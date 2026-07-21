@@ -1,10 +1,12 @@
-# Task: GDPR Auth, Consent Forms, and Data Deletion
+# Task: Auth, Guardian/Minor Flow, and Consent
 
-Generate handlers, `templ` components, and migrations for auth/consent in European Portuguese (pt-PT).
+Generate handlers and templates for authentication and the specific guardian registration flow.
 
-1. **Goose Migration**: Create `00002_consent_forms.sql` for the `consent_forms` table.
-2. **Handlers**: 
-   * `HandleLogin`: Verify `bcrypt` hash, initialize session.
-   * `HandleRegister`: Validate checkboxes. Execute a database transaction via `sqlc` inserting the user and consent records. Return 422 via HTMX if checkboxes are missing.
-   * `HandleDeleteAccount`: An endpoint to process a "Right to be Forgotten" request, scrubbing PII and unlinking references in the DB.
-3. **templ Components**: Create `login.templ` and `registo.templ`. Ensure all forms contain the CSRF token and use `hx-ext="response-targets"`.
+1. **Self-Registration (`GET/POST /registo`)**:
+   * Captures Adult User data. Requires checking 'Termos_Gerais' and 'Uso_Imagem' boxes. 
+   * Uses a DB transaction (`sqlc`) to insert the `User` and `ConsentForms` rows together.
+2. **Guardian Dependent Flow (`POST /guardian/add-dependent`)**:
+   * Only accessible by 'Guardian' role. 
+   * Form requires checking the 'Responsabilidade_Menor' consent box. Must use `hx-disabled-elt`.
+   * Handler inserts a new `User` (the minor) with `guardian_id` set to the logged-in Guardian's ID, and records the consent form.
+3. **Login/Logout**: Implement `HandleLogin` (bcrypt verification, scs session init) and `HandleLogout` (session destroy).

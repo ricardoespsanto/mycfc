@@ -2,28 +2,32 @@
 # Client: Clube Fluvial de Coimbra (CFC)
 
 ## Tech Stack
-* Backend: Go (Standard Library `net/http` using Go 1.22+ routing)
-* Configuration: `caarlos0/env` (Environment variable parsing)
-* Logging: `log/slog` (Structured JSON logging for AWS CloudWatch)
-* Security: `gorilla/csrf` (Strict Cross-Site Request Forgery protection)
-* Database: PostgreSQL (RDS)
+* Backend: Go 1.22+ (`net/http`)
+* Database Driver: `jackc/pgx/v5`
+* Configuration: `caarlos0/env`
+* Logging: `log/slog`
+* Security: `gorilla/csrf`
+* Database: PostgreSQL 16 (AWS RDS)
 * Migrations: `pressly/goose`
-* Data Access: `sqlc` (Type-safe Go interface generation)
-* Storage: AWS S3 (via AWS SDK for Go v2) for media uploads
-* UI Components: `a-h/templ` (Compile-time type-safe HTML)
-* Interactivity: HTMX (`hx-get`, `hx-post`) with `response-targets` extension
+* Data Access: `sqlc`
+* Storage: AWS S3 (AWS SDK for Go v2)
+* UI Components: `a-h/templ`
+* Interactivity: HTMX (`hx-get`, `hx-post`, `hx-disabled-elt`, `response-targets`)
 * Styling: PicoCSS
-* Session Management: `alexedwards/scs` (HttpOnly, server-backed cookies)
+* Session: `alexedwards/scs` (HttpOnly, backed by PostgreSQL)
+* Local Dev: `air` (for hot-reloading Go)
 
-## Architecture
-Monolithic, server-side rendered application with strict GitOps deployment (GitHub Actions, Terraform). Role-based access mapped via secure session tokens.
+## Architecture & Style Rules
+* **Language Strictness:** The UI and all user-facing data must be strictly European Portuguese (pt-PT). Do not use Brazilian Portuguese (pt-BR) terminology.
+* **Timezone Strictness:** The application and database must strictly handle times in `Europe/Lisbon`.
+* Monolithic, server-side rendered application.
+* Strict GitOps deployment via GitHub Actions and Terraform.
 
 ## Directory Structure
 /cmd/server/         # main.go entrypoint
 /internal/config/    # Environment variable structs
 /internal/db/        # sqlc generated code and goose migrations
-/internal/storage/   # AWS S3 integration logic
-/internal/handlers/  # HTTP handlers
+/internal/storage/   # S3 integration
+/internal/handlers/  # HTTP handlers mapped to routes
 /internal/auth/      # Session, CSRF, and Role middleware
-/internal/logger/    # slog initialization
 /ui/components/      # templ components (*.templ)

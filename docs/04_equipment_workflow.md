@@ -1,12 +1,13 @@
 # Task: Multipart Form Uploads & S3 Integration
 
-Implement the "Report Boat Repair" flow allowing users to upload photos of broken equipment directly to S3.
+Implement the `POST /repairs` handler and `repair_form.templ`.
 
-1. **templ Component**: Create `repair_form.templ`.
-   * Use `hx-ext="response-targets"`, `hx-post="/repairs"`, and `enctype="multipart/form-data"`.
-   * Include `<input type="file" name="photo" accept="image/*">` and the hidden CSRF token.
-   * Target `#repair-status` for 200 OK, and `#form-error` for 422 failures.
-2. **Go Handler**: Write `HandlePostRepair`.
-   * Parse the multipart form. Extract the image buffer.
-   * If a photo exists, use the AWS SDK for Go v2 to stream the upload to the S3 bucket defined in the config. Set the object key as a generated UUID.
-   * Save the `RepairRequest` to PostgreSQL via `sqlc`, including the returned S3 URL. Return a success `templ` partial.
+1. **templ Component (`repair_form.templ`)**:
+   * `hx-post="/repairs"`, `enctype="multipart/form-data"`.
+   * **Idempotency:** Must include `hx-disabled-elt="find button"` to prevent double-submissions.
+   * Includes hidden CSRF token and `<input type="file" name="photo">`.
+2. **Go Handler (`HandlePostRepair`)**:
+   * Parses multipart form.
+   * If a photo exists, streams it to AWS S3 (`S3_BUCKET_NAME`) via AWS SDK v2 (`manager.Uploader`), generating a UUID object key.
+   * Inserts the `RepairRequest` (with S3 URL and status 'Pendente') into PostgreSQL via `sqlc`.
+   * Returns a 200 OK success partial, or a 422 error partial for validation failures.

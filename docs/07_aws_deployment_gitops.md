@@ -1,15 +1,21 @@
-# Task: AWS Infrastructure (Terraform) & GitOps Pipeline
+# Task: AWS Infrastructure as Code (Terraform)
 
-Generate the infrastructure as code and CI/CD pipelines.
+Generate production Terraform with strict network isolation and zero-trust IAM policies.
 
-1. **Dockerfile**: Multi-stage build running `templ generate` and `sqlc generate`.
-2. **Terraform**: 
-   * Provision an AWS RDS PostgreSQL instance.
-   * Provision an AWS S3 Bucket for media storage with strict private access policies.
-   * Provision AWS ECR and AWS App Runner. Assign an IAM Task Role to App Runner granting it `s3:PutObject` access to the bucket.
-   * Provision AWS Route53 records and an ACM SSL certificate for the custom domain.
-   * Inject `DATABASE_URL`, `CSRF_SECRET`, `SESSION_SECRET`, and `S3_BUCKET_NAME` into App Runner.
-3. **GitHub Actions**: 
-   * Authenticate via OIDC.
-   * Run `goose up` directly against the AWS RDS instance to apply database migrations *before* deploying.
-   * Build/push the Docker image to ECR, then trigger the App Runner update.
+1. **State & Secrets**:
+   * Define S3/DynamoDB remote state backend.
+   * Provision AWS SSM Parameter Store resources for sensitive variables.
+
+2. **Network, Data & Compute**:
+   * Provision a VPC (public/private subnets).
+   * Provision an RDS PostgreSQL 16 instance (`db.t3.micro`) inside **private subnets**.
+   * Provision an App Runner service (with ECR repository).
+   * Provision an `aws_apprunner_vpc_connector` attached to the private subnets so App Runner can reach RDS.
+
+3. **DNS (`mycfc.pt`)**:
+   * Use `aws_apprunner_custom_domain_association` (no standalone ACM cert). Map outputted CNAMEs via `aws_route53_record`.
+
+4. **CI/CD IAM & Migrations**:
+   * Provision `aws_iam_openid_connect_provider` for GitHub. 
+   * **Security:** The OIDC IAM Role Trust Policy MUST restrict the `StringLike` condition `sub` claim explicitly to `repo:<YOUR_GITHUB_ORG>/<YOUR_REPO_NAME>:*`. Do not leave this open.
+   * Provision an AWS Lambda function inside the private VPC containing the `goose` binary. Grant the Lambda execution role permissions to read the DB credentials from SSM. The GitHub Actions IAM Role will invoke this Lambda to run migrations.

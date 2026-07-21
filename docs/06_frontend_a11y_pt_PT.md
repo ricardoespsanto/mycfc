@@ -1,11 +1,13 @@
-# Task: Accessibility, Mobile Responsiveness, and Localization
+# Task: Accessibility and pt-PT Localization
 
-Refine all `templ` components for WCAG accessibility and mobile readiness.
+Refine all `templ` components for WCAG accessibility. 
 
-1. **Localization**: Enforce `<html lang="pt-PT">`. All UI vocabulary must be European Portuguese (Painel, Reportar Avaria, Pagaias, Embarcações, Notícias).
-2. **Accessibility**:
-   * Explicit `<label>` associations for all inputs.
-   * Use `aria-busy="true"` on HTMX submission buttons to indicate loading states.
-   * Ensure 422 validation error messages use high-contrast red text (`var(--pico-color-red-500)`) and `role="alert"`.
-   * Ensure hidden CSRF inputs do not break semantic layout or screen reader flows.
-3. **Mobile-Friendly**: Wrap data tables in responsive `<figure>` tags with horizontal overflow scrolling to prevent viewport breaking.
+**Strict Localization Rules:**
+* Enforce `<html lang="pt-PT">`.
+* Absolutely no Brazilian Portuguese (pt-BR). 
+* Explicit translations: Dashboard = Painel, Report Repair = Reportar Avaria, Paddles = Pagaias, Boats = Embarcações, Newsfeed = Notícias, Username = Utilizador, Password = Palavra-passe.
+
+**Accessibility:**
+* Explicit `<label>` associations.
+* `aria-busy="true"` on HTMX buttons during flight.
+* 422 validation errors must use `role="alert"` and high-contrast red text.
