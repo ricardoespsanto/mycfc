@@ -1,15 +1,10 @@
-# Task: User Authentication and Consent Forms (pt-PT)
+# Task: GDPR Auth, Consent Forms, and Data Deletion
 
-Generate the Go handlers, HTML templates, and SQLite schema updates for user registration and login. All user-facing UI text must be strictly in European Portuguese (pt-PT).
+Generate handlers, `templ` components, and migrations for auth/consent in European Portuguese (pt-PT).
 
-1. **Schema Updates**:
-   - Add password hashing (using `golang.org/x/crypto/bcrypt`) to the `User` model.
-   - Create a `ConsentForm` struct and table: `ID`, `UserID`, `ConsentType` (e.g., Termos e Condições, Uso de Imagem, Responsabilidade de Iniciantes), `IsAccepted` (Boolean), `DateSigned`.
-
-2. **Go Handlers**:
-   - `HandleLogin`: Parses Email and Palavra-passe, verifies the hash, and sets a secure HttpOnly session cookie.
-   - `HandleRegister`: Captures registration details and explicitly requires the validation of consent form checkboxes before creating the user record.
-   
-3. **HTMX Templates**:
-   - Create `login.html` and `registo.html`.
-   - Build a specific consent capture partial (`consentimento.html`) using PicoCSS form elements. Ensure proper error validation messaging via HTMX swaps (e.g., '<small class='error'>Por favor, aceite os termos para continuar.</small>').
+1. **Goose Migration**: Create `00002_consent_forms.sql` for the `consent_forms` table.
+2. **Handlers**: 
+   * `HandleLogin`: Verify `bcrypt` hash, initialize session.
+   * `HandleRegister`: Validate checkboxes. Execute a database transaction via `sqlc` inserting the user and consent records. Return 422 via HTMX if checkboxes are missing.
+   * `HandleDeleteAccount`: An endpoint to process a "Right to be Forgotten" request, scrubbing PII and unlinking references in the DB.
+3. **templ Components**: Create `login.templ` and `registo.templ`. Ensure all forms contain the CSRF token and use `hx-ext="response-targets"`.

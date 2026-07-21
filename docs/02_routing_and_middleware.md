@@ -1,17 +1,11 @@
-# Task: Setup Router and Role-Based Middleware
+# Task: Setup Config, Router, and Security Middleware
 
-Write the Go code for setting up the `net/http` ServeMux using Go 1.22 path matching features. 
+Write the Go code to bootstrap the application.
 
-1. Create a middleware package (`internal/auth`) that checks user sessions and roles.
-2. Define the main router in `cmd/server/main.go` or a dedicated `routes.go` file.
-3. Set up the following route groups:
-   * Public: `/login`, `/public-news`
-   * Authenticated (Base): `/dashboard` (This handler should inspect the user's role and redirect to the specific dashboards below)
-   * Role-Restricted: 
-     * `/dashboard/competitor`
-     * `/dashboard/leisure`
-     * `/dashboard/guardian`
-     * `/admin/fleet`
-     * `/admin/repairs`
-
-Please provide the implementation for the router setup and the role-checking middleware.
+1. **Config**: Use `caarlos0/env` to parse environment variables (`DATABASE_URL`, `PORT`, `SESSION_SECRET`, `CSRF_SECRET`, `S3_BUCKET_NAME`, `APP_VERSION`).
+2. **Middleware**: 
+   * Initialize `log/slog` to output structured JSON logs, wrapping all HTTP requests.
+   * Integrate `gorilla/csrf` to enforce CSRF validation on all state-changing requests.
+   * Integrate `alexedwards/scs` backed by PostgreSQL for HttpOnly sessions. 
+   * Create an `internal/auth` middleware package that checks user roles from the session.
+3. **Router**: Use Go 1.22 `net/http` ServeMux path matching. Define public routes (`/login`), the base authenticated route (`/dashboard`), and role-restricted subgroups (`/dashboard/competitor`, `/admin/*`, etc.).

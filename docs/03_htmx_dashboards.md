@@ -1,10 +1,9 @@
-# Task: Generate Base Template and Dashboard Views
+# Task: Generate templ Components & CSRF-Protected UI
 
-We are using Go templates and HTMX. 
+Replace standard templates with `a-h/templ`.
 
-1. Create a `base.html` template that includes the HTML boilerplate, loads PicoCSS via CDN, and loads HTMX. It should define a `{{ block content . }}{{ end }}` area.
-2. Create `dashboard_competitor.html`. It should inherit from `base`.
-3. Inside the competitor dashboard, create an HTMX-powered widget for the Newsfeed. 
-   * It should have a button or trigger that uses `hx-get=/api/news?filter=polo` to fetch discipline-specific news and swap it into a `div` with `hx-target=#news-container`.
-
-Please write the Go handler that serves this template and the corresponding HTML file.
+1. **Base Layout**: Create `base.templ`. Include PicoCSS, HTMX, the `htmx-ext-response-targets` script, and FullCalendar.js. 
+2. **Security**: Ensure every form rendered inside `templ` components natively includes a hidden input populated by the `gorilla/csrf` token provided in the HTTP request context.
+3. **Dashboards**: Create `dashboard_competitor.templ`.
+4. **Calendar Integration**: Define a `div` for FullCalendar. Configure the JS initialization to pull events from public Google Calendar feeds using the `@fullcalendar/google-calendar` plugin.
+5. **WhatsApp Directory**: Fetch records from `WhatsAppGroups` and render them securely.
