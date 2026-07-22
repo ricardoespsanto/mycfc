@@ -1,6 +1,6 @@
 # MyCFC — Complete production implementation specification
 
-This combined file is generated from the canonical ordered files. The split files remain easier to maintain.
+This combined file is generated from the canonical ordered files. The split files remain easier to maintain. Architecture diagrams and their editable Graphviz sources remain separate binary/text artefacts referenced from this document.
 
 
 ---
@@ -27,7 +27,16 @@ The agent MUST process the documents in numeric order and treat earlier global d
 10. `09_local_dev_and_minio.md`
 11. `10_acceptance_test_matrix.md`
 
-`arch_diagram.svg` is the normative deployment overview. The Markdown documents remain authoritative when a visual detail is unclear.
+## Architecture diagrams
+
+The architecture is deliberately split by concern:
+
+- `architecture_runtime.svg` is the normative visual for **running components, trust boundaries, request paths and data flows**.
+- `architecture_delivery_pipeline.svg` is the normative visual for **source verification, Terraform reconciliation, database migration and application deployment**.
+- `architecture_runtime.dot` and `architecture_delivery_pipeline.dot` are the editable canonical sources. Regenerate the SVGs with Graphviz rather than editing generated SVG markup by hand.
+- `ARCHITECTURE.md` presents both diagrams with their scope and regeneration commands.
+
+The runtime diagram MUST NOT accumulate CI/CD components. The delivery diagram MUST collapse the running application into a single referenced runtime boundary instead of duplicating the full topology. The Markdown documents remain authoritative when a visual detail is unclear.
 
 ## Meaning of “unattended implementation ready”
 
@@ -88,6 +97,8 @@ This file has highest precedence. Later files may add detail but MUST NOT contra
 Dependency versions MUST be recorded in `go.mod`, `go.sum`, `package-lock.json`, `.terraform.lock.hcl`, and pinned GitHub Action commit SHAs. Do not use floating `latest` versions in production files.
 
 ## 3. Architecture invariants
+
+`architecture_runtime.svg` and `architecture_delivery_pipeline.svg` are complementary normative views. The first defines the running topology and request/data flows; the second defines how verified source and infrastructure changes reach that topology. Their editable sources are the corresponding `.dot` files.
 
 1. The application is a single stateless Go process. Session state and business data live in PostgreSQL.
 2. Two or more ECS tasks may process requests concurrently. No correctness property may depend on process-local memory.
@@ -487,12 +498,7 @@ Create `internal/config/config.go`. Parse with `caarlos0/env/v11`, then run expl
 | `GIT_SHA` | 40 lowercase hex in production |
 | `PORT` | integer 1–65535, default 8080 |
 | `BASE_URL` | absolute HTTPS URL in production; local HTTP permitted |
-| `DATABASE_URL` | PostgreSQL URL for local/test; empty in production when component fields below are used; never logged |
-| `DB_HOST` | required in production when `DATABASE_URL` is empty |
-| `DB_PORT` | default 5432; required valid port in component mode |
-| `DB_NAME` | required in production component mode |
-| `DB_USER` | required in production component mode |
-| `DB_PASSWORD` | required secret in production component mode; never logged |
+| `DATABASE_URL` | PostgreSQL URL; required; never logged |
 | `CSRF_AUTH_KEY_B64` | base64 decoding to exactly 32 bytes |
 | `AWS_REGION` | non-empty |
 | `S3_BUCKET_NAME` | DNS-compatible bucket name |
@@ -526,7 +532,7 @@ Implement this exact order in `internal/app`:
 1. Parse and validate configuration.
 2. Create logger; set default logger.
 3. Load `Europe/Lisbon` and fail startup if unavailable.
-4. Resolve database configuration: use `DATABASE_URL` in local/test, or build a percent-encoded PostgreSQL DSN from the production `DB_*` components. Validation requires exactly one complete mode. Parse with `pgxpool.ParseConfig`; set pool limits from configuration.
+4. Parse `DATABASE_URL` with `pgxpool.ParseConfig`; set pool limits from configuration.
 5. Open pool and perform a ping with a 5-second context deadline.
 6. Create sqlc queries and SCS pgx store.
 7. Configure SCS cookies and lifetimes.
@@ -583,7 +589,7 @@ Use middleware adapter tests to prove ordering.
 
 ## 6. Security headers
 
-Production responses, excluding health endpoints where irrelevant, MUST include the following baseline. The CSP builder MUST append the exact configured S3 regional bucket origin to `img-src` in production and the exact configured MinIO origin locally; do not use an unrestricted wildcard.
+Production responses, excluding health endpoints where irrelevant, MUST include:
 
 ```text
 Strict-Transport-Security: max-age=31536000; includeSubDomains
@@ -592,7 +598,7 @@ Referrer-Policy: strict-origin-when-cross-origin
 X-Frame-Options: DENY
 Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 Cross-Origin-Opener-Policy: same-origin
-Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: <exact-s3-or-minio-origin>; style-src 'self'; script-src 'self'; connect-src 'self' https://www.googleapis.com; font-src 'self'; upgrade-insecure-requests
+Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self' https://www.googleapis.com; font-src 'self'; upgrade-insecure-requests
 ```
 
 Local CSP omits `upgrade-insecure-requests`. No inline script or style is permitted; all JavaScript and CSS must be bundled files.
@@ -1200,6 +1206,8 @@ Provision a deployable, secure and observable AWS production environment using T
 
 AWS App Runner MUST NOT be provisioned. It is unavailable to new AWS customers after 31 March 2026.
 
+`architecture_runtime.svg` is the normative visual for the running AWS topology. `architecture_delivery_pipeline.svg` shows ownership and delivery orchestration but intentionally collapses this runtime topology into one boundary.
+
 ## 2. Terraform structure and state
 
 ```text
@@ -1301,12 +1309,12 @@ Attach AWS WAF v2 Web ACL with:
 - Stop timeout aligns with application shutdown timeout plus safety margin.
 - CloudWatch log group retention 30 days, encrypted, with `prevent_destroy` optional via variable.
 
-Terraform creates two task-definition families using the same image contract:
+Terraform owns the cluster, service and two distinct base task-definition families:
 
-1. Application task definition: least-privileged application DB secret, S3 task role, default command `serve`.
-2. Migration task definition: RDS-managed master/migration secret plus application-credential secret, migration task role, default command `migrate status`; never attached to a service.
+- `mycfc-app`: attached to the ECS service, default command `serve`, application task role, application DB secret and repair-image S3 permissions.
+- `mycfc-migrate`: never attached to a service, default command `migrate up`, migration task role and migration/admin DB secret, with no S3 permissions unless a migration explicitly requires them.
 
-GitHub Actions registers image-specific revisions for both families with the same image digest. ECS service has lifecycle ignore only for the application task-definition revision and desired count managed by autoscaling; do not ignore network, IAM or security configuration.
+GitHub Actions registers one image-specific revision of each family for a release. The ECS service has lifecycle ignore only for the **application** task-definition revision and desired count managed by autoscaling; do not ignore network, IAM or security configuration. The migration family is invoked only as a one-off task and must never inherit the application task role or application DB credentials.
 
 ## 8. Database
 
@@ -1324,7 +1332,7 @@ RDS PostgreSQL 16:
 - Parameter group sets timezone `Europe/Lisbon`, `log_min_duration_statement=1000`, and safe connection logging without statement/password leakage.
 - Master credentials managed by RDS/Secrets Manager; application does not use the master account.
 
-Create an application credential secret containing username `mycfc_app` and a generated password. RDS manages the master credential in Secrets Manager. The migration task receives both secrets. Before Goose migrations, its `migrate up` command idempotently ensures the `mycfc_app` role exists, rotates it to the generated application password, grants connection/schema/table/sequence privileges required by the application, and sets default privileges for migration-created objects. The application task receives only the application credential. Secret values are marked sensitive and never output.
+Create an application DB credential secret and a migration/admin credential secret. Migration bootstrap SQL creates/updates least-privileged application role. App runtime role gets only app credential; migration task gets migration credential. Secret values are marked sensitive and never output.
 
 Coordinate DB capacity with ECS: `DB_MAX_CONNS=8` and max six tasks means at most 48 app connections plus migration/admin headroom. Terraform validates this against a documented `db_connection_budget` variable.
 
@@ -1400,6 +1408,7 @@ Mandatory:
 - S3 anonymous read fails.
 - OIDC token from another repository, branch-only subject or environment is denied.
 - Failed ECS deployment automatically rolls back.
+- Application and migration task-definition families have distinct commands, roles and secrets; only `mycfc-app` is attached to the service.
 - RDS deletion is blocked until protection is deliberately disabled and a final snapshot is selected.
 - Terraform second apply produces no unexpected changes after CI has deployed a new task-definition revision.
 
@@ -1417,6 +1426,8 @@ Mandatory:
 Create reproducible workflows that verify all generated/code/infrastructure artefacts, authenticate to AWS only through OIDC, build one immutable image, run backward-compatible migrations as an ECS one-off task, deploy by digest, and verify/roll back failures.
 
 All third-party actions MUST be pinned to full commit SHA with an adjacent comment naming the human-readable release. Dependabot is configured to update action SHAs, Go modules, npm and Docker dependencies.
+
+`architecture_delivery_pipeline.svg` is the normative visual for this workflow. It references `architecture_runtime.svg` rather than duplicating the production runtime topology.
 
 ## 2. Workflows
 
@@ -1495,13 +1506,13 @@ Permissions: `id-token: write`, `contents: read`, `attestations: write` when ima
 5. Build once with production Dockerfile; tag `git-<40sha>`; push.
 6. Resolve and record immutable ECR digest. Subsequent steps use `<repo>@sha256:<digest>` only.
 7. Generate SBOM and provenance/attestation tied to digest.
-8. Fetch both current application and migration task-definition JSON documents. Register one new revision of each, changing only image digest, app version/Git SHA and permitted deployment metadata. Preserve each family’s distinct role/secrets/command and strip read-only AWS fields before registration.
-9. Run the new migration task revision as a one-off Fargate task with command override `["migrate","up"]`, private application subnets and migration security group.
+8. Fetch the current `mycfc-app` and `mycfc-migrate` task-definition JSON documents. Register one new revision of each, changing only image digest, app version/Git SHA and permitted release metadata. Preserve each family’s distinct command, task role, execution role and secret references. Strip read-only AWS fields before registration.
+9. Run the new `mycfc-migrate` revision as a one-off Fargate task with command override `["migrate", "up"]`, private application subnets and the migration security group.
 10. Wait `tasks-stopped`. Query `stopCode`, `stoppedReason`, container `exitCode` and reason. Fail unless the migration container exit code is exactly 0. Print bounded migration logs on failure without secret values.
-11. Update ECS service to the new **application** task-definition revision with force-new-deployment.
-12. Wait for services stable with an explicit maximum polling duration. Then confirm primary deployment is completed and target health is healthy.
-13. Smoke test `https://<domain>/health/ready`, login GET, and static asset response. Retry boundedly to tolerate DNS/ALB propagation.
-14. Write deployment summary containing SHA, image digest, task-definition revision and migration task ARN—not secrets.
+11. Only after migration success, update the ECS service to the new `mycfc-app` revision with force-new-deployment.
+12. Wait for services stable with an explicit maximum polling duration. Then confirm the primary deployment is completed and all registered targets are healthy.
+13. Smoke test `https://<domain>/health/ready`, login GET, and a versioned static asset response. Retry boundedly to tolerate ALB registration and rolling deployment.
+14. Write a deployment summary containing SHA, image digest, both task-definition revisions and migration task ARN—not secrets.
 
 If service deployment fails, ECS circuit breaker performs rollback. Workflow reports the rolled-back status and fails. Do not automatically run down migrations.
 
@@ -1530,7 +1541,7 @@ Multi-stage build:
 
 1. Node stage: `npm ci` and production asset build.
 2. Go builder stage pinned to Go 1.26.5; copy module files first; download; generate templ/sqlc or verify committed generation; build static `CGO_ENABLED=0` binary with version/SHA via ldflags.
-3. Final distroless/static non-root image. Copy CA certificates, timezone data if required, binary and no source/build tools. User non-root; read-only filesystem compatible; entrypoint `/app/mycfc serve`.
+3. Final distroless/static non-root image. Copy CA certificates, timezone data if required, binary and no source/build tools. User non-root; read-only filesystem compatible; `ENTRYPOINT ["/app/mycfc"]` and `CMD ["serve"]` so the migration family can safely override the command with `["migrate", "up"]`.
 
 The same binary supports `serve` and `migrate up`; migration command exits non-zero on any Goose error.
 
@@ -1547,8 +1558,8 @@ The same binary supports `serve` and `migrate up`; migration command exits non-z
 
 - PR cannot deploy or apply production infrastructure.
 - Workflow OIDC subject matches protected production environment trust exactly.
-- A migration task non-zero exit prevents service update.
-- Deployment uses digest and can prove which commit produced it.
+- A non-zero `mycfc-migrate` task exit prevents updating the ECS service to the new application revision.
+- Both application and migration task-definition revisions use the same immutable image digest and can prove which commit produced it.
 - An unhealthy image triggers ECS rollback and the workflow fails.
 - Re-running deployment for the same SHA is safe: migration is already applied, new task revision may be registered, resulting service image digest is unchanged.
 - No workflow has `permissions: write-all`.
@@ -1742,7 +1753,7 @@ make dev-infra
 make migrate-up
 make generate
 git diff --exit-code
-test -z "$(gofmt -l .)"
+gofmt -l . | test -z "$(cat)"
 go vet ./...
 govulncheck ./...
 go test -race -count=1 ./...
@@ -1754,6 +1765,8 @@ terraform -chdir=infra/bootstrap validate
 terraform -chdir=infra/environments/production fmt -check
 terraform -chdir=infra/environments/production validate
 tflint --chdir=infra/environments/production
+dot -Tsvg architecture_runtime.dot -o /tmp/architecture_runtime.svg
+dot -Tsvg architecture_delivery_pipeline.dot -o /tmp/architecture_delivery_pipeline.svg
 ```
 
 `make verify` MUST run the applicable superset and fail on the first failing phase with a clear label.
@@ -1872,7 +1885,16 @@ tflint --chdir=infra/environments/production
 | DEP-07 | Concurrent deployments | Serialized; none cancelled mid-migration |
 | DEP-08 | Terraform after app deploy | Does not revert task revision |
 
-## 11. Evidence required
+## 11. Architecture documentation scenarios
+
+| ID | Scenario | Expected result |
+|---|---|---|
+| DOC-01 | Render both `.dot` sources with Graphviz | Both SVGs generate without syntax errors |
+| DOC-02 | Inspect runtime diagram scope | Running components, trust boundaries and request/data flows only; no GitHub Actions, Terraform state or deployment migration orchestration |
+| DOC-03 | Inspect delivery diagram scope | CI, OIDC, Terraform, distinct app/migration task families, migration gate, service update and rollback are shown; runtime topology is collapsed to one referenced boundary |
+| DOC-04 | Cross-check files 00, 07, 08 and README | Diagram names, task-family semantics and scope rules agree exactly |
+
+## 12. Evidence required
 
 The final implementation PR/agent report MUST include:
 
@@ -1884,7 +1906,7 @@ The final implementation PR/agent report MUST include:
 - Deployed image digest for production deployment runs.
 - List of deliberately deferred product features, which may include password reset/email delivery, consent revocation UI, user profile editing and admin content authoring. Deferred items must not be represented by active dead-end controls.
 
-## 12. Hard completion blockers
+## 13. Hard completion blockers
 
 The implementation is not complete if any applies:
 
@@ -1898,6 +1920,7 @@ The implementation is not complete if any applies:
 - A role check trusts only browser input or session role without DB user validation.
 - Tests are skipped, marked flaky without issue/expiry, or weakened to fit implementation.
 - Documentation and Make targets disagree.
+- Runtime and delivery concerns are recombined into one ambiguous architecture diagram or their task-family semantics disagree with files 07/08.
 - Unresolved architecture decisions remain in TODO comments.
 
 <!-- END 10_acceptance_test_matrix.md -->
