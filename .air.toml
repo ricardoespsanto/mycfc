@@ -1,0 +1,46 @@
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  # 1. Generate templ files, then compile the Go binary from your specific entrypoint
+  cmd = "templ generate && go build -o ./tmp/main ./cmd/server"
+
+  # 2. The compiled binary to run
+  bin = "./tmp/main"
+
+  # 3. Watch these extensions for changes
+  include_ext = ["go", "templ", "html", "env"]
+
+  # 4. Ignore these directories to prevent unnecessary rebuilds
+  exclude_dir = ["assets", "tmp", "vendor", "ui/static"]
+
+  # 5. CRITICAL: Ignore generated templ files to prevent infinite build loops
+  exclude_regex = ["_templ\\.go$"]
+
+  # 6. Delay in milliseconds before building to allow file saves to finish
+  delay = 1000
+
+  # Stop the old process before building the new one
+  kill_delay = "0s"
+
+  # Exit if there's a build error (don't run a stale binary)
+  stop_on_error = true
+
+  # Send interrupts instead of kill signals for graceful shutdowns
+  send_interrupt = true
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  time = false
+  main_only = false
+
+[misc]
+  # Delete tmp directory on exit
+  clean_on_exit = true

@@ -1,0 +1,12 @@
+{
+  "name": "mycfc-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-assets.mjs",
+    "dev": "node scripts/build-assets.mjs",
+    "test": "node --test",
+    "test:e2e": "node scripts/not-implemented.mjs e2e"
+  }
+}
