@@ -1,0 +1,157 @@
+digraph MyCFCDelivery {
+  graph [
+    rankdir=TB,
+    splines=polyline,
+    compound=true,
+    newrank=true,
+    bgcolor="white",
+    pad="0.35",
+    nodesep="0.5",
+    ranksep="0.68",
+    fontname="Arial",
+    fontsize=24,
+    label="MyCFC — CI/CD, Infrastructure and Production Delivery Pipeline",
+    labelloc=t,
+    labeljust=c
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fillcolor="#ffffff",
+    color="#425466",
+    penwidth=1.3,
+    fontname="Arial",
+    fontsize=11.5,
+    margin="0.18,0.12"
+  ];
+
+  edge [
+    color="#5b6775",
+    penwidth=1.2,
+    arrowsize=0.75,
+    fontname="Arial",
+    fontsize=9.5
+  ];
+
+  developer [label="Developer", fillcolor="#f5f7fa"];
+  repo [label="GitHub repository\nprotected main branch", fillcolor="#eef2f7"];
+  developer -> repo [label="commit / pull request"];
+
+  subgraph cluster_pr {
+    label="Pull-request and main-branch verification — no production mutation";
+    color="#b8c4d1";
+    style="rounded,dashed";
+    margin=18;
+
+    ci [label="ci.yml", fillcolor="#eef5ff"];
+    generated [label="Generated code + formatting\ntempl · sqlc · gofmt · goimports"];
+    tests [label="Backend verification\nrace tests · vet · govulncheck"];
+    frontend [label="Frontend verification\nbuild · Playwright · axe · npm audit"];
+    container [label="Container verification\nnon-root smoke · SBOM · vulnerability scan"];
+    summary [label="Required CI summary check", fillcolor="#eaf8ef"];
+
+    { rank=same; generated; tests; frontend; container; }
+    ci -> generated;
+    ci -> tests;
+    ci -> frontend;
+    ci -> container;
+    generated -> summary;
+    tests -> summary;
+    frontend -> summary;
+    container -> summary;
+  }
+
+  repo -> ci [label="PR or push to main"];
+  merge [label="Merge / release gate\nall required checks pass", fillcolor="#eaf8ef"];
+  summary -> merge;
+
+  subgraph cluster_github_prod {
+    label="Protected GitHub environment: production";
+    color="#d7b97c";
+    style="rounded,dashed";
+    margin=18;
+
+    infra [label="infra.yml\nplan on PR · apply saved plan from main", fillcolor="#fff6e8"];
+    deploy [label="deploy.yml\nexact CI-tested main-branch commit", fillcolor="#fff6e8"];
+    oidc [label="GitHub OIDC\nshort-lived credentials only\nexact repository + environment subject", fillcolor="#fffdf4"];
+
+    { rank=same; infra; deploy; }
+    infra -> oidc;
+    deploy -> oidc;
+  }
+
+  merge -> infra [label="infra/** changed", style=dashed];
+  merge -> deploy [label="successful CI on main"];
+
+  subgraph cluster_aws {
+    label="AWS production account";
+    color="#8ea0b2";
+    style="rounded";
+    penwidth=1.5;
+    margin=22;
+
+    plan_role [label="github-infra-plan\nread-only plan permissions", fillcolor="#f6f1ff"];
+    apply_role [label="github-infra-apply\nscoped Terraform apply", fillcolor="#f6f1ff"];
+    deploy_role [label="github-deploy\nECR + approved ECS operations", fillcolor="#f6f1ff"];
+    { rank=same; plan_role; apply_role; deploy_role; }
+
+    state [label="S3 Terraform state\nversioned · encrypted · native lockfile", fillcolor="#f3f9e9"];
+    terraform [label="Terraform production stack\nVPC · DNS/TLS · ALB/WAF · ECS · RDS · S3 · IAM", fillcolor="#eef5ff"];
+
+    ecr [label="ECR\nbuild once · push · resolve immutable digest", fillcolor="#f6f1ff"];
+    app_td [label="Application task-definition family\nserve command · runtime role and secrets", fillcolor="#ebf8f1"];
+    migration_td [label="Migration task-definition family\nmigrate command · admin DB role and secret", fillcolor="#fff6e8"];
+    { rank=same; app_td; migration_td; }
+
+    migration_task [label="One-off ECS Fargate migration task\nprivate subnet · Goose up", fillcolor="#fff6e8"];
+    rds [label="RDS PostgreSQL\nbackward-compatible migration target", fillcolor="#fff0f0"];
+    ecs_service [label="ECS application service update\nnew application task revision", fillcolor="#ebf8f1"];
+    health [label="Deployment verification\nservice stable · targets healthy · smoke tests", fillcolor="#eaf8ef"];
+    rollback [label="ECS deployment circuit breaker\nautomatic rollback to previous revision", fillcolor="#fff0f0"];
+    runtime [label="Production runtime environment\nsee architecture_runtime.svg", fillcolor="#eef5ff", penwidth=1.6];
+    cloudwatch [label="CloudWatch\nmigration logs · deployment events", fillcolor="#f6f1ff"];
+
+    oidc -> plan_role [label="PR plan"];
+    oidc -> apply_role [label="protected infra apply"];
+    oidc -> deploy_role [label="protected app deploy"];
+
+    plan_role -> state [label="read / lock for plan", style=dashed];
+    apply_role -> state [label="read / write / lock"];
+    apply_role -> terraform [label="apply exact saved plan"];
+    terraform -> runtime [label="provision or reconcile base stack"];
+
+    deploy_role -> ecr [label="push and resolve digest"];
+    ecr -> app_td [label="register app revision"];
+    ecr -> migration_td [label="register migration revision"];
+    migration_td -> migration_task [label="run one-off task"];
+    migration_task -> rds [label="must exit 0"];
+    migration_task -> cloudwatch [label="bounded logs", style=dashed];
+    rds -> ecs_service [label="migration succeeded"];
+    app_td -> ecs_service [label="update service by revision"];
+    ecs_service -> health [label="wait with bounded timeout"];
+    health -> runtime [label="healthy release"];
+    ecs_service -> cloudwatch [label="deployment events", style=dashed];
+    health -> rollback [label="unhealthy", color="#b94a48", fontcolor="#8f2f2d"];
+    rollback -> runtime [label="restore previous revision", style=dashed];
+  }
+
+  fail_gate [
+    shape=octagon,
+    label="STOP\nDo not update service",
+    fillcolor="#fff0f0",
+    color="#b94a48",
+    fontcolor="#8f2f2d",
+    penwidth=1.6
+  ];
+  migration_task -> fail_gate [label="non-zero exit / task failure", color="#b94a48", fontcolor="#8f2f2d", constraint=false];
+
+  delivery_note [
+    shape=note,
+    label="Scope rule\nThis diagram shows source verification, infrastructure reconciliation, migration and release orchestration.\nThe running topology is intentionally collapsed into the runtime environment node.",
+    fillcolor="#fffdf2",
+    color="#b9a96a",
+    fontsize=10
+  ];
+  runtime -> delivery_note [style=invis];
+}
