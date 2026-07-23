@@ -1,5 +1,7 @@
 # Implementation status
 
+Incremental delivery checkpoints and the wireframe scope boundary are tracked in [`implementation-plan.md`](implementation-plan.md).
+
 | Specification | State | Notes |
 |---|---|---|
 | 00 System context | In progress | Repository boundaries, module, config, HTTP foundation and local workflow exist. |
