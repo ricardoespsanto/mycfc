@@ -21,7 +21,8 @@ tools: ## Install pinned Go development tools into ./bin
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@v1.67.1
 
 dev-infra: ## Start local PostgreSQL and MinIO
-	docker compose up -d --wait postgres minio minio-init
+	docker compose up -d --wait postgres minio
+	docker compose run --rm minio-init
 
 dev-infra-down: ## Stop local services without deleting data
 	docker compose down
@@ -60,7 +61,7 @@ test: ## Run unit tests
 	go test ./internal/... ./cmd/...
 
 test-integration: dev-infra ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable"; $(GOOSE) -dir internal/db/migrations postgres "$$TEST_DATABASE_URL" up; TEST_DATABASE_URL="$$TEST_DATABASE_URL" go test -tags=integration ./tests/integration/... ./internal/db/...
+	@set -a; source .env; set +a; if ! docker compose exec -T postgres psql -U "$${POSTGRES_USER}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then docker compose exec -T postgres createdb -U "$${POSTGRES_USER}" mycfc_test; fi; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable"; $(GOOSE) -dir internal/db/migrations postgres "$$TEST_DATABASE_URL" up; TEST_DATABASE_URL="$$TEST_DATABASE_URL" go test -tags=integration ./tests/integration/... ./internal/db/...
 
 test-e2e: ## Run browser and accessibility tests
 	npm run test:e2e

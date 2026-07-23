@@ -11,9 +11,10 @@ set -a
 source .env
 set +a
 
-docker-compose up -d --wait postgres minio minio-init
-if ! docker-compose exec -T postgres psql -U mycfc -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then
-  docker-compose exec -T postgres createdb -U mycfc mycfc_test
+docker compose up -d --wait postgres minio
+docker compose run --rm minio-init
+if ! docker compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then
+  docker compose exec -T postgres createdb -U "$POSTGRES_USER" mycfc_test
 fi
 ./bin/goose -dir internal/db/migrations postgres "$DATABASE_URL" up
 npm ci

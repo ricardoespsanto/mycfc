@@ -22,7 +22,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager) http.Handle
 	mux.HandleFunc("GET /health/ready", health.Ready)
 	mux.Handle("GET /assets/{path...}", assetHandler())
 
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		if sessions.Exists(r.Context(), "user_id") {
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			return
