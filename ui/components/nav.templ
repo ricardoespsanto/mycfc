@@ -1,0 +1,22 @@
+package components
+
+type NavigationItem struct {
+	Label string
+	Path  string
+}
+
+templ Navigation(currentPath string, items []NavigationItem) {
+	<nav aria-label="Navegação principal">
+		<ul>
+			for _, item := range items {
+				<li>
+					if item.Path == currentPath {
+						<a href={ item.Path } aria-current="page">{ item.Label }</a>
+					} else {
+						<a href={ item.Path }>{ item.Label }</a>
+					}
+				</li>
+			}
+		</ul>
+	</nav>
+}

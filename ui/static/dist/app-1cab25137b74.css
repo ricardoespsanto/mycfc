@@ -11,9 +11,37 @@ body {
 }
 
 main {
-  width: min(72rem, calc(100% - 2rem));
-  margin-inline: auto;
-  padding-block: 2rem;
+	width: min(72rem, calc(100% - 2rem));
+	margin-inline: auto;
+	padding-block: 2rem;
+}
+
+.error-summary {
+	margin-block-end: 1.5rem;
+	padding: 1rem;
+	border-inline-start: 0.35rem solid #a61b1b;
+	background: #fff1f1;
+}
+
+.error-summary h2,
+.error-summary ul {
+	margin: 0;
+}
+
+.error-summary ul {
+	margin-block-start: 0.5rem;
+}
+
+.field-error {
+	margin-block: 0.25rem 0;
+	color: #8f1616;
+	font-weight: 600;
+}
+
+.flash {
+	padding: 0.75rem 1rem;
+	border-inline-start: 0.35rem solid #17653c;
+	background: #edfff3;
 }
 
 .skip-link {

@@ -1,0 +1,26 @@
+package components
+
+type PageMeta struct {
+	Title         string
+	StylesheetURL string
+	ScriptURL     string
+}
+
+templ Base(meta PageMeta, content templ.Component) {
+	<!doctype html>
+	<html lang="pt-PT">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ meta.Title }</title>
+			<link rel="stylesheet" href={ meta.StylesheetURL }/>
+			<script src={ meta.ScriptURL } defer></script>
+		</head>
+		<body>
+			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
+			<main id="conteudo-principal">
+				@content
+			</main>
+		</body>
+	</html>
+}

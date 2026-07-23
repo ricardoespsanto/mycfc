@@ -1,0 +1,7 @@
+package components
+
+templ FieldErrorMessage(field, message string) {
+	if message != "" {
+		<p id={ field + "-error" } class="field-error">{ message }</p>
+	}
+}
