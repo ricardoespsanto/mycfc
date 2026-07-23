@@ -17,8 +17,11 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/cfcoimbra/mycfc/internal/config"
+	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/storage"
+	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/gorilla/csrf"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -102,7 +105,21 @@ func New(ctx context.Context) (*Application, error) {
 		return nil, err
 	}
 
-	router := newRouter(pool, sessions)
+	assets, err := loadAssetManifest()
+	if err != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, err
+	}
+	login := handlers.Login{
+		Users:    dbgen.New(pool),
+		Sessions: sessions,
+		PageMeta: components.PageMeta{
+			StylesheetURL: assets["app.css"],
+			ScriptURL:     assets["app.js"],
+		},
+	}
+	router := newRouter(pool, sessions, login)
 	csrfMiddleware := csrf.Protect(
 		csrfKey,
 		csrf.CookieName("mycfc_csrf"),

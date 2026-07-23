@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/handlers"
 )
 
 type routerPinger struct{ err error }
@@ -15,7 +16,7 @@ type routerPinger struct{ err error }
 func (p routerPinger) Ping(context.Context) error { return p.err }
 
 func TestRouterHealthAndMethodSemantics(t *testing.T) {
-	router := newTestRouter(routerPinger{})
+	router := newTestRouter(routerPinger{}, handlers.Login{})
 	for _, tc := range []struct {
 		method   string
 		path     string
@@ -27,7 +28,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/health/live", http.StatusOK, "", ""},
 		{http.MethodPost, "/health/live", http.StatusMethodNotAllowed, "GET, HEAD", ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, "", ""},
-		{http.MethodGet, "/login", http.StatusNotImplemented, "", ""},
+		{http.MethodGet, "/login", http.StatusOK, "", ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -46,7 +47,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 }
 
 func TestRouterReadinessFailure(t *testing.T) {
-	router := newTestRouter(routerPinger{err: errors.New("down")})
+	router := newTestRouter(routerPinger{err: errors.New("down")}, handlers.Login{})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if response.Code != http.StatusServiceUnavailable {
@@ -54,7 +55,8 @@ func TestRouterReadinessFailure(t *testing.T) {
 	}
 }
 
-func newTestRouter(pinger routerPinger) http.Handler {
+func newTestRouter(pinger routerPinger, login handlers.Login) http.Handler {
 	sessions := scs.New()
-	return sessions.LoadAndSave(newRouter(pinger, sessions))
+	login.Sessions = sessions
+	return sessions.LoadAndSave(newRouter(pinger, sessions, login))
 }

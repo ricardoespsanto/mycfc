@@ -13,7 +13,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -30,8 +30,8 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager) http.Handle
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /login", system.NotImplemented)
-	mux.HandleFunc("POST /login", system.NotImplemented)
+	mux.HandleFunc("GET /login", login.Get)
+	mux.HandleFunc("POST /login", login.Post)
 	mux.HandleFunc("GET /registo", system.NotImplemented)
 	mux.HandleFunc("POST /registo", system.NotImplemented)
 	mux.HandleFunc("POST /logout", system.NotImplemented)

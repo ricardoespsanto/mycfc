@@ -1,0 +1,40 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type LoginPage struct {
+	Meta      components.PageMeta
+	Email     string
+	Next      string
+	CSRFField templ.Component
+	Error     string
+}
+
+templ Login(page LoginPage) {
+	@components.Base(page.Meta, loginContent(page))
+}
+
+templ loginContent(page LoginPage) {
+	<section class="auth-card" aria-labelledby="login-title">
+		<h1 id="login-title">Iniciar sessão</h1>
+		<p>Utilize o seu endereço de correio eletrónico e palavra-passe.</p>
+		if page.Error != "" {
+			<p class="field-error" role="alert">{ page.Error }</p>
+		}
+		<form method="post" action="/login">
+			@page.CSRFField
+			if page.Next != "" {
+				<input type="hidden" name="next" value={ page.Next }/>
+			}
+			<div class="form-field">
+				<label for="email">Correio eletrónico</label>
+				<input id="email" name="email" type="email" autocomplete="email" value={ page.Email } required/>
+			</div>
+			<div class="form-field">
+				<label for="password">Palavra-passe</label>
+				<input id="password" name="password" type="password" autocomplete="current-password" required/>
+			</div>
+			<button type="submit">Iniciar sessão</button>
+		</form>
+	</section>
+}

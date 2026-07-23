@@ -44,6 +44,46 @@ main {
 	background: #edfff3;
 }
 
+.auth-card {
+	width: min(100%, 30rem);
+	margin-inline: auto;
+	padding: clamp(1.5rem, 5vw, 3rem);
+	border: 1px solid #c7d1d9;
+	border-radius: 0.75rem;
+	background: #fff;
+	box-shadow: 0 1rem 2.5rem rgb(23 32 42 / 10%);
+}
+
+.form-field {
+	display: grid;
+	gap: 0.4rem;
+	margin-block: 1rem;
+}
+
+input,
+button {
+	font: inherit;
+}
+
+input {
+	padding: 0.65rem 0.75rem;
+	border: 1px solid #6a7782;
+	border-radius: 0.35rem;
+}
+
+button {
+	padding: 0.7rem 1rem;
+	border: 0;
+	border-radius: 0.35rem;
+	background: #134c6b;
+	color: #fff;
+	font-weight: 700;
+}
+
+button:hover {
+	background: #0b354c;
+}
+
 .skip-link {
   position: absolute;
   inset-inline-start: 1rem;
