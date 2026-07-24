@@ -13,6 +13,7 @@ import (
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/ui/components"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -230,6 +231,13 @@ func TestAdminFleetCapsEquipmentAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	response = dashboardResponse(t, dashboard.Admin, uuid.New(), "Admin")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Imagem temporariamente indisponível") {
 		t.Fatalf("presign failure should not fail the fleet page: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestCalendarSourceIDsPreservesPublicSourceIDs(t *testing.T) {
+	sources := calendarSourceIDs([]pages.CalendarLink{{ID: "training@example.test"}, {ID: "calendar with spaces@example.test"}})
+	if sources != `["training@example.test","calendar with spaces@example.test"]` {
+		t.Fatalf("calendar sources = %q", sources)
 	}
 }
 

@@ -7,6 +7,8 @@ type DashboardPage struct {
 	Heading   string
 	Intro     string
 	EmptyText string
+	CalendarAPIKey string
+	CalendarSources string
 	Calendars []CalendarLink
 	Sections []DashboardSection
 	RepairForm components.RepairFormData
@@ -15,6 +17,7 @@ type DashboardPage struct {
 type CalendarLink struct {
 	Label string
 	URL   string
+	ID    string
 }
 type DashboardSection struct { Heading, Empty string; Items []DashboardItem }
 type DashboardItem struct { Title, Detail, URL string }
@@ -52,10 +55,17 @@ templ dashboardContent(page DashboardPage) {
 		</section>
 	}
 	if len(page.Calendars) > 0 {
-		<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>Consulte os calendários públicos relevantes para o seu perfil.</p><ul class="calendar-links">
-			for _, calendar := range page.Calendars {
+		@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte os calendários públicos relevantes para o seu perfil.")
+	}
+}
+
+templ Calendar(apiKey, sources string, calendars []CalendarLink, intro string) {
+	<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>{ intro }</p>
+		<div class="interactive-calendar" data-calendar data-calendar-api-key={ apiKey } data-calendar-sources={ sources } data-calendar-time-zone="Europe/Lisbon" aria-live="polite"><p>A carregar agenda...</p></div>
+		<noscript><p>A agenda interativa necessita de JavaScript. Consulte os calendários públicos:</p><ul class="calendar-links">
+			for _, calendar := range calendars {
 				<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
 			}
-		</ul></section>
-	}
+		</ul></noscript>
+	</section>
 }

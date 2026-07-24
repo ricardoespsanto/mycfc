@@ -13,6 +13,9 @@ type FleetPage struct {
 	Repairs              []FleetRepair
 	Maintenance          []FleetMaintenance
 	MaintenanceForm      FleetMaintenanceForm
+	CalendarAPIKey       string
+	CalendarSources      string
+	Calendars            []CalendarLink
 }
 
 type FleetStatusCount struct { Status string; Total int64 }
@@ -83,6 +86,7 @@ templ fleetContent(page FleetPage) {
 			</ul>
 		}
 	</section>
+	@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte todos os calendários públicos do clube.")
 	@MaintenanceForm(page.MaintenanceForm)
 }
 

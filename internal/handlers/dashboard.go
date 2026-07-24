@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,6 +55,7 @@ type Dashboard struct {
 	TrainingID            string
 	SocialID              string
 	CleanupsID            string
+	CalendarAPIKey        string
 	Location              *time.Location
 	Dependents            GuardianDependentStore
 	Now                   func() time.Time
@@ -249,7 +251,11 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentCapped: len(equipment) > 500, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	calendars := guardianCalendarLinks([]CalendarVM{
+		h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID),
+		h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID),
+	})
+	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentCapped: len(equipment) > 500, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
 	if page.EquipmentCapped {
 		equipment = equipment[:500]
 	}
@@ -333,7 +339,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	view := DashboardVM{Meta: meta, Heading: heading, Intro: intro, EmptyText: emptyText, Calendars: calendars, Sections: sections}
 	links := make([]pages.CalendarLink, len(view.Calendars))
 	for i, calendar := range view.Calendars {
-		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL}
+		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL, ID: calendar.ID}
 	}
 	pageSections := make([]pages.DashboardSection, len(view.Sections))
 	for i, section := range view.Sections {
@@ -347,7 +353,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	if h.Sessions != nil {
 		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
 	}
-	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Calendars: links, Sections: pageSections, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
+	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
@@ -380,8 +386,9 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	for i, item := range equipment {
 		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
 	}
+	calendars := guardianCalendarLinks(h.guardianCalendars(dependents))
 	page := pages.GuardianPage{
-		Meta: meta, Dependents: pageItems, Calendars: guardianCalendarLinks(h.guardianCalendars(dependents)),
+		Meta: meta, Dependents: pageItems, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars,
 		Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -410,9 +417,18 @@ func (h Dashboard) location() *time.Location {
 func guardianCalendarLinks(calendars []CalendarVM) []pages.CalendarLink {
 	links := make([]pages.CalendarLink, len(calendars))
 	for i, calendar := range calendars {
-		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL}
+		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL, ID: calendar.ID}
 	}
 	return links
+}
+
+func calendarSourceIDs(calendars []pages.CalendarLink) string {
+	ids := make([]string, len(calendars))
+	for i, calendar := range calendars {
+		ids[i] = calendar.ID
+	}
+	encoded, _ := json.Marshal(ids)
+	return string(encoded)
 }
 
 func (h Dashboard) groups(ctx context.Context, role string) ([]dbgen.WhatsappGroup, error) {
@@ -468,7 +484,7 @@ func numericString(value pgtype.Numeric) string {
 }
 
 func (h Dashboard) calendar(label, id string) CalendarVM {
-	return CalendarVM{Label: label, URL: "https://calendar.google.com/calendar/u/0?cid=" + url.QueryEscape(id)}
+	return CalendarVM{Label: label, URL: "https://calendar.google.com/calendar/u/0?cid=" + url.QueryEscape(id), ID: id}
 }
 
 func (h Dashboard) guardianCalendars(dependents []dbgen.ListDependentsByGuardianRow) []CalendarVM {

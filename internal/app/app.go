@@ -136,6 +136,7 @@ func New(ctx context.Context) (*Application, error) {
 		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
 		CompetitionID: cfg.CalendarCompetitionID, TrainingID: cfg.CalendarTrainingID,
 		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
+		CalendarAPIKey: cfg.GoogleCalendarAPIKey,
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}

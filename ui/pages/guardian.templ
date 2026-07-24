@@ -7,6 +7,8 @@ type GuardianPage struct {
 	Meta       components.PageMeta
 	Dependents []DashboardItem
 	Calendars  []CalendarLink
+	CalendarAPIKey string
+	CalendarSources string
 	Name, DateOfBirth, Role, Squad string
 	Errors     validation.FieldErrors
 	Success    string
@@ -36,11 +38,7 @@ templ GuardianContent(page GuardianPage) {
 			}
 		</section>
 		if len(page.Calendars) > 0 {
-			<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>Consulte os calendários públicos relevantes para os menores a seu cargo.</p><ul class="calendar-links">
-				for _, calendar := range page.Calendars {
-					<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
-				}
-			</ul></section>
+			@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte os calendários públicos relevantes para os menores a seu cargo.")
 		}
 		<section class="dashboard-card" aria-labelledby="add-dependent-title"><h2 id="add-dependent-title">Adicionar menor a cargo</h2>
 			if message := page.Errors["form"]; message != "" {

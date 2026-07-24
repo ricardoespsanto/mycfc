@@ -5,6 +5,7 @@ import "github.com/cfcoimbra/mycfc/ui/components"
 type CalendarVM struct {
 	Label string
 	URL   string
+	ID    string
 }
 
 type DashboardVM struct {
