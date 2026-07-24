@@ -112,3 +112,70 @@ func (q *Queries) CreateMaintenanceTask(ctx context.Context, arg CreateMaintenan
 	)
 	return i, err
 }
+
+const scheduleMaintenanceTask = `-- name: ScheduleMaintenanceTask :one
+WITH eligible_equipment AS (
+    SELECT id
+    FROM equipment
+    WHERE equipment.id = $1
+      AND status <> 'Retired'
+    FOR UPDATE
+), task AS (
+    INSERT INTO maintenance_tasks (equipment_id, scheduled_for, description, created_by_id)
+    SELECT id, $2, $3, $4
+    FROM eligible_equipment
+    RETURNING id, equipment_id, scheduled_for, description, status,
+              created_by_id, completed_at, created_at, updated_at
+), equipment_status AS (
+    UPDATE equipment e
+    SET status = 'Maintenance', updated_at = now()
+    FROM task
+    WHERE e.id = task.equipment_id
+      AND task.scheduled_for <= now()
+    RETURNING e.id
+)
+SELECT id, equipment_id, scheduled_for, description, status,
+       created_by_id, completed_at, created_at, updated_at
+FROM task
+`
+
+type ScheduleMaintenanceTaskParams struct {
+	EquipmentID  uuid.UUID          `json:"equipment_id"`
+	ScheduledFor pgtype.Timestamptz `json:"scheduled_for"`
+	Description  string             `json:"description"`
+	CreatedByID  *uuid.UUID         `json:"created_by_id"`
+}
+
+type ScheduleMaintenanceTaskRow struct {
+	ID           uuid.UUID          `json:"id"`
+	EquipmentID  uuid.UUID          `json:"equipment_id"`
+	ScheduledFor pgtype.Timestamptz `json:"scheduled_for"`
+	Description  string             `json:"description"`
+	Status       string             `json:"status"`
+	CreatedByID  *uuid.UUID         `json:"created_by_id"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error) {
+	row := q.db.QueryRow(ctx, scheduleMaintenanceTask,
+		arg.EquipmentID,
+		arg.ScheduledFor,
+		arg.Description,
+		arg.CreatedByID,
+	)
+	var i ScheduleMaintenanceTaskRow
+	err := row.Scan(
+		&i.ID,
+		&i.EquipmentID,
+		&i.ScheduledFor,
+		&i.Description,
+		&i.Status,
+		&i.CreatedByID,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

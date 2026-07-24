@@ -2,20 +2,27 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/a-h/templ"
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/locale"
+	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/gorilla/csrf"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -30,8 +37,17 @@ type DashboardStore interface {
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 }
 
+type FleetStore interface {
+	CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error)
+	ListEquipmentForAdmin(context.Context, int32) ([]dbgen.Equipment, error)
+	ListPendingRepairRequests(context.Context, int32) ([]dbgen.ListPendingRepairRequestsRow, error)
+	ListUpcomingMaintenance(context.Context, dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error)
+	ScheduleMaintenanceTask(context.Context, dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error)
+}
+
 type Dashboard struct {
 	Store                 DashboardStore
+	Fleet                 FleetStore
 	System                System
 	PageMeta              components.PageMeta
 	CompetitionID         string
@@ -44,6 +60,7 @@ type Dashboard struct {
 	ResponsibilityVersion string
 	ResponsibilitySHA256  string
 	Sessions              *scs.SessionManager
+	Objects               storage.ObjectStore
 }
 
 func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +119,197 @@ func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 	h.renderGuardian(w, r, http.StatusOK, dependents, guardianDependentForm{})
 }
 func (h Dashboard) Admin(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, "Painel de administração", "Consulte a frota, pedidos de reparação e manutenção.", "Ainda não existem dados de frota para apresentar.", "/admin/fleet", []CalendarVM{h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID), h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID)}, nil)
+	h.renderFleet(w, r, http.StatusOK, fleetMaintenanceForm{})
+}
+
+type fleetMaintenanceForm struct {
+	EquipmentID, ScheduledFor, Description, Success string
+	Errors                                          validation.FieldErrors
+}
+
+func (h Dashboard) Maintenance(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderFleet(w, r, http.StatusBadRequest, fleetMaintenanceForm{})
+		return
+	}
+	form := h.validateMaintenance(r)
+	if !form.Errors.Empty() {
+		h.renderFleet(w, r, http.StatusUnprocessableEntity, form)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	scheduledFor, _ := time.ParseInLocation("2006-01-02T15:04", form.ScheduledFor, h.location())
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	if h.Fleet == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	_, err := h.Fleet.ScheduleMaintenanceTask(ctx, dbgen.ScheduleMaintenanceTaskParams{
+		EquipmentID: mustParseUUID(form.EquipmentID), ScheduledFor: pgtype.Timestamptz{Time: scheduledFor, Valid: true},
+		Description: form.Description, CreatedByID: &user.ID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		form.Errors.Add("equipment_id", "Selecione um equipamento disponível.")
+		h.renderFleet(w, r, http.StatusUnprocessableEntity, form)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		h.renderMaintenanceForm(w, r, http.StatusOK, fleetMaintenanceForm{Success: "Manutenção agendada."})
+		return
+	}
+	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+}
+
+func (h Dashboard) validateMaintenance(r *http.Request) fleetMaintenanceForm {
+	form := fleetMaintenanceForm{EquipmentID: strings.TrimSpace(r.PostForm.Get("equipment_id")), ScheduledFor: strings.TrimSpace(r.PostForm.Get("scheduled_for")), Description: strings.TrimSpace(r.PostForm.Get("description")), Errors: validation.FieldErrors{}}
+	if _, err := uuid.Parse(form.EquipmentID); err != nil {
+		form.Errors.Add("equipment_id", "Selecione um equipamento válido.")
+	}
+	if _, err := time.ParseInLocation("2006-01-02T15:04", form.ScheduledFor, h.location()); err != nil {
+		form.Errors.Add("scheduled_for", "Introduza uma data e hora válidas.")
+	}
+	length := utf8.RuneCountInString(form.Description)
+	if length < 10 || length > 2000 {
+		form.Errors.Add("description", "A descrição deve ter entre 10 e 2000 caracteres.")
+	}
+	return form
+}
+
+func mustParseUUID(value string) uuid.UUID {
+	id, _ := uuid.Parse(value)
+	return id
+}
+
+func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status int, form fleetMaintenanceForm) {
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	page, err := h.fleetPage(ctx, r, form)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	page.Meta = h.PageMeta
+	page.Meta.Title = "Frota | MyCFC"
+	page.Meta.CurrentPath = "/admin/fleet"
+	page.Meta.CurrentUserName = user.Name
+	page.Meta.Navigation = dashboardNavigation(user.Role)
+	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if r.Header.Get("HX-Request") == "true" {
+		_ = pages.MaintenanceForm(page.MaintenanceForm).Render(r.Context(), w)
+		return
+	}
+	_ = pages.Fleet(page).Render(r.Context(), w)
+}
+
+func (h Dashboard) renderMaintenanceForm(w http.ResponseWriter, r *http.Request, status int, form fleetMaintenanceForm) {
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	equipment, err := h.Store.ListOperationalEquipment(ctx, 500)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	meta := h.PageMeta
+	meta.CurrentUserName = user.Name
+	meta.Navigation = dashboardNavigation(user.Role)
+	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.MaintenanceForm(pages.FleetMaintenanceForm{CSRFField: meta.CSRFField, Equipment: repairEquipment(equipment), Success: form.Success}).Render(r.Context(), w)
+}
+
+func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMaintenanceForm) (pages.FleetPage, error) {
+	if h.Fleet == nil {
+		return pages.FleetPage{}, errors.New("fleet store is not configured")
+	}
+	counts, err := h.Fleet.CountEquipmentByStatus(ctx)
+	if err != nil {
+		return pages.FleetPage{}, err
+	}
+	equipment, err := h.Fleet.ListEquipmentForAdmin(ctx, 501)
+	if err != nil {
+		return pages.FleetPage{}, err
+	}
+	repairs, err := h.Fleet.ListPendingRepairRequests(ctx, 50)
+	if err != nil {
+		return pages.FleetPage{}, err
+	}
+	now := h.now()
+	maintenance, err := h.Fleet.ListUpcomingMaintenance(ctx, dbgen.ListUpcomingMaintenanceParams{FromTime: pgtype.Timestamptz{Time: now, Valid: true}, ToTime: pgtype.Timestamptz{Time: now.AddDate(0, 0, 90), Valid: true}, RowLimit: 50})
+	if err != nil {
+		return pages.FleetPage{}, err
+	}
+	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentCapped: len(equipment) > 500, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	if page.EquipmentCapped {
+		equipment = equipment[:500]
+	}
+	page.Equipment = make([]pages.FleetEquipment, len(equipment))
+	for i, item := range equipment {
+		page.Equipment[i] = pages.FleetEquipment{AssetTag: item.AssetTag, Name: item.Name, Type: item.Type, Status: item.Status}
+	}
+	page.Repairs = h.fleetRepairs(ctx, r, repairs)
+	page.Maintenance = make([]pages.FleetMaintenance, len(maintenance))
+	for i, task := range maintenance {
+		page.Maintenance[i] = pages.FleetMaintenance{Equipment: task.AssetTag + " - " + task.EquipmentName, Description: task.Description, Status: task.Status, ScheduledFor: task.ScheduledFor.Time.In(h.location()).Format("02/01/2006 15:04")}
+	}
+	nonRetired, err := h.Store.ListOperationalEquipment(ctx, 500)
+	if err != nil {
+		return pages.FleetPage{}, err
+	}
+	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
+	return page, nil
+}
+
+func fleetStatusCounts(counts []dbgen.CountEquipmentByStatusRow) []pages.FleetStatusCount {
+	totals := map[string]int64{"Operational": 0, "Maintenance": 0, "Retired": 0}
+	for _, count := range counts {
+		totals[count.Status] = count.Total
+	}
+	return []pages.FleetStatusCount{{Status: "Operational", Total: totals["Operational"]}, {Status: "Maintenance", Total: totals["Maintenance"]}, {Status: "Retired", Total: totals["Retired"]}}
+}
+
+func repairEquipment(equipment []dbgen.Equipment) []components.RepairEquipment {
+	choices := make([]components.RepairEquipment, len(equipment))
+	for i, item := range equipment {
+		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
+	}
+	return choices
+}
+
+func (h Dashboard) fleetRepairs(ctx context.Context, r *http.Request, repairs []dbgen.ListPendingRepairRequestsRow) []pages.FleetRepair {
+	items := make([]pages.FleetRepair, len(repairs))
+	for i, repair := range repairs {
+		items[i] = pages.FleetRepair{Equipment: repair.AssetTag + " - " + repair.EquipmentName, Description: repair.IssueDescription, Status: repair.Status, ReportedAt: repair.DateReported.Time.In(h.location()).Format("02/01/2006 15:04")}
+		if repair.ImageObjectKey == nil {
+			continue
+		}
+		if repair.ImageContentType == nil || !validRepairImageContentType(*repair.ImageContentType) || h.Objects == nil {
+			items[i].PhotoUnavailable = "Imagem temporariamente indisponível"
+			continue
+		}
+		url, err := h.Objects.PresignGet(storage.WithPresignContentType(ctx, *repair.ImageContentType), *repair.ImageObjectKey, 10*time.Minute)
+		if err != nil {
+			slog.Warn("presign repair photo", "repair_id", repair.ID, "request_id", httpx.RequestID(r.Context()), "error", err)
+			items[i].PhotoUnavailable = "Imagem temporariamente indisponível"
+			continue
+		}
+		items[i].PhotoURL = url
+	}
+	return items
+}
+
+func validRepairImageContentType(contentType string) bool {
+	return contentType == "image/jpeg" || contentType == "image/png" || contentType == "image/webp"
 }
 
 func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro, emptyText, path string, calendars []CalendarVM, sections []DashboardSectionVM) {

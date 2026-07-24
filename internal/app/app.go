@@ -127,6 +127,8 @@ func New(ctx context.Context) (*Application, error) {
 	}
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
+		Fleet:                 dbgen.New(pool),
+		Objects:               objectStore,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
 		PageMeta:              components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
 		Location:              location,

@@ -1,0 +1,114 @@
+package pages
+
+import (
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type FleetPage struct {
+	Meta                 components.PageMeta
+	Counts               []FleetStatusCount
+	Equipment            []FleetEquipment
+	EquipmentCapped      bool
+	Repairs              []FleetRepair
+	Maintenance          []FleetMaintenance
+	MaintenanceForm      FleetMaintenanceForm
+}
+
+type FleetStatusCount struct { Status string; Total int64 }
+type FleetEquipment struct { AssetTag, Name, Type, Status string }
+type FleetRepair struct { Equipment, Description, Status, ReportedAt, PhotoURL, PhotoUnavailable string }
+type FleetMaintenance struct { Equipment, Description, Status, ScheduledFor string }
+type FleetMaintenanceForm struct {
+	CSRFField templ.Component
+	Equipment []components.RepairEquipment
+	EquipmentID, ScheduledFor, Description, Success string
+	Errors validation.FieldErrors
+}
+
+templ Fleet(page FleetPage) {
+	@components.Base(page.Meta, fleetContent(page))
+}
+
+templ fleetContent(page FleetPage) {
+	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section>
+	<section class="dashboard-card"><h2>Estado da frota</h2><ul>
+		for _, count := range page.Counts {
+			<li>{ count.Status }: { count.Total }</li>
+		}
+	</ul></section>
+	<section class="dashboard-card"><h2>Equipamentos</h2>
+		if page.EquipmentCapped {
+			<p role="alert">A lista está limitada a 500 equipamentos.</p>
+		}
+		if len(page.Equipment) == 0 {
+			<p>Ainda não existem equipamentos registados.</p>
+		}
+		if len(page.Equipment) > 0 {
+			<ul>
+				for _, equipment := range page.Equipment {
+					<li>{ equipment.AssetTag } - { equipment.Name } - { equipment.Type } - { equipment.Status }</li>
+				}
+			</ul>
+		}
+	</section>
+	<section class="dashboard-card"><h2>Pedidos de reparação pendentes</h2>
+		if len(page.Repairs) == 0 {
+			<p>Não existem pedidos de reparação pendentes.</p>
+		}
+		if len(page.Repairs) > 0 {
+			<ul>
+				for _, repair := range page.Repairs {
+					<li><strong>{ repair.Equipment }</strong> - { repair.Description } - { repair.Status } - { repair.ReportedAt }
+						if repair.PhotoURL != "" {
+							<br/><img src={ repair.PhotoURL } alt="Fotografia da avaria"/>
+						}
+						if repair.PhotoUnavailable != "" {
+							<br/><span>{ repair.PhotoUnavailable }</span>
+						}
+					</li>
+				}
+			</ul>
+		}
+	</section>
+	<section class="dashboard-card"><h2>Próximas manutenções</h2>
+		if len(page.Maintenance) == 0 {
+			<p>Não existem manutenções nos próximos 90 dias.</p>
+		}
+		if len(page.Maintenance) > 0 {
+			<ul>
+				for _, task := range page.Maintenance {
+					<li><strong>{ task.Equipment }</strong> - { task.Description } - { task.Status } - { task.ScheduledFor }</li>
+				}
+			</ul>
+		}
+	</section>
+	@MaintenanceForm(page.MaintenanceForm)
+}
+
+templ MaintenanceForm(form FleetMaintenanceForm) {
+	<section id="maintenance-form" class="dashboard-card" aria-labelledby="maintenance-title">
+		<h2 id="maintenance-title">Agendar manutenção</h2>
+		if form.Success != "" {
+			<p role="status" tabindex="-1">{ form.Success }</p>
+		}
+		<form method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="this" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+			@form.CSRFField
+			<label for="maintenance-equipment">Equipamento</label>
+			<select id="maintenance-equipment" name="equipment_id" required aria-describedby="equipment_id-error">
+				<option value="">Selecione um equipamento</option>
+				for _, equipment := range form.Equipment {
+					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
+				}
+			</select>
+			@components.FieldErrorMessage("equipment_id", form.Errors["equipment_id"])
+			<label for="maintenance-scheduled-for">Data e hora</label>
+			<input id="maintenance-scheduled-for" name="scheduled_for" type="datetime-local" value={ form.ScheduledFor } required/>
+			@components.FieldErrorMessage("scheduled_for", form.Errors["scheduled_for"])
+			<label for="maintenance-description">Descrição</label>
+			<textarea id="maintenance-description" name="description" required>{ form.Description }</textarea>
+			@components.FieldErrorMessage("description", form.Errors["description"])
+			<button type="submit">Agendar manutenção</button>
+		</form>
+	</section>
+}
