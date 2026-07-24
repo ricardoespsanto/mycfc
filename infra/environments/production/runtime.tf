@@ -448,8 +448,8 @@ resource "aws_ecs_task_definition" "app" {
   network_mode             = "awsvpc"
   cpu                      = tostring(var.task_cpu)
   memory                   = tostring(var.task_memory)
-  execution_role_arn       = var.app_execution_role_arn
-  task_role_arn            = var.app_task_role_arn
+  execution_role_arn       = aws_iam_role.app_execution.arn
+  task_role_arn            = aws_iam_role.app_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -469,8 +469,8 @@ resource "aws_ecs_task_definition" "app" {
     }]
     environment = local.app_environment
     secrets = [
-      { name = "DB_PASSWORD", valueFrom = var.app_db_password_secret_arn },
-      { name = "CSRF_AUTH_KEY_B64", valueFrom = var.csrf_auth_key_secret_arn },
+      { name = "DB_PASSWORD", valueFrom = aws_secretsmanager_secret.app_db_password.arn },
+      { name = "CSRF_AUTH_KEY_B64", valueFrom = aws_secretsmanager_secret.csrf_auth_key.arn },
     ]
     readonlyRootFilesystem = true
     privileged             = false
@@ -502,8 +502,8 @@ resource "aws_ecs_task_definition" "migrate" {
   network_mode             = "awsvpc"
   cpu                      = tostring(var.task_cpu)
   memory                   = tostring(var.task_memory)
-  execution_role_arn       = var.migration_execution_role_arn
-  task_role_arn            = var.migration_task_role_arn
+  execution_role_arn       = aws_iam_role.migrate_execution.arn
+  task_role_arn            = aws_iam_role.migrate_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"

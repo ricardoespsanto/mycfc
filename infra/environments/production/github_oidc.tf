@@ -121,6 +121,10 @@ data "aws_iam_policy_document" "github_infra_apply" {
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-plan",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-apply",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-deploy",
+      aws_iam_role.app_execution.arn,
+      aws_iam_role.app_task.arn,
+      aws_iam_role.migrate_execution.arn,
+      aws_iam_role.migrate_task.arn,
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-rds-monitoring",
       "arn:aws:route53:::hostedzone/${var.route53_zone_id}",
       "arn:aws:wafv2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:regional/webacl/${local.name}-web-acl/*",
@@ -255,13 +259,27 @@ data "aws_iam_policy_document" "github_infra_apply" {
     sid       = "PassDeclaredTaskRoles"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
-    resources = [var.app_execution_role_arn, var.app_task_role_arn, var.migration_execution_role_arn, var.migration_task_role_arn]
+    resources = [aws_iam_role.app_execution.arn, aws_iam_role.app_task.arn, aws_iam_role.migrate_execution.arn, aws_iam_role.migrate_task.arn]
 
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
       values   = ["ecs-tasks.amazonaws.com"]
     }
+  }
+
+  statement {
+    sid       = "CreateApplicationSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:CreateSecret"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "ManageApplicationSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:DeleteSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds", "secretsmanager:PutSecretValue", "secretsmanager:TagResource", "secretsmanager:UntagResource", "secretsmanager:UpdateSecret"]
+    resources = [aws_secretsmanager_secret.app_db_password.arn, aws_secretsmanager_secret.csrf_auth_key.arn]
   }
 
   statement {
@@ -288,6 +306,10 @@ data "aws_iam_policy_document" "github_infra_apply" {
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-plan",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-apply",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-deploy",
+      aws_iam_role.app_execution.arn,
+      aws_iam_role.app_task.arn,
+      aws_iam_role.migrate_execution.arn,
+      aws_iam_role.migrate_task.arn,
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-rds-monitoring",
     ]
   }
@@ -391,10 +413,10 @@ data "aws_iam_policy_document" "github_deploy" {
     effect  = "Allow"
     actions = ["iam:PassRole"]
     resources = [
-      var.app_execution_role_arn,
-      var.app_task_role_arn,
-      var.migration_execution_role_arn,
-      var.migration_task_role_arn,
+      aws_iam_role.app_execution.arn,
+      aws_iam_role.app_task.arn,
+      aws_iam_role.migrate_execution.arn,
+      aws_iam_role.migrate_task.arn,
     ]
 
     condition {

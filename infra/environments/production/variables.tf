@@ -53,19 +53,7 @@ variable "consent_terms_url" { type = string }
 variable "consent_image_url" { type = string }
 variable "consent_minor_url" { type = string }
 variable "image_git_sha" { type = string }
-variable "app_execution_role_arn" { type = string }
-variable "app_task_role_arn" { type = string }
-variable "migration_execution_role_arn" { type = string }
-variable "migration_task_role_arn" { type = string }
-variable "app_db_password_secret_arn" {
-  type      = string
-  sensitive = true
-}
 variable "migration_db_password_secret_arn" {
-  type      = string
-  sensitive = true
-}
-variable "csrf_auth_key_secret_arn" {
   type      = string
   sensitive = true
 }
@@ -143,12 +131,8 @@ check "production_input_validation" {
     error_message = "Image Git SHA and consent document URLs are invalid."
   }
   assert {
-    condition     = alltrue([for value in [var.app_execution_role_arn, var.app_task_role_arn, var.migration_execution_role_arn, var.migration_task_role_arn] : can(regex("^arn:aws(-[a-z]+)?:iam::[0-9]{12}:role/.+$", value))]) && length(distinct([var.app_execution_role_arn, var.app_task_role_arn, var.migration_execution_role_arn, var.migration_task_role_arn])) == 4
-    error_message = "Application and migration execution/task roles must be four distinct IAM role ARNs."
-  }
-  assert {
-    condition     = alltrue([for value in [var.app_db_password_secret_arn, var.migration_db_password_secret_arn, var.csrf_auth_key_secret_arn] : can(regex("^arn:aws(-[a-z]+)?:secretsmanager:[a-z]{2}(-gov)?-[a-z]+-[0-9]+:[0-9]{12}:secret:.+$", value))]) && trimspace(var.app_db_username) != "" && trimspace(var.migration_db_username) != "" && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
-    error_message = "Database/CSRF secret ARNs, database users, or database name are invalid."
+    condition     = can(regex("^arn:aws(-[a-z]+)?:secretsmanager:[a-z]{2}(-gov)?-[a-z]+-[0-9]+:[0-9]{12}:secret:.+$", var.migration_db_password_secret_arn)) && trimspace(var.app_db_username) != "" && trimspace(var.migration_db_username) != "" && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
+    error_message = "Migration database secret ARN, database users, or database name are invalid."
   }
   assert {
     condition     = var.alb_log_retention_days >= 30 && var.waf_login_rate_limit >= 10 && var.waf_general_rate_limit >= var.waf_login_rate_limit && var.alb_requests_per_target > 0
