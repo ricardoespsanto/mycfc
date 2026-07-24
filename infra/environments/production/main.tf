@@ -11,6 +11,13 @@ locals {
   repository    = "${var.github_org}/${var.github_repo}"
   repair_bucket = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-repairs"
   log_bucket    = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-alb-logs"
+  fargate_task_memory_by_cpu = {
+    "256"  = [512, 1024, 2048]
+    "512"  = [1024, 2048, 3072, 4096]
+    "1024" = [2048, 3072, 4096, 5120, 6144, 7168, 8192]
+    "2048" = [for memory in range(4096, 16385, 1024) : memory]
+    "4096" = [for memory in range(8192, 30721, 1024) : memory]
+  }
   tags = {
     Project     = var.project_name
     Environment = var.environment

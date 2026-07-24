@@ -1,0 +1,102 @@
+name: Infrastructure
+
+on:
+  pull_request:
+    paths: [infra/**]
+  push:
+    branches: [main]
+    paths: [infra/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: make terraform-check
+
+  plan:
+    # Fork PRs receive no environment values or AWS OIDC token.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) &&
+      vars.AWS_REGION != '' && vars.TF_BACKEND_BUCKET != '' && vars.AWS_INFRA_PLAN_ROLE_ARN != ''
+    needs: checks
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+      TF_VARS: ${{ secrets.TF_VARS }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # aws-actions/configure-aws-credentials v5.1.1
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Create an ephemeral Terraform variables file
+        run: umask 077; printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
+      - name: Plan production changes
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace
+          -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION
+          hashicorp/terraform:1.15.8 -chdir=infra/environments/production init
+          -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="region=$AWS_REGION"
+          && docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace
+          -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION
+          hashicorp/terraform:1.15.8 -chdir=infra/environments/production plan -out=/workspace/infra/environments/production/production.tfplan
+      - name: Record plan result
+        run: printf '%s\n' 'Production plan completed; the plan file remains only on this runner.' >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        run: rm -f infra/environments/production/ci.auto.tfvars
+
+  apply:
+    if: >-
+      github.event_name == 'push' && vars.AWS_REGION != '' &&
+      vars.TF_BACKEND_BUCKET != '' && vars.AWS_INFRA_APPLY_ROLE_ARN != ''
+    needs: plan
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: mycfc-production-infra
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+      TF_VARS: ${{ secrets.TF_VARS }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # aws-actions/configure-aws-credentials v5.1.1
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Apply a fresh production plan
+        run: >-
+          umask 077; printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars;
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace
+          -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION
+          hashicorp/terraform:1.15.8 -chdir=infra/environments/production init
+          -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="region=$AWS_REGION";
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace
+          -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION
+          hashicorp/terraform:1.15.8 -chdir=infra/environments/production plan -out=/workspace/infra/environments/production/production.tfplan;
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace
+          -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION
+          hashicorp/terraform:1.15.8 -chdir=infra/environments/production apply -auto-approve /workspace/infra/environments/production/production.tfplan
+      - if: always()
+        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan

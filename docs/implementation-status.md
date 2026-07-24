@@ -11,8 +11,8 @@ Incremental delivery checkpoints and the wireframe scope boundary are tracked in
 | 04 Repair workflow | Partial | Repair reporting with multipart validation, idempotency, private object storage, and administrator visibility exists; MinIO encrypted upload/delete integration coverage and initial no-JavaScript browser submission exist. |
 | 05 Authentication and consent | Partial | Login, adult registration, guardian dependant creation with transactional responsibility consent, configuration-backed legal-document links, session-backed current-user loading, role guards, logout, and administrator CLI exist; integration execution remains. |
 | 06 Accessibility/localisation | Partial | pt-PT locale helpers and HTTP error text exist; initial Playwright/axe coverage is present, while full page-state accessibility checks remain. |
-| 07 AWS deployment | Not started | Runtime architecture remains defined in the specification bundle. |
-| 08 GitHub Actions | Not started | Will follow after application and Terraform verification commands exist. |
+| 07 AWS deployment | Implemented source | Terraform bootstrap and production foundations cover state, private network, RDS, S3, ECR, ALB/WAF, ECS, and GitHub OIDC; operator values and live AWS plan/apply evidence remain. |
+| 08 GitHub Actions | Implemented source | Pinned CI, infrastructure, deployment, and Dependabot workflow foundations exist; protected environment configuration and live execution remain. |
 | 09 Local development | Implemented source | Compose, env template, Air config and Make targets are present. |
 | 10 Acceptance matrix | In progress | Unit-level checks added; integration/e2e/infra evidence remains. |
 

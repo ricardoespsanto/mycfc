@@ -49,6 +49,48 @@ variable "consent_image_sha256" { type = string }
 variable "consent_minor_version" { type = string }
 variable "consent_minor_sha256" { type = string }
 variable "image_digest" { type = string }
+variable "consent_terms_url" { type = string }
+variable "consent_image_url" { type = string }
+variable "consent_minor_url" { type = string }
+variable "image_git_sha" { type = string }
+variable "app_execution_role_arn" { type = string }
+variable "app_task_role_arn" { type = string }
+variable "migration_execution_role_arn" { type = string }
+variable "migration_task_role_arn" { type = string }
+variable "app_db_password_secret_arn" {
+  type      = string
+  sensitive = true
+}
+variable "migration_db_password_secret_arn" {
+  type      = string
+  sensitive = true
+}
+variable "csrf_auth_key_secret_arn" {
+  type      = string
+  sensitive = true
+}
+variable "app_db_username" { type = string }
+variable "migration_db_username" { type = string }
+variable "database_name" {
+  type    = string
+  default = "mycfc"
+}
+variable "alb_log_retention_days" {
+  type    = number
+  default = 90
+}
+variable "waf_login_rate_limit" {
+  type    = number
+  default = 100
+}
+variable "waf_general_rate_limit" {
+  type    = number
+  default = 2000
+}
+variable "alb_requests_per_target" {
+  type    = number
+  default = 1000
+}
 variable "vpc_cidr" {
   type    = string
   default = "10.42.0.0/16"
@@ -93,7 +135,23 @@ check "production_input_validation" {
     error_message = "gallery_url must be HTTPS and consent hashes must be lowercase SHA-256 digests."
   }
   assert {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.image_digest)) && can(cidrnetmask(var.vpc_cidr)) && contains([256, 512, 1024, 2048, 4096], var.task_cpu) && var.task_memory >= 512 && var.db_connection_budget >= 56
+    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.image_digest)) && can(cidrnetmask(var.vpc_cidr)) && contains(lookup(local.fargate_task_memory_by_cpu, tostring(var.task_cpu), []), var.task_memory) && var.db_connection_budget >= 56
     error_message = "Image digest, VPC CIDR, Fargate sizing, or database connection budget is invalid."
+  }
+  assert {
+    condition     = can(regex("^[0-9a-f]{40}$", var.image_git_sha)) && alltrue([for value in [var.consent_terms_url, var.consent_image_url, var.consent_minor_url] : can(regex("^https://", value))])
+    error_message = "Image Git SHA and consent document URLs are invalid."
+  }
+  assert {
+    condition     = alltrue([for value in [var.app_execution_role_arn, var.app_task_role_arn, var.migration_execution_role_arn, var.migration_task_role_arn] : can(regex("^arn:aws(-[a-z]+)?:iam::[0-9]{12}:role/.+$", value))]) && length(distinct([var.app_execution_role_arn, var.app_task_role_arn, var.migration_execution_role_arn, var.migration_task_role_arn])) == 4
+    error_message = "Application and migration execution/task roles must be four distinct IAM role ARNs."
+  }
+  assert {
+    condition     = alltrue([for value in [var.app_db_password_secret_arn, var.migration_db_password_secret_arn, var.csrf_auth_key_secret_arn] : can(regex("^arn:aws(-[a-z]+)?:secretsmanager:[a-z]{2}(-gov)?-[a-z]+-[0-9]+:[0-9]{12}:secret:.+$", value))]) && trimspace(var.app_db_username) != "" && trimspace(var.migration_db_username) != "" && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
+    error_message = "Database/CSRF secret ARNs, database users, or database name are invalid."
+  }
+  assert {
+    condition     = var.alb_log_retention_days >= 30 && var.waf_login_rate_limit >= 10 && var.waf_general_rate_limit >= var.waf_login_rate_limit && var.alb_requests_per_target > 0
+    error_message = "ALB log retention and WAF/autoscaling thresholds are invalid."
   }
 }

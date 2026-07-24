@@ -1,0 +1,268 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Tested main-branch commit to deploy.
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mycfc-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+      TF_VARS: ${{ secrets.TF_VARS }}
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+          fetch-depth: 0
+      - name: Verify a tested main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}"
+          git merge-base --is-ancestor "$SHA" origin/main
+          test "$(git rev-parse HEAD)" = "$SHA"
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            test -n "$(gh api \"/repos/${{ github.repository }}/actions/runs?head_sha=$SHA&status=completed&per_page=100\" \
+              --jq '.workflow_runs[] | select(.name == "CI" and .conclusion == "success") | .id')"
+          fi
+      # aws-actions/configure-aws-credentials v5.1.1
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr-login
+        # aws-actions/amazon-ecr-login v2.0.1
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+      - name: Resolve deployment identifiers from Terraform state
+        id: terraform
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
+            hashicorp/terraform:1.15.8 -chdir=infra/environments/production init \
+            -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="region=$AWS_REGION"
+          terraform_output="$RUNNER_TEMP/terraform-outputs.json"
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
+            hashicorp/terraform:1.15.8 -chdir=infra/environments/production output -json > "$terraform_output"
+
+          # These deployment-critical identifiers must come from Terraform state, not guesses.
+          required_outputs=(
+            ecr_repository_url
+            ecs_cluster_name
+            ecs_service_name
+            app_task_definition_arn
+            migration_task_definition_arn
+            domain_name
+            app_private_subnet_ids
+            task_security_group_id
+            alb_target_group_arn
+          )
+          missing_outputs=()
+          for output in "${required_outputs[@]}"; do
+            if ! jq -e --arg output "$output" 'has($output) and (.[$output].sensitive | not)' "$terraform_output" >/dev/null; then
+              missing_outputs+=("$output")
+            fi
+          done
+          if ((${#missing_outputs[@]})); then
+            printf 'Production Terraform state is missing required non-sensitive deployment outputs: %s\n' "${missing_outputs[*]}" >&2
+            exit 1
+          fi
+          if ! jq -e '.app_private_subnet_ids.value | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' "$terraform_output" >/dev/null; then
+            echo "Production Terraform output app_private_subnet_ids must be a non-empty list of subnet IDs." >&2
+            exit 1
+          fi
+
+          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn migration_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
+            printf '%s=%s\n' "$output" "$(jq -r --arg output "$output" '.[$output].value' "$terraform_output")" >> "$GITHUB_OUTPUT"
+          done
+          printf 'app_private_subnet_ids=%s\n' "$(jq -c '.app_private_subnet_ids.value' "$terraform_output")" >> "$GITHUB_OUTPUT"
+      - name: Build and push the immutable image
+        id: image
+        run: |
+          set -Eeuo pipefail
+          SHA="$(git rev-parse HEAD)"
+          REPOSITORY="${{ steps.terraform.outputs.ecr_repository_url }}"
+          IMAGE="$REPOSITORY:git-$SHA"
+          docker build --label "org.opencontainers.image.revision=$SHA" -t "$IMAGE" .
+          docker push "$IMAGE"
+          DIGEST="$(aws ecr describe-images --repository-name "${REPOSITORY#*/}" --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          printf 'image=%s@%s\nsha=%s\n' "$REPOSITORY" "$DIGEST" "$SHA" >> "$GITHUB_OUTPUT"
+      - name: Register immutable ECS task definitions
+        id: task-definitions
+        run: |
+          set -Eeuo pipefail
+          app_current="$RUNNER_TEMP/app-task-definition.json"
+          migrate_current="$RUNNER_TEMP/migrate-task-definition.json"
+          app_registration="$RUNNER_TEMP/app-task-registration.json"
+          migrate_registration="$RUNNER_TEMP/migrate-task-registration.json"
+
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.terraform.outputs.app_task_definition_arn }}" \
+            --query taskDefinition --output json > "$app_current"
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.terraform.outputs.migration_task_definition_arn }}" \
+            --query taskDefinition --output json > "$migrate_current"
+
+          # ECS rejects describe-only fields. Preserve all operational settings and alter only release values.
+          jq --arg image "${{ steps.image.outputs.image }}" --arg sha "${{ steps.image.outputs.sha }}" '
+            def release_env($name; $value):
+              .environment = ((.environment // [] | map(select(.name != $name))) + [{name: $name, value: $value}]);
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+            | if any(.containerDefinitions[]; .name == "app") then
+                .containerDefinitions |= map(
+                  if .name == "app" then
+                    .image = $image
+                    | release_env("APP_VERSION"; $sha)
+                    | release_env("GIT_SHA"; $sha)
+                  else . end
+                )
+              else error("app task definition has no app container") end
+          ' "$app_current" > "$app_registration"
+          jq --arg image "${{ steps.image.outputs.image }}" '
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+            | if any(.containerDefinitions[]; .name == "migrate") then
+                .containerDefinitions |= map(if .name == "migrate" then .image = $image else . end)
+              else error("migration task definition has no migrate container") end
+          ' "$migrate_current" > "$migrate_registration"
+
+          app_task_definition="$(aws ecs register-task-definition --cli-input-json "file://$app_registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
+          migration_task_definition="$(aws ecs register-task-definition --cli-input-json "file://$migrate_registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
+          printf 'app_task_definition=%s\nmigration_task_definition=%s\n' "$app_task_definition" "$migration_task_definition" >> "$GITHUB_OUTPUT"
+      - name: Run and verify database migration
+        id: migration
+        env:
+          CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
+          TASK_DEFINITION: ${{ steps.task-definitions.outputs.migration_task_definition }}
+          SUBNETS: ${{ steps.terraform.outputs.app_private_subnet_ids }}
+          SECURITY_GROUP: ${{ steps.terraform.outputs.task_security_group_id }}
+        run: |
+          set -Eeuo pipefail
+          network_configuration="$RUNNER_TEMP/migration-network.json"
+          jq -n --argjson subnets "$SUBNETS" --arg security_group "$SECURITY_GROUP" \
+            '{awsvpcConfiguration: {subnets: $subnets, securityGroups: [$security_group], assignPublicIp: "DISABLED"}}' > "$network_configuration"
+          run_result="$RUNNER_TEMP/migration-run.json"
+          aws ecs run-task --cluster "$CLUSTER" --launch-type FARGATE --task-definition "$TASK_DEFINITION" \
+            --network-configuration "file://$network_configuration" \
+            --overrides '{"containerOverrides":[{"name":"migrate","command":["migrate","up"]}]}' \
+            --output json > "$run_result"
+          jq -e '(.failures | length) == 0 and (.tasks | length) == 1' "$run_result" >/dev/null || {
+            jq -c '{failures: .failures}' "$run_result" >&2
+            exit 1
+          }
+          task_arn="$(jq -r '.tasks[0].taskArn' "$run_result")"
+          printf 'task_arn=%s\n' "$task_arn" >> "$GITHUB_OUTPUT"
+
+          task_description="$RUNNER_TEMP/migration-task.json"
+          for attempt in {1..40}; do
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --output json > "$task_description"
+            if [[ "$(jq -r '.tasks[0].lastStatus' "$task_description")" == "STOPPED" ]]; then
+              break
+            fi
+            sleep 15
+          done
+          [[ "$(jq -r '.tasks[0].lastStatus' "$task_description")" == "STOPPED" ]] || {
+            echo "Migration task did not stop within 10 minutes." >&2
+            exit 1
+          }
+          if ! jq -e '.tasks[0] | ([.containers[] | select(.name == "migrate") | .exitCode] == [0])' "$task_description" >/dev/null; then
+            jq -c '.tasks[0] | {stopCode, stoppedReason, containers: [.containers[] | {name, exitCode, reason}]}' "$task_description" >&2
+            log_group="$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.containerDefinitions[?name==`migrate`].logConfiguration.options."awslogs-group" | [0]' --output text)"
+            log_prefix="$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.containerDefinitions[?name==`migrate`].logConfiguration.options."awslogs-stream-prefix" | [0]' --output text)"
+            task_id="${task_arn##*/}"
+            aws logs get-log-events --log-group-name "$log_group" --log-stream-name "$log_prefix/migrate/$task_id" --limit 100 --query 'events[].message' --output text || true
+            exit 1
+          fi
+      - name: Update ECS service and wait for a healthy deployment
+        env:
+          CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
+          SERVICE: ${{ steps.terraform.outputs.ecs_service_name }}
+          TASK_DEFINITION: ${{ steps.task-definitions.outputs.app_task_definition }}
+          TARGET_GROUP_ARN: ${{ steps.terraform.outputs.alb_target_group_arn }}
+        run: |
+          set -Eeuo pipefail
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --force-new-deployment >/dev/null
+          service_description="$RUNNER_TEMP/service.json"
+          for attempt in {1..40}; do
+            aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --output json > "$service_description"
+            if jq -e --arg task_definition "$TASK_DEFINITION" '
+              .services[0] | .runningCount == .desiredCount and
+              ([.deployments[] | select(.status == "PRIMARY")] | length == 1) and
+              ([.deployments[] | select(.status == "PRIMARY") | .taskDefinition == $task_definition and .rolloutState == "COMPLETED"] | all)
+            ' "$service_description" >/dev/null; then
+              break
+            fi
+            sleep 15
+          done
+          jq -e --arg task_definition "$TASK_DEFINITION" '
+            .services[0] | .runningCount == .desiredCount and
+            ([.deployments[] | select(.status == "PRIMARY")] | length == 1) and
+            ([.deployments[] | select(.status == "PRIMARY") | .taskDefinition == $task_definition and .rolloutState == "COMPLETED"] | all)
+          ' "$service_description" >/dev/null || {
+            jq -c '.services[0] | {status, runningCount, desiredCount, deployments: [.deployments[] | {status, taskDefinition, rolloutState, rolloutStateReason}]}' "$service_description" >&2
+            exit 1
+          }
+          target_health="$RUNNER_TEMP/target-health.json"
+          aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output json > "$target_health"
+          jq -e '(.TargetHealthDescriptions | length) > 0 and all(.TargetHealthDescriptions[]; .TargetHealth.State == "healthy")' "$target_health" >/dev/null || {
+            jq -c '.TargetHealthDescriptions | map({target: .Target.Id, state: .TargetHealth.State, reason: .TargetHealth.Reason, description: .TargetHealth.Description})' "$target_health" >&2
+            exit 1
+          }
+      - name: Smoke test production endpoints
+        env:
+          DOMAIN: ${{ steps.terraform.outputs.domain_name }}
+        run: |
+          set -Eeuo pipefail
+          asset_path="$(jq -r '."app.js"' ui/static/dist/manifest.json)"
+          for attempt in {1..20}; do
+            health="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "https://$DOMAIN/health/ready" || true)"
+            login="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "https://$DOMAIN/login" || true)"
+            asset="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "https://$DOMAIN$asset_path" || true)"
+            if [[ "$health" == 200 && "$login" == 200 && "$asset" == 200 ]]; then
+              exit 0
+            fi
+            sleep 15
+          done
+          printf 'Smoke checks failed: health=%s login=%s static_asset=%s\n' "$health" "$login" "$asset" >&2
+          exit 1
+      - name: Write deployment summary
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "## Production deployment"
+            echo
+            echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
+            echo "- Image: \`${{ steps.image.outputs.image }}\`"
+            echo "- App task definition: \`${{ steps.task-definitions.outputs.app_task_definition }}\`"
+            echo "- Migration task definition: \`${{ steps.task-definitions.outputs.migration_task_definition }}\`"
+            echo "- Migration task: \`${{ steps.migration.outputs.task_arn }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,migrate-task-definition,app-task-registration,migrate-task-registration,migration-network,migration-run,migration-task,service,target-health}.json
