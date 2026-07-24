@@ -40,7 +40,12 @@ type Config struct {
 	Port       int    `env:"PORT" envDefault:"8080"`
 	BaseURL    string `env:"BASE_URL,required"`
 
-	DatabaseURL    Secret `env:"DATABASE_URL,required"`
+	DatabaseURL    Secret `env:"DATABASE_URL"`
+	DBHost         string `env:"DB_HOST"`
+	DBPort         int    `env:"DB_PORT"`
+	DBName         string `env:"DB_NAME"`
+	DBUser         string `env:"DB_USER"`
+	DBPassword     Secret `env:"DB_PASSWORD"`
 	CSRFAuthKeyB64 Secret `env:"CSRF_AUTH_KEY_B64,required"`
 
 	AWSRegion        string `env:"AWS_REGION,required"`
@@ -100,6 +105,23 @@ func (c Config) IsProduction() bool { return c.AppEnv == "production" }
 
 func (c Config) HTTPAddress() string { return fmt.Sprintf(":%d", c.Port) }
 
+// ResolvedDatabaseURL supports local URLs and production component secrets.
+func (c Config) ResolvedDatabaseURL() (string, error) {
+	if c.DatabaseURL.Value() != "" {
+		return c.DatabaseURL.Value(), nil
+	}
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(c.DBUser, c.DBPassword.Value()),
+		Host:   net.JoinHostPort(c.DBHost, fmt.Sprintf("%d", c.DBPort)),
+		Path:   c.DBName,
+	}
+	query := u.Query()
+	query.Set("sslmode", "require")
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
 func (c Config) CSRFAuthKey() ([]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(c.CSRFAuthKeyB64.Value())
 	if err != nil {
@@ -148,8 +170,19 @@ func (c Config) Validate() error {
 		problems.Add("BASE_URL", baseErr.Error())
 	}
 
-	if err := validateDatabaseURL(c.DatabaseURL.Value()); err != nil {
-		problems.Add("DATABASE_URL", err.Error())
+	components := []string{c.DBHost, c.DBName, c.DBUser, c.DBPassword.Value()}
+	usingURL := strings.TrimSpace(c.DatabaseURL.Value()) != ""
+	usingComponents := c.DBPort != 0 || slices.ContainsFunc(components, func(value string) bool { return strings.TrimSpace(value) != "" })
+	if usingURL && usingComponents {
+		problems.Add("DATABASE_URL", "must not be set with DB_HOST, DB_PORT, DB_NAME, DB_USER, or DB_PASSWORD")
+	}
+	if !usingURL && (!usingComponents || c.DBPort < 1 || c.DBPort > 65535 || slices.ContainsFunc(components, func(value string) bool { return strings.TrimSpace(value) == "" })) {
+		problems.Add("DATABASE_URL", "or complete DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD configuration is required")
+	}
+	if usingURL {
+		if err := validateDatabaseURL(c.DatabaseURL.Value()); err != nil {
+			problems.Add("DATABASE_URL", err.Error())
+		}
 	}
 	if _, err := c.CSRFAuthKey(); err != nil {
 		problems.Add("CSRF_AUTH_KEY_B64", err.Error())

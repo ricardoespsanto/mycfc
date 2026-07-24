@@ -55,6 +55,12 @@ test.describe('authentication', () => {
     await expect(page.getByRole('link', { name: 'Treinos' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Competições' })).toBeVisible();
     await expect(page.locator('a[aria-current="page"]')).toHaveText('Competidor');
+
+    await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
+    await page.getByLabel('Descrição da avaria').fill('Avaria de teste sem fotografia.');
+    await page.getByRole('button', { name: 'Reportar avaria' }).click();
+    await expect(page).toHaveURL('/dashboard/competitor');
+    await expect(page.getByText(/Avaria reportada\. Referência:/)).toBeVisible();
     await context.close();
   });
 

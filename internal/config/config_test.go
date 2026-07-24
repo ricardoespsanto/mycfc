@@ -62,6 +62,23 @@ func TestValidateAcceptsLocalConfiguration(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsProductionDatabaseComponents(t *testing.T) {
+	cfg := validConfig()
+	cfg.DatabaseURL = ""
+	cfg.DBHost = "database.internal"
+	cfg.DBPort = 5432
+	cfg.DBName = "mycfc"
+	cfg.DBUser = "mycfc_app"
+	cfg.DBPassword = Secret("database-password")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	url, err := cfg.ResolvedDatabaseURL()
+	if err != nil || !strings.Contains(url, "database.internal:5432") || !strings.Contains(url, "sslmode=require") {
+		t.Fatalf("ResolvedDatabaseURL() = %q, %v", url, err)
+	}
+}
+
 func TestValidateAggregatesAndSortsProblems(t *testing.T) {
 	cfg := validConfig()
 	cfg.Port = 0

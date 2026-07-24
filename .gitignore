@@ -27,6 +27,7 @@ go.work.sum
 /bin
 /tmp
 /node_modules
+**/.terraform/
 
 # env file
 .env

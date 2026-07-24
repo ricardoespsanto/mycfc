@@ -33,7 +33,11 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL.Value())
+	databaseURL, err := cfg.ResolvedDatabaseURL()
+	if err != nil {
+		fail(err)
+	}
+	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		fail(fmt.Errorf("open database pool: %w", err))
 	}

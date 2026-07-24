@@ -85,6 +85,24 @@ services:
       - e2e_go_build:/root/.cache/go-build
     networks: [mycfc]
 
+  e2e-seed:
+    image: postgres:16.9-alpine3.21
+    profiles: [e2e]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        psql -v ON_ERROR_STOP=1 -c "INSERT INTO equipment (asset_tag, name, type) VALUES ('E2E-REPAIR', 'Embarcação de teste', 'Boat') ON CONFLICT (asset_tag) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, status = 'Operational', notes = ''"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+
   e2e:
     image: mcr.microsoft.com/playwright:v1.61.1-noble
     profiles: [e2e]
@@ -102,6 +120,8 @@ services:
     depends_on:
       e2e-app:
         condition: service_started
+      e2e-seed:
+        condition: service_completed_successfully
     volumes:
       - .:/workspace
       - e2e_node_modules:/workspace/node_modules

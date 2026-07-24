@@ -1,0 +1,3 @@
+# Supply a globally unique name. State bucket names are globally shared by AWS.
+state_bucket_name = "replace-with-globally-unique-myCFC-state-bucket"
+repository        = "organisation/repository"

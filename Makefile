@@ -7,8 +7,10 @@ GOOSE := $(BIN_DIR)/goose
 SQLC := $(BIN_DIR)/sqlc
 TEMPL := $(BIN_DIR)/templ
 AIR := $(BIN_DIR)/air
+TERRAFORM_VERSION := 1.15.8
+TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast migrate-up migrate-down-one migrate-status dev-bootstrap dev test test-integration test-e2e verify verify-foundation reset-local fmt-check
+.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast migrate-up migrate-down-one migrate-status dev-bootstrap dev test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -65,6 +67,14 @@ test-integration: dev-infra ## Run integration tests against local services
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
+
+terraform-fmt: ## Check Terraform formatting through the pinned container
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) fmt -check -recursive infra
+
+terraform-validate: ## Validate Terraform stacks through the pinned container without remote state
+	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) -ec 'terraform -chdir=infra/bootstrap init -backend=false && terraform -chdir=infra/bootstrap validate && terraform -chdir=infra/environments/production init -backend=false && terraform -chdir=infra/environments/production validate'
+
+terraform-check: terraform-fmt terraform-validate ## Run all containerized Terraform checks
 
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }

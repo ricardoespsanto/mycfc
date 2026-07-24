@@ -51,7 +51,11 @@ func New(ctx context.Context) (*Application, error) {
 		return nil, fmt.Errorf("load Europe/Lisbon: %w", err)
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL.Value())
+	databaseURL, err := cfg.ResolvedDatabaseURL()
+	if err != nil {
+		return nil, err
+	}
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, errors.New("parse DATABASE_URL")
 	}
