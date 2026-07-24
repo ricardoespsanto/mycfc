@@ -39,7 +39,7 @@ RETURNING id, user_id, granted_by_user_id, consent_type, document_version,
 type CreateConsentFormParams struct {
 	UserID          uuid.UUID   `json:"user_id"`
 	GrantedByUserID *uuid.UUID  `json:"granted_by_user_id"`
-	ConsentType     interface{} `json:"consent_type"`
+	ConsentType     string      `json:"consent_type"`
 	DocumentVersion string      `json:"document_version"`
 	DocumentSha256  string      `json:"document_sha256"`
 	IpAddress       *netip.Addr `json:"ip_address"`
@@ -84,9 +84,9 @@ SELECT EXISTS (
 `
 
 type HasConsentVersionParams struct {
-	UserID          uuid.UUID   `json:"user_id"`
-	ConsentType     interface{} `json:"consent_type"`
-	DocumentVersion string      `json:"document_version"`
+	UserID          uuid.UUID `json:"user_id"`
+	ConsentType     string    `json:"consent_type"`
+	DocumentVersion string    `json:"document_version"`
 }
 
 func (q *Queries) HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error) {

@@ -161,11 +161,11 @@ type ListPendingRepairRequestsRow struct {
 	EquipmentID      uuid.UUID          `json:"equipment_id"`
 	AssetTag         string             `json:"asset_tag"`
 	EquipmentName    string             `json:"equipment_name"`
-	EquipmentType    interface{}        `json:"equipment_type"`
+	EquipmentType    string             `json:"equipment_type"`
 	ReportedByID     *uuid.UUID         `json:"reported_by_id"`
 	ReportedByName   *string            `json:"reported_by_name"`
 	IssueDescription string             `json:"issue_description"`
-	Status           interface{}        `json:"status"`
+	Status           string             `json:"status"`
 	ImageObjectKey   *string            `json:"image_object_key"`
 	ImageContentType *string            `json:"image_content_type"`
 	ImageSizeBytes   *int64             `json:"image_size_bytes"`
@@ -226,8 +226,8 @@ RETURNING id, idempotency_key, equipment_id, reported_by_id,
 `
 
 type UpdateRepairStatusParams struct {
-	Status interface{} `json:"status"`
-	ID     uuid.UUID   `json:"id"`
+	Status string    `json:"status"`
+	ID     uuid.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error) {

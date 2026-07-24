@@ -55,8 +55,8 @@ type CreateAdultUserParams struct {
 	Name          string      `json:"name"`
 	Email         *string     `json:"email"`
 	PasswordHash  *string     `json:"password_hash"`
-	Role          interface{} `json:"role"`
-	SquadCategory interface{} `json:"squad_category"`
+	Role          string      `json:"role"`
+	SquadCategory string      `json:"squad_category"`
 	DateOfBirth   pgtype.Date `json:"date_of_birth"`
 }
 
@@ -113,8 +113,8 @@ RETURNING id, name, email, password_hash, role, squad_category, guardian_id,
 
 type CreateDependentUserParams struct {
 	Name          string      `json:"name"`
-	Role          interface{} `json:"role"`
-	SquadCategory interface{} `json:"squad_category"`
+	Role          string      `json:"role"`
+	SquadCategory string      `json:"squad_category"`
 	GuardianID    *uuid.UUID  `json:"guardian_id"`
 	DateOfBirth   pgtype.Date `json:"date_of_birth"`
 }
@@ -260,8 +260,8 @@ type ListDependentsByGuardianParams struct {
 type ListDependentsByGuardianRow struct {
 	ID            uuid.UUID          `json:"id"`
 	Name          string             `json:"name"`
-	Role          interface{}        `json:"role"`
-	SquadCategory interface{}        `json:"squad_category"`
+	Role          string             `json:"role"`
+	SquadCategory string             `json:"squad_category"`
 	GuardianID    *uuid.UUID         `json:"guardian_id"`
 	IsDependent   bool               `json:"is_dependent"`
 	DateOfBirth   pgtype.Date        `json:"date_of_birth"`
@@ -299,6 +299,23 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockActiveGuardian = `-- name: LockActiveGuardian :one
+SELECT id
+FROM users
+WHERE id = $1
+  AND role = 'Guardian'
+  AND is_active = true
+  AND is_dependent = false
+FOR UPDATE
+`
+
+func (q *Queries) LockActiveGuardian(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockActiveGuardian, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const setUserPasswordHash = `-- name: SetUserPasswordHash :exec

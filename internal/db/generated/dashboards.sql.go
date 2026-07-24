@@ -20,8 +20,8 @@ ORDER BY status
 `
 
 type CountEquipmentByStatusRow struct {
-	Status interface{} `json:"status"`
-	Total  int64       `json:"total"`
+	Status string `json:"status"`
+	Total  int64  `json:"total"`
 }
 
 func (q *Queries) CountEquipmentByStatus(ctx context.Context) ([]CountEquipmentByStatusRow, error) {
@@ -203,10 +203,10 @@ type ListUpcomingMaintenanceRow struct {
 	EquipmentID   uuid.UUID          `json:"equipment_id"`
 	AssetTag      string             `json:"asset_tag"`
 	EquipmentName string             `json:"equipment_name"`
-	EquipmentType interface{}        `json:"equipment_type"`
+	EquipmentType string             `json:"equipment_type"`
 	ScheduledFor  pgtype.Timestamptz `json:"scheduled_for"`
 	Description   string             `json:"description"`
-	Status        interface{}        `json:"status"`
+	Status        string             `json:"status"`
 	CreatedByID   *uuid.UUID         `json:"created_by_id"`
 	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`

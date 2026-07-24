@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/locale"
+	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/gorilla/csrf"
@@ -22,16 +25,23 @@ type DashboardStore interface {
 	ListRecentTrainingLogs(context.Context, dbgen.ListRecentTrainingLogsParams) ([]dbgen.TrainingLog, error)
 	ListPublishedNews(context.Context, int32) ([]dbgen.NewsItem, error)
 	ListWhatsAppGroupsForRole(context.Context, dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error)
+	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 }
 
 type Dashboard struct {
-	Store         DashboardStore
-	System        System
-	PageMeta      components.PageMeta
-	CompetitionID string
-	TrainingID    string
-	SocialID      string
-	CleanupsID    string
+	Store                 DashboardStore
+	System                System
+	PageMeta              components.PageMeta
+	CompetitionID         string
+	TrainingID            string
+	SocialID              string
+	CleanupsID            string
+	Location              *time.Location
+	Dependents            GuardianDependentStore
+	Now                   func() time.Time
+	ResponsibilityVersion string
+	ResponsibilitySHA256  string
+	Sessions              *scs.SessionManager
 }
 
 func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +89,15 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, "Painel de encarregado de educação", "Consulte os menores a seu cargo e respetivas agendas.", "Ainda não tem menores a cargo. Poderá adicioná-los aqui quando essa funcionalidade estiver disponível.", "/dashboard/guardian", nil, nil)
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 10})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.renderGuardian(w, r, http.StatusOK, dependents, guardianDependentForm{})
 }
 func (h Dashboard) Admin(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "Painel de administração", "Consulte a frota, pedidos de reparação e manutenção.", "Ainda não existem dados de frota para apresentar.", "/admin/fleet", []CalendarVM{h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID), h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID)}, nil)
@@ -108,6 +126,58 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 		pageSections[i] = pages.DashboardSection{Heading: section.Heading, Empty: section.Empty, Items: items}
 	}
 	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Calendars: links, Sections: pageSections}).Render(r.Context(), w)
+}
+
+func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
+	user, _ := CurrentUserFromContext(r.Context())
+	meta := h.PageMeta
+	meta.Title = "Painel de encarregado de educação | MyCFC"
+	meta.CurrentPath = "/dashboard/guardian"
+	meta.CurrentUserName = user.Name
+	meta.Navigation = dashboardNavigation(user.Role)
+	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	items := guardianDependentItems(dependents, h.now(), h.location())
+	pageItems := make([]pages.DashboardItem, len(items))
+	for i, item := range items {
+		pageItems[i] = pages.DashboardItem{Title: item.Title, Detail: item.Detail, URL: item.URL}
+	}
+	success := form.Success
+	if success == "" && h.Sessions != nil {
+		success = h.Sessions.PopString(r.Context(), "guardian_flash")
+	}
+	page := pages.GuardianPage{
+		Meta: meta, Dependents: pageItems, Calendars: guardianCalendarLinks(h.guardianCalendars(dependents)),
+		Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if r.Header.Get("HX-Request") == "true" {
+		_ = pages.GuardianContent(page).Render(r.Context(), w)
+		return
+	}
+	_ = pages.Guardian(page).Render(r.Context(), w)
+}
+
+func (h Dashboard) now() time.Time {
+	if h.Now != nil {
+		return h.Now()
+	}
+	return time.Now()
+}
+
+func (h Dashboard) location() *time.Location {
+	if h.Location != nil {
+		return h.Location
+	}
+	return time.UTC
+}
+
+func guardianCalendarLinks(calendars []CalendarVM) []pages.CalendarLink {
+	links := make([]pages.CalendarLink, len(calendars))
+	for i, calendar := range calendars {
+		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL}
+	}
+	return links
 }
 
 func (h Dashboard) groups(ctx context.Context, role string) ([]dbgen.WhatsappGroup, error) {
@@ -164,6 +234,43 @@ func numericString(value pgtype.Numeric) string {
 
 func (h Dashboard) calendar(label, id string) CalendarVM {
 	return CalendarVM{Label: label, URL: "https://calendar.google.com/calendar/u/0?cid=" + url.QueryEscape(id)}
+}
+
+func (h Dashboard) guardianCalendars(dependents []dbgen.ListDependentsByGuardianRow) []CalendarVM {
+	calendars := make([]CalendarVM, 0, 4)
+	seen := map[string]bool{}
+	add := func(label, id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			calendars = append(calendars, h.calendar(label, id))
+		}
+	}
+	for _, dependent := range dependents {
+		switch dependent.Role {
+		case "Competitor":
+			add("Treinos", h.TrainingID)
+			add("Competições", h.CompetitionID)
+		case "Leisure":
+			add("Eventos sociais", h.SocialID)
+			add("Ações de limpeza", h.CleanupsID)
+		}
+	}
+	return calendars
+}
+
+func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now time.Time, location *time.Location) []DashboardItemVM {
+	items := make([]DashboardItemVM, len(dependents))
+	for i, dependent := range dependents {
+		role := dependent.Role
+		squad := dependent.SquadCategory
+		age := validation.AgeOn(dependent.DateOfBirth.Time, now, location)
+		sources := "Eventos sociais e ações de limpeza"
+		if role == "Competitor" {
+			sources = "Treinos e competições"
+		}
+		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%s · %s · %d anos · %s", locale.Role(role), locale.Squad(squad), age, sources)}
+	}
+	return items
 }
 
 func dashboardNavigation(role string) []components.NavigationItem {

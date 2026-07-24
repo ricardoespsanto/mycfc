@@ -15,7 +15,7 @@ type ConsentForm struct {
 	ID              uuid.UUID          `json:"id"`
 	UserID          uuid.UUID          `json:"user_id"`
 	GrantedByUserID *uuid.UUID         `json:"granted_by_user_id"`
-	ConsentType     interface{}        `json:"consent_type"`
+	ConsentType     string             `json:"consent_type"`
 	DocumentVersion string             `json:"document_version"`
 	DocumentSha256  string             `json:"document_sha256"`
 	IsAccepted      bool               `json:"is_accepted"`
@@ -28,8 +28,8 @@ type Equipment struct {
 	ID        uuid.UUID          `json:"id"`
 	AssetTag  string             `json:"asset_tag"`
 	Name      string             `json:"name"`
-	Type      interface{}        `json:"type"`
-	Status    interface{}        `json:"status"`
+	Type      string             `json:"type"`
+	Status    string             `json:"status"`
 	Notes     string             `json:"notes"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
@@ -40,7 +40,7 @@ type MaintenanceTask struct {
 	EquipmentID  uuid.UUID          `json:"equipment_id"`
 	ScheduledFor pgtype.Timestamptz `json:"scheduled_for"`
 	Description  string             `json:"description"`
-	Status       interface{}        `json:"status"`
+	Status       string             `json:"status"`
 	CreatedByID  *uuid.UUID         `json:"created_by_id"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
@@ -61,7 +61,7 @@ type NewsItem struct {
 type PerformanceMetric struct {
 	ID         uuid.UUID          `json:"id"`
 	UserID     uuid.UUID          `json:"user_id"`
-	MetricType interface{}        `json:"metric_type"`
+	MetricType string             `json:"metric_type"`
 	LabelPt    string             `json:"label_pt"`
 	Value      pgtype.Numeric     `json:"value"`
 	UnitPt     string             `json:"unit_pt"`
@@ -75,7 +75,7 @@ type RepairRequest struct {
 	EquipmentID      uuid.UUID          `json:"equipment_id"`
 	ReportedByID     *uuid.UUID         `json:"reported_by_id"`
 	IssueDescription string             `json:"issue_description"`
-	Status           interface{}        `json:"status"`
+	Status           string             `json:"status"`
 	ImageObjectKey   *string            `json:"image_object_key"`
 	ImageContentType *string            `json:"image_content_type"`
 	ImageSizeBytes   *int64             `json:"image_size_bytes"`
@@ -105,8 +105,8 @@ type User struct {
 	Name          string             `json:"name"`
 	Email         *string            `json:"email"`
 	PasswordHash  *string            `json:"password_hash"`
-	Role          interface{}        `json:"role"`
-	SquadCategory interface{}        `json:"squad_category"`
+	Role          string             `json:"role"`
+	SquadCategory string             `json:"squad_category"`
 	GuardianID    *uuid.UUID         `json:"guardian_id"`
 	IsDependent   bool               `json:"is_dependent"`
 	DateOfBirth   pgtype.Date        `json:"date_of_birth"`
@@ -119,7 +119,7 @@ type WhatsappGroup struct {
 	ID            uuid.UUID          `json:"id"`
 	Name          string             `json:"name"`
 	Discipline    string             `json:"discipline"`
-	TargetRole    interface{}        `json:"target_role"`
+	TargetRole    string             `json:"target_role"`
 	SquadCategory interface{}        `json:"squad_category"`
 	Url           string             `json:"url"`
 	IsActive      bool               `json:"is_active"`

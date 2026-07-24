@@ -54,12 +54,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		role, ok := user.Role.(string)
-		if !ok {
-			a.System.InternalError(w, r)
-			return
-		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, Role: role}
+		current := CurrentUser{ID: user.ID, Name: user.Name, Role: user.Role}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
 		ctx = httpx.WithUserID(ctx, current.ID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))

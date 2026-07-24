@@ -43,7 +43,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handl
 	mux.Handle("GET /admin/fleet", auth.RequireRole("Admin")(http.HandlerFunc(dashboard.Admin)))
 	mux.Handle("POST /admin/maintenance", auth.RequireRole("Admin")(http.HandlerFunc(system.NotImplemented)))
 	mux.Handle("POST /repairs", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(system.NotImplemented)))
-	mux.Handle("POST /guardian/add-dependent", auth.RequireRole("Guardian")(http.HandlerFunc(system.NotImplemented)))
+	mux.Handle("POST /guardian/add-dependent", auth.RequireRole("Guardian")(http.HandlerFunc(dashboard.AddDependent)))
 
 	return customNotFound(mux, system.NotFound)
 }

@@ -82,6 +82,15 @@ WHERE guardian_id = sqlc.arg(guardian_id)
   AND is_dependent = true
   AND is_active = true;
 
+-- name: LockActiveGuardian :one
+SELECT id
+FROM users
+WHERE id = sqlc.arg(id)
+  AND role = 'Guardian'
+  AND is_active = true
+  AND is_dependent = false
+FOR UPDATE;
+
 -- name: SetUserPasswordHash :exec
 UPDATE users
 SET password_hash = sqlc.arg(password_hash),

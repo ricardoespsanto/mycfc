@@ -24,7 +24,7 @@ LIMIT $3
 `
 
 type ListWhatsAppGroupsForRoleParams struct {
-	TargetRole    interface{} `json:"target_role"`
+	TargetRole    string      `json:"target_role"`
 	SquadCategory interface{} `json:"squad_category"`
 	RowLimit      int32       `json:"row_limit"`
 }

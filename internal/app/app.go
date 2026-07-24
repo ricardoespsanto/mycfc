@@ -126,8 +126,12 @@ func New(ctx context.Context) (*Application, error) {
 		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
 	}
 	dashboard := handlers.Dashboard{
-		Store:         dbgen.New(pool),
-		PageMeta:      components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+		Store:                 dbgen.New(pool),
+		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
+		PageMeta:              components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+		Location:              location,
+		Sessions:              sessions,
+		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
 		CompetitionID: cfg.CalendarCompetitionID, TrainingID: cfg.CalendarTrainingID,
 		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
 	}
@@ -162,6 +166,7 @@ func New(ctx context.Context) (*Application, error) {
 		httpx.SecurityHeadersMiddleware(cfg.IsProduction()),
 		httpx.AccessLogMiddleware(logger),
 		func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) },
+		plaintextCSRFMiddleware,
 		func(next http.Handler) http.Handler { return csrfMiddleware(next) },
 	)
 
@@ -184,6 +189,15 @@ func New(ctx context.Context) (*Application, error) {
 		ObjectStore:  objectStore,
 		Server:       server,
 	}, nil
+}
+
+func plaintextCSRFMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if httpx.Scheme(r.Context()) == "http" {
+			r = csrf.PlaintextHTTPRequest(r)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *Application) Close() {

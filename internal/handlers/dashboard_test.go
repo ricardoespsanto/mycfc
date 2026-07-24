@@ -24,7 +24,7 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	}{
 		{"competitor", "Competitor", "Frota", "Competições", dashboard.Competitor},
 		{"leisure", "Leisure", "Competidor", "Eventos sociais", dashboard.Leisure},
-		{"guardian", "Guardian", "Frota", "Ainda não tem menores a cargo", dashboard.Guardian},
+		{"guardian", "Guardian", "Frota", "Adicione o primeiro menor", dashboard.Guardian},
 		{"admin", "Admin", "Menores a cargo", "Frota", dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,6 +121,7 @@ type dashboardStoreFake struct {
 	logs          []dbgen.TrainingLog
 	news          []dbgen.NewsItem
 	groups        []dbgen.WhatsappGroup
+	dependents    []dbgen.ListDependentsByGuardianRow
 	metricsErr    error
 	logsErr       error
 	newsErr       error
@@ -147,4 +148,8 @@ func (f *dashboardStoreFake) ListPublishedNews(_ context.Context, _ int32) ([]db
 
 func (f *dashboardStoreFake) ListWhatsAppGroupsForRole(_ context.Context, _ dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error) {
 	return f.groups, f.groupsErr
+}
+
+func (f *dashboardStoreFake) ListDependentsByGuardian(_ context.Context, _ dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {
+	return f.dependents, nil
 }

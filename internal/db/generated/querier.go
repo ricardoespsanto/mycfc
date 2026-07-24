@@ -38,6 +38,7 @@ type Querier interface {
 	ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error)
 	ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error)
 	ListWhatsAppGroupsForRole(ctx context.Context, arg ListWhatsAppGroupsForRoleParams) ([]WhatsappGroup, error)
+	LockActiveGuardian(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)
 }

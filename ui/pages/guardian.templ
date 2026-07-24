@@ -1,0 +1,59 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/internal/validation"
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type GuardianPage struct {
+	Meta       components.PageMeta
+	Dependents []DashboardItem
+	Calendars  []CalendarLink
+	Name, DateOfBirth, Role, Squad string
+	Errors     validation.FieldErrors
+	Success    string
+}
+
+templ Guardian(page GuardianPage) {
+	@components.Base(page.Meta, GuardianContent(page))
+}
+
+templ GuardianContent(page GuardianPage) {
+	<div id="guardian-content">
+		<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Menores a cargo</h1><p>Consulte os menores a seu cargo e respetivas agendas.</p></section>
+		if page.Success != "" {
+			<p class="flash" role="status" tabindex="-1">{ page.Success }</p>
+		}
+		<section class="dashboard-card" aria-labelledby="dependents-title"><h2 id="dependents-title">Menores a cargo</h2>
+			if len(page.Dependents) == 0 {
+				<p>Ainda não tem menores a cargo. Adicione o primeiro menor para consultar a respetiva agenda.</p>
+			}
+			if len(page.Dependents) > 0 {
+				<ul>
+					for _, dependent := range page.Dependents {
+						<li><strong>{ dependent.Title }</strong><span> { dependent.Detail }</span></li>
+					}
+				</ul>
+			}
+		</section>
+		if len(page.Calendars) > 0 {
+			<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>Consulte os calendários públicos relevantes para os menores a seu cargo.</p><ul class="calendar-links">
+				for _, calendar := range page.Calendars {
+					<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
+				}
+			</ul></section>
+		}
+		<section class="dashboard-card" aria-labelledby="add-dependent-title"><h2 id="add-dependent-title">Adicionar menor a cargo</h2>
+			if message := page.Errors["form"]; message != "" {
+				<p class="field-error" role="alert">{ message }</p>
+			}
+			<form method="post" action="/guardian/add-dependent" hx-post="/guardian/add-dependent" hx-target="#guardian-content" hx-swap="outerHTML" hx-target-422="#guardian-content" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+				@page.Meta.CSRFField
+				<div class="form-field"><label for="name">Nome</label><input id="name" name="name" autocomplete="name" value={ page.Name } required/>@errorText(page.Errors, "name")</div>
+				<div class="form-field"><label for="date_of_birth">Data de nascimento</label><input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required/>@errorText(page.Errors, "date_of_birth")</div>
+				<div class="form-field"><label for="role">Perfil</label><select id="role" name="role" required><option value="">Selecione</option><option value="Competitor" selected?={ page.Role == "Competitor" }>Competidor</option><option value="Leisure" selected?={ page.Role == "Leisure" }>Lazer</option></select>@errorText(page.Errors, "role")</div>
+				<div class="form-field"><label for="squad_category">Categoria de equipa (apenas competidor)</label><select id="squad_category" name="squad_category"><option value="">Selecione</option><option value="Iniciante" selected?={ page.Squad == "Iniciante" }>Iniciante</option><option value="Polo_Senior" selected?={ page.Squad == "Polo_Senior" }>Polo sénior</option><option value="Master_A" selected?={ page.Squad == "Master_A" }>Master A</option></select></div>
+				<label><input name="accept_minor_responsibility" type="checkbox" required/> Aceito a responsabilidade pelo menor a cargo.</label>@errorText(page.Errors, "accept_minor_responsibility")
+				<button type="submit">Adicionar menor</button>
+			</form>
+		</section>
+	</div>
+}

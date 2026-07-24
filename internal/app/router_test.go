@@ -9,6 +9,8 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/gorilla/csrf"
 )
 
 type routerPinger struct{ err error }
@@ -56,6 +58,17 @@ func TestRouterReadinessFailure(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", response.Code)
 	}
+}
+
+func TestPlaintextCSRFMiddleware(t *testing.T) {
+	handler := plaintextCSRFMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if enabled, _ := r.Context().Value(csrf.PlaintextHTTPContextKey).(bool); !enabled {
+			t.Fatal("plaintext CSRF context not enabled")
+		}
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request = request.WithContext(httpx.WithScheme(request.Context(), "http"))
+	handler.ServeHTTP(httptest.NewRecorder(), request)
 }
 
 func newTestRouter(pinger routerPinger, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
