@@ -8,10 +8,15 @@
 ## Commands and Baseline
 
 - Install repository tools with `make tools`; they live in `./bin`, not on the global `PATH`. templ, sqlc, and Air are versioned, but the Makefile currently installs Goose with `@latest`.
-- The current green gate is `make verify-foundation` (focused vet/tests plus deterministic asset build). `make verify` is deliberately red: e2e is a placeholder and production Terraform is absent.
+- The current green gate is `make verify-foundation` (focused vet/tests plus deterministic asset build). `make test-e2e` runs the initial containerized Playwright/axe coverage. `make verify` remains deliberately red until production Terraform and the remaining acceptance coverage exist.
 - Run one Go test with `go test ./internal/<package> -run '^TestName$'`; for example, `go test ./internal/config -run '^TestSecretIsRedacted$'`.
 - `make test` runs the current Go unit suite; integration packages remain placeholders and are not included.
-- `npm test` discovers zero tests, and `npm run test:e2e` intentionally fails as unimplemented; neither is meaningful frontend verification yet.
+- `npm test` discovers zero tests. Use `make test-e2e` for browser verification; it starts the local stack and pinned Playwright container.
+
+## Dependencies
+
+- Before adding or upgrading a dependency, check its authoritative registry or vendor release channel and use the latest stable GA version, or the latest supported LTS version where LTS releases apply.
+- Pin direct dependencies to exact versions. Document any compatibility or security exception in the change that introduces it.
 
 ## Local and Integration Traps
 
