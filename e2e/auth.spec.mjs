@@ -5,6 +5,7 @@ const email = `e2e-${Date.now()}@example.test`;
 const guardianEmail = `e2e-guardian-${Date.now()}@example.test`;
 const password = 'correct horse 7';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080';
+const validPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2h38AAAAASUVORK5CYII=', 'base64');
 
 async function expectNoSeriousAxeViolations(page) {
   const results = await new AxeBuilder({ page }).analyze();
@@ -56,11 +57,22 @@ test.describe('authentication', () => {
     await expect(page.getByRole('link', { name: 'Competições' })).toBeVisible();
     await expect(page.locator('a[aria-current="page"]')).toHaveText('Competidor');
 
+    const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
-    await page.getByLabel('Descrição da avaria').fill('Avaria de teste sem fotografia.');
+    await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
+    await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/dashboard/competitor');
-    await expect(page.getByText(/Avaria reportada\. Referência:/)).toBeVisible();
+    const success = page.getByText(/Avaria reportada\. Referência:/);
+    await expect(success).toBeVisible();
+    const firstReference = await success.textContent();
+
+    await page.locator('input[name="idempotency_key"]').evaluate((input, value) => { input.value = value; }, idempotencyKey);
+    await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
+    await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
+    await page.getByRole('button', { name: 'Reportar avaria' }).click();
+    await expect(page).toHaveURL('/dashboard/competitor');
+    await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
 
