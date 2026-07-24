@@ -18,7 +18,7 @@ Not executable on the generation host:
 - `sqlc generate`/`sqlc compile`, because the pinned binary cannot be downloaded here.
 - Goose migrations and integration tests, because Docker and PostgreSQL are unavailable here.
 - Docker image and Compose validation, because Docker is unavailable here.
-- Browser end-to-end tests, Terraform validation, and deployment checks; those implementation slices are deliberately not present yet.
+- The initial browser end-to-end suite passed through the pinned Playwright container with `make test-e2e`. Terraform validation and deployment checks remain deliberately unimplemented.
 
 Run this in a networked development environment with Docker:
 

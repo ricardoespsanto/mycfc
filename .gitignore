@@ -26,6 +26,7 @@ go.work.sum
 
 /bin
 /tmp
+/node_modules
 
 # env file
 .env
@@ -35,3 +36,7 @@ go.work.sum
 # .vscode/
 #
 .DS_Store
+
+# Playwright artifacts
+/playwright-report
+/test-results

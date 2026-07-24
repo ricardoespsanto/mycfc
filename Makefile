@@ -63,8 +63,8 @@ test: ## Run unit tests
 test-integration: dev-infra ## Run integration tests against local services
 	@set -a; source .env; set +a; if ! docker compose exec -T postgres psql -U "$${POSTGRES_USER}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then docker compose exec -T postgres createdb -U "$${POSTGRES_USER}" mycfc_test; fi; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable"; $(GOOSE) -dir internal/db/migrations postgres "$$TEST_DATABASE_URL" up; TEST_DATABASE_URL="$$TEST_DATABASE_URL" go test -tags=integration ./internal/db/... ./internal/storage/...
 
-test-e2e: ## Run browser and accessibility tests
-	npm run test:e2e
+test-e2e: dev-bootstrap ## Run browser and accessibility tests
+	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
 
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }

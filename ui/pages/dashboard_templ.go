@@ -328,7 +328,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" data-calendar-time-zone=\"Europe/Lisbon\" aria-live=\"polite\"><p>A carregar agenda...</p></div><noscript><p>A agenda interativa necessita de JavaScript. Consulte os calendários públicos:</p><ul class=\"calendar-links\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" data-calendar-time-zone=\"Europe/Lisbon\" aria-live=\"polite\"><p>A carregar agenda...</p></div><p>Consulte os calendários públicos:</p><ul class=\"calendar-links\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -364,7 +364,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</ul></noscript></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</ul></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

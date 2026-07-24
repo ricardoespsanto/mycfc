@@ -4,6 +4,12 @@
   line-height: 1.5;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   color: #17202a;
@@ -58,6 +64,7 @@ main {
 	display: grid;
 	gap: 0.4rem;
 	margin-block: 1rem;
+	min-width: 0;
 }
 
 input,
@@ -69,6 +76,11 @@ input {
 	padding: 0.65rem 0.75rem;
 	border: 1px solid #6a7782;
 	border-radius: 0.35rem;
+}
+
+.form-field :is(input, select, textarea) {
+	inline-size: 100%;
+	min-inline-size: 0;
 }
 
 button {

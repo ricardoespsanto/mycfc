@@ -7,6 +7,10 @@
     "build": "node scripts/build-assets.mjs",
     "dev": "node scripts/build-assets.mjs",
     "test": "node --test",
-    "test:e2e": "node scripts/not-implemented.mjs e2e"
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.11.0",
+    "@playwright/test": "1.55.0"
   }
 }

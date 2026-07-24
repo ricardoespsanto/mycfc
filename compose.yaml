@@ -61,6 +61,53 @@ services:
     networks: [mycfc]
     restart: "no"
 
+  e2e-app:
+    image: golang:1.26.5-bookworm
+    profiles: [e2e]
+    working_dir: /workspace
+    env_file: .env
+    environment:
+      BASE_URL: http://e2e-app:8080
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      S3_ENDPOINT: http://minio:9000
+      CONSENT_TERMS_URL: http://e2e-app:8080/legal/termos-gerais
+      CONSENT_IMAGE_URL: http://e2e-app:8080/legal/uso-imagem
+      CONSENT_MINOR_URL: http://e2e-app:8080/legal/responsabilidade-menor
+    command: go run ./cmd/server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+      - e2e_go_cache:/go/pkg/mod
+      - e2e_go_build:/root/.cache/go-build
+    networks: [mycfc]
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.55.0-noble
+    profiles: [e2e]
+    working_dir: /workspace
+    environment:
+      E2E_BASE_URL: http://e2e-app:8080
+      CI: "true"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        npm ci
+        node -e 'const url = "http://e2e-app:8080/health/ready"; const deadline = Date.now() + 60000; const check = async () => { try { if ((await fetch(url)).ok) return; } catch {} if (Date.now() >= deadline) process.exit(1); setTimeout(check, 250); }; check();'
+        npm run test:e2e
+    depends_on:
+      e2e-app:
+        condition: service_started
+    volumes:
+      - .:/workspace
+      - e2e_node_modules:/workspace/node_modules
+    shm_size: 1gb
+    networks: [mycfc]
+
 networks:
   mycfc:
     name: mycfc
@@ -68,3 +115,6 @@ networks:
 volumes:
   pgdata:
   miniodata:
+  e2e_go_cache:
+  e2e_go_build:
+  e2e_node_modules:

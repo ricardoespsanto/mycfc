@@ -62,10 +62,10 @@ templ dashboardContent(page DashboardPage) {
 templ Calendar(apiKey, sources string, calendars []CalendarLink, intro string) {
 	<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>{ intro }</p>
 		<div class="interactive-calendar" data-calendar data-calendar-api-key={ apiKey } data-calendar-sources={ sources } data-calendar-time-zone="Europe/Lisbon" aria-live="polite"><p>A carregar agenda...</p></div>
-		<noscript><p>A agenda interativa necessita de JavaScript. Consulte os calendários públicos:</p><ul class="calendar-links">
+		<p>Consulte os calendários públicos:</p><ul class="calendar-links">
 			for _, calendar := range calendars {
 				<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
 			}
-		</ul></noscript>
+		</ul>
 	</section>
 }

@@ -1649,10 +1649,13 @@ CALENDAR_CLEANUPS_ID=replace-with-public-calendar-id
 GALLERY_URL=https://example.invalid/gallery
 CONSENT_TERMS_VERSION=dev-v1
 CONSENT_TERMS_SHA256=<64 lowercase zeroes allowed only in local env>
+CONSENT_TERMS_URL=http://localhost:8080/legal/termos-gerais
 CONSENT_IMAGE_VERSION=dev-v1
 CONSENT_IMAGE_SHA256=<...>
+CONSENT_IMAGE_URL=http://localhost:8080/legal/uso-imagem
 CONSENT_MINOR_VERSION=dev-v1
 CONSENT_MINOR_SHA256=<...>
+CONSENT_MINOR_URL=http://localhost:8080/legal/responsabilidade-menor
 ```
 
 Application startup in local mode may accept `.invalid` URLs and documented zero hashes; production validation must reject them.
