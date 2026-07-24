@@ -136,7 +136,8 @@ func New(ctx context.Context) (*Application, error) {
 		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
-	router := auth.Load(newRouter(pool, sessions, login, registration, auth, dashboard))
+	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}
+	router := auth.Load(newRouter(pool, sessions, login, registration, auth, dashboard, repair))
 	csrfMiddleware := csrf.Protect(
 		csrfKey,
 		csrf.CookieName("mycfc_csrf"),

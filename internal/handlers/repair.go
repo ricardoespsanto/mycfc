@@ -1,0 +1,252 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"mime/multipart"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/storage"
+	"github.com/cfcoimbra/mycfc/ui/components"
+	"github.com/google/uuid"
+	"github.com/gorilla/csrf"
+	"github.com/jackc/pgx/v5"
+)
+
+const repairQueryTimeout = 5 * time.Second
+const repairMultipartMemory = 1 << 20
+
+type RepairStore interface {
+	GetRepairByIdempotencyKey(context.Context, uuid.UUID) (dbgen.RepairRequest, error)
+	GetEquipmentByID(context.Context, uuid.UUID) (dbgen.Equipment, error)
+	CreateRepairRequest(context.Context, dbgen.CreateRepairRequestParams) (dbgen.RepairRequest, error)
+	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
+}
+
+type Repair struct {
+	Store           RepairStore
+	Objects         storage.ObjectStore
+	Sessions        *scs.SessionManager
+	MaxRequestBytes int64
+	MaxPhotoBytes   int64
+	Location        *time.Location
+	Now             func() time.Time
+}
+
+func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
+	user, ok := CurrentUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Pedido recusado", http.StatusForbidden)
+		return
+	}
+	maxRequest := h.MaxRequestBytes
+	if maxRequest <= 0 {
+		maxRequest = 12 << 20
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequest)
+	if err := r.ParseMultipartForm(repairMultipartMemory); err != nil {
+		if isTooLarge(err) {
+			h.error(w, r, http.StatusRequestEntityTooLarge, "O pedido excede o tamanho máximo permitido.")
+			return
+		}
+		h.validation(w, r, repairForm{Errors: map[string]string{"form": "Não foi possível ler o formulário."}})
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	form, photo, err := repairRequestForm(r.MultipartForm)
+	if err != nil {
+		h.validation(w, r, repairForm{Errors: map[string]string{"form": err.Error()}})
+		return
+	}
+	key, err := uuid.Parse(form.IdempotencyKey)
+	if err != nil {
+		form.Errors["form"] = "O pedido não é válido. Atualize a página e tente novamente."
+		h.validation(w, r, form)
+		return
+	}
+	equipmentID, err := uuid.Parse(form.EquipmentID)
+	if err != nil {
+		form.Errors["equipment_id"] = "Selecione um equipamento válido."
+		h.validation(w, r, form)
+		return
+	}
+	if form.Description = strings.TrimSpace(form.Description); utf8.RuneCountInString(form.Description) < 10 || utf8.RuneCountInString(form.Description) > 2000 {
+		form.Errors["issue_description"] = "Descreva a avaria entre 10 e 2000 caracteres."
+		h.validation(w, r, form)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), repairQueryTimeout)
+	defer cancel()
+	existing, err := h.Store.GetRepairByIdempotencyKey(ctx, key)
+	if err == nil {
+		h.existing(w, r, user, existing)
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		h.internal(w, r)
+		return
+	}
+	equipment, err := h.Store.GetEquipmentByID(ctx, equipmentID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && equipment.Status == "Retired") {
+		form.Errors["equipment_id"] = "Selecione um equipamento disponível."
+		h.validation(w, r, form)
+		return
+	}
+	if err != nil {
+		h.internal(w, r)
+		return
+	}
+
+	params := dbgen.CreateRepairRequestParams{IdempotencyKey: key, EquipmentID: equipmentID, ReportedByID: &user.ID, IssueDescription: form.Description}
+	objectKey := ""
+	if photo != nil {
+		file, err := photo.Open()
+		if err != nil {
+			h.validation(w, r, form)
+			return
+		}
+		validated, validationErr := storage.ValidateRepairPhoto(file, h.photoLimit())
+		_ = file.Close()
+		if validationErr != nil {
+			form.Errors["photo"] = validationErr.Error() + " Selecione a imagem novamente."
+			h.validation(w, r, form)
+			return
+		}
+		objectKey = fmt.Sprintf("repairs/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), validated.Extension)
+		uploadCtx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
+		if err := h.Objects.PutRepairPhoto(uploadCtx, objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
+			h.internal(w, r)
+			return
+		}
+		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &objectKey, &validated.ContentType, &validated.Size
+	}
+	repair, err := h.Store.CreateRepairRequest(ctx, params)
+	if err != nil {
+		if objectKey != "" {
+			h.deleteObject(r, objectKey)
+		}
+		if isUniqueViolation(err) {
+			existing, lookupErr := h.Store.GetRepairByIdempotencyKey(ctx, key)
+			if lookupErr == nil {
+				h.existing(w, r, user, existing)
+				return
+			}
+		}
+		h.internal(w, r)
+		return
+	}
+	h.success(w, r, repair)
+}
+
+type repairForm struct {
+	IdempotencyKey, EquipmentID, Description string
+	Errors                                   map[string]string
+}
+
+func repairRequestForm(form *multipart.Form) (repairForm, *multipart.FileHeader, error) {
+	allowed := map[string]bool{"idempotency_key": true, "equipment_id": true, "issue_description": true, "gorilla.csrf.Token": true, "photo": true}
+	for field, values := range form.Value {
+		if !allowed[field] || len(values) != 1 {
+			return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
+		}
+	}
+	for field, files := range form.File {
+		if !allowed[field] || field != "photo" || len(files) != 1 {
+			return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
+		}
+	}
+	if _, ok := form.Value["idempotency_key"]; !ok {
+		return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
+	}
+	if _, ok := form.Value["equipment_id"]; !ok {
+		return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
+	}
+	if _, ok := form.Value["issue_description"]; !ok {
+		return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
+	}
+	f := repairForm{IdempotencyKey: form.Value["idempotency_key"][0], EquipmentID: form.Value["equipment_id"][0], Description: form.Value["issue_description"][0], Errors: map[string]string{}}
+	if files := form.File["photo"]; len(files) == 1 && files[0].Filename != "" {
+		return f, files[0], nil
+	}
+	return f, nil, nil
+}
+
+func (h Repair) existing(w http.ResponseWriter, r *http.Request, user CurrentUser, repair dbgen.RepairRequest) {
+	if repair.ReportedByID == nil || *repair.ReportedByID != user.ID {
+		slog.Warn("repair idempotency key belongs to another user", "request_id", httpx.RequestID(r.Context()))
+		h.error(w, r, http.StatusConflict, "Não foi possível concluir o pedido.")
+		return
+	}
+	h.success(w, r, repair)
+}
+func (h Repair) success(w http.ResponseWriter, r *http.Request, repair dbgen.RepairRequest) {
+	if httpx.IsHTMX(r) {
+		h.renderForm(w, r, http.StatusOK, repairForm{IdempotencyKey: uuid.NewString()}, "Avaria reportada. Referência: "+repair.ID.String()[:8])
+		return
+	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "repair_flash", "Avaria reportada. Referência: "+repair.ID.String()[:8])
+	}
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+func (h Repair) validation(w http.ResponseWriter, r *http.Request, form repairForm) {
+	h.renderForm(w, r, http.StatusUnprocessableEntity, form, "")
+}
+func (h Repair) renderForm(w http.ResponseWriter, r *http.Request, status int, form repairForm, success string) {
+	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
+	if err != nil {
+		h.internal(w, r)
+		return
+	}
+	choices := make([]components.RepairEquipment, len(equipment))
+	for i, item := range equipment {
+		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = components.RepairForm(components.RepairFormData{CSRFField: templ.Raw(string(csrf.TemplateField(r))), IdempotencyKey: form.IdempotencyKey, Equipment: choices, EquipmentID: form.EquipmentID, Description: form.Description, Errors: form.Errors, Success: success}).Render(r.Context(), w)
+}
+func (h Repair) error(w http.ResponseWriter, _ *http.Request, status int, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, "<p role=\"alert\">%s</p>", message)
+}
+func (h Repair) internal(w http.ResponseWriter, r *http.Request) {
+	h.error(w, r, http.StatusInternalServerError, "Não foi possível concluir o pedido. Referência: "+httpx.RequestID(r.Context()))
+}
+func (h Repair) deleteObject(r *http.Request, key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.Objects.DeleteObject(ctx, key); err != nil {
+		slog.Error("delete repair photo after database failure", "object_key", key, "request_id", httpx.RequestID(r.Context()), "error", err)
+	}
+}
+func (h Repair) now() time.Time {
+	if h.Now != nil {
+		return h.Now()
+	}
+	return time.Now()
+}
+func (h Repair) location() *time.Location {
+	if h.Location != nil {
+		return h.Location
+	}
+	return time.UTC
+}
+func (h Repair) photoLimit() int64 {
+	if h.MaxPhotoBytes > 0 {
+		return h.MaxPhotoBytes
+	}
+	return 10 << 20
+}
+func isTooLarge(err error) bool { var maxErr *http.MaxBytesError; return errors.As(err, &maxErr) }

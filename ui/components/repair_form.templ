@@ -1,0 +1,37 @@
+package components
+
+type RepairEquipment struct { ID, Label string }
+
+type RepairFormData struct {
+	CSRFField      templ.Component
+	IdempotencyKey string
+	Equipment      []RepairEquipment
+	EquipmentID    string
+	Description    string
+	Errors         map[string]string
+	Success        string
+}
+
+templ RepairForm(form RepairFormData) {
+	<section class="dashboard-card" id="repair-form" aria-labelledby="repair-form-title">
+		<h2 id="repair-form-title">Reportar avaria</h2>
+		if form.Success != "" {
+			<p class="flash" role="status" tabindex="-1">{ form.Success }</p>
+		}
+		if form.Errors["form"] != "" {
+			<p class="field-error" role="alert">{ form.Errors["form"] }</p>
+		}
+		<form method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+			@form.CSRFField
+			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+			<div class="form-field"><label for="equipment_id">Equipamento</label><select id="equipment_id" name="equipment_id" required><option value="">Selecione</option>
+				for _, equipment := range form.Equipment {
+					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
+				}
+			</select>@FieldErrorMessage("equipment_id", form.Errors["equipment_id"])</div>
+			<div class="form-field"><label for="issue_description">Descrição da avaria</label><textarea id="issue_description" name="issue_description" required minlength="10" maxlength="2000">{ form.Description }</textarea>@FieldErrorMessage("issue_description", form.Errors["issue_description"])</div>
+			<div class="form-field"><label for="photo">Fotografia (opcional)</label><input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp"/>@FieldErrorMessage("photo", form.Errors["photo"])</div>
+			<button type="submit">Reportar avaria</button>
+		</form>
+	</section>
+}

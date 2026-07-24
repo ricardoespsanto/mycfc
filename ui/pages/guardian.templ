@@ -10,6 +10,7 @@ type GuardianPage struct {
 	Name, DateOfBirth, Role, Squad string
 	Errors     validation.FieldErrors
 	Success    string
+	RepairForm components.RepairFormData
 }
 
 templ Guardian(page GuardianPage) {
@@ -55,5 +56,6 @@ templ GuardianContent(page GuardianPage) {
 				<button type="submit">Adicionar menor</button>
 			</form>
 		</section>
+		@components.RepairForm(page.RepairForm)
 	</div>
 }

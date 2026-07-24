@@ -9,6 +9,7 @@ type DashboardPage struct {
 	EmptyText string
 	Calendars []CalendarLink
 	Sections []DashboardSection
+	RepairForm components.RepairFormData
 }
 
 type CalendarLink struct {
@@ -25,6 +26,7 @@ templ Dashboard(page DashboardPage) {
 templ dashboardContent(page DashboardPage) {
 	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>{ page.Heading }</h1><p>{ page.Intro }</p></section>
 	<section class="dashboard-card" aria-labelledby="summary-title"><h2 id="summary-title">Resumo</h2><p>{ page.EmptyText }</p></section>
+	@components.RepairForm(page.RepairForm)
 	for _, section := range page.Sections {
 		<section class="dashboard-card"><h2>{ section.Heading }</h2>
 			if len(section.Items) == 0 {

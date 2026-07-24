@@ -76,5 +76,5 @@ func newTestRouter(pinger routerPinger, login handlers.Login, registration handl
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, login, registration, auth, dashboard)))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, login, registration, auth, dashboard, handlers.Repair{})))
 }

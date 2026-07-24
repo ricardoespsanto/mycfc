@@ -131,6 +131,10 @@ type dashboardStoreFake struct {
 	deadlineSeen  bool
 }
 
+func (f *dashboardStoreFake) ListOperationalEquipment(_ context.Context, _ int32) ([]dbgen.Equipment, error) {
+	return nil, nil
+}
+
 func (f *dashboardStoreFake) ListRecentPerformanceMetrics(ctx context.Context, params dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error) {
 	_, f.deadlineSeen = ctx.Deadline()
 	f.metricsParams = params

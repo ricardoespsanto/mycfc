@@ -153,3 +153,6 @@ func (s *guardianDashboardStore) ListWhatsAppGroupsForRole(context.Context, dbge
 func (s *guardianDashboardStore) ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {
 	return s.dependents, s.err
 }
+func (s *guardianDashboardStore) ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error) {
+	return nil, nil
+}

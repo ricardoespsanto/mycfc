@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -42,7 +42,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handl
 	mux.Handle("GET /dashboard/guardian", auth.RequireRole("Guardian")(http.HandlerFunc(dashboard.Guardian)))
 	mux.Handle("GET /admin/fleet", auth.RequireRole("Admin")(http.HandlerFunc(dashboard.Admin)))
 	mux.Handle("POST /admin/maintenance", auth.RequireRole("Admin")(http.HandlerFunc(system.NotImplemented)))
-	mux.Handle("POST /repairs", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(system.NotImplemented)))
+	mux.Handle("POST /repairs", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(repair.Post)))
 	mux.Handle("POST /guardian/add-dependent", auth.RequireRole("Guardian")(http.HandlerFunc(dashboard.AddDependent)))
 
 	return customNotFound(mux, system.NotFound)

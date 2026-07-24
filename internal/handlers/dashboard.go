@@ -14,6 +14,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
+	"github.com/google/uuid"
 	"github.com/gorilla/csrf"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -26,6 +27,7 @@ type DashboardStore interface {
 	ListPublishedNews(context.Context, int32) ([]dbgen.NewsItem, error)
 	ListWhatsAppGroupsForRole(context.Context, dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error)
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
+	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 }
 
 type Dashboard struct {
@@ -112,6 +114,15 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.Navigation = dashboardNavigation(user.Role)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	choices := make([]components.RepairEquipment, len(equipment))
+	for i, item := range equipment {
+		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
+	}
 	view := DashboardVM{Meta: meta, Heading: heading, Intro: intro, EmptyText: emptyText, Calendars: calendars, Sections: sections}
 	links := make([]pages.CalendarLink, len(view.Calendars))
 	for i, calendar := range view.Calendars {
@@ -125,7 +136,11 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 		}
 		pageSections[i] = pages.DashboardSection{Heading: section.Heading, Empty: section.Empty, Items: items}
 	}
-	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Calendars: links, Sections: pageSections}).Render(r.Context(), w)
+	repairSuccess := ""
+	if h.Sessions != nil {
+		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
+	}
+	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Calendars: links, Sections: pageSections, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
@@ -145,9 +160,22 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	if success == "" && h.Sessions != nil {
 		success = h.Sessions.PopString(r.Context(), "guardian_flash")
 	}
+	repairSuccess := ""
+	if h.Sessions != nil {
+		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
+	}
+	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	choices := make([]components.RepairEquipment, len(equipment))
+	for i, item := range equipment {
+		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
+	}
 	page := pages.GuardianPage{
 		Meta: meta, Dependents: pageItems, Calendars: guardianCalendarLinks(h.guardianCalendars(dependents)),
-		Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success,
+		Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
