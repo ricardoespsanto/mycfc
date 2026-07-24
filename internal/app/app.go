@@ -123,6 +123,7 @@ func New(ctx context.Context) (*Application, error) {
 		Store: handlers.PostgresRegistrationStore{Pool: pool}, Sessions: sessions, Location: location,
 		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
 		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
+		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
 		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
 	}
 	dashboard := handlers.Dashboard{
@@ -134,7 +135,8 @@ func New(ctx context.Context) (*Application, error) {
 		Location:              location,
 		Sessions:              sessions,
 		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
-		CompetitionID: cfg.CalendarCompetitionID, TrainingID: cfg.CalendarTrainingID,
+		ResponsibilityURL: cfg.ConsentMinorURL,
+		CompetitionID:     cfg.CalendarCompetitionID, TrainingID: cfg.CalendarTrainingID,
 		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
 		CalendarAPIKey: cfg.GoogleCalendarAPIKey,
 	}

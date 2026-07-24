@@ -9,7 +9,7 @@ Incremental delivery checkpoints and the wireframe scope boundary are tracked in
 | 02 Routing and middleware | Implemented foundation | Full route table is registered; business handlers remain deliberately unavailable rather than returning fake success. |
 | 03 Dashboards | Partial | Typed role shells, competitor metrics/training/groups, leisure news/groups, guardian dependant list/form, administrator fleet/repair/maintenance visibility, and browser-fetched public calendars with accessible no-JavaScript fallbacks exist; calendar browser acceptance remains. |
 | 04 Repair workflow | Partial | Repair reporting with multipart validation, idempotency, private object storage, and administrator visibility exists; MinIO encrypted upload/delete integration coverage exists. |
-| 05 Authentication and consent | Partial | Login, adult registration, guardian dependant creation with transactional responsibility consent, session-backed current-user loading, role guards, logout, and administrator CLI exist; legal-document links and integration execution remain. |
+| 05 Authentication and consent | Partial | Login, adult registration, guardian dependant creation with transactional responsibility consent, configuration-backed legal-document links, session-backed current-user loading, role guards, logout, and administrator CLI exist; integration execution remains. |
 | 06 Accessibility/localisation | Partial | pt-PT locale helpers and HTTP error text exist; full UI and Playwright checks remain. |
 | 07 AWS deployment | Not started | Runtime architecture remains defined in the specification bundle. |
 | 08 GitHub Actions | Not started | Will follow after application and Terraform verification commands exist. |

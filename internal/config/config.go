@@ -57,10 +57,13 @@ type Config struct {
 
 	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION,required"`
 	ConsentTermsSHA256  string `env:"CONSENT_TERMS_SHA256,required"`
+	ConsentTermsURL     string `env:"CONSENT_TERMS_URL,required"`
 	ConsentImageVersion string `env:"CONSENT_IMAGE_VERSION,required"`
 	ConsentImageSHA256  string `env:"CONSENT_IMAGE_SHA256,required"`
+	ConsentImageURL     string `env:"CONSENT_IMAGE_URL,required"`
 	ConsentMinorVersion string `env:"CONSENT_MINOR_VERSION,required"`
 	ConsentMinorSHA256  string `env:"CONSENT_MINOR_SHA256,required"`
+	ConsentMinorURL     string `env:"CONSENT_MINOR_URL,required"`
 
 	LogLevel string `env:"LOG_LEVEL" envDefault:"INFO"`
 
@@ -206,6 +209,15 @@ func (c Config) Validate() error {
 	validateConsent("CONSENT_TERMS_VERSION", c.ConsentTermsVersion, "CONSENT_TERMS_SHA256", c.ConsentTermsSHA256)
 	validateConsent("CONSENT_IMAGE_VERSION", c.ConsentImageVersion, "CONSENT_IMAGE_SHA256", c.ConsentImageSHA256)
 	validateConsent("CONSENT_MINOR_VERSION", c.ConsentMinorVersion, "CONSENT_MINOR_SHA256", c.ConsentMinorSHA256)
+	for field, value := range map[string]string{
+		"CONSENT_TERMS_URL": c.ConsentTermsURL,
+		"CONSENT_IMAGE_URL": c.ConsentImageURL,
+		"CONSENT_MINOR_URL": c.ConsentMinorURL,
+	} {
+		if _, err := validateAbsoluteURL(value, c.IsProduction(), true); err != nil {
+			problems.Add(field, err.Error())
+		}
+	}
 
 	if !slices.Contains([]string{"DEBUG", "INFO", "WARN", "ERROR"}, strings.ToUpper(c.LogLevel)) {
 		problems.Add("LOG_LEVEL", "must be DEBUG, INFO, WARN or ERROR")

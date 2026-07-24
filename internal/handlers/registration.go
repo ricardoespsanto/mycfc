@@ -48,8 +48,10 @@ type Registration struct {
 	Now          func() time.Time
 	TermsVersion string
 	TermsSHA256  string
+	TermsURL     string
 	ImageVersion string
 	ImageSHA256  string
+	ImageURL     string
 }
 
 func (h Registration) Get(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +149,7 @@ func (h Registration) render(w http.ResponseWriter, r *http.Request, status int,
 	if !form.DateOfBirth.IsZero() {
 		dateOfBirth = form.DateOfBirth.Format("2006-01-02")
 	}
-	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
+	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, Role: form.Role, Squad: form.Squad, TermsURL: h.TermsURL, ImageURL: h.ImageURL, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
 }
 
 func (h Registration) now() time.Time {

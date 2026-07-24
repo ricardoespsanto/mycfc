@@ -9,6 +9,7 @@ type GuardianPage struct {
 	Calendars  []CalendarLink
 	CalendarAPIKey string
 	CalendarSources string
+	ResponsibilityURL string
 	Name, DateOfBirth, Role, Squad string
 	Errors     validation.FieldErrors
 	Success    string
@@ -50,7 +51,7 @@ templ GuardianContent(page GuardianPage) {
 				<div class="form-field"><label for="date_of_birth">Data de nascimento</label><input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required/>@errorText(page.Errors, "date_of_birth")</div>
 				<div class="form-field"><label for="role">Perfil</label><select id="role" name="role" required><option value="">Selecione</option><option value="Competitor" selected?={ page.Role == "Competitor" }>Competidor</option><option value="Leisure" selected?={ page.Role == "Leisure" }>Lazer</option></select>@errorText(page.Errors, "role")</div>
 				<div class="form-field"><label for="squad_category">Categoria de equipa (apenas competidor)</label><select id="squad_category" name="squad_category"><option value="">Selecione</option><option value="Iniciante" selected?={ page.Squad == "Iniciante" }>Iniciante</option><option value="Polo_Senior" selected?={ page.Squad == "Polo_Senior" }>Polo sénior</option><option value="Master_A" selected?={ page.Squad == "Master_A" }>Master A</option></select></div>
-				<label><input name="accept_minor_responsibility" type="checkbox" required/> Aceito a responsabilidade pelo menor a cargo.</label>@errorText(page.Errors, "accept_minor_responsibility")
+				<label><input name="accept_minor_responsibility" type="checkbox" required/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) } target="_blank" rel="noopener">responsabilidade pelo menor a cargo</a>.</label>@errorText(page.Errors, "accept_minor_responsibility")
 				<button type="submit">Adicionar menor</button>
 			</form>
 		</section>

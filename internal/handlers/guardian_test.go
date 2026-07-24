@@ -25,7 +25,7 @@ func TestGuardianDashboardRendersDependentsAndDeduplicatedCalendars(t *testing.T
 	dashboard := guardianDashboard(store, &guardianDependentStoreFake{})
 	response := guardianResponse(t, dashboard.Guardian, guardianID, nil)
 	body := response.Body.String()
-	for _, want := range []string{"Ana", "11 anos", "Treinos e competições", "Bruno", "16 anos", "Eventos sociais e ações de limpeza", "Competições", "Ações de limpeza"} {
+	for _, want := range []string{"Ana", "11 anos", "Treinos e competições", "Bruno", "16 anos", "Eventos sociais e ações de limpeza", "Competições", "Ações de limpeza", `href="https://example.test/responsabilidade"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q", want)
 		}
@@ -97,7 +97,7 @@ func guardianDashboard(store DashboardStore, dependents GuardianDependentStore) 
 		Store: store, Dependents: dependents, Location: time.UTC, Now: func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) },
 		PageMeta:      components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"},
 		CompetitionID: "competition", TrainingID: "training", SocialID: "social", CleanupsID: "cleanups",
-		ResponsibilityVersion: "1.0", ResponsibilitySHA256: strings.Repeat("c", 64),
+		ResponsibilityVersion: "1.0", ResponsibilitySHA256: strings.Repeat("c", 64), ResponsibilityURL: "https://example.test/responsabilidade",
 	}
 }
 

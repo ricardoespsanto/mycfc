@@ -29,10 +29,13 @@ func validConfig() Config {
 		GalleryURL:             "https://example.invalid/gallery",
 		ConsentTermsVersion:    "dev-v1",
 		ConsentTermsSHA256:     strings.Repeat("0", 64),
+		ConsentTermsURL:        "http://localhost:8080/legal/termos-gerais",
 		ConsentImageVersion:    "dev-v1",
 		ConsentImageSHA256:     strings.Repeat("0", 64),
+		ConsentImageURL:        "http://localhost:8080/legal/uso-imagem",
 		ConsentMinorVersion:    "dev-v1",
 		ConsentMinorSHA256:     strings.Repeat("0", 64),
+		ConsentMinorURL:        "http://localhost:8080/legal/responsabilidade-menor",
 		LogLevel:               "INFO",
 		DBMaxConns:             8,
 		DBMinConns:             1,
@@ -86,6 +89,7 @@ func TestValidateRejectsUnsafeProductionConfiguration(t *testing.T) {
 	cfg.GITSHA = strings.Repeat("a", 40)
 	cfg.BaseURL = "http://mycfc.pt"
 	cfg.GalleryURL = "https://example.invalid/gallery"
+	cfg.ConsentTermsURL = "http://mycfc.pt/legal/termos-gerais"
 	cfg.S3Endpoint = "http://minio:9000"
 	cfg.S3ForcePathStyle = true
 	cfg.TrustedProxyCIDRValues = nil
@@ -94,7 +98,7 @@ func TestValidateRejectsUnsafeProductionConfiguration(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate() returned nil")
 	}
-	for _, expected := range []string{"BASE_URL", "GALLERY_URL", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE", "TRUSTED_PROXY_CIDRS"} {
+	for _, expected := range []string{"BASE_URL", "GALLERY_URL", "CONSENT_TERMS_URL", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE", "TRUSTED_PROXY_CIDRS"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("error %q does not include %s", err, expected)
 		}

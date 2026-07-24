@@ -61,6 +61,7 @@ type Dashboard struct {
 	Now                   func() time.Time
 	ResponsibilityVersion string
 	ResponsibilitySHA256  string
+	ResponsibilityURL     string
 	Sessions              *scs.SessionManager
 	Objects               storage.ObjectStore
 }
@@ -389,7 +390,7 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	calendars := guardianCalendarLinks(h.guardianCalendars(dependents))
 	page := pages.GuardianPage{
 		Meta: meta, Dependents: pageItems, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars,
-		Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
+		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

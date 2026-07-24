@@ -6,6 +6,7 @@ import "github.com/cfcoimbra/mycfc/ui/components"
 type RegistrationPage struct {
 	Meta                                components.PageMeta
 	Name, Email, DateOfBirth, Role, Squad string
+	TermsURL, ImageURL                 string
 	Errors                       validation.FieldErrors
 	CSRFField                    templ.Component
 }
@@ -26,8 +27,8 @@ templ registrationContent(page RegistrationPage) {
 			<div class="form-field"><label for="squad_category">Categoria de equipa (apenas competidor)</label><select id="squad_category" name="squad_category"><option value="">Selecione</option><option value="Iniciante" selected?={ page.Squad == "Iniciante" }>Iniciante</option><option value="Polo_Senior" selected?={ page.Squad == "Polo_Senior" }>Polo sénior</option><option value="Master_A" selected?={ page.Squad == "Master_A" }>Master A</option></select></div>
 			<div class="form-field"><label for="password">Palavra-passe</label><input id="password" name="password" type="password" autocomplete="new-password" required/>@errorText(page.Errors, "password")</div>
 			<div class="form-field"><label for="password_confirmation">Confirmar palavra-passe</label><input id="password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required/>@errorText(page.Errors, "password_confirmation")</div>
-			<label><input name="accept_terms" type="checkbox" required/> Aceito os termos gerais.</label>@errorText(page.Errors, "accept_terms")
-			<label><input name="accept_image_use" type="checkbox" required/> Aceito a autorização de uso de imagem.</label>@errorText(page.Errors, "accept_image_use")
+			<label><input name="accept_terms" type="checkbox" required/> Aceito os <a href={ templ.SafeURL(page.TermsURL) } target="_blank" rel="noopener">termos gerais</a>.</label>@errorText(page.Errors, "accept_terms")
+			<label><input name="accept_image_use" type="checkbox" required/> Aceito a <a href={ templ.SafeURL(page.ImageURL) } target="_blank" rel="noopener">autorização de uso de imagem</a>.</label>@errorText(page.Errors, "accept_image_use")
 			<button type="submit">Criar conta</button>
 		</form>
 	</section>

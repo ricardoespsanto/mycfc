@@ -34,7 +34,7 @@ func TestRegistrationGetRendersForm(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	for _, expected := range []string{`<h1 id="registration-title">Criar conta</h1>`, `name="accept_terms"`, `name="accept_image_use"`} {
+	for _, expected := range []string{`<h1 id="registration-title">Criar conta</h1>`, `name="accept_terms"`, `name="accept_image_use"`, `href="https://example.test/termos"`, `href="https://example.test/imagem"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
 		}
@@ -94,7 +94,7 @@ func registrationHandler(store RegistrationStore) Registration {
 	return Registration{
 		Store: store, Sessions: scs.New(), PageMeta: loginTestPageMeta(), Location: time.UTC,
 		Now:          func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) },
-		TermsVersion: "1.0", TermsSHA256: strings.Repeat("a", 64), ImageVersion: "2.0", ImageSHA256: strings.Repeat("b", 64),
+		TermsVersion: "1.0", TermsSHA256: strings.Repeat("a", 64), TermsURL: "https://example.test/termos", ImageVersion: "2.0", ImageSHA256: strings.Repeat("b", 64), ImageURL: "https://example.test/imagem",
 	}
 }
 
