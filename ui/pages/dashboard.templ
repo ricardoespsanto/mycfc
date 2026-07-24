@@ -1,0 +1,59 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type DashboardPage struct {
+	Meta      components.PageMeta
+	Heading   string
+	Intro     string
+	EmptyText string
+	Calendars []CalendarLink
+	Sections []DashboardSection
+}
+
+type CalendarLink struct {
+	Label string
+	URL   string
+}
+type DashboardSection struct { Heading, Empty string; Items []DashboardItem }
+type DashboardItem struct { Title, Detail, URL string }
+
+templ Dashboard(page DashboardPage) {
+	@components.Base(page.Meta, dashboardContent(page))
+}
+
+templ dashboardContent(page DashboardPage) {
+	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>{ page.Heading }</h1><p>{ page.Intro }</p></section>
+	<section class="dashboard-card" aria-labelledby="summary-title"><h2 id="summary-title">Resumo</h2><p>{ page.EmptyText }</p></section>
+	for _, section := range page.Sections {
+		<section class="dashboard-card"><h2>{ section.Heading }</h2>
+			if len(section.Items) == 0 {
+				<p>{ section.Empty }</p>
+			}
+			if len(section.Items) > 0 {
+				<ul>
+					for _, item := range section.Items {
+						<li>
+							if item.URL != "" {
+								<a href={ item.URL }>{ item.Title }</a>
+							}
+							if item.URL == "" {
+								{ item.Title }
+							}
+							if item.Detail != "" {
+								<span> { item.Detail }</span>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+	if len(page.Calendars) > 0 {
+		<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>Consulte os calendários públicos relevantes para o seu perfil.</p><ul class="calendar-links">
+			for _, calendar := range page.Calendars {
+				<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
+			}
+		</ul></section>
+	}
+}

@@ -25,6 +25,7 @@ type Querier interface {
 	GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment, error)
 	GetRepairByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (RepairRequest, error)
 	GetRepairRequestByID(ctx context.Context, id uuid.UUID) (RepairRequest, error)
+	GetUserByEmail(ctx context.Context, email *string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)

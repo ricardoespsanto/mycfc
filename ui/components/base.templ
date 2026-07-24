@@ -4,6 +4,10 @@ type PageMeta struct {
 	Title         string
 	StylesheetURL string
 	ScriptURL     string
+	CurrentPath   string
+	CurrentUserName string
+	Navigation    []NavigationItem
+	CSRFField     templ.Component
 }
 
 templ Base(meta PageMeta, content templ.Component) {
@@ -18,9 +22,13 @@ templ Base(meta PageMeta, content templ.Component) {
 		</head>
 		<body>
 			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
+			if len(meta.Navigation) > 0 {
+				<header class="site-header"><div class="site-header__content"><a class="site-brand" href="/dashboard">MyCFC</a>@Navigation(meta.CurrentPath, meta.Navigation)<form method="post" action="/logout">@meta.CSRFField<button class="logout-button" type="submit">Terminar sessão</button></form></div></header>
+			}
 			<main id="conteudo-principal">
 				@content
 			</main>
+			<footer class="site-footer">Clube Fluvial de Coimbra</footer>
 		</body>
 	</html>
 }

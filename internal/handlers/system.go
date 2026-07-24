@@ -27,3 +27,15 @@ func (System) NotFound(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = io.WriteString(w, `<!doctype html><html lang="pt-PT"><title>Página não encontrada</title><main id="conteudo-principal"><h1>Página não encontrada</h1><p>Verifique o endereço e tente novamente.</p></main></html>`)
 }
+
+func (System) Forbidden(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="pt-PT"><title>Acesso recusado</title><main id="conteudo-principal"><h1>Acesso recusado</h1><p>Não tem permissão para aceder a esta página.</p></main></html>`)
+}
+
+func (System) InternalError(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="pt-PT"><title>Erro interno</title><main id="conteudo-principal"><h1>Não foi possível concluir o pedido</h1><p>Tente novamente mais tarde.</p></main></html>`)
+}

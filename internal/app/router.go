@@ -8,12 +8,13 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
 	staticassets "github.com/cfcoimbra/mycfc/ui/static"
 )
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -23,26 +24,26 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handl
 	mux.Handle("GET /assets/{path...}", assetHandler())
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		if sessions.Exists(r.Context(), "user_id") {
+		if httpx.UserID(r.Context()) != "" {
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			return
 		}
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /login", login.Get)
-	mux.HandleFunc("POST /login", login.Post)
-	mux.HandleFunc("GET /registo", system.NotImplemented)
-	mux.HandleFunc("POST /registo", system.NotImplemented)
-	mux.HandleFunc("POST /logout", system.NotImplemented)
-	mux.HandleFunc("GET /dashboard", system.NotImplemented)
-	mux.HandleFunc("GET /dashboard/competitor", system.NotImplemented)
-	mux.HandleFunc("GET /dashboard/leisure", system.NotImplemented)
-	mux.HandleFunc("GET /dashboard/guardian", system.NotImplemented)
-	mux.HandleFunc("GET /admin/fleet", system.NotImplemented)
-	mux.HandleFunc("POST /admin/maintenance", system.NotImplemented)
-	mux.HandleFunc("POST /repairs", system.NotImplemented)
-	mux.HandleFunc("POST /guardian/add-dependent", system.NotImplemented)
+	mux.Handle("GET /login", auth.AnonymousOnly(http.HandlerFunc(login.Get)))
+	mux.Handle("POST /login", auth.AnonymousOnly(http.HandlerFunc(login.Post)))
+	mux.Handle("GET /registo", auth.AnonymousOnly(http.HandlerFunc(registration.Get)))
+	mux.Handle("POST /registo", auth.AnonymousOnly(http.HandlerFunc(registration.Post)))
+	mux.Handle("POST /logout", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(auth.Logout)))
+	mux.Handle("GET /dashboard", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(auth.Dashboard)))
+	mux.Handle("GET /dashboard/competitor", auth.RequireRole("Competitor")(http.HandlerFunc(dashboard.Competitor)))
+	mux.Handle("GET /dashboard/leisure", auth.RequireRole("Leisure")(http.HandlerFunc(dashboard.Leisure)))
+	mux.Handle("GET /dashboard/guardian", auth.RequireRole("Guardian")(http.HandlerFunc(dashboard.Guardian)))
+	mux.Handle("GET /admin/fleet", auth.RequireRole("Admin")(http.HandlerFunc(dashboard.Admin)))
+	mux.Handle("POST /admin/maintenance", auth.RequireRole("Admin")(http.HandlerFunc(system.NotImplemented)))
+	mux.Handle("POST /repairs", auth.RequireRole("Admin", "Competitor", "Leisure", "Guardian")(http.HandlerFunc(system.NotImplemented)))
+	mux.Handle("POST /guardian/add-dependent", auth.RequireRole("Guardian")(http.HandlerFunc(system.NotImplemented)))
 
 	return customNotFound(mux, system.NotFound)
 }

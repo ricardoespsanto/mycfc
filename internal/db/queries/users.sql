@@ -56,6 +56,13 @@ SELECT id, name, email, password_hash, role, squad_category, guardian_id,
 FROM users
 WHERE email = sqlc.arg(email)
   AND is_active = true
+   AND is_dependent = false;
+
+-- name: GetUserByEmail :one
+SELECT id, name, email, password_hash, role, squad_category, guardian_id,
+       is_dependent, date_of_birth, is_active, created_at, updated_at
+FROM users
+WHERE email = sqlc.arg(email)
   AND is_dependent = false;
 
 -- name: ListDependentsByGuardian :many

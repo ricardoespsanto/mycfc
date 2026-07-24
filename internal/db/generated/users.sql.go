@@ -163,11 +163,39 @@ SELECT id, name, email, password_hash, role, squad_category, guardian_id,
 FROM users
 WHERE email = $1
   AND is_active = true
-  AND is_dependent = false
+   AND is_dependent = false
 `
 
 func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (User, error) {
 	row := q.db.QueryRow(ctx, getActiveUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.PasswordHash,
+		&i.Role,
+		&i.SquadCategory,
+		&i.GuardianID,
+		&i.IsDependent,
+		&i.DateOfBirth,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, name, email, password_hash, role, squad_category, guardian_id,
+       is_dependent, date_of_birth, is_active, created_at, updated_at
+FROM users
+WHERE email = $1
+  AND is_dependent = false
+`
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
 	var i User
 	err := row.Scan(
 		&i.ID,

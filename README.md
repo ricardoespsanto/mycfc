@@ -30,6 +30,14 @@ make reset-local
 
 `make reset-local` deletes local PostgreSQL and MinIO data after confirmation.
 
+Create or manage an administrator with a password file rather than shell input:
+
+```bash
+MYCFC_ADMIN_PASSWORD_FILE=/path/to/password-file go run ./cmd/admin create --email admin@example.com --name "Admin User" --date-of-birth 1990-01-01
+```
+
+The CLI also supports `set-password --email ...` and `deactivate --email ...`. Without `MYCFC_ADMIN_PASSWORD_FILE`, it reads and confirms a password only from an interactive terminal.
+
 ## Current scope
 
-The first implementation slice provides the database, configuration, middleware, health, storage and local-development foundations. The business UI is tracked in `docs/implementation-status.md` and incomplete routes return `501 Not Implemented` rather than fake successful responses.
+The foundation now includes login, adult registration, database-authoritative authorization, and administrator credential management. The remaining business UI is tracked in `docs/implementation-status.md`; incomplete routes return `501 Not Implemented` rather than fake successful responses.

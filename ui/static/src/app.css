@@ -102,3 +102,15 @@ button:hover {
   outline: 3px solid currentColor;
   outline-offset: 3px;
 }
+
+.site-header { background: #12334a; color: #fff; }
+.site-header__content { width: min(72rem, calc(100% - 2rem)); margin-inline: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding-block: 0.8rem; }
+.site-header a { color: inherit; }
+.site-header nav ul, .calendar-links { display: flex; flex-wrap: wrap; gap: 0.8rem; margin: 0; padding: 0; list-style: none; }
+.site-brand { font-weight: 800; text-decoration: none; }
+.logout-button { padding: 0.4rem 0.65rem; background: transparent; border: 1px solid currentColor; }
+.site-footer { padding: 2rem 1rem; text-align: center; color: #4d5964; }
+.dashboard-hero { margin-block-end: 1.5rem; }
+.eyebrow { margin: 0; color: #17653c; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.dashboard-card { margin-block: 1rem; padding: clamp(1rem, 3vw, 1.5rem); border: 1px solid #c7d1d9; border-radius: 0.5rem; background: #fff; }
+@media (max-width: 40rem) { .site-header__content { align-items: flex-start; flex-direction: column; } }

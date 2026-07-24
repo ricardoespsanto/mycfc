@@ -16,7 +16,7 @@ type routerPinger struct{ err error }
 func (p routerPinger) Ping(context.Context) error { return p.err }
 
 func TestRouterHealthAndMethodSemantics(t *testing.T) {
-	router := newTestRouter(routerPinger{}, handlers.Login{})
+	router := newTestRouter(routerPinger{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
 	for _, tc := range []struct {
 		method   string
 		path     string
@@ -29,6 +29,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodPost, "/health/live", http.StatusMethodNotAllowed, "GET, HEAD", ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, "", ""},
 		{http.MethodGet, "/login", http.StatusOK, "", ""},
+		{http.MethodGet, "/registo", http.StatusOK, "", ""},
+		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
+		{http.MethodGet, "/admin/fleet", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -47,7 +50,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 }
 
 func TestRouterReadinessFailure(t *testing.T) {
-	router := newTestRouter(routerPinger{err: errors.New("down")}, handlers.Login{})
+	router := newTestRouter(routerPinger{err: errors.New("down")}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if response.Code != http.StatusServiceUnavailable {
@@ -55,8 +58,10 @@ func TestRouterReadinessFailure(t *testing.T) {
 	}
 }
 
-func newTestRouter(pinger routerPinger, login handlers.Login) http.Handler {
+func newTestRouter(pinger routerPinger, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
 	sessions := scs.New()
 	login.Sessions = sessions
-	return sessions.LoadAndSave(newRouter(pinger, sessions, login))
+	registration.Sessions = sessions
+	auth.Sessions = sessions
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, login, registration, auth, dashboard)))
 }

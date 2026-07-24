@@ -119,7 +119,20 @@ func New(ctx context.Context) (*Application, error) {
 			ScriptURL:     assets["app.js"],
 		},
 	}
-	router := newRouter(pool, sessions, login)
+	registration := handlers.Registration{
+		Store: handlers.PostgresRegistrationStore{Pool: pool}, Sessions: sessions, Location: location,
+		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
+		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
+		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+	}
+	dashboard := handlers.Dashboard{
+		Store:         dbgen.New(pool),
+		PageMeta:      components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+		CompetitionID: cfg.CalendarCompetitionID, TrainingID: cfg.CalendarTrainingID,
+		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
+	}
+	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
+	router := auth.Load(newRouter(pool, sessions, login, registration, auth, dashboard))
 	csrfMiddleware := csrf.Protect(
 		csrfKey,
 		csrf.CookieName("mycfc_csrf"),
