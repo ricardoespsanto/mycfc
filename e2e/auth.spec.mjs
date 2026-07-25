@@ -13,14 +13,28 @@ async function expectNoSeriousAxeViolations(page) {
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }
 
+async function expectNoHorizontalOverflow(page) {
+  const overflowing = await page.locator('*').evaluateAll((elements) => elements
+    .filter((element) => element.scrollWidth > element.clientWidth + 1)
+    .map((element) => ({ tag: element.tagName, className: element.className, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })));
+  expect(overflowing).toEqual([]);
+}
+
 test.describe('authentication', () => {
   test.describe.configure({ mode: 'serial' });
 
   test('registers a competitor, reaches the dashboard, and has no serious accessibility violations', async ({ page }) => {
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);
-    await page.getByLabel('Nome').fill('Pessoa de teste');
-    await page.getByLabel('Correio eletrónico').fill(email);
+    const name = page.getByLabel('Nome');
+    const emailField = page.getByLabel('Correio eletrónico');
+    await name.focus();
+    await page.keyboard.press('Tab');
+    await expect(emailField).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(name).toBeFocused();
+    await name.fill('Pessoa de teste');
+    await emailField.fill(email);
     await page.getByLabel('Data de nascimento').fill('1990-01-01');
     await page.getByLabel('Tipo de conta').selectOption('Competitor');
     await page.getByLabel('Categoria de equipa (apenas competidor)').selectOption('Iniciante');
@@ -35,12 +49,12 @@ test.describe('authentication', () => {
     await expectNoSeriousAxeViolations(page);
 
     await page.setViewportSize({ width: 320, height: 720 });
-    const overflowing = await page.locator('*').evaluateAll((elements) => elements
-      .filter((element) => element.scrollWidth > element.clientWidth + 1)
-      .map((element) => ({ tag: element.tagName, className: element.className, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })));
-    expect(overflowing).toEqual([]);
+    await expectNoHorizontalOverflow(page);
 
-    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    const logout = page.getByRole('button', { name: 'Terminar sessão' });
+    await logout.focus();
+    await expect(logout).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(page).toHaveURL('/login');
   });
 
@@ -110,6 +124,8 @@ test.describe('authentication', () => {
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
     await expect(noJavaScriptPage.getByText('Menor a cargo adicionado.')).toBeVisible();
     await expect(noJavaScriptPage.getByText('Menor de teste')).toBeVisible();
+    await noJavaScriptPage.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(noJavaScriptPage);
     await context.close();
   });
 });
