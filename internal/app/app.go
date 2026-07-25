@@ -115,6 +115,10 @@ func New(ctx context.Context) (*Application, error) {
 		pool.Close()
 		return nil, err
 	}
+	landing := handlers.Landing{
+		PageMeta: components.PageMeta{Title: "Clube Fluvial de Coimbra | MyCFC", StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+		HeroURL:  assets["images/cfc-hero.png"],
+	}
 	login := handlers.Login{
 		Users:    dbgen.New(pool),
 		Sessions: sessions,
@@ -146,7 +150,7 @@ func New(ctx context.Context) (*Application, error) {
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}
-	router := auth.Load(newRouter(pool, sessions, login, registration, auth, dashboard, repair))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair))
 	csrfMiddleware := csrf.Protect(
 		csrfKey,
 		csrf.CookieName("mycfc_csrf"),

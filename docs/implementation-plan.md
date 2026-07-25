@@ -48,6 +48,19 @@ Existing phases: 02 Routing and middleware, 05 Authentication and consent, 06 Ac
 
 Operator checkpoint: each public role can register, authenticate, reach only its destination, and log out with and without JavaScript.
 
+### 1.5 Public Landing Page
+
+Existing phases: 00 System context, 02 Routing and middleware, 03 Dashboards, 06 Accessibility/localisation.
+
+- Replace the anonymous `/` redirect with a server-rendered public landing page; authenticated visitors continue to redirect to `/dashboard`.
+- Build a public header and footer distinct from authenticated navigation, with working `/registo` and `/login` calls to action.
+- Follow the approved CFC visual direction: locally embedded CFC logo and canoeing imagery, club-blue/river palette, editorial hierarchy, and responsive mobile composition. Do not add runtime external image or CDN dependencies.
+- Include concise club framing, role-oriented MyCFC highlights, and links to the existing `https://cfcoimbra.com` site, club information, news, and events.
+- Publish the approved contact details and social links: +351 912 626 410, cfluvialcoimbra@gmail.com, Av. Inês de Castro, Pav. A, 3040-255 Coimbra, Facebook, Instagram, and YouTube.
+- Cover anonymous rendering, authenticated root redirect, CTA/external-link behavior, keyboard navigation, axe, responsive overflow, and no-JavaScript rendering.
+
+Operator checkpoint: an anonymous visitor can understand the club, reach registration or login, use contact and club-site links, and navigate the page accessibly on mobile and desktop.
+
 ### 2. Shared Dashboard and Calendar Shell
 
 Existing phases: 03 Dashboards, 06 Accessibility/localisation.

@@ -12,9 +12,9 @@ import (
 	staticassets "github.com/cfcoimbra/mycfc/ui/static"
 )
 
-var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js)$`)
+var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -28,7 +28,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, login handl
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			return
 		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		landing.Get(w, r)
 	})
 
 	mux.Handle("GET /login", auth.AnonymousOnly(http.HandlerFunc(login.Get)))

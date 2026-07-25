@@ -25,6 +25,28 @@ async function expectNoHorizontalOverflow(page) {
 test.describe('authentication', () => {
   test.describe.configure({ mode: 'serial' });
 
+  test('renders an accessible public landing page with working calls to action', async ({ page, browser }) => {
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'A promover a canoagem, dentro e fora de água.' })).toBeVisible();
+    await expect(page.getByAltText('Instalações do Clube Fluvial de Coimbra junto ao rio')).toBeVisible();
+    const register = page.getByRole('link', { name: 'Criar conta MyCFC' });
+    await expect(register).toHaveAttribute('href', '/registo');
+    await expect(page.getByRole('link', { name: 'Iniciar sessão' }).first()).toHaveAttribute('href', '/login');
+    await expect(page.getByRole('link', { name: 'Ver as novidades do clube' })).toHaveAttribute('href', 'https://cfcoimbra.com/noticias/');
+    await expect(page.locator('a[href="tel:+351912626410"]').first()).toHaveText('+351 912 626 410');
+    await register.focus();
+    await expect(register).toBeFocused();
+    await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const noJavaScriptPage = await context.newPage();
+    await noJavaScriptPage.goto('/');
+    await expect(noJavaScriptPage.getByRole('heading', { name: 'A promover a canoagem, dentro e fora de água.' })).toBeVisible();
+    await context.close();
+  });
+
   test('registers a competitor, reaches the dashboard, and has no serious accessibility violations', async ({ page }) => {
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);

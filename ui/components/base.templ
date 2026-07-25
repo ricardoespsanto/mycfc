@@ -1,13 +1,48 @@
 package components
 
 type PageMeta struct {
-	Title         string
-	StylesheetURL string
-	ScriptURL     string
-	CurrentPath   string
+	Title           string
+	StylesheetURL   string
+	ScriptURL       string
+	BrandImageURL   string
+	CurrentPath     string
 	CurrentUserName string
-	Navigation    []NavigationItem
-	CSRFField     templ.Component
+	Navigation      []NavigationItem
+	CSRFField       templ.Component
+}
+
+templ PublicBase(meta PageMeta, content templ.Component) {
+	<!doctype html>
+	<html lang="pt-PT">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ meta.Title }</title>
+			<link rel="stylesheet" href={ meta.StylesheetURL }/>
+			<script src={ meta.ScriptURL } defer></script>
+		</head>
+		<body class="public-body">
+			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
+			<header class="public-header">
+				<div class="public-header__content">
+					<a class="public-brand" href="/" aria-label="Clube Fluvial de Coimbra, página inicial">
+						<img src={ meta.BrandImageURL } alt="Clube Fluvial de Coimbra"/>
+						<span>Clube Fluvial de Coimbra<small>MyCFC</small></span>
+					</a>
+					<nav aria-label="Navegação pública"><a href="https://cfcoimbra.com/o-clube/">O Clube</a><a href="https://cfcoimbra.com/noticias/">Notícias</a><a href="https://cfcoimbra.com/eventos/">Eventos</a></nav>
+					<div class="public-header__actions"><a class="public-login" href="/login">Iniciar sessão</a><a class="public-register" href="/registo">Criar conta</a></div>
+				</div>
+			</header>
+			<main id="conteudo-principal">
+				@content
+			</main>
+			<footer class="public-footer">
+				<div><strong>Clube Fluvial de Coimbra</strong><p>A promover a canoagem desde 1989.</p></div>
+				<address><a href="tel:+351912626410">+351 912 626 410</a><a href="mailto:cfluvialcoimbra@gmail.com">cfluvialcoimbra@gmail.com</a><span>Av. Inês de Castro, Pav. A, 3040-255 Coimbra</span></address>
+				<nav aria-label="Redes sociais"><a href="https://www.facebook.com/CFCoimbra">Facebook</a><a href="https://www.instagram.com/cfcoimbra/">Instagram</a><a href="https://www.youtube.com/channel/UCiCvFGLsklKxzqOrEjG9gDw">YouTube</a></nav>
+			</footer>
+		</body>
+	</html>
 }
 
 templ Base(meta PageMeta, content templ.Component) {

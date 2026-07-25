@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alexedwards/scs/v2"
@@ -18,7 +19,7 @@ type routerPinger struct{ err error }
 func (p routerPinger) Ping(context.Context) error { return p.err }
 
 func TestRouterHealthAndMethodSemantics(t *testing.T) {
-	router := newTestRouter(routerPinger{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
+	router := newTestRouter(routerPinger{}, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
 	for _, tc := range []struct {
 		method   string
 		path     string
@@ -26,7 +27,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		allow    string
 		location string
 	}{
-		{http.MethodGet, "/", http.StatusSeeOther, "", "/login"},
+		{http.MethodGet, "/", http.StatusOK, "", ""},
 		{http.MethodGet, "/health/live", http.StatusOK, "", ""},
 		{http.MethodPost, "/health/live", http.StatusMethodNotAllowed, "GET, HEAD", ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, "", ""},
@@ -52,7 +53,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 }
 
 func TestRouterReadinessFailure(t *testing.T) {
-	router := newTestRouter(routerPinger{err: errors.New("down")}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
+	router := newTestRouter(routerPinger{err: errors.New("down")}, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if response.Code != http.StatusServiceUnavailable {
@@ -71,10 +72,32 @@ func TestPlaintextCSRFMiddleware(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), request)
 }
 
-func newTestRouter(pinger routerPinger, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
+func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestLandingRendersPublicCallsToAction(t *testing.T) {
+	router := newTestRouter(routerPinger{}, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, expected := range []string{"A promover a canoagem", `href="/registo"`, `href="/login"`, "cfluvialcoimbra@gmail.com"} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Errorf("landing does not contain %q", expected)
+		}
+	}
+}
+
+func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard) http.Handler {
 	sessions := scs.New()
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, login, registration, auth, dashboard, handlers.Repair{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, auth, dashboard, handlers.Repair{})))
 }

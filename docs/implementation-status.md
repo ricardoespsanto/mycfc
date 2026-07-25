@@ -4,7 +4,7 @@ Incremental delivery checkpoints and the wireframe scope boundary are tracked in
 
 | Specification | State | Notes |
 |---|---|---|
-| 00 System context | In progress | Repository boundaries, module, config, HTTP foundation and local workflow exist. |
+| 00 System context | In progress | Repository boundaries, module, config, HTTP foundation and local workflow exist; a public CFC landing page with locally embedded imagery, contacts, account calls to action, and club-site links is available at `/`. |
 | 01 Data models | Implemented source | Migrations, queries, sqlc config and transaction helper are present; maintenance scheduling has PostgreSQL integration coverage. |
 | 02 Routing and middleware | Implemented foundation | Full route table is registered; business handlers remain deliberately unavailable rather than returning fake success. |
 | 03 Dashboards | Partial | Typed role shells, competitor metrics/training/groups, leisure news/groups, guardian dependant list/form, administrator fleet/repair/maintenance visibility, and browser-fetched public calendars with accessible no-JavaScript fallbacks exist; Playwright covers competitor, leisure, guardian, and administrator role flows. |
