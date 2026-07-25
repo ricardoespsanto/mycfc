@@ -98,6 +98,7 @@ services:
       - -ec
       - |
         psql -v ON_ERROR_STOP=1 -c "INSERT INTO equipment (asset_tag, name, type) VALUES ('E2E-REPAIR', 'Embarcação de teste', 'Boat') ON CONFLICT (asset_tag) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, status = 'Operational', notes = ''"
+        psql -v ON_ERROR_STOP=1 -c "INSERT INTO users (name, email, password_hash, role, squad_category, date_of_birth) VALUES ('Administrador de teste', 'e2e-admin@example.test', '\$$2a\$$12\$$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK', 'Admin', 'None', '1990-01-01') ON CONFLICT (email) WHERE email IS NOT NULL DO UPDATE SET name = EXCLUDED.name, password_hash = EXCLUDED.password_hash, role = 'Admin', squad_category = 'None', guardian_id = NULL, is_dependent = false, date_of_birth = EXCLUDED.date_of_birth, is_active = true"
     depends_on:
       postgres:
         condition: service_healthy

@@ -3,6 +3,8 @@ import AxeBuilder from '@axe-core/playwright';
 
 const email = `e2e-${Date.now()}@example.test`;
 const guardianEmail = `e2e-guardian-${Date.now()}@example.test`;
+const leisureEmail = `e2e-leisure-${Date.now()}@example.test`;
+const adminEmail = 'e2e-admin@example.test';
 const password = 'correct horse 7';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080';
 const validPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2h38AAAAASUVORK5CYII=', 'base64');
@@ -127,5 +129,36 @@ test.describe('authentication', () => {
     await noJavaScriptPage.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(noJavaScriptPage);
     await context.close();
+  });
+
+  test('registers a leisure member and reaches the leisure dashboard', async ({ page }) => {
+    await page.goto('/registo');
+    await page.getByLabel('Nome').fill('Membro de lazer');
+    await page.getByLabel('Correio eletrónico').fill(leisureEmail);
+    await page.getByLabel('Data de nascimento').fill('1990-01-01');
+    await page.getByLabel('Tipo de conta').selectOption('Leisure');
+    await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
+    await page.getByLabel('Confirmar palavra-passe').fill(password);
+    await page.getByLabel(/Aceito os termos gerais/).check();
+    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+
+    await expect(page).toHaveURL('/dashboard/leisure');
+    await expect(page.getByRole('heading', { name: 'Painel de lazer' })).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
+  });
+
+  test('logs in as an administrator and views the fleet', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+
+    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Equipamento')).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
   });
 });
