@@ -32,8 +32,6 @@ INSERT INTO users (
     name,
     email,
     password_hash,
-    role,
-    squad_category,
     guardian_id,
     is_dependent,
     date_of_birth
@@ -41,23 +39,19 @@ INSERT INTO users (
     $1,
     $2,
     $3,
-    $4,
-    $5,
     NULL,
     false,
-    $6
+    $4
 )
-RETURNING id, name, email, password_hash, role, squad_category, guardian_id,
+RETURNING id, name, email, password_hash, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
 `
 
 type CreateAdultUserParams struct {
-	Name          string      `json:"name"`
-	Email         *string     `json:"email"`
-	PasswordHash  *string     `json:"password_hash"`
-	Role          string      `json:"role"`
-	SquadCategory string      `json:"squad_category"`
-	DateOfBirth   pgtype.Date `json:"date_of_birth"`
+	Name         string      `json:"name"`
+	Email        *string     `json:"email"`
+	PasswordHash *string     `json:"password_hash"`
+	DateOfBirth  pgtype.Date `json:"date_of_birth"`
 }
 
 func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (User, error) {
@@ -65,8 +59,6 @@ func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams
 		arg.Name,
 		arg.Email,
 		arg.PasswordHash,
-		arg.Role,
-		arg.SquadCategory,
 		arg.DateOfBirth,
 	)
 	var i User
@@ -75,8 +67,6 @@ func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
-		&i.Role,
-		&i.SquadCategory,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -92,8 +82,6 @@ INSERT INTO users (
     name,
     email,
     password_hash,
-    role,
-    squad_category,
     guardian_id,
     is_dependent,
     date_of_birth
@@ -102,39 +90,27 @@ INSERT INTO users (
     NULL,
     NULL,
     $2,
-    $3,
-    $4,
     true,
-    $5
+    $3
 )
-RETURNING id, name, email, password_hash, role, squad_category, guardian_id,
+RETURNING id, name, email, password_hash, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
 `
 
 type CreateDependentUserParams struct {
-	Name          string      `json:"name"`
-	Role          string      `json:"role"`
-	SquadCategory string      `json:"squad_category"`
-	GuardianID    *uuid.UUID  `json:"guardian_id"`
-	DateOfBirth   pgtype.Date `json:"date_of_birth"`
+	Name        string      `json:"name"`
+	GuardianID  *uuid.UUID  `json:"guardian_id"`
+	DateOfBirth pgtype.Date `json:"date_of_birth"`
 }
 
 func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, createDependentUser,
-		arg.Name,
-		arg.Role,
-		arg.SquadCategory,
-		arg.GuardianID,
-		arg.DateOfBirth,
-	)
+	row := q.db.QueryRow(ctx, createDependentUser, arg.Name, arg.GuardianID, arg.DateOfBirth)
 	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
-		&i.Role,
-		&i.SquadCategory,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -157,8 +133,75 @@ func (q *Queries) DeactivateUser(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const getAccountByEmail = `-- name: GetAccountByEmail :one
+SELECT u.id, u.name, u.is_dependent, u.is_active,
+       EXISTS (
+           SELECT 1
+           FROM user_platform_roles assignment
+           JOIN platform_roles role ON role.id = assignment.role_id
+           WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
+       ) AS is_admin
+FROM users u
+WHERE u.email = $1
+  AND u.is_dependent = false
+`
+
+type GetAccountByEmailRow struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	IsDependent bool      `json:"is_dependent"`
+	IsActive    bool      `json:"is_active"`
+	IsAdmin     bool      `json:"is_admin"`
+}
+
+func (q *Queries) GetAccountByEmail(ctx context.Context, email *string) (GetAccountByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getAccountByEmail, email)
+	var i GetAccountByEmailRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsDependent,
+		&i.IsActive,
+		&i.IsAdmin,
+	)
+	return i, err
+}
+
+const getActiveAccountByID = `-- name: GetActiveAccountByID :one
+SELECT u.id, u.name, u.is_dependent, u.is_active,
+       EXISTS (
+           SELECT 1
+           FROM user_platform_roles assignment
+           JOIN platform_roles role ON role.id = assignment.role_id
+           WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
+       ) AS is_admin
+FROM users u
+WHERE u.id = $1
+`
+
+type GetActiveAccountByIDRow struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	IsDependent bool      `json:"is_dependent"`
+	IsActive    bool      `json:"is_active"`
+	IsAdmin     bool      `json:"is_admin"`
+}
+
+func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDRow, error) {
+	row := q.db.QueryRow(ctx, getActiveAccountByID, id)
+	var i GetActiveAccountByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsDependent,
+		&i.IsActive,
+		&i.IsAdmin,
+	)
+	return i, err
+}
+
 const getActiveUserByEmail = `-- name: GetActiveUserByEmail :one
-SELECT id, name, email, password_hash, role, squad_category, guardian_id,
+SELECT id, name, email, password_hash, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM users
 WHERE email = $1
@@ -174,8 +217,6 @@ func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (User
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
-		&i.Role,
-		&i.SquadCategory,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -187,7 +228,7 @@ func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (User
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, password_hash, role, squad_category, guardian_id,
+SELECT id, name, email, password_hash, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM users
 WHERE email = $1
@@ -202,8 +243,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (User, erro
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
-		&i.Role,
-		&i.SquadCategory,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -215,7 +254,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (User, erro
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, name, email, password_hash, role, squad_category, guardian_id,
+SELECT id, name, email, password_hash, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM users
 WHERE id = $1
@@ -229,8 +268,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
-		&i.Role,
-		&i.SquadCategory,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -241,8 +278,26 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
+const grantPlatformRoleByCode = `-- name: GrantPlatformRoleByCode :exec
+INSERT INTO user_platform_roles (user_id, role_id)
+SELECT $1, id
+FROM platform_roles
+WHERE code = $2
+ON CONFLICT DO NOTHING
+`
+
+type GrantPlatformRoleByCodeParams struct {
+	UserID   uuid.UUID `json:"user_id"`
+	RoleCode string    `json:"role_code"`
+}
+
+func (q *Queries) GrantPlatformRoleByCode(ctx context.Context, arg GrantPlatformRoleByCodeParams) error {
+	_, err := q.db.Exec(ctx, grantPlatformRoleByCode, arg.UserID, arg.RoleCode)
+	return err
+}
+
 const listDependentsByGuardian = `-- name: ListDependentsByGuardian :many
-SELECT id, name, role, squad_category, guardian_id, is_dependent,
+SELECT id, name, guardian_id, is_dependent,
        date_of_birth, is_active, created_at, updated_at
 FROM users
 WHERE guardian_id = $1
@@ -258,16 +313,14 @@ type ListDependentsByGuardianParams struct {
 }
 
 type ListDependentsByGuardianRow struct {
-	ID            uuid.UUID          `json:"id"`
-	Name          string             `json:"name"`
-	Role          string             `json:"role"`
-	SquadCategory string             `json:"squad_category"`
-	GuardianID    *uuid.UUID         `json:"guardian_id"`
-	IsDependent   bool               `json:"is_dependent"`
-	DateOfBirth   pgtype.Date        `json:"date_of_birth"`
-	IsActive      bool               `json:"is_active"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID          uuid.UUID          `json:"id"`
+	Name        string             `json:"name"`
+	GuardianID  *uuid.UUID         `json:"guardian_id"`
+	IsDependent bool               `json:"is_dependent"`
+	DateOfBirth pgtype.Date        `json:"date_of_birth"`
+	IsActive    bool               `json:"is_active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error) {
@@ -282,8 +335,6 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
-			&i.Role,
-			&i.SquadCategory,
 			&i.GuardianID,
 			&i.IsDependent,
 			&i.DateOfBirth,
@@ -301,18 +352,17 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 	return items, nil
 }
 
-const lockActiveGuardian = `-- name: LockActiveGuardian :one
+const lockActiveAdult = `-- name: LockActiveAdult :one
 SELECT id
 FROM users
 WHERE id = $1
-  AND role = 'Guardian'
   AND is_active = true
   AND is_dependent = false
 FOR UPDATE
 `
 
-func (q *Queries) LockActiveGuardian(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, lockActiveGuardian, id)
+func (q *Queries) LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockActiveAdult, id)
 	var id_2 uuid.UUID
 	err := row.Scan(&id_2)
 	return id_2, err

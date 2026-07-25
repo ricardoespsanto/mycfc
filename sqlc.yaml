@@ -13,12 +13,6 @@ sql:
         emit_empty_slices: true
         emit_pointers_for_null_types: true
         overrides:
-          - db_type: "role"
-            go_type:
-              type: "string"
-          - db_type: "squad_category"
-            go_type:
-              type: "string"
           - db_type: "consent_type"
             go_type:
               type: "string"

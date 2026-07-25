@@ -4,20 +4,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- +goose StatementBegin
 DO $$ BEGIN
-    CREATE TYPE role AS ENUM ('Admin', 'Competitor', 'Leisure', 'Guardian');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
--- +goose StatementEnd
-
--- +goose StatementBegin
-DO $$ BEGIN
-    CREATE TYPE squad_category AS ENUM ('Iniciante', 'Polo_Senior', 'Master_A', 'Lazer', 'None');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
--- +goose StatementEnd
-
--- +goose StatementBegin
-DO $$ BEGIN
     CREATE TYPE repair_status AS ENUM ('Pendente', 'Em_Analise', 'Resolvido');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
@@ -65,7 +51,5 @@ DROP TYPE IF EXISTS equipment_status;
 DROP TYPE IF EXISTS equipment_type;
 DROP TYPE IF EXISTS consent_type;
 DROP TYPE IF EXISTS repair_status;
-DROP TYPE IF EXISTS squad_category;
-DROP TYPE IF EXISTS role;
 DROP EXTENSION IF EXISTS pgcrypto;
 DROP EXTENSION IF EXISTS citext;

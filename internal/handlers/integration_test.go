@@ -27,7 +27,7 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 	})
 
 	input := RegistrationInput{
-		Name: "Pessoa de integração", Email: email, PasswordHash: "hash", Role: "Competitor", Squad: "Iniciante",
+		Name: "Pessoa de integração", Email: email, PasswordHash: "hash",
 		DateOfBirth:  time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
 		TermsVersion: "test-v1", TermsSHA256: strings.Repeat("a", 64),
 		ImageVersion: "test-v1", ImageSHA256: strings.Repeat("b", 64),
@@ -41,7 +41,7 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user.Email == nil || *user.Email != email || user.Role != "Competitor" || user.SquadCategory != "Iniciante" {
+	if user.Email == nil || *user.Email != email || user.IsDependent {
 		t.Fatalf("created user = %#v", user)
 	}
 	consents, err := queries.ListConsentFormsForUser(ctx, dbgen.ListConsentFormsForUserParams{UserID: user.ID, RowLimit: 10})
@@ -80,7 +80,7 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	queries := dbgen.New(pool)
 	guardianEmail := "guardian-" + uuid.NewString() + "@example.test"
 	guardian, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{
-		Name: "Guardião de integração", Email: &guardianEmail, PasswordHash: stringPtr("hash"), Role: "Guardian", SquadCategory: "None",
+		Name: "Guardião de integração", Email: &guardianEmail, PasswordHash: stringPtr("hash"),
 		DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
 	})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 
 	store := PostgresGuardianDependentStore{Pool: pool}
 	input := GuardianDependentInput{
-		GuardianID: guardian.ID, Name: "Menor de integração", Role: "Competitor", Squad: "Iniciante",
+		GuardianID: guardian.ID, Name: "Menor de integração",
 		DateOfBirth:           time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC),
 		ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("c", 64),
 		IP: ptrAddr(netip.MustParseAddr("192.0.2.2")), UserAgent: "integration-test",

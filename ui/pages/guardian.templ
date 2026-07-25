@@ -10,7 +10,7 @@ type GuardianPage struct {
 	CalendarAPIKey string
 	CalendarSources string
 	ResponsibilityURL string
-	Name, DateOfBirth, Role, Squad string
+	Name, DateOfBirth string
 	Errors     validation.FieldErrors
 	Success    string
 	RepairForm components.RepairFormData
@@ -28,7 +28,7 @@ templ GuardianContent(page GuardianPage) {
 		}
 		<section class="dashboard-card" aria-labelledby="dependents-title"><h2 id="dependents-title">Menores a cargo</h2>
 			if len(page.Dependents) == 0 {
-				<p>Ainda não tem menores a cargo. Adicione o primeiro menor para consultar a respetiva agenda.</p>
+				<p>Ainda não tem menores a cargo.</p>
 			}
 			if len(page.Dependents) > 0 {
 				<ul>
@@ -38,9 +38,6 @@ templ GuardianContent(page GuardianPage) {
 				</ul>
 			}
 		</section>
-		if len(page.Calendars) > 0 {
-			@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte os calendários públicos relevantes para os menores a seu cargo.")
-		}
 		<section class="dashboard-card" aria-labelledby="add-dependent-title"><h2 id="add-dependent-title">Adicionar menor a cargo</h2>
 			if message := page.Errors["form"]; message != "" {
 				<p class="field-error" role="alert">{ message }</p>
@@ -49,8 +46,6 @@ templ GuardianContent(page GuardianPage) {
 				@page.Meta.CSRFField
 				<div class="form-field"><label for="name">Nome</label><input id="name" name="name" autocomplete="name" value={ page.Name } required/>@errorText(page.Errors, "name")</div>
 				<div class="form-field"><label for="date_of_birth">Data de nascimento</label><input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required/>@errorText(page.Errors, "date_of_birth")</div>
-				<div class="form-field"><label for="role">Perfil</label><select id="role" name="role" required><option value="">Selecione</option><option value="Competitor" selected?={ page.Role == "Competitor" }>Competidor</option><option value="Leisure" selected?={ page.Role == "Leisure" }>Lazer</option></select>@errorText(page.Errors, "role")</div>
-				<div class="form-field"><label for="squad_category">Categoria de equipa (apenas competidor)</label><select id="squad_category" name="squad_category"><option value="">Selecione</option><option value="Iniciante" selected?={ page.Squad == "Iniciante" }>Iniciante</option><option value="Polo_Senior" selected?={ page.Squad == "Polo_Senior" }>Polo sénior</option><option value="Master_A" selected?={ page.Squad == "Master_A" }>Master A</option></select></div>
 				<label><input name="accept_minor_responsibility" type="checkbox" required/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) } target="_blank" rel="noopener">responsabilidade pelo menor a cargo</a>.</label>@errorText(page.Errors, "accept_minor_responsibility")
 				<button type="submit">Adicionar menor</button>
 			</form>

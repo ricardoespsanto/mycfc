@@ -19,19 +19,16 @@ import (
 func TestGuardianDashboardRendersDependentsAndDeduplicatedCalendars(t *testing.T) {
 	guardianID := uuid.New()
 	store := &guardianDashboardStore{dependents: []dbgen.ListDependentsByGuardianRow{
-		{Name: "Ana", Role: "Competitor", SquadCategory: "Iniciante", DateOfBirth: pgtype.Date{Time: time.Date(2014, 7, 25, 0, 0, 0, 0, time.UTC), Valid: true}},
-		{Name: "Bruno", Role: "Leisure", SquadCategory: "Lazer", DateOfBirth: pgtype.Date{Time: time.Date(2010, 7, 24, 0, 0, 0, 0, time.UTC), Valid: true}},
+		{Name: "Ana", DateOfBirth: pgtype.Date{Time: time.Date(2014, 7, 25, 0, 0, 0, 0, time.UTC), Valid: true}},
+		{Name: "Bruno", DateOfBirth: pgtype.Date{Time: time.Date(2010, 7, 24, 0, 0, 0, 0, time.UTC), Valid: true}},
 	}}
 	dashboard := guardianDashboard(store, &guardianDependentStoreFake{})
 	response := guardianResponse(t, dashboard.Guardian, guardianID, nil)
 	body := response.Body.String()
-	for _, want := range []string{"Ana", "11 anos", "Treinos e competições", "Bruno", "16 anos", "Eventos sociais e ações de limpeza", "Competições", "Ações de limpeza", `href="https://example.test/responsabilidade"`} {
+	for _, want := range []string{"Ana", "11 anos", "Bruno", "16 anos", `href="https://example.test/responsabilidade"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q", want)
 		}
-	}
-	if strings.Count(body, "Treinos") != 2 { // dependant source label plus one calendar link.
-		t.Fatalf("unexpected duplicate training calendar: %q", body)
 	}
 }
 
@@ -60,7 +57,7 @@ func TestAddDependentCreatesFromCurrentGuardianAndRedirects(t *testing.T) {
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/dashboard/guardian" {
 		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
 	}
-	if !store.called || store.input.GuardianID != guardianID || store.input.Name != "Maria Silva" || store.input.Role != "Competitor" || store.input.Squad != "Iniciante" {
+	if !store.called || store.input.GuardianID != guardianID || store.input.Name != "Maria Silva" {
 		t.Fatalf("input = %+v", store.input)
 	}
 	if store.input.ResponsibilityVersion != "1.0" || store.input.ResponsibilitySHA256 != strings.Repeat("c", 64) {
@@ -84,7 +81,7 @@ func TestAddDependentReportsMaximumAndSupportsHTMX(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/guardian/add-dependent", strings.NewReader(validDependentForm().Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("HX-Request", "true")
-	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Guardião", Role: "Guardian"})
+	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Guardião"})
 	response = httptest.NewRecorder()
 	guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{}).AddDependent(response, request.WithContext(ctx))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `id="guardian-content"`) || !strings.Contains(response.Body.String(), "Menor a cargo adicionado.") {
@@ -102,7 +99,7 @@ func guardianDashboard(store DashboardStore, dependents GuardianDependentStore) 
 }
 
 func validDependentForm() url.Values {
-	return url.Values{"name": {"  Maria   Silva "}, "date_of_birth": {"2010-07-24"}, "role": {"Competitor"}, "squad_category": {"Iniciante"}, "accept_minor_responsibility": {"on"}}
+	return url.Values{"name": {"  Maria   Silva "}, "date_of_birth": {"2010-07-24"}, "accept_minor_responsibility": {"on"}}
 }
 
 func guardianResponse(t *testing.T, handler http.HandlerFunc, guardianID uuid.UUID, form url.Values) *httptest.ResponseRecorder {
@@ -115,7 +112,7 @@ func guardianResponse(t *testing.T, handler http.HandlerFunc, guardianID uuid.UU
 	if form != nil {
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: guardianID, Name: "Guardião", Role: "Guardian"})
+	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: guardianID, Name: "Guardião"})
 	response := httptest.NewRecorder()
 	handler(response, request.WithContext(ctx))
 	return response
@@ -147,7 +144,7 @@ func (s *guardianDashboardStore) ListRecentTrainingLogs(context.Context, dbgen.L
 func (s *guardianDashboardStore) ListPublishedNews(context.Context, int32) ([]dbgen.NewsItem, error) {
 	return nil, errors.New("not used")
 }
-func (s *guardianDashboardStore) ListWhatsAppGroupsForRole(context.Context, dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error) {
+func (s *guardianDashboardStore) ListWhatsAppGroupsForUserProgramme(context.Context, dbgen.ListWhatsAppGroupsForUserProgrammeParams) ([]dbgen.WhatsappGroup, error) {
 	return nil, errors.New("not used")
 }
 func (s *guardianDashboardStore) ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {

@@ -65,7 +65,6 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 	lookup := &loginLookup{user: dbgen.User{
 		ID:           uuid.New(),
 		PasswordHash: &passwordHash,
-		Role:         "Leisure",
 	}}
 	sessions := scs.New()
 	handler := Login{
@@ -103,9 +102,6 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 	if got := sessions.GetString(ctx, "user_id"); got != lookup.user.ID.String() {
 		t.Fatalf("session user_id = %q", got)
 	}
-	if got := sessions.GetString(ctx, "role"); got != "Leisure" {
-		t.Fatalf("session role = %q", got)
-	}
 	if sessions.GetString(ctx, "last_seen_at") == "" {
 		t.Fatal("session last_seen_at is empty")
 	}
@@ -122,7 +118,6 @@ func TestLoginPostReturnsHTMXRedirect(t *testing.T) {
 		Users: &loginLookup{user: dbgen.User{
 			ID:           uuid.New(),
 			PasswordHash: &passwordHash,
-			Role:         "Competitor",
 		}},
 		Sessions: scs.New(),
 		PageMeta: loginTestPageMeta(),

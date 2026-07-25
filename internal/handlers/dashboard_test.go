@@ -22,17 +22,19 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	store := &dashboardStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}, CompetitionID: "competition", TrainingID: "training", SocialID: "social", CleanupsID: "cleanups"}
 	for _, tc := range []struct {
-		name, role, absent, present string
-		handler                     http.HandlerFunc
+		name, absent, present string
+		user                  CurrentUser
+		handler               http.HandlerFunc
 	}{
-		{"competitor", "Competitor", "Frota", "Competições", dashboard.Competitor},
-		{"leisure", "Leisure", "Competidor", "Eventos sociais", dashboard.Leisure},
-		{"guardian", "Guardian", "Frota", "Adicione o primeiro menor", dashboard.Guardian},
-		{"admin", "Admin", "Menores a cargo", "Frota", dashboard.Admin},
+		{"competitor", "Frota", "Competições", CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competitor},
+		{"leisure", "Competição", "Eventos sociais", CurrentUser{Programmes: map[string]bool{"Leisure": true}}, dashboard.Leisure},
+		{"guardian", "Frota", "Adicionar menor a cargo", CurrentUser{}, dashboard.Guardian},
+		{"admin", "Competição", "Frota", CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-			ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Maria Silva", Role: tc.role})
+			tc.user.ID, tc.user.Name = uuid.New(), "Maria Silva"
+			ctx := context.WithValue(request.Context(), currentUserKey{}, tc.user)
 			response := httptest.NewRecorder()
 			tc.handler(response, request.WithContext(ctx))
 			if response.Code != http.StatusOK {
@@ -55,7 +57,7 @@ func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 		groups:  []dbgen.WhatsappGroup{{Name: "Seniores", Discipline: "Remo", Url: "https://chat.whatsapp.com/seniores"}},
 	}
 	dashboard := Dashboard{Store: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
-	response := dashboardResponse(t, dashboard.Competitor, memberID, "Competitor")
+	response := dashboardResponse(t, dashboard.Competitor, memberID)
 	body := response.Body.String()
 	for _, want := range []string{"Peso", "72.5 kg", "Treinos recentes", "Série longa", `href="https://chat.whatsapp.com/seniores"`} {
 		if !strings.Contains(body, want) {
@@ -73,7 +75,7 @@ func TestDashboardLeisureRendersDatabaseContent(t *testing.T) {
 		news:   []dbgen.NewsItem{{TitlePt: "Regata", SummaryPt: "Inscrições abertas", Url: &url}},
 		groups: []dbgen.WhatsappGroup{{Name: "Lazer", Discipline: "Canoagem", Url: "https://chat.whatsapp.com/lazer"}},
 	}, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
-	response := dashboardResponse(t, dashboard.Leisure, uuid.New(), "Leisure")
+	response := dashboardResponse(t, dashboard.Leisure, uuid.New())
 	body := response.Body.String()
 	for _, want := range []string{`href="https://example.com/noticia"`, "Inscrições abertas", `href="https://chat.whatsapp.com/lazer"`} {
 		if !strings.Contains(body, want) {
@@ -102,7 +104,7 @@ func TestDashboardReturnsInternalErrorForRequiredQueryFailure(t *testing.T) {
 			} else {
 				handler = dashboard.Leisure
 			}
-			response := dashboardResponse(t, handler, uuid.New(), tc.role)
+			response := dashboardResponse(t, handler, uuid.New())
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d", response.Code)
 			}
@@ -110,10 +112,10 @@ func TestDashboardReturnsInternalErrorForRequiredQueryFailure(t *testing.T) {
 	}
 }
 
-func dashboardResponse(t *testing.T, handler http.HandlerFunc, userID uuid.UUID, role string) *httptest.ResponseRecorder {
+func dashboardResponse(t *testing.T, handler http.HandlerFunc, userID uuid.UUID) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Maria Silva", Role: role})
+	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Maria Silva"})
 	response := httptest.NewRecorder()
 	handler(response, request.WithContext(ctx))
 	return response
@@ -183,7 +185,7 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader(tc.body))
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			request.Header.Set("HX-Request", "true")
-			request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Role: "Admin"}))
+			request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
 			response := httptest.NewRecorder()
 			dashboard.Maintenance(response, request)
 			if response.Code != tc.status {
@@ -199,7 +201,7 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader("equipment_id="+uuid.NewString()+"&scheduled_for=2026-07-24T14%3A30&description=Substituir%20a%20pe%C3%A7a%20danificada"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Role: "Admin"}))
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
 	response := httptest.NewRecorder()
 	dashboard.Maintenance(response, request)
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet" {
@@ -217,7 +219,7 @@ func TestAdminFleetCapsEquipmentAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	store := &dashboardStoreFake{counts: []dbgen.CountEquipmentByStatusRow{{Status: "Operational", Total: 501}}, adminEquipment: equipment, repairs: []dbgen.ListPendingRepairRequestsRow{{ID: uuid.New(), AssetTag: "EQ", EquipmentName: "Barco", IssueDescription: "Casco danificado", Status: "Pendente", ImageObjectKey: &key, ImageContentType: &contentType, DateReported: pgtype.Timestamptz{Time: now, Valid: true}}}}
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
-	response := dashboardResponse(t, dashboard.Admin, uuid.New(), "Admin")
+	response := dashboardResponse(t, dashboard.Admin, uuid.New())
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "A lista está limitada a 500 equipamentos.") || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
@@ -228,7 +230,7 @@ func TestAdminFleetCapsEquipmentAndPresignsDisplayedRepairPhotos(t *testing.T) {
 		t.Fatalf("unexpected presign request: %+v", objects)
 	}
 	objects.err = errors.New("storage unavailable")
-	response = dashboardResponse(t, dashboard.Admin, uuid.New(), "Admin")
+	response = dashboardResponse(t, dashboard.Admin, uuid.New())
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Imagem temporariamente indisponível") {
 		t.Fatalf("presign failure should not fail the fleet page: %d %q", response.Code, response.Body.String())
 	}
@@ -276,7 +278,7 @@ func (f *dashboardStoreFake) ListPublishedNews(_ context.Context, _ int32) ([]db
 	return f.news, f.newsErr
 }
 
-func (f *dashboardStoreFake) ListWhatsAppGroupsForRole(_ context.Context, _ dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error) {
+func (f *dashboardStoreFake) ListWhatsAppGroupsForUserProgramme(_ context.Context, _ dbgen.ListWhatsAppGroupsForUserProgrammeParams) ([]dbgen.WhatsappGroup, error) {
 	return f.groups, f.groupsErr
 }
 

@@ -75,7 +75,7 @@ func TestCreateRepairRequestEnforcesIdempotencyKeyDuringConcurrentRetries(t *tes
 	t.Cleanup(func() { pool.Close(ctx) })
 
 	userID, equipmentID, key := uuid.New(), uuid.New(), uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, role, squad_category, date_of_birth) VALUES ($1, 'Utilizador de teste', $2, 'hash', 'Competitor', 'Iniciante', '1990-01-01')`, userID, "repair-"+uuid.NewString()+"@example.test"); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Utilizador de teste', $2, 'hash', '1990-01-01')`, userID, "repair-"+uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO equipment (id, asset_tag, name, type) VALUES ($1, $2, 'Barco de teste', 'Boat')`, equipmentID, "IT-"+uuid.NewString()[:8]); err != nil {
@@ -123,5 +123,116 @@ func TestCreateRepairRequestEnforcesIdempotencyKeyDuringConcurrentRetries(t *tes
 	}
 	if repair.EquipmentID != equipmentID || repair.ReportedByID == nil || *repair.ReportedByID != userID || repair.IssueDescription != input.IssueDescription {
 		t.Fatalf("persisted repair = %#v", repair)
+	}
+}
+
+func TestMembershipsResolveActiveSportStructureAndRejectMismatches(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+
+	directorID, athleteID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Diretor de teste', $2, 'hash', '1980-01-01'), ($3, 'Atleta de teste', $4, 'hash', '2000-01-01')`, directorID, "director-"+uuid.NewString()+"@example.test", athleteID, "athlete-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles (user_id, role_id) SELECT $1, id FROM platform_roles WHERE code = 'ADMIN'`, directorID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE user_id IN ($1, $2)`, directorID, athleteID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM competition_categories WHERE approved_by_user_id = $1`, directorID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM teams WHERE code LIKE 'IT_%'`)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE code LIKE 'IT_%'`)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1, $2)`, directorID, athleteID)
+	})
+
+	queries := dbgen.New(pool)
+	competition, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leisure, err := queries.GetProgrammeByCode(ctx, "Leisure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k1, err := queries.GetModalityByCode(ctx, "K1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k4, err := queries.GetModalityByCode(ctx, "K4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	season, err := queries.CreateSeason(ctx, dbgen.CreateSeasonParams{
+		Code: "IT_" + uuid.NewString()[:8], Name: "Época de integração",
+		StartsOn: pgtype.Date{Time: today.AddDate(-1, 0, 0), Valid: true},
+		EndsOn:   pgtype.Date{Time: today.AddDate(1, 0, 0), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := queries.CreateTeam(ctx, dbgen.CreateTeamParams{SeasonID: season.ID, ProgrammeID: competition.ID, Code: "IT_A", Name: "Equipa de integração"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	category, err := queries.CreateCompetitionCategory(ctx, dbgen.CreateCompetitionCategoryParams{
+		SeasonID: season.ID, ProgrammeID: competition.ID, Code: "IT_Junior", NamePt: "Júnior de integração",
+		ApprovedByUserID: directorID, ApprovedAt: pgtype.Timestamptz{Time: today, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{
+		UserID: athleteID, SeasonID: season.ID, ProgrammeID: competition.ID, TeamID: &team.ID,
+		CompetitionCategoryID: &category.ID, StartsOn: pgtype.Date{Time: today, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, modalityID := range []uuid.UUID{k1.ID, k4.ID} {
+		if err := queries.AddMembershipModality(ctx, dbgen.AddMembershipModalityParams{MembershipID: membership.ID, ModalityID: modalityID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	active, err := queries.ListActiveMembershipsForUser(ctx, athleteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ProgrammeCode != "Competition" || active[0].TeamID == nil || *active[0].TeamID != team.ID || active[0].CompetitionCategoryID == nil || *active[0].CompetitionCategoryID != category.ID {
+		t.Fatalf("active memberships = %#v", active)
+	}
+	modalities, err := queries.ListModalitiesForMembership(ctx, membership.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modalities) != 2 || modalities[0].Code != "K1" || modalities[1].Code != "K4" {
+		t.Fatalf("membership modalities = %#v", modalities)
+	}
+
+	if _, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{
+		UserID: athleteID, SeasonID: season.ID, ProgrammeID: leisure.ID, TeamID: &team.ID,
+		StartsOn: pgtype.Date{Time: today, Valid: true},
+	}); err == nil {
+		t.Fatal("membership accepted a team from another programme")
+	}
+	otherSeason, err := queries.CreateSeason(ctx, dbgen.CreateSeasonParams{
+		Code: "IT_" + uuid.NewString()[:8], Name: "Outra época de integração",
+		StartsOn: pgtype.Date{Time: today.AddDate(1, 0, 1), Valid: true},
+		EndsOn:   pgtype.Date{Time: today.AddDate(2, 0, 0), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{
+		UserID: athleteID, SeasonID: otherSeason.ID, ProgrammeID: competition.ID, TeamID: &team.ID,
+		CompetitionCategoryID: &category.ID, StartsOn: pgtype.Date{Time: today.AddDate(1, 0, 1), Valid: true},
+	}); err == nil {
+		t.Fatal("membership accepted team and category from another season")
 	}
 }

@@ -20,7 +20,6 @@ func (s PostgresRegistrationStore) RegisterAdult(ctx context.Context, input Regi
 		queries := dbgen.New(tx)
 		user, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{
 			Name: input.Name, Email: &input.Email, PasswordHash: &input.PasswordHash,
-			Role: input.Role, SquadCategory: input.Squad,
 			DateOfBirth: pgtype.Date{Time: input.DateOfBirth, Valid: true},
 		})
 		if err != nil {
@@ -38,7 +37,7 @@ func (s PostgresRegistrationStore) RegisterAdult(ctx context.Context, input Regi
 				return err
 			}
 		}
-		result = RegistrationResult{UserID: user.ID, Role: input.Role}
+		result = RegistrationResult{UserID: user.ID}
 		return nil
 	})
 	return result, err

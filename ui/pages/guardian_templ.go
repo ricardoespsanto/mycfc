@@ -12,16 +12,16 @@ import "github.com/cfcoimbra/mycfc/internal/validation"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type GuardianPage struct {
-	Meta                           components.PageMeta
-	Dependents                     []DashboardItem
-	Calendars                      []CalendarLink
-	CalendarAPIKey                 string
-	CalendarSources                string
-	ResponsibilityURL              string
-	Name, DateOfBirth, Role, Squad string
-	Errors                         validation.FieldErrors
-	Success                        string
-	RepairForm                     components.RepairFormData
+	Meta              components.PageMeta
+	Dependents        []DashboardItem
+	Calendars         []CalendarLink
+	CalendarAPIKey    string
+	CalendarSources   string
+	ResponsibilityURL string
+	Name, DateOfBirth string
+	Errors            validation.FieldErrors
+	Success           string
+	RepairForm        components.RepairFormData
 }
 
 func Guardian(page GuardianPage) templ.Component {
@@ -102,7 +102,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(page.Dependents) == 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<p>Ainda não tem menores a cargo. Adicione o primeiro menor para consultar a respetiva agenda.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<p>Ainda não tem menores a cargo.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -149,40 +149,30 @@ func GuardianContent(page GuardianPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</section>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if len(page.Calendars) > 0 {
-			templ_7745c5c3_Err = Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte os calendários públicos relevantes para os menores a seu cargo.").Render(ctx, templ_7745c5c3_Buffer)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<section class=\"dashboard-card\" aria-labelledby=\"add-dependent-title\"><h2 id=\"add-dependent-title\">Adicionar menor a cargo</h2>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</section><section class=\"dashboard-card\" aria-labelledby=\"add-dependent-title\"><h2 id=\"add-dependent-title\">Adicionar menor a cargo</h2>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if message := page.Errors["form"]; message != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<p class=\"field-error\" role=\"alert\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<p class=\"field-error\" role=\"alert\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var6 string
 			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(message)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 46, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 43, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<form method=\"post\" action=\"/guardian/add-dependent\" hx-post=\"/guardian/add-dependent\" hx-target=\"#guardian-content\" hx-swap=\"outerHTML\" hx-target-422=\"#guardian-content\" hx-swap-422=\"outerHTML\" hx-disabled-elt=\"find button, find input[type='submit']\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<form method=\"post\" action=\"/guardian/add-dependent\" hx-post=\"/guardian/add-dependent\" hx-target=\"#guardian-content\" hx-swap=\"outerHTML\" hx-target-422=\"#guardian-content\" hx-swap-422=\"outerHTML\" hx-disabled-elt=\"find button, find input[type='submit']\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -190,20 +180,20 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<div class=\"form-field\"><label for=\"name\">Nome</label><input id=\"name\" name=\"name\" autocomplete=\"name\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<div class=\"form-field\"><label for=\"name\">Nome</label><input id=\"name\" name=\"name\" autocomplete=\"name\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 50, Col: 124}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 47, Col: 124}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\" required>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\" required>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -211,20 +201,20 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</div><div class=\"form-field\"><label for=\"date_of_birth\">Data de nascimento</label><input id=\"date_of_birth\" name=\"date_of_birth\" type=\"date\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</div><div class=\"form-field\"><label for=\"date_of_birth\">Data de nascimento</label><input id=\"date_of_birth\" name=\"date_of_birth\" type=\"date\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.DateOfBirth)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 51, Col: 164}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 48, Col: 164}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "\" required>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\" required>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -232,78 +222,20 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "</div><div class=\"form-field\"><label for=\"role\">Perfil</label><select id=\"role\" name=\"role\" required><option value=\"\">Selecione</option><option value=\"Competitor\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.Role == "Competitor" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, " selected")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, ">Competidor</option><option value=\"Leisure\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.Role == "Leisure" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, " selected")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, ">Lazer</option></select>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = errorText(page.Errors, "role").Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "</div><div class=\"form-field\"><label for=\"squad_category\">Categoria de equipa (apenas competidor)</label><select id=\"squad_category\" name=\"squad_category\"><option value=\"\">Selecione</option><option value=\"Iniciante\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.Squad == "Iniciante" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, " selected")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, ">Iniciante</option><option value=\"Polo_Senior\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.Squad == "Polo_Senior" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, " selected")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, ">Polo sénior</option><option value=\"Master_A\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.Squad == "Master_A" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, " selected")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, ">Master A</option></select></div><label><input name=\"accept_minor_responsibility\" type=\"checkbox\" required> Aceito a <a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</div><label><input name=\"accept_minor_responsibility\" type=\"checkbox\" required> Aceito a <a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var9 templ.SafeURL
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ResponsibilityURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 54, Col: 136}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 49, Col: 136}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\" target=\"_blank\" rel=\"noopener\">responsabilidade pelo menor a cargo</a>.</label>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\" target=\"_blank\" rel=\"noopener\">responsabilidade pelo menor a cargo</a>.</label>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -311,7 +243,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<button type=\"submit\">Adicionar menor</button></form></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<button type=\"submit\">Adicionar menor</button></form></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -319,7 +251,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

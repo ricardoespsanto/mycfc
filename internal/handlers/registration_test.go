@@ -24,7 +24,7 @@ type registrationStore struct {
 func (s *registrationStore) RegisterAdult(_ context.Context, input RegistrationInput) (RegistrationResult, error) {
 	s.called = true
 	s.input = input
-	return RegistrationResult{UserID: uuid.MustParse("1b7b67c8-5072-4a4f-a7f3-7cc3934bb8b0"), Role: input.Role}, s.err
+	return RegistrationResult{UserID: uuid.MustParse("1b7b67c8-5072-4a4f-a7f3-7cc3934bb8b0")}, s.err
 }
 
 func TestRegistrationGetRendersForm(t *testing.T) {
@@ -68,7 +68,7 @@ func TestRegistrationPostCreatesAccountAndSession(t *testing.T) {
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/dashboard" {
 		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
 	}
-	if !store.called || store.input.Email != "member@example.com" || store.input.Role != "Competitor" || store.input.Squad != "Iniciante" {
+	if !store.called || store.input.Email != "member@example.com" {
 		t.Fatalf("registration input = %+v", store.input)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(store.input.PasswordHash), []byte("correct horse 7")) != nil {
@@ -99,7 +99,7 @@ func registrationHandler(store RegistrationStore) Registration {
 }
 
 func validRegistrationForm() url.Values {
-	return url.Values{"name": {"  Maria   Silva "}, "email": {" MEMBER@EXAMPLE.COM "}, "date_of_birth": {"1990-01-01"}, "password": {"correct horse 7"}, "password_confirmation": {"correct horse 7"}, "role": {"Competitor"}, "squad_category": {"Iniciante"}, "accept_terms": {"on"}, "accept_image_use": {"on"}}
+	return url.Values{"name": {"  Maria   Silva "}, "email": {" MEMBER@EXAMPLE.COM "}, "date_of_birth": {"1990-01-01"}, "password": {"correct horse 7"}, "password_confirmation": {"correct horse 7"}, "accept_terms": {"on"}, "accept_image_use": {"on"}}
 }
 
 func submitRegistration(t *testing.T, handler Registration, form url.Values) *httptest.ResponseRecorder {

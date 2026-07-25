@@ -18,12 +18,18 @@ type fakeAdminStore struct {
 	user        dbgen.User
 	lookupErr   error
 	created     dbgen.CreateAdultUserParams
+	granted     dbgen.GrantPlatformRoleByCodeParams
 	password    dbgen.SetUserPasswordHashParams
 	deactivated uuid.UUID
+	admin       bool
 }
 
-func (s *fakeAdminStore) GetUserByEmail(context.Context, *string) (dbgen.User, error) {
-	return s.user, s.lookupErr
+func (s *fakeAdminStore) GetAccountByEmail(context.Context, *string) (dbgen.GetAccountByEmailRow, error) {
+	return dbgen.GetAccountByEmailRow{ID: s.user.ID, IsActive: s.user.IsActive, IsAdmin: s.admin}, s.lookupErr
+}
+func (s *fakeAdminStore) GrantPlatformRoleByCode(_ context.Context, input dbgen.GrantPlatformRoleByCodeParams) error {
+	s.granted = input
+	return nil
 }
 func (s *fakeAdminStore) CreateAdultUser(_ context.Context, input dbgen.CreateAdultUserParams) (dbgen.User, error) {
 	s.created = input
@@ -48,7 +54,7 @@ func TestCreateAdminUsesValidatedInputAndPasswordFile(t *testing.T) {
 	if err := run(context.Background(), []string{"create", "--email", " ADMIN@EXAMPLE.COM ", "--name", " Admin   User ", "--date-of-birth", "1990-01-01"}, store, os.Stdin, passwordFile, &output); err != nil {
 		t.Fatal(err)
 	}
-	if store.created.Email == nil || *store.created.Email != "admin@example.com" || store.created.Role != "Admin" || store.created.SquadCategory != "None" {
+	if store.created.Email == nil || *store.created.Email != "admin@example.com" || store.granted.RoleCode != "ADMIN" {
 		t.Fatalf("create input = %+v", store.created)
 	}
 	if store.created.PasswordHash == nil || bcrypt.CompareHashAndPassword([]byte(*store.created.PasswordHash), []byte("correct horse 7")) != nil {
@@ -65,7 +71,7 @@ func TestSetPasswordUsesPasswordFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := uuid.New()
-	store := &fakeAdminStore{user: dbgen.User{ID: id, Role: "Admin", IsActive: true}}
+	store := &fakeAdminStore{user: dbgen.User{ID: id, IsActive: true}, admin: true}
 	var output bytes.Buffer
 	if err := run(context.Background(), []string{"set-password", "--email", "admin@example.com"}, store, os.Stdin, passwordFile, &output); err != nil {
 		t.Fatal(err)
@@ -77,7 +83,7 @@ func TestSetPasswordUsesPasswordFile(t *testing.T) {
 
 func TestAdminCommandsAreIdempotentWhereSafe(t *testing.T) {
 	id := uuid.New()
-	store := &fakeAdminStore{user: dbgen.User{ID: id, Role: "Admin", IsActive: false}}
+	store := &fakeAdminStore{user: dbgen.User{ID: id, IsActive: false}, admin: true}
 	var output bytes.Buffer
 	if err := run(context.Background(), []string{"create", "--email", "admin@example.com", "--name", "Admin User", "--date-of-birth", "1990-01-01"}, store, os.Stdin, "", &output); err != nil {
 		t.Fatal(err)

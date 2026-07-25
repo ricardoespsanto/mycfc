@@ -7,30 +7,36 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
 
-const listWhatsAppGroupsForRole = `-- name: ListWhatsAppGroupsForRole :many
-SELECT id, name, discipline, target_role, squad_category, url,
+const listWhatsAppGroupsForUserProgramme = `-- name: ListWhatsAppGroupsForUserProgramme :many
+SELECT DISTINCT id, name, discipline, programme_id, url,
        is_active, created_at, updated_at
 FROM whatsapp_groups
-WHERE target_role = $1
+WHERE (programme_id IS NULL OR programme_id IN (
+    SELECT membership.programme_id
+    FROM user_memberships membership
+    JOIN programmes programme ON programme.id = membership.programme_id
+    WHERE membership.user_id = $1
+      AND programme.code = $2
+      AND membership.starts_on <= CURRENT_DATE
+      AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+))
   AND is_active = true
-  AND (
-      squad_category IS NULL
-      OR squad_category = $2
-  )
 ORDER BY lower(discipline), lower(name), id
 LIMIT $3
 `
 
-type ListWhatsAppGroupsForRoleParams struct {
-	TargetRole    string      `json:"target_role"`
-	SquadCategory interface{} `json:"squad_category"`
-	RowLimit      int32       `json:"row_limit"`
+type ListWhatsAppGroupsForUserProgrammeParams struct {
+	UserID        uuid.UUID `json:"user_id"`
+	ProgrammeCode string    `json:"programme_code"`
+	RowLimit      int32     `json:"row_limit"`
 }
 
-func (q *Queries) ListWhatsAppGroupsForRole(ctx context.Context, arg ListWhatsAppGroupsForRoleParams) ([]WhatsappGroup, error) {
-	rows, err := q.db.Query(ctx, listWhatsAppGroupsForRole, arg.TargetRole, arg.SquadCategory, arg.RowLimit)
+func (q *Queries) ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error) {
+	rows, err := q.db.Query(ctx, listWhatsAppGroupsForUserProgramme, arg.UserID, arg.ProgrammeCode, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +48,7 @@ func (q *Queries) ListWhatsAppGroupsForRole(ctx context.Context, arg ListWhatsAp
 			&i.ID,
 			&i.Name,
 			&i.Discipline,
-			&i.TargetRole,
-			&i.SquadCategory,
+			&i.ProgrammeID,
 			&i.Url,
 			&i.IsActive,
 			&i.CreatedAt,

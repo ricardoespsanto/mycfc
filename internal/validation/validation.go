@@ -107,31 +107,6 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-func ValidatePublicRoleSquad(role, squad string) (string, string, error) {
-	switch role {
-	case "Guardian":
-		return role, "None", nil
-	case "Leisure":
-		return role, "Lazer", nil
-	case "Competitor":
-		switch squad {
-		case "Iniciante", "Polo_Senior", "Master_A":
-			return role, squad, nil
-		default:
-			return "", "", errors.New("Selecione uma categoria de equipa válida.")
-		}
-	default:
-		return "", "", errors.New("Selecione um tipo de conta válido.")
-	}
-}
-
-func ValidateDependentRoleSquad(role, squad string) (string, string, error) {
-	if role == "Guardian" || role == "Admin" {
-		return "", "", errors.New("Selecione um perfil válido para o menor a cargo.")
-	}
-	return ValidatePublicRoleSquad(role, squad)
-}
-
 var allowedNextPaths = map[string]struct{}{
 	"/dashboard":            {},
 	"/dashboard/competitor": {},

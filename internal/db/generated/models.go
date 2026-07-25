@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CompetitionCategory struct {
+	ID               uuid.UUID          `json:"id"`
+	SeasonID         uuid.UUID          `json:"season_id"`
+	ProgrammeID      uuid.UUID          `json:"programme_id"`
+	Code             string             `json:"code"`
+	NamePt           string             `json:"name_pt"`
+	BirthDateFrom    pgtype.Date        `json:"birth_date_from"`
+	BirthDateTo      pgtype.Date        `json:"birth_date_to"`
+	ApprovedByUserID uuid.UUID          `json:"approved_by_user_id"`
+	ApprovedAt       pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type ConsentForm struct {
 	ID              uuid.UUID          `json:"id"`
 	UserID          uuid.UUID          `json:"user_id"`
@@ -47,6 +60,19 @@ type MaintenanceTask struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type MembershipModality struct {
+	MembershipID uuid.UUID          `json:"membership_id"`
+	ModalityID   uuid.UUID          `json:"modality_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type Modality struct {
+	ID        uuid.UUID          `json:"id"`
+	Code      string             `json:"code"`
+	NamePt    string             `json:"name_pt"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type NewsItem struct {
 	ID          uuid.UUID          `json:"id"`
 	TitlePt     string             `json:"title_pt"`
@@ -69,6 +95,19 @@ type PerformanceMetric struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type PlatformRole struct {
+	ID     uuid.UUID `json:"id"`
+	Code   string    `json:"code"`
+	NamePt string    `json:"name_pt"`
+}
+
+type Programme struct {
+	ID        uuid.UUID          `json:"id"`
+	Code      string             `json:"code"`
+	NamePt    string             `json:"name_pt"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type RepairRequest struct {
 	ID               uuid.UUID          `json:"id"`
 	IdempotencyKey   uuid.UUID          `json:"idempotency_key"`
@@ -84,10 +123,29 @@ type RepairRequest struct {
 	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
 }
 
+type Season struct {
+	ID        uuid.UUID          `json:"id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	StartsOn  pgtype.Date        `json:"starts_on"`
+	EndsOn    pgtype.Date        `json:"ends_on"`
+	IsCurrent bool               `json:"is_current"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Session struct {
 	Token  string             `json:"token"`
 	Data   []byte             `json:"data"`
 	Expiry pgtype.Timestamptz `json:"expiry"`
+}
+
+type Team struct {
+	ID          uuid.UUID          `json:"id"`
+	SeasonID    uuid.UUID          `json:"season_id"`
+	ProgrammeID uuid.UUID          `json:"programme_id"`
+	Code        string             `json:"code"`
+	Name        string             `json:"name"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type TrainingLog struct {
@@ -101,28 +159,44 @@ type TrainingLog struct {
 }
 
 type User struct {
-	ID            uuid.UUID          `json:"id"`
-	Name          string             `json:"name"`
-	Email         *string            `json:"email"`
-	PasswordHash  *string            `json:"password_hash"`
-	Role          string             `json:"role"`
-	SquadCategory string             `json:"squad_category"`
-	GuardianID    *uuid.UUID         `json:"guardian_id"`
-	IsDependent   bool               `json:"is_dependent"`
-	DateOfBirth   pgtype.Date        `json:"date_of_birth"`
-	IsActive      bool               `json:"is_active"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserMembership struct {
+	ID                    uuid.UUID          `json:"id"`
+	UserID                uuid.UUID          `json:"user_id"`
+	SeasonID              uuid.UUID          `json:"season_id"`
+	ProgrammeID           uuid.UUID          `json:"programme_id"`
+	TeamID                *uuid.UUID         `json:"team_id"`
+	CompetitionCategoryID *uuid.UUID         `json:"competition_category_id"`
+	StartsOn              pgtype.Date        `json:"starts_on"`
+	EndsOn                pgtype.Date        `json:"ends_on"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserPlatformRole struct {
+	UserID    uuid.UUID          `json:"user_id"`
+	RoleID    uuid.UUID          `json:"role_id"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
 }
 
 type WhatsappGroup struct {
-	ID            uuid.UUID          `json:"id"`
-	Name          string             `json:"name"`
-	Discipline    string             `json:"discipline"`
-	TargetRole    string             `json:"target_role"`
-	SquadCategory interface{}        `json:"squad_category"`
-	Url           string             `json:"url"`
-	IsActive      bool               `json:"is_active"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID          uuid.UUID          `json:"id"`
+	Name        string             `json:"name"`
+	Discipline  string             `json:"discipline"`
+	ProgrammeID *uuid.UUID         `json:"programme_id"`
+	Url         string             `json:"url"`
+	IsActive    bool               `json:"is_active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }

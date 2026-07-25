@@ -16,7 +16,6 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/cfcoimbra/mycfc/internal/locale"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -33,7 +32,7 @@ type DashboardStore interface {
 	ListRecentPerformanceMetrics(context.Context, dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error)
 	ListRecentTrainingLogs(context.Context, dbgen.ListRecentTrainingLogsParams) ([]dbgen.TrainingLog, error)
 	ListPublishedNews(context.Context, int32) ([]dbgen.NewsItem, error)
-	ListWhatsAppGroupsForRole(context.Context, dbgen.ListWhatsAppGroupsForRoleParams) ([]dbgen.WhatsappGroup, error)
+	ListWhatsAppGroupsForUserProgramme(context.Context, dbgen.ListWhatsAppGroupsForUserProgrammeParams) ([]dbgen.WhatsappGroup, error)
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 }
@@ -81,7 +80,7 @@ func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	groups, err := h.groups(ctx, "Competitor")
+	groups, err := h.groups(ctx, user.ID, "Competition", "Initiation", "Kayak_Polo")
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -93,6 +92,7 @@ func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
 	news, err := h.Store.ListPublishedNews(ctx, 10)
@@ -100,7 +100,7 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	groups, err := h.groups(ctx, "Leisure")
+	groups, err := h.groups(ctx, user.ID, "Leisure")
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -109,6 +109,9 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 		{Heading: "Notícias", Empty: "Ainda não existem notícias publicadas.", Items: newsItems(news)},
 		{Heading: "Grupos WhatsApp", Empty: "Ainda não existem grupos WhatsApp ativos.", Items: whatsappGroupItems(groups)},
 	})
+}
+func (h Dashboard) Member(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, "Área de membro", "A sua conta está ativa. As atividades do clube serão apresentadas quando a sua inscrição de época for atribuída.", "Ainda não tem inscrições de época ativas.", "/dashboard/member", nil, nil)
 }
 func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
@@ -201,7 +204,7 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.Title = "Frota | MyCFC"
 	page.Meta.CurrentPath = "/admin/fleet"
 	page.Meta.CurrentUserName = user.Name
-	page.Meta.Navigation = dashboardNavigation(user.Role)
+	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -224,7 +227,7 @@ func (h Dashboard) renderMaintenanceForm(w http.ResponseWriter, r *http.Request,
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
 	meta.CurrentUserName = user.Name
-	meta.Navigation = dashboardNavigation(user.Role)
+	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -325,7 +328,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.Title = heading + " | MyCFC"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
-	meta.Navigation = dashboardNavigation(user.Role)
+	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
@@ -363,7 +366,7 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	meta.Title = "Painel de encarregado de educação | MyCFC"
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name
-	meta.Navigation = dashboardNavigation(user.Role)
+	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	items := guardianDependentItems(dependents, h.now(), h.location())
 	pageItems := make([]pages.DashboardItem, len(items))
@@ -387,10 +390,9 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	for i, item := range equipment {
 		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
 	}
-	calendars := guardianCalendarLinks(h.guardianCalendars(dependents))
 	page := pages.GuardianPage{
-		Meta: meta, Dependents: pageItems, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars,
-		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, Role: form.Role, Squad: form.Squad, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
+		Meta: meta, Dependents: pageItems,
+		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -432,8 +434,22 @@ func calendarSourceIDs(calendars []pages.CalendarLink) string {
 	return string(encoded)
 }
 
-func (h Dashboard) groups(ctx context.Context, role string) ([]dbgen.WhatsappGroup, error) {
-	return h.Store.ListWhatsAppGroupsForRole(ctx, dbgen.ListWhatsAppGroupsForRoleParams{TargetRole: role, SquadCategory: nil, RowLimit: 50})
+func (h Dashboard) groups(ctx context.Context, userID uuid.UUID, programmes ...string) ([]dbgen.WhatsappGroup, error) {
+	groups := make([]dbgen.WhatsappGroup, 0, 50)
+	seen := map[uuid.UUID]bool{}
+	for _, programme := range programmes {
+		items, err := h.Store.ListWhatsAppGroupsForUserProgramme(ctx, dbgen.ListWhatsAppGroupsForUserProgrammeParams{UserID: userID, ProgrammeCode: programme, RowLimit: 50})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if !seen[item.ID] {
+				seen[item.ID] = true
+				groups = append(groups, item)
+			}
+		}
+	}
+	return groups, nil
 }
 
 func performanceMetricItems(metrics []dbgen.PerformanceMetric) []DashboardItemVM {
@@ -488,54 +504,25 @@ func (h Dashboard) calendar(label, id string) CalendarVM {
 	return CalendarVM{Label: label, URL: "https://calendar.google.com/calendar/u/0?cid=" + url.QueryEscape(id), ID: id}
 }
 
-func (h Dashboard) guardianCalendars(dependents []dbgen.ListDependentsByGuardianRow) []CalendarVM {
-	calendars := make([]CalendarVM, 0, 4)
-	seen := map[string]bool{}
-	add := func(label, id string) {
-		if id != "" && !seen[id] {
-			seen[id] = true
-			calendars = append(calendars, h.calendar(label, id))
-		}
-	}
-	for _, dependent := range dependents {
-		switch dependent.Role {
-		case "Competitor":
-			add("Treinos", h.TrainingID)
-			add("Competições", h.CompetitionID)
-		case "Leisure":
-			add("Eventos sociais", h.SocialID)
-			add("Ações de limpeza", h.CleanupsID)
-		}
-	}
-	return calendars
-}
-
 func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now time.Time, location *time.Location) []DashboardItemVM {
 	items := make([]DashboardItemVM, len(dependents))
 	for i, dependent := range dependents {
-		role := dependent.Role
-		squad := dependent.SquadCategory
 		age := validation.AgeOn(dependent.DateOfBirth.Time, now, location)
-		sources := "Eventos sociais e ações de limpeza"
-		if role == "Competitor" {
-			sources = "Treinos e competições"
-		}
-		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%s · %s · %d anos · %s", locale.Role(role), locale.Squad(squad), age, sources)}
+		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%d anos", age)}
 	}
 	return items
 }
 
-func dashboardNavigation(role string) []components.NavigationItem {
-	items := []components.NavigationItem{{Label: "Painel", Path: "/dashboard"}}
-	switch role {
-	case "Admin":
-		return append(items, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
-	case "Competitor":
-		return append(items, components.NavigationItem{Label: "Competidor", Path: "/dashboard/competitor"})
-	case "Leisure":
-		return append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
-	case "Guardian":
-		return append(items, components.NavigationItem{Label: "Menores a cargo", Path: "/dashboard/guardian"})
+func dashboardNavigation(user CurrentUser) []components.NavigationItem {
+	items := []components.NavigationItem{{Label: "Painel", Path: "/dashboard"}, {Label: "Menores a cargo", Path: "/dashboard/guardian"}}
+	if user.Programmes["Leisure"] {
+		items = append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
+	}
+	if user.Programmes["Competition"] || user.Programmes["Initiation"] || user.Programmes["Kayak_Polo"] {
+		items = append(items, components.NavigationItem{Label: "Competição", Path: "/dashboard/competitor"})
+	}
+	if user.IsAdmin {
+		items = append(items, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
 	}
 	return items
 }

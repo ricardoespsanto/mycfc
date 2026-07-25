@@ -22,8 +22,9 @@ import (
 )
 
 type adminStore interface {
-	GetUserByEmail(context.Context, *string) (dbgen.User, error)
+	GetAccountByEmail(context.Context, *string) (dbgen.GetAccountByEmailRow, error)
 	CreateAdultUser(context.Context, dbgen.CreateAdultUserParams) (dbgen.User, error)
+	GrantPlatformRoleByCode(context.Context, dbgen.GrantPlatformRoleByCodeParams) error
 	SetUserPasswordHash(context.Context, dbgen.SetUserPasswordHashParams) error
 	DeactivateUser(context.Context, uuid.UUID) error
 }
@@ -114,13 +115,17 @@ func createAdmin(ctx context.Context, store adminStore, stdin *os.File, password
 	if err := validation.ValidateAdultDateOfBirth(birth, time.Now(), location); err != nil {
 		return err
 	}
-	user, err := store.GetUserByEmail(ctx, &email)
+	user, err := store.GetAccountByEmail(ctx, &email)
 	if err == nil {
-		if user.Role == "Admin" && !user.IsDependent {
+		if user.IsAdmin && !user.IsDependent {
 			fmt.Fprintln(output, "administrator already exists")
 			return nil
 		}
-		return errors.New("email already belongs to a non-administrator account")
+		if err := store.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: user.ID, RoleCode: "ADMIN"}); err != nil {
+			return fmt.Errorf("grant administrator role: %w", err)
+		}
+		fmt.Fprintln(output, "administrator role granted")
+		return nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("look up administrator: %w", err)
@@ -136,8 +141,12 @@ func createAdmin(ctx context.Context, store adminStore, stdin *os.File, password
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	if _, err := store.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: name, Email: &email, PasswordHash: ptr(string(hash)), Role: "Admin", SquadCategory: "None", DateOfBirth: pgtype.Date{Time: birth, Valid: true}}); err != nil {
+	created, err := store.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: name, Email: &email, PasswordHash: ptr(string(hash)), DateOfBirth: pgtype.Date{Time: birth, Valid: true}})
+	if err != nil {
 		return fmt.Errorf("create administrator: %w", err)
+	}
+	if err := store.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: created.ID, RoleCode: "ADMIN"}); err != nil {
+		return fmt.Errorf("grant administrator role: %w", err)
 	}
 	fmt.Fprintln(output, "administrator created")
 	return nil
@@ -148,14 +157,14 @@ func setPassword(ctx context.Context, store adminStore, stdin *os.File, password
 	if err != nil {
 		return err
 	}
-	user, err := store.GetUserByEmail(ctx, &email)
+	user, err := store.GetAccountByEmail(ctx, &email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("administrator not found")
 	}
 	if err != nil {
 		return fmt.Errorf("look up administrator: %w", err)
 	}
-	if user.Role != "Admin" || user.IsDependent {
+	if !user.IsAdmin || user.IsDependent {
 		return errors.New("email does not belong to an administrator")
 	}
 	password, err := readPassword(stdin, passwordFile)
@@ -181,14 +190,14 @@ func deactivate(ctx context.Context, store adminStore, output io.Writer, rawEmai
 	if err != nil {
 		return err
 	}
-	user, err := store.GetUserByEmail(ctx, &email)
+	user, err := store.GetAccountByEmail(ctx, &email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("administrator not found")
 	}
 	if err != nil {
 		return fmt.Errorf("look up administrator: %w", err)
 	}
-	if user.Role != "Admin" || user.IsDependent {
+	if !user.IsAdmin || user.IsDependent {
 		return errors.New("email does not belong to an administrator")
 	}
 	if !user.IsActive {

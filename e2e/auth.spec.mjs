@@ -47,7 +47,7 @@ test.describe('authentication', () => {
     await context.close();
   });
 
-  test('registers a competitor, reaches the dashboard, and has no serious accessibility violations', async ({ page }) => {
+  test('registers a member, reaches the account dashboard, and has no serious accessibility violations', async ({ page }) => {
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);
     const name = page.getByLabel('Nome');
@@ -60,16 +60,14 @@ test.describe('authentication', () => {
     await name.fill('Pessoa de teste');
     await emailField.fill(email);
     await page.getByLabel('Data de nascimento').fill('1990-01-01');
-    await page.getByLabel('Tipo de conta').selectOption('Competitor');
-    await page.getByLabel('Categoria de equipa (apenas competidor)').selectOption('Iniciante');
     await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
 
-    await expect(page).toHaveURL('/dashboard/competitor');
-    await expect(page.getByRole('heading', { name: 'Painel de competidor' })).toBeVisible();
+    await expect(page).toHaveURL('/dashboard/member');
+    await expect(page.getByRole('heading', { name: 'Área de membro' })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
     await page.setViewportSize({ width: 320, height: 720 });
@@ -90,18 +88,14 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
-    await expect(page).toHaveURL('/dashboard/competitor');
-    await expect(page.getByText('Consulte os calendários públicos:')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Treinos' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Competições' })).toBeVisible();
-    await expect(page.locator('a[aria-current="page"]')).toHaveText('Competidor');
+    await expect(page).toHaveURL('/dashboard/member');
 
     const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/dashboard/competitor');
+    await expect(page).toHaveURL('/dashboard/member');
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
     const firstReference = await success.textContent();
@@ -110,7 +104,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/dashboard/competitor');
+    await expect(page).toHaveURL('/dashboard/member');
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
@@ -120,13 +114,12 @@ test.describe('authentication', () => {
     await page.getByLabel('Nome').fill('Guardião de teste');
     await page.getByLabel('Correio eletrónico').fill(guardianEmail);
     await page.getByLabel('Data de nascimento').fill('1980-01-01');
-    await page.getByLabel('Tipo de conta').selectOption('Guardian');
     await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page).toHaveURL('/dashboard/guardian');
+	await expect(page).toHaveURL('/dashboard/member');
     await expectNoSeriousAxeViolations(page);
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
 
@@ -136,12 +129,11 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Correio eletrónico').fill(guardianEmail);
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
+	await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
+	await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
     await noJavaScriptPage.getByLabel('Nome').fill('Menor de teste');
     await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
-    await noJavaScriptPage.getByLabel('Perfil').selectOption('Competitor');
-    await noJavaScriptPage.getByLabel('Categoria de equipa (apenas competidor)').selectOption('Iniciante');
     await noJavaScriptPage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
     await noJavaScriptPage.getByRole('button', { name: 'Adicionar menor' }).click();
 
@@ -151,23 +143,6 @@ test.describe('authentication', () => {
     await noJavaScriptPage.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(noJavaScriptPage);
     await context.close();
-  });
-
-  test('registers a leisure member and reaches the leisure dashboard', async ({ page }) => {
-    await page.goto('/registo');
-    await page.getByLabel('Nome').fill('Membro de lazer');
-    await page.getByLabel('Correio eletrónico').fill(leisureEmail);
-    await page.getByLabel('Data de nascimento').fill('1990-01-01');
-    await page.getByLabel('Tipo de conta').selectOption('Leisure');
-    await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
-    await page.getByLabel('Confirmar palavra-passe').fill(password);
-    await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-
-    await expect(page).toHaveURL('/dashboard/leisure');
-    await expect(page.getByRole('heading', { name: 'Painel de lazer' })).toBeVisible();
-    await expectNoSeriousAxeViolations(page);
   });
 
   test('logs in as an administrator and views the fleet', async ({ page }) => {

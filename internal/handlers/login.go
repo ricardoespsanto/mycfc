@@ -76,7 +76,6 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Sessions.Put(r.Context(), "user_id", user.ID.String())
-	h.Sessions.Put(r.Context(), "role", user.Role)
 	h.Sessions.Put(r.Context(), "last_seen_at", time.Now().UTC().Format(time.RFC3339Nano))
 	if next == "" {
 		next = "/dashboard"

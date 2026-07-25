@@ -125,7 +125,7 @@ func repairResponse(t *testing.T, handler Repair, userID, equipmentID uuid.UUID,
 	if htmx {
 		request.Header.Set("HX-Request", "true")
 	}
-	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Role: "Competitor"}))
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
 	response := httptest.NewRecorder()
 	handler.Post(response, request)
 	return response

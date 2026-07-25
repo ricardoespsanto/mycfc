@@ -4,8 +4,6 @@ CREATE TABLE users (
     name varchar(120) NOT NULL,
     email citext NULL,
     password_hash text NULL,
-    role role NOT NULL,
-    squad_category squad_category NOT NULL DEFAULT 'None',
     guardian_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
     is_dependent boolean NOT NULL DEFAULT false,
     date_of_birth date NOT NULL,
@@ -23,7 +21,6 @@ CREATE TABLE users (
             AND guardian_id IS NOT NULL
             AND email IS NULL
             AND password_hash IS NULL
-            AND role IN ('Competitor', 'Leisure')
         )
         OR
         (
@@ -32,17 +29,33 @@ CREATE TABLE users (
             AND email IS NOT NULL
             AND password_hash IS NOT NULL
         )
-    ),
-    CONSTRAINT users_role_squad_valid CHECK (
-        (role IN ('Admin', 'Guardian') AND squad_category = 'None')
-        OR (role = 'Leisure' AND squad_category = 'Lazer')
-        OR (role = 'Competitor' AND squad_category IN ('Iniciante', 'Polo_Senior', 'Master_A'))
     )
 );
 
 CREATE UNIQUE INDEX users_email_uidx ON users (email) WHERE email IS NOT NULL;
 CREATE INDEX users_guardian_id_idx ON users (guardian_id) WHERE guardian_id IS NOT NULL;
-CREATE INDEX users_role_active_idx ON users (role, is_active);
+CREATE INDEX users_active_idx ON users (is_active);
+
+CREATE TABLE platform_roles (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    code varchar(40) NOT NULL UNIQUE,
+    name_pt varchar(120) NOT NULL,
+    CONSTRAINT platform_roles_code_valid CHECK (code = btrim(code) AND code ~ '^[A-Z][A-Z0-9_]*$'),
+    CONSTRAINT platform_roles_name_valid CHECK (name_pt = btrim(name_pt) AND char_length(name_pt) BETWEEN 2 AND 120)
+);
+
+INSERT INTO platform_roles (code, name_pt) VALUES
+    ('ADMIN', 'Administração'),
+    ('STAFF', 'Equipa do clube');
+
+CREATE TABLE user_platform_roles (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id uuid NOT NULL REFERENCES platform_roles(id) ON DELETE RESTRICT,
+    granted_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, role_id)
+);
+
+CREATE INDEX user_platform_roles_role_idx ON user_platform_roles (role_id, user_id);
 
 CREATE TABLE equipment (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -128,8 +141,7 @@ CREATE TABLE whatsapp_groups (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name varchar(120) NOT NULL,
     discipline varchar(80) NOT NULL,
-    target_role role NOT NULL,
-    squad_category squad_category NULL,
+    programme_id uuid NULL,
     url text NOT NULL,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -143,18 +155,15 @@ CREATE TABLE whatsapp_groups (
         AND char_length(discipline) BETWEEN 2 AND 80
     ),
     CONSTRAINT whatsapp_url_valid CHECK (url LIKE 'https://chat.whatsapp.com/%'),
-    CONSTRAINT whatsapp_role_squad_valid CHECK (
-        (target_role = 'Competitor' AND squad_category IN ('Iniciante', 'Polo_Senior', 'Master_A'))
-        OR (target_role = 'Leisure' AND (squad_category = 'Lazer' OR squad_category IS NULL))
-        OR (target_role IN ('Admin', 'Guardian') AND squad_category IS NULL)
-    ),
-    CONSTRAINT whatsapp_group_unique UNIQUE NULLS NOT DISTINCT (name, target_role, squad_category)
+    CONSTRAINT whatsapp_group_unique UNIQUE NULLS NOT DISTINCT (name, programme_id)
 );
 
-CREATE INDEX whatsapp_role_active_idx ON whatsapp_groups (target_role, is_active);
+CREATE INDEX whatsapp_programme_active_idx ON whatsapp_groups (programme_id, is_active);
 
 -- +goose Down
 DROP TABLE IF EXISTS whatsapp_groups;
+DROP TABLE IF EXISTS user_platform_roles;
+DROP TABLE IF EXISTS platform_roles;
 DROP TABLE IF EXISTS consent_forms;
 DROP TABLE IF EXISTS repair_requests;
 DROP TABLE IF EXISTS equipment;

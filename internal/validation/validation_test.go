@@ -77,16 +77,6 @@ func TestValidatePassword(t *testing.T) {
 	}
 }
 
-func TestRoleSquadMapping(t *testing.T) {
-	role, squad, err := ValidatePublicRoleSquad("Leisure", "None")
-	if err != nil || role != "Leisure" || squad != "Lazer" {
-		t.Fatalf("Leisure mapping = %q %q %v", role, squad, err)
-	}
-	if _, _, err := ValidatePublicRoleSquad("Admin", "None"); err == nil {
-		t.Fatal("public Admin registration accepted")
-	}
-}
-
 func TestSafeNext(t *testing.T) {
 	for _, valid := range []string{"/dashboard", "/admin/fleet"} {
 		if got := SafeNext(valid); got != valid {

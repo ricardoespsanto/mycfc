@@ -19,7 +19,7 @@ var ErrMaximumDependents = errors.New("maximum active dependents reached")
 
 type GuardianDependentInput struct {
 	GuardianID                                  uuid.UUID
-	Name, Role, Squad                           string
+	Name                                        string
 	DateOfBirth                                 time.Time
 	ResponsibilityVersion, ResponsibilitySHA256 string
 	IP                                          *netip.Addr
@@ -31,9 +31,9 @@ type GuardianDependentStore interface {
 }
 
 type guardianDependentForm struct {
-	Name, DateOfBirth, Role, Squad string
-	Errors                         validation.FieldErrors
-	Success                        string
+	Name, DateOfBirth string
+	Errors            validation.FieldErrors
+	Success           string
 }
 
 func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +52,7 @@ func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
 		ip = &value
 	}
 	err := h.Dependents.CreateDependent(r.Context(), GuardianDependentInput{
-		GuardianID: user.ID, Name: form.Name, Role: form.Role, Squad: form.Squad, DateOfBirth: mustParseDate(form.DateOfBirth),
+		GuardianID: user.ID, Name: form.Name, DateOfBirth: mustParseDate(form.DateOfBirth),
 		ResponsibilityVersion: h.ResponsibilityVersion, ResponsibilitySHA256: h.ResponsibilitySHA256,
 		IP: ip, UserAgent: truncateRunes(r.UserAgent(), 512),
 	})
@@ -88,9 +88,6 @@ func (h Dashboard) validateDependent(r *http.Request) guardianDependentForm {
 		form.Errors.Add("date_of_birth", err.Error())
 	} else {
 		form.DateOfBirth = dateOfBirth.Format("2006-01-02")
-	}
-	if form.Role, form.Squad, err = validation.ValidateDependentRoleSquad(r.PostForm.Get("role"), r.PostForm.Get("squad_category")); err != nil {
-		form.Errors.Add("role", err.Error())
 	}
 	if r.PostForm.Get("accept_minor_responsibility") != "on" {
 		form.Errors.Add("accept_minor_responsibility", "Tem de aceitar a responsabilidade pelo menor a cargo.")

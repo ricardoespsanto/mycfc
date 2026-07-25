@@ -23,17 +23,16 @@ import (
 const duplicateEmailMessage = "Já existe uma conta com este endereço de correio eletrónico."
 
 type RegistrationInput struct {
-	Name, Email, PasswordHash, Role, Squad string
-	DateOfBirth                            time.Time
-	TermsVersion, TermsSHA256              string
-	ImageVersion, ImageSHA256              string
-	IP                                     *netip.Addr
-	UserAgent                              string
+	Name, Email, PasswordHash string
+	DateOfBirth               time.Time
+	TermsVersion, TermsSHA256 string
+	ImageVersion, ImageSHA256 string
+	IP                        *netip.Addr
+	UserAgent                 string
 }
 
 type RegistrationResult struct {
 	UserID uuid.UUID
-	Role   string
 }
 
 type RegistrationStore interface {
@@ -78,7 +77,7 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 		ip = &value
 	}
 	result, err := h.Store.RegisterAdult(r.Context(), RegistrationInput{
-		Name: form.Name, Email: form.Email, PasswordHash: string(hash), Role: form.Role, Squad: form.Squad,
+		Name: form.Name, Email: form.Email, PasswordHash: string(hash),
 		DateOfBirth: form.DateOfBirth, TermsVersion: h.TermsVersion, TermsSHA256: h.TermsSHA256,
 		ImageVersion: h.ImageVersion, ImageSHA256: h.ImageSHA256, IP: ip, UserAgent: truncateRunes(r.UserAgent(), 512),
 	})
@@ -96,15 +95,14 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Sessions.Put(r.Context(), "user_id", result.UserID.String())
-	h.Sessions.Put(r.Context(), "role", result.Role)
 	h.Sessions.Put(r.Context(), "last_seen_at", h.now().UTC().Format(time.RFC3339Nano))
 	httpx.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
 type registrationForm struct {
-	Name, Email, Role, Squad string
-	DateOfBirth              time.Time
-	Errors                   validation.FieldErrors
+	Name, Email string
+	DateOfBirth time.Time
+	Errors      validation.FieldErrors
 }
 
 func (h Registration) validate(r *http.Request) registrationForm {
@@ -128,9 +126,6 @@ func (h Registration) validate(r *http.Request) registrationForm {
 	if password != r.PostForm.Get("password_confirmation") {
 		form.Errors.Add("password_confirmation", "As palavras-passe não coincidem.")
 	}
-	if form.Role, form.Squad, err = validation.ValidatePublicRoleSquad(r.PostForm.Get("role"), r.PostForm.Get("squad_category")); err != nil {
-		form.Errors.Add("role", err.Error())
-	}
 	if r.PostForm.Get("accept_terms") != "on" {
 		form.Errors.Add("accept_terms", "Tem de aceitar os termos gerais.")
 	}
@@ -149,7 +144,7 @@ func (h Registration) render(w http.ResponseWriter, r *http.Request, status int,
 	if !form.DateOfBirth.IsZero() {
 		dateOfBirth = form.DateOfBirth.Format("2006-01-02")
 	}
-	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, Role: form.Role, Squad: form.Squad, TermsURL: h.TermsURL, ImageURL: h.ImageURL, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
+	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, TermsURL: h.TermsURL, ImageURL: h.ImageURL, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
 }
 
 func (h Registration) now() time.Time {
