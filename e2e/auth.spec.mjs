@@ -18,6 +18,7 @@ test.describe('authentication', () => {
 
   test('registers a competitor, reaches the dashboard, and has no serious accessibility violations', async ({ page }) => {
     await page.goto('/registo');
+    await expectNoSeriousAxeViolations(page);
     await page.getByLabel('Nome').fill('Pessoa de teste');
     await page.getByLabel('Correio eletrónico').fill(email);
     await page.getByLabel('Data de nascimento').fill('1990-01-01');
@@ -88,6 +89,7 @@ test.describe('authentication', () => {
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page).toHaveURL('/dashboard/guardian');
+    await expectNoSeriousAxeViolations(page);
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
 
     const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
