@@ -207,7 +207,7 @@ The implementation MUST use this layout. Generated files may add children but no
 7. Do not weaken tests or acceptance criteria to obtain a green build.
 8. Do not leave stubs that return successful responses.
 9. Where a required external production value is absent, implement the variable/configuration and fail validation; do not invent a production value.
-10. When third-party API behaviour differs from this specification, use the official current API, preserve the intended security property, and document the exact adaptation in `IMPLEMENTATION_NOTES.md`.
+10. When third-party API behaviour differs from this specification, use the official current API, preserve the intended security property, and document the exact adaptation in `implementation-status.md` and the relevant GitHub Project issue.
 
 ## 9. Global definition of done
 

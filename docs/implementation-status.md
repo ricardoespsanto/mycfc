@@ -1,6 +1,6 @@
 # Implementation status
 
-Incremental delivery checkpoints and the wireframe scope boundary are tracked in [`implementation-plan.md`](implementation-plan.md).
+This document records the current implementation boundary. Planned and deferred work is tracked in the [MyCFC Delivery Project](https://github.com/users/ricardoespsanto/projects/1).
 
 | Specification | State | Notes |
 |---|---|---|
@@ -15,7 +15,3 @@ Incremental delivery checkpoints and the wireframe scope boundary are tracked in
 | 08 GitHub Actions | Implemented source | Pinned CI, infrastructure, deployment, and Dependabot workflow foundations exist; protected environment configuration and live execution remain. |
 | 09 Local development | Implemented source | Compose, env template, Air config and Make targets are present. |
 | 10 Acceptance matrix | In progress | Unit-level checks added; integration/e2e/infra evidence remains. |
-
-## Next recommended implementation slice
-
-Complete acceptance evidence: PostgreSQL/MinIO integration coverage, browser accessibility and no-JavaScript flows, then production infrastructure and CI.
