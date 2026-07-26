@@ -29,7 +29,7 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		user    CurrentUser
 		handler http.HandlerFunc
 	}{
-		{"competition athlete", []string{"Hoje", "Atleta de competição"}, []string{"Atleta de iniciação", "Atleta de kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
+		{"competition athlete", []string{"Atleta de competição"}, []string{"Atleta de iniciação", "Atleta de kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
 		{"multiple memberships", []string{"Lazer", "Atleta de iniciação", "Atleta de competição", "Atleta de kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
 		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
 		{"admin", []string{"Frota"}, []string{"Treinador", "Moderador"}, CurrentUser{IsAdmin: true}, dashboard.Admin},

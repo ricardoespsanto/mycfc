@@ -69,7 +69,7 @@ func registrationContent(page RegistrationPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"registration-title\"><h1 id=\"registration-title\">Criar conta</h1><form method=\"post\" action=\"/registo\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"registration-title\"><h1 id=\"registration-title\">Criar conta</h1><form class=\"form-layout\" method=\"post\" action=\"/registo\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

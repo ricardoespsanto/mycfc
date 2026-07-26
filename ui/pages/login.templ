@@ -21,7 +21,7 @@ templ loginContent(page LoginPage) {
 		if page.Error != "" {
 			<p class="field-error" role="alert">{ page.Error }</p>
 		}
-		<form method="post" action="/login">
+		<form class="form-layout" method="post" action="/login">
 			@page.CSRFField
 			if page.Next != "" {
 				<input type="hidden" name="next" value={ page.Next }/>

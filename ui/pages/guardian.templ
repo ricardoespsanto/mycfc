@@ -24,14 +24,14 @@ templ GuardianContent(page GuardianPage) {
 	<div id="guardian-content">
 		<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Menores a cargo</h1><p>Consulte os menores a seu cargo e respetivas agendas.</p></section>
 		if page.Success != "" {
-			<p class="flash" role="status" tabindex="-1">{ page.Success }</p>
+			<p class="flash status-message" role="status" tabindex="-1">{ page.Success }</p>
 		}
 		<section class="dashboard-card" aria-labelledby="dependents-title"><h2 id="dependents-title">Menores a cargo</h2>
 			if len(page.Dependents) == 0 {
-				<p>Ainda não tem menores a cargo.</p>
+				<p class="empty-state">Ainda não tem menores a cargo.</p>
 			}
 			if len(page.Dependents) > 0 {
-				<ul>
+				<ul class="content-list">
 					for _, dependent := range page.Dependents {
 						<li><strong>{ dependent.Title }</strong><span> { dependent.Detail }</span></li>
 					}
@@ -42,7 +42,7 @@ templ GuardianContent(page GuardianPage) {
 			if message := page.Errors["form"]; message != "" {
 				<p class="field-error" role="alert">{ message }</p>
 			}
-			<form method="post" action="/guardian/add-dependent" hx-post="/guardian/add-dependent" hx-target="#guardian-content" hx-swap="outerHTML" hx-target-422="#guardian-content" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+			<form class="form-layout" method="post" action="/guardian/add-dependent" hx-post="/guardian/add-dependent" hx-target="#guardian-content" hx-swap="outerHTML" hx-target-422="#guardian-content" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 				@page.Meta.CSRFField
 				<div class="form-field"><label for="name">Nome</label><input id="name" name="name" autocomplete="name" value={ page.Name } required/>@errorText(page.Errors, "name")</div>
 				<div class="form-field"><label for="date_of_birth">Data de nascimento</label><input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required/>@errorText(page.Errors, "date_of_birth")</div>

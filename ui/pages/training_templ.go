@@ -80,7 +80,7 @@ func trainingContent(page TrainingPage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(page.Sessions) == 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p>Ainda não tem sessões atribuídas.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p class=\"empty-state\">Ainda não tem sessões atribuídas.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -167,7 +167,7 @@ func trainingContent(page TrainingPage) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<form method=\"post\" action=\"/treinos/sessoes/concluir\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<form class=\"inline-action\" method=\"post\" action=\"/treinos/sessoes/concluir\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -182,7 +182,7 @@ func trainingContent(page TrainingPage) templ.Component {
 				var templ_7745c5c3_Var8 string
 				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(session.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/training.templ`, Line: 26, Col: 143}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/training.templ`, Line: 26, Col: 165}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 				if templ_7745c5c3_Err != nil {
@@ -203,7 +203,7 @@ func trainingContent(page TrainingPage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(page.Documents) == 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<p>Não existem documentos aplicáveis.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<p class=\"empty-state\">Não existem documentos aplicáveis.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -314,7 +314,7 @@ func trainingAuthoring(page TrainingPage) templ.Component {
 			templ_7745c5c3_Var14 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<section class=\"dashboard-card\"><h2>Criar plano</h2><form method=\"post\" action=\"/treinos/planos\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<section class=\"dashboard-card\"><h2>Criar plano</h2><form class=\"form-layout\" method=\"post\" action=\"/treinos/planos\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -330,7 +330,7 @@ func trainingAuthoring(page TrainingPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<button type=\"submit\">Criar plano</button></form></section><section class=\"dashboard-card\"><h2>Criar sessão</h2><form method=\"post\" action=\"/treinos/sessoes\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<button type=\"submit\">Criar plano</button></form></section><section class=\"dashboard-card\"><h2>Criar sessão</h2><form class=\"form-layout\" method=\"post\" action=\"/treinos/sessoes\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -410,7 +410,7 @@ func trainingAuthoring(page TrainingPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</select></label><button type=\"submit\">Criar sessão</button></form></section><section class=\"dashboard-card\"><h2>Atribuir sessão</h2><form method=\"post\" action=\"/treinos/atribuicoes\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</select></label><button type=\"submit\">Criar sessão</button></form></section><section class=\"dashboard-card\"><h2>Atribuir sessão</h2><form class=\"form-layout\" method=\"post\" action=\"/treinos/atribuicoes\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -454,7 +454,7 @@ func trainingAuthoring(page TrainingPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</select></label><button type=\"submit\">Atribuir</button></form></section><section class=\"dashboard-card\"><h2>Publicar documento de competição</h2><form method=\"post\" action=\"/treinos/documentos\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</select></label><button type=\"submit\">Atribuir</button></form></section><section class=\"dashboard-card\"><h2>Publicar documento de competição</h2><form class=\"form-layout\" method=\"post\" action=\"/treinos/documentos\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

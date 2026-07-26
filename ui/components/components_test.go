@@ -59,3 +59,13 @@ func TestErrorSummaryRendersFieldLinks(t *testing.T) {
 		t.Fatalf("rendered summary = %q", output.String())
 	}
 }
+
+func TestFlashUsesSharedStatusStyling(t *testing.T) {
+	var output strings.Builder
+	if err := Flash("Guardado.").Render(context.Background(), &output); err != nil {
+		t.Fatalf("render flash: %v", err)
+	}
+	if !strings.Contains(output.String(), `class="flash status-message"`) {
+		t.Fatalf("rendered flash = %q", output.String())
+	}
+}

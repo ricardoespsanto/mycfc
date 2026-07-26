@@ -21,7 +21,7 @@ templ RepairForm(form RepairFormData) {
 		if form.Errors["form"] != "" {
 			<p class="field-error" role="alert">{ form.Errors["form"] }</p>
 		}
-		<form method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
 			<div class="form-field"><label for="equipment_id">Equipamento</label><select id="equipment_id" name="equipment_id" required><option value="">Selecione</option>

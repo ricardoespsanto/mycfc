@@ -83,7 +83,7 @@ func RepairForm(form RepairFormData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<form method=\"post\" action=\"/repairs\" enctype=\"multipart/form-data\" hx-post=\"/repairs\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disabled-elt=\"find button, find input[type='submit']\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<form class=\"form-layout\" method=\"post\" action=\"/repairs\" enctype=\"multipart/form-data\" hx-post=\"/repairs\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disabled-elt=\"find button, find input[type='submit']\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

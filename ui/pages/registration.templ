@@ -18,7 +18,7 @@ templ Registration(page RegistrationPage) {
 templ registrationContent(page RegistrationPage) {
 	<section class="auth-card" aria-labelledby="registration-title">
 		<h1 id="registration-title">Criar conta</h1>
-		<form method="post" action="/registo">
+		<form class="form-layout" method="post" action="/registo">
 			@page.CSRFField
 			<div class="form-field"><label for="name">Nome</label><input id="name" name="name" autocomplete="name" value={ page.Name } required/>@errorText(page.Errors, "name")</div>
 			<div class="form-field"><label for="email">Correio eletrónico</label><input id="email" name="email" type="email" autocomplete="email" value={ page.Email } required/>@errorText(page.Errors, "email")</div>

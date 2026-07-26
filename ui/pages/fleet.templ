@@ -35,20 +35,20 @@ templ Fleet(page FleetPage) {
 
 templ fleetContent(page FleetPage) {
 	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section>
-	<section class="dashboard-card"><h2>Estado da frota</h2><ul>
+	<section class="dashboard-card"><h2>Estado da frota</h2><ul class="content-list">
 		for _, count := range page.Counts {
 			<li>{ count.Status }: { count.Total }</li>
 		}
 	</ul></section>
 	<section class="dashboard-card"><h2>Equipamentos</h2>
 		if page.EquipmentCapped {
-			<p role="alert">A lista está limitada a 500 equipamentos.</p>
+			<p class="status-message" role="alert">A lista está limitada a 500 equipamentos.</p>
 		}
 		if len(page.Equipment) == 0 {
-			<p>Ainda não existem equipamentos registados.</p>
+			<p class="empty-state">Ainda não existem equipamentos registados.</p>
 		}
 		if len(page.Equipment) > 0 {
-			<ul>
+			<ul class="content-list">
 				for _, equipment := range page.Equipment {
 					<li>{ equipment.AssetTag } - { equipment.Name } - { equipment.Type } - { equipment.Status }</li>
 				}
@@ -57,10 +57,10 @@ templ fleetContent(page FleetPage) {
 	</section>
 	<section class="dashboard-card"><h2>Pedidos de reparação pendentes</h2>
 		if len(page.Repairs) == 0 {
-			<p>Não existem pedidos de reparação pendentes.</p>
+			<p class="empty-state">Não existem pedidos de reparação pendentes.</p>
 		}
 		if len(page.Repairs) > 0 {
-			<ul>
+			<ul class="content-list">
 				for _, repair := range page.Repairs {
 					<li><strong>{ repair.Equipment }</strong> - { repair.Description } - { repair.Status } - { repair.ReportedAt }
 						if repair.PhotoURL != "" {
@@ -77,10 +77,10 @@ templ fleetContent(page FleetPage) {
 	</section>
 	<section class="dashboard-card"><h2>Próximas manutenções</h2>
 		if len(page.Maintenance) == 0 {
-			<p>Não existem manutenções nos próximos 90 dias.</p>
+			<p class="empty-state">Não existem manutenções nos próximos 90 dias.</p>
 		}
 		if len(page.Maintenance) > 0 {
-			<ul>
+			<ul class="content-list">
 				for _, task := range page.Maintenance {
 					<li><strong>{ task.Equipment }</strong> - { task.Description } - { task.Status } - { task.ScheduledFor }
 						@MaintenanceCompletionForm(task, page.Meta.CSRFField)
@@ -95,7 +95,7 @@ templ fleetContent(page FleetPage) {
 
 templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
 	if repair.Status == "Pendente" || repair.Status == "Em_Analise" {
-		<form method="post" action="/admin/repairs/status" hx-post="/admin/repairs/status" hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="inline-action" method="post" action="/admin/repairs/status" hx-post="/admin/repairs/status" hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@csrfField
 			<input type="hidden" name="repair_id" value={ repair.ID }/>
 			<input type="hidden" name="expected_status" value={ repair.Status }/>
@@ -113,7 +113,7 @@ templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
 
 templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component) {
 	if task.Status == "Scheduled" || task.Status == "In_Progress" {
-		<form method="post" action={ "/admin/maintenance/" + task.ID + "/complete" } hx-post={ "/admin/maintenance/" + task.ID + "/complete" } hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="inline-action" method="post" action={ "/admin/maintenance/" + task.ID + "/complete" } hx-post={ "/admin/maintenance/" + task.ID + "/complete" } hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@csrfField
 			<input type="hidden" name="maintenance_id" value={ task.ID }/><button type="submit">Concluir manutenção</button>
 			if task.ActionError != "" {
@@ -126,10 +126,10 @@ templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component
 templ FleetActionFeedback(success, errorMessage string) {
 	<section class="dashboard-card" aria-live="polite">
 		if success != "" {
-			<p role="status" tabindex="-1">{ success }</p>
+			<p class="status-message" role="status" tabindex="-1">{ success }</p>
 		}
 		if errorMessage != "" {
-			<p role="alert">{ errorMessage }</p>
+			<p class="status-message" role="alert">{ errorMessage }</p>
 		}
 	</section>
 }
@@ -138,9 +138,9 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 	<section id="maintenance-form" class="dashboard-card" aria-labelledby="maintenance-title">
 		<h2 id="maintenance-title">Agendar manutenção</h2>
 		if form.Success != "" {
-			<p role="status" tabindex="-1">{ form.Success }</p>
+			<p class="status-message" role="status" tabindex="-1">{ form.Success }</p>
 		}
-		<form method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="this" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="this" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<label for="maintenance-equipment">Equipamento</label>
 			<select id="maintenance-equipment" name="equipment_id" required aria-describedby="equipment_id-error">

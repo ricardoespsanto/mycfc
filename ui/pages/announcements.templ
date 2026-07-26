@@ -25,10 +25,10 @@ templ announcementsContent(page AnnouncementsPage) {
     }
     <section class="dashboard-card"><h2>Para si</h2>
         if len(page.Items) == 0 {
-            <p>Não existem avisos ativos.</p>
+            <p class="empty-state">Não existem avisos ativos.</p>
         }
         if len(page.Items) > 0 {
-            <ul>
+            <ul class="content-list">
                 for _, item := range page.Items {
                     <li><a href={ "/announcements/" + item.ID }>{ item.Title }</a> <span>{ item.PublishedAt }</span>
                         if item.Unread {
@@ -40,14 +40,14 @@ templ announcementsContent(page AnnouncementsPage) {
         }
     </section>
     if page.CanManage {
-        <section class="dashboard-card"><h2>Os meus avisos</h2><ul>
+        <section class="dashboard-card"><h2>Os meus avisos</h2><ul class="content-list">
             for _, item := range page.Authored {
                 <li>{ item.Title } · { item.Status }
                     if item.Status == "DRAFT" {
-                        <form method="post" action={ "/admin/announcements/" + item.ID + "/publish" }>@page.Form.CSRFField<button type="submit">Publicar</button></form>
+                        <form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/publish" }>@page.Form.CSRFField<button type="submit">Publicar</button></form>
                     }
                     if item.Status == "PUBLISHED" {
-                        <form method="post" action={ "/admin/announcements/" + item.ID + "/expire" }>@page.Form.CSRFField<button type="submit">Expirar</button></form>
+                        <form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/expire" }>@page.Form.CSRFField<button type="submit">Expirar</button></form>
                     }
                 </li>
             }
@@ -55,7 +55,7 @@ templ announcementsContent(page AnnouncementsPage) {
     }
 }
 templ AnnouncementAuthoringForm(form AnnouncementForm) {
-    <section class="dashboard-card"><h2>Criar aviso</h2><form method="post" action="/admin/announcements">@form.CSRFField
+    <section class="dashboard-card"><h2>Criar aviso</h2><form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
         <label for="announcement-title">Título</label><input id="announcement-title" name="title" value={ form.Title } required/>@components.FieldErrorMessage("title", form.Errors["title"])
         <label for="announcement-body">Mensagem</label><textarea id="announcement-body" name="body" required>{ form.Body }</textarea>@components.FieldErrorMessage("body", form.Errors["body"])
         <fieldset><legend>Caderno de prova ou documento oficial (opcional)</legend><p>Publique apenas uma ligação HTTPS revista. A fonte e a data de revisão ficam registadas no aviso.</p>
