@@ -93,7 +93,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		h.internal(w, r)
+		h.internal(w, r, err)
 		return
 	}
 	equipment, err := h.Store.GetEquipmentByID(ctx, equipmentID)
@@ -103,7 +103,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.internal(w, r)
+		h.internal(w, r, err)
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		objectKey = fmt.Sprintf("repairs/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), validated.Extension)
 		uploadCtx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
 		if err := h.Objects.PutRepairPhoto(uploadCtx, objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
-			h.internal(w, r)
+			h.internal(w, r, err)
 			return
 		}
 		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &objectKey, &validated.ContentType, &validated.Size
@@ -142,7 +142,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.internal(w, r)
+		h.internal(w, r, err)
 		return
 	}
 	h.success(w, r, repair)
@@ -205,7 +205,7 @@ func (h Repair) validation(w http.ResponseWriter, r *http.Request, form repairFo
 func (h Repair) renderForm(w http.ResponseWriter, r *http.Request, status int, form repairForm, success string) {
 	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
 	if err != nil {
-		h.internal(w, r)
+		h.internal(w, r, err)
 		return
 	}
 	choices := make([]components.RepairEquipment, len(equipment))
@@ -221,7 +221,8 @@ func (h Repair) error(w http.ResponseWriter, _ *http.Request, status int, messag
 	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w, "<p role=\"alert\">%s</p>", message)
 }
-func (h Repair) internal(w http.ResponseWriter, r *http.Request) {
+func (h Repair) internal(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Error("repair request failed", "request_id", httpx.RequestID(r.Context()), "error", err)
 	h.error(w, r, http.StatusInternalServerError, "Não foi possível concluir o pedido. Referência: "+httpx.RequestID(r.Context()))
 }
 func (h Repair) deleteObject(r *http.Request, key string) {

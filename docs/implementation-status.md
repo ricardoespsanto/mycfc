@@ -14,4 +14,4 @@ This document records the current implementation boundary. Planned and deferred 
 | 07 AWS deployment | Implemented source | Terraform bootstrap and production foundations cover state, private network, RDS, S3, ECR, ALB/WAF, ECS, and GitHub OIDC; operator values and live AWS plan/apply evidence remain. |
 | 08 GitHub Actions | Implemented source | Pinned CI, infrastructure, deployment, and Dependabot workflow foundations exist; protected environment configuration and live execution remain. |
 | 09 Local development | Implemented source | Compose, env template, Air config and Make targets are present. |
-| 10 Acceptance matrix | In progress | Unit-level checks added; integration/e2e/infra evidence remains. |
+| 10 Acceptance matrix | In progress | `docs/acceptance-matrix.md` maps the implemented workflows to unit, PostgreSQL/MinIO integration, and configured Playwright/axe evidence. It also records the remaining browser, accessibility, and environment-dependent gaps without treating them as covered. |

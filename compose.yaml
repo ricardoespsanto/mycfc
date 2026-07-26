@@ -69,7 +69,9 @@ services:
     environment:
       BASE_URL: http://e2e-app:8080
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
       CONSENT_TERMS_URL: http://e2e-app:8080/legal/termos-gerais
       CONSENT_IMAGE_URL: http://e2e-app:8080/legal/uso-imagem
       CONSENT_MINOR_URL: http://e2e-app:8080/legal/responsabilidade-menor
@@ -117,7 +119,7 @@ services:
       - -ec
       - |
         npm ci
-        node -e 'const url = "http://e2e-app:8080/health/ready"; const deadline = Date.now() + 60000; const check = async () => { try { if ((await fetch(url)).ok) return; } catch {} if (Date.now() >= deadline) process.exit(1); setTimeout(check, 250); }; check();'
+        node -e 'const url = "http://e2e-app:8080/health/ready"; const deadline = Date.now() + 600000; const check = async () => { try { if ((await fetch(url)).ok) return; } catch {} if (Date.now() >= deadline) throw new Error("e2e app readiness timed out"); await new Promise(resolve => setTimeout(resolve, 250)); return check(); }; check().catch(error => { console.error(error); process.exit(1); });'
         npm run test:e2e
     depends_on:
       e2e-app:

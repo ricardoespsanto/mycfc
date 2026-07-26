@@ -6,7 +6,8 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
   workers: 1,
-  reporter: process.env.CI ? 'github' : 'list',
+  timeout: 60_000,
+  reporter: process.env.CI ? [['github'], ['line']] : 'list',
   use: {
     baseURL,
     trace: 'retain-on-failure',
@@ -17,7 +18,7 @@ export default defineConfig({
       cwd: '.',
       url: 'http://127.0.0.1:8080/health/ready',
       reuseExistingServer: !process.env.CI,
-      timeout: 30_000,
+      timeout: 600_000,
     },
   }),
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

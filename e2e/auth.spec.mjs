@@ -22,6 +22,10 @@ async function expectNoHorizontalOverflow(page) {
   expect(overflowing).toEqual([]);
 }
 
+async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 720 }) {
+  await page.setViewportSize({ width: viewport.width / zoom, height: viewport.height / zoom });
+}
+
 test.describe('authentication', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -47,7 +51,7 @@ test.describe('authentication', () => {
     await context.close();
   });
 
-  test('registers a member, reaches the account dashboard, and has no serious accessibility violations', async ({ page }) => {
+  test('registers a member, reaches the today view, and has no serious accessibility violations', async ({ page }) => {
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);
     const name = page.getByLabel('Nome');
@@ -66,8 +70,8 @@ test.describe('authentication', () => {
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
 
-    await expect(page).toHaveURL('/dashboard/member');
-    await expect(page.getByRole('heading', { name: 'Área de membro' })).toBeVisible();
+    await expect(page).toHaveURL('/today');
+    await expect(page.getByRole('heading', { name: 'Hoje', exact: true })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
     await page.setViewportSize({ width: 320, height: 720 });
@@ -88,14 +92,17 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
-    await expect(page).toHaveURL('/dashboard/member');
+    await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await expect(page).toHaveURL('/dashboard/guardian');
 
     const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/dashboard/member');
+    await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
     const firstReference = await success.textContent();
@@ -104,7 +111,8 @@ test.describe('authentication', () => {
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/dashboard/member');
+    await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
@@ -119,7 +127,7 @@ test.describe('authentication', () => {
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
-	await expect(page).toHaveURL('/dashboard/member');
+    await expect(page).toHaveURL('/today');
     await expectNoSeriousAxeViolations(page);
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
 
@@ -129,8 +137,8 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Correio eletrónico').fill(guardianEmail);
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-	await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
-	await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
+    await noJavaScriptPage.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
     await noJavaScriptPage.getByLabel('Nome').fill('Menor de teste');
     await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
@@ -145,17 +153,48 @@ test.describe('authentication', () => {
     await context.close();
   });
 
-  test('logs in as an administrator and views the fleet', async ({ page }) => {
+  test('administrator validates, schedules, and completes maintenance with keyboard and zoom coverage', async ({ page }) => {
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
+    await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Frota' }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await expect(page.getByLabel('Equipamento')).toBeVisible();
     await expectNoSeriousAxeViolations(page);
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
+
+    await emulateBrowserZoom(page, 2);
+    await expectNoHorizontalOverflow(page);
+
+    const maintenanceForm = page.locator('#maintenance-form');
+    const scheduledFor = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+    await maintenanceForm.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
+    await maintenanceForm.getByLabel('Data e hora').fill(scheduledFor);
+    await maintenanceForm.getByLabel('Descrição').fill('curta');
+    await maintenanceForm.getByRole('button', { name: 'Agendar manutenção' }).click();
+    await expect(maintenanceForm.getByText('A descrição deve ter entre 10 e 2000 caracteres.')).toBeVisible();
+
+    const description = `Manutenção e2e ${Date.now()}`;
+    await maintenanceForm.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
+    await maintenanceForm.getByLabel('Data e hora').fill(scheduledFor);
+    await maintenanceForm.getByLabel('Descrição').fill(description);
+    const schedule = maintenanceForm.getByRole('button', { name: 'Agendar manutenção' });
+    await schedule.focus();
+    await expect(schedule).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(maintenanceForm.getByRole('status')).toHaveText('Manutenção agendada.');
+
+    await page.reload();
+    const task = page.locator('li', { hasText: description });
+    const complete = task.getByRole('button', { name: 'Concluir manutenção' });
+    await complete.focus();
+    await expect(complete).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('status')).toHaveText('Manutenção concluída.');
   });
 });
