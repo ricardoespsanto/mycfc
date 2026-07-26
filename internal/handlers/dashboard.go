@@ -514,7 +514,7 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 }
 
 func dashboardNavigation(user CurrentUser) []components.NavigationItem {
-	items := []components.NavigationItem{{Label: "Painel", Path: "/dashboard"}, {Label: "Menores a cargo", Path: "/dashboard/guardian"}}
+	items := []components.NavigationItem{{Label: "Painel", Path: "/dashboard"}, {Label: "Eventos", Path: "/events"}, {Label: "Menores a cargo", Path: "/dashboard/guardian"}}
 	if user.Programmes["Leisure"] {
 		items = append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}

@@ -3,6 +3,11 @@ SELECT id, code, name_pt, created_at
 FROM programmes
 WHERE code = sqlc.arg(code);
 
+-- name: GetTeamByID :one
+SELECT id, season_id, programme_id, code, name, created_at
+FROM teams
+WHERE id = sqlc.arg(id);
+
 -- name: GetModalityByCode :one
 SELECT id, code, name_pt, created_at
 FROM modalities

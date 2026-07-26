@@ -1,0 +1,119 @@
+package pages
+
+import (
+    "github.com/cfcoimbra/mycfc/internal/validation"
+    "github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type EventItem struct { ID, Title, When, Status, Capacity string }
+type EventResponse struct { UserID, Name, Status, RespondedAt, CheckedInAt string }
+type EventDependent struct { ID, Name string }
+type EventProgramme struct { ID, Name string; Selected bool }
+type EventTeam struct { ID, Name string; Selected bool }
+type EventForm struct {
+    CSRFField templ.Component
+    Title, Description, StartsAt, EndsAt, Deadline, Capacity string
+    Programmes []EventProgramme
+    Teams []EventTeam
+    Errors validation.FieldErrors
+}
+type EventsPage struct { Meta components.PageMeta; CanManageEvents bool; Events []EventItem; Form EventForm }
+type EventDetailPage struct {
+    Meta components.PageMeta
+    CanManageEvents bool
+    ID, Title, Description, When, Deadline, Capacity, Status string
+    Responses []EventResponse
+    Dependents []EventDependent
+    CSRFField templ.Component
+}
+
+templ Events(page EventsPage) { @components.Base(page.Meta, eventsContent(page)) }
+templ eventsContent(page EventsPage) {
+    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Eventos</h1><p>Consulte e responda aos eventos do clube.</p></section>
+    if page.CanManageEvents {
+        @EventAuthoringForm(page.Form)
+    }
+    <section class="dashboard-card"><h2>Próximos eventos</h2>
+        if len(page.Events) == 0 {
+            <p>Ainda não existem eventos para apresentar.</p>
+        }
+        if len(page.Events) > 0 {
+            <ul>
+                for _, event := range page.Events {
+                    <li><a href={ "/events/" + event.ID }>{ event.Title }</a> <span>{ event.When } · { event.Status }{ event.Capacity }</span></li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+templ EventAuthoringForm(form EventForm) {
+    <section class="dashboard-card" aria-labelledby="event-authoring-title"><h2 id="event-authoring-title">Criar evento</h2>
+        <form method="post" action="/admin/events">@form.CSRFField
+            <label for="event-title">Título</label><input id="event-title" name="title" value={ form.Title } required/>
+            @components.FieldErrorMessage("title", form.Errors["title"])
+            <label for="event-description">Descrição</label><textarea id="event-description" name="description">{ form.Description }</textarea>
+            @components.FieldErrorMessage("description", form.Errors["description"])
+            <label for="event-starts-at">Início</label><input id="event-starts-at" name="starts_at" type="datetime-local" value={ form.StartsAt } required/>
+            @components.FieldErrorMessage("starts_at", form.Errors["starts_at"])
+            <label for="event-ends-at">Fim</label><input id="event-ends-at" name="ends_at" type="datetime-local" value={ form.EndsAt } required/>
+            @components.FieldErrorMessage("ends_at", form.Errors["ends_at"])
+            <label for="event-deadline">Limite de resposta</label><input id="event-deadline" name="response_deadline" type="datetime-local" value={ form.Deadline }/>
+            @components.FieldErrorMessage("response_deadline", form.Errors["response_deadline"])
+            <label for="event-capacity">Lotação (opcional)</label><input id="event-capacity" name="capacity" type="number" min="1" value={ form.Capacity }/>
+            @components.FieldErrorMessage("capacity", form.Errors["capacity"])
+            <fieldset><legend>Destinatários</legend><p>Os administradores podem deixar esta lista vazia para todos os membros.</p>
+                for _, programme := range form.Programmes {
+                    <label><input name="programme_id" type="checkbox" value={ programme.ID } checked?={ programme.Selected }/> { programme.Name }</label>
+                }
+                for _, team := range form.Teams {
+                    <label><input name="team_id" type="checkbox" value={ team.ID } checked?={ team.Selected }/> { team.Name }</label>
+                }
+            </fieldset><button type="submit">Criar evento</button>
+        </form>
+    </section>
+}
+
+templ EventDetail(page EventDetailPage) { @components.Base(page.Meta, eventDetailContent(page)) }
+templ eventDetailContent(page EventDetailPage) {
+    <section class="dashboard-hero"><p class="eyebrow">Evento</p><h1>{ page.Title }</h1><p>{ page.Description }</p><p>{ page.When }</p><p>{ page.Deadline }{ page.Capacity }</p></section>
+    if !page.CanManageEvents {
+        <section class="dashboard-card"><h2>A sua resposta</h2><p>Estado: { page.Status }</p>
+            if page.Status != "Fora do prazo" {
+                <form method="post" action={ "/events/" + page.ID + "/responses" }>
+                    @page.CSRFField<label for="event-subject">Resposta para</label>
+                    <select id="event-subject" name="subject_user_id"><option value="">A minha participação</option>
+                        for _, dependent := range page.Dependents {
+                            <option value={ dependent.ID }>{ dependent.Name }</option>
+                        }
+                    </select>
+                    <button name="status" value="Going" type="submit">Vou</button><button name="status" value="NotGoing" type="submit">Não vou</button>
+                </form>
+            }
+        </section>
+    }
+    if page.CanManageEvents {
+        <section class="dashboard-card"><h2>Respostas e presenças</h2>
+            if len(page.Responses) == 0 {
+                <p>Ainda não há respostas.</p>
+            }
+            if len(page.Responses) > 0 {
+                <ul>
+                    for _, response := range page.Responses {
+                        <li><strong>{ response.Name }</strong> · { response.Status } · { response.RespondedAt }
+                            if response.Status == "Em lista de espera" {
+                                <form method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button type="submit">Confirmar vaga</button></form>
+                            }
+                            if response.Status == "Vou" && response.CheckedInAt == "" {
+                                <form method="post" action={ "/admin/events/" + page.ID + "/check-in" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button type="submit">Registar presença</button></form>
+                            }
+                            if response.CheckedInAt != "" {
+                                <span> · Presença: { response.CheckedInAt }</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+}

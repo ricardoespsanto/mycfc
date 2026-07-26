@@ -16,13 +16,18 @@ import (
 type CurrentUserLookup interface {
 	GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error)
 	ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error)
+	ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error)
 }
 
 type CurrentUser struct {
-	ID         uuid.UUID
-	Name       string
-	IsAdmin    bool
-	Programmes map[string]bool
+	ID                 uuid.UUID
+	Name               string
+	IsAdmin            bool
+	Programmes         map[string]bool
+	CoachProgrammeIDs  map[uuid.UUID]bool
+	CoachTeamIDs       map[uuid.UUID]bool
+	CanManageEvents    bool
+	CanModerateContent bool
 }
 
 type Auth struct {
@@ -61,9 +66,28 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, IsAdmin: user.IsAdmin, Programmes: make(map[string]bool, len(programmes))}
+		grants, err := a.Users.ListActiveStaffGrantsForUser(r.Context(), id)
+		if err != nil {
+			a.System.InternalError(w, r)
+			return
+		}
+		current := CurrentUser{ID: user.ID, Name: user.Name, IsAdmin: user.IsAdmin, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
+		}
+		for _, grant := range grants {
+			switch grant.Capability {
+			case "COACH":
+				current.CanManageEvents = true
+				if grant.ProgrammeID != nil {
+					current.CoachProgrammeIDs[*grant.ProgrammeID] = true
+				}
+				if grant.TeamID != nil {
+					current.CoachTeamIDs[*grant.TeamID] = true
+				}
+			case "MODERATOR":
+				current.CanModerateContent = true
+			}
 		}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
 		ctx = httpx.WithUserID(ctx, current.ID.String())
@@ -104,6 +128,17 @@ func (a Auth) RequireAdmin(next http.Handler) http.Handler {
 		}
 		a.System.Forbidden(w, r)
 	})
+}
+
+func (a Auth) RequireEventStaff(next http.Handler) http.Handler {
+	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := currentUser(r.Context())
+		if user.IsAdmin || user.CanManageEvents {
+			next.ServeHTTP(w, r)
+			return
+		}
+		a.System.Forbidden(w, r)
+	}))
 }
 
 func (a Auth) RequireProgramme(programmes ...string) func(http.Handler) http.Handler {

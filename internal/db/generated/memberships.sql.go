@@ -226,6 +226,26 @@ func (q *Queries) GetProgrammeByCode(ctx context.Context, code string) (Programm
 	return i, err
 }
 
+const getTeamByID = `-- name: GetTeamByID :one
+SELECT id, season_id, programme_id, code, name, created_at
+FROM teams
+WHERE id = $1
+`
+
+func (q *Queries) GetTeamByID(ctx context.Context, id uuid.UUID) (Team, error) {
+	row := q.db.QueryRow(ctx, getTeamByID, id)
+	var i Team
+	err := row.Scan(
+		&i.ID,
+		&i.SeasonID,
+		&i.ProgrammeID,
+		&i.Code,
+		&i.Name,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listActiveMembershipProgrammeCodesForUser = `-- name: ListActiveMembershipProgrammeCodesForUser :many
 SELECT programme.code
 FROM user_memberships membership

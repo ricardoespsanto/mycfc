@@ -16,6 +16,7 @@ import (
 type currentUserLookup struct {
 	account    dbgen.GetActiveAccountByIDRow
 	programmes []string
+	grants     []dbgen.ListActiveStaffGrantsForUserRow
 	err        error
 }
 
@@ -24,6 +25,9 @@ func (l currentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbg
 }
 func (l currentUserLookup) ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error) {
 	return l.programmes, l.err
+}
+func (l currentUserLookup) ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error) {
+	return l.grants, l.err
 }
 
 func TestAuthLoadsDatabaseAccountInsteadOfSessionData(t *testing.T) {
@@ -57,6 +61,19 @@ func TestAuthGuardsAdminAndMembership(t *testing.T) {
 		t.Fatalf("programme status = %d", response.Code)
 	}
 }
+
+func TestAuthAllowsCoachEventStaffButNotAdmin(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true}, grants: []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "COACH", ProgrammeID: ptr(uuid.New())}}}, Sessions: scs.New()}
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), auth.Load(auth.RequireEventStaff(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))); response.Code != http.StatusNoContent {
+		t.Fatalf("event staff status = %d", response.Code)
+	}
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), auth.Load(auth.RequireAdmin(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("admin handler called") })))); response.Code != http.StatusForbidden {
+		t.Fatalf("admin status = %d", response.Code)
+	}
+}
+
+func ptr(id uuid.UUID) *uuid.UUID { return &id }
 
 func TestAuthDashboardSelection(t *testing.T) {
 	id := uuid.New()

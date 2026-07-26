@@ -5,11 +5,98 @@
 package dbgen
 
 import (
+	"database/sql/driver"
+	"fmt"
 	"net/netip"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type EventResponseStatus string
+
+const (
+	EventResponseStatusGoing      EventResponseStatus = "Going"
+	EventResponseStatusNotGoing   EventResponseStatus = "NotGoing"
+	EventResponseStatusWaitlisted EventResponseStatus = "Waitlisted"
+)
+
+func (e *EventResponseStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = EventResponseStatus(s)
+	case string:
+		*e = EventResponseStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for EventResponseStatus: %T", src)
+	}
+	return nil
+}
+
+type NullEventResponseStatus struct {
+	EventResponseStatus EventResponseStatus `json:"event_response_status"`
+	Valid               bool                `json:"valid"` // Valid is true if EventResponseStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullEventResponseStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.EventResponseStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.EventResponseStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullEventResponseStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.EventResponseStatus), nil
+}
+
+type StaffCapability string
+
+const (
+	StaffCapabilityCOACH     StaffCapability = "COACH"
+	StaffCapabilityMODERATOR StaffCapability = "MODERATOR"
+)
+
+func (e *StaffCapability) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = StaffCapability(s)
+	case string:
+		*e = StaffCapability(s)
+	default:
+		return fmt.Errorf("unsupported scan type for StaffCapability: %T", src)
+	}
+	return nil
+}
+
+type NullStaffCapability struct {
+	StaffCapability StaffCapability `json:"staff_capability"`
+	Valid           bool            `json:"valid"` // Valid is true if StaffCapability is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullStaffCapability) Scan(value interface{}) error {
+	if value == nil {
+		ns.StaffCapability, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.StaffCapability.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullStaffCapability) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.StaffCapability), nil
+}
 
 type CompetitionCategory struct {
 	ID               uuid.UUID          `json:"id"`
@@ -46,6 +133,39 @@ type Equipment struct {
 	Notes     string             `json:"notes"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Event struct {
+	ID               uuid.UUID          `json:"id"`
+	Title            string             `json:"title"`
+	Description      string             `json:"description"`
+	StartsAt         pgtype.Timestamptz `json:"starts_at"`
+	EndsAt           pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
+	Capacity         *int32             `json:"capacity"`
+	CreatedByID      uuid.UUID          `json:"created_by_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EventAudience struct {
+	EventID     uuid.UUID `json:"event_id"`
+	ProgrammeID uuid.UUID `json:"programme_id"`
+}
+
+type EventResponse struct {
+	EventID       uuid.UUID           `json:"event_id"`
+	UserID        uuid.UUID           `json:"user_id"`
+	Status        EventResponseStatus `json:"status"`
+	RespondedByID uuid.UUID           `json:"responded_by_id"`
+	RespondedAt   pgtype.Timestamptz  `json:"responded_at"`
+	CheckedInAt   pgtype.Timestamptz  `json:"checked_in_at"`
+	CheckedInByID *uuid.UUID          `json:"checked_in_by_id"`
+}
+
+type EventTeamAudience struct {
+	EventID uuid.UUID `json:"event_id"`
+	TeamID  uuid.UUID `json:"team_id"`
 }
 
 type MaintenanceTask struct {
@@ -137,6 +257,28 @@ type Session struct {
 	Token  string             `json:"token"`
 	Data   []byte             `json:"data"`
 	Expiry pgtype.Timestamptz `json:"expiry"`
+}
+
+type StaffGrant struct {
+	ID           uuid.UUID          `json:"id"`
+	UserID       uuid.UUID          `json:"user_id"`
+	Capability   StaffCapability    `json:"capability"`
+	ProgrammeID  *uuid.UUID         `json:"programme_id"`
+	TeamID       *uuid.UUID         `json:"team_id"`
+	GrantedByID  uuid.UUID          `json:"granted_by_id"`
+	GrantedAt    pgtype.Timestamptz `json:"granted_at"`
+	RevokedByID  *uuid.UUID         `json:"revoked_by_id"`
+	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
+	RevokeReason *string            `json:"revoke_reason"`
+}
+
+type StaffGrantAuditEvent struct {
+	ID           uuid.UUID          `json:"id"`
+	StaffGrantID uuid.UUID          `json:"staff_grant_id"`
+	Action       string             `json:"action"`
+	ActorUserID  uuid.UUID          `json:"actor_user_id"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+	Reason       *string            `json:"reason"`
 }
 
 type Team struct {

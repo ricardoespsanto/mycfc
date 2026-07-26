@@ -22,9 +22,18 @@ type fakeAdminStore struct {
 	password    dbgen.SetUserPasswordHashParams
 	deactivated uuid.UUID
 	admin       bool
+	accounts    map[string]dbgen.GetAccountByEmailRow
+	programme   dbgen.Programme
+	team        dbgen.Team
+	staffGrant  dbgen.GrantStaffCapabilityParams
+	revocation  dbgen.RevokeStaffGrantParams
+	revoked     int64
 }
 
-func (s *fakeAdminStore) GetAccountByEmail(context.Context, *string) (dbgen.GetAccountByEmailRow, error) {
+func (s *fakeAdminStore) GetAccountByEmail(_ context.Context, email *string) (dbgen.GetAccountByEmailRow, error) {
+	if account, ok := s.accounts[*email]; ok {
+		return account, nil
+	}
 	return dbgen.GetAccountByEmailRow{ID: s.user.ID, IsActive: s.user.IsActive, IsAdmin: s.admin}, s.lookupErr
 }
 func (s *fakeAdminStore) GrantPlatformRoleByCode(_ context.Context, input dbgen.GrantPlatformRoleByCodeParams) error {
@@ -42,6 +51,20 @@ func (s *fakeAdminStore) SetUserPasswordHash(_ context.Context, input dbgen.SetU
 func (s *fakeAdminStore) DeactivateUser(_ context.Context, id uuid.UUID) error {
 	s.deactivated = id
 	return nil
+}
+func (s *fakeAdminStore) GetProgrammeByCode(context.Context, string) (dbgen.Programme, error) {
+	return s.programme, nil
+}
+func (s *fakeAdminStore) GetTeamByID(context.Context, uuid.UUID) (dbgen.Team, error) {
+	return s.team, nil
+}
+func (s *fakeAdminStore) GrantStaffCapability(_ context.Context, input dbgen.GrantStaffCapabilityParams) (dbgen.GrantStaffCapabilityRow, error) {
+	s.staffGrant = input
+	return dbgen.GrantStaffCapabilityRow{ID: uuid.New()}, nil
+}
+func (s *fakeAdminStore) RevokeStaffGrant(_ context.Context, input dbgen.RevokeStaffGrantParams) (int64, error) {
+	s.revocation = input
+	return s.revoked, nil
 }
 
 func TestCreateAdminUsesValidatedInputAndPasswordFile(t *testing.T) {
@@ -109,5 +132,70 @@ func TestReadPasswordRejectsNonTerminalWithoutFile(t *testing.T) {
 	defer writer.Close()
 	if _, err := readPassword(reader, ""); err == nil || !strings.Contains(err.Error(), "non-terminal") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGrantStaffValidatesScopesAndActor(t *testing.T) {
+	targetID, actorID, programmeID, teamID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{
+		"coach@example.com": {ID: targetID, IsActive: true},
+		"admin@example.com": {ID: actorID, IsActive: true, IsAdmin: true},
+	}, programme: dbgen.Programme{ID: programmeID}, team: dbgen.Team{ID: teamID}}
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--programme", "Competition"}, store, os.Stdin, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.staffGrant.UserID != targetID || store.staffGrant.GrantedByID != actorID || store.staffGrant.Capability != dbgen.StaffCapabilityCOACH || store.staffGrant.ProgrammeID == nil || *store.staffGrant.ProgrammeID != programmeID || store.staffGrant.TeamID != nil {
+		t.Fatalf("grant = %+v", store.staffGrant)
+	}
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--programme", "Competition", "--team-id", teamID.String()}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("mixed coach scope error = %v", err)
+	}
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "moderator", "--programme", "Competition"}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "cannot have") {
+		t.Fatalf("moderator scope error = %v", err)
+	}
+	store.accounts["admin@example.com"] = dbgen.GetAccountByEmailRow{ID: actorID, IsActive: true}
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "moderator"}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "active administrator") {
+		t.Fatalf("non-admin actor error = %v", err)
+	}
+}
+
+func TestGrantStaffSupportsTeamAndModerator(t *testing.T) {
+	targetID, actorID, teamID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{
+		"coach@example.com": {ID: targetID, IsActive: true},
+		"admin@example.com": {ID: actorID, IsActive: true, IsAdmin: true},
+	}, team: dbgen.Team{ID: teamID}}
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--team-id", teamID.String()}, store, os.Stdin, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.staffGrant.TeamID == nil || *store.staffGrant.TeamID != teamID || store.staffGrant.ProgrammeID != nil {
+		t.Fatalf("team grant = %+v", store.staffGrant)
+	}
+	if err := run(context.Background(), []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "moderator"}, store, os.Stdin, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.staffGrant.Capability != dbgen.StaffCapabilityMODERATOR || store.staffGrant.TeamID != nil || store.staffGrant.ProgrammeID != nil {
+		t.Fatalf("moderator grant = %+v", store.staffGrant)
+	}
+}
+
+func TestRevokeStaffRequiresActiveGrantAndReason(t *testing.T) {
+	actorID, grantID := uuid.New(), uuid.New()
+	store := &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": {ID: actorID, IsActive: true, IsAdmin: true}}, revoked: 1}
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"revoke-staff", "--grant-id", grantID.String(), "--actor-email", "admin@example.com", "--reason", "  Alteração de equipa  "}, store, os.Stdin, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.revocation.ID != grantID || store.revocation.RevokedByID == nil || *store.revocation.RevokedByID != actorID || store.revocation.RevokeReason == nil || *store.revocation.RevokeReason != "Alteração de equipa" {
+		t.Fatalf("revocation = %+v", store.revocation)
+	}
+	if err := run(context.Background(), []string{"revoke-staff", "--grant-id", grantID.String(), "--actor-email", "admin@example.com", "--reason", " "}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("empty reason error = %v", err)
+	}
+	store.revoked = 0
+	if err := run(context.Background(), []string{"revoke-staff", "--grant-id", grantID.String(), "--actor-email", "admin@example.com", "--reason", "No longer needed"}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "active staff grant") {
+		t.Fatalf("inactive grant error = %v", err)
 	}
 }
