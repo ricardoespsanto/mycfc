@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -51,11 +52,13 @@ type Announcements struct {
 	Location *time.Location
 }
 type announcementForm struct {
-	Title, Body, ExpiresAt string
-	Targets                map[dbgen.AnnouncementTargetType][]uuid.UUID
-	Guardian               bool
-	Errors                 validation.FieldErrors
+	Title, Body, ExpiresAt, DocumentURL, DocumentSource, ReviewedOn string
+	Targets                                                         map[dbgen.AnnouncementTargetType][]uuid.UUID
+	Guardian                                                        bool
+	Errors                                                          validation.FieldErrors
 }
+
+type officialDocument struct{ URL, Source, ReviewedOn string }
 
 func (h Announcements) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, announcementForm{Targets: map[dbgen.AnnouncementTargetType][]uuid.UUID{}, Errors: validation.FieldErrors{}})
@@ -83,7 +86,7 @@ func (h Announcements) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	err := db.WithinTx(ctx, h.DB, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
-		a, err := q.CreateAnnouncement(ctx, dbgen.CreateAnnouncementParams{Title: form.Title, Body: form.Body, AuthorID: user.ID, ExpiresAt: expiry})
+		a, err := q.CreateAnnouncement(ctx, dbgen.CreateAnnouncementParams{Title: form.Title, Body: documentBody(form), AuthorID: user.ID, ExpiresAt: expiry})
 		if err != nil {
 			return err
 		}
@@ -173,7 +176,11 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 			if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: id, UserID: user.ID}); err == nil && announcementReadOnDetail() {
 				_ = dbgen.New(h.DB).MarkAnnouncementRead(ctx, dbgen.MarkAnnouncementReadParams{AnnouncementID: id, UserID: user.ID})
 			}
-			page := pages.AnnouncementDetailPage{Title: item.Title, Body: item.Body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
+			body, document := parseOfficialDocument(item.Body)
+			page := pages.AnnouncementDetailPage{Title: item.Title, Body: body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
+			if document != nil {
+				page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_ = pages.AnnouncementDetail(page).Render(r.Context(), w)
 			return
@@ -182,7 +189,7 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	h.System.NotFound(w, r)
 }
 func (h Announcements) validate(r *http.Request) announcementForm {
-	f := announcementForm{Title: strings.TrimSpace(r.PostForm.Get("title")), Body: strings.TrimSpace(r.PostForm.Get("body")), ExpiresAt: strings.TrimSpace(r.PostForm.Get("expires_at")), Targets: map[dbgen.AnnouncementTargetType][]uuid.UUID{}, Guardian: r.PostForm.Get("guardian") == "true", Errors: validation.FieldErrors{}}
+	f := announcementForm{Title: strings.TrimSpace(r.PostForm.Get("title")), Body: strings.TrimSpace(r.PostForm.Get("body")), ExpiresAt: strings.TrimSpace(r.PostForm.Get("expires_at")), DocumentURL: strings.TrimSpace(r.PostForm.Get("document_url")), DocumentSource: strings.TrimSpace(r.PostForm.Get("document_source")), ReviewedOn: strings.TrimSpace(r.PostForm.Get("reviewed_on")), Targets: map[dbgen.AnnouncementTargetType][]uuid.UUID{}, Guardian: r.PostForm.Get("guardian") == "true", Errors: validation.FieldErrors{}}
 	if n := utf8.RuneCountInString(f.Title); n < 2 || n > 180 {
 		f.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
 	}
@@ -192,6 +199,17 @@ func (h Announcements) validate(r *http.Request) announcementForm {
 	if f.ExpiresAt != "" {
 		if _, err := time.ParseInLocation("2006-01-02T15:04", f.ExpiresAt, h.location()); err != nil {
 			f.Errors.Add("expires_at", "Introduza uma data e hora válidas.")
+		}
+	}
+	if f.DocumentURL != "" || f.DocumentSource != "" || f.ReviewedOn != "" {
+		if !validDocumentURL(f.DocumentURL) {
+			f.Errors.Add("document_url", "Indique uma ligação HTTPS válida para o documento.")
+		}
+		if n := utf8.RuneCountInString(f.DocumentSource); n < 2 || n > 180 {
+			f.Errors.Add("document_source", "Indique a fonte oficial (entre 2 e 180 caracteres).")
+		}
+		if reviewed, err := time.Parse("2006-01-02", f.ReviewedOn); err != nil || reviewed.After(time.Now().UTC()) {
+			f.Errors.Add("reviewed_on", "Indique uma data de revisão válida, não futura.")
 		}
 	}
 	for name, kind := range map[string]dbgen.AnnouncementTargetType{"programme_id": dbgen.AnnouncementTargetTypePROGRAMME, "team_id": dbgen.AnnouncementTargetTypeTEAM, "category_id": dbgen.AnnouncementTargetTypeCATEGORY, "modality_id": dbgen.AnnouncementTargetTypeMODALITY, "event_id": dbgen.AnnouncementTargetTypeEVENT} {
@@ -245,7 +263,7 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
 	for _, item := range visible {
 		if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: item.ID, UserID: user.ID}); err != nil {
 			h.System.InternalError(w, r)
@@ -278,7 +296,18 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 			}
 		}
 		for _, x := range e {
-			page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
+			if user.IsAdmin {
+				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
+				continue
+			}
+			allowed, err := h.Store.CanCoachManageEvent(ctx, dbgen.CanCoachManageEventParams{EventID: x.ID, UserID: user.ID})
+			if err != nil {
+				h.System.InternalError(w, r)
+				return
+			}
+			if allowed {
+				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
+			}
 		}
 		authored, err := h.Store.ListAnnouncementsForAuthor(ctx, dbgen.ListAnnouncementsForAuthorParams{AuthorID: user.ID, RowLimit: 100})
 		if err == nil {
@@ -291,6 +320,36 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Announcements(page).Render(r.Context(), w)
+}
+
+const documentMarker = "[DOCUMENTO_OFICIAL]"
+
+func validDocumentURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
+}
+
+func documentBody(f announcementForm) string {
+	if f.DocumentURL == "" {
+		return f.Body
+	}
+	return documentMarker + "\nLigação: " + f.DocumentURL + "\nFonte: " + f.DocumentSource + "\nRevisto em: " + f.ReviewedOn + "\n[/DOCUMENTO_OFICIAL]\n\n" + f.Body
+}
+
+func parseOfficialDocument(body string) (string, *officialDocument) {
+	parts := strings.SplitN(body, "\n\n", 2)
+	if len(parts) != 2 {
+		return body, nil
+	}
+	lines := strings.Split(parts[0], "\n")
+	if len(lines) != 5 || lines[0] != documentMarker || lines[4] != "[/DOCUMENTO_OFICIAL]" {
+		return body, nil
+	}
+	document := &officialDocument{URL: strings.TrimPrefix(lines[1], "Ligação: "), Source: strings.TrimPrefix(lines[2], "Fonte: "), ReviewedOn: strings.TrimPrefix(lines[3], "Revisto em: ")}
+	if !validDocumentURL(document.URL) || document.Source == "" || document.ReviewedOn == "" {
+		return body, nil
+	}
+	return parts[1], document
 }
 func (h Announcements) meta(r *http.Request, u CurrentUser, path, title string) components.PageMeta {
 	m := h.PageMeta

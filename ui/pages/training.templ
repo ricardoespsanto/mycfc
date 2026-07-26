@@ -1,0 +1,78 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type TrainingChoice struct { ID, Name string }
+type TrainingSession struct { ID, Plan, Title, Detail, When, Modality string; Completed bool }
+type CompetitionDocument struct { Title, URL, Source, ReviewedOn, Context string }
+type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; Programmes, Teams, Modalities, Events, Athletes, Plans []TrainingChoice }
+
+templ Training(page TrainingPage) { @components.Base(page.Meta, trainingContent(page)) }
+templ trainingContent(page TrainingPage) {
+    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Treinos e competição</h1><p>Consulte as sessões atribuídas e os documentos oficiais aplicáveis.</p></section>
+    <section class="dashboard-card"><h2>As minhas sessões</h2>
+        if len(page.Sessions) == 0 {
+            <p>Ainda não tem sessões atribuídas.</p>
+        }
+        for _, session := range page.Sessions {
+            <article><h3>{ session.Plan }: { session.Title }</h3><p>{ session.When }
+                if session.Modality != "" {
+                    · { session.Modality }
+                }
+            </p><p>{ session.Detail }</p>
+            if session.Completed {
+                <p><strong>Concluída</strong></p>
+            } else {
+                <form method="post" action="/treinos/sessoes/concluir">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><button type="submit">Marcar como concluída</button></form>
+            }
+            </article>
+        }
+    </section>
+    <section class="dashboard-card"><h2>Cadernos de prova e documentos oficiais</h2>
+        if len(page.Documents) == 0 {
+            <p>Não existem documentos aplicáveis.</p>
+        }
+        for _, document := range page.Documents {
+            <article><h3><a href={ document.URL } target="_blank" rel="noopener noreferrer">{ document.Title }</a></h3><p>{ document.Context }</p><p>Fonte: { document.Source } · Revisto em: { document.ReviewedOn }</p></article>
+        }
+    </section>
+    if page.CanManage {
+        @trainingAuthoring(page)
+    }
+}
+templ trainingAuthoring(page TrainingPage) {
+    <section class="dashboard-card"><h2>Criar plano</h2><form method="post" action="/treinos/planos">@page.CSRFField<label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label>@trainingScopeChoices(page)<button type="submit">Criar plano</button></form></section>
+    <section class="dashboard-card"><h2>Criar sessão</h2><form method="post" action="/treinos/sessoes">@page.CSRFField
+        <label>Plano <select name="plan_id" required><option value="">Selecione</option>
+            for _, item := range page.Plans {
+                <option value={ item.ID }>{ item.Name }</option>
+            }
+        </select></label><label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label><label>Início <input name="starts_at" type="datetime-local" required/></label><label>Fim <input name="ends_at" type="datetime-local" required/></label><label>Modalidade <select name="modality_id"><option value="">Sem modalidade</option>
+            for _, item := range page.Modalities {
+                <option value={ item.ID }>{ item.Name }</option>
+            }
+        </select></label><button type="submit">Criar sessão</button></form></section>
+    <section class="dashboard-card"><h2>Atribuir sessão</h2><form method="post" action="/treinos/atribuicoes">@page.CSRFField<label>ID da sessão <input name="session_id" required/></label><label>Atleta <select name="athlete_id" required><option value="">Selecione</option>
+        for _, item := range page.Athletes {
+            <option value={ item.ID }>{ item.Name }</option>
+        }
+    </select></label><button type="submit">Atribuir</button></form></section>
+    <section class="dashboard-card"><h2>Publicar documento de competição</h2><form method="post" action="/treinos/documentos">@page.CSRFField<label>Título <input name="title" required/></label><label>Ligação HTTPS <input name="url" type="url" required/></label><label>Fonte oficial <input name="source" required/></label><label>Revisto em <input name="reviewed_on" type="date" required/></label><label>Evento <select name="event_id"><option value="">Sem evento</option>
+        for _, item := range page.Events {
+            <option value={ item.ID }>{ item.Name }</option>
+        }
+    </select></label><label>Modalidade <select name="modality_id"><option value="">Sem modalidade</option>
+        for _, item := range page.Modalities {
+            <option value={ item.ID }>{ item.Name }</option>
+        }
+    </select></label><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page)<button type="submit">Publicar documento</button></form></section>
+}
+templ trainingScopeChoices(page TrainingPage) { <label>Programa <select name="programme_id"><option value="">Sem programa</option>
+    for _, item := range page.Programmes {
+        <option value={ item.ID }>{ item.Name }</option>
+    }
+</select></label><label>Equipa <select name="team_id"><option value="">Sem equipa</option>
+    for _, item := range page.Teams {
+        <option value={ item.ID }>{ item.Name }</option>
+    }
+</select></label> }

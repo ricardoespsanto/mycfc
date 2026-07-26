@@ -81,7 +81,7 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	queries := dbgen.New(pool)
 	guardianEmail := "guardian-" + uuid.NewString() + "@example.test"
 	guardian, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{
-		Name: "Guardião de integração", Email: &guardianEmail, PasswordHash: stringPtr("hash"),
+		Name: "Guardião de integração", Email: &guardianEmail, PasswordHash: integrationStringPtr("hash"),
 		DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
 	})
 	if err != nil {
@@ -141,11 +141,11 @@ func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	queries := dbgen.New(pool)
 	guardianEmail := "credential-guardian-" + uuid.NewString() + "@example.test"
 	actorEmail := "credential-admin-" + uuid.NewString() + "@example.test"
-	guardian, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Guardião de credencial", Email: &guardianEmail, PasswordHash: stringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	guardian, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Guardião de credencial", Email: &guardianEmail, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Administrador de credencial", Email: &actorEmail, PasswordHash: stringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	actor, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Administrador de credencial", Email: &actorEmail, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,4 +190,4 @@ func integrationPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 
 func ptrAddr(value netip.Addr) *netip.Addr { return &value }
 
-func stringPtr(value string) *string { return &value }
+func integrationStringPtr(value string) *string { return &value }

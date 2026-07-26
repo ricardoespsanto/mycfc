@@ -236,6 +236,21 @@ type CompetitionCategory struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
+type CompetitionDocument struct {
+	ID          uuid.UUID          `json:"id"`
+	Title       string             `json:"title"`
+	Url         string             `json:"url"`
+	Source      string             `json:"source"`
+	ReviewedOn  pgtype.Date        `json:"reviewed_on"`
+	EventID     *uuid.UUID         `json:"event_id"`
+	ModalityID  *uuid.UUID         `json:"modality_id"`
+	ProgrammeID *uuid.UUID         `json:"programme_id"`
+	TeamID      *uuid.UUID         `json:"team_id"`
+	AuthorID    uuid.UUID          `json:"author_id"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type ConsentForm struct {
 	ID              uuid.UUID          `json:"id"`
 	UserID          uuid.UUID          `json:"user_id"`
@@ -433,6 +448,39 @@ type TrainingLog struct {
 	DistanceMetres  int32              `json:"distance_metres"`
 	Notes           string             `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type TrainingPlan struct {
+	ID          uuid.UUID          `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	ProgrammeID *uuid.UUID         `json:"programme_id"`
+	TeamID      *uuid.UUID         `json:"team_id"`
+	CreatedByID uuid.UUID          `json:"created_by_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingSession struct {
+	ID          uuid.UUID          `json:"id"`
+	PlanID      uuid.UUID          `json:"plan_id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	StartsAt    pgtype.Timestamptz `json:"starts_at"`
+	EndsAt      pgtype.Timestamptz `json:"ends_at"`
+	ModalityID  *uuid.UUID         `json:"modality_id"`
+	CreatedByID uuid.UUID          `json:"created_by_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingSessionAssignment struct {
+	SessionID     uuid.UUID          `json:"session_id"`
+	UserID        uuid.UUID          `json:"user_id"`
+	AssignedByID  uuid.UUID          `json:"assigned_by_id"`
+	AssignedAt    pgtype.Timestamptz `json:"assigned_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	CompletedByID *uuid.UUID         `json:"completed_by_id"`
 }
 
 type User struct {

@@ -10,12 +10,12 @@ type AnnouncementItem struct { ID, Title, PublishedAt string; Unread bool }
 type AuthoredAnnouncement struct { ID, Title, Status string }
 type AnnouncementForm struct {
     CSRFField templ.Component
-    Title, Body, ExpiresAt string
+    Title, Body, ExpiresAt, DocumentURL, DocumentSource, ReviewedOn string
     Programmes, Teams, Categories, Modalities, Events []AnnouncementAudience
     Errors validation.FieldErrors
 }
 type AnnouncementsPage struct { Meta components.PageMeta; CanManage bool; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
-type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt string }
+type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt, DocumentURL, DocumentSource, DocumentReviewedOn string }
 
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
@@ -58,8 +58,13 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
     <section class="dashboard-card"><h2>Criar aviso</h2><form method="post" action="/admin/announcements">@form.CSRFField
         <label for="announcement-title">Título</label><input id="announcement-title" name="title" value={ form.Title } required/>@components.FieldErrorMessage("title", form.Errors["title"])
         <label for="announcement-body">Mensagem</label><textarea id="announcement-body" name="body" required>{ form.Body }</textarea>@components.FieldErrorMessage("body", form.Errors["body"])
+        <fieldset><legend>Caderno de prova ou documento oficial (opcional)</legend><p>Publique apenas uma ligação HTTPS revista. A fonte e a data de revisão ficam registadas no aviso.</p>
+            <label for="announcement-document-url">Ligação para PDF/documento</label><input id="announcement-document-url" name="document_url" type="url" inputmode="url" value={ form.DocumentURL }/>@components.FieldErrorMessage("document_url", form.Errors["document_url"])
+            <label for="announcement-document-source">Fonte oficial</label><input id="announcement-document-source" name="document_source" value={ form.DocumentSource }/>@components.FieldErrorMessage("document_source", form.Errors["document_source"])
+            <label for="announcement-reviewed-on">Revisto em</label><input id="announcement-reviewed-on" name="reviewed_on" type="date" value={ form.ReviewedOn }/>@components.FieldErrorMessage("reviewed_on", form.Errors["reviewed_on"])
+        </fieldset>
         <label for="announcement-expires">Expira em (opcional)</label><input id="announcement-expires" type="datetime-local" name="expires_at" value={ form.ExpiresAt }/>@components.FieldErrorMessage("expires_at", form.Errors["expires_at"])
-        <fieldset><legend>Destinatários</legend><p>Os públicos selecionados somam-se. Treinadores só podem usar os seus programas, equipas e eventos.</p>
+        <fieldset><legend>Contexto e destinatários</legend><p>Os públicos selecionados somam-se. Selecione o evento de competição e/ou a modalidade aplicável. Treinadores só podem usar os seus programas, equipas e eventos.</p>
             <label><input type="checkbox" name="guardian" value="true"/> Encarregados de educação</label>
             for _, item := range form.Programmes {
                 <label><input type="checkbox" name="programme_id" value={ item.ID }/> { item.Name }</label>
@@ -81,4 +86,9 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
     </form></section>
 }
 templ AnnouncementDetail(page AnnouncementDetailPage) { @components.Base(page.Meta, announcementDetailContent(page)) }
-templ announcementDetailContent(page AnnouncementDetailPage) { <section class="dashboard-hero"><p class="eyebrow">Aviso · { page.PublishedAt }</p><h1>{ page.Title }</h1><p>{ page.Body }</p></section> }
+templ announcementDetailContent(page AnnouncementDetailPage) {
+    <section class="dashboard-hero"><p class="eyebrow">Aviso · { page.PublishedAt }</p><h1>{ page.Title }</h1><p>{ page.Body }</p></section>
+    if page.DocumentURL != "" {
+        <section class="dashboard-card"><h2>Documento oficial</h2><p><a href={ page.DocumentURL } target="_blank" rel="noopener noreferrer">Abrir caderno de prova ou documento</a></p><p>Fonte: { page.DocumentSource } · Revisto em: { page.DocumentReviewedOn }</p></section>
+    }
+}

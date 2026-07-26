@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
@@ -12,6 +15,36 @@ type announcementStoreFake struct{}
 
 func (announcementStoreFake) ListAnnouncementProgrammes(context.Context) ([]dbgen.ListAnnouncementProgrammesRow, error) {
 	return nil, nil
+}
+
+func TestAnnouncementDocumentValidationAndRoundTrip(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/admin/announcements", strings.NewReader("title=Caderno&body=Consulte+o+documento.&document_url=https%3A%2F%2Fexample.org%2Fcaderno.pdf&document_source=Federa%C3%A7%C3%A3o+Portuguesa+de+Canoagem&reviewed_on=2026-07-26"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form := (Announcements{}).validate(request)
+	if !form.Errors.Empty() {
+		t.Fatalf("unexpected validation errors: %#v", form.Errors)
+	}
+	body, document := parseOfficialDocument(documentBody(form))
+	if body != form.Body || document == nil || document.URL != form.DocumentURL || document.Source != form.DocumentSource || document.ReviewedOn != form.ReviewedOn {
+		t.Fatalf("document round trip failed: body=%q document=%#v", body, document)
+	}
+}
+
+func TestAnnouncementDocumentRejectsUnsafeOrIncompleteMetadata(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/admin/announcements", strings.NewReader("title=Caderno&body=Consulte+o+documento.&document_url=http%3A%2F%2Fexample.org%2Fcaderno.pdf&document_source=&reviewed_on=2999-01-01"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form := (Announcements{}).validate(request)
+	for _, field := range []string{"document_url", "document_source", "reviewed_on"} {
+		if form.Errors[field] == "" {
+			t.Errorf("expected error for %s", field)
+		}
+	}
 }
 func (announcementStoreFake) ListAnnouncementTeams(context.Context) ([]dbgen.ListAnnouncementTeamsRow, error) {
 	return nil, nil
