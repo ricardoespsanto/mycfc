@@ -588,7 +588,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationItem {
 		items = append(items, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
 	}
 	if user.IsAdmin {
-		items = append(items, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
+		items = append(items, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
 	}
 	return items
 }

@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, members handlers.Members) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, members handlers.Members, news handlers.News) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -55,6 +55,10 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/membros/{id}/inscricao", auth.RequireAdmin(http.HandlerFunc(members.Membership)))
 	mux.Handle("POST /admin/membros/{id}/desativar", auth.RequireAdmin(http.HandlerFunc(members.Deactivate)))
 	mux.Handle("POST /admin/membros/{id}/credencial-menor", auth.RequireAdmin(http.HandlerFunc(members.IssueMinorCredential)))
+	mux.Handle("GET /admin/noticias", auth.RequireAdmin(http.HandlerFunc(news.Index)))
+	mux.Handle("POST /admin/noticias", auth.RequireAdmin(http.HandlerFunc(news.Create)))
+	mux.Handle("POST /admin/noticias/{id}/publicar", auth.RequireAdmin(http.HandlerFunc(news.Publish)))
+	mux.Handle("POST /admin/noticias/{id}/expirar", auth.RequireAdmin(http.HandlerFunc(news.Expire)))
 	mux.Handle("POST /repairs", auth.RequireAuthenticated(http.HandlerFunc(repair.Post)))
 	mux.Handle("POST /guardian/add-dependent", auth.RequireGuardian(http.HandlerFunc(dashboard.AddDependent)))
 	mux.Handle("GET /events", auth.RequireAuthenticated(http.HandlerFunc(events.Index)))

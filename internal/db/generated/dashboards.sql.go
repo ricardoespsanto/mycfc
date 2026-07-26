@@ -44,6 +44,90 @@ func (q *Queries) CountEquipmentByStatus(ctx context.Context) ([]CountEquipmentB
 	return items, nil
 }
 
+const createNews = `-- name: CreateNews :one
+INSERT INTO news_items (title_pt, summary_pt, url, published_at)
+VALUES ($1, $2, $3, $4)
+RETURNING id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
+`
+
+type CreateNewsParams struct {
+	TitlePt     string             `json:"title_pt"`
+	SummaryPt   string             `json:"summary_pt"`
+	Url         *string            `json:"url"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) CreateNews(ctx context.Context, arg CreateNewsParams) (NewsItem, error) {
+	row := q.db.QueryRow(ctx, createNews,
+		arg.TitlePt,
+		arg.SummaryPt,
+		arg.Url,
+		arg.PublishedAt,
+	)
+	var i NewsItem
+	err := row.Scan(
+		&i.ID,
+		&i.TitlePt,
+		&i.SummaryPt,
+		&i.Url,
+		&i.PublishedAt,
+		&i.IsPublished,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const expireNews = `-- name: ExpireNews :execrows
+UPDATE news_items
+SET is_published = false, updated_at = now()
+WHERE id = $1 AND is_published = true
+`
+
+func (q *Queries) ExpireNews(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, expireNews, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listNewsForAdmin = `-- name: ListNewsForAdmin :many
+SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
+FROM news_items
+ORDER BY published_at DESC, id DESC
+LIMIT $1
+`
+
+func (q *Queries) ListNewsForAdmin(ctx context.Context, rowLimit int32) ([]NewsItem, error) {
+	rows, err := q.db.Query(ctx, listNewsForAdmin, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NewsItem{}
+	for rows.Next() {
+		var i NewsItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.TitlePt,
+			&i.SummaryPt,
+			&i.Url,
+			&i.PublishedAt,
+			&i.IsPublished,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublishedNews = `-- name: ListPublishedNews :many
 SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
 FROM news_items
@@ -244,4 +328,18 @@ func (q *Queries) ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingM
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishNews = `-- name: PublishNews :execrows
+UPDATE news_items
+SET is_published = true, updated_at = now()
+WHERE id = $1 AND is_published = false
+`
+
+func (q *Queries) PublishNews(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, publishNews, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

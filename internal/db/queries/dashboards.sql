@@ -22,6 +22,27 @@ WHERE is_published = true
 ORDER BY published_at DESC, id DESC
 LIMIT sqlc.arg(row_limit);
 
+-- name: ListNewsForAdmin :many
+SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
+FROM news_items
+ORDER BY published_at DESC, id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: CreateNews :one
+INSERT INTO news_items (title_pt, summary_pt, url, published_at)
+VALUES (sqlc.arg(title_pt), sqlc.arg(summary_pt), sqlc.arg(url), sqlc.arg(published_at))
+RETURNING id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at;
+
+-- name: PublishNews :execrows
+UPDATE news_items
+SET is_published = true, updated_at = now()
+WHERE id = sqlc.arg(id) AND is_published = false;
+
+-- name: ExpireNews :execrows
+UPDATE news_items
+SET is_published = false, updated_at = now()
+WHERE id = sqlc.arg(id) AND is_published = true;
+
 -- name: CountEquipmentByStatus :many
 SELECT status, count(*)::bigint AS total
 FROM equipment

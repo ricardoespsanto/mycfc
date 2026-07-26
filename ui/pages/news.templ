@@ -1,0 +1,40 @@
+package pages
+
+import (
+    "github.com/cfcoimbra/mycfc/internal/validation"
+    "github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type NewsItem struct { ID, Title, PublishedAt string; Published bool }
+type NewsForm struct { CSRFField templ.Component; Title, Summary, URL, PublishedAt string; Errors validation.FieldErrors }
+type NewsPage struct { Meta components.PageMeta; Items []NewsItem; Form NewsForm }
+
+templ News(page NewsPage) { @components.Base(page.Meta, newsContent(page)) }
+templ newsContent(page NewsPage) {
+    <section class="dashboard-hero"><p class="eyebrow">Operações</p><h1>Notícias</h1><p>Prepare notícias do clube e publique-as na data definida.</p></section>
+    <section class="dashboard-card"><h2>Criar notícia</h2><form method="post" action="/admin/noticias">@page.Form.CSRFField
+        <label for="news-title">Título</label><input id="news-title" name="title" value={ page.Form.Title } required/>@components.FieldErrorMessage("title", page.Form.Errors["title"])
+        <label for="news-summary">Resumo</label><textarea id="news-summary" name="summary" required>{ page.Form.Summary }</textarea>@components.FieldErrorMessage("summary", page.Form.Errors["summary"])
+        <label for="news-url">Ligação HTTPS (opcional)</label><input id="news-url" type="url" name="url" value={ page.Form.URL }/>@components.FieldErrorMessage("url", page.Form.Errors["url"])
+        <label for="news-published-at">Publicar em</label><input id="news-published-at" type="datetime-local" name="published_at" value={ page.Form.PublishedAt } required/>@components.FieldErrorMessage("published_at", page.Form.Errors["published_at"])
+        <button type="submit">Guardar rascunho</button></form></section>
+    <section class="dashboard-card"><h2>Notícias do clube</h2>
+        if len(page.Items) == 0 {
+            <p>Ainda não existem notícias.</p>
+        }
+        if len(page.Items) > 0 {
+            <ul>
+            for _, item := range page.Items {
+                <li>{ item.Title } · { item.PublishedAt }
+                if item.Published {
+                    <strong> · publicada</strong><form method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField<button type="submit">Expirar</button></form>
+                }
+                if !item.Published {
+                    <strong> · rascunho</strong><form method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField<button type="submit">Publicar</button></form>
+                }
+                </li>
+            }
+            </ul>
+        }
+    </section>
+}
