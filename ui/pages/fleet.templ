@@ -20,8 +20,8 @@ type FleetPage struct {
 
 type FleetStatusCount struct { Status string; Total int64 }
 type FleetEquipment struct { AssetTag, Name, Type, Status string }
-type FleetRepair struct { Equipment, Description, Status, ReportedAt, PhotoURL, PhotoUnavailable string }
-type FleetMaintenance struct { Equipment, Description, Status, ScheduledFor string }
+type FleetRepair struct { ID, Equipment, Description, Status, ReportedAt, PhotoURL, PhotoUnavailable, ActionError string }
+type FleetMaintenance struct { ID, Equipment, Description, Status, ScheduledFor, ActionError string }
 type FleetMaintenanceForm struct {
 	CSRFField templ.Component
 	Equipment []components.RepairEquipment
@@ -69,6 +69,7 @@ templ fleetContent(page FleetPage) {
 						if repair.PhotoUnavailable != "" {
 							<br/><span>{ repair.PhotoUnavailable }</span>
 						}
+						@RepairStatusForm(repair, page.Meta.CSRFField)
 					</li>
 				}
 			</ul>
@@ -81,13 +82,56 @@ templ fleetContent(page FleetPage) {
 		if len(page.Maintenance) > 0 {
 			<ul>
 				for _, task := range page.Maintenance {
-					<li><strong>{ task.Equipment }</strong> - { task.Description } - { task.Status } - { task.ScheduledFor }</li>
+					<li><strong>{ task.Equipment }</strong> - { task.Description } - { task.Status } - { task.ScheduledFor }
+						@MaintenanceCompletionForm(task, page.Meta.CSRFField)
+					</li>
 				}
 			</ul>
 		}
 	</section>
 	@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte todos os calendários públicos do clube.")
 	@MaintenanceForm(page.MaintenanceForm)
+}
+
+templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
+	if repair.Status == "Pendente" || repair.Status == "Em_Analise" {
+		<form method="post" action="/admin/repairs/status" hx-post="/admin/repairs/status" hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+			@csrfField
+			<input type="hidden" name="repair_id" value={ repair.ID }/>
+			<input type="hidden" name="expected_status" value={ repair.Status }/>
+			if repair.Status == "Pendente" {
+				<input type="hidden" name="status" value="Em_Analise"/><button type="submit">Iniciar análise</button>
+			} else {
+				<input type="hidden" name="status" value="Resolvido"/><button type="submit">Marcar como resolvido</button>
+			}
+			if repair.ActionError != "" {
+				<p role="alert">{ repair.ActionError }</p>
+			}
+		</form>
+	}
+}
+
+templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component) {
+	if task.Status == "Scheduled" || task.Status == "In_Progress" {
+		<form method="post" action={ "/admin/maintenance/" + task.ID + "/complete" } hx-post={ "/admin/maintenance/" + task.ID + "/complete" } hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+			@csrfField
+			<input type="hidden" name="maintenance_id" value={ task.ID }/><button type="submit">Concluir manutenção</button>
+			if task.ActionError != "" {
+				<p role="alert">{ task.ActionError }</p>
+			}
+		</form>
+	}
+}
+
+templ FleetActionFeedback(success, errorMessage string) {
+	<section class="dashboard-card" aria-live="polite">
+		if success != "" {
+			<p role="status" tabindex="-1">{ success }</p>
+		}
+		if errorMessage != "" {
+			<p role="alert">{ errorMessage }</p>
+		}
+	</section>
 }
 
 templ MaintenanceForm(form FleetMaintenanceForm) {

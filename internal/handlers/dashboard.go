@@ -44,6 +44,8 @@ type FleetStore interface {
 	ListPendingRepairRequests(context.Context, int32) ([]dbgen.ListPendingRepairRequestsRow, error)
 	ListUpcomingMaintenance(context.Context, dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error)
 	ScheduleMaintenanceTask(context.Context, dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error)
+	UpdateRepairStatus(context.Context, dbgen.UpdateRepairStatusParams) (dbgen.RepairRequest, error)
+	CompleteMaintenanceTask(context.Context, uuid.UUID) (dbgen.MaintenanceTask, error)
 }
 
 type Dashboard struct {
@@ -178,6 +180,7 @@ func (h Dashboard) Admin(w http.ResponseWriter, r *http.Request) {
 type fleetMaintenanceForm struct {
 	EquipmentID, ScheduledFor, Description, Success string
 	Errors                                          validation.FieldErrors
+	ActionErrorID, ActionError                      string
 }
 
 func (h Dashboard) Maintenance(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +218,101 @@ func (h Dashboard) Maintenance(w http.ResponseWriter, r *http.Request) {
 		h.renderMaintenanceForm(w, r, http.StatusOK, fleetMaintenanceForm{Success: "Manutenção agendada."})
 		return
 	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "fleet_flash", "Manutenção agendada.")
+	}
 	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+}
+
+func (h Dashboard) RepairStatus(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderFleetActionError(w, r, http.StatusBadRequest, r.PostForm.Get("repair_id"), "Não foi possível processar o pedido.")
+		return
+	}
+	repairID, err := uuid.Parse(r.PostForm.Get("repair_id"))
+	if err != nil {
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("repair_id"), "Pedido de reparação inválido.")
+		return
+	}
+	expectedStatus, status := r.PostForm.Get("expected_status"), r.PostForm.Get("status")
+	if !validRepairTransition(expectedStatus, status) {
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, repairID.String(), "A alteração de estado não é válida.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	if h.Fleet == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	_, err = h.Fleet.UpdateRepairStatus(ctx, dbgen.UpdateRepairStatusParams{ID: repairID, Status: status, ExpectedStatus: expectedStatus})
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.renderFleetActionError(w, r, http.StatusConflict, repairID.String(), "O pedido de reparação já foi atualizado. Atualize a página.")
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	message := "Pedido de reparação em análise."
+	if status == "Resolvido" {
+		message = "Pedido de reparação resolvido."
+	}
+	h.fleetActionSuccess(w, r, message)
+}
+
+func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderFleetActionError(w, r, http.StatusBadRequest, r.PostForm.Get("maintenance_id"), "Não foi possível processar o pedido.")
+		return
+	}
+	taskID, err := uuid.Parse(r.PostForm.Get("maintenance_id"))
+	if err != nil {
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("maintenance_id"), "Tarefa de manutenção inválida.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	if h.Fleet == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	_, err = h.Fleet.CompleteMaintenanceTask(ctx, taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.renderFleetActionError(w, r, http.StatusConflict, taskID.String(), "A tarefa já foi concluída ou cancelada. Atualize a página.")
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.fleetActionSuccess(w, r, "Manutenção concluída.")
+}
+
+func validRepairTransition(from, to string) bool {
+	return (from == "Pendente" && to == "Em_Analise") || (from == "Em_Analise" && to == "Resolvido")
+}
+
+func (h Dashboard) fleetActionSuccess(w http.ResponseWriter, r *http.Request, message string) {
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = pages.FleetActionFeedback(message, "").Render(r.Context(), w)
+		return
+	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "fleet_flash", message)
+	}
+	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+}
+
+func (h Dashboard) renderFleetActionError(w http.ResponseWriter, r *http.Request, status int, id, message string) {
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
+		_ = pages.FleetActionFeedback("", message).Render(r.Context(), w)
+		return
+	}
+	h.renderFleet(w, r, status, fleetMaintenanceForm{ActionErrorID: id, ActionError: message})
 }
 
 func (h Dashboard) validateMaintenance(r *http.Request) fleetMaintenanceForm {
@@ -254,6 +351,9 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
+	if page.MaintenanceForm.Success == "" && h.Sessions != nil {
+		page.MaintenanceForm.Success = h.Sessions.PopString(r.Context(), "fleet_flash")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if r.Header.Get("HX-Request") == "true" {
@@ -315,9 +415,14 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 		page.Equipment[i] = pages.FleetEquipment{AssetTag: item.AssetTag, Name: item.Name, Type: item.Type, Status: item.Status}
 	}
 	page.Repairs = h.fleetRepairs(ctx, r, repairs)
+	for i := range page.Repairs {
+		if page.Repairs[i].ID == form.ActionErrorID {
+			page.Repairs[i].ActionError = form.ActionError
+		}
+	}
 	page.Maintenance = make([]pages.FleetMaintenance, len(maintenance))
 	for i, task := range maintenance {
-		page.Maintenance[i] = pages.FleetMaintenance{Equipment: task.AssetTag + " - " + task.EquipmentName, Description: task.Description, Status: task.Status, ScheduledFor: task.ScheduledFor.Time.In(h.location()).Format("02/01/2006 15:04")}
+		page.Maintenance[i] = pages.FleetMaintenance{ID: task.ID.String(), Equipment: task.AssetTag + " - " + task.EquipmentName, Description: task.Description, Status: task.Status, ScheduledFor: task.ScheduledFor.Time.In(h.location()).Format("02/01/2006 15:04"), ActionError: actionError(task.ID.String(), form)}
 	}
 	nonRetired, err := h.Store.ListOperationalEquipment(ctx, 500)
 	if err != nil {
@@ -325,6 +430,13 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	}
 	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
 	return page, nil
+}
+
+func actionError(id string, form fleetMaintenanceForm) string {
+	if id == form.ActionErrorID {
+		return form.ActionError
+	}
+	return ""
 }
 
 func fleetStatusCounts(counts []dbgen.CountEquipmentByStatusRow) []pages.FleetStatusCount {
@@ -346,7 +458,7 @@ func repairEquipment(equipment []dbgen.Equipment) []components.RepairEquipment {
 func (h Dashboard) fleetRepairs(ctx context.Context, r *http.Request, repairs []dbgen.ListPendingRepairRequestsRow) []pages.FleetRepair {
 	items := make([]pages.FleetRepair, len(repairs))
 	for i, repair := range repairs {
-		items[i] = pages.FleetRepair{Equipment: repair.AssetTag + " - " + repair.EquipmentName, Description: repair.IssueDescription, Status: repair.Status, ReportedAt: repair.DateReported.Time.In(h.location()).Format("02/01/2006 15:04")}
+		items[i] = pages.FleetRepair{ID: repair.ID.String(), Equipment: repair.AssetTag + " - " + repair.EquipmentName, Description: repair.IssueDescription, Status: repair.Status, ReportedAt: repair.DateReported.Time.In(h.location()).Format("02/01/2006 15:04")}
 		if repair.ImageObjectKey == nil {
 			continue
 		}

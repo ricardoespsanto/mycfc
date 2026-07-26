@@ -220,18 +220,20 @@ SET status = $1,
     END,
     updated_at = now()
 WHERE id = $2
+  AND status = $3
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
           image_size_bytes, date_reported, updated_at, resolved_at
 `
 
 type UpdateRepairStatusParams struct {
-	Status string    `json:"status"`
-	ID     uuid.UUID `json:"id"`
+	Status         string    `json:"status"`
+	ID             uuid.UUID `json:"id"`
+	ExpectedStatus string    `json:"expected_status"`
 }
 
 func (q *Queries) UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error) {
-	row := q.db.QueryRow(ctx, updateRepairStatus, arg.Status, arg.ID)
+	row := q.db.QueryRow(ctx, updateRepairStatus, arg.Status, arg.ID, arg.ExpectedStatus)
 	var i RepairRequest
 	err := row.Scan(
 		&i.ID,

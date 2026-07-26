@@ -68,6 +68,7 @@ SET status = sqlc.arg(status),
     END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
+  AND status = sqlc.arg(expected_status)
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
           image_size_bytes, date_reported, updated_at, resolved_at;

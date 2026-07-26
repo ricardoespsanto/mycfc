@@ -15,6 +15,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -159,6 +160,10 @@ type dashboardStoreFake struct {
 	deadlineSeen      bool
 	scheduleParams    dbgen.ScheduleMaintenanceTaskParams
 	scheduleErr       error
+	repairParams      dbgen.UpdateRepairStatusParams
+	repairErr         error
+	completeID        uuid.UUID
+	completeErr       error
 	counts            []dbgen.CountEquipmentByStatusRow
 	adminEquipment    []dbgen.Equipment
 	repairs           []dbgen.ListPendingRepairRequestsRow
@@ -192,6 +197,16 @@ func (f *dashboardStoreFake) ListUpcomingMaintenance(_ context.Context, params d
 func (f *dashboardStoreFake) ScheduleMaintenanceTask(_ context.Context, params dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error) {
 	f.scheduleParams = params
 	return dbgen.ScheduleMaintenanceTaskRow{}, f.scheduleErr
+}
+
+func (f *dashboardStoreFake) UpdateRepairStatus(_ context.Context, params dbgen.UpdateRepairStatusParams) (dbgen.RepairRequest, error) {
+	f.repairParams = params
+	return dbgen.RepairRequest{}, f.repairErr
+}
+
+func (f *dashboardStoreFake) CompleteMaintenanceTask(_ context.Context, id uuid.UUID) (dbgen.MaintenanceTask, error) {
+	f.completeID = id
+	return dbgen.MaintenanceTask{}, f.completeErr
 }
 
 func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
@@ -231,6 +246,82 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 	dashboard.Maintenance(response, request)
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet" {
 		t.Fatalf("normal response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestRepairStatusRequiresSequentialTransitionsAndSupportsHTMXAndNormalForms(t *testing.T) {
+	repairID := uuid.New()
+	store := &dashboardStoreFake{}
+	dashboard := Dashboard{Store: store, Fleet: store}
+	for _, tc := range []struct {
+		name, body, method string
+		status             int
+		wantStatus         string
+		wantLocation       string
+		wantBody           string
+	}{
+		{"invalid transition", "repair_id=" + repairID.String() + "&expected_status=Pendente&status=Resolvido", "HX", http.StatusUnprocessableEntity, "", "", "A alteração de estado não é válida."},
+		{"start analysis", "repair_id=" + repairID.String() + "&expected_status=Pendente&status=Em_Analise", "HX", http.StatusOK, "Em_Analise", "", "Pedido de reparação em análise."},
+		{"resolve normally", "repair_id=" + repairID.String() + "&expected_status=Em_Analise&status=Resolvido", "normal", http.StatusSeeOther, "Resolvido", "/admin/fleet", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/admin/repairs/status", strings.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tc.method == "HX" {
+				request.Header.Set("HX-Request", "true")
+			}
+			response := httptest.NewRecorder()
+			dashboard.RepairStatus(response, request)
+			if response.Code != tc.status || response.Header().Get("Location") != tc.wantLocation || !strings.Contains(response.Body.String(), tc.wantBody) {
+				t.Fatalf("response = %d %q %q", response.Code, response.Header().Get("Location"), response.Body.String())
+			}
+			if tc.wantStatus != "" && (store.repairParams.ID != repairID || store.repairParams.Status != tc.wantStatus) {
+				t.Fatalf("repair parameters = %+v", store.repairParams)
+			}
+		})
+	}
+	store.repairErr = pgx.ErrNoRows
+	request := httptest.NewRequest(http.MethodPost, "/admin/repairs/status", strings.NewReader("repair_id="+repairID.String()+"&expected_status=Pendente&status=Em_Analise"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("HX-Request", "true")
+	response := httptest.NewRecorder()
+	dashboard.RepairStatus(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já foi atualizado") {
+		t.Fatalf("conflict response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestCompleteMaintenanceSupportsHTMXAndNormalForms(t *testing.T) {
+	taskID := uuid.New()
+	store := &dashboardStoreFake{}
+	dashboard := Dashboard{Store: store, Fleet: store}
+	for _, htmx := range []bool{true, false} {
+		request := httptest.NewRequest(http.MethodPost, "/admin/maintenance/"+taskID.String()+"/complete", strings.NewReader("maintenance_id="+taskID.String()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if htmx {
+			request.Header.Set("HX-Request", "true")
+		}
+		response := httptest.NewRecorder()
+		dashboard.CompleteMaintenance(response, request)
+		wantStatus := http.StatusSeeOther
+		if htmx {
+			wantStatus = http.StatusOK
+		}
+		if response.Code != wantStatus || store.completeID != taskID {
+			t.Fatalf("response = %d, complete id = %s", response.Code, store.completeID)
+		}
+		if htmx && !strings.Contains(response.Body.String(), "Manutenção concluída.") {
+			t.Fatalf("success body = %q", response.Body.String())
+		}
+	}
+	store.completeErr = pgx.ErrNoRows
+	request := httptest.NewRequest(http.MethodPost, "/admin/maintenance/"+taskID.String()+"/complete", strings.NewReader("maintenance_id="+taskID.String()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("HX-Request", "true")
+	response := httptest.NewRecorder()
+	dashboard.CompleteMaintenance(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já foi concluída") {
+		t.Fatalf("conflict response = %d %q", response.Code, response.Body.String())
 	}
 }
 
