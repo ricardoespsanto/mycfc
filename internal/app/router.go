@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -57,6 +57,11 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/events", auth.RequireEventStaff(http.HandlerFunc(events.Create)))
 	mux.Handle("POST /admin/events/{id}/confirm", auth.RequireEventStaff(http.HandlerFunc(events.Confirm)))
 	mux.Handle("POST /admin/events/{id}/check-in", auth.RequireEventStaff(http.HandlerFunc(events.CheckIn)))
+	mux.Handle("GET /announcements", auth.RequireAuthenticated(http.HandlerFunc(announcements.Index)))
+	mux.Handle("GET /announcements/{id}", auth.RequireAuthenticated(http.HandlerFunc(announcements.Detail)))
+	mux.Handle("POST /admin/announcements", auth.RequireEventStaff(http.HandlerFunc(announcements.Create)))
+	mux.Handle("POST /admin/announcements/{id}/publish", auth.RequireEventStaff(http.HandlerFunc(announcements.Publish)))
+	mux.Handle("POST /admin/announcements/{id}/expire", auth.RequireEventStaff(http.HandlerFunc(announcements.Expire)))
 
 	return customNotFound(mux, system.NotFound)
 }

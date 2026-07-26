@@ -36,7 +36,7 @@ inventing dashboard-only fields:
 | Training log | Existing athlete ID; RFC 3339 occurrence time; duration and distance within database limits. |
 | Performance metric | Existing athlete ID; valid metric type; label, unit, numeric value, and RFC 3339 measurement time. |
 | News item | Portuguese title and summary; HTTPS URL when present; publication time and publication state. |
-| WhatsApp group | Name, discipline, HTTPS group URL, active state, and an optional existing programme. |
+| WhatsApp group | Name, discipline, HTTPS group URL, active state, and zero or more curated programme, team, category, modality, event, or guardian audiences. |
 
 An import is rejected as a whole if any row is invalid or references a missing
 record. The operator must correct the source file and rerun it; partial data is

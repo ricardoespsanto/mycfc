@@ -13,6 +13,95 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AnnouncementStatus string
+
+const (
+	AnnouncementStatusDRAFT     AnnouncementStatus = "DRAFT"
+	AnnouncementStatusPUBLISHED AnnouncementStatus = "PUBLISHED"
+	AnnouncementStatusEXPIRED   AnnouncementStatus = "EXPIRED"
+)
+
+func (e *AnnouncementStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AnnouncementStatus(s)
+	case string:
+		*e = AnnouncementStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AnnouncementStatus: %T", src)
+	}
+	return nil
+}
+
+type NullAnnouncementStatus struct {
+	AnnouncementStatus AnnouncementStatus `json:"announcement_status"`
+	Valid              bool               `json:"valid"` // Valid is true if AnnouncementStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAnnouncementStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.AnnouncementStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AnnouncementStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAnnouncementStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AnnouncementStatus), nil
+}
+
+type AnnouncementTargetType string
+
+const (
+	AnnouncementTargetTypePROGRAMME AnnouncementTargetType = "PROGRAMME"
+	AnnouncementTargetTypeTEAM      AnnouncementTargetType = "TEAM"
+	AnnouncementTargetTypeCATEGORY  AnnouncementTargetType = "CATEGORY"
+	AnnouncementTargetTypeMODALITY  AnnouncementTargetType = "MODALITY"
+	AnnouncementTargetTypeEVENT     AnnouncementTargetType = "EVENT"
+	AnnouncementTargetTypeGUARDIAN  AnnouncementTargetType = "GUARDIAN"
+)
+
+func (e *AnnouncementTargetType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AnnouncementTargetType(s)
+	case string:
+		*e = AnnouncementTargetType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AnnouncementTargetType: %T", src)
+	}
+	return nil
+}
+
+type NullAnnouncementTargetType struct {
+	AnnouncementTargetType AnnouncementTargetType `json:"announcement_target_type"`
+	Valid                  bool                   `json:"valid"` // Valid is true if AnnouncementTargetType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAnnouncementTargetType) Scan(value interface{}) error {
+	if value == nil {
+		ns.AnnouncementTargetType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AnnouncementTargetType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAnnouncementTargetType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AnnouncementTargetType), nil
+}
+
 type EventResponseStatus string
 
 const (
@@ -96,6 +185,42 @@ func (ns NullStaffCapability) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.StaffCapability), nil
+}
+
+type Announcement struct {
+	ID            uuid.UUID          `json:"id"`
+	Title         string             `json:"title"`
+	Body          string             `json:"body"`
+	Status        AnnouncementStatus `json:"status"`
+	AuthorID      uuid.UUID          `json:"author_id"`
+	PublishedByID *uuid.UUID         `json:"published_by_id"`
+	ExpiredByID   *uuid.UUID         `json:"expired_by_id"`
+	PublishedAt   pgtype.Timestamptz `json:"published_at"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	ExpiredAt     pgtype.Timestamptz `json:"expired_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AnnouncementAuditEvent struct {
+	ID             uuid.UUID          `json:"id"`
+	AnnouncementID uuid.UUID          `json:"announcement_id"`
+	Action         string             `json:"action"`
+	ActorUserID    uuid.UUID          `json:"actor_user_id"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type AnnouncementDelivery struct {
+	AnnouncementID uuid.UUID          `json:"announcement_id"`
+	UserID         uuid.UUID          `json:"user_id"`
+	DeliveredAt    pgtype.Timestamptz `json:"delivered_at"`
+	ReadAt         pgtype.Timestamptz `json:"read_at"`
+}
+
+type AnnouncementTarget struct {
+	AnnouncementID uuid.UUID              `json:"announcement_id"`
+	TargetType     AnnouncementTargetType `json:"target_type"`
+	TargetID       *uuid.UUID             `json:"target_id"`
 }
 
 type CompetitionCategory struct {
@@ -341,4 +466,10 @@ type WhatsappGroup struct {
 	IsActive    bool               `json:"is_active"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WhatsappGroupTarget struct {
+	WhatsappGroupID uuid.UUID              `json:"whatsapp_group_id"`
+	TargetType      AnnouncementTargetType `json:"target_type"`
+	TargetID        *uuid.UUID             `json:"target_id"`
 }

@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AddAnnouncementTarget(ctx context.Context, arg AddAnnouncementTargetParams) error
 	AddEventAudience(ctx context.Context, arg AddEventAudienceParams) error
 	AddEventTeamAudience(ctx context.Context, arg AddEventTeamAudienceParams) error
 	AddMembershipModality(ctx context.Context, arg AddMembershipModalityParams) error
@@ -23,6 +24,7 @@ type Querier interface {
 	CountEquipmentByStatus(ctx context.Context) ([]CountEquipmentByStatusRow, error)
 	CountGoingEventResponses(ctx context.Context, eventID uuid.UUID) (int64, error)
 	CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (User, error)
+	CreateAnnouncement(ctx context.Context, arg CreateAnnouncementParams) (CreateAnnouncementRow, error)
 	CreateCompetitionCategory(ctx context.Context, arg CreateCompetitionCategoryParams) (CompetitionCategory, error)
 	CreateConsentForm(ctx context.Context, arg CreateConsentFormParams) (ConsentForm, error)
 	CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (User, error)
@@ -33,9 +35,11 @@ type Querier interface {
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	CreateUserMembership(ctx context.Context, arg CreateUserMembershipParams) (UserMembership, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error
+	ExpireAnnouncement(ctx context.Context, arg ExpireAnnouncementParams) (int64, error)
 	GetAccountByEmail(ctx context.Context, email *string) (GetAccountByEmailRow, error)
 	GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDRow, error)
 	GetActiveUserByEmail(ctx context.Context, email *string) (User, error)
+	GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment, error)
 	GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Event, error)
 	GetEventDetailForMember(ctx context.Context, arg GetEventDetailForMemberParams) (GetEventDetailForMemberRow, error)
@@ -55,6 +59,12 @@ type Querier interface {
 	ListActiveMembershipProgrammeCodesForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
 	ListActiveMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListActiveMembershipsForUserRow, error)
 	ListActiveStaffGrantsForUser(ctx context.Context, userID uuid.UUID) ([]ListActiveStaffGrantsForUserRow, error)
+	ListAnnouncementCategories(ctx context.Context) ([]ListAnnouncementCategoriesRow, error)
+	ListAnnouncementEvents(ctx context.Context) ([]ListAnnouncementEventsRow, error)
+	ListAnnouncementModalities(ctx context.Context) ([]ListAnnouncementModalitiesRow, error)
+	ListAnnouncementProgrammes(ctx context.Context) ([]ListAnnouncementProgrammesRow, error)
+	ListAnnouncementTeams(ctx context.Context) ([]ListAnnouncementTeamsRow, error)
+	ListAnnouncementsForAuthor(ctx context.Context, arg ListAnnouncementsForAuthorParams) ([]ListAnnouncementsForAuthorRow, error)
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)
 	ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error)
 	ListEquipmentForAdmin(ctx context.Context, rowLimit int32) ([]Equipment, error)
@@ -72,8 +82,12 @@ type Querier interface {
 	ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error)
 	ListTeamsForEventAuthoring(ctx context.Context) ([]ListTeamsForEventAuthoringRow, error)
 	ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error)
+	ListVisibleAnnouncements(ctx context.Context, arg ListVisibleAnnouncementsParams) ([]ListVisibleAnnouncementsRow, error)
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
+	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
+	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
 	RevokeStaffGrant(ctx context.Context, arg RevokeStaffGrantParams) (int64, error)
 	SaveEventResponse(ctx context.Context, arg SaveEventResponseParams) error
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)
