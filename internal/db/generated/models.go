@@ -311,6 +311,16 @@ type MembershipModality struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type MinorCredentialAudit struct {
+	ID             uuid.UUID          `json:"id"`
+	MinorUserID    uuid.UUID          `json:"minor_user_id"`
+	GuardianUserID uuid.UUID          `json:"guardian_user_id"`
+	ActorUserID    uuid.UUID          `json:"actor_user_id"`
+	Action         string             `json:"action"`
+	IssuedLoginID  string             `json:"issued_login_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Modality struct {
 	ID        uuid.UUID          `json:"id"`
 	Code      string             `json:"code"`
@@ -429,6 +439,7 @@ type User struct {
 	ID           uuid.UUID          `json:"id"`
 	Name         string             `json:"name"`
 	Email        *string            `json:"email"`
+	MinorLoginID *string            `json:"minor_login_id"`
 	PasswordHash *string            `json:"password_hash"`
 	GuardianID   *uuid.UUID         `json:"guardian_id"`
 	IsDependent  bool               `json:"is_dependent"`

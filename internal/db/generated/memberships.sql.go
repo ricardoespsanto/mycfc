@@ -190,6 +190,47 @@ func (q *Queries) CreateUserMembership(ctx context.Context, arg CreateUserMember
 	return i, err
 }
 
+const endCurrentSeasonMembership = `-- name: EndCurrentSeasonMembership :execrows
+UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
+WHERE user_id = $1 AND season_id = $2
+  AND programme_id = $3 AND starts_on <= CURRENT_DATE
+  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
+`
+
+type EndCurrentSeasonMembershipParams struct {
+	UserID      uuid.UUID `json:"user_id"`
+	SeasonID    uuid.UUID `json:"season_id"`
+	ProgrammeID uuid.UUID `json:"programme_id"`
+}
+
+func (q *Queries) EndCurrentSeasonMembership(ctx context.Context, arg EndCurrentSeasonMembershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endCurrentSeasonMembership, arg.UserID, arg.SeasonID, arg.ProgrammeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getCurrentSeason = `-- name: GetCurrentSeason :one
+SELECT id, code, name, starts_on, ends_on, is_current, created_at
+FROM seasons WHERE is_current = true
+`
+
+func (q *Queries) GetCurrentSeason(ctx context.Context) (Season, error) {
+	row := q.db.QueryRow(ctx, getCurrentSeason)
+	var i Season
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.StartsOn,
+		&i.EndsOn,
+		&i.IsCurrent,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getModalityByCode = `-- name: GetModalityByCode :one
 SELECT id, code, name_pt, created_at
 FROM modalities
@@ -355,6 +396,35 @@ func (q *Queries) ListActiveMembershipsForUser(ctx context.Context, userID uuid.
 	return items, nil
 }
 
+const listMembershipProgrammes = `-- name: ListMembershipProgrammes :many
+SELECT id, code, name_pt, created_at FROM programmes ORDER BY name_pt
+`
+
+func (q *Queries) ListMembershipProgrammes(ctx context.Context) ([]Programme, error) {
+	rows, err := q.db.Query(ctx, listMembershipProgrammes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Programme{}
+	for rows.Next() {
+		var i Programme
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.NamePt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listModalitiesForMembership = `-- name: ListModalitiesForMembership :many
 SELECT modality.id, modality.code, modality.name_pt, modality.created_at
 FROM membership_modalities assignment
@@ -386,4 +456,43 @@ func (q *Queries) ListModalitiesForMembership(ctx context.Context, membershipID 
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertCurrentSeasonMembership = `-- name: UpsertCurrentSeasonMembership :one
+INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
+SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
+RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
+          starts_on, ends_on, created_at, updated_at
+`
+
+type UpsertCurrentSeasonMembershipParams struct {
+	UserID      uuid.UUID   `json:"user_id"`
+	SeasonID    uuid.UUID   `json:"season_id"`
+	ProgrammeID uuid.UUID   `json:"programme_id"`
+	StartsOn    pgtype.Date `json:"starts_on"`
+}
+
+func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error) {
+	row := q.db.QueryRow(ctx, upsertCurrentSeasonMembership,
+		arg.UserID,
+		arg.SeasonID,
+		arg.ProgrammeID,
+		arg.StartsOn,
+	)
+	var i UserMembership
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.SeasonID,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.CompetitionCategoryID,
+		&i.StartsOn,
+		&i.EndsOn,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -24,9 +24,10 @@ import (
 
 type adminStore interface {
 	GetAccountByEmail(context.Context, *string) (dbgen.GetAccountByEmailRow, error)
-	CreateAdultUser(context.Context, dbgen.CreateAdultUserParams) (dbgen.User, error)
+	CreateAdultUser(context.Context, dbgen.CreateAdultUserParams) (dbgen.CreateAdultUserRow, error)
 	GrantPlatformRoleByCode(context.Context, dbgen.GrantPlatformRoleByCodeParams) error
 	SetUserPasswordHash(context.Context, dbgen.SetUserPasswordHashParams) error
+	IssueMinorCredential(context.Context, dbgen.IssueMinorCredentialParams) (uuid.UUID, error)
 	DeactivateUser(context.Context, uuid.UUID) error
 	GetProgrammeByCode(context.Context, string) (dbgen.Programme, error)
 	GetTeamByID(context.Context, uuid.UUID) (dbgen.Team, error)
@@ -60,7 +61,7 @@ func fail(err error) {
 
 func run(ctx context.Context, args []string, store adminStore, stdin *os.File, passwordFile string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: admin <create|set-password|deactivate|grant-staff|revoke-staff> [options]")
+		return errors.New("usage: admin <create|set-password|deactivate|grant-staff|revoke-staff|issue-minor-login|recover-minor-login> [options]")
 	}
 	switch args[0] {
 	case "create":
@@ -89,9 +90,67 @@ func run(ctx context.Context, args []string, store adminStore, stdin *os.File, p
 		return grantStaff(ctx, store, output, args[1:])
 	case "revoke-staff":
 		return revokeStaff(ctx, store, output, args[1:])
+	case "issue-minor-login", "recover-minor-login":
+		return issueMinorLogin(ctx, store, stdin, passwordFile, output, args[0] == "recover-minor-login", args[1:])
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}
+}
+
+func issueMinorLogin(ctx context.Context, store adminStore, stdin *os.File, passwordFile string, output io.Writer, recovery bool, args []string) error {
+	command := "issue-minor-login"
+	if recovery {
+		command = "recover-minor-login"
+	}
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	minorID := flags.String("minor-id", "", "")
+	guardianEmail := flags.String("guardian-email", "", "")
+	actorEmail := flags.String("actor-email", "", "")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return fmt.Errorf("usage: admin %s --minor-id UUID --guardian-email ... --actor-email ...", command)
+	}
+	minor, err := uuid.Parse(*minorID)
+	if err != nil {
+		return errors.New("minor-id must be a UUID")
+	}
+	guardian, err := activeAdultByEmail(ctx, store, *guardianEmail, "guardian account")
+	if err != nil {
+		return err
+	}
+	actor, err := activeAdminByEmail(ctx, store, *actorEmail)
+	if err != nil {
+		return err
+	}
+	password, err := readPassword(stdin, passwordFile)
+	if err != nil {
+		return err
+	}
+	if err := validation.ValidatePassword(password); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	loginID := "CFC-" + strings.ToUpper(strings.ReplaceAll(minor.String()[:8], "-", ""))
+	action := "ISSUED"
+	if recovery {
+		action = "RECOVERED"
+	}
+	passwordHash := string(hash)
+	_, err = store.IssueMinorCredential(ctx, dbgen.IssueMinorCredentialParams{
+		MinorUserID: minor, GuardianUserID: guardian.ID, ActorUserID: actor.ID,
+		MinorLoginID: &loginID, PasswordHash: &passwordHash, Action: action,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("active minor with this guardian relationship not found, or administrator authorization is invalid")
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", command, err)
+	}
+	fmt.Fprintf(output, "minor login %s\n", loginID)
+	return nil
 }
 
 func grantStaff(ctx context.Context, store adminStore, output io.Writer, args []string) error {

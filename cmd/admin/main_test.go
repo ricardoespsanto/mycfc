@@ -15,19 +15,20 @@ import (
 )
 
 type fakeAdminStore struct {
-	user        dbgen.User
-	lookupErr   error
-	created     dbgen.CreateAdultUserParams
-	granted     dbgen.GrantPlatformRoleByCodeParams
-	password    dbgen.SetUserPasswordHashParams
-	deactivated uuid.UUID
-	admin       bool
-	accounts    map[string]dbgen.GetAccountByEmailRow
-	programme   dbgen.Programme
-	team        dbgen.Team
-	staffGrant  dbgen.GrantStaffCapabilityParams
-	revocation  dbgen.RevokeStaffGrantParams
-	revoked     int64
+	user            dbgen.User
+	lookupErr       error
+	created         dbgen.CreateAdultUserParams
+	granted         dbgen.GrantPlatformRoleByCodeParams
+	password        dbgen.SetUserPasswordHashParams
+	deactivated     uuid.UUID
+	admin           bool
+	accounts        map[string]dbgen.GetAccountByEmailRow
+	programme       dbgen.Programme
+	team            dbgen.Team
+	staffGrant      dbgen.GrantStaffCapabilityParams
+	revocation      dbgen.RevokeStaffGrantParams
+	revoked         int64
+	minorCredential dbgen.IssueMinorCredentialParams
 }
 
 func (s *fakeAdminStore) GetAccountByEmail(_ context.Context, email *string) (dbgen.GetAccountByEmailRow, error) {
@@ -40,9 +41,9 @@ func (s *fakeAdminStore) GrantPlatformRoleByCode(_ context.Context, input dbgen.
 	s.granted = input
 	return nil
 }
-func (s *fakeAdminStore) CreateAdultUser(_ context.Context, input dbgen.CreateAdultUserParams) (dbgen.User, error) {
+func (s *fakeAdminStore) CreateAdultUser(_ context.Context, input dbgen.CreateAdultUserParams) (dbgen.CreateAdultUserRow, error) {
 	s.created = input
-	return dbgen.User{}, nil
+	return dbgen.CreateAdultUserRow{}, nil
 }
 func (s *fakeAdminStore) SetUserPasswordHash(_ context.Context, input dbgen.SetUserPasswordHashParams) error {
 	s.password = input
@@ -66,6 +67,10 @@ func (s *fakeAdminStore) RevokeStaffGrant(_ context.Context, input dbgen.RevokeS
 	s.revocation = input
 	return s.revoked, nil
 }
+func (s *fakeAdminStore) IssueMinorCredential(_ context.Context, input dbgen.IssueMinorCredentialParams) (uuid.UUID, error) {
+	s.minorCredential = input
+	return input.MinorUserID, nil
+}
 
 func TestCreateAdminUsesValidatedInputAndPasswordFile(t *testing.T) {
 	passwordFile := filepath.Join(t.TempDir(), "password")
@@ -84,6 +89,28 @@ func TestCreateAdminUsesValidatedInputAndPasswordFile(t *testing.T) {
 		t.Fatal("created password was not bcrypt hashed")
 	}
 	if !strings.Contains(output.String(), "administrator created") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestIssueMinorLoginRequiresGuardianAndAuditsActor(t *testing.T) {
+	passwordFile := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(passwordFile, []byte("correct horse 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guardianID, actorID, minorID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{
+		"guardian@example.com": {ID: guardianID, IsActive: true},
+		"admin@example.com":    {ID: actorID, IsActive: true, IsAdmin: true},
+	}}
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"issue-minor-login", "--minor-id", minorID.String(), "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, store, os.Stdin, passwordFile, &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.minorCredential.MinorUserID != minorID || store.minorCredential.GuardianUserID != guardianID || store.minorCredential.ActorUserID != actorID || store.minorCredential.Action != "ISSUED" {
+		t.Fatalf("credential input = %+v", store.minorCredential)
+	}
+	if !strings.HasPrefix(output.String(), "minor login CFC-") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

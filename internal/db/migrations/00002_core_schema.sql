@@ -3,6 +3,7 @@ CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name varchar(120) NOT NULL,
     email citext NULL,
+    minor_login_id citext NULL,
     password_hash text NULL,
     guardian_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
     is_dependent boolean NOT NULL DEFAULT false,
@@ -20,7 +21,7 @@ CREATE TABLE users (
             is_dependent
             AND guardian_id IS NOT NULL
             AND email IS NULL
-            AND password_hash IS NULL
+            AND ((minor_login_id IS NULL AND password_hash IS NULL) OR (minor_login_id IS NOT NULL AND password_hash IS NOT NULL))
         )
         OR
         (
@@ -28,13 +29,27 @@ CREATE TABLE users (
             AND guardian_id IS NULL
             AND email IS NOT NULL
             AND password_hash IS NOT NULL
+            AND minor_login_id IS NULL
         )
     )
 );
 
 CREATE UNIQUE INDEX users_email_uidx ON users (email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX users_minor_login_id_uidx ON users (minor_login_id) WHERE minor_login_id IS NOT NULL;
 CREATE INDEX users_guardian_id_idx ON users (guardian_id) WHERE guardian_id IS NOT NULL;
 CREATE INDEX users_active_idx ON users (is_active);
+
+CREATE TABLE minor_credential_audit (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    minor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    guardian_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    action varchar(20) NOT NULL CHECK (action IN ('ISSUED', 'RECOVERED')),
+    issued_login_id citext NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX minor_credential_audit_minor_created_idx ON minor_credential_audit (minor_user_id, created_at DESC);
 
 CREATE TABLE platform_roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,6 +177,7 @@ CREATE INDEX whatsapp_programme_active_idx ON whatsapp_groups (programme_id, is_
 
 -- +goose Down
 DROP TABLE IF EXISTS whatsapp_groups;
+DROP TABLE IF EXISTS minor_credential_audit;
 DROP TABLE IF EXISTS user_platform_roles;
 DROP TABLE IF EXISTS platform_roles;
 DROP TABLE IF EXISTS consent_forms;

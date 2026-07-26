@@ -39,11 +39,22 @@ func TestAuthLoadsDatabaseAccountInsteadOfSessionData(t *testing.T) {
 	}
 }
 
-func TestAuthRejectsInvalidInactiveAndDependentAccounts(t *testing.T) {
-	for _, lookup := range []currentUserLookup{{err: pgx.ErrNoRows}, {account: dbgen.GetActiveAccountByIDRow{IsActive: false}}, {account: dbgen.GetActiveAccountByIDRow{IsActive: true, IsDependent: true}}} {
+func TestAuthRejectsInvalidAndInactiveAccounts(t *testing.T) {
+	for _, lookup := range []currentUserLookup{{err: pgx.ErrNoRows}, {account: dbgen.GetActiveAccountByIDRow{IsActive: false}}} {
 		auth := Auth{Users: lookup, Sessions: scs.New()}
 		handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("protected handler called") })))
 		if response := authenticatedRequest(t, auth.Sessions, uuid.NewString(), handler); response.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d", response.Code)
+		}
+	}
+}
+
+func TestAuthAllowsDependentButBarsGuardianAndStaffControls(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsDependent: true, IsAdmin: true}, grants: []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "COACH"}}}, Sessions: scs.New()}
+	for _, guard := range []func(http.Handler) http.Handler{auth.RequireGuardian, auth.RequireAdmin, auth.RequireCoach, auth.RequireModerator} {
+		response := authenticatedRequest(t, auth.Sessions, id.String(), auth.Load(guard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("minor control handler called") }))))
+		if response.Code != http.StatusForbidden {
 			t.Fatalf("status = %d", response.Code)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/a-h/templ"
@@ -15,6 +16,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
+	"github.com/google/uuid"
 	"github.com/gorilla/csrf"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -26,7 +28,8 @@ const invalidLoginMessage = "O endereço de correio eletrónico ou a palavra-pas
 const dummyPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
 type LoginUserLookup interface {
-	GetActiveUserByEmail(ctx context.Context, email *string) (dbgen.User, error)
+	GetActiveUserByEmail(ctx context.Context, email *string) (dbgen.GetActiveUserByEmailRow, error)
+	GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (dbgen.GetActiveDependentByLoginIDRow, error)
 }
 
 type Login struct {
@@ -46,28 +49,44 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, emailErr := validation.NormalizeEmail(r.PostForm.Get("email"))
+	identifier := strings.TrimSpace(r.PostForm.Get("identifier"))
 	password := r.PostForm.Get("password")
 	next := validation.SafeNext(r.PostForm.Get("next"))
-	if emailErr != nil || password == "" {
+	if identifier == "" || password == "" {
 		h.wait(r.Context())
 		h.render(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("email"), next)
 		return
 	}
 
-	user, err := h.Users.GetActiveUserByEmail(r.Context(), &email)
+	userID := uuid.Nil
+	var passwordHash *string
+	var err error
+	if strings.HasPrefix(strings.ToUpper(identifier), "CFC-") {
+		loginID := strings.ToUpper(identifier)
+		user, lookupErr := h.Users.GetActiveDependentByLoginID(r.Context(), &loginID)
+		err, userID, passwordHash = lookupErr, user.ID, user.PasswordHash
+	} else {
+		email, emailErr := validation.NormalizeEmail(identifier)
+		if emailErr != nil {
+			h.wait(r.Context())
+			h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
+			return
+		}
+		user, lookupErr := h.Users.GetActiveUserByEmail(r.Context(), &email)
+		err, userID, passwordHash = lookupErr, user.ID, user.PasswordHash
+	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		h.render(w, r, http.StatusInternalServerError, "", "")
 		return
 	}
 
 	hash := dummyPasswordHash
-	if err == nil && user.PasswordHash != nil {
-		hash = *user.PasswordHash
+	if err == nil && passwordHash != nil {
+		hash = *passwordHash
 	}
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		h.wait(r.Context())
-		h.render(w, r, http.StatusUnprocessableEntity, email, next)
+		h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
 		return
 	}
 
@@ -75,7 +94,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		h.render(w, r, http.StatusInternalServerError, "", "")
 		return
 	}
-	h.Sessions.Put(r.Context(), "user_id", user.ID.String())
+	h.Sessions.Put(r.Context(), "user_id", userID.String())
 	h.Sessions.Put(r.Context(), "last_seen_at", time.Now().UTC().Format(time.RFC3339Nano))
 	if next == "" {
 		next = "/dashboard"

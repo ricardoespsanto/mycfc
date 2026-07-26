@@ -35,6 +35,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/registo", http.StatusOK, "", ""},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
 		{http.MethodGet, "/admin/fleet", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet"},
+		{http.MethodGet, "/admin/membros", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -73,7 +74,7 @@ func TestPlaintextCSRFMiddleware(t *testing.T) {
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
-	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{})
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Members{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
 	response := httptest.NewRecorder()
@@ -99,5 +100,5 @@ func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Members{})))
 }

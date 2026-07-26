@@ -555,13 +555,20 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 	items := make([]DashboardItemVM, len(dependents))
 	for i, dependent := range dependents {
 		age := validation.AgeOn(dependent.DateOfBirth.Time, now, location)
-		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%d anos", age)}
+		credential := "Sem acesso individual"
+		if dependent.MinorLoginID != nil {
+			credential = "Acesso individual emitido: " + *dependent.MinorLoginID
+		}
+		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%d anos · %s", age, credential)}
 	}
 	return items
 }
 
 func dashboardNavigation(user CurrentUser) []components.NavigationItem {
-	items := []components.NavigationItem{{Label: "Hoje", Path: "/today"}, {Label: "Eventos", Path: "/events"}, {Label: "Avisos", Path: "/announcements"}, {Label: "Encarregado de educação", Path: "/dashboard/guardian"}}
+	items := []components.NavigationItem{{Label: "Hoje", Path: "/today"}, {Label: "Eventos", Path: "/events"}, {Label: "Avisos", Path: "/announcements"}}
+	if !user.IsDependent {
+		items = append(items, components.NavigationItem{Label: "Encarregado de educação", Path: "/dashboard/guardian"})
+	}
 	if user.Programmes["Leisure"] {
 		items = append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}
@@ -581,7 +588,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationItem {
 		items = append(items, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
 	}
 	if user.IsAdmin {
-		items = append(items, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
+		items = append(items, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
 	}
 	return items
 }

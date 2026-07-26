@@ -54,14 +54,27 @@ type CreateAdultUserParams struct {
 	DateOfBirth  pgtype.Date `json:"date_of_birth"`
 }
 
-func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (User, error) {
+type CreateAdultUserRow struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (CreateAdultUserRow, error) {
 	row := q.db.QueryRow(ctx, createAdultUser,
 		arg.Name,
 		arg.Email,
 		arg.PasswordHash,
 		arg.DateOfBirth,
 	)
-	var i User
+	var i CreateAdultUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -103,9 +116,22 @@ type CreateDependentUserParams struct {
 	DateOfBirth pgtype.Date `json:"date_of_birth"`
 }
 
-func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (User, error) {
+type CreateDependentUserRow struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (CreateDependentUserRow, error) {
 	row := q.db.QueryRow(ctx, createDependentUser, arg.Name, arg.GuardianID, arg.DateOfBirth)
-	var i User
+	var i CreateDependentUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -200,18 +226,32 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 	return i, err
 }
 
-const getActiveUserByEmail = `-- name: GetActiveUserByEmail :one
-SELECT id, name, email, password_hash, guardian_id,
-       is_dependent, date_of_birth, is_active, created_at, updated_at
-FROM users
-WHERE email = $1
-  AND is_active = true
-   AND is_dependent = false
+const getActiveDependentByLoginID = `-- name: GetActiveDependentByLoginID :one
+SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
+       u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at
+FROM users u
+JOIN users guardian ON guardian.id = u.guardian_id AND guardian.is_active = true AND guardian.is_dependent = false
+WHERE u.minor_login_id = $1
+  AND u.is_active = true
+  AND u.is_dependent = true
 `
 
-func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (User, error) {
-	row := q.db.QueryRow(ctx, getActiveUserByEmail, email)
-	var i User
+type GetActiveDependentByLoginIDRow struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (GetActiveDependentByLoginIDRow, error) {
+	row := q.db.QueryRow(ctx, getActiveDependentByLoginID, minorLoginID)
+	var i GetActiveDependentByLoginIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -227,8 +267,85 @@ func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (User
 	return i, err
 }
 
-const getUserByEmail = `-- name: GetUserByEmail :one
+const getActiveUserByEmail = `-- name: GetActiveUserByEmail :one
 SELECT id, name, email, password_hash, guardian_id,
+       is_dependent, date_of_birth, is_active, created_at, updated_at
+FROM users
+WHERE email = $1
+  AND is_active = true
+   AND is_dependent = false
+`
+
+type GetActiveUserByEmailRow struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (GetActiveUserByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getActiveUserByEmail, email)
+	var i GetActiveUserByEmailRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.PasswordHash,
+		&i.GuardianID,
+		&i.IsDependent,
+		&i.DateOfBirth,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMemberForAdmin = `-- name: GetMemberForAdmin :one
+SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+       u.is_dependent, u.date_of_birth, u.is_active
+FROM users u
+LEFT JOIN users guardian ON guardian.id = u.guardian_id
+WHERE u.id = $1
+`
+
+type GetMemberForAdminRow struct {
+	ID           uuid.UUID   `json:"id"`
+	Name         string      `json:"name"`
+	Email        *string     `json:"email"`
+	MinorLoginID *string     `json:"minor_login_id"`
+	GuardianID   *uuid.UUID  `json:"guardian_id"`
+	GuardianName *string     `json:"guardian_name"`
+	IsDependent  bool        `json:"is_dependent"`
+	DateOfBirth  pgtype.Date `json:"date_of_birth"`
+	IsActive     bool        `json:"is_active"`
+}
+
+func (q *Queries) GetMemberForAdmin(ctx context.Context, id uuid.UUID) (GetMemberForAdminRow, error) {
+	row := q.db.QueryRow(ctx, getMemberForAdmin, id)
+	var i GetMemberForAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.MinorLoginID,
+		&i.GuardianID,
+		&i.GuardianName,
+		&i.IsDependent,
+		&i.DateOfBirth,
+		&i.IsActive,
+	)
+	return i, err
+}
+
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, name, email, minor_login_id, password_hash, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM users
 WHERE email = $1
@@ -242,6 +359,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (User, erro
 		&i.ID,
 		&i.Name,
 		&i.Email,
+		&i.MinorLoginID,
 		&i.PasswordHash,
 		&i.GuardianID,
 		&i.IsDependent,
@@ -260,9 +378,22 @@ FROM users
 WHERE id = $1
 `
 
-func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
+type GetUserByIDRow struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Email        *string            `json:"email"`
+	PasswordHash *string            `json:"password_hash"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
-	var i User
+	var i GetUserByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -296,9 +427,92 @@ func (q *Queries) GrantPlatformRoleByCode(ctx context.Context, arg GrantPlatform
 	return err
 }
 
+const issueMinorCredential = `-- name: IssueMinorCredential :one
+WITH issued AS (
+    UPDATE users minor
+    SET minor_login_id = $1, password_hash = $2, updated_at = now()
+    FROM users guardian
+    WHERE minor.id = $3
+      AND minor.is_dependent = true
+      AND minor.is_active = true
+      AND minor.guardian_id = guardian.id
+      AND guardian.id = $4
+      AND guardian.is_active = true
+      AND guardian.is_dependent = false
+      AND EXISTS (
+          SELECT 1 FROM user_platform_roles assignment
+          JOIN platform_roles role ON role.id = assignment.role_id
+          WHERE assignment.user_id = $5 AND role.code = 'ADMIN'
+      )
+    RETURNING minor.id
+), audited AS (
+    INSERT INTO minor_credential_audit (minor_user_id, guardian_user_id, actor_user_id, action, issued_login_id)
+    SELECT id, $4, $5, $6, $1
+    FROM issued
+    RETURNING minor_user_id
+)
+SELECT minor_user_id FROM audited
+`
+
+type IssueMinorCredentialParams struct {
+	MinorLoginID   *string   `json:"minor_login_id"`
+	PasswordHash   *string   `json:"password_hash"`
+	MinorUserID    uuid.UUID `json:"minor_user_id"`
+	GuardianUserID uuid.UUID `json:"guardian_user_id"`
+	ActorUserID    uuid.UUID `json:"actor_user_id"`
+	Action         string    `json:"action"`
+}
+
+func (q *Queries) IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, issueMinorCredential,
+		arg.MinorLoginID,
+		arg.PasswordHash,
+		arg.MinorUserID,
+		arg.GuardianUserID,
+		arg.ActorUserID,
+		arg.Action,
+	)
+	var minor_user_id uuid.UUID
+	err := row.Scan(&minor_user_id)
+	return minor_user_id, err
+}
+
+const listActiveAdultsForAdmin = `-- name: ListActiveAdultsForAdmin :many
+SELECT id, name, email FROM users
+WHERE is_active = true AND is_dependent = false
+ORDER BY lower(name), id
+LIMIT $1
+`
+
+type ListActiveAdultsForAdminRow struct {
+	ID    uuid.UUID `json:"id"`
+	Name  string    `json:"name"`
+	Email *string   `json:"email"`
+}
+
+func (q *Queries) ListActiveAdultsForAdmin(ctx context.Context, rowLimit int32) ([]ListActiveAdultsForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listActiveAdultsForAdmin, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveAdultsForAdminRow{}
+	for rows.Next() {
+		var i ListActiveAdultsForAdminRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.Email); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDependentsByGuardian = `-- name: ListDependentsByGuardian :many
 SELECT id, name, guardian_id, is_dependent,
-       date_of_birth, is_active, created_at, updated_at
+       date_of_birth, is_active, created_at, updated_at, minor_login_id
 FROM users
 WHERE guardian_id = $1
   AND is_dependent = true
@@ -313,14 +527,15 @@ type ListDependentsByGuardianParams struct {
 }
 
 type ListDependentsByGuardianRow struct {
-	ID          uuid.UUID          `json:"id"`
-	Name        string             `json:"name"`
-	GuardianID  *uuid.UUID         `json:"guardian_id"`
-	IsDependent bool               `json:"is_dependent"`
-	DateOfBirth pgtype.Date        `json:"date_of_birth"`
-	IsActive    bool               `json:"is_active"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	MinorLoginID *string            `json:"minor_login_id"`
 }
 
 func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error) {
@@ -341,6 +556,67 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.MinorLoginID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMembersForAdmin = `-- name: ListMembersForAdmin :many
+SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+       u.is_dependent, u.date_of_birth, u.is_active
+FROM users u
+LEFT JOIN users guardian ON guardian.id = u.guardian_id
+WHERE $1::text IS NULL
+   OR u.name ILIKE '%' || $1::text || '%'
+   OR u.email::text ILIKE '%' || $1::text || '%'
+   OR u.minor_login_id::text ILIKE '%' || $1::text || '%'
+ORDER BY u.is_active DESC, lower(u.name), u.id
+LIMIT $2
+`
+
+type ListMembersForAdminParams struct {
+	Search   *string `json:"search"`
+	RowLimit int32   `json:"row_limit"`
+}
+
+type ListMembersForAdminRow struct {
+	ID           uuid.UUID   `json:"id"`
+	Name         string      `json:"name"`
+	Email        *string     `json:"email"`
+	MinorLoginID *string     `json:"minor_login_id"`
+	GuardianID   *uuid.UUID  `json:"guardian_id"`
+	GuardianName *string     `json:"guardian_name"`
+	IsDependent  bool        `json:"is_dependent"`
+	DateOfBirth  pgtype.Date `json:"date_of_birth"`
+	IsActive     bool        `json:"is_active"`
+}
+
+func (q *Queries) ListMembersForAdmin(ctx context.Context, arg ListMembersForAdminParams) ([]ListMembersForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listMembersForAdmin, arg.Search, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMembersForAdminRow{}
+	for rows.Next() {
+		var i ListMembersForAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.MinorLoginID,
+			&i.GuardianID,
+			&i.GuardianName,
+			&i.IsDependent,
+			&i.DateOfBirth,
+			&i.IsActive,
 		); err != nil {
 			return nil, err
 		}
@@ -373,7 +649,7 @@ UPDATE users
 SET password_hash = $1,
     updated_at = now()
 WHERE id = $2
-  AND is_dependent = false
+   AND is_dependent = false
 `
 
 type SetUserPasswordHashParams struct {

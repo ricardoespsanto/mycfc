@@ -13,6 +13,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -132,6 +133,47 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	}
 	if count != 10 {
 		t.Fatalf("active dependant count = %d, want 10", count)
+	}
+}
+
+func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	guardianEmail := "credential-guardian-" + uuid.NewString() + "@example.test"
+	actorEmail := "credential-admin-" + uuid.NewString() + "@example.test"
+	guardian, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Guardião de credencial", Email: &guardianEmail, PasswordHash: stringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Administrador de credencial", Email: &actorEmail, PasswordHash: stringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM minor_credential_audit WHERE guardian_user_id = $1`, guardian.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE guardian_id = $1`, guardian.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1, $2)`, guardian.ID, actor.ID)
+	})
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: actor.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	minor, err := queries.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{Name: "Menor com credencial", GuardianID: &guardian.ID, DateOfBirth: pgtype.Date{Time: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginID, passwordHash := "CFC-TEST0001", "hash"
+	if _, err := queries.IssueMinorCredential(ctx, dbgen.IssueMinorCredentialParams{MinorLoginID: &loginID, PasswordHash: &passwordHash, MinorUserID: minor.ID, GuardianUserID: uuid.New(), ActorUserID: actor.ID, Action: "ISSUED"}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("wrong guardian error = %v", err)
+	}
+	if _, err := queries.IssueMinorCredential(ctx, dbgen.IssueMinorCredentialParams{MinorLoginID: &loginID, PasswordHash: &passwordHash, MinorUserID: minor.ID, GuardianUserID: guardian.ID, ActorUserID: actor.ID, Action: "ISSUED"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.GetActiveDependentByLoginID(ctx, &loginID); err != nil {
+		t.Fatalf("issued minor cannot log in: %v", err)
+	}
+	var auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM minor_credential_audit WHERE minor_user_id = $1 AND action = 'ISSUED'`, minor.ID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("audit count = %d, err = %v", auditCount, err)
 	}
 }
 

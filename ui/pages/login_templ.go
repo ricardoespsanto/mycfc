@@ -68,7 +68,7 @@ func loginContent(page LoginPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"login-title\"><h1 id=\"login-title\">Iniciar sessão</h1><p>Utilize o seu endereço de correio eletrónico e palavra-passe.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"login-title\"><h1 id=\"login-title\">Iniciar sessão</h1><p>Utilize o seu correio eletrónico ou identificador CFC e palavra-passe.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -118,7 +118,7 @@ func loginContent(page LoginPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<div class=\"form-field\"><label for=\"email\">Correio eletrónico</label> <input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<div class=\"form-field\"><label for=\"identifier\">Correio eletrónico ou identificador CFC</label> <input id=\"identifier\" name=\"identifier\" autocomplete=\"username\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -18,16 +18,20 @@ import (
 )
 
 type loginLookup struct {
-	user  dbgen.User
+	user  dbgen.GetActiveUserByEmailRow
+	minor dbgen.GetActiveDependentByLoginIDRow
 	err   error
 	email string
 }
 
-func (l *loginLookup) GetActiveUserByEmail(_ context.Context, email *string) (dbgen.User, error) {
+func (l *loginLookup) GetActiveUserByEmail(_ context.Context, email *string) (dbgen.GetActiveUserByEmailRow, error) {
 	if email != nil {
 		l.email = *email
 	}
 	return l.user, l.err
+}
+func (l *loginLookup) GetActiveDependentByLoginID(_ context.Context, _ *string) (dbgen.GetActiveDependentByLoginIDRow, error) {
+	return l.minor, l.err
 }
 
 func TestLoginGetRendersForm(t *testing.T) {
@@ -46,7 +50,7 @@ func TestLoginGetRendersForm(t *testing.T) {
 		`<h1 id="login-title">Iniciar sessão</h1>`,
 		`action="/login"`,
 		`name="next" value="/dashboard/leisure"`,
-		`autocomplete="email"`,
+		`autocomplete="username"`,
 		`autocomplete="current-password"`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
@@ -62,7 +66,7 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 		t.Fatalf("generate password hash: %v", err)
 	}
 	passwordHash := string(hash)
-	lookup := &loginLookup{user: dbgen.User{
+	lookup := &loginLookup{user: dbgen.GetActiveUserByEmailRow{
 		ID:           uuid.New(),
 		PasswordHash: &passwordHash,
 	}}
@@ -74,9 +78,9 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 		FailureWait: func(context.Context) {},
 	}
 	form := url.Values{
-		"email":    {" MEMBER@EXAMPLE.COM "},
-		"password": {password},
-		"next":     {"/dashboard/leisure"},
+		"identifier": {" MEMBER@EXAMPLE.COM "},
+		"password":   {password},
+		"next":       {"/dashboard/leisure"},
 	}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -115,14 +119,14 @@ func TestLoginPostReturnsHTMXRedirect(t *testing.T) {
 	}
 	passwordHash := string(hash)
 	handler := Login{
-		Users: &loginLookup{user: dbgen.User{
+		Users: &loginLookup{user: dbgen.GetActiveUserByEmailRow{
 			ID:           uuid.New(),
 			PasswordHash: &passwordHash,
 		}},
 		Sessions: scs.New(),
 		PageMeta: loginTestPageMeta(),
 	}
-	form := url.Values{"email": {"member@example.com"}, "password": {password}}
+	form := url.Values{"identifier": {"member@example.com"}, "password": {password}}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("HX-Request", "true")
@@ -137,6 +141,25 @@ func TestLoginPostReturnsHTMXRedirect(t *testing.T) {
 	}
 }
 
+func TestLoginPostAllowsIssuedMinorIdentifier(t *testing.T) {
+	password := "correct horse battery staple"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordHash := string(hash)
+	minorID := uuid.New()
+	handler := Login{Users: &loginLookup{minor: dbgen.GetActiveDependentByLoginIDRow{ID: minorID, PasswordHash: &passwordHash}}, Sessions: scs.New(), PageMeta: loginTestPageMeta(), FailureWait: func(context.Context) {}}
+	form := url.Values{"identifier": {"cfc-ab12cd34"}, "password": {password}}
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.Sessions.LoadAndSave(http.HandlerFunc(handler.Post)).ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
 func TestLoginPostReturnsGenericFailure(t *testing.T) {
 	lookup := &loginLookup{err: pgx.ErrNoRows}
 	handler := Login{
@@ -145,7 +168,7 @@ func TestLoginPostReturnsGenericFailure(t *testing.T) {
 		PageMeta:    loginTestPageMeta(),
 		FailureWait: func(context.Context) {},
 	}
-	form := url.Values{"email": {"nobody@example.com"}, "password": {"incorrect password"}}
+	form := url.Values{"identifier": {"nobody@example.com"}, "password": {"incorrect password"}}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
@@ -166,7 +189,7 @@ func TestLoginPostReturnsInternalErrorForLookupFailure(t *testing.T) {
 		PageMeta:    loginTestPageMeta(),
 		FailureWait: func(context.Context) {},
 	}
-	form := url.Values{"email": {"member@example.com"}, "password": {"correct horse battery staple"}}
+	form := url.Values{"identifier": {"member@example.com"}, "password": {"correct horse battery staple"}}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()

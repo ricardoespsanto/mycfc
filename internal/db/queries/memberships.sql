@@ -18,6 +18,13 @@ INSERT INTO seasons (code, name, starts_on, ends_on, is_current)
 VALUES (sqlc.arg(code), sqlc.arg(name), sqlc.arg(starts_on), sqlc.arg(ends_on), sqlc.arg(is_current))
 RETURNING id, code, name, starts_on, ends_on, is_current, created_at;
 
+-- name: GetCurrentSeason :one
+SELECT id, code, name, starts_on, ends_on, is_current, created_at
+FROM seasons WHERE is_current = true;
+
+-- name: ListMembershipProgrammes :many
+SELECT id, code, name_pt, created_at FROM programmes ORDER BY name_pt;
+
 -- name: CreateCompetitionCategory :one
 INSERT INTO competition_categories (
     season_id, programme_id, code, name_pt, birth_date_from, birth_date_to, approved_by_user_id, approved_at
@@ -46,6 +53,20 @@ RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id
 -- name: AddMembershipModality :exec
 INSERT INTO membership_modalities (membership_id, modality_id)
 VALUES (sqlc.arg(membership_id), sqlc.arg(modality_id));
+
+-- name: UpsertCurrentSeasonMembership :one
+INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
+VALUES (sqlc.arg(user_id), sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.arg(starts_on))
+ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
+SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
+RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
+          starts_on, ends_on, created_at, updated_at;
+
+-- name: EndCurrentSeasonMembership :execrows
+UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
+WHERE user_id = sqlc.arg(user_id) AND season_id = sqlc.arg(season_id)
+  AND programme_id = sqlc.arg(programme_id) AND starts_on <= CURRENT_DATE
+  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE);
 
 -- name: ListActiveMembershipsForUser :many
 SELECT

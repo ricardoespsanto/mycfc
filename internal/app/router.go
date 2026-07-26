@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, members handlers.Members) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{}
@@ -44,13 +44,19 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /dashboard/competition", auth.RequireProgramme("Competition")(http.HandlerFunc(dashboard.Competition)))
 	mux.Handle("GET /dashboard/kayak-polo", auth.RequireProgramme("Kayak_Polo")(http.HandlerFunc(dashboard.KayakPolo)))
 	mux.Handle("GET /dashboard/leisure", auth.RequireProgramme("Leisure")(http.HandlerFunc(dashboard.Leisure)))
-	mux.Handle("GET /dashboard/guardian", auth.RequireAuthenticated(http.HandlerFunc(dashboard.Guardian)))
+	mux.Handle("GET /dashboard/guardian", auth.RequireGuardian(http.HandlerFunc(dashboard.Guardian)))
 	mux.Handle("GET /dashboard/coach", auth.RequireCoach(http.HandlerFunc(dashboard.Coach)))
 	mux.Handle("GET /dashboard/moderator", auth.RequireModerator(http.HandlerFunc(dashboard.Moderator)))
 	mux.Handle("GET /admin/fleet", auth.RequireAdmin(http.HandlerFunc(dashboard.Admin)))
 	mux.Handle("POST /admin/maintenance", auth.RequireAdmin(http.HandlerFunc(dashboard.Maintenance)))
+	mux.Handle("GET /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Index)))
+	mux.Handle("POST /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Create)))
+	mux.Handle("GET /admin/membros/{id}", auth.RequireAdmin(http.HandlerFunc(members.Detail)))
+	mux.Handle("POST /admin/membros/{id}/inscricao", auth.RequireAdmin(http.HandlerFunc(members.Membership)))
+	mux.Handle("POST /admin/membros/{id}/desativar", auth.RequireAdmin(http.HandlerFunc(members.Deactivate)))
+	mux.Handle("POST /admin/membros/{id}/credencial-menor", auth.RequireAdmin(http.HandlerFunc(members.IssueMinorCredential)))
 	mux.Handle("POST /repairs", auth.RequireAuthenticated(http.HandlerFunc(repair.Post)))
-	mux.Handle("POST /guardian/add-dependent", auth.RequireAuthenticated(http.HandlerFunc(dashboard.AddDependent)))
+	mux.Handle("POST /guardian/add-dependent", auth.RequireGuardian(http.HandlerFunc(dashboard.AddDependent)))
 	mux.Handle("GET /events", auth.RequireAuthenticated(http.HandlerFunc(events.Index)))
 	mux.Handle("GET /events/{id}", auth.RequireAuthenticated(http.HandlerFunc(events.Detail)))
 	mux.Handle("POST /events/{id}/responses", auth.RequireAuthenticated(http.HandlerFunc(events.Respond)))
@@ -89,9 +95,10 @@ func assetHandler() http.Handler {
 
 func customNotFound(mux *http.ServeMux, notFound http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler, pattern := mux.Handler(r)
+		_, pattern := mux.Handler(r)
 		if pattern != "" || matchesOtherMethod(mux, r) {
-			handler.ServeHTTP(w, r)
+			// ServeMux attaches path values such as {id} before invoking a handler.
+			mux.ServeHTTP(w, r)
 			return
 		}
 		notFound(w, r)

@@ -152,7 +152,8 @@ func New(ctx context.Context) (*Application, error) {
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements))
+	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, members))
 	csrfMiddleware := csrf.Protect(
 		csrfKey,
 		csrf.CookieName("mycfc_csrf"),

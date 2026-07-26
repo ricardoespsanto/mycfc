@@ -22,6 +22,7 @@ type CurrentUserLookup interface {
 type CurrentUser struct {
 	ID                 uuid.UUID
 	Name               string
+	IsDependent        bool
 	IsAdmin            bool
 	Programmes         map[string]bool
 	CoachProgrammeIDs  map[uuid.UUID]bool
@@ -52,7 +53,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			return
 		}
 		user, err := a.Users.GetActiveAccountByID(r.Context(), id)
-		if errors.Is(err, pgx.ErrNoRows) || (err == nil && (!user.IsActive || user.IsDependent)) {
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !user.IsActive) {
 			a.destroy(r.Context())
 			next.ServeHTTP(w, r)
 			return
@@ -66,14 +67,17 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		grants, err := a.Users.ListActiveStaffGrantsForUser(r.Context(), id)
-		if err != nil {
-			a.System.InternalError(w, r)
-			return
-		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, IsAdmin: user.IsAdmin, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
+		current := CurrentUser{ID: user.ID, Name: user.Name, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
+		}
+		var grants []dbgen.ListActiveStaffGrantsForUserRow
+		if !user.IsDependent {
+			grants, err = a.Users.ListActiveStaffGrantsForUser(r.Context(), id)
+			if err != nil {
+				a.System.InternalError(w, r)
+				return
+			}
 		}
 		for _, grant := range grants {
 			switch grant.Capability {
@@ -93,6 +97,17 @@ func (a Auth) Load(next http.Handler) http.Handler {
 		ctx = httpx.WithUserID(ctx, current.ID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (a Auth) RequireGuardian(next http.Handler) http.Handler {
+	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := currentUser(r.Context())
+		if user.IsDependent {
+			a.System.Forbidden(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 
 func (a Auth) AnonymousOnly(next http.Handler) http.Handler {

@@ -27,6 +27,22 @@ CREATE UNIQUE INDEX staff_grants_active_scope_uidx
     WHERE revoked_at IS NULL;
 CREATE INDEX staff_grants_active_user_idx ON staff_grants (user_id) WHERE revoked_at IS NULL;
 
+-- +goose StatementBegin
+CREATE FUNCTION reject_dependent_privileges() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id AND is_dependent) THEN
+        RAISE EXCEPTION 'dependants cannot receive platform or staff privileges';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER user_platform_roles_reject_dependant BEFORE INSERT OR UPDATE OF user_id ON user_platform_roles
+FOR EACH ROW EXECUTE FUNCTION reject_dependent_privileges();
+CREATE TRIGGER staff_grants_reject_dependant BEFORE INSERT OR UPDATE OF user_id ON staff_grants
+FOR EACH ROW EXECUTE FUNCTION reject_dependent_privileges();
+
 -- Append-only record of every grant and revocation for operational review.
 CREATE TABLE staff_grant_audit_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -88,6 +104,9 @@ CREATE INDEX event_team_audiences_team_idx ON event_team_audiences (team_id, eve
 
 -- +goose Down
 DROP TABLE IF EXISTS event_team_audiences;
+DROP TRIGGER IF EXISTS staff_grants_reject_dependant ON staff_grants;
+DROP TRIGGER IF EXISTS user_platform_roles_reject_dependant ON user_platform_roles;
+DROP FUNCTION IF EXISTS reject_dependent_privileges;
 DROP FUNCTION IF EXISTS prevent_staff_grant_audit_mutation;
 DROP FUNCTION IF EXISTS audit_staff_grant_change;
 DROP TABLE IF EXISTS staff_grant_audit_events;
