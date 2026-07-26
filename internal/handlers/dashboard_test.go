@@ -22,14 +22,16 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	store := &dashboardStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}, CompetitionID: "competition", TrainingID: "training", SocialID: "social", CleanupsID: "cleanups"}
 	for _, tc := range []struct {
-		name, absent, present string
-		user                  CurrentUser
-		handler               http.HandlerFunc
+		name    string
+		present []string
+		absent  []string
+		user    CurrentUser
+		handler http.HandlerFunc
 	}{
-		{"competitor", "Frota", "Competições", CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competitor},
-		{"leisure", "Competição", "Eventos sociais", CurrentUser{Programmes: map[string]bool{"Leisure": true}}, dashboard.Leisure},
-		{"guardian", "Frota", "Adicionar menor a cargo", CurrentUser{}, dashboard.Guardian},
-		{"admin", "Competição", "Frota", CurrentUser{IsAdmin: true}, dashboard.Admin},
+		{"competition athlete", []string{"Hoje", "Atleta de competição"}, []string{"Atleta de iniciação", "Atleta de kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
+		{"multiple memberships", []string{"Lazer", "Atleta de iniciação", "Atleta de competição", "Atleta de kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
+		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
+		{"admin", []string{"Frota"}, []string{"Treinador", "Moderador"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
@@ -41,10 +43,31 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 				t.Fatalf("status = %d", response.Code)
 			}
 			body := response.Body.String()
-			if !strings.Contains(body, tc.present) || strings.Contains(body, tc.absent) {
-				t.Fatalf("unexpected dashboard content: %q", body)
+			for _, label := range tc.present {
+				if !strings.Contains(body, label) {
+					t.Fatalf("dashboard does not contain %q: %q", label, body)
+				}
+			}
+			for _, label := range tc.absent {
+				if strings.Contains(body, label) {
+					t.Fatalf("dashboard unexpectedly contains %q: %q", label, body)
+				}
 			}
 		})
+	}
+}
+
+func TestDashboardTodayRendersVisibleEventsAndLocalDayBounds(t *testing.T) {
+	location := time.FixedZone("WEST", 3600)
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, location)
+	store := &dashboardStoreFake{todayEvents: []dbgen.ListEventsForTodayRow{{ID: uuid.New(), Title: "Treino de manhã", StartsAt: pgtype.Timestamptz{Time: now, Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true}}}}
+	dashboard := Dashboard{Store: store, Location: location, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	response := dashboardResponse(t, dashboard.Today, uuid.New())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Treino de manhã") {
+		t.Fatalf("unexpected Today response: %d %q", response.Code, response.Body.String())
+	}
+	if store.todayParams.DayStartsAt.Time != time.Date(2026, 7, 24, 0, 0, 0, 0, location) || store.todayParams.DayEndsAt.Time != time.Date(2026, 7, 25, 0, 0, 0, 0, location) {
+		t.Fatalf("unexpected Today bounds: %+v", store.todayParams)
 	}
 }
 
@@ -143,6 +166,8 @@ type dashboardStoreFake struct {
 	adminLimit        int32
 	repairLimit       int32
 	maintenanceParams dbgen.ListUpcomingMaintenanceParams
+	todayEvents       []dbgen.ListEventsForTodayRow
+	todayParams       dbgen.ListEventsForTodayParams
 }
 
 func (f *dashboardStoreFake) CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error) {
@@ -261,6 +286,11 @@ func (f *presignStoreFake) PresignGet(_ context.Context, _ string, lifetime time
 
 func (f *dashboardStoreFake) ListOperationalEquipment(_ context.Context, _ int32) ([]dbgen.Equipment, error) {
 	return nil, nil
+}
+
+func (f *dashboardStoreFake) ListEventsForToday(_ context.Context, params dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {
+	f.todayParams = params
+	return f.todayEvents, nil
 }
 
 func (f *dashboardStoreFake) ListRecentPerformanceMetrics(ctx context.Context, params dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error) {

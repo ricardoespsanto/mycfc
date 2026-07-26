@@ -108,11 +108,17 @@ func ValidatePassword(password string) error {
 }
 
 var allowedNextPaths = map[string]struct{}{
-	"/dashboard":            {},
-	"/dashboard/competitor": {},
-	"/dashboard/leisure":    {},
-	"/dashboard/guardian":   {},
-	"/admin/fleet":          {},
+	"/dashboard":             {},
+	"/today":                 {},
+	"/dashboard/competitor":  {},
+	"/dashboard/initiation":  {},
+	"/dashboard/competition": {},
+	"/dashboard/kayak-polo":  {},
+	"/dashboard/leisure":     {},
+	"/dashboard/guardian":    {},
+	"/dashboard/coach":       {},
+	"/dashboard/moderator":   {},
+	"/admin/fleet":           {},
 }
 
 func SafeNext(raw string) string {

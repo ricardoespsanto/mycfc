@@ -1,0 +1,24 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type TodayEvent struct { ID, Title, When string }
+type TodayPage struct { Meta components.PageMeta; Events []TodayEvent }
+
+templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
+
+templ todayContent(page TodayPage) {
+	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Hoje</h1><p>Os eventos visíveis para as suas inscrições e responsabilidades ativas.</p></section>
+	<section class="dashboard-card"><h2>Agenda de hoje</h2>
+		if len(page.Events) == 0 {
+			<p>Não existem eventos para hoje.</p>
+		}
+		if len(page.Events) > 0 {
+			<ul>
+				for _, event := range page.Events {
+					<li><a href={ "/events/" + event.ID }>{ event.Title }</a> <span>{ event.When }</span></li>
+				}
+			</ul>
+		}
+	</section>
+}

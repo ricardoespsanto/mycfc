@@ -58,7 +58,7 @@ templ Base(meta PageMeta, content templ.Component) {
 		<body>
 			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
 			if len(meta.Navigation) > 0 {
-				<header class="site-header"><div class="site-header__content"><a class="site-brand" href="/dashboard">MyCFC</a>@Navigation(meta.CurrentPath, meta.Navigation)<form method="post" action="/logout">@meta.CSRFField<button class="logout-button" type="submit">Terminar sessão</button></form></div></header>
+				<header class="site-header"><div class="site-header__content"><a class="site-brand" href="/today">MyCFC</a>@Navigation(meta.CurrentPath, meta.Navigation)<form method="post" action="/logout">@meta.CSRFField<button class="logout-button" type="submit">Terminar sessão</button></form></div></header>
 			}
 			<main id="conteudo-principal">
 				@content

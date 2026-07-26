@@ -41,6 +41,7 @@ CREATE TABLE staff_grant_audit_events (
 
 CREATE INDEX staff_grant_audit_events_grant_idx ON staff_grant_audit_events (staff_grant_id, occurred_at);
 
+-- +goose StatementBegin
 CREATE FUNCTION audit_staff_grant_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
@@ -59,16 +60,19 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+-- +goose StatementEnd
 
 CREATE TRIGGER staff_grants_audit_trigger
 AFTER INSERT OR UPDATE ON staff_grants
 FOR EACH ROW EXECUTE FUNCTION audit_staff_grant_change();
 
+-- +goose StatementBegin
 CREATE FUNCTION prevent_staff_grant_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     RAISE EXCEPTION 'staff grant audit events are append-only';
 END;
 $$;
+-- +goose StatementEnd
 
 CREATE TRIGGER staff_grant_audit_events_immutable_trigger
 BEFORE UPDATE OR DELETE ON staff_grant_audit_events

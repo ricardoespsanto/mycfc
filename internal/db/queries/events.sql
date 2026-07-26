@@ -41,6 +41,55 @@ WHERE e.starts_at >= now()
 ORDER BY e.starts_at, e.id
 LIMIT sqlc.arg(row_limit);
 
+-- name: ListEventsForToday :many
+SELECT e.id, e.title, e.starts_at, e.ends_at
+FROM events e
+WHERE e.starts_at < sqlc.arg(day_ends_at)
+  AND e.ends_at >= sqlc.arg(day_starts_at)
+  AND (
+      sqlc.arg(is_admin)::boolean
+      OR NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      OR (
+          EXISTS (
+              SELECT 1
+              FROM user_memberships m
+              JOIN event_audiences a ON a.programme_id = m.programme_id
+              JOIN users subject ON subject.id = m.user_id
+              WHERE a.event_id = e.id
+                AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+                AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM user_memberships m
+              JOIN event_team_audiences a ON a.team_id = m.team_id
+              JOIN users subject ON subject.id = m.user_id
+              WHERE a.event_id = e.id
+                AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+                AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+          )
+      )
+      OR (
+          (EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id) OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id))
+          AND NOT EXISTS (
+              SELECT 1 FROM event_audiences a
+              WHERE a.event_id = e.id AND NOT EXISTS (
+                  SELECT 1 FROM staff_grants g
+                  WHERE g.user_id = sqlc.arg(user_id) AND g.capability = 'COACH' AND g.revoked_at IS NULL AND g.programme_id = a.programme_id
+              )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM event_team_audiences a
+              JOIN teams t ON t.id = a.team_id
+              WHERE a.event_id = e.id AND NOT EXISTS (
+                  SELECT 1 FROM staff_grants g
+                  WHERE g.user_id = sqlc.arg(user_id) AND g.capability = 'COACH' AND g.revoked_at IS NULL AND (g.team_id = a.team_id OR g.programme_id = t.programme_id)
+              )
+          )
+      )
+  )
+ORDER BY e.starts_at, e.id;
+
 -- name: ListEventsForAdmin :many
 SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count

@@ -73,6 +73,34 @@ func TestAuthAllowsCoachEventStaffButNotAdmin(t *testing.T) {
 	}
 }
 
+func TestAuthRequiresActiveDelegatedGrantForStaffWorkspaces(t *testing.T) {
+	id := uuid.New()
+	for _, tc := range []struct {
+		name   string
+		grants []dbgen.ListActiveStaffGrantsForUserRow
+		status int
+	}{
+		{"coach", []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "COACH", ProgrammeID: ptr(uuid.New())}}, http.StatusNoContent},
+		{"moderator", []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "MODERATOR"}}, http.StatusNoContent},
+		{"no grant", nil, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true}, grants: tc.grants}, Sessions: scs.New()}
+			var guard func(http.Handler) http.Handler
+			switch tc.name {
+			case "coach", "no grant":
+				guard = auth.RequireCoach
+			default:
+				guard = auth.RequireModerator
+			}
+			response := authenticatedRequest(t, auth.Sessions, id.String(), auth.Load(guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))))
+			if response.Code != tc.status {
+				t.Fatalf("status = %d, want %d", response.Code, tc.status)
+			}
+		})
+	}
+}
+
 func ptr(id uuid.UUID) *uuid.UUID { return &id }
 
 func TestAuthDashboardSelection(t *testing.T) {
@@ -80,17 +108,16 @@ func TestAuthDashboardSelection(t *testing.T) {
 	for _, tc := range []struct {
 		programmes []string
 		admin      bool
-		want       string
 	}{
-		{[]string{"Leisure"}, false, "/dashboard/leisure"},
-		{[]string{"Competition"}, true, "/dashboard/competitor"},
-		{nil, true, "/admin/fleet"},
-		{nil, false, "/dashboard/member"},
+		{[]string{"Leisure"}, false},
+		{[]string{"Competition"}, true},
+		{nil, true},
+		{nil, false},
 	} {
 		auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: tc.admin}, programmes: tc.programmes}, Sessions: scs.New()}
 		response := authenticatedRequest(t, auth.Sessions, id.String(), auth.Load(http.HandlerFunc(auth.Dashboard)))
-		if response.Header().Get("Location") != tc.want {
-			t.Fatalf("location = %q, want %q", response.Header().Get("Location"), tc.want)
+		if response.Header().Get("Location") != "/today" {
+			t.Fatalf("location = %q, want /today", response.Header().Get("Location"))
 		}
 	}
 }

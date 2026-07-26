@@ -62,6 +62,7 @@ type Querier interface {
 	ListEventsForAdmin(ctx context.Context, rowLimit int32) ([]ListEventsForAdminRow, error)
 	ListEventsForCoach(ctx context.Context, arg ListEventsForCoachParams) ([]ListEventsForCoachRow, error)
 	ListEventsForMember(ctx context.Context, arg ListEventsForMemberParams) ([]ListEventsForMemberRow, error)
+	ListEventsForToday(ctx context.Context, arg ListEventsForTodayParams) ([]ListEventsForTodayRow, error)
 	ListModalitiesForMembership(ctx context.Context, membershipID uuid.UUID) ([]Modality, error)
 	ListOperationalEquipment(ctx context.Context, rowLimit int32) ([]Equipment, error)
 	ListPendingRepairRequests(ctx context.Context, rowLimit int32) ([]ListPendingRepairRequestsRow, error)

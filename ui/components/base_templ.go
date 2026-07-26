@@ -173,7 +173,7 @@ func Base(meta PageMeta, content templ.Component) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(meta.Navigation) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<header class=\"site-header\"><div class=\"site-header__content\"><a class=\"site-brand\" href=\"/dashboard\">MyCFC</a>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<header class=\"site-header\"><div class=\"site-header__content\"><a class=\"site-brand\" href=\"/today\">MyCFC</a>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

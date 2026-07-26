@@ -35,6 +35,7 @@ type DashboardStore interface {
 	ListWhatsAppGroupsForUserProgramme(context.Context, dbgen.ListWhatsAppGroupsForUserProgrammeParams) ([]dbgen.WhatsappGroup, error)
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
+	ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error)
 }
 
 type FleetStore interface {
@@ -66,6 +67,22 @@ type Dashboard struct {
 }
 
 func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
+	h.athlete(w, r, "Painel de atleta", "/dashboard/competitor", []string{"Competition", "Initiation", "Kayak_Polo"})
+}
+
+func (h Dashboard) Initiation(w http.ResponseWriter, r *http.Request) {
+	h.athlete(w, r, "Painel de atleta de iniciação", "/dashboard/initiation", []string{"Initiation"})
+}
+
+func (h Dashboard) Competition(w http.ResponseWriter, r *http.Request) {
+	h.athlete(w, r, "Painel de atleta de competição", "/dashboard/competition", []string{"Competition"})
+}
+
+func (h Dashboard) KayakPolo(w http.ResponseWriter, r *http.Request) {
+	h.athlete(w, r, "Painel de atleta de kayak polo", "/dashboard/kayak-polo", []string{"Kayak_Polo"})
+}
+
+func (h Dashboard) athlete(w http.ResponseWriter, r *http.Request, heading, path string, programmes []string) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
@@ -80,12 +97,12 @@ func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	groups, err := h.groups(ctx, user.ID, "Competition", "Initiation", "Kayak_Polo")
+	groups, err := h.groups(ctx, user.ID, programmes...)
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.render(w, r, "Painel de competidor", "Acompanhe os seus treinos, desempenho e agenda.", "Ainda não existem treinos ou métricas para apresentar.", "/dashboard/competitor", []CalendarVM{h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID)}, []DashboardSectionVM{
+	h.render(w, r, heading, "Acompanhe os seus treinos, desempenho e agenda.", "Ainda não existem treinos ou métricas para apresentar.", path, []CalendarVM{h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID)}, []DashboardSectionVM{
 		{Heading: "Desempenho", Empty: "Ainda não existem métricas recentes.", Items: performanceMetricItems(metrics)},
 		{Heading: "Treinos recentes", Empty: "Ainda não existem treinos recentes.", Items: trainingLogItems(logs)},
 		{Heading: "Grupos WhatsApp", Empty: "Ainda não existem grupos WhatsApp ativos.", Items: whatsappGroupItems(groups)},
@@ -112,6 +129,36 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 }
 func (h Dashboard) Member(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "Área de membro", "A sua conta está ativa. As atividades do clube serão apresentadas quando a sua inscrição de época for atribuída.", "Ainda não tem inscrições de época ativas.", "/dashboard/member", nil, nil)
+}
+func (h Dashboard) Coach(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, "Área de treinador", "Consulte os eventos das suas atribuições ativas.", "Use Eventos para criar e gerir eventos no âmbito das suas atribuições.", "/dashboard/coach", nil, nil)
+}
+func (h Dashboard) Moderator(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, "Área de moderador", "A sua atribuição de moderação está ativa.", "As ferramentas de moderação serão apresentadas aqui.", "/dashboard/moderator", nil, nil)
+}
+func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	now := h.now().In(h.location())
+	dayStartsAt := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, h.location())
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	events, err := h.Store.ListEventsForToday(ctx, dbgen.ListEventsForTodayParams{UserID: user.ID, IsAdmin: user.IsAdmin, DayStartsAt: pgtype.Timestamptz{Time: dayStartsAt, Valid: true}, DayEndsAt: pgtype.Timestamptz{Time: dayStartsAt.AddDate(0, 0, 1), Valid: true}})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.TodayPage{Events: make([]pages.TodayEvent, len(events))}
+	for i, event := range events {
+		page.Events[i] = pages.TodayEvent{ID: event.ID.String(), Title: event.Title, When: event.StartsAt.Time.In(h.location()).Format("15:04") + " - " + event.EndsAt.Time.In(h.location()).Format("15:04")}
+	}
+	page.Meta = h.PageMeta
+	page.Meta.Title = "Hoje | MyCFC"
+	page.Meta.CurrentPath = "/today"
+	page.Meta.CurrentUserName = user.Name
+	page.Meta.Navigation = dashboardNavigation(user)
+	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pages.Today(page).Render(r.Context(), w)
 }
 func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
@@ -514,12 +561,24 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 }
 
 func dashboardNavigation(user CurrentUser) []components.NavigationItem {
-	items := []components.NavigationItem{{Label: "Painel", Path: "/dashboard"}, {Label: "Eventos", Path: "/events"}, {Label: "Menores a cargo", Path: "/dashboard/guardian"}}
+	items := []components.NavigationItem{{Label: "Hoje", Path: "/today"}, {Label: "Eventos", Path: "/events"}, {Label: "Encarregado de educação", Path: "/dashboard/guardian"}}
 	if user.Programmes["Leisure"] {
 		items = append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}
-	if user.Programmes["Competition"] || user.Programmes["Initiation"] || user.Programmes["Kayak_Polo"] {
-		items = append(items, components.NavigationItem{Label: "Competição", Path: "/dashboard/competitor"})
+	if user.Programmes["Initiation"] {
+		items = append(items, components.NavigationItem{Label: "Atleta de iniciação", Path: "/dashboard/initiation"})
+	}
+	if user.Programmes["Competition"] {
+		items = append(items, components.NavigationItem{Label: "Atleta de competição", Path: "/dashboard/competition"})
+	}
+	if user.Programmes["Kayak_Polo"] {
+		items = append(items, components.NavigationItem{Label: "Atleta de kayak polo", Path: "/dashboard/kayak-polo"})
+	}
+	if user.CanManageEvents {
+		items = append(items, components.NavigationItem{Label: "Treinador", Path: "/dashboard/coach"})
+	}
+	if user.CanModerateContent {
+		items = append(items, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
 	}
 	if user.IsAdmin {
 		items = append(items, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
