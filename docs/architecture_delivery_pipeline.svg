@@ -353,7 +353,7 @@
 <title>migration_task</title>
 <path fill="#fff6e8" stroke="#425466" stroke-width="1.3" d="M305.5,-671C305.5,-671 118.5,-671 118.5,-671 112.5,-671 106.5,-665 106.5,-659 106.5,-659 106.5,-639 106.5,-639 106.5,-633 112.5,-627 118.5,-627 118.5,-627 305.5,-627 305.5,-627 311.5,-627 317.5,-633 317.5,-639 317.5,-639 317.5,-659 317.5,-659 317.5,-665 311.5,-671 305.5,-671"/>
 <text text-anchor="middle" x="212" y="-652.8" font-family="Arial" font-size="11.50">One&#45;off ECS Fargate migration task</text>
-<text text-anchor="middle" x="212" y="-639.8" font-family="Arial" font-size="11.50">private subnet · Goose up</text>
+<text text-anchor="middle" x="212" y="-639.8" font-family="Arial" font-size="11.50">not used by reset&#45;only baseline</text>
 </g>
 <!-- migration_td&#45;&gt;migration_task -->
 <g id="edge26" class="edge">

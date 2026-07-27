@@ -3,14 +3,13 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 BIN_DIR := $(CURDIR)/bin
-GOOSE := $(BIN_DIR)/goose
 SQLC := $(BIN_DIR)/sqlc
 TEMPL := $(BIN_DIR)/templ
 AIR := $(BIN_DIR)/air
 TERRAFORM_VERSION := 1.15.8
 TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast migrate-up migrate-down-one migrate-status dev-bootstrap dev test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,7 +18,6 @@ tools: ## Install pinned Go development tools into ./bin
 	@mkdir -p $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/a-h/templ/cmd/templ@v0.3.1020
 	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-	GOBIN=$(BIN_DIR) go install github.com/pressly/goose/v3/cmd/goose@latest
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@v1.67.1
 
 dev-infra: ## Start local PostgreSQL and MinIO
@@ -44,14 +42,11 @@ generate-fast: ## Regenerate source and assets for Air
 	$(SQLC) generate
 	npm run build
 
-migrate-up: ## Apply all pending local database migrations
-	@set -a; source .env; set +a; $(GOOSE) -dir internal/db/migrations postgres "$$DATABASE_URL" up
+db-provision: ## Provision the reset-only baseline into an empty local database
+	@set -a; source .env; set +a; if docker compose exec -T postgres psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "SELECT to_regclass('public.users') IS NOT NULL" | grep -qx t; then echo "local database already has the baseline; use make reset-local to recreate it"; else docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" < internal/db/schema.sql; fi
 
-migrate-down-one: ## Roll back one migration outside production
-	@set -a; source .env; set +a; [[ "$${APP_ENV}" != "production" ]] || { echo "down migrations are forbidden in production" >&2; exit 1; }; $(GOOSE) -dir internal/db/migrations postgres "$$DATABASE_URL" down
-
-migrate-status: ## Show migration status
-	@set -a; source .env; set +a; $(GOOSE) -dir internal/db/migrations postgres "$$DATABASE_URL" status
+db-provision-test: ## Recreate and provision the local integration-test database
+	@set -a; source .env; set +a; docker compose exec -T postgres dropdb -U "$$POSTGRES_USER" --if-exists mycfc_test; docker compose exec -T postgres createdb -U "$$POSTGRES_USER" mycfc_test; docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d mycfc_test < internal/db/schema.sql
 
 dev-bootstrap: ## Create .env, start infrastructure, migrate and build assets
 	./scripts/local-bootstrap.sh
@@ -62,8 +57,8 @@ dev: ## Run the application through Air (never go run)
 test: ## Run unit tests
 	go test ./internal/... ./cmd/...
 
-test-integration: dev-infra ## Run integration tests against local services
-	@set -a; source .env; set +a; if ! docker compose exec -T postgres psql -U "$${POSTGRES_USER}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then docker compose exec -T postgres createdb -U "$${POSTGRES_USER}" mycfc_test; fi; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable"; $(GOOSE) -dir internal/db/migrations postgres "$$TEST_DATABASE_URL" up; TEST_DATABASE_URL="$$TEST_DATABASE_URL" go test -tags=integration ./internal/db/... ./internal/handlers/... ./internal/storage/...
+test-integration: dev-infra db-provision-test ## Run integration tests against local services
+	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -tags=integration ./internal/db/... ./internal/handlers/... ./internal/storage/...
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e

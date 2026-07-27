@@ -104,7 +104,7 @@ digraph MyCFCDelivery {
     migration_td [label="Migration task-definition family\nmigrate command · admin DB role and secret", fillcolor="#fff6e8"];
     { rank=same; app_td; migration_td; }
 
-    migration_task [label="One-off ECS Fargate migration task\nprivate subnet · Goose up", fillcolor="#fff6e8"];
+    migration_task [label="One-off ECS Fargate schema task\nnot used by reset-only baseline", fillcolor="#fff6e8"];
     rds [label="RDS PostgreSQL\nbackward-compatible migration target", fillcolor="#fff0f0"];
     ecs_service [label="ECS application service update\nnew application task revision", fillcolor="#ebf8f1"];
     health [label="Deployment verification\nservice stable · targets healthy · smoke tests", fillcolor="#eaf8ef"];

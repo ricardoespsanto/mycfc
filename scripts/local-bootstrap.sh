@@ -24,9 +24,11 @@ done
 
 docker compose up -d --wait postgres minio
 docker compose run --rm minio-init
-if ! docker compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='mycfc_test'" | grep -qx 1; then
-  docker compose exec -T postgres createdb -U "$POSTGRES_USER" mycfc_test
+if ! docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT to_regclass('public.users') IS NOT NULL" | grep -qx t; then
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" < internal/db/schema.sql
 fi
-./bin/goose -dir internal/db/migrations postgres "$DATABASE_URL" up
+docker compose exec -T postgres dropdb -U "$POSTGRES_USER" --if-exists mycfc_test
+docker compose exec -T postgres createdb -U "$POSTGRES_USER" mycfc_test
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d mycfc_test < internal/db/schema.sql
 npm ci
 npm run build

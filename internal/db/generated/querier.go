@@ -15,14 +15,11 @@ type Querier interface {
 	AddEventAudience(ctx context.Context, arg AddEventAudienceParams) error
 	AddEventTeamAudience(ctx context.Context, arg AddEventTeamAudienceParams) error
 	AddMembershipModality(ctx context.Context, arg AddMembershipModalityParams) error
-	AssignTrainingSession(ctx context.Context, arg AssignTrainingSessionParams) (int64, error)
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)
-	CanCoachManageTrainingSession(ctx context.Context, arg CanCoachManageTrainingSessionParams) (bool, error)
 	CancelMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CheckInEventResponse(ctx context.Context, arg CheckInEventResponseParams) (int64, error)
 	CompleteMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
-	CompleteTrainingSession(ctx context.Context, arg CompleteTrainingSessionParams) (int64, error)
 	ConfirmWaitlistedResponse(ctx context.Context, arg ConfirmWaitlistedResponseParams) (int64, error)
 	CountDependentsByGuardian(ctx context.Context, guardianID *uuid.UUID) (int64, error)
 	CountEquipmentByStatus(ctx context.Context) ([]CountEquipmentByStatusRow, error)
@@ -100,9 +97,8 @@ type Querier interface {
 	ListRecentPerformanceMetrics(ctx context.Context, arg ListRecentPerformanceMetricsParams) ([]PerformanceMetric, error)
 	ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error)
 	ListTeamsForEventAuthoring(ctx context.Context) ([]ListTeamsForEventAuthoringRow, error)
-	ListTrainingAthletesForAdmin(ctx context.Context, rowLimit int32) ([]ListTrainingAthletesForAdminRow, error)
-	ListTrainingAthletesForCoach(ctx context.Context, arg ListTrainingAthletesForCoachParams) ([]ListTrainingAthletesForCoachRow, error)
 	ListTrainingPlansForAdmin(ctx context.Context, rowLimit int32) ([]ListTrainingPlansForAdminRow, error)
+	ListTrainingPlansForAuthoring(ctx context.Context, arg ListTrainingPlansForAuthoringParams) ([]ListTrainingPlansForAuthoringRow, error)
 	ListTrainingPlansForCoach(ctx context.Context, arg ListTrainingPlansForCoachParams) ([]ListTrainingPlansForCoachRow, error)
 	ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error)
 	ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error)
@@ -115,6 +111,7 @@ type Querier interface {
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
 	RevokeStaffGrant(ctx context.Context, arg RevokeStaffGrantParams) (int64, error)
 	SaveEventResponse(ctx context.Context, arg SaveEventResponseParams) error
+	SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error)
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)

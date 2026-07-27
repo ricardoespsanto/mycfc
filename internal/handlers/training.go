@@ -41,7 +41,8 @@ func (h Training) Index(w http.ResponseWriter, r *http.Request) {
 		if session.ModalityName != nil {
 			modality = *session.ModalityName
 		}
-		page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Completed: session.CompletedAt.Valid})
+		outcome, _ := session.OutcomeStatus.(string)
+		page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome})
 	}
 	documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
 	if err != nil {
@@ -106,8 +107,28 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	ends, endErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("ends_at"), h.location())
 	title, description := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("description"))
 	modalityID, err := optionalUUID(r.PostForm.Get("modality_id"))
-	if err != nil || startErr != nil || endErr != nil || !ends.After(starts) || !validTrainingText(title, 2, 180) || utf8.RuneCountInString(description) > 4000 {
-		http.Error(w, "Dados da sessão inválidos.", http.StatusUnprocessableEntity)
+	if err != nil {
+		http.Error(w, "Selecione uma modalidade válida.", http.StatusUnprocessableEntity)
+		return
+	}
+	if !validTrainingText(title, 2, 180) {
+		http.Error(w, "O título deve ter entre 2 e 180 caracteres.", http.StatusUnprocessableEntity)
+		return
+	}
+	if utf8.RuneCountInString(description) > 4000 {
+		http.Error(w, "A descrição não pode exceder 4000 caracteres.", http.StatusUnprocessableEntity)
+		return
+	}
+	if startErr != nil {
+		http.Error(w, "Introduza uma data e hora de início válidas.", http.StatusUnprocessableEntity)
+		return
+	}
+	if endErr != nil {
+		http.Error(w, "Introduza uma data e hora de fim válidas.", http.StatusUnprocessableEntity)
+		return
+	}
+	if !ends.After(starts) {
+		http.Error(w, "O fim tem de ser posterior ao início.", http.StatusUnprocessableEntity)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -130,63 +151,29 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
-func (h Training) Assign(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
-		return
-	}
-	user, _ := CurrentUserFromContext(r.Context())
-	sessionID, e1 := uuid.Parse(r.PostForm.Get("session_id"))
-	athleteID, e2 := uuid.Parse(r.PostForm.Get("athlete_id"))
-	if e1 != nil || e2 != nil {
-		http.Error(w, "Atribuição inválida.", http.StatusUnprocessableEntity)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
-	defer cancel()
-	if !user.IsAdmin {
-		allowed, err := h.Store.CanCoachManageTrainingSession(ctx, dbgen.CanCoachManageTrainingSessionParams{SessionID: sessionID, UserID: user.ID})
-		if err != nil {
-			h.System.InternalError(w, r)
-			return
-		}
-		if !allowed {
-			h.System.Forbidden(w, r)
-			return
-		}
-	}
-	n, err := h.Store.AssignTrainingSession(ctx, dbgen.AssignTrainingSessionParams{SessionID: sessionID, UserID: athleteID, AssignedByID: user.ID})
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	if n != 1 {
-		http.Error(w, "O atleta não pertence ao âmbito ativo da sessão ou já está atribuído.", http.StatusConflict)
-		return
-	}
-	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
-}
-
-func (h Training) Complete(w http.ResponseWriter, r *http.Request) {
+func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
 		return
 	}
 	sessionID, err := uuid.Parse(r.PostForm.Get("session_id"))
-	if err != nil {
-		http.Error(w, "Sessão inválida.", http.StatusUnprocessableEntity)
+	status := r.PostForm.Get("status")
+	replacementSessionID, replacementErr := optionalUUID(r.PostForm.Get("replacement_session_id"))
+	replacementReason := strings.TrimSpace(r.PostForm.Get("replacement_reason"))
+	if err != nil || replacementErr != nil || !validTrainingOutcome(status, replacementSessionID, replacementReason) {
+		http.Error(w, "Resultado da sessão inválido.", http.StatusUnprocessableEntity)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
-	n, err := h.Store.CompleteTrainingSession(ctx, dbgen.CompleteTrainingSessionParams{UserID: &user.ID, SessionID: sessionID})
+	n, err := h.Store.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: user.ID, Status: dbgen.TrainingOutcomeStatus(status), ReplacementSessionID: replacementSessionID, ReplacementReason: optionalString(replacementReason)})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
 	if n != 1 {
-		http.Error(w, "A sessão não está disponível para conclusão.", http.StatusConflict)
+		http.Error(w, "A sessão ou substituição não está disponível no seu âmbito ativo.", http.StatusConflict)
 		return
 	}
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
@@ -238,14 +225,10 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 	teams, _ := h.Store.ListTeamsForEventAuthoring(ctx)
 	modalities, _ := h.Store.ListAnnouncementModalities(ctx)
 	events, _ := h.Store.ListAnnouncementEvents(ctx)
-	athletes, _ := h.Store.ListTrainingAthletesForCoach(ctx, dbgen.ListTrainingAthletesForCoachParams{UserID: user.ID, RowLimit: 200})
 	plans, _ := h.Store.ListTrainingPlansForCoach(ctx, dbgen.ListTrainingPlansForCoachParams{UserID: user.ID, RowLimit: 100})
+	managedPlans, _ := h.Store.ListTrainingPlansForAuthoring(ctx, dbgen.ListTrainingPlansForAuthoringParams{UserID: user.ID, IsAdmin: user.IsAdmin, PlanLimit: 100})
+	page.ManagedPlans = managedTrainingPlans(managedPlans, h.location())
 	if user.IsAdmin {
-		adminAthletes, _ := h.Store.ListTrainingAthletesForAdmin(ctx, 200)
-		athletes = make([]dbgen.ListTrainingAthletesForCoachRow, len(adminAthletes))
-		for i, athlete := range adminAthletes {
-			athletes[i] = dbgen.ListTrainingAthletesForCoachRow{ID: athlete.ID, Name: athlete.Name}
-		}
 		adminPlans, _ := h.Store.ListTrainingPlansForAdmin(ctx, 100)
 		plans = make([]dbgen.ListTrainingPlansForCoachRow, len(adminPlans))
 		for i, plan := range adminPlans {
@@ -275,12 +258,32 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 			page.Events = append(page.Events, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})
 		}
 	}
-	for _, x := range athletes {
-		page.Athletes = append(page.Athletes, pages.TrainingChoice{ID: x.ID.String(), Name: x.Name})
-	}
 	for _, x := range plans {
 		page.Plans = append(page.Plans, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})
 	}
+}
+
+func managedTrainingPlans(rows []dbgen.ListTrainingPlansForAuthoringRow, location *time.Location) []pages.ManagedTrainingPlan {
+	plans := make([]pages.ManagedTrainingPlan, 0, len(rows))
+	for _, row := range rows {
+		if len(plans) == 0 || plans[len(plans)-1].ID != row.PlanID.String() {
+			plans = append(plans, pages.ManagedTrainingPlan{ID: row.PlanID.String(), Title: row.PlanTitle, Description: row.PlanDescription})
+		}
+		if row.SessionID == nil {
+			continue
+		}
+		modality := ""
+		if row.ModalityName != nil {
+			modality = *row.ModalityName
+		}
+		plans[len(plans)-1].Sessions = append(plans[len(plans)-1].Sessions, pages.ManagedTrainingSession{
+			Title:       *row.SessionTitle,
+			Description: *row.SessionDescription,
+			When:        row.StartsAt.Time.In(location).Format("02/01/2006 15:04") + " - " + row.EndsAt.Time.In(location).Format("15:04"),
+			Modality:    modality,
+		})
+	}
+	return plans
 }
 
 func (h Training) canUseScope(user CurrentUser, programmeID, teamID *uuid.UUID) bool {
@@ -316,6 +319,18 @@ func optionalUUID(raw string) (*uuid.UUID, error) {
 func validTrainingText(value string, min, max int) bool {
 	n := utf8.RuneCountInString(value)
 	return n >= min && n <= max
+}
+func validTrainingOutcome(status string, replacementSessionID *uuid.UUID, replacementReason string) bool {
+	if status == "REPLACED" {
+		return replacementSessionID != nil && validTrainingText(replacementReason, 2, 300)
+	}
+	return (status == "COMPLETED" || status == "MISSED") && replacementSessionID == nil && replacementReason == ""
+}
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 func validCompetitionDocumentInput(title, rawURL, source string, reviewed time.Time, eventID, modalityID, programmeID, teamID *uuid.UUID) bool {
 	return !reviewed.After(time.Now().UTC()) && validTrainingText(title, 2, 180) && validTrainingText(source, 2, 180) && validDocumentURL(rawURL) && (eventID != nil || modalityID != nil) && (eventID != nil || programmeID != nil || teamID != nil) && (modalityID == nil || programmeID != nil || teamID != nil)

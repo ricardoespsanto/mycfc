@@ -3,16 +3,18 @@ package pages
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type TrainingChoice struct { ID, Name string }
-type TrainingSession struct { ID, Plan, Title, Detail, When, Modality string; Completed bool }
+type TrainingSession struct { ID, Plan, Title, Detail, When, Modality, Outcome string }
+type ManagedTrainingSession struct { Title, Description, When, Modality string }
+type ManagedTrainingPlan struct { ID, Title, Description string; Sessions []ManagedTrainingSession }
 type CompetitionDocument struct { Title, URL, Source, ReviewedOn, Context string }
-type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; Programmes, Teams, Modalities, Events, Athletes, Plans []TrainingChoice }
+type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; ManagedPlans []ManagedTrainingPlan; Programmes, Teams, Modalities, Events, Plans []TrainingChoice }
 
 templ Training(page TrainingPage) { @components.Base(page.Meta, trainingContent(page)) }
 templ trainingContent(page TrainingPage) {
-    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Treinos e competição</h1><p>Consulte as sessões atribuídas e os documentos oficiais aplicáveis.</p></section>
+    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Treinos e competição</h1><p>Consulte as sessões do seu grupo e os documentos oficiais aplicáveis.</p></section>
     <section class="dashboard-card"><h2>As minhas sessões</h2>
         if len(page.Sessions) == 0 {
-            <p class="empty-state">Ainda não tem sessões atribuídas.</p>
+            <p class="empty-state">Ainda não tem sessões disponíveis para o seu grupo.</p>
         }
         for _, session := range page.Sessions {
             <article><h3>{ session.Plan }: { session.Title }</h3><p>{ session.When }
@@ -20,10 +22,18 @@ templ trainingContent(page TrainingPage) {
                     · { session.Modality }
                 }
             </p><p>{ session.Detail }</p>
-            if session.Completed {
-                <p><strong>Concluída</strong></p>
+            if session.Outcome != "" {
+                <p><strong>{ trainingOutcomeLabel(session.Outcome) }</strong></p>
             } else {
-                <form class="inline-action" method="post" action="/treinos/sessoes/concluir">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><button type="submit">Marcar como concluída</button></form>
+                <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/><button type="submit">Marcar como concluída</button></form>
+                <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button type="submit">Marcar como não realizada</button></form>
+                <form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="REPLACED"/><label>Sessão de substituição <select name="replacement_session_id" required><option value="">Selecione</option>
+                    for _, replacement := range page.Sessions {
+                        if replacement.ID != session.ID {
+                            <option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
+                        }
+                    }
+                </select></label><label>Motivo <input name="replacement_reason" minlength="2" maxlength="300" required/></label><button type="submit">Registar substituição</button></form>
             }
             </article>
         }
@@ -41,6 +51,25 @@ templ trainingContent(page TrainingPage) {
     }
 }
 templ trainingAuthoring(page TrainingPage) {
+    <section class="dashboard-card"><h2>Planos que gere</h2>
+        if len(page.ManagedPlans) == 0 {
+            <p class="empty-state">Ainda não existem planos no seu âmbito.</p>
+        }
+        for _, plan := range page.ManagedPlans {
+            <article><h3>{ plan.Title }</h3><p>{ plan.Description }</p>
+                if len(plan.Sessions) == 0 {
+                    <p class="empty-state">Este plano ainda não tem sessões.</p>
+                }
+                for _, session := range plan.Sessions {
+                    <div><h4>{ session.Title }</h4><p>{ session.When }
+                        if session.Modality != "" {
+                            · { session.Modality }
+                        }
+                    </p><p>{ session.Description }</p></div>
+                }
+            </article>
+        }
+    </section>
     <section class="dashboard-card"><h2>Criar plano</h2><form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField<label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label>@trainingScopeChoices(page)<button type="submit">Criar plano</button></form></section>
     <section class="dashboard-card"><h2>Criar sessão</h2><form class="form-layout" method="post" action="/treinos/sessoes">@page.CSRFField
         <label>Plano <select name="plan_id" required><option value="">Selecione</option>
@@ -52,11 +81,6 @@ templ trainingAuthoring(page TrainingPage) {
                 <option value={ item.ID }>{ item.Name }</option>
             }
         </select></label><button type="submit">Criar sessão</button></form></section>
-    <section class="dashboard-card"><h2>Atribuir sessão</h2><form class="form-layout" method="post" action="/treinos/atribuicoes">@page.CSRFField<label>ID da sessão <input name="session_id" required/></label><label>Atleta <select name="athlete_id" required><option value="">Selecione</option>
-        for _, item := range page.Athletes {
-            <option value={ item.ID }>{ item.Name }</option>
-        }
-    </select></label><button type="submit">Atribuir</button></form></section>
     <section class="dashboard-card"><h2>Publicar documento de competição</h2><form class="form-layout" method="post" action="/treinos/documentos">@page.CSRFField<label>Título <input name="title" required/></label><label>Ligação HTTPS <input name="url" type="url" required/></label><label>Fonte oficial <input name="source" required/></label><label>Revisto em <input name="reviewed_on" type="date" required/></label><label>Evento <select name="event_id"><option value="">Sem evento</option>
         for _, item := range page.Events {
             <option value={ item.ID }>{ item.Name }</option>
@@ -67,12 +91,21 @@ templ trainingAuthoring(page TrainingPage) {
         }
     </select></label><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page)<button type="submit">Publicar documento</button></form></section>
 }
-templ trainingScopeChoices(page TrainingPage) { <label>Programa <select name="programme_id"><option value="">Sem programa</option>
-    for _, item := range page.Programmes {
-        <option value={ item.ID }>{ item.Name }</option>
-    }
-</select></label><label>Equipa <select name="team_id"><option value="">Sem equipa</option>
+templ trainingScopeChoices(page TrainingPage) { <label>Equipa (preferencial) <select name="team_id"><option value="">Sem equipa</option>
     for _, item := range page.Teams {
         <option value={ item.ID }>{ item.Name }</option>
     }
+</select></label><label>Programa <select name="programme_id"><option value="">Sem programa</option>
+    for _, item := range page.Programmes {
+        <option value={ item.ID }>{ item.Name }</option>
+    }
 </select></label> }
+
+func trainingOutcomeLabel(status string) string {
+	switch status {
+	case "COMPLETED": return "Concluída"
+	case "MISSED": return "Não realizada"
+	case "REPLACED": return "Substituída"
+	default: return status
+	}
+}

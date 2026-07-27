@@ -19,16 +19,15 @@ Never reuse local credentials in production.
 ## Common commands
 
 ```bash
-make migrate-status
-make migrate-up
-make migrate-down-one
+make db-provision
+make db-provision-test
 make test
 make test-integration
 make verify
 make reset-local
 ```
 
-`make reset-local` deletes local PostgreSQL and MinIO data after confirmation.
+`internal/db/schema.sql` is a reset-only baseline, not a migration history. `make reset-local` deletes local PostgreSQL and MinIO data after confirmation, then recreates the local and test databases from it.
 
 Create or manage an administrator with a password file rather than shell input:
 

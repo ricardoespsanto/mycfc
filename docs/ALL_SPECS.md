@@ -79,8 +79,8 @@ This file has highest precedence. Later files may add detail but MUST NOT contra
 | Browser assets | npm lockfile + esbuild; locally bundled and embedded into the Go binary |
 | Database | PostgreSQL 16, `timestamptz`, UUID primary keys |
 | DB driver | Native `github.com/jackc/pgx/v5/pgxpool`; do not use `database/sql` |
-| Data access | `sqlc` using `sql_package: pgx/v5`; handwritten SQL outside migrations/queries is forbidden |
-| Migrations | `pressly/goose/v3`; migrations are forward-only in production |
+| Data access | `sqlc` using `sql_package: pgx/v5`; handwritten SQL outside `schema.sql`/queries is forbidden |
+| Schema provisioning | `internal/db/schema.sql` is a reset-only baseline applied with `psql`; it is not an in-place production migration mechanism |
 | Sessions | `github.com/alexedwards/scs/v2` with PostgreSQL `pgxstore` |
 | CSRF | `github.com/gorilla/csrf`; all state-changing browser requests protected |
 | Passwords | `golang.org/x/crypto/bcrypt`, cost 12 |
@@ -225,7 +225,7 @@ The implementation MUST use this layout. Generated files may add children but no
 
 <!-- BEGIN 01_data_models.md -->
 
-# 01 — PostgreSQL schema, migrations, sqlc and transactional contracts
+# 01 — PostgreSQL schema, sqlc and transactional contracts
 
 ## 1. Objective
 
@@ -234,10 +234,7 @@ Create a complete PostgreSQL 16 schema and generated data-access layer that can 
 ## 2. Files to create
 
 ```text
-internal/db/migrations/00001_extensions_and_types.sql
-internal/db/migrations/00002_core_schema.sql
-internal/db/migrations/00003_dashboard_schema.sql
-internal/db/migrations/00004_sessions.sql
+internal/db/schema.sql
 internal/db/queries/users.sql
 internal/db/queries/consents.sql
 internal/db/queries/equipment.sql
@@ -248,7 +245,7 @@ internal/db/queries/whatsapp.sql
 sqlc.yaml
 ```
 
-Each migration MUST contain Goose `Up` and `Down` sections. Production automation runs only `goose up`; down migrations exist for local development and tests.
+`internal/db/schema.sql` is the complete ordered baseline for newly created local and test databases. It has no down path and must be applied with `psql -v ON_ERROR_STOP=1` only to a reset database.
 
 ## 3. Extensions and enum types
 
@@ -445,7 +442,7 @@ All list queries MUST have deterministic ordering and explicit `LIMIT` parameter
 
 - Version 2 configuration.
 - Engine `postgresql`.
-- Schema points to migrations; queries point to `internal/db/queries`.
+- Schema points to `internal/db/schema.sql`; queries point to `internal/db/queries`.
 - Go output `internal/db/generated`.
 - Package name `dbgen`.
 - `sql_package: pgx/v5`.
@@ -1458,7 +1455,7 @@ Jobs:
 
 2. **go-test**
    - Start PostgreSQL and MinIO through Compose or service containers.
-   - `make migrate-up`.
+    - `make db-provision`.
    - `go test -race -count=1 ./...`.
    - `go vet ./...`.
    - `govulncheck ./...`.
@@ -1521,7 +1518,7 @@ If service deployment fails, ECS circuit breaker performs rollback. Workflow rep
 Every normal migration MUST be backward-compatible with the currently deployed release:
 
 - Add nullable columns or columns with safe defaults before code depends on them.
-- Add tables/indexes concurrently where PostgreSQL requires low-lock rollout; Goose files requiring `NO TRANSACTION` must declare it.
+- This reset-only baseline is replaced as a whole; it has no incremental migration or `NO TRANSACTION` convention.
 - Do not rename/drop columns, tighten constraints over existing data, remove enum values or make columns non-null in the same release that stops using the old shape.
 - Destructive contract migrations require a later dedicated release after telemetry confirms old code/data is absent and require manual production approval.
 
@@ -1543,7 +1540,7 @@ Multi-stage build:
 2. Go builder stage pinned to Go 1.26.5; copy module files first; download; generate templ/sqlc or verify committed generation; build static `CGO_ENABLED=0` binary with version/SHA via ldflags.
 3. Final distroless/static non-root image. Copy CA certificates, timezone data if required, binary and no source/build tools. User non-root; read-only filesystem compatible; `ENTRYPOINT ["/app/mycfc"]` and `CMD ["serve"]` so the migration family can safely override the command with `["migrate", "up"]`.
 
-The same binary supports `serve` and `migrate up`; migration command exits non-zero on any Goose error.
+The application binary supports `serve` only. Schema provisioning is a local `psql` operation against a reset database.
 
 ## 9. Supply-chain and workflow safety
 
@@ -1577,7 +1574,7 @@ The same binary supports `serve` and `migrate up`; migration command exits non-z
 
 ## 1. Objective
 
-A fresh clone must reach a working local application using documented commands, without manually creating databases, users or buckets. Local behaviour must exercise the same pgx, Goose, sqlc and S3 code paths as production.
+A fresh clone must reach a working local application using documented commands, without manually creating databases, users or buckets. Local behaviour must exercise the pgx, sqlc and S3 code paths used by the application.
 
 This file is the only canonical local-development specification; no CI document may redefine its Make targets.
 
@@ -1670,10 +1667,9 @@ make dev-infra          docker compose up -d --wait postgres minio minio-init
 make dev-infra-down     docker compose down
 make dev-infra-clean    docker compose down -v (requires interactive confirmation unless CI=true)
 make generate           templ generate; sqlc generate; npm run build
-make migrate-up         goose up against DATABASE_URL
-make migrate-down-one   goose down once; forbidden when APP_ENV=production
-make migrate-status     goose status
-make dev-bootstrap      copy .env.example to .env if absent, start infra, migrate, build assets
+make db-provision       provision the reset-only baseline into an empty local database
+make db-provision-test  recreate and provision mycfc_test from the baseline
+make dev-bootstrap      copy .env.example to .env if absent, start infra, provision, build assets
 make dev                load .env and run ./bin/air
 make test               unit tests
 make test-integration   starts infra and runs tagged/integration suite
@@ -1753,7 +1749,7 @@ From a clean checkout after dependencies are installed:
 
 ```bash
 make dev-infra
-make migrate-up
+make db-provision
 make generate
 git diff --exit-code
 gofmt -l . | test -z "$(cat)"
@@ -1778,8 +1774,8 @@ dot -Tsvg architecture_delivery_pipeline.dot -o /tmp/architecture_delivery_pipel
 
 | ID | Scenario | Expected result |
 |---|---|---|
-| DB-01 | Fresh PostgreSQL 16, Goose up | All migrations apply |
-| DB-02 | Goose status after up | No pending migrations |
+| DB-01 | Fresh PostgreSQL 16, `psql -f internal/db/schema.sql` | Complete baseline applies |
+| DB-02 | Reset local database and provision again | Complete baseline reapplies |
 | DB-03 | Local down-all then up | Reversible in local/test |
 | DB-04 | Duplicate email differing only case | Rejected |
 | DB-05 | Invalid role/squad/dependent combinations | Rejected by DB and app |

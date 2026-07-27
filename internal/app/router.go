@@ -77,8 +77,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /treinos", auth.RequireAuthenticated(http.HandlerFunc(training.Index)))
 	mux.Handle("POST /treinos/planos", auth.RequireEventStaff(http.HandlerFunc(training.CreatePlan)))
 	mux.Handle("POST /treinos/sessoes", auth.RequireEventStaff(http.HandlerFunc(training.CreateSession)))
-	mux.Handle("POST /treinos/atribuicoes", auth.RequireEventStaff(http.HandlerFunc(training.Assign)))
-	mux.Handle("POST /treinos/sessoes/concluir", auth.RequireAuthenticated(http.HandlerFunc(training.Complete)))
+	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/documentos", auth.RequireEventStaff(http.HandlerFunc(training.CreateDocument)))
 
 	return customNotFound(mux, system.NotFound)

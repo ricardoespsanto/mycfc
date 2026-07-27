@@ -79,7 +79,6 @@ jobs:
             ecs_cluster_name
             ecs_service_name
             app_task_definition_arn
-            migration_task_definition_arn
             domain_name
             app_private_subnet_ids
             task_security_group_id
@@ -100,7 +99,7 @@ jobs:
             exit 1
           fi
 
-          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn migration_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
+          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
             printf '%s=%s\n' "$output" "$(jq -r --arg output "$output" '.[$output].value' "$terraform_output")" >> "$GITHUB_OUTPUT"
           done
           printf 'app_private_subnet_ids=%s\n' "$(jq -c '.app_private_subnet_ids.value' "$terraform_output")" >> "$GITHUB_OUTPUT"
@@ -120,16 +119,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           app_current="$RUNNER_TEMP/app-task-definition.json"
-          migrate_current="$RUNNER_TEMP/migrate-task-definition.json"
           app_registration="$RUNNER_TEMP/app-task-registration.json"
-          migrate_registration="$RUNNER_TEMP/migrate-task-registration.json"
 
           aws ecs describe-task-definition \
             --task-definition "${{ steps.terraform.outputs.app_task_definition_arn }}" \
             --query taskDefinition --output json > "$app_current"
-          aws ecs describe-task-definition \
-            --task-definition "${{ steps.terraform.outputs.migration_task_definition_arn }}" \
-            --query taskDefinition --output json > "$migrate_current"
 
           # ECS rejects describe-only fields. Preserve all operational settings and alter only release values.
           jq --arg image "${{ steps.image.outputs.image }}" --arg sha "${{ steps.image.outputs.sha }}" '
@@ -146,60 +140,8 @@ jobs:
                 )
               else error("app task definition has no app container") end
           ' "$app_current" > "$app_registration"
-          jq --arg image "${{ steps.image.outputs.image }}" '
-            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
-            | if any(.containerDefinitions[]; .name == "migrate") then
-                .containerDefinitions |= map(if .name == "migrate" then .image = $image else . end)
-              else error("migration task definition has no migrate container") end
-          ' "$migrate_current" > "$migrate_registration"
-
           app_task_definition="$(aws ecs register-task-definition --cli-input-json "file://$app_registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
-          migration_task_definition="$(aws ecs register-task-definition --cli-input-json "file://$migrate_registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
-          printf 'app_task_definition=%s\nmigration_task_definition=%s\n' "$app_task_definition" "$migration_task_definition" >> "$GITHUB_OUTPUT"
-      - name: Run and verify database migration
-        id: migration
-        env:
-          CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
-          TASK_DEFINITION: ${{ steps.task-definitions.outputs.migration_task_definition }}
-          SUBNETS: ${{ steps.terraform.outputs.app_private_subnet_ids }}
-          SECURITY_GROUP: ${{ steps.terraform.outputs.task_security_group_id }}
-        run: |
-          set -Eeuo pipefail
-          network_configuration="$RUNNER_TEMP/migration-network.json"
-          jq -n --argjson subnets "$SUBNETS" --arg security_group "$SECURITY_GROUP" \
-            '{awsvpcConfiguration: {subnets: $subnets, securityGroups: [$security_group], assignPublicIp: "DISABLED"}}' > "$network_configuration"
-          run_result="$RUNNER_TEMP/migration-run.json"
-          aws ecs run-task --cluster "$CLUSTER" --launch-type FARGATE --task-definition "$TASK_DEFINITION" \
-            --network-configuration "file://$network_configuration" \
-            --overrides '{"containerOverrides":[{"name":"migrate","command":["migrate","up"]}]}' \
-            --output json > "$run_result"
-          jq -e '(.failures | length) == 0 and (.tasks | length) == 1' "$run_result" >/dev/null || {
-            jq -c '{failures: .failures}' "$run_result" >&2
-            exit 1
-          }
-          task_arn="$(jq -r '.tasks[0].taskArn' "$run_result")"
-          printf 'task_arn=%s\n' "$task_arn" >> "$GITHUB_OUTPUT"
-
-          task_description="$RUNNER_TEMP/migration-task.json"
-          for attempt in {1..40}; do
-            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --output json > "$task_description"
-            if [[ "$(jq -r '.tasks[0].lastStatus' "$task_description")" == "STOPPED" ]]; then
-              break
-            fi
-            sleep 15
-          done
-          [[ "$(jq -r '.tasks[0].lastStatus' "$task_description")" == "STOPPED" ]] || {
-            echo "Migration task did not stop within 10 minutes." >&2
-            exit 1
-          }
-          if ! jq -e '.tasks[0] | ([.containers[] | select(.name == "migrate") | .exitCode] == [0])' "$task_description" >/dev/null; then
-            jq -c '.tasks[0] | {stopCode, stoppedReason, containers: [.containers[] | {name, exitCode, reason}]}' "$task_description" >&2
-            log_group="$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.containerDefinitions[?name==`migrate`].logConfiguration.options."awslogs-group" | [0]' --output text)"
-            log_prefix="$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.containerDefinitions[?name==`migrate`].logConfiguration.options."awslogs-stream-prefix" | [0]' --output text)"
-            task_id="${task_arn##*/}"
-            aws logs get-log-events --log-group-name "$log_group" --log-stream-name "$log_prefix/migrate/$task_id" --limit 100 --query 'events[].message' --output text || true
-            exit 1
-          fi
+          printf 'app_task_definition=%s\n' "$app_task_definition" >> "$GITHUB_OUTPUT"
       - name: Update ECS service and wait for a healthy deployment
         env:
           CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
@@ -261,8 +203,6 @@ jobs:
             echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
             echo "- App task definition: \`${{ steps.task-definitions.outputs.app_task_definition }}\`"
-            echo "- Migration task definition: \`${{ steps.task-definitions.outputs.migration_task_definition }}\`"
-            echo "- Migration task: \`${{ steps.migration.outputs.task_arn }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,migrate-task-definition,app-task-registration,migrate-task-registration,migration-network,migration-run,migration-task,service,target-health}.json
+        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,app-task-registration,service,target-health}.json

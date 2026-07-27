@@ -102,6 +102,135 @@ func (ns NullAnnouncementTargetType) Value() (driver.Value, error) {
 	return string(ns.AnnouncementTargetType), nil
 }
 
+type ConsentType string
+
+const (
+	ConsentTypeTermosGerais          ConsentType = "Termos_Gerais"
+	ConsentTypeUsoImagem             ConsentType = "Uso_Imagem"
+	ConsentTypeResponsabilidadeMenor ConsentType = "Responsabilidade_Menor"
+)
+
+func (e *ConsentType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ConsentType(s)
+	case string:
+		*e = ConsentType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ConsentType: %T", src)
+	}
+	return nil
+}
+
+type NullConsentType struct {
+	ConsentType ConsentType `json:"consent_type"`
+	Valid       bool        `json:"valid"` // Valid is true if ConsentType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullConsentType) Scan(value interface{}) error {
+	if value == nil {
+		ns.ConsentType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ConsentType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullConsentType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ConsentType), nil
+}
+
+type EquipmentStatus string
+
+const (
+	EquipmentStatusOperational EquipmentStatus = "Operational"
+	EquipmentStatusMaintenance EquipmentStatus = "Maintenance"
+	EquipmentStatusRetired     EquipmentStatus = "Retired"
+)
+
+func (e *EquipmentStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = EquipmentStatus(s)
+	case string:
+		*e = EquipmentStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for EquipmentStatus: %T", src)
+	}
+	return nil
+}
+
+type NullEquipmentStatus struct {
+	EquipmentStatus EquipmentStatus `json:"equipment_status"`
+	Valid           bool            `json:"valid"` // Valid is true if EquipmentStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullEquipmentStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.EquipmentStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.EquipmentStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullEquipmentStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.EquipmentStatus), nil
+}
+
+type EquipmentType string
+
+const (
+	EquipmentTypeBoat    EquipmentType = "Boat"
+	EquipmentTypePaddle  EquipmentType = "Paddle"
+	EquipmentTypeVehicle EquipmentType = "Vehicle"
+)
+
+func (e *EquipmentType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = EquipmentType(s)
+	case string:
+		*e = EquipmentType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for EquipmentType: %T", src)
+	}
+	return nil
+}
+
+type NullEquipmentType struct {
+	EquipmentType EquipmentType `json:"equipment_type"`
+	Valid         bool          `json:"valid"` // Valid is true if EquipmentType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullEquipmentType) Scan(value interface{}) error {
+	if value == nil {
+		ns.EquipmentType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.EquipmentType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullEquipmentType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.EquipmentType), nil
+}
+
 type EventResponseStatus string
 
 const (
@@ -145,6 +274,137 @@ func (ns NullEventResponseStatus) Value() (driver.Value, error) {
 	return string(ns.EventResponseStatus), nil
 }
 
+type MaintenanceStatus string
+
+const (
+	MaintenanceStatusScheduled  MaintenanceStatus = "Scheduled"
+	MaintenanceStatusInProgress MaintenanceStatus = "In_Progress"
+	MaintenanceStatusCompleted  MaintenanceStatus = "Completed"
+	MaintenanceStatusCancelled  MaintenanceStatus = "Cancelled"
+)
+
+func (e *MaintenanceStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MaintenanceStatus(s)
+	case string:
+		*e = MaintenanceStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MaintenanceStatus: %T", src)
+	}
+	return nil
+}
+
+type NullMaintenanceStatus struct {
+	MaintenanceStatus MaintenanceStatus `json:"maintenance_status"`
+	Valid             bool              `json:"valid"` // Valid is true if MaintenanceStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMaintenanceStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.MaintenanceStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MaintenanceStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMaintenanceStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MaintenanceStatus), nil
+}
+
+type MetricType string
+
+const (
+	MetricTypeDistanceMetres  MetricType = "Distance_Metres"
+	MetricTypeDurationSeconds MetricType = "Duration_Seconds"
+	MetricTypeSessions        MetricType = "Sessions"
+	MetricTypeCustom          MetricType = "Custom"
+)
+
+func (e *MetricType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MetricType(s)
+	case string:
+		*e = MetricType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MetricType: %T", src)
+	}
+	return nil
+}
+
+type NullMetricType struct {
+	MetricType MetricType `json:"metric_type"`
+	Valid      bool       `json:"valid"` // Valid is true if MetricType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMetricType) Scan(value interface{}) error {
+	if value == nil {
+		ns.MetricType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MetricType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMetricType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MetricType), nil
+}
+
+type RepairStatus string
+
+const (
+	RepairStatusPendente  RepairStatus = "Pendente"
+	RepairStatusEmAnalise RepairStatus = "Em_Analise"
+	RepairStatusResolvido RepairStatus = "Resolvido"
+)
+
+func (e *RepairStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = RepairStatus(s)
+	case string:
+		*e = RepairStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for RepairStatus: %T", src)
+	}
+	return nil
+}
+
+type NullRepairStatus struct {
+	RepairStatus RepairStatus `json:"repair_status"`
+	Valid        bool         `json:"valid"` // Valid is true if RepairStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullRepairStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.RepairStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.RepairStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullRepairStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.RepairStatus), nil
+}
+
 type StaffCapability string
 
 const (
@@ -185,6 +445,49 @@ func (ns NullStaffCapability) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.StaffCapability), nil
+}
+
+type TrainingOutcomeStatus string
+
+const (
+	TrainingOutcomeStatusCOMPLETED TrainingOutcomeStatus = "COMPLETED"
+	TrainingOutcomeStatusMISSED    TrainingOutcomeStatus = "MISSED"
+	TrainingOutcomeStatusREPLACED  TrainingOutcomeStatus = "REPLACED"
+)
+
+func (e *TrainingOutcomeStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingOutcomeStatus(s)
+	case string:
+		*e = TrainingOutcomeStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingOutcomeStatus: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingOutcomeStatus struct {
+	TrainingOutcomeStatus TrainingOutcomeStatus `json:"training_outcome_status"`
+	Valid                 bool                  `json:"valid"` // Valid is true if TrainingOutcomeStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingOutcomeStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingOutcomeStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingOutcomeStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingOutcomeStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingOutcomeStatus), nil
 }
 
 type Announcement struct {
@@ -474,13 +777,14 @@ type TrainingSession struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
-type TrainingSessionAssignment struct {
-	SessionID     uuid.UUID          `json:"session_id"`
-	UserID        uuid.UUID          `json:"user_id"`
-	AssignedByID  uuid.UUID          `json:"assigned_by_id"`
-	AssignedAt    pgtype.Timestamptz `json:"assigned_at"`
-	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
-	CompletedByID *uuid.UUID         `json:"completed_by_id"`
+type TrainingSessionOutcome struct {
+	SessionID            uuid.UUID             `json:"session_id"`
+	UserID               uuid.UUID             `json:"user_id"`
+	Status               TrainingOutcomeStatus `json:"status"`
+	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
+	ReplacementReason    *string               `json:"replacement_reason"`
+	ReportedAt           pgtype.Timestamptz    `json:"reported_at"`
+	UpdatedAt            pgtype.Timestamptz    `json:"updated_at"`
 }
 
 type User struct {

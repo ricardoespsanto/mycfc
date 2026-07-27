@@ -12,31 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const assignTrainingSession = `-- name: AssignTrainingSession :execrows
-INSERT INTO training_session_assignments (session_id, user_id, assigned_by_id)
-SELECT $1, $2, $3
-WHERE EXISTS (
-    SELECT 1 FROM training_sessions s JOIN training_plans p ON p.id = s.plan_id
-    JOIN user_memberships m ON m.user_id = $2 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-    WHERE s.id = $1 AND (p.programme_id IS NULL OR p.programme_id = m.programme_id) AND (p.team_id IS NULL OR p.team_id = m.team_id)
-)
-ON CONFLICT (session_id, user_id) DO NOTHING
-`
-
-type AssignTrainingSessionParams struct {
-	SessionID    uuid.UUID `json:"session_id"`
-	UserID       uuid.UUID `json:"user_id"`
-	AssignedByID uuid.UUID `json:"assigned_by_id"`
-}
-
-func (q *Queries) AssignTrainingSession(ctx context.Context, arg AssignTrainingSessionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, assignTrainingSession, arg.SessionID, arg.UserID, arg.AssignedByID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const canCoachManageTrainingPlan = `-- name: CanCoachManageTrainingPlan :one
 SELECT EXISTS (SELECT 1 FROM training_plans p WHERE p.id = $1 AND EXISTS (SELECT 1 FROM staff_grants g WHERE g.user_id = $2 AND g.capability = 'COACH' AND g.revoked_at IS NULL AND (g.programme_id = p.programme_id OR g.team_id = p.team_id)))
 `
@@ -51,40 +26,6 @@ func (q *Queries) CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachMa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const canCoachManageTrainingSession = `-- name: CanCoachManageTrainingSession :one
-SELECT EXISTS (SELECT 1 FROM training_sessions s JOIN training_plans p ON p.id = s.plan_id WHERE s.id = $1 AND EXISTS (SELECT 1 FROM staff_grants g WHERE g.user_id = $2 AND g.capability = 'COACH' AND g.revoked_at IS NULL AND (g.programme_id = p.programme_id OR g.team_id = p.team_id)))
-`
-
-type CanCoachManageTrainingSessionParams struct {
-	SessionID uuid.UUID `json:"session_id"`
-	UserID    uuid.UUID `json:"user_id"`
-}
-
-func (q *Queries) CanCoachManageTrainingSession(ctx context.Context, arg CanCoachManageTrainingSessionParams) (bool, error) {
-	row := q.db.QueryRow(ctx, canCoachManageTrainingSession, arg.SessionID, arg.UserID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const completeTrainingSession = `-- name: CompleteTrainingSession :execrows
-UPDATE training_session_assignments SET completed_at = now(), completed_by_id = $1
-WHERE session_id = $2 AND user_id = $1 AND completed_at IS NULL
-`
-
-type CompleteTrainingSessionParams struct {
-	UserID    *uuid.UUID `json:"user_id"`
-	SessionID uuid.UUID  `json:"session_id"`
-}
-
-func (q *Queries) CompleteTrainingSession(ctx context.Context, arg CompleteTrainingSessionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, completeTrainingSession, arg.UserID, arg.SessionID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const createCompetitionDocument = `-- name: CreateCompetitionDocument :one
@@ -281,74 +222,6 @@ func (q *Queries) ListCompetitionDocumentsForAthlete(ctx context.Context, arg Li
 	return items, nil
 }
 
-const listTrainingAthletesForAdmin = `-- name: ListTrainingAthletesForAdmin :many
-SELECT DISTINCT u.id, u.name FROM users u JOIN user_memberships m ON m.user_id = u.id
-WHERE u.is_active AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-ORDER BY lower(u.name), u.id LIMIT $1
-`
-
-type ListTrainingAthletesForAdminRow struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
-}
-
-func (q *Queries) ListTrainingAthletesForAdmin(ctx context.Context, rowLimit int32) ([]ListTrainingAthletesForAdminRow, error) {
-	rows, err := q.db.Query(ctx, listTrainingAthletesForAdmin, rowLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListTrainingAthletesForAdminRow{}
-	for rows.Next() {
-		var i ListTrainingAthletesForAdminRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTrainingAthletesForCoach = `-- name: ListTrainingAthletesForCoach :many
-SELECT DISTINCT u.id, u.name FROM users u JOIN user_memberships m ON m.user_id = u.id
-WHERE u.is_active AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-  AND EXISTS (SELECT 1 FROM staff_grants g WHERE g.user_id = $1 AND g.capability = 'COACH' AND g.revoked_at IS NULL AND (g.programme_id = m.programme_id OR g.team_id = m.team_id))
-ORDER BY lower(u.name), u.id LIMIT $2
-`
-
-type ListTrainingAthletesForCoachParams struct {
-	UserID   uuid.UUID `json:"user_id"`
-	RowLimit int32     `json:"row_limit"`
-}
-
-type ListTrainingAthletesForCoachRow struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
-}
-
-func (q *Queries) ListTrainingAthletesForCoach(ctx context.Context, arg ListTrainingAthletesForCoachParams) ([]ListTrainingAthletesForCoachRow, error) {
-	rows, err := q.db.Query(ctx, listTrainingAthletesForCoach, arg.UserID, arg.RowLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListTrainingAthletesForCoachRow{}
-	for rows.Next() {
-		var i ListTrainingAthletesForCoachRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTrainingPlansForAdmin = `-- name: ListTrainingPlansForAdmin :many
 SELECT id, title, description, programme_id, team_id, created_at FROM training_plans
 ORDER BY created_at DESC, id DESC LIMIT $1
@@ -379,6 +252,76 @@ func (q *Queries) ListTrainingPlansForAdmin(ctx context.Context, rowLimit int32)
 			&i.ProgrammeID,
 			&i.TeamID,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingPlansForAuthoring = `-- name: ListTrainingPlansForAuthoring :many
+WITH scoped_plans AS (
+    SELECT p.id, p.title, p.description, p.created_at
+    FROM training_plans p
+    WHERE $1::boolean
+       OR EXISTS (
+           SELECT 1 FROM staff_grants g
+           WHERE g.user_id = $2 AND g.capability = 'COACH' AND g.revoked_at IS NULL
+             AND (g.programme_id = p.programme_id OR g.team_id = p.team_id)
+       )
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT $3
+)
+SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
+       s.id AS session_id, s.title AS session_title, s.description AS session_description,
+       s.starts_at, s.ends_at, m.name_pt AS modality_name
+FROM scoped_plans p
+LEFT JOIN training_sessions s ON s.plan_id = p.id
+LEFT JOIN modalities m ON m.id = s.modality_id
+ORDER BY p.created_at DESC, p.id DESC, s.starts_at ASC, s.id ASC
+`
+
+type ListTrainingPlansForAuthoringParams struct {
+	IsAdmin   bool      `json:"is_admin"`
+	UserID    uuid.UUID `json:"user_id"`
+	PlanLimit int32     `json:"plan_limit"`
+}
+
+type ListTrainingPlansForAuthoringRow struct {
+	PlanID             uuid.UUID          `json:"plan_id"`
+	PlanTitle          string             `json:"plan_title"`
+	PlanDescription    string             `json:"plan_description"`
+	SessionID          *uuid.UUID         `json:"session_id"`
+	SessionTitle       *string            `json:"session_title"`
+	SessionDescription *string            `json:"session_description"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ModalityName       *string            `json:"modality_name"`
+}
+
+func (q *Queries) ListTrainingPlansForAuthoring(ctx context.Context, arg ListTrainingPlansForAuthoringParams) ([]ListTrainingPlansForAuthoringRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingPlansForAuthoring, arg.IsAdmin, arg.UserID, arg.PlanLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingPlansForAuthoringRow{}
+	for rows.Next() {
+		var i ListTrainingPlansForAuthoringRow
+		if err := rows.Scan(
+			&i.PlanID,
+			&i.PlanTitle,
+			&i.PlanDescription,
+			&i.SessionID,
+			&i.SessionTitle,
+			&i.SessionDescription,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.ModalityName,
 		); err != nil {
 			return nil, err
 		}
@@ -439,12 +382,18 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 }
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
-SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name, a.completed_at
-FROM training_session_assignments a
-JOIN training_sessions s ON s.id = a.session_id
+SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+       COALESCE(o.status::text, ''::text) AS outcome_status
+FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
-WHERE a.user_id = $1
+LEFT JOIN training_session_outcomes o ON o.session_id = s.id AND o.user_id = $1
+WHERE EXISTS (
+    SELECT 1 FROM user_memberships membership
+    WHERE membership.user_id = $1 AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+      AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
+      AND (p.team_id IS NULL OR p.team_id = membership.team_id)
+)
 ORDER BY s.starts_at DESC, s.id DESC LIMIT $2
 `
 
@@ -454,14 +403,14 @@ type ListTrainingSessionsForAthleteParams struct {
 }
 
 type ListTrainingSessionsForAthleteRow struct {
-	ID           uuid.UUID          `json:"id"`
-	PlanTitle    string             `json:"plan_title"`
-	Title        string             `json:"title"`
-	Description  string             `json:"description"`
-	StartsAt     pgtype.Timestamptz `json:"starts_at"`
-	EndsAt       pgtype.Timestamptz `json:"ends_at"`
-	ModalityName *string            `json:"modality_name"`
-	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	ID            uuid.UUID          `json:"id"`
+	PlanTitle     string             `json:"plan_title"`
+	Title         string             `json:"title"`
+	Description   string             `json:"description"`
+	StartsAt      pgtype.Timestamptz `json:"starts_at"`
+	EndsAt        pgtype.Timestamptz `json:"ends_at"`
+	ModalityName  *string            `json:"modality_name"`
+	OutcomeStatus interface{}        `json:"outcome_status"`
 }
 
 func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error) {
@@ -481,7 +430,7 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.ModalityName,
-			&i.CompletedAt,
+			&i.OutcomeStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -491,4 +440,59 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 		return nil, err
 	}
 	return items, nil
+}
+
+const saveTrainingSessionOutcome = `-- name: SaveTrainingSessionOutcome :execrows
+INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason)
+SELECT $1, $2, $3::training_outcome_status,
+       $4, $5
+FROM training_sessions s
+JOIN training_plans p ON p.id = s.plan_id
+WHERE s.id = $1
+  AND EXISTS (
+      SELECT 1 FROM user_memberships m
+      WHERE m.user_id = $2 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        AND (p.programme_id IS NULL OR p.programme_id = m.programme_id)
+        AND (p.team_id IS NULL OR p.team_id = m.team_id)
+  )
+  AND (
+      $3::training_outcome_status <> 'REPLACED'
+      OR EXISTS (
+          SELECT 1 FROM training_sessions replacement_session
+          JOIN training_plans replacement_plan ON replacement_plan.id = replacement_session.plan_id
+          JOIN user_memberships m ON m.user_id = $2
+              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+          WHERE replacement_session.id = $4
+            AND replacement_session.id <> s.id
+            AND (replacement_plan.programme_id IS NULL OR replacement_plan.programme_id = m.programme_id)
+            AND (replacement_plan.team_id IS NULL OR replacement_plan.team_id = m.team_id)
+      )
+  )
+ON CONFLICT (session_id, user_id) DO UPDATE SET
+    status = EXCLUDED.status,
+    replacement_session_id = EXCLUDED.replacement_session_id,
+    replacement_reason = EXCLUDED.replacement_reason,
+    updated_at = now()
+`
+
+type SaveTrainingSessionOutcomeParams struct {
+	SessionID            uuid.UUID             `json:"session_id"`
+	UserID               uuid.UUID             `json:"user_id"`
+	Status               TrainingOutcomeStatus `json:"status"`
+	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
+	ReplacementReason    *string               `json:"replacement_reason"`
+}
+
+func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveTrainingSessionOutcome,
+		arg.SessionID,
+		arg.UserID,
+		arg.Status,
+		arg.ReplacementSessionID,
+		arg.ReplacementReason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
