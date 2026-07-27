@@ -5,6 +5,7 @@ const email = `e2e-${Date.now()}@example.test`;
 const guardianEmail = `e2e-guardian-${Date.now()}@example.test`;
 const leisureEmail = `e2e-leisure-${Date.now()}@example.test`;
 const athleteEmail = `e2e-athlete-${Date.now()}@example.test`;
+const waitlistedEmail = `e2e-waitlisted-${Date.now()}@example.test`;
 const adminEmail = 'e2e-admin@example.test';
 const password = 'correct horse 7';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080';
@@ -231,5 +232,104 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Atleta de competição' }).click();
     await expect(page).toHaveURL('/dashboard/competition');
     await expect(page.getByRole('heading', { name: 'Painel de atleta de competição' })).toBeVisible();
+  });
+
+  test('administrator manages event capacity, waitlist confirmation, and check-in', async ({ page }) => {
+    test.setTimeout(120000);
+    const waitlistedName = `Lista de espera E2E ${Date.now()}`;
+    const futureTitle = `Evento com lotação E2E ${Date.now()}`;
+    const pastTitle = `Evento com presença E2E ${Date.now()}`;
+    const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const futureEnd = new Date(futureStart.getTime() + 2 * 60 * 60 * 1000);
+    const pastStart = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const pastEnd = new Date(pastStart.getTime() + 2 * 60 * 60 * 1000);
+    const asDateTimeLocal = (value) => value.toISOString().slice(0, 16);
+
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Membros' }).click();
+    await page.locator('#member-name').fill(waitlistedName);
+    await page.locator('#member-email').fill(waitlistedEmail);
+    await page.locator('#member-birth').fill('2000-01-01');
+    await page.locator('#member-password').fill(password);
+    await page.locator('#member-password-confirmation').fill(password);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await page.getByRole('link', { name: waitlistedName }).click();
+    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
+    await membershipForm.getByLabel('Competição').check();
+    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+
+    await page.goto('/events');
+    await page.locator('#event-title').fill(futureTitle);
+    await page.locator('#event-description').fill('Evento de teste para confirmar lotação e lista de espera.');
+    await page.locator('#event-starts-at').fill(asDateTimeLocal(futureStart));
+    await page.locator('#event-ends-at').fill(asDateTimeLocal(futureEnd));
+    await page.locator('#event-capacity').fill('1');
+    await page.getByLabel('Competição').check();
+    await page.getByRole('button', { name: 'Criar evento' }).click();
+    await page.getByRole('link', { name: futureTitle }).click();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/events');
+    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('button', { name: 'Vou', exact: true }).click();
+    await expect(page.getByText('Estado: Vou')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(waitlistedEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/events');
+    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('button', { name: 'Vou', exact: true }).click();
+    await expect(page.getByText('Estado: Em lista de espera')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/events');
+    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('button', { name: 'Não vou' }).click();
+    await expect(page.getByText('Estado: Não vou')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/events');
+    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('button', { name: 'Confirmar vaga' }).click();
+    await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Vou');
+
+    await page.goto('/events');
+    await page.locator('#event-title').fill(pastTitle);
+    await page.locator('#event-description').fill('Evento de teste para registar uma presença após o início.');
+    await page.locator('#event-starts-at').fill(asDateTimeLocal(pastStart));
+    await page.locator('#event-ends-at').fill(asDateTimeLocal(pastEnd));
+    await page.getByRole('button', { name: 'Criar evento' }).click();
+    const pastEventURL = await page.getByRole('link', { name: pastTitle }).getAttribute('href');
+    expect(pastEventURL).not.toBeNull();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(waitlistedEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto(pastEventURL ?? '/events');
+    await page.getByRole('button', { name: 'Vou', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/events');
+    await page.getByRole('link', { name: pastTitle }).click();
+    await page.getByRole('button', { name: 'Registar presença' }).click();
+    await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Presença:');
   });
 });
