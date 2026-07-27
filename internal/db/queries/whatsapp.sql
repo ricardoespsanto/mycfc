@@ -1,8 +1,11 @@
 -- name: ListWhatsAppGroupsForUserProgramme :many
-SELECT DISTINCT id, name, discipline, programme_id, url,
+SELECT id, name, discipline, programme_id, url,
        is_active, created_at, updated_at
-FROM whatsapp_groups
-WHERE (
+FROM (
+    SELECT DISTINCT id, name, discipline, programme_id, url,
+           is_active, created_at, updated_at
+    FROM whatsapp_groups
+    WHERE (
     NOT EXISTS (SELECT 1 FROM whatsapp_group_targets target WHERE target.whatsapp_group_id = whatsapp_groups.id)
     OR EXISTS (
         SELECT 1
@@ -23,7 +26,7 @@ WHERE (
               OR (target.target_type = 'EVENT' AND EXISTS (SELECT 1 FROM events event WHERE event.id = target.target_id))
           )
     )
-)
-  AND is_active = true
+) AND is_active = true
+) AS visible_groups
 ORDER BY lower(discipline), lower(name), id
 LIMIT sqlc.arg(row_limit);

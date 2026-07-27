@@ -4,6 +4,7 @@ import AxeBuilder from '@axe-core/playwright';
 const email = `e2e-${Date.now()}@example.test`;
 const guardianEmail = `e2e-guardian-${Date.now()}@example.test`;
 const leisureEmail = `e2e-leisure-${Date.now()}@example.test`;
+const athleteEmail = `e2e-athlete-${Date.now()}@example.test`;
 const adminEmail = 'e2e-admin@example.test';
 const password = 'correct horse 7';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080';
@@ -196,5 +197,39 @@ test.describe('authentication', () => {
     await expect(complete).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('status')).toHaveText('Manutenção concluída.');
+  });
+
+  test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
+    const athleteName = `Atleta E2E ${Date.now()}`;
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+
+    await page.getByRole('link', { name: 'Membros' }).click();
+    await expect(page).toHaveURL('/admin/membros');
+    await page.locator('#member-name').fill(athleteName);
+    await page.locator('#member-email').fill(athleteEmail);
+    await page.locator('#member-birth').fill('2000-01-01');
+    await page.locator('#member-password').fill(password);
+    await page.locator('#member-password-confirmation').fill(password);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(page).toHaveURL('/admin/membros');
+
+    await page.getByRole('link', { name: athleteName }).click();
+    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
+    await membershipForm.getByLabel('Competição').check();
+    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+    await expect(membershipForm.getByLabel('Competição')).toBeChecked();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await expect(page).toHaveURL('/login');
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Atleta de competição' }).click();
+    await expect(page).toHaveURL('/dashboard/competition');
+    await expect(page.getByRole('heading', { name: 'Painel de atleta de competição' })).toBeVisible();
   });
 });
