@@ -372,4 +372,47 @@ test.describe('authentication', () => {
     await page.goto('/announcements');
     await expect(page.getByRole('link', { name: title })).toHaveCount(0);
   });
+
+  test('administrator publishes scheduled news to the leisure workspace and expires it', async ({ page }) => {
+    test.setTimeout(120000);
+    const memberName = `Lazer E2E ${Date.now()}`;
+    const title = `Notícia E2E ${Date.now()}`;
+    const publishedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 16);
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Membros' }).click();
+    await page.locator('#member-name').fill(memberName);
+    await page.locator('#member-email').fill(leisureEmail);
+    await page.locator('#member-birth').fill('2000-01-01');
+    await page.locator('#member-password').fill(password);
+    await page.locator('#member-password-confirmation').fill(password);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await page.getByRole('link', { name: memberName }).click();
+    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Lazer') });
+    await membershipForm.getByLabel('Lazer').check();
+    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+    await page.getByRole('link', { name: 'Notícias' }).click();
+    await page.locator('#news-title').fill(title);
+    await page.locator('#news-summary').fill('Notícia publicada no painel de lazer.');
+    await page.locator('#news-published-at').fill(publishedAt);
+    await page.getByRole('button', { name: 'Guardar rascunho' }).click();
+    const item = page.locator('li', { hasText: title });
+    await item.getByRole('button', { name: 'Publicar' }).click();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(leisureEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Lazer' }).click();
+    await expect(page.getByText(title)).toBeVisible();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Notícias' }).click();
+    await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
+  });
 });
