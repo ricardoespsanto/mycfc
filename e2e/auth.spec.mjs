@@ -332,4 +332,44 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Registar presença' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Presença:');
   });
+
+  test('administrator publishes a targeted announcement and the athlete reads it', async ({ page }) => {
+    const title = `Aviso de competição E2E ${Date.now()}`;
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/announcements');
+    await page.locator('#announcement-title').fill(title);
+    await page.locator('#announcement-body').fill('Aviso dirigido aos atletas de competição.');
+    await page.getByLabel('Competição').check();
+    await page.getByRole('button', { name: 'Publicar' }).click();
+    await expect(page.getByText(title)).toContainText('PUBLISHED');
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/announcements');
+    const announcement = page.locator('li', { hasText: title });
+    await expect(announcement).toContainText('Não lido');
+    await announcement.getByRole('link', { name: title }).click();
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+
+    await page.goto('/announcements');
+    await expect(page.locator('li', { hasText: title })).not.toContainText('Não lido');
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/announcements');
+    await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/announcements');
+    await expect(page.getByRole('link', { name: title })).toHaveCount(0);
+  });
 });
