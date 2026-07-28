@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 //go:embed schema.sql
@@ -34,25 +33,26 @@ func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, cr
 	migration := quoteIdentifier(credentials.MigrationUsername)
 	database := quoteIdentifier(databaseName)
 
-	statements := []string{
-		"CREATE EXTENSION IF NOT EXISTS citext",
-		"CREATE EXTENSION IF NOT EXISTS pgcrypto",
-		roleStatement(credentials.AppUsername, credentials.AppPassword),
-		roleStatement(credentials.MigrationUsername, credentials.MigrationPassword),
-		"REVOKE ALL ON DATABASE " + database + " FROM PUBLIC",
-		"GRANT CONNECT ON DATABASE " + database + " TO " + app + ", " + migration,
-		"REVOKE ALL ON SCHEMA public FROM PUBLIC",
-		"ALTER SCHEMA public OWNER TO " + migration,
-		"GRANT USAGE ON SCHEMA public TO " + app,
-		"CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration,
-		"ALTER SCHEMA mycfc_meta OWNER TO " + migration,
-		"REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC",
-		"ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app,
-		"ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app,
+	statements := []struct{ name, sql string }{
+		{"enable citext", "CREATE EXTENSION IF NOT EXISTS citext"},
+		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
+		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
+		{"configure migration role", roleStatement(credentials.MigrationUsername, credentials.MigrationPassword)},
+		{"grant migration membership", "GRANT " + migration + " TO CURRENT_USER"},
+		{"revoke public database access", "REVOKE ALL ON DATABASE " + database + " FROM PUBLIC"},
+		{"grant database access", "GRANT CONNECT ON DATABASE " + database + " TO " + app + ", " + migration},
+		{"revoke public schema access", "REVOKE ALL ON SCHEMA public FROM PUBLIC"},
+		{"set public schema owner", "ALTER SCHEMA public OWNER TO " + migration},
+		{"grant app schema usage", "GRANT USAGE ON SCHEMA public TO " + app},
+		{"create metadata schema", "CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration},
+		{"set metadata schema owner", "ALTER SCHEMA mycfc_meta OWNER TO " + migration},
+		{"revoke public metadata access", "REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC"},
+		{"set table defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app},
+		{"set sequence defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app},
 	}
 	for _, statement := range statements {
-		if _, err := conn.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("bootstrap database roles: %w", err)
+		if _, err := conn.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("bootstrap database roles (%s): %w", statement.name, err)
 		}
 	}
 	return nil
@@ -69,13 +69,18 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 		return fmt.Errorf("lock baseline migration: %w", err)
 	}
 
-	var installed bool
-	err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed)
-	if err == nil && installed {
-		return tx.Commit(ctx)
+	var markerExists bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('mycfc_meta.schema_migrations') IS NOT NULL").Scan(&markerExists); err != nil {
+		return fmt.Errorf("check baseline marker: %w", err)
 	}
-	if err != nil && !isUndefinedTable(err) {
-		return fmt.Errorf("check baseline migration: %w", err)
+	if markerExists {
+		var installed bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed); err != nil {
+			return fmt.Errorf("check baseline migration: %w", err)
+		}
+		if installed {
+			return tx.Commit(ctx)
+		}
 	}
 
 	var objectCount int
@@ -121,15 +126,9 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 }
 
 func roleStatement(username, password string) string {
-	return "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
-		"ALTER ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; " +
-		"ELSE CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; END IF; END $$"
+	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
+		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; END IF; END $$"
 }
 
 func quoteIdentifier(value string) string { return `"` + strings.ReplaceAll(value, `"`, `""`) + `"` }
 func quoteLiteral(value string) string    { return `'` + strings.ReplaceAll(value, `'`, `''`) + `'` }
-
-func isUndefinedTable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
-}

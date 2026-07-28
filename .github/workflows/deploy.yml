@@ -84,7 +84,6 @@ jobs:
             domain_name
             app_private_subnet_ids
             task_security_group_id
-            alb_target_group_arn
           )
           missing_outputs=()
           for output in "${required_outputs[@]}"; do
@@ -101,7 +100,7 @@ jobs:
             exit 1
           fi
 
-          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn bootstrap_task_definition_arn migration_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
+          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn bootstrap_task_definition_arn migration_task_definition_arn domain_name task_security_group_id; do
             printf '%s=%s\n' "$output" "$(jq -r --arg output "$output" '.[$output].value' "$terraform_output")" >> "$GITHUB_OUTPUT"
           done
           printf 'app_private_subnet_ids=%s\n' "$(jq -c '.app_private_subnet_ids.value' "$terraform_output")" >> "$GITHUB_OUTPUT"
@@ -136,6 +135,7 @@ jobs:
                 .containerDefinitions |= map(
                   if .name == "app" then
                     .image = $image
+                    | del(.healthCheck)
                     | release_env("APP_VERSION"; $sha)
                     | release_env("GIT_SHA"; $sha)
                   else . end
@@ -187,40 +187,52 @@ jobs:
           run_and_wait "$BOOTSTRAP_TASK_DEFINITION"
           run_and_wait "$MIGRATION_TASK_DEFINITION"
       - name: Update ECS service and wait for a healthy deployment
+        timeout-minutes: 10
         env:
           CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
           SERVICE: ${{ steps.terraform.outputs.ecs_service_name }}
           TASK_DEFINITION: ${{ steps.task-definitions.outputs.app_task_definition }}
-          TARGET_GROUP_ARN: ${{ steps.terraform.outputs.alb_target_group_arn }}
         run: |
           set -Eeuo pipefail
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --force-new-deployment >/dev/null
           service_description="$RUNNER_TEMP/service.json"
-          for attempt in {1..40}; do
+          deployment_healthy=false
+          for attempt in {1..36}; do
             aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --output json > "$service_description"
+            rollout_state="$(jq -r --arg task_definition "$TASK_DEFINITION" '
+              [.services[0].deployments[] | select(.status == "PRIMARY" and .taskDefinition == $task_definition)][0].rolloutState // "PENDING"
+            ' "$service_description")"
+            jq -r --argjson attempt "$attempt" --arg task_definition "$TASK_DEFINITION" --arg rollout_state "$rollout_state" '
+              .services[0] |
+              "ECS rollout poll \($attempt)/36: state=\($rollout_state) running=\(.runningCount)/\(.desiredCount) pending=\(.pendingCount) task=\($task_definition)"
+            ' "$service_description"
+            if [[ "$rollout_state" == "FAILED" ]]; then
+              jq -c --arg task_definition "$TASK_DEFINITION" '.services[0] | {
+                status, runningCount, desiredCount, pendingCount,
+                deployment: [.deployments[] | select(.taskDefinition == $task_definition) | {status, taskDefinition, rolloutState, rolloutStateReason}][0],
+                events: [.events[0:10][] | {createdAt, message}]
+              }' "$service_description" >&2
+              exit 1
+            fi
             if jq -e --arg task_definition "$TASK_DEFINITION" '
-              .services[0] | .runningCount == .desiredCount and
-              ([.deployments[] | select(.status == "PRIMARY")] | length == 1) and
-              ([.deployments[] | select(.status == "PRIMARY") | .taskDefinition == $task_definition and .rolloutState == "COMPLETED"] | all)
+              .services[0] |
+              .runningCount == .desiredCount and .pendingCount == 0 and
+              ([.deployments[] | select(.status == "PRIMARY" and .taskDefinition == $task_definition and .rolloutState == "COMPLETED")] | length == 1)
             ' "$service_description" >/dev/null; then
+              deployment_healthy=true
               break
             fi
             sleep 15
           done
-          jq -e --arg task_definition "$TASK_DEFINITION" '
-            .services[0] | .runningCount == .desiredCount and
-            ([.deployments[] | select(.status == "PRIMARY")] | length == 1) and
-            ([.deployments[] | select(.status == "PRIMARY") | .taskDefinition == $task_definition and .rolloutState == "COMPLETED"] | all)
-          ' "$service_description" >/dev/null || {
-            jq -c '.services[0] | {status, runningCount, desiredCount, deployments: [.deployments[] | {status, taskDefinition, rolloutState, rolloutStateReason}]}' "$service_description" >&2
+          if [[ "$deployment_healthy" != true ]]; then
+            jq -c '.services[0] | {
+              status, runningCount, desiredCount, pendingCount,
+              deployments: [.deployments[] | {status, taskDefinition, rolloutState, rolloutStateReason}],
+              events: [.events[0:10][] | {createdAt, message}]
+            }' "$service_description" >&2
+            echo "ECS deployment did not become healthy within 9 minutes." >&2
             exit 1
-          }
-          target_health="$RUNNER_TEMP/target-health.json"
-          aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output json > "$target_health"
-          jq -e '(.TargetHealthDescriptions | length) > 0 and all(.TargetHealthDescriptions[]; .TargetHealth.State == "healthy")' "$target_health" >/dev/null || {
-            jq -c '.TargetHealthDescriptions | map({target: .Target.Id, state: .TargetHealth.State, reason: .TargetHealth.Reason, description: .TargetHealth.Description})' "$target_health" >&2
-            exit 1
-          }
+          fi
       - name: Smoke test production endpoints
         env:
           DOMAIN: ${{ steps.terraform.outputs.domain_name }}
@@ -249,4 +261,4 @@ jobs:
             echo "- App task definition: \`${{ steps.task-definitions.outputs.app_task_definition }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,app-task-registration,service,target-health}.json
+        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,app-task-registration,service}.json
