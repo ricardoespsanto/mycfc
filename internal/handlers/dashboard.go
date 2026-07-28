@@ -676,31 +676,53 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 	return items
 }
 
-func dashboardNavigation(user CurrentUser) []components.NavigationItem {
-	items := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+// dashboardNavigation builds the signed-in navigation as a small set of
+// groups rather than one flat list: everyday links stay always visible,
+// while role-specific and administrative links are clustered under their
+// own disclosure so the header doesn't grow unbounded as a member picks up
+// more roles (guardian + coach + admin, for example).
+func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
+	primary := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+
+	var programme []components.NavigationItem
 	if !user.IsDependent {
-		items = append(items, components.NavigationItem{Label: "Encarregado de educação", Path: "/dashboard/guardian"})
+		programme = append(programme, components.NavigationItem{Label: "Encarregado de educação", Path: "/dashboard/guardian"})
 	}
 	if user.Programmes["Leisure"] {
-		items = append(items, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
+		programme = append(programme, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}
 	if user.Programmes["Initiation"] {
-		items = append(items, components.NavigationItem{Label: "Atleta de iniciação", Path: "/dashboard/initiation"})
+		programme = append(programme, components.NavigationItem{Label: "Atleta de iniciação", Path: "/dashboard/initiation"})
 	}
 	if user.Programmes["Competition"] {
-		items = append(items, components.NavigationItem{Label: "Atleta de competição", Path: "/dashboard/competition"})
+		programme = append(programme, components.NavigationItem{Label: "Atleta de competição", Path: "/dashboard/competition"})
 	}
 	if user.Programmes["Kayak_Polo"] {
-		items = append(items, components.NavigationItem{Label: "Atleta de kayak polo", Path: "/dashboard/kayak-polo"})
+		programme = append(programme, components.NavigationItem{Label: "Atleta de kayak polo", Path: "/dashboard/kayak-polo"})
 	}
+
+	var management []components.NavigationItem
 	if user.CanManageEvents {
-		items = append(items, components.NavigationItem{Label: "Treinador", Path: "/dashboard/coach"})
+		management = append(management, components.NavigationItem{Label: "Treinador", Path: "/dashboard/coach"})
 	}
 	if user.CanModerateContent {
-		items = append(items, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
+		management = append(management, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
 	}
+
+	var admin []components.NavigationItem
 	if user.IsAdmin {
-		items = append(items, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
+		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"})
 	}
-	return items
+
+	groups := []components.NavigationGroup{{Items: primary}}
+	if len(programme) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "O meu programa", Items: programme})
+	}
+	if len(management) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Gestão", Items: management})
+	}
+	if len(admin) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Administração", Items: admin})
+	}
+	return groups
 }

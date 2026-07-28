@@ -34,7 +34,7 @@ templ Fleet(page FleetPage) {
 }
 
 templ fleetContent(page FleetPage) {
-	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section>
+	<section class="dashboard-hero"><p class="eyebrow">Operações</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section>
 	<section class="dashboard-card"><h2>Estado da frota</h2><ul class="content-list">
 		for _, count := range page.Counts {
 			<li>{ count.Status }: { count.Total }</li>

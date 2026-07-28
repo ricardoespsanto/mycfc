@@ -90,7 +90,7 @@ func fleetContent(page FleetPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"dashboard-hero\"><p class=\"eyebrow\">MyCFC</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section><section class=\"dashboard-card\"><h2>Estado da frota</h2><ul class=\"content-list\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"dashboard-hero\"><p class=\"eyebrow\">Operações</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section><section class=\"dashboard-card\"><h2>Estado da frota</h2><ul class=\"content-list\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
