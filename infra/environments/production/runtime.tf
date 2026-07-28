@@ -471,13 +471,6 @@ resource "aws_ecs_task_definition" "app" {
     linuxParameters = {
       capabilities = { drop = ["ALL"] }
     }
-    healthCheck = {
-      command     = ["CMD-SHELL", "wget -q -O- http://localhost:8080/health/live >/dev/null || exit 1"]
-      interval    = 30
-      timeout     = 5
-      retries     = 3
-      startPeriod = 30
-    }
     stopTimeout = 30
     logConfiguration = {
       logDriver = "awslogs"
