@@ -334,6 +334,20 @@ resource "aws_iam_role" "github_deploy" {
 
 data "aws_iam_policy_document" "github_deploy" {
   statement {
+    sid       = "ReadTerraformStateBucket"
+    effect    = "Allow"
+    actions   = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:ListBucket"]
+    resources = ["arn:aws:s3:::${var.state_bucket_name}"]
+  }
+
+  statement {
+    sid       = "ReadTerraformState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:GetObjectVersion"]
+    resources = ["arn:aws:s3:::${var.state_bucket_name}/mycfc/production/terraform.tfstate"]
+  }
+
+  statement {
     sid       = "GetECRAuthorizationToken"
     effect    = "Allow"
     actions   = ["ecr:GetAuthorizationToken"]
