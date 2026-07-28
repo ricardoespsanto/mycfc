@@ -394,12 +394,6 @@ data "aws_iam_policy_document" "github_deploy" {
     effect    = "Allow"
     actions   = ["ecs:RegisterTaskDefinition"]
     resources = ["*"]
-
-    condition {
-      test     = "StringLike"
-      variable = "ecs:TaskDefinitionFamily"
-      values   = [aws_ecs_task_definition.app.family, aws_ecs_task_definition.migrate.family, aws_ecs_task_definition.bootstrap.family]
-    }
   }
 
   statement {
