@@ -181,7 +181,7 @@ jobs:
               sleep 5
             done
             [[ "$status" == "STOPPED" ]]
-            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].containers[0] | {name, exitCode, reason}' --output json
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].containers[0] | {name: name, exitCode: exitCode, reason: reason}' --output json
             [[ "$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].containers[0].exitCode' --output text)" == "0" ]]
           }
           run_and_wait "$BOOTSTRAP_TASK_DEFINITION"
