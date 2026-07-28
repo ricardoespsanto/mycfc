@@ -34,26 +34,26 @@ func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, cr
 	migration := quoteIdentifier(credentials.MigrationUsername)
 	database := quoteIdentifier(databaseName)
 
-	statements := []string{
-		"CREATE EXTENSION IF NOT EXISTS citext",
-		"CREATE EXTENSION IF NOT EXISTS pgcrypto",
-		roleStatement(credentials.AppUsername, credentials.AppPassword),
-		roleStatement(credentials.MigrationUsername, credentials.MigrationPassword),
-		"GRANT " + migration + " TO CURRENT_USER",
-		"REVOKE ALL ON DATABASE " + database + " FROM PUBLIC",
-		"GRANT CONNECT ON DATABASE " + database + " TO " + app + ", " + migration,
-		"REVOKE ALL ON SCHEMA public FROM PUBLIC",
-		"ALTER SCHEMA public OWNER TO " + migration,
-		"GRANT USAGE ON SCHEMA public TO " + app,
-		"CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration,
-		"ALTER SCHEMA mycfc_meta OWNER TO " + migration,
-		"REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC",
-		"ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app,
-		"ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app,
+	statements := []struct{ name, sql string }{
+		{"enable citext", "CREATE EXTENSION IF NOT EXISTS citext"},
+		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
+		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
+		{"configure migration role", roleStatement(credentials.MigrationUsername, credentials.MigrationPassword)},
+		{"grant migration membership", "GRANT " + migration + " TO CURRENT_USER"},
+		{"revoke public database access", "REVOKE ALL ON DATABASE " + database + " FROM PUBLIC"},
+		{"grant database access", "GRANT CONNECT ON DATABASE " + database + " TO " + app + ", " + migration},
+		{"revoke public schema access", "REVOKE ALL ON SCHEMA public FROM PUBLIC"},
+		{"set public schema owner", "ALTER SCHEMA public OWNER TO " + migration},
+		{"grant app schema usage", "GRANT USAGE ON SCHEMA public TO " + app},
+		{"create metadata schema", "CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration},
+		{"set metadata schema owner", "ALTER SCHEMA mycfc_meta OWNER TO " + migration},
+		{"revoke public metadata access", "REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC"},
+		{"set table defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app},
+		{"set sequence defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app},
 	}
 	for _, statement := range statements {
-		if _, err := conn.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("bootstrap database roles: %w", err)
+		if _, err := conn.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("bootstrap database roles (%s): %w", statement.name, err)
 		}
 	}
 	return nil
