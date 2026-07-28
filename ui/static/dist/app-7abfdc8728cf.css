@@ -131,11 +131,41 @@ button:hover {
 .site-header { background: #12334a; color: #fff; }
 .site-header__content { width: min(72rem, calc(100% - 2rem)); margin-inline: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; padding-block: 0.8rem; }
 .site-header a { color: inherit; }
-.site-header nav ul, .calendar-links { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; margin: 0; padding: 0; list-style: none; }
-.site-header nav a { display: inline-flex; min-block-size: 2.75rem; align-items: center; padding-inline: 0.2rem; }
+.calendar-links { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; margin: 0; padding: 0; list-style: none; }
 .site-brand { font-weight: 800; text-decoration: none; }
+
+/* Grouped navigation: an always-visible primary list, plus role/admin links
+   clustered into <details> disclosures so the header doesn't grow into a
+   wall of same-weight links as a member accumulates roles. */
+.site-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.4rem; }
+.site-nav ul { display: flex; flex-wrap: wrap; gap: 0.15rem 0.6rem; margin: 0; padding: 0; list-style: none; }
+.site-nav a { display: inline-flex; min-block-size: 2.75rem; align-items: center; padding-inline: 0.2rem; }
+.site-nav__primary { padding-inline-end: 0.4rem; border-inline-end: 1px solid rgb(255 255 255 / 22%); }
+.site-nav__group { position: relative; }
+.site-nav__group summary { display: inline-flex; align-items: center; gap: 0.35rem; min-block-size: 2.75rem; padding-inline: 0.5rem; list-style: none; cursor: pointer; border-radius: 0.3rem; }
+.site-nav__group summary::-webkit-details-marker { display: none; }
+.site-nav__group summary::after { content: "▾"; font-size: 0.7em; opacity: 0.8; }
+.site-nav__group[open] summary,
+.site-nav__group summary:hover,
+.site-nav__group summary:focus-visible { background: rgb(255 255 255 / 12%); }
+.site-nav__group-indicator { inline-size: 0.4rem; block-size: 0.4rem; border-radius: 50%; background: #6fd6a8; }
+.site-nav__group ul { position: absolute; inset-inline-start: 0; top: calc(100% + 0.3rem); z-index: 20; flex-direction: column; min-inline-size: 12rem; padding: 0.4rem; border-radius: 0.4rem; background: #12334a; box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 25%); }
+.site-nav__group ul a { min-block-size: 2.5rem; padding-inline: 0.5rem; border-radius: 0.3rem; }
+.site-nav__group ul a:hover,
+.site-nav__group ul a:focus-visible { background: rgb(255 255 255 / 12%); }
 .logout-button { padding: 0.4rem 0.65rem; background: transparent; border: 1px solid currentColor; }
 .site-footer { padding: 2rem 1rem; text-align: center; color: #4d5964; }
+
+/* Shared "you are here" strip across the three /admin/* sections, so moving
+   between Membros/Notícias/Frota reads as one area rather than three
+   unrelated pages. */
+.admin-subnav { background: #fff; border-block-end: 1px solid #c7d1d9; }
+.admin-subnav ul { display: flex; flex-wrap: wrap; gap: 0 1.25rem; width: min(72rem, calc(100% - 2rem)); margin-inline: auto; padding: 0; list-style: none; }
+.admin-subnav a { display: inline-flex; align-items: center; min-block-size: 2.75rem; padding-inline: 0.1rem; color: #4d5964; text-decoration: none; border-block-end: 0.2rem solid transparent; font-weight: 650; }
+.admin-subnav a:hover,
+.admin-subnav a:focus-visible { color: #17202a; }
+.admin-subnav a[aria-current="page"] { color: #17653c; border-block-end-color: #17653c; }
+
 .dashboard-hero { max-width: 48rem; margin-block-end: 1.5rem; }
 .dashboard-hero h1 { margin-block: 0.25rem 0.5rem; font-size: clamp(2rem, 4vw, 3.25rem); line-height: 1.05; letter-spacing: -0.03em; }
 .dashboard-hero > p:last-child { max-width: 42rem; margin-block: 0; color: #4d5964; font-size: 1.05rem; }
@@ -172,10 +202,14 @@ button:hover {
 .calendar-warning { padding: 0.75rem; border-inline-start: 0.35rem solid #a66a00; background: #fff8e7; font-weight: 600; }
 @media (max-width: 40rem) {
   .site-header__content { align-items: stretch; flex-direction: column; }
-  .site-header nav ul { gap: 0.15rem 0.75rem; }
   .site-header__content > form { align-self: flex-start; }
+  .site-nav { flex-direction: column; align-items: stretch; gap: 0.15rem; }
+  .site-nav__primary { padding-inline-end: 0; padding-block-end: 0.3rem; border-inline-end: 0; border-block-end: 1px solid rgb(255 255 255 / 22%); }
+  .site-nav__group summary { justify-content: space-between; }
+  .site-nav__group ul { position: static; box-shadow: none; padding-inline-start: 0.75rem; background: transparent; }
   .dashboard-card { border-radius: 0.4rem; }
   .form-layout > button { inline-size: 100%; }
+  .admin-subnav ul { flex-wrap: nowrap; overflow-x: auto; gap: 0 1rem; }
 }
 
 .public-body {

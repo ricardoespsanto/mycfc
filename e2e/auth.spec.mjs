@@ -95,6 +95,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
+    await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     await expect(page).toHaveURL('/dashboard/guardian');
 
@@ -104,6 +105,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
+    await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
@@ -114,6 +116,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
+    await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
@@ -139,6 +142,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Correio eletrónico').fill(guardianEmail);
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await noJavaScriptPage.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await noJavaScriptPage.getByRole('link', { name: 'Encarregado de educação' }).click();
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
@@ -162,6 +166,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
+    await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Frota' }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
@@ -207,6 +212,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
+    await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
     await expect(page).toHaveURL('/admin/membros');
     await page.locator('#member-name').fill(athleteName);
@@ -229,6 +235,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await expect(page).toHaveURL('/today');
+    await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await page.getByRole('link', { name: 'Atleta de competição' }).click();
     await expect(page).toHaveURL('/dashboard/competition');
     await expect(page.getByRole('heading', { name: 'Painel de atleta de competição' })).toBeVisible();
@@ -249,6 +256,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
     await page.locator('#member-name').fill(waitlistedName);
     await page.locator('#member-email').fill(waitlistedEmail);
@@ -382,6 +390,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
     await page.locator('#member-name').fill(memberName);
     await page.locator('#member-email').fill(leisureEmail);
@@ -393,7 +402,7 @@ test.describe('authentication', () => {
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Lazer') });
     await membershipForm.getByLabel('Lazer').check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
-    await page.getByRole('link', { name: 'Notícias' }).click();
+    await page.getByLabel('Secções de administração').getByRole('link', { name: 'Notícias' }).click();
     await page.locator('#news-title').fill(title);
     await page.locator('#news-summary').fill('Notícia publicada no painel de lazer.');
     await page.locator('#news-published-at').fill(publishedAt);
@@ -405,6 +414,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(leisureEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
     await page.getByRole('link', { name: 'Lazer' }).click();
     await expect(page.getByText(title)).toBeVisible();
 
@@ -412,6 +422,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Notícias' }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
   });

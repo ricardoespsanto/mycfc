@@ -25,7 +25,7 @@ templ Navigation(currentPath string, groups []NavigationGroup) {
 					}
 				</ul>
 			} else {
-				<details class="site-nav__group">
+				<details class="site-nav__group" open?={ groupContainsCurrent(currentPath, group) }>
 					<summary>
 						{ group.Label }
 						if groupContainsCurrent(currentPath, group) {

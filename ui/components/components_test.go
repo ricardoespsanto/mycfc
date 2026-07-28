@@ -87,7 +87,7 @@ func TestNavigationGroupsSecondaryLinksInDisclosures(t *testing.T) {
 		t.Fatalf("render navigation: %v", err)
 	}
 	body := output.String()
-	if !strings.Contains(body, `<details class="site-nav__group">`) {
+	if !strings.Contains(body, `<details class="site-nav__group"`) {
 		t.Error("labelled group should render as a disclosure")
 	}
 	if !strings.Contains(body, `<summary>`) || !strings.Contains(body, `Administração`) {
@@ -95,6 +95,9 @@ func TestNavigationGroupsSecondaryLinksInDisclosures(t *testing.T) {
 	}
 	if !strings.Contains(body, `site-nav__group-indicator`) {
 		t.Error("group containing the current path should show an indicator")
+	}
+	if !strings.Contains(body, `<details class="site-nav__group" open>`) {
+		t.Error("group containing the current path should be open")
 	}
 }
 
