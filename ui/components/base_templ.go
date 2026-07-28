@@ -15,7 +15,7 @@ type PageMeta struct {
 	BrandImageURL   string
 	CurrentPath     string
 	CurrentUserName string
-	Navigation      []NavigationItem
+	Navigation      []NavigationGroup
 	CSRFField       templ.Component
 }
 

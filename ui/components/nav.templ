@@ -5,18 +5,59 @@ type NavigationItem struct {
 	Path  string
 }
 
-templ Navigation(currentPath string, items []NavigationItem) {
-	<nav aria-label="Navegação principal">
-		<ul>
-			for _, item := range items {
-				<li>
-					if item.Path == currentPath {
-						<a href={ item.Path } aria-current="page">{ item.Label }</a>
-					} else {
-						<a href={ item.Path }>{ item.Label }</a>
+// NavigationGroup clusters related navigation items under an optional label.
+// A group with an empty Label renders as an always-visible inline list (used
+// for the small set of links every signed-in member sees). Labelled groups
+// render as a disclosure ("<details>") so role-specific and admin-only links
+// don't compete for attention with everyday navigation.
+type NavigationGroup struct {
+	Label string
+	Items []NavigationItem
+}
+
+templ Navigation(currentPath string, groups []NavigationGroup) {
+	<nav aria-label="Navegação principal" class="site-nav">
+		for _, group := range groups {
+			if group.Label == "" {
+				<ul class="site-nav__primary">
+					for _, item := range group.Items {
+						@navItem(currentPath, item)
 					}
-				</li>
+				</ul>
+			} else {
+				<details class="site-nav__group">
+					<summary>
+						{ group.Label }
+						if groupContainsCurrent(currentPath, group) {
+							<span class="site-nav__group-indicator" aria-hidden="true"></span>
+						}
+					</summary>
+					<ul>
+						for _, item := range group.Items {
+							@navItem(currentPath, item)
+						}
+					</ul>
+				</details>
 			}
-		</ul>
+		}
 	</nav>
+}
+
+templ navItem(currentPath string, item NavigationItem) {
+	<li>
+		if item.Path == currentPath {
+			<a href={ item.Path } aria-current="page">{ item.Label }</a>
+		} else {
+			<a href={ item.Path }>{ item.Label }</a>
+		}
+	</li>
+}
+
+func groupContainsCurrent(currentPath string, group NavigationGroup) bool {
+	for _, item := range group.Items {
+		if item.Path == currentPath {
+			return true
+		}
+	}
+	return false
 }

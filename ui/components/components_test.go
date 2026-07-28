@@ -34,9 +34,11 @@ func TestBaseRendersDocumentContract(t *testing.T) {
 
 func TestNavigationMarksCurrentPath(t *testing.T) {
 	var output strings.Builder
-	err := Navigation("/dashboard", []NavigationItem{
-		{Label: "Painel", Path: "/dashboard"},
-		{Label: "Terminar sessão", Path: "/logout"},
+	err := Navigation("/dashboard", []NavigationGroup{
+		{Items: []NavigationItem{
+			{Label: "Painel", Path: "/dashboard"},
+			{Label: "Terminar sessão", Path: "/logout"},
+		}},
 	}).Render(context.Background(), &output)
 	if err != nil {
 		t.Fatalf("render navigation: %v", err)
@@ -46,6 +48,27 @@ func TestNavigationMarksCurrentPath(t *testing.T) {
 	}
 	if strings.Contains(output.String(), `href="/logout" aria-current="page"`) {
 		t.Error("non-current navigation item is marked")
+	}
+}
+
+func TestNavigationGroupsSecondaryLinksInDisclosures(t *testing.T) {
+	var output strings.Builder
+	err := Navigation("/admin/membros", []NavigationGroup{
+		{Items: []NavigationItem{{Label: "Eventos", Path: "/events"}}},
+		{Label: "Administração", Items: []NavigationItem{{Label: "Membros", Path: "/admin/membros"}}},
+	}).Render(context.Background(), &output)
+	if err != nil {
+		t.Fatalf("render navigation: %v", err)
+	}
+	body := output.String()
+	if !strings.Contains(body, `<details class="site-nav__group">`) {
+		t.Error("labelled group should render as a disclosure")
+	}
+	if !strings.Contains(body, `<summary>`) || !strings.Contains(body, `Administração`) {
+		t.Error("labelled group should show its label in the summary")
+	}
+	if !strings.Contains(body, `site-nav__group-indicator`) {
+		t.Error("group containing the current path should show an indicator")
 	}
 }
 
