@@ -122,7 +122,7 @@ resource "aws_db_instance" "postgres" {
   storage_type                 = "gp3"
   storage_encrypted            = true
   multi_az                     = true
-  db_name                      = "mycfc"
+  db_name                      = var.database_name
   username                     = "master"
   manage_master_user_password  = true
   publicly_accessible          = false

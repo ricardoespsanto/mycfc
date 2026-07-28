@@ -28,6 +28,11 @@ go.work.sum
 /tmp
 /node_modules
 **/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.tfvars
+**/backend.hcl
 
 # env file
 .env

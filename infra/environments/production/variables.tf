@@ -53,10 +53,6 @@ variable "consent_terms_url" { type = string }
 variable "consent_image_url" { type = string }
 variable "consent_minor_url" { type = string }
 variable "image_git_sha" { type = string }
-variable "migration_db_password_secret_arn" {
-  type      = string
-  sensitive = true
-}
 variable "app_db_username" { type = string }
 variable "migration_db_username" { type = string }
 variable "database_name" {
@@ -131,8 +127,8 @@ check "production_input_validation" {
     error_message = "Image Git SHA and consent document URLs are invalid."
   }
   assert {
-    condition     = can(regex("^arn:aws(-[a-z]+)?:secretsmanager:[a-z]{2}(-gov)?-[a-z]+-[0-9]+:[0-9]{12}:secret:.+$", var.migration_db_password_secret_arn)) && trimspace(var.app_db_username) != "" && trimspace(var.migration_db_username) != "" && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
-    error_message = "Migration database secret ARN, database users, or database name are invalid."
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.app_db_username)) && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.migration_db_username)) && var.app_db_username != var.migration_db_username && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
+    error_message = "App and migration database users must be distinct PostgreSQL identifiers, as must the database name."
   }
   assert {
     condition     = var.alb_log_retention_days >= 30 && var.waf_login_rate_limit >= 10 && var.waf_general_rate_limit >= var.waf_login_rate_limit && var.alb_requests_per_target > 0

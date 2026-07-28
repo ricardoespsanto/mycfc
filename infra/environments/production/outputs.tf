@@ -50,6 +50,10 @@ output "migration_task_definition_arn" {
   value = aws_ecs_task_definition.migrate.arn
 }
 
+output "bootstrap_task_definition_arn" {
+  value = aws_ecs_task_definition.bootstrap.arn
+}
+
 output "github_infra_plan_role_arn" {
   value = aws_iam_role.github_infra_plan.arn
 }

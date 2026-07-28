@@ -79,6 +79,8 @@ jobs:
             ecs_cluster_name
             ecs_service_name
             app_task_definition_arn
+            bootstrap_task_definition_arn
+            migration_task_definition_arn
             domain_name
             app_private_subnet_ids
             task_security_group_id
@@ -99,7 +101,7 @@ jobs:
             exit 1
           fi
 
-          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
+          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn bootstrap_task_definition_arn migration_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
             printf '%s=%s\n' "$output" "$(jq -r --arg output "$output" '.[$output].value' "$terraform_output")" >> "$GITHUB_OUTPUT"
           done
           printf 'app_private_subnet_ids=%s\n' "$(jq -c '.app_private_subnet_ids.value' "$terraform_output")" >> "$GITHUB_OUTPUT"
@@ -142,6 +144,48 @@ jobs:
           ' "$app_current" > "$app_registration"
           app_task_definition="$(aws ecs register-task-definition --cli-input-json "file://$app_registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
           printf 'app_task_definition=%s\n' "$app_task_definition" >> "$GITHUB_OUTPUT"
+          for task in bootstrap migration; do
+            current="$RUNNER_TEMP/$task-task-definition.json"
+            registration="$RUNNER_TEMP/$task-task-registration.json"
+            if [[ "$task" == bootstrap ]]; then
+              task_definition="${{ steps.terraform.outputs.bootstrap_task_definition_arn }}"
+            else
+              task_definition="${{ steps.terraform.outputs.migration_task_definition_arn }}"
+            fi
+            aws ecs describe-task-definition --task-definition "$task_definition" --query taskDefinition --output json > "$current"
+            jq --arg image "${{ steps.image.outputs.image }}" '
+              del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+              | .containerDefinitions |= map(.image = $image)
+            ' "$current" > "$registration"
+            registered="$(aws ecs register-task-definition --cli-input-json "file://$registration" --query 'taskDefinition.taskDefinitionArn' --output text)"
+            printf '%s_task_definition=%s\n' "$task" "$registered" >> "$GITHUB_OUTPUT"
+          done
+      - name: Bootstrap database roles and apply the reset baseline
+        env:
+          CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
+          BOOTSTRAP_TASK_DEFINITION: ${{ steps.task-definitions.outputs.bootstrap_task_definition }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.task-definitions.outputs.migration_task_definition }}
+          SUBNETS: ${{ steps.terraform.outputs.app_private_subnet_ids }}
+          SECURITY_GROUP: ${{ steps.terraform.outputs.task_security_group_id }}
+        run: |
+          set -Eeuo pipefail
+          network_configuration="$(jq -cn --argjson subnets "$SUBNETS" --arg security_group "$SECURITY_GROUP" '{awsvpcConfiguration:{subnets:$subnets,securityGroups:[$security_group],assignPublicIp:"DISABLED"}}')"
+          run_and_wait() {
+            local task_definition="$1"
+            local task_arn status
+            task_arn="$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$task_definition" --launch-type FARGATE --network-configuration "$network_configuration" --query 'tasks[0].taskArn' --output text)"
+            test "$task_arn" != "None"
+            for attempt in {1..80}; do
+              status="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].lastStatus' --output text)"
+              [[ "$status" == "STOPPED" ]] && break
+              sleep 5
+            done
+            [[ "$status" == "STOPPED" ]]
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].containers[0] | {name, exitCode, reason}' --output json
+            [[ "$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --query 'tasks[0].containers[0].exitCode' --output text)" == "0" ]]
+          }
+          run_and_wait "$BOOTSTRAP_TASK_DEFINITION"
+          run_and_wait "$MIGRATION_TASK_DEFINITION"
       - name: Update ECS service and wait for a healthy deployment
         env:
           CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}

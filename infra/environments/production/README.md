@@ -5,4 +5,6 @@
 3. Copy `terraform.tfvars.example` to untracked `terraform.tfvars`, replacing every account-specific value.
 4. Run `terraform init -backend-config=backend.hcl`, then `terraform plan -var-file=terraform.tfvars`.
 
+Set `app_db_username` and `migration_db_username` to distinct PostgreSQL identifiers in the tfvars file. Terraform generates and stores both role passwords; do not provide a migration-password secret ARN. Deploy registers a bootstrap task that reads the RDS-managed master secret, reconciles the roles and grants, then runs the reset-only baseline migration.
+
 The Google Calendar browser key is not confidential, but it must be restricted in Google Cloud to the production origin and Google Calendar API. Terraform state contains sensitive generated secret values; restrict state-bucket access accordingly.

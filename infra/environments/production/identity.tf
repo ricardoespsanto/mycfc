@@ -15,6 +15,11 @@ resource "random_password" "app_db" {
   special = false
 }
 
+resource "random_password" "migration_db" {
+  length  = 32
+  special = false
+}
+
 resource "random_bytes" "csrf_auth_key" {
   length = 32
 }
@@ -26,6 +31,15 @@ resource "aws_secretsmanager_secret" "app_db_password" {
 resource "aws_secretsmanager_secret_version" "app_db_password" {
   secret_id     = aws_secretsmanager_secret.app_db_password.id
   secret_string = random_password.app_db.result
+}
+
+resource "aws_secretsmanager_secret" "migration_db_password" {
+  name = "${local.name}/migration-db-password"
+}
+
+resource "aws_secretsmanager_secret_version" "migration_db_password" {
+  secret_id     = aws_secretsmanager_secret.migration_db_password.id
+  secret_string = random_password.migration_db.result
 }
 
 resource "aws_secretsmanager_secret" "csrf_auth_key" {
@@ -47,6 +61,11 @@ resource "aws_iam_role" "migrate_execution" {
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
 }
 
+resource "aws_iam_role" "bootstrap_execution" {
+  name               = "${local.name}-bootstrap-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
+}
+
 resource "aws_iam_role" "app_task" {
   name               = "${local.name}-app-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
@@ -54,6 +73,11 @@ resource "aws_iam_role" "app_task" {
 
 resource "aws_iam_role" "migrate_task" {
   name               = "${local.name}-migrate-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
+}
+
+resource "aws_iam_role" "bootstrap_task" {
+  name               = "${local.name}-bootstrap-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
 }
 
@@ -119,7 +143,7 @@ data "aws_iam_policy_document" "migrate_execution" {
     sid       = "ReadMigrationSecret"
     effect    = "Allow"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.migration_db_password_secret_arn]
+    resources = [aws_secretsmanager_secret.migration_db_password.arn]
   }
 }
 
@@ -127,6 +151,39 @@ resource "aws_iam_role_policy" "migrate_execution" {
   name   = "runtime"
   role   = aws_iam_role.migrate_execution.name
   policy = data.aws_iam_policy_document.migrate_execution.json
+}
+
+data "aws_iam_policy_document" "bootstrap_execution" {
+  statement {
+    sid       = "GetECRAuthorizationToken"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "PullApplicationImage"
+    effect    = "Allow"
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    resources = [aws_ecr_repository.app.arn]
+  }
+  statement {
+    sid       = "WriteBootstrapLogs"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.app.arn}:*"]
+  }
+  statement {
+    sid       = "ReadBootstrapSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_db_instance.postgres.master_user_secret[0].secret_arn, aws_secretsmanager_secret.app_db_password.arn, aws_secretsmanager_secret.migration_db_password.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "bootstrap_execution" {
+  name   = "runtime"
+  role   = aws_iam_role.bootstrap_execution.name
+  policy = data.aws_iam_policy_document.bootstrap_execution.json
 }
 
 data "aws_iam_policy_document" "app_task" {

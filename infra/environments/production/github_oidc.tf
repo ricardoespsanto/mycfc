@@ -117,6 +117,7 @@ data "aws_iam_policy_document" "github_infra_apply" {
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:service/${local.name}/${local.name}-app",
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-app:*",
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-migrate:*",
+      "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-bootstrap:*",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-plan",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/github-infra-apply",
@@ -125,6 +126,8 @@ data "aws_iam_policy_document" "github_infra_apply" {
       aws_iam_role.app_task.arn,
       aws_iam_role.migrate_execution.arn,
       aws_iam_role.migrate_task.arn,
+      aws_iam_role.bootstrap_execution.arn,
+      aws_iam_role.bootstrap_task.arn,
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-rds-monitoring",
       "arn:aws:route53:::hostedzone/${var.route53_zone_id}",
       "arn:aws:wafv2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:regional/webacl/${local.name}-web-acl/*",
@@ -252,6 +255,7 @@ data "aws_iam_policy_document" "github_infra_apply" {
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:service/${local.name}/${local.name}-app",
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-app:*",
       "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-migrate:*",
+      "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-bootstrap:*",
     ]
   }
 
@@ -259,7 +263,7 @@ data "aws_iam_policy_document" "github_infra_apply" {
     sid       = "PassDeclaredTaskRoles"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.app_execution.arn, aws_iam_role.app_task.arn, aws_iam_role.migrate_execution.arn, aws_iam_role.migrate_task.arn]
+    resources = [aws_iam_role.app_execution.arn, aws_iam_role.app_task.arn, aws_iam_role.migrate_execution.arn, aws_iam_role.migrate_task.arn, aws_iam_role.bootstrap_execution.arn, aws_iam_role.bootstrap_task.arn]
 
     condition {
       test     = "StringEquals"
@@ -279,7 +283,7 @@ data "aws_iam_policy_document" "github_infra_apply" {
     sid       = "ManageApplicationSecrets"
     effect    = "Allow"
     actions   = ["secretsmanager:DeleteSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:ListSecretVersionIds", "secretsmanager:PutSecretValue", "secretsmanager:TagResource", "secretsmanager:UntagResource", "secretsmanager:UpdateSecret"]
-    resources = [aws_secretsmanager_secret.app_db_password.arn, aws_secretsmanager_secret.csrf_auth_key.arn]
+    resources = [aws_secretsmanager_secret.app_db_password.arn, aws_secretsmanager_secret.migration_db_password.arn, aws_secretsmanager_secret.csrf_auth_key.arn]
   }
 
   statement {
@@ -310,6 +314,8 @@ data "aws_iam_policy_document" "github_infra_apply" {
       aws_iam_role.app_task.arn,
       aws_iam_role.migrate_execution.arn,
       aws_iam_role.migrate_task.arn,
+      aws_iam_role.bootstrap_execution.arn,
+      aws_iam_role.bootstrap_task.arn,
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-rds-monitoring",
     ]
   }
@@ -369,6 +375,7 @@ data "aws_iam_policy_document" "github_deploy" {
     resources = [
       "${aws_ecs_task_definition.app.arn_without_revision}:*",
       "${aws_ecs_task_definition.migrate.arn_without_revision}:*",
+      "${aws_ecs_task_definition.bootstrap.arn_without_revision}:*",
     ]
   }
 
@@ -381,7 +388,7 @@ data "aws_iam_policy_document" "github_deploy" {
     condition {
       test     = "StringLike"
       variable = "ecs:TaskDefinitionFamily"
-      values   = [aws_ecs_task_definition.app.family, aws_ecs_task_definition.migrate.family]
+      values   = [aws_ecs_task_definition.app.family, aws_ecs_task_definition.migrate.family, aws_ecs_task_definition.bootstrap.family]
     }
   }
 
@@ -392,6 +399,7 @@ data "aws_iam_policy_document" "github_deploy" {
     resources = [
       "${aws_ecs_task_definition.app.arn_without_revision}:*",
       "${aws_ecs_task_definition.migrate.arn_without_revision}:*",
+      "${aws_ecs_task_definition.bootstrap.arn_without_revision}:*",
     ]
 
     condition {
@@ -417,6 +425,8 @@ data "aws_iam_policy_document" "github_deploy" {
       aws_iam_role.app_task.arn,
       aws_iam_role.migrate_execution.arn,
       aws_iam_role.migrate_task.arn,
+      aws_iam_role.bootstrap_execution.arn,
+      aws_iam_role.bootstrap_task.arn,
     ]
 
     condition {

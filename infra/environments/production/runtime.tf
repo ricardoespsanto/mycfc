@@ -9,19 +9,13 @@ resource "aws_acm_certificate" "app" {
 }
 
 resource "aws_route53_record" "certificate_validation" {
-  for_each = {
-    for option in aws_acm_certificate.app.domain_validation_options : option.resource_record_name => {
-      name   = option.resource_record_name
-      record = option.resource_record_value
-      type   = option.resource_record_type
-    }
-  }
+  for_each = toset([var.domain_name, "www.${var.domain_name}"])
 
   allow_overwrite = true
-  name            = each.value.name
-  records         = [each.value.record]
+  name            = one([for option in aws_acm_certificate.app.domain_validation_options : option.resource_record_name if option.domain_name == each.key])
+  records         = [one([for option in aws_acm_certificate.app.domain_validation_options : option.resource_record_value if option.domain_name == each.key])]
   ttl             = 60
-  type            = each.value.type
+  type            = one([for option in aws_acm_certificate.app.domain_validation_options : option.resource_record_type if option.domain_name == each.key])
   zone_id         = var.route53_zone_id
 }
 
@@ -93,7 +87,7 @@ data "aws_iam_policy_document" "alb_logs" {
 
     actions = ["s3:PutObject"]
     resources = [
-      "${aws_s3_bucket.alb_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*",
+      "${aws_s3_bucket.alb_logs.arn}/app/AWSLogs/${data.aws_caller_identity.current.account_id}/*",
     ]
 
     condition {
@@ -513,7 +507,7 @@ resource "aws_ecs_task_definition" "migrate" {
   container_definitions = jsonencode([{
     name      = "migrate"
     image     = "${aws_ecr_repository.app.repository_url}@${var.image_digest}"
-    command   = ["migrate", "up"]
+    command   = ["migrate"]
     essential = true
     user      = "65532:65532"
     environment = [
@@ -524,7 +518,7 @@ resource "aws_ecs_task_definition" "migrate" {
       { name = "DB_USER", value = var.migration_db_username },
     ]
     secrets = [
-      { name = "DB_PASSWORD", valueFrom = var.migration_db_password_secret_arn },
+      { name = "DB_PASSWORD", valueFrom = aws_secretsmanager_secret.migration_db_password.arn },
     ]
     readonlyRootFilesystem = true
     privileged             = false
@@ -538,6 +532,57 @@ resource "aws_ecs_task_definition" "migrate" {
         awslogs-group         = aws_cloudwatch_log_group.app.name
         awslogs-region        = data.aws_region.current.region
         awslogs-stream-prefix = "migrate"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_task_definition" "bootstrap" {
+  family                   = "${var.project_name}-bootstrap"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = tostring(var.task_cpu)
+  memory                   = tostring(var.task_memory)
+  execution_role_arn       = aws_iam_role.bootstrap_execution.arn
+  task_role_arn            = aws_iam_role.bootstrap_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([{
+    name      = "bootstrap"
+    image     = "${aws_ecr_repository.app.repository_url}@${var.image_digest}"
+    command   = ["bootstrap-db"]
+    essential = true
+    user      = "65532:65532"
+    environment = [
+      { name = "APP_ENV", value = "production" },
+      { name = "DB_HOST", value = aws_db_instance.postgres.address },
+      { name = "DB_PORT", value = "5432" },
+      { name = "DB_NAME", value = var.database_name },
+      { name = "APP_DB_USER", value = var.app_db_username },
+      { name = "MIGRATION_DB_USER", value = var.migration_db_username },
+    ]
+    secrets = [
+      { name = "DB_USER", valueFrom = "${aws_db_instance.postgres.master_user_secret[0].secret_arn}:username::" },
+      { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.postgres.master_user_secret[0].secret_arn}:password::" },
+      { name = "APP_DB_PASSWORD", valueFrom = aws_secretsmanager_secret.app_db_password.arn },
+      { name = "MIGRATION_DB_PASSWORD", valueFrom = aws_secretsmanager_secret.migration_db_password.arn },
+    ]
+    readonlyRootFilesystem = true
+    privileged             = false
+    linuxParameters = {
+      capabilities = { drop = ["ALL"] }
+    }
+    stopTimeout = 30
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.app.name
+        awslogs-region        = data.aws_region.current.region
+        awslogs-stream-prefix = "bootstrap"
       }
     }
   }])

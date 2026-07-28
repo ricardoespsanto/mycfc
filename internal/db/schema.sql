@@ -1,6 +1,6 @@
 -- Reset-only baseline schema. Apply this file with psql to a newly created database.
-CREATE EXTENSION citext;
-CREATE EXTENSION pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TYPE repair_status AS ENUM ('Pendente', 'Em_Analise', 'Resolvido');
 CREATE TYPE consent_type AS ENUM ('Termos_Gerais', 'Uso_Imagem', 'Responsabilidade_Menor');
 CREATE TYPE equipment_type AS ENUM ('Boat', 'Paddle', 'Vehicle');
