@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 //go:embed schema.sql
@@ -70,13 +69,18 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 		return fmt.Errorf("lock baseline migration: %w", err)
 	}
 
-	var installed bool
-	err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed)
-	if err == nil && installed {
-		return tx.Commit(ctx)
+	var markerExists bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('mycfc_meta.schema_migrations') IS NOT NULL").Scan(&markerExists); err != nil {
+		return fmt.Errorf("check baseline marker: %w", err)
 	}
-	if err != nil && !isUndefinedTable(err) {
-		return fmt.Errorf("check baseline migration: %w", err)
+	if markerExists {
+		var installed bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed); err != nil {
+			return fmt.Errorf("check baseline migration: %w", err)
+		}
+		if installed {
+			return tx.Commit(ctx)
+		}
 	}
 
 	var objectCount int
@@ -128,8 +132,3 @@ func roleStatement(username, password string) string {
 
 func quoteIdentifier(value string) string { return `"` + strings.ReplaceAll(value, `"`, `""`) + `"` }
 func quoteLiteral(value string) string    { return `'` + strings.ReplaceAll(value, `'`, `''`) + `'` }
-
-func isUndefinedTable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
-}
