@@ -39,6 +39,7 @@ func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, cr
 		"CREATE EXTENSION IF NOT EXISTS pgcrypto",
 		roleStatement(credentials.AppUsername, credentials.AppPassword),
 		roleStatement(credentials.MigrationUsername, credentials.MigrationPassword),
+		"GRANT " + migration + " TO CURRENT_USER",
 		"REVOKE ALL ON DATABASE " + database + " FROM PUBLIC",
 		"GRANT CONNECT ON DATABASE " + database + " TO " + app + ", " + migration,
 		"REVOKE ALL ON SCHEMA public FROM PUBLIC",
