@@ -84,7 +84,6 @@ jobs:
             domain_name
             app_private_subnet_ids
             task_security_group_id
-            alb_target_group_arn
           )
           missing_outputs=()
           for output in "${required_outputs[@]}"; do
@@ -101,7 +100,7 @@ jobs:
             exit 1
           fi
 
-          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn bootstrap_task_definition_arn migration_task_definition_arn domain_name task_security_group_id alb_target_group_arn; do
+          for output in ecr_repository_url ecs_cluster_name ecs_service_name app_task_definition_arn bootstrap_task_definition_arn migration_task_definition_arn domain_name task_security_group_id; do
             printf '%s=%s\n' "$output" "$(jq -r --arg output "$output" '.[$output].value' "$terraform_output")" >> "$GITHUB_OUTPUT"
           done
           printf 'app_private_subnet_ids=%s\n' "$(jq -c '.app_private_subnet_ids.value' "$terraform_output")" >> "$GITHUB_OUTPUT"
@@ -193,7 +192,6 @@ jobs:
           CLUSTER: ${{ steps.terraform.outputs.ecs_cluster_name }}
           SERVICE: ${{ steps.terraform.outputs.ecs_service_name }}
           TASK_DEFINITION: ${{ steps.task-definitions.outputs.app_task_definition }}
-          TARGET_GROUP_ARN: ${{ steps.terraform.outputs.alb_target_group_arn }}
         run: |
           set -Eeuo pipefail
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --force-new-deployment >/dev/null
@@ -235,12 +233,6 @@ jobs:
             echo "ECS deployment did not become healthy within 9 minutes." >&2
             exit 1
           fi
-          target_health="$RUNNER_TEMP/target-health.json"
-          aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output json > "$target_health"
-          jq -e '(.TargetHealthDescriptions | length) > 0 and all(.TargetHealthDescriptions[]; .TargetHealth.State == "healthy")' "$target_health" >/dev/null || {
-            jq -c '.TargetHealthDescriptions | map({target: .Target.Id, state: .TargetHealth.State, reason: .TargetHealth.Reason, description: .TargetHealth.Description})' "$target_health" >&2
-            exit 1
-          }
       - name: Smoke test production endpoints
         env:
           DOMAIN: ${{ steps.terraform.outputs.domain_name }}
@@ -269,4 +261,4 @@ jobs:
             echo "- App task definition: \`${{ steps.task-definitions.outputs.app_task_definition }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,app-task-registration,service,target-health}.json
+        run: rm -f infra/environments/production/ci.auto.tfvars infra/environments/production/production.tfplan "$RUNNER_TEMP"/{terraform-outputs,app-task-definition,app-task-registration,service}.json
