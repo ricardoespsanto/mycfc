@@ -196,7 +196,7 @@ jobs:
           set -Eeuo pipefail
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --force-new-deployment >/dev/null
           service_description="$RUNNER_TEMP/service.json"
-          for attempt in {1..40}; do
+          for attempt in {1..80}; do
             aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --output json > "$service_description"
             if jq -e --arg task_definition "$TASK_DEFINITION" '
               .services[0] | .runningCount == .desiredCount and
