@@ -383,14 +383,10 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid     = "ManageApplicationTaskDefinitions"
-    effect  = "Allow"
-    actions = ["ecs:DescribeTaskDefinition"]
-    resources = [
-      "${aws_ecs_task_definition.app.arn_without_revision}:*",
-      "${aws_ecs_task_definition.migrate.arn_without_revision}:*",
-      "${aws_ecs_task_definition.bootstrap.arn_without_revision}:*",
-    ]
+    sid       = "ManageApplicationTaskDefinitions"
+    effect    = "Allow"
+    actions   = ["ecs:DescribeTaskDefinition"]
+    resources = ["*"]
   }
 
   statement {
