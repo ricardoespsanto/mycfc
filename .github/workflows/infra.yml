@@ -15,7 +15,7 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: make terraform-check
 
@@ -36,7 +36,7 @@ jobs:
       TF_VARS: ${{ secrets.TF_VARS }}
       TF_IN_AUTOMATION: "true"
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # aws-actions/configure-aws-credentials v5.1.1
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
@@ -78,7 +78,7 @@ jobs:
       TF_VARS: ${{ secrets.TF_VARS }}
       TF_IN_AUTOMATION: "true"
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # aws-actions/configure-aws-credentials v5.1.1
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708

@@ -33,7 +33,7 @@ jobs:
       TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
       TF_VARS: ${{ secrets.TF_VARS }}
     steps:
-      # actions/checkout v4.2.2
+      # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
