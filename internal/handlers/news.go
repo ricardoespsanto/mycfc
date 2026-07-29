@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
@@ -15,7 +16,6 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
-	"github.com/gorilla/csrf"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 

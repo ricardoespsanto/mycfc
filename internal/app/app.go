@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	csrf "filippo.io/csrf/gorilla"
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,7 +23,6 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
-	"github.com/gorilla/csrf"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -156,19 +156,7 @@ func New(ctx context.Context) (*Application, error) {
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, news))
-	csrfMiddleware := csrf.Protect(
-		csrfKey,
-		csrf.CookieName("mycfc_csrf"),
-		csrf.Path("/"),
-		csrf.Secure(cfg.IsProduction()),
-		csrf.SameSite(csrf.SameSiteLaxMode),
-		csrf.MaxAge(int(cfg.SessionLifetime.Seconds())),
-		csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`<!doctype html><html lang="pt-PT"><title>Pedido recusado</title><main id="conteudo-principal"><h1>Pedido recusado</h1><p>Atualize a página e tente novamente.</p></main></html>`))
-		})),
-	)
+	csrfMiddleware := csrfProtection(csrfKey)
 
 	trusted, err := cfg.TrustedProxyCIDRs()
 	if err != nil {
@@ -185,7 +173,6 @@ func New(ctx context.Context) (*Application, error) {
 		httpx.SecurityHeadersMiddleware(cfg.IsProduction()),
 		httpx.AccessLogMiddleware(logger),
 		func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) },
-		plaintextCSRFMiddleware,
 		func(next http.Handler) http.Handler { return csrfMiddleware(next) },
 	)
 
@@ -210,13 +197,12 @@ func New(ctx context.Context) (*Application, error) {
 	}, nil
 }
 
-func plaintextCSRFMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if httpx.Scheme(r.Context()) == "http" {
-			r = csrf.PlaintextHTTPRequest(r)
-		}
-		next.ServeHTTP(w, r)
-	})
+func csrfProtection(authKey []byte) func(http.Handler) http.Handler {
+	return csrf.Protect(authKey, csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<!doctype html><html lang="pt-PT"><title>Pedido recusado</title><main id="conteudo-principal"><h1>Pedido recusado</h1><p>Atualize a página e tente novamente.</p></main></html>`))
+	})))
 }
 
 func (a *Application) Close() {

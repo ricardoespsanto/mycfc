@@ -11,7 +11,6 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/gorilla/csrf"
 )
 
 type routerPinger struct{ err error }
@@ -63,15 +62,22 @@ func TestRouterReadinessFailure(t *testing.T) {
 	}
 }
 
-func TestPlaintextCSRFMiddleware(t *testing.T) {
-	handler := plaintextCSRFMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if enabled, _ := r.Context().Value(csrf.PlaintextHTTPContextKey).(bool); !enabled {
-			t.Fatal("plaintext CSRF context not enabled")
-		}
+func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
+	called := false
+	handler := csrfProtection(make([]byte, 32))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
 	}))
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request = request.WithContext(httpx.WithScheme(request.Context(), "http"))
-	handler.ServeHTTP(httptest.NewRecorder(), request)
+	request := httptest.NewRequest(http.MethodPost, "https://mycfc.example/logout", nil)
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if called {
+		t.Fatal("cross-site request reached protected handler")
+	}
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
