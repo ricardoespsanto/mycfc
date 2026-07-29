@@ -1,0 +1,9 @@
+{$MYCFC_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy app:8080 {
+		health_uri /health/live
+		health_interval 10s
+		health_timeout 2s
+	}
+}

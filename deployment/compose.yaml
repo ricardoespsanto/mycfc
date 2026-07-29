@@ -1,0 +1,99 @@
+name: mycfc-production
+
+services:
+  postgres:
+    image: postgres:16.9-alpine3.21
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}
+      TZ: Europe/Lisbon
+      PGTZ: Europe/Lisbon
+    command: ["postgres", "-c", "timezone=Europe/Lisbon"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../internal/db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    networks: [mycfc]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  app:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    environment:
+      APP_ENV: production
+      APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
+      GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
+      PORT: "8080"
+      BASE_URL: ${BASE_URL:?set BASE_URL in /etc/mycfc/mycfc.env}
+      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      CSRF_AUTH_KEY_B64: ${CSRF_AUTH_KEY_B64:?set CSRF_AUTH_KEY_B64 in /etc/mycfc/mycfc.env}
+      AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:?set S3_BUCKET_NAME in /etc/mycfc/mycfc.env}
+      GOOGLE_CALENDAR_API_KEY: ${GOOGLE_CALENDAR_API_KEY:?set GOOGLE_CALENDAR_API_KEY in /etc/mycfc/mycfc.env}
+      CALENDAR_COMPETITION_ID: ${CALENDAR_COMPETITION_ID:?set CALENDAR_COMPETITION_ID in /etc/mycfc/mycfc.env}
+      CALENDAR_TRAINING_ID: ${CALENDAR_TRAINING_ID:?set CALENDAR_TRAINING_ID in /etc/mycfc/mycfc.env}
+      CALENDAR_SOCIAL_ID: ${CALENDAR_SOCIAL_ID:?set CALENDAR_SOCIAL_ID in /etc/mycfc/mycfc.env}
+      CALENDAR_CLEANUPS_ID: ${CALENDAR_CLEANUPS_ID:?set CALENDAR_CLEANUPS_ID in /etc/mycfc/mycfc.env}
+      GALLERY_URL: ${GALLERY_URL:?set GALLERY_URL in /etc/mycfc/mycfc.env}
+      CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:?set CONSENT_TERMS_VERSION in /etc/mycfc/mycfc.env}
+      CONSENT_TERMS_SHA256: ${CONSENT_TERMS_SHA256:?set CONSENT_TERMS_SHA256 in /etc/mycfc/mycfc.env}
+      CONSENT_TERMS_URL: ${CONSENT_TERMS_URL:?set CONSENT_TERMS_URL in /etc/mycfc/mycfc.env}
+      CONSENT_IMAGE_VERSION: ${CONSENT_IMAGE_VERSION:?set CONSENT_IMAGE_VERSION in /etc/mycfc/mycfc.env}
+      CONSENT_IMAGE_SHA256: ${CONSENT_IMAGE_SHA256:?set CONSENT_IMAGE_SHA256 in /etc/mycfc/mycfc.env}
+      CONSENT_IMAGE_URL: ${CONSENT_IMAGE_URL:?set CONSENT_IMAGE_URL in /etc/mycfc/mycfc.env}
+      CONSENT_MINOR_VERSION: ${CONSENT_MINOR_VERSION:?set CONSENT_MINOR_VERSION in /etc/mycfc/mycfc.env}
+      CONSENT_MINOR_SHA256: ${CONSENT_MINOR_SHA256:?set CONSENT_MINOR_SHA256 in /etc/mycfc/mycfc.env}
+      CONSENT_MINOR_URL: ${CONSENT_MINOR_URL:?set CONSENT_MINOR_URL in /etc/mycfc/mycfc.env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      TRUSTED_PROXY_CIDRS: 172.30.0.0/24
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    environment:
+      MYCFC_DOMAIN: ${MYCFC_DOMAIN:?set MYCFC_DOMAIN in /etc/mycfc/mycfc.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started
+    networks: [mycfc]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://app:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+networks:
+  mycfc:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

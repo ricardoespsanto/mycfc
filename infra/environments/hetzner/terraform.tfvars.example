@@ -1,0 +1,3 @@
+ssh_public_key        = "ssh-ed25519 AAAA... operator@example.com"
+deploy_ssh_public_key = "ssh-ed25519 AAAA... deploy@example.com"
+ssh_source_ips        = ["203.0.113.10/32"]
