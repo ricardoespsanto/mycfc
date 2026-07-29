@@ -317,7 +317,15 @@ SELECT r.event_id, r.user_id, u.name AS user_name, r.status::text AS status, r.r
 FROM event_responses r JOIN users u ON u.id = r.user_id
 WHERE r.event_id = $1
 ORDER BY lower(u.name), u.id
+LIMIT $3
+OFFSET $2
 `
+
+type ListEventResponsesForAdminParams struct {
+	EventID   uuid.UUID `json:"event_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
 
 type ListEventResponsesForAdminRow struct {
 	EventID     uuid.UUID          `json:"event_id"`
@@ -328,8 +336,8 @@ type ListEventResponsesForAdminRow struct {
 	CheckedInAt pgtype.Timestamptz `json:"checked_in_at"`
 }
 
-func (q *Queries) ListEventResponsesForAdmin(ctx context.Context, eventID uuid.UUID) ([]ListEventResponsesForAdminRow, error) {
-	rows, err := q.db.Query(ctx, listEventResponsesForAdmin, eventID)
+func (q *Queries) ListEventResponsesForAdmin(ctx context.Context, arg ListEventResponsesForAdminParams) ([]ListEventResponsesForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listEventResponsesForAdmin, arg.EventID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -360,8 +368,14 @@ SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 ORDER BY e.starts_at DESC, e.id
-LIMIT $1
+LIMIT $2
+OFFSET $1
 `
+
+type ListEventsForAdminParams struct {
+	RowOffset int32 `json:"row_offset"`
+	RowLimit  int32 `json:"row_limit"`
+}
 
 type ListEventsForAdminRow struct {
 	ID               uuid.UUID          `json:"id"`
@@ -373,8 +387,8 @@ type ListEventsForAdminRow struct {
 	GoingCount       int64              `json:"going_count"`
 }
 
-func (q *Queries) ListEventsForAdmin(ctx context.Context, rowLimit int32) ([]ListEventsForAdminRow, error) {
-	rows, err := q.db.Query(ctx, listEventsForAdmin, rowLimit)
+func (q *Queries) ListEventsForAdmin(ctx context.Context, arg ListEventsForAdminParams) ([]ListEventsForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listEventsForAdmin, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

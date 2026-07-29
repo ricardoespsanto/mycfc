@@ -274,7 +274,8 @@ WITH scoped_plans AS (
              AND (g.programme_id = p.programme_id OR g.team_id = p.team_id)
        )
     ORDER BY p.created_at DESC, p.id DESC
-    LIMIT $3
+    LIMIT $4
+    OFFSET $3
 )
 SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
        s.id AS session_id, s.title AS session_title, s.description AS session_description,
@@ -286,9 +287,10 @@ ORDER BY p.created_at DESC, p.id DESC, s.starts_at ASC, s.id ASC
 `
 
 type ListTrainingPlansForAuthoringParams struct {
-	IsAdmin   bool      `json:"is_admin"`
-	UserID    uuid.UUID `json:"user_id"`
-	PlanLimit int32     `json:"plan_limit"`
+	IsAdmin    bool      `json:"is_admin"`
+	UserID     uuid.UUID `json:"user_id"`
+	PlanOffset int32     `json:"plan_offset"`
+	PlanLimit  int32     `json:"plan_limit"`
 }
 
 type ListTrainingPlansForAuthoringRow struct {
@@ -304,7 +306,12 @@ type ListTrainingPlansForAuthoringRow struct {
 }
 
 func (q *Queries) ListTrainingPlansForAuthoring(ctx context.Context, arg ListTrainingPlansForAuthoringParams) ([]ListTrainingPlansForAuthoringRow, error) {
-	rows, err := q.db.Query(ctx, listTrainingPlansForAuthoring, arg.IsAdmin, arg.UserID, arg.PlanLimit)
+	rows, err := q.db.Query(ctx, listTrainingPlansForAuthoring,
+		arg.IsAdmin,
+		arg.UserID,
+		arg.PlanOffset,
+		arg.PlanLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

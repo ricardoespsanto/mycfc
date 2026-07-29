@@ -96,11 +96,17 @@ const listNewsForAdmin = `-- name: ListNewsForAdmin :many
 SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
 FROM news_items
 ORDER BY published_at DESC, id DESC
-LIMIT $1
+LIMIT $2
+OFFSET $1
 `
 
-func (q *Queries) ListNewsForAdmin(ctx context.Context, rowLimit int32) ([]NewsItem, error) {
-	rows, err := q.db.Query(ctx, listNewsForAdmin, rowLimit)
+type ListNewsForAdminParams struct {
+	RowOffset int32 `json:"row_offset"`
+	RowLimit  int32 `json:"row_limit"`
+}
+
+func (q *Queries) ListNewsForAdmin(ctx context.Context, arg ListNewsForAdminParams) ([]NewsItem, error) {
+	rows, err := q.db.Query(ctx, listNewsForAdmin, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -216,17 +222,24 @@ FROM training_logs
 WHERE user_id = $1
   AND occurred_at >= $2
 ORDER BY occurred_at DESC, id DESC
-LIMIT $3
+LIMIT $4
+OFFSET $3
 `
 
 type ListRecentTrainingLogsParams struct {
-	UserID   uuid.UUID          `json:"user_id"`
-	Since    pgtype.Timestamptz `json:"since"`
-	RowLimit int32              `json:"row_limit"`
+	UserID    uuid.UUID          `json:"user_id"`
+	Since     pgtype.Timestamptz `json:"since"`
+	RowOffset int32              `json:"row_offset"`
+	RowLimit  int32              `json:"row_limit"`
 }
 
 func (q *Queries) ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error) {
-	rows, err := q.db.Query(ctx, listRecentTrainingLogs, arg.UserID, arg.Since, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listRecentTrainingLogs,
+		arg.UserID,
+		arg.Since,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -273,13 +286,15 @@ WHERE mt.status IN ('Scheduled', 'In_Progress')
   AND mt.scheduled_for >= $1
   AND mt.scheduled_for < $2
 ORDER BY mt.scheduled_for ASC, mt.id ASC
-LIMIT $3
+LIMIT $4
+OFFSET $3
 `
 
 type ListUpcomingMaintenanceParams struct {
-	FromTime pgtype.Timestamptz `json:"from_time"`
-	ToTime   pgtype.Timestamptz `json:"to_time"`
-	RowLimit int32              `json:"row_limit"`
+	FromTime  pgtype.Timestamptz `json:"from_time"`
+	ToTime    pgtype.Timestamptz `json:"to_time"`
+	RowOffset int32              `json:"row_offset"`
+	RowLimit  int32              `json:"row_limit"`
 }
 
 type ListUpcomingMaintenanceRow struct {
@@ -298,7 +313,12 @@ type ListUpcomingMaintenanceRow struct {
 }
 
 func (q *Queries) ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error) {
-	rows, err := q.db.Query(ctx, listUpcomingMaintenance, arg.FromTime, arg.ToTime, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listUpcomingMaintenance,
+		arg.FromTime,
+		arg.ToTime,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

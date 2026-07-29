@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
 )
+
+const membersPageSize = 6
 
 type MemberStore interface {
 	ListMembersForAdmin(context.Context, dbgen.ListMembersForAdminParams) ([]dbgen.ListMembersForAdminRow, error)
@@ -59,7 +63,8 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 	if search != "" {
 		filter = &search
 	}
-	members, err := h.Store.ListMembersForAdmin(ctx, dbgen.ListMembersForAdminParams{Search: filter, RowLimit: 100})
+	pageNumber := membersPageNumber(r.URL.Query().Get("page"))
+	members, err := h.Store.ListMembersForAdmin(ctx, dbgen.ListMembersForAdminParams{Search: filter, RowLimit: membersPageSize + 1, RowOffset: int32((pageNumber - 1) * membersPageSize)})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -70,10 +75,33 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := pages.MembersPage{Search: search, Form: h.memberFormFromAdults(r, memberForm{Errors: validation.FieldErrors{}}, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
+	if pageNumber > 1 {
+		page.PreviousURL = membersPageURL(search, pageNumber-1)
+	}
+	if len(members) > membersPageSize {
+		page.NextURL = membersPageURL(search, pageNumber+1)
+		members = members[:membersPageSize]
+	}
 	for _, member := range members {
 		page.Members = append(page.Members, pages.MemberListItem{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Dependent: member.IsDependent, Active: member.IsActive})
 	}
 	h.render(w, r, http.StatusOK, page)
+}
+
+func membersPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func membersPageURL(search string, page int) string {
+	query := url.Values{"page": {strconv.Itoa(page)}}
+	if search != "" {
+		query.Set("q", search)
+	}
+	return "/admin/membros?" + query.Encode()
 }
 
 func (h Members) Create(w http.ResponseWriter, r *http.Request) {

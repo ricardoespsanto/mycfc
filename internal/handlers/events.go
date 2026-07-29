@@ -23,6 +23,8 @@ import (
 )
 
 const eventQueryTimeout = 5 * time.Second
+const eventsPageSize = 6
+const eventResponsesPageSize = 6
 
 type Events struct {
 	Store    dbgen.Querier
@@ -162,12 +164,17 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 			h.System.InternalError(w, r)
 			return
 		}
-		responses, err := h.Store.ListEventResponsesForAdmin(ctx, eventID)
+		responsePage := eventsPageNumber(r.URL.Query().Get("response_page"))
+		responses, err := h.Store.ListEventResponsesForAdmin(ctx, dbgen.ListEventResponsesForAdminParams{
+			EventID:   eventID,
+			RowLimit:  eventResponsesPageSize + 1,
+			RowOffset: int32((responsePage - 1) * eventResponsesPageSize),
+		})
 		if err != nil {
 			h.System.InternalError(w, r)
 			return
 		}
-		page = h.adminDetailPage(event, responses)
+		page = h.adminDetailPage(event, responses, responsePage)
 	} else {
 		event, err := h.Store.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: user.ID, EventID: eventID})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -444,10 +451,18 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	page := pages.EventsPage{CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
 	if user.IsAdmin || user.CanManageEvents {
 		if user.IsAdmin {
-			items, err := h.Store.ListEventsForAdmin(ctx, 100)
+			pageNumber := eventsPageNumber(r.URL.Query().Get("page"))
+			items, err := h.Store.ListEventsForAdmin(ctx, dbgen.ListEventsForAdminParams{RowLimit: eventsPageSize + 1, RowOffset: int32((pageNumber - 1) * eventsPageSize)})
 			if err != nil {
 				h.System.InternalError(w, r)
 				return
+			}
+			if pageNumber > 1 {
+				page.PreviousURL = eventsPageURL(pageNumber - 1)
+			}
+			if len(items) > eventsPageSize {
+				page.NextURL = eventsPageURL(pageNumber + 1)
+				items = items[:eventsPageSize]
 			}
 			for _, item := range items {
 				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
@@ -506,6 +521,20 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	_ = pages.Events(page).Render(r.Context(), w)
 }
 
+func eventsPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func eventsPageURL(page int) string { return "/events?page=" + strconv.Itoa(page) }
+
+func eventResponsesPageURL(eventID uuid.UUID, page int) string {
+	return "/events/" + eventID.String() + "?response_page=" + strconv.Itoa(page)
+}
+
 func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, dependents []dbgen.ListDependentsByGuardianRow) pages.EventDetailPage {
 	page := pages.EventDetailPage{ID: event.ID.String(), Title: event.Title, Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity), Status: eventStatus(event.ResponseStatus)}
 	if event.ResponseDeadline.Valid && h.now().After(event.ResponseDeadline.Time) {
@@ -516,8 +545,15 @@ func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, depende
 	}
 	return page
 }
-func (h Events) adminDetailPage(event dbgen.Event, responses []dbgen.ListEventResponsesForAdminRow) pages.EventDetailPage {
+func (h Events) adminDetailPage(event dbgen.Event, responses []dbgen.ListEventResponsesForAdminRow, responsePage int) pages.EventDetailPage {
 	page := pages.EventDetailPage{CanManageEvents: true, ID: event.ID.String(), Title: event.Title, Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity)}
+	if responsePage > 1 {
+		page.ResponsesPreviousURL = eventResponsesPageURL(event.ID, responsePage-1)
+	}
+	if len(responses) > eventResponsesPageSize {
+		page.ResponsesNextURL = eventResponsesPageURL(event.ID, responsePage+1)
+		responses = responses[:eventResponsesPageSize]
+	}
 	for _, response := range responses {
 		checked := ""
 		if response.CheckedInAt.Valid {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,7 @@ import (
 )
 
 const trainingQueryTimeout = 5 * time.Second
+const managedTrainingPlansPageSize = 6
 
 type Training struct {
 	Store    dbgen.Querier
@@ -63,7 +65,7 @@ func (h Training) Index(w http.ResponseWriter, r *http.Request) {
 		page.Documents = append(page.Documents, pages.CompetitionDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006"), Context: context})
 	}
 	if page.CanManage {
-		h.authoring(ctx, user, &page)
+		h.authoring(ctx, user, &page, managedTrainingPlansPageNumber(r.URL.Query().Get("managed_page")))
 	}
 	page.Meta = h.meta(r, user)
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
@@ -220,14 +222,21 @@ func (h Training) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
-func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.TrainingPage) {
+func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.TrainingPage, pageNumber int) {
 	programmes, _ := h.Store.ListProgrammes(ctx)
 	teams, _ := h.Store.ListTeamsForEventAuthoring(ctx)
 	modalities, _ := h.Store.ListAnnouncementModalities(ctx)
 	events, _ := h.Store.ListAnnouncementEvents(ctx)
 	plans, _ := h.Store.ListTrainingPlansForCoach(ctx, dbgen.ListTrainingPlansForCoachParams{UserID: user.ID, RowLimit: 100})
-	managedPlans, _ := h.Store.ListTrainingPlansForAuthoring(ctx, dbgen.ListTrainingPlansForAuthoringParams{UserID: user.ID, IsAdmin: user.IsAdmin, PlanLimit: 100})
+	managedPlans, _ := h.Store.ListTrainingPlansForAuthoring(ctx, dbgen.ListTrainingPlansForAuthoringParams{UserID: user.ID, IsAdmin: user.IsAdmin, PlanLimit: managedTrainingPlansPageSize + 1, PlanOffset: int32((pageNumber - 1) * managedTrainingPlansPageSize)})
 	page.ManagedPlans = managedTrainingPlans(managedPlans, h.location())
+	if len(page.ManagedPlans) > managedTrainingPlansPageSize {
+		page.ManagedPlans = page.ManagedPlans[:managedTrainingPlansPageSize]
+		page.ManagedPlansNextURL = managedTrainingPlansPageURL(pageNumber + 1)
+	}
+	if pageNumber > 1 {
+		page.ManagedPlansPreviousURL = managedTrainingPlansPageURL(pageNumber - 1)
+	}
 	if user.IsAdmin {
 		adminPlans, _ := h.Store.ListTrainingPlansForAdmin(ctx, 100)
 		plans = make([]dbgen.ListTrainingPlansForCoachRow, len(adminPlans))
@@ -261,6 +270,18 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 	for _, x := range plans {
 		page.Plans = append(page.Plans, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})
 	}
+}
+
+func managedTrainingPlansPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func managedTrainingPlansPageURL(page int) string {
+	return "/treinos?managed_page=" + strconv.Itoa(page)
 }
 
 func managedTrainingPlans(rows []dbgen.ListTrainingPlansForAuthoringRow, location *time.Location) []pages.ManagedTrainingPlan {

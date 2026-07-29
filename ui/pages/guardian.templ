@@ -38,7 +38,7 @@ templ GuardianContent(page GuardianPage) {
 				</ul>
 			}
 		</section>
-		<section class="dashboard-card" aria-labelledby="add-dependent-title"><h2 id="add-dependent-title">Adicionar menor a cargo</h2>
+		<details class="dashboard-card disclosure-card" open?={ len(page.Dependents) == 0 || len(page.Errors) > 0 } aria-labelledby="add-dependent-title"><summary><span id="add-dependent-title" class="disclosure-card__title">Adicionar menor a cargo</span><span class="disclosure-card__summary">Associe um novo dependente à sua conta.</span></summary><div class="disclosure-card__content">
 			if message := page.Errors["form"]; message != "" {
 				<p class="field-error" role="alert">{ message }</p>
 			}
@@ -49,7 +49,7 @@ templ GuardianContent(page GuardianPage) {
 				<label><input name="accept_minor_responsibility" type="checkbox" required/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) } target="_blank" rel="noopener">responsabilidade pelo menor a cargo</a>.</label>@errorText(page.Errors, "accept_minor_responsibility")
 				<button type="submit">Adicionar menor</button>
 			</form>
-		</section>
+		</div></details>
 		@components.RepairForm(page.RepairForm)
 	</div>
 }

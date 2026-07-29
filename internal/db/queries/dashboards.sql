@@ -4,7 +4,8 @@ FROM training_logs
 WHERE user_id = sqlc.arg(user_id)
   AND occurred_at >= sqlc.arg(since)
 ORDER BY occurred_at DESC, id DESC
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: ListRecentPerformanceMetrics :many
 SELECT id, user_id, metric_type, label_pt, value, unit_pt, measured_at, created_at
@@ -26,7 +27,8 @@ LIMIT sqlc.arg(row_limit);
 SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
 FROM news_items
 ORDER BY published_at DESC, id DESC
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: CreateNews :one
 INSERT INTO news_items (title_pt, summary_pt, url, published_at)
@@ -69,4 +71,5 @@ WHERE mt.status IN ('Scheduled', 'In_Progress')
   AND mt.scheduled_for >= sqlc.arg(from_time)
   AND mt.scheduled_for < sqlc.arg(to_time)
 ORDER BY mt.scheduled_for ASC, mt.id ASC
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);

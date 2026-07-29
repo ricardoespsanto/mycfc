@@ -95,7 +95,8 @@ SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 ORDER BY e.starts_at DESC, e.id
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: ListEventsForCoach :many
 SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
@@ -187,7 +188,9 @@ FROM events WHERE id = sqlc.arg(id);
 SELECT r.event_id, r.user_id, u.name AS user_name, r.status::text AS status, r.responded_at, r.checked_in_at
 FROM event_responses r JOIN users u ON u.id = r.user_id
 WHERE r.event_id = sqlc.arg(event_id)
-ORDER BY lower(u.name), u.id;
+ORDER BY lower(u.name), u.id
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: ConfirmWaitlistedResponse :execrows
 UPDATE event_responses SET status = 'Going', responded_at = now(), responded_by_id = sqlc.arg(staff_user_id)

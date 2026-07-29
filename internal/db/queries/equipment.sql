@@ -18,7 +18,8 @@ ORDER BY
     lower(name),
     asset_tag,
     id
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: GetEquipmentByID :one
 SELECT id, asset_tag, name, type, status, notes, created_at, updated_at

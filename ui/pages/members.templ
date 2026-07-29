@@ -8,7 +8,7 @@ import (
 type MemberListItem struct { ID, Name, Email, LoginID string; Dependent, Active bool }
 type MemberGuardian struct { ID, Name, Email string }
 type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID string; Dependent bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
-type MembersPage struct { Meta components.PageMeta; Search string; Members []MemberListItem; Form MemberCreateForm }
+type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL string; Members []MemberListItem; Form MemberCreateForm }
 type MemberDetail struct { ID, Name, Email, LoginID, Guardian string; Dependent, Active bool }
 type MemberProgramme struct { ID, Name string; Active bool }
 type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Season string; Programmes []MemberProgramme; Errors validation.FieldErrors }
@@ -40,11 +40,21 @@ templ membersContent(page MembersPage) {
             }
             </ul>
         }
+        if page.PreviousURL != "" || page.NextURL != "" {
+            <nav class="pagination" aria-label="Paginação de membros">
+                if page.PreviousURL != "" {
+                    <a href={ templ.SafeURL(page.PreviousURL) }>Anterior</a>
+                }
+                if page.NextURL != "" {
+                    <a href={ templ.SafeURL(page.NextURL) }>Seguinte</a>
+                }
+            </nav>
+        }
     </section>
     @MemberCreate(page.Form)
 }
 templ MemberCreate(form MemberCreateForm) {
-    <section class="dashboard-card"><h2>Criar conta</h2><p>Para um menor, selecione o encarregado de educação. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
+    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar conta</span><span class="disclosure-card__summary">Adicione um adulto ou um menor a cargo.</span></summary><div class="disclosure-card__content"><p>Para um menor, selecione o encarregado de educação. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
         <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>
         <label for="member-name">Nome</label><input id="member-name" name="name" value={ form.Name } required/>@components.FieldErrorMessage("name", form.Errors["name"])
         <label for="member-birth">Data de nascimento</label><input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])
@@ -56,7 +66,7 @@ templ MemberCreate(form MemberCreateForm) {
         </select>@components.FieldErrorMessage("guardian_id", form.Errors["guardian_id"])
         <label for="member-password">Palavra-passe (adultos)</label><input id="member-password" type="password" name="password" autocomplete="new-password"/>@components.FieldErrorMessage("password", form.Errors["password"])
         <label for="member-password-confirmation">Confirmar palavra-passe</label><input id="member-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password"/>@components.FieldErrorMessage("password_confirmation", form.Errors["password_confirmation"])
-        <button type="submit">Criar conta</button></form></section>
+        <button type="submit">Criar conta</button></form></div></details>
 }
 templ MemberDetailView(page MemberDetailPage) { @components.Base(page.Meta, memberDetailContent(page)) }
 templ memberDetailContent(page MemberDetailPage) {
@@ -81,18 +91,18 @@ templ memberDetailContent(page MemberDetailPage) {
             <p>Identificador de acesso: <strong>{ page.Member.LoginID }</strong></p>
         }
         if page.Member.Dependent && page.Member.Active {
-            <h3>Credencial individual</h3><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao encarregado de educação.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
+            <details class="inline-disclosure" open?={ page.Errors["password"] != "" }><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao encarregado de educação.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
             <label for="minor-password">Palavra-passe</label><input id="minor-password" type="password" name="password" autocomplete="new-password" required/>@components.FieldErrorMessage("password", page.Errors["password"])
             <label for="minor-password-confirmation">Confirmar palavra-passe</label><input id="minor-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required/>@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])
-            <button type="submit">Emitir ou recuperar credencial</button></form>
+            <button type="submit">Emitir ou recuperar credencial</button></form></details>
         }
         if page.Member.Active {
-            <form class="inline-action" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<button type="submit">Desativar conta</button></form>
+            <details class="inline-disclosure"><summary>Ações da conta</summary><form class="inline-action" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<button type="submit">Desativar conta</button></form></details>
         }
     </section>
-    <section class="dashboard-card"><h2>Inscrições ativas · { page.Season }</h2><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
+    <details class="dashboard-card disclosure-card" open?={ page.Errors["membership"] != "" }><summary><span class="disclosure-card__title">Inscrições ativas · { page.Season }</span><span class="disclosure-card__summary">Gerir programas e espaços de trabalho disponíveis.</span></summary><div class="disclosure-card__content"><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
         for _, programme := range page.Programmes {
             <form class="inline-action" method="post" action={ "/admin/membros/" + page.Member.ID + "/inscricao" }>@page.Meta.CSRFField<input type="hidden" name="programme_id" value={ programme.ID }/><label><input type="checkbox" name="active" checked?={ programme.Active }/> { programme.Name }</label><button type="submit">Guardar</button></form>
         }
-    </section><p><a href="/admin/membros">Voltar à gestão de membros</a></p>
+    </div></details><p><a href="/admin/membros">Voltar à gestão de membros</a></p>
 }

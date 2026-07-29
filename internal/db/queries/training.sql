@@ -77,6 +77,7 @@ WITH scoped_plans AS (
        )
     ORDER BY p.created_at DESC, p.id DESC
     LIMIT sqlc.arg(plan_limit)
+    OFFSET sqlc.arg(plan_offset)
 )
 SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
        s.id AS session_id, s.title AS session_title, s.description AS session_description,

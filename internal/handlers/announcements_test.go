@@ -6,9 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type announcementStoreFake struct{}
@@ -64,8 +67,107 @@ func (announcementStoreFake) ListAnnouncementsForAuthor(context.Context, dbgen.L
 func (announcementStoreFake) ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	return nil, nil
 }
+func (announcementStoreFake) GetVisibleAnnouncement(context.Context, dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error) {
+	return dbgen.GetVisibleAnnouncementRow{}, nil
+}
 func (announcementStoreFake) GetAnnouncementAuthor(context.Context, uuid.UUID) (uuid.UUID, error) {
 	return uuid.Nil, nil
+}
+
+func TestAnnouncementPaginationURLsAreIndependent(t *testing.T) {
+	if got, want := announcementsPageURL(2, 3), "/announcements?authored_page=3&page=2"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	if got := announcementPageNumber("0"); got != 1 {
+		t.Fatalf("page = %d, want 1", got)
+	}
+}
+
+func TestAnnouncementsIndexPaginatesVisibleAndAuthoredIndependently(t *testing.T) {
+	userID := uuid.New()
+	store := &paginatedAnnouncementStore{}
+	for range announcementPageSize + 1 {
+		store.visible = append(store.visible, dbgen.ListVisibleAnnouncementsRow{ID: uuid.New(), Title: "Aviso"})
+	}
+	for range announcementPageSize + 1 {
+		store.authored = append(store.authored, dbgen.ListAnnouncementsForAuthorRow{ID: uuid.New(), Title: "Aviso", Status: "DRAFT"})
+	}
+	h := Announcements{Store: store, DB: announcementDBFake{}, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/announcements?page=2&authored_page=3", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
+	w := httptest.NewRecorder()
+
+	h.Index(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if got, want := store.visibleParams, (dbgen.ListVisibleAnnouncementsParams{UserID: userID, RowLimit: announcementPageSize + 1, RowOffset: announcementPageSize}); got != want {
+		t.Fatalf("visible params = %#v, want %#v", got, want)
+	}
+	if got, want := store.authoredParams, (dbgen.ListAnnouncementsForAuthorParams{AuthorID: userID, RowLimit: announcementPageSize + 1, RowOffset: announcementPageSize * 2}); got != want {
+		t.Fatalf("authored params = %#v, want %#v", got, want)
+	}
+	for _, link := range []string{"/announcements?authored_page=3&amp;page=1", "/announcements?authored_page=3&amp;page=3", "/announcements?authored_page=2&amp;page=2", "/announcements?authored_page=4&amp;page=2"} {
+		if !strings.Contains(w.Body.String(), link) {
+			t.Errorf("body does not contain %q", link)
+		}
+	}
+}
+
+func TestAnnouncementDetailLooksUpVisibleIDDirectly(t *testing.T) {
+	userID, announcementID := uuid.New(), uuid.New()
+	store := &paginatedAnnouncementStore{detailErr: pgx.ErrNoRows}
+	h := Announcements{Store: store}
+	r := httptest.NewRequest(http.MethodGet, "/announcements/"+announcementID.String(), nil)
+	r.SetPathValue("id", announcementID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	w := httptest.NewRecorder()
+
+	h.Detail(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+	if got, want := store.detailParams, (dbgen.GetVisibleAnnouncementParams{ID: announcementID, UserID: userID}); got != want {
+		t.Fatalf("detail params = %#v, want %#v", got, want)
+	}
+}
+
+type paginatedAnnouncementStore struct {
+	announcementStoreFake
+	visibleParams  dbgen.ListVisibleAnnouncementsParams
+	authoredParams dbgen.ListAnnouncementsForAuthorParams
+	detailParams   dbgen.GetVisibleAnnouncementParams
+	visible        []dbgen.ListVisibleAnnouncementsRow
+	authored       []dbgen.ListAnnouncementsForAuthorRow
+	detailErr      error
+}
+
+func (s *paginatedAnnouncementStore) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
+	s.visibleParams = params
+	return s.visible, nil
+}
+
+type announcementDBFake struct{}
+
+func (announcementDBFake) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) { return nil, nil }
+func (announcementDBFake) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+func (announcementDBFake) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
+	return nil, nil
+}
+func (announcementDBFake) QueryRow(context.Context, string, ...interface{}) pgx.Row { return nil }
+
+func (s *paginatedAnnouncementStore) ListAnnouncementsForAuthor(_ context.Context, params dbgen.ListAnnouncementsForAuthorParams) ([]dbgen.ListAnnouncementsForAuthorRow, error) {
+	s.authoredParams = params
+	return s.authored, nil
+}
+
+func (s *paginatedAnnouncementStore) GetVisibleAnnouncement(_ context.Context, params dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error) {
+	s.detailParams = params
+	return dbgen.GetVisibleAnnouncementRow{}, s.detailErr
 }
 func (announcementStoreFake) CanCoachManageEvent(context.Context, dbgen.CanCoachManageEventParams) (bool, error) {
 	return true, nil

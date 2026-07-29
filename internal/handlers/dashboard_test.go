@@ -146,46 +146,46 @@ func dashboardResponse(t *testing.T, handler http.HandlerFunc, userID uuid.UUID)
 }
 
 type dashboardStoreFake struct {
-	metrics           []dbgen.PerformanceMetric
-	logs              []dbgen.TrainingLog
-	news              []dbgen.NewsItem
-	groups            []dbgen.WhatsappGroup
-	dependents        []dbgen.ListDependentsByGuardianRow
-	metricsErr        error
-	logsErr           error
-	newsErr           error
-	groupsErr         error
-	metricsParams     dbgen.ListRecentPerformanceMetricsParams
-	logsParams        dbgen.ListRecentTrainingLogsParams
-	deadlineSeen      bool
-	scheduleParams    dbgen.ScheduleMaintenanceTaskParams
-	scheduleErr       error
-	repairParams      dbgen.UpdateRepairStatusParams
-	repairErr         error
-	completeID        uuid.UUID
-	completeErr       error
-	counts            []dbgen.CountEquipmentByStatusRow
-	adminEquipment    []dbgen.Equipment
-	repairs           []dbgen.ListPendingRepairRequestsRow
-	maintenance       []dbgen.ListUpcomingMaintenanceRow
-	adminLimit        int32
-	repairLimit       int32
-	maintenanceParams dbgen.ListUpcomingMaintenanceParams
-	todayEvents       []dbgen.ListEventsForTodayRow
-	todayParams       dbgen.ListEventsForTodayParams
+	metrics             []dbgen.PerformanceMetric
+	logs                []dbgen.TrainingLog
+	news                []dbgen.NewsItem
+	groups              []dbgen.WhatsappGroup
+	dependents          []dbgen.ListDependentsByGuardianRow
+	metricsErr          error
+	logsErr             error
+	newsErr             error
+	groupsErr           error
+	metricsParams       dbgen.ListRecentPerformanceMetricsParams
+	logsParams          dbgen.ListRecentTrainingLogsParams
+	deadlineSeen        bool
+	scheduleParams      dbgen.ScheduleMaintenanceTaskParams
+	scheduleErr         error
+	repairParams        dbgen.UpdateRepairStatusParams
+	repairErr           error
+	completeID          uuid.UUID
+	completeErr         error
+	counts              []dbgen.CountEquipmentByStatusRow
+	adminEquipment      []dbgen.Equipment
+	repairs             []dbgen.ListPendingRepairRequestsRow
+	maintenance         []dbgen.ListUpcomingMaintenanceRow
+	adminParams         dbgen.ListEquipmentForAdminParams
+	pendingRepairParams dbgen.ListPendingRepairRequestsParams
+	maintenanceParams   dbgen.ListUpcomingMaintenanceParams
+	todayEvents         []dbgen.ListEventsForTodayRow
+	todayParams         dbgen.ListEventsForTodayParams
 }
 
 func (f *dashboardStoreFake) CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error) {
 	return f.counts, nil
 }
 
-func (f *dashboardStoreFake) ListEquipmentForAdmin(_ context.Context, limit int32) ([]dbgen.Equipment, error) {
-	f.adminLimit = limit
+func (f *dashboardStoreFake) ListEquipmentForAdmin(_ context.Context, params dbgen.ListEquipmentForAdminParams) ([]dbgen.Equipment, error) {
+	f.adminParams = params
 	return f.adminEquipment, nil
 }
 
-func (f *dashboardStoreFake) ListPendingRepairRequests(_ context.Context, limit int32) ([]dbgen.ListPendingRepairRequestsRow, error) {
-	f.repairLimit = limit
+func (f *dashboardStoreFake) ListPendingRepairRequests(_ context.Context, params dbgen.ListPendingRepairRequestsParams) ([]dbgen.ListPendingRepairRequestsRow, error) {
+	f.pendingRepairParams = params
 	return f.repairs, nil
 }
 
@@ -325,21 +325,21 @@ func TestCompleteMaintenanceSupportsHTMXAndNormalForms(t *testing.T) {
 	}
 }
 
-func TestAdminFleetCapsEquipmentAndPresignsDisplayedRepairPhotos(t *testing.T) {
+func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	key, contentType := "repairs/2026/07/photo.jpg", "image/jpeg"
-	equipment := make([]dbgen.Equipment, 501)
+	equipment := make([]dbgen.Equipment, 7)
 	for i := range equipment {
 		equipment[i] = dbgen.Equipment{ID: uuid.New(), AssetTag: "EQ", Name: "Barco", Type: "Boat", Status: "Operational"}
 	}
-	store := &dashboardStoreFake{counts: []dbgen.CountEquipmentByStatusRow{{Status: "Operational", Total: 501}}, adminEquipment: equipment, repairs: []dbgen.ListPendingRepairRequestsRow{{ID: uuid.New(), AssetTag: "EQ", EquipmentName: "Barco", IssueDescription: "Casco danificado", Status: "Pendente", ImageObjectKey: &key, ImageContentType: &contentType, DateReported: pgtype.Timestamptz{Time: now, Valid: true}}}}
+	store := &dashboardStoreFake{counts: []dbgen.CountEquipmentByStatusRow{{Status: "Operational", Total: 7}}, adminEquipment: equipment, repairs: []dbgen.ListPendingRepairRequestsRow{{ID: uuid.New(), AssetTag: "EQ", EquipmentName: "Barco", IssueDescription: "Casco danificado", Status: "Pendente", ImageObjectKey: &key, ImageContentType: &contentType, DateReported: pgtype.Timestamptz{Time: now, Valid: true}}}}
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Admin, uuid.New())
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "A lista está limitada a 500 equipamentos.") || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
-	if store.adminLimit != 501 || store.repairLimit != 50 || store.maintenanceParams.RowLimit != 50 || !store.maintenanceParams.ToTime.Time.Equal(now.AddDate(0, 0, 90)) {
+	if store.adminParams.RowLimit != 7 || store.adminParams.RowOffset != 0 || store.pendingRepairParams.RowLimit != 7 || store.pendingRepairParams.RowOffset != 0 || store.maintenanceParams.RowLimit != 7 || store.maintenanceParams.RowOffset != 0 || !store.maintenanceParams.ToTime.Time.Equal(now.AddDate(0, 0, 90)) {
 		t.Fatalf("unexpected fleet limits: %+v", store)
 	}
 	if objects.calls != 1 || objects.lifetime != 10*time.Minute {
@@ -349,6 +349,30 @@ func TestAdminFleetCapsEquipmentAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	response = dashboardResponse(t, dashboard.Admin, uuid.New())
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Imagem temporariamente indisponível") {
 		t.Fatalf("presign failure should not fail the fleet page: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminFleetPaginatesSectionsIndependently(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	items := make([]dbgen.Equipment, 7)
+	store := &dashboardStoreFake{adminEquipment: items, repairs: make([]dbgen.ListPendingRepairRequestsRow, 7), maintenance: make([]dbgen.ListUpcomingMaintenanceRow, 7)}
+	dashboard := Dashboard{Store: store, Fleet: store, Now: func() time.Time { return now }}
+	request := httptest.NewRequest(http.MethodGet, "/admin/fleet?equipment_page=2&repairs_page=3&maintenance_page=4", nil)
+	page, err := dashboard.fleetPage(context.Background(), request, fleetMaintenanceForm{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.adminParams.RowOffset != 6 || store.pendingRepairParams.RowOffset != 12 || store.maintenanceParams.RowOffset != 18 {
+		t.Fatalf("unexpected fleet offsets: %+v", store)
+	}
+	if page.EquipmentPreviousURL != "/admin/fleet?maintenance_page=4&repairs_page=3" || page.EquipmentNextURL != "/admin/fleet?equipment_page=3&maintenance_page=4&repairs_page=3" {
+		t.Fatalf("unexpected equipment pagination URLs: %+v", page)
+	}
+	if page.RepairsPreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=2" || page.RepairsNextURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=4" {
+		t.Fatalf("unexpected repair pagination URLs: %+v", page)
+	}
+	if page.MaintenancePreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=3&repairs_page=3" || page.MaintenanceNextURL != "/admin/fleet?equipment_page=2&maintenance_page=5&repairs_page=3" {
+		t.Fatalf("unexpected maintenance pagination URLs: %+v", page)
 	}
 }
 

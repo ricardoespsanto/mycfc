@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,6 +28,7 @@ import (
 )
 
 const dashboardQueryTimeout = 5 * time.Second
+const fleetPageSize = 6
 
 type DashboardStore interface {
 	ListRecentPerformanceMetrics(context.Context, dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error)
@@ -40,8 +42,8 @@ type DashboardStore interface {
 
 type FleetStore interface {
 	CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error)
-	ListEquipmentForAdmin(context.Context, int32) ([]dbgen.Equipment, error)
-	ListPendingRepairRequests(context.Context, int32) ([]dbgen.ListPendingRepairRequestsRow, error)
+	ListEquipmentForAdmin(context.Context, dbgen.ListEquipmentForAdminParams) ([]dbgen.Equipment, error)
+	ListPendingRepairRequests(context.Context, dbgen.ListPendingRepairRequestsParams) ([]dbgen.ListPendingRepairRequestsRow, error)
 	ListUpcomingMaintenance(context.Context, dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error)
 	ScheduleMaintenanceTask(context.Context, dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error)
 	UpdateRepairStatus(context.Context, dbgen.UpdateRepairStatusParams) (dbgen.RepairRequest, error)
@@ -389,16 +391,19 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	equipment, err := h.Fleet.ListEquipmentForAdmin(ctx, 501)
+	equipmentPage := fleetPageNumber(r.URL.Query().Get("equipment_page"))
+	equipment, err := h.Fleet.ListEquipmentForAdmin(ctx, dbgen.ListEquipmentForAdminParams{RowLimit: fleetPageSize + 1, RowOffset: int32((equipmentPage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	repairs, err := h.Fleet.ListPendingRepairRequests(ctx, 50)
+	repairsPage := fleetPageNumber(r.URL.Query().Get("repairs_page"))
+	repairs, err := h.Fleet.ListPendingRepairRequests(ctx, dbgen.ListPendingRepairRequestsParams{RowLimit: fleetPageSize + 1, RowOffset: int32((repairsPage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
 	now := h.now()
-	maintenance, err := h.Fleet.ListUpcomingMaintenance(ctx, dbgen.ListUpcomingMaintenanceParams{FromTime: pgtype.Timestamptz{Time: now, Valid: true}, ToTime: pgtype.Timestamptz{Time: now.AddDate(0, 0, 90), Valid: true}, RowLimit: 50})
+	maintenancePage := fleetPageNumber(r.URL.Query().Get("maintenance_page"))
+	maintenance, err := h.Fleet.ListUpcomingMaintenance(ctx, dbgen.ListUpcomingMaintenanceParams{FromTime: pgtype.Timestamptz{Time: now, Valid: true}, ToTime: pgtype.Timestamptz{Time: now.AddDate(0, 0, 90), Valid: true}, RowLimit: fleetPageSize + 1, RowOffset: int32((maintenancePage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
@@ -406,10 +411,10 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 		h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID),
 		h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID),
 	})
-	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentCapped: len(equipment) > 500, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
-	if page.EquipmentCapped {
-		equipment = equipment[:500]
-	}
+	page := pages.FleetPage{Counts: fleetStatusCounts(counts), CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	page.EquipmentPreviousURL, page.EquipmentNextURL, equipment = fleetPaginationURLs(r.URL.Query(), "equipment_page", equipmentPage, equipment)
+	page.RepairsPreviousURL, page.RepairsNextURL, repairs = fleetPaginationURLs(r.URL.Query(), "repairs_page", repairsPage, repairs)
+	page.MaintenancePreviousURL, page.MaintenanceNextURL, maintenance = fleetPaginationURLs(r.URL.Query(), "maintenance_page", maintenancePage, maintenance)
 	page.Equipment = make([]pages.FleetEquipment, len(equipment))
 	for i, item := range equipment {
 		page.Equipment[i] = pages.FleetEquipment{AssetTag: item.AssetTag, Name: item.Name, Type: item.Type, Status: item.Status}
@@ -430,6 +435,42 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	}
 	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
 	return page, nil
+}
+
+func fleetPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func fleetPaginationURLs[T any](query url.Values, parameter string, page int, items []T) (string, string, []T) {
+	var previous, next string
+	if page > 1 {
+		previous = fleetPageURL(query, parameter, page-1)
+	}
+	if len(items) > fleetPageSize {
+		next = fleetPageURL(query, parameter, page+1)
+		items = items[:fleetPageSize]
+	}
+	return previous, next, items
+}
+
+func fleetPageURL(query url.Values, parameter string, page int) string {
+	values := make(url.Values, len(query))
+	for key, items := range query {
+		values[key] = append([]string(nil), items...)
+	}
+	if page == 1 {
+		values.Del(parameter)
+	} else {
+		values.Set(parameter, strconv.Itoa(page))
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return "/admin/fleet?" + encoded
+	}
+	return "/admin/fleet"
 }
 
 func actionError(id string, form fleetMaintenanceForm) string {

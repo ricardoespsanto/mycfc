@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,6 +24,7 @@ import (
 )
 
 const announcementQueryTimeout = 5 * time.Second
+const announcementPageSize = 6
 
 // Delivery is recorded when an announcement appears in a recipient's list;
 // only opening its detail page marks it read.
@@ -36,6 +38,7 @@ type AnnouncementStore interface {
 	ListAnnouncementEvents(context.Context) ([]dbgen.ListAnnouncementEventsRow, error)
 	ListAnnouncementsForAuthor(context.Context, dbgen.ListAnnouncementsForAuthorParams) ([]dbgen.ListAnnouncementsForAuthorRow, error)
 	ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error)
+	GetVisibleAnnouncement(context.Context, dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error)
 	GetAnnouncementAuthor(context.Context, uuid.UUID) (uuid.UUID, error)
 	CanCoachManageEvent(context.Context, dbgen.CanCoachManageEventParams) (bool, error)
 }
@@ -166,27 +169,25 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
 	defer cancel()
-	items, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: 100})
+	item, err := h.Store.GetVisibleAnnouncement(ctx, dbgen.GetVisibleAnnouncementParams{ID: id, UserID: user.ID})
 	if err != nil {
-		h.System.InternalError(w, r)
+		if errors.Is(err, pgx.ErrNoRows) {
+			h.System.NotFound(w, r)
+		} else {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
-	for _, item := range items {
-		if item.ID == id {
-			if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: id, UserID: user.ID}); err == nil && announcementReadOnDetail() {
-				_ = dbgen.New(h.DB).MarkAnnouncementRead(ctx, dbgen.MarkAnnouncementReadParams{AnnouncementID: id, UserID: user.ID})
-			}
-			body, document := parseOfficialDocument(item.Body)
-			page := pages.AnnouncementDetailPage{Title: item.Title, Body: body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
-			if document != nil {
-				page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_ = pages.AnnouncementDetail(page).Render(r.Context(), w)
-			return
-		}
+	if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: id, UserID: user.ID}); err == nil && announcementReadOnDetail() {
+		_ = dbgen.New(h.DB).MarkAnnouncementRead(ctx, dbgen.MarkAnnouncementReadParams{AnnouncementID: id, UserID: user.ID})
 	}
-	h.System.NotFound(w, r)
+	body, document := parseOfficialDocument(item.Body)
+	page := pages.AnnouncementDetailPage{Title: item.Title, Body: body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
+	if document != nil {
+		page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pages.AnnouncementDetail(page).Render(r.Context(), w)
 }
 func (h Announcements) validate(r *http.Request) announcementForm {
 	f := announcementForm{Title: strings.TrimSpace(r.PostForm.Get("title")), Body: strings.TrimSpace(r.PostForm.Get("body")), ExpiresAt: strings.TrimSpace(r.PostForm.Get("expires_at")), DocumentURL: strings.TrimSpace(r.PostForm.Get("document_url")), DocumentSource: strings.TrimSpace(r.PostForm.Get("document_source")), ReviewedOn: strings.TrimSpace(r.PostForm.Get("reviewed_on")), Targets: map[dbgen.AnnouncementTargetType][]uuid.UUID{}, Guardian: r.PostForm.Get("guardian") == "true", Errors: validation.FieldErrors{}}
@@ -258,12 +259,21 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
 	defer cancel()
-	visible, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: 100})
+	visiblePage := announcementPageNumber(r.URL.Query().Get("page"))
+	authoredPage := announcementPageNumber(r.URL.Query().Get("authored_page"))
+	visible, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: announcementPageSize + 1, RowOffset: int32((visiblePage - 1) * announcementPageSize)})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
 	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if visiblePage > 1 {
+		page.VisiblePreviousURL = announcementsPageURL(visiblePage-1, authoredPage)
+	}
+	if len(visible) > announcementPageSize {
+		page.VisibleNextURL = announcementsPageURL(visiblePage+1, authoredPage)
+		visible = visible[:announcementPageSize]
+	}
 	for _, item := range visible {
 		if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: item.ID, UserID: user.ID}); err != nil {
 			h.System.InternalError(w, r)
@@ -309,17 +319,39 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
 			}
 		}
-		authored, err := h.Store.ListAnnouncementsForAuthor(ctx, dbgen.ListAnnouncementsForAuthorParams{AuthorID: user.ID, RowLimit: 100})
-		if err == nil {
-			for _, x := range authored {
-				page.Authored = append(page.Authored, pages.AuthoredAnnouncement{ID: x.ID.String(), Title: x.Title, Status: x.Status})
-			}
+		authored, err := h.Store.ListAnnouncementsForAuthor(ctx, dbgen.ListAnnouncementsForAuthorParams{AuthorID: user.ID, RowLimit: announcementPageSize + 1, RowOffset: int32((authoredPage - 1) * announcementPageSize)})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		if authoredPage > 1 {
+			page.AuthoredPreviousURL = announcementsPageURL(visiblePage, authoredPage-1)
+		}
+		if len(authored) > announcementPageSize {
+			page.AuthoredNextURL = announcementsPageURL(visiblePage, authoredPage+1)
+			authored = authored[:announcementPageSize]
+		}
+		for _, x := range authored {
+			page.Authored = append(page.Authored, pages.AuthoredAnnouncement{ID: x.ID.String(), Title: x.Title, Status: x.Status})
 		}
 	}
 	page.Meta = h.meta(r, user, "/announcements", "Avisos")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Announcements(page).Render(r.Context(), w)
+}
+
+func announcementPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func announcementsPageURL(visiblePage, authoredPage int) string {
+	query := url.Values{"page": {strconv.Itoa(visiblePage)}, "authored_page": {strconv.Itoa(authoredPage)}}
+	return "/announcements?" + query.Encode()
 }
 
 const documentMarker = "[DOCUMENTO_OFICIAL]"

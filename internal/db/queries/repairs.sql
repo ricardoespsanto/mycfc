@@ -57,7 +57,8 @@ JOIN equipment e ON e.id = rr.equipment_id
 LEFT JOIN users u ON u.id = rr.reported_by_id
 WHERE rr.status IN ('Pendente', 'Em_Analise')
 ORDER BY rr.date_reported ASC, rr.id ASC
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: UpdateRepairStatus :one
 UPDATE repair_requests

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyCFC: visão do sistema</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #f8f5ea;
+      background: #06243a;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button { font: inherit; }
+
+    .deck {
+      min-block-size: 100vh;
+      display: grid;
+      place-items: center;
+      padding: clamp(1rem, 4vw, 3rem);
+    }
+
+    .slide {
+      display: none;
+      width: min(100%, 76rem);
+      min-height: min(68vw, 43rem);
+      padding: clamp(2rem, 6vw, 5.5rem);
+      border: 1px solid rgb(248 245 234 / 24%);
+      background: #082f48;
+      box-shadow: 0 1.25rem 4rem rgb(0 0 0 / 24%);
+    }
+
+    .slide.is-active { display: grid; }
+    .slide--roles { background: linear-gradient(135deg, #082f48 0%, #075c68 100%); }
+    .slide--capabilities { background: #f5f1e5; color: #102b41; }
+    .slide--workflows { background: linear-gradient(135deg, #075c68 0%, #12334a 100%); }
+
+    .slide__content { align-self: center; }
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: #b9d9cb;
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .slide--capabilities .eyebrow { color: #075c68; }
+    h1, h2 { max-width: 14ch; margin: 0; font-size: clamp(2.7rem, 6vw, 5.5rem); line-height: 0.96; letter-spacing: -0.05em; }
+    .lead { max-width: 48rem; margin: 1.75rem 0 0; font-size: clamp(1.1rem, 2vw, 1.45rem); line-height: 1.55; }
+
+    .role-grid, .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: clamp(2rem, 5vw, 4rem); }
+    .role, .capability { min-height: 10rem; padding: 1.35rem; border: 1px solid rgb(248 245 234 / 28%); }
+    .role strong, .capability strong { display: block; font-size: 1.3rem; }
+    .role p, .capability p { margin: 0.65rem 0 0; line-height: 1.45; }
+    .capability { border-color: #b8c9ce; background: #fff; }
+    .capability span { display: block; margin-bottom: 0.65rem; color: #075c68; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.72rem; }
+
+    .workflow { display: grid; gap: 0.8rem; margin-top: clamp(2rem, 5vw, 4rem); counter-reset: workflow; }
+    .workflow li { display: grid; grid-template-columns: 2.5rem 1fr; gap: 1rem; align-items: center; list-style: none; padding: 1rem 0; border-top: 1px solid rgb(248 245 234 / 28%); font-size: clamp(1rem, 1.7vw, 1.28rem); }
+    .workflow li::before { content: counter(workflow, decimal-leading-zero); counter-increment: workflow; color: #b9d9cb; font-weight: 800; }
+
+    .controls { position: fixed; inset-inline: 1rem; inset-block-end: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .controls button { min-width: 6.5rem; min-block-size: 2.75rem; padding: 0.6rem 0.9rem; border: 1px solid rgb(248 245 234 / 55%); border-radius: 999px; color: #f8f5ea; background: rgb(6 36 58 / 82%); font-weight: 700; cursor: pointer; }
+    .controls button:hover, .controls button:focus-visible { background: #075c68; }
+    .controls button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .counter { color: #f8f5ea; font-weight: 700; }
+    :focus-visible { outline: 3px solid #b9d9cb; outline-offset: 3px; }
+
+    @media (max-width: 42rem) {
+      .slide { min-height: calc(100vh - 2rem); }
+      .role-grid, .capability-grid { grid-template-columns: 1fr; }
+      .role, .capability { min-height: auto; }
+    }
+
+    @media print {
+      .deck { display: block; padding: 0; }
+      .slide { display: grid; width: 100%; min-height: 100vh; break-after: page; box-shadow: none; }
+      .controls { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck" aria-live="polite">
+    <section class="slide slide--roles is-active" aria-labelledby="slide-1-title">
+      <div class="slide__content">
+        <p class="eyebrow">MyCFC · visão do sistema</p>
+        <h1 id="slide-1-title">Um ponto de encontro para o clube.</h1>
+        <p class="lead">O MyCFC organiza a informação e os fluxos do Clube Fluvial de Coimbra numa plataforma simples, segura e adaptada a cada pessoa.</p>
+        <div class="role-grid">
+          <article class="role"><strong>Atletas</strong><p>Treinos, documentos de competição, eventos, grupos e histórico pessoal.</p></article>
+          <article class="role"><strong>Encarregados</strong><p>Dependentes, consentimentos, respostas a eventos e acesso ao que lhes diz respeito.</p></article>
+          <article class="role"><strong>Treinadores</strong><p>Planos e sessões por programa ou equipa, com acompanhamento do treino realizado.</p></article>
+          <article class="role"><strong>Gestão do clube</strong><p>Membros, conteúdos, eventos, embarcações, avarias e manutenção.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide slide--capabilities" aria-labelledby="slide-2-title">
+      <div class="slide__content">
+        <p class="eyebrow">O que já existe</p>
+        <h2 id="slide-2-title">Fluxos práticos, não apenas páginas.</h2>
+        <div class="capability-grid">
+          <article class="capability"><span>Acesso</span><strong>Contas e consentimentos</strong><p>Registo de adultos, dependentes, credenciais de menores, sessões seguras e controlo de permissões.</p></article>
+          <article class="capability"><span>Comunidade</span><strong>Notícias, avisos e eventos</strong><p>Publicação programada, destinatários segmentados, RSVP, capacidade, lista de espera e confirmação.</p></article>
+          <article class="capability"><span>Desporto</span><strong>Treinos e competição</strong><p>Planos, sessões, conclusão pelo atleta e documentos oficiais visíveis para o grupo certo.</p></article>
+          <article class="capability"><span>Operações</span><strong>Frota e manutenção</strong><p>Inventário, comunicação de avarias com fotografia, acompanhamento e tarefas de manutenção.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide slide--workflows" aria-labelledby="slide-3-title">
+      <div class="slide__content">
+        <p class="eyebrow">Como funciona no dia a dia</p>
+        <h2 id="slide-3-title">Da inscrição à operação do clube.</h2>
+        <ol class="workflow">
+          <li>O membro entra ou é criado pela gestão; os dependentes e consentimentos ficam associados à família certa.</li>
+          <li>O sistema mostra um espaço de trabalho adequado ao programa, equipa e responsabilidades ativas.</li>
+          <li>Treinadores e gestão publicam treinos, documentos, eventos, avisos e notícias para públicos definidos.</li>
+          <li>Atletas e encarregados acompanham o que lhes é relevante e respondem a eventos ou sessões.</li>
+          <li>A gestão mantém a frota operacional: regista avarias, analisa pedidos e agenda manutenção.</li>
+        </ol>
+        <p class="lead">Tudo foi pensado para funcionar também sem JavaScript, em telemóvel e com navegação por teclado.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="controls" aria-label="Controlos da apresentação">
+    <button type="button" data-previous>Anterior</button>
+    <span class="counter" aria-atomic="true"><span data-current>1</span> / 3</span>
+    <button type="button" data-next>Seguinte</button>
+  </nav>
+
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    const current = document.querySelector("[data-current]");
+    const previous = document.querySelector("[data-previous]");
+    const next = document.querySelector("[data-next]");
+    let index = 0;
+
+    function show(nextIndex) {
+      index = Math.max(0, Math.min(nextIndex, slides.length - 1));
+      slides.forEach((slide, slideIndex) => slide.classList.toggle("is-active", slideIndex === index));
+      current.textContent = index + 1;
+      previous.disabled = index === 0;
+      next.disabled = index === slides.length - 1;
+    }
+
+    previous.addEventListener("click", () => show(index - 1));
+    next.addEventListener("click", () => show(index + 1));
+    document.addEventListener("keydown", (event) => {
+      if (event.target.closest("button")) return;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        show(index - 1);
+      }
+      if (event.key === "ArrowRight" || event.key === " ") {
+        event.preventDefault();
+        show(index + 1);
+      }
+    });
+    show(0);
+  </script>
+</body>
+</html>

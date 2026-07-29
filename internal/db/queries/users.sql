@@ -170,7 +170,8 @@ WHERE sqlc.narg(search)::text IS NULL
    OR u.email::text ILIKE '%' || sqlc.narg(search)::text || '%'
    OR u.minor_login_id::text ILIKE '%' || sqlc.narg(search)::text || '%'
 ORDER BY u.is_active DESC, lower(u.name), u.id
-LIMIT sqlc.arg(row_limit);
+LIMIT sqlc.arg(row_limit)
+OFFSET sqlc.arg(row_offset);
 
 -- name: GetMemberForAdmin :one
 SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,

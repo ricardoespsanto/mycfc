@@ -110,6 +110,66 @@ func (q *Queries) GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid
 	return author_id, err
 }
 
+const getVisibleAnnouncement = `-- name: GetVisibleAnnouncement :one
+SELECT DISTINCT a.id, a.title, a.body, a.published_at, a.expires_at, d.read_at
+FROM announcements a
+LEFT JOIN announcement_deliveries d ON d.announcement_id = a.id AND d.user_id = $1
+WHERE a.id = $2
+  AND a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
+  AND (
+    NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
+    OR EXISTS (
+      SELECT 1 FROM announcement_targets t
+      JOIN users subject ON subject.is_active AND (subject.id = $1 OR subject.guardian_id = $1)
+      LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+      LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
+      WHERE t.announcement_id = a.id
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR subject.guardian_id = $1)
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
+        (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
+        OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
+        OR (t.target_type = 'CATEGORY' AND m.competition_category_id = t.target_id)
+        OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
+        OR (t.target_type = 'EVENT' AND EXISTS (
+          SELECT 1 FROM events e WHERE e.id = t.target_id AND (
+            NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+            OR EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id AND ea.programme_id = m.programme_id)
+            OR EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id AND eta.team_id = m.team_id)
+          )
+        ))
+        ))
+    )
+  )
+`
+
+type GetVisibleAnnouncementParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	ID     uuid.UUID `json:"id"`
+}
+
+type GetVisibleAnnouncementRow struct {
+	ID          uuid.UUID          `json:"id"`
+	Title       string             `json:"title"`
+	Body        string             `json:"body"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ReadAt      pgtype.Timestamptz `json:"read_at"`
+}
+
+func (q *Queries) GetVisibleAnnouncement(ctx context.Context, arg GetVisibleAnnouncementParams) (GetVisibleAnnouncementRow, error) {
+	row := q.db.QueryRow(ctx, getVisibleAnnouncement, arg.UserID, arg.ID)
+	var i GetVisibleAnnouncementRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Body,
+		&i.PublishedAt,
+		&i.ExpiresAt,
+		&i.ReadAt,
+	)
+	return i, err
+}
+
 const listAnnouncementCategories = `-- name: ListAnnouncementCategories :many
 SELECT id, programme_id, name_pt FROM competition_categories ORDER BY name_pt, id
 `
@@ -262,12 +322,14 @@ SELECT id, title, status::text AS status, published_at, expires_at
 FROM announcements
 WHERE author_id = $1
 ORDER BY created_at DESC, id
-LIMIT $2
+LIMIT $3
+OFFSET $2
 `
 
 type ListAnnouncementsForAuthorParams struct {
-	AuthorID uuid.UUID `json:"author_id"`
-	RowLimit int32     `json:"row_limit"`
+	AuthorID  uuid.UUID `json:"author_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
 }
 
 type ListAnnouncementsForAuthorRow struct {
@@ -279,7 +341,7 @@ type ListAnnouncementsForAuthorRow struct {
 }
 
 func (q *Queries) ListAnnouncementsForAuthor(ctx context.Context, arg ListAnnouncementsForAuthorParams) ([]ListAnnouncementsForAuthorRow, error) {
-	rows, err := q.db.Query(ctx, listAnnouncementsForAuthor, arg.AuthorID, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listAnnouncementsForAuthor, arg.AuthorID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -334,12 +396,14 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
     )
   )
 ORDER BY a.published_at DESC, a.id
-LIMIT $2
+LIMIT $3
+OFFSET $2
 `
 
 type ListVisibleAnnouncementsParams struct {
-	UserID   uuid.UUID `json:"user_id"`
-	RowLimit int32     `json:"row_limit"`
+	UserID    uuid.UUID `json:"user_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
 }
 
 type ListVisibleAnnouncementsRow struct {
@@ -352,7 +416,7 @@ type ListVisibleAnnouncementsRow struct {
 }
 
 func (q *Queries) ListVisibleAnnouncements(ctx context.Context, arg ListVisibleAnnouncementsParams) ([]ListVisibleAnnouncementsRow, error) {
-	rows, err := q.db.Query(ctx, listVisibleAnnouncements, arg.UserID, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listVisibleAnnouncements, arg.UserID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

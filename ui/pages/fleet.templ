@@ -9,9 +9,14 @@ type FleetPage struct {
 	Meta                 components.PageMeta
 	Counts               []FleetStatusCount
 	Equipment            []FleetEquipment
-	EquipmentCapped      bool
+	EquipmentPreviousURL string
+	EquipmentNextURL     string
 	Repairs              []FleetRepair
+	RepairsPreviousURL   string
+	RepairsNextURL       string
 	Maintenance          []FleetMaintenance
+	MaintenancePreviousURL string
+	MaintenanceNextURL     string
 	MaintenanceForm      FleetMaintenanceForm
 	CalendarAPIKey       string
 	CalendarSources      string
@@ -40,10 +45,7 @@ templ fleetContent(page FleetPage) {
 			<li>{ count.Status }: { count.Total }</li>
 		}
 	</ul></section>
-	<section class="dashboard-card"><h2>Equipamentos</h2>
-		if page.EquipmentCapped {
-			<p class="status-message" role="alert">A lista está limitada a 500 equipamentos.</p>
-		}
+	<details class="dashboard-card disclosure-card"><summary><span class="disclosure-card__title">Equipamentos</span><span class="disclosure-card__summary">Consulte o inventário e o estado de cada equipamento.</span></summary><div class="disclosure-card__content">
 		if len(page.Equipment) == 0 {
 			<p class="empty-state">Ainda não existem equipamentos registados.</p>
 		}
@@ -54,7 +56,8 @@ templ fleetContent(page FleetPage) {
 				}
 			</ul>
 		}
-	</section>
+		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
+	</div></details>
 	<section class="dashboard-card"><h2>Pedidos de reparação pendentes</h2>
 		if len(page.Repairs) == 0 {
 			<p class="empty-state">Não existem pedidos de reparação pendentes.</p>
@@ -74,6 +77,7 @@ templ fleetContent(page FleetPage) {
 				}
 			</ul>
 		}
+		@fleetPagination(page.RepairsPreviousURL, page.RepairsNextURL, "Paginação de pedidos de reparação")
 	</section>
 	<section class="dashboard-card"><h2>Próximas manutenções</h2>
 		if len(page.Maintenance) == 0 {
@@ -88,9 +92,23 @@ templ fleetContent(page FleetPage) {
 				}
 			</ul>
 		}
+		@fleetPagination(page.MaintenancePreviousURL, page.MaintenanceNextURL, "Paginação de manutenções")
 	</section>
 	@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte todos os calendários públicos do clube.")
 	@MaintenanceForm(page.MaintenanceForm)
+}
+
+templ fleetPagination(previousURL, nextURL, label string) {
+	if previousURL != "" || nextURL != "" {
+		<nav class="pagination" aria-label={ label }>
+			if previousURL != "" {
+				<a href={ templ.SafeURL(previousURL) }>Anterior</a>
+			}
+			if nextURL != "" {
+				<a href={ templ.SafeURL(nextURL) }>Seguinte</a>
+			}
+		</nav>
+	}
 }
 
 templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
@@ -135,12 +153,12 @@ templ FleetActionFeedback(success, errorMessage string) {
 }
 
 templ MaintenanceForm(form FleetMaintenanceForm) {
-	<section id="maintenance-form" class="dashboard-card" aria-labelledby="maintenance-title">
-		<h2 id="maintenance-title">Agendar manutenção</h2>
+	<details id="maintenance-form" class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
+		<summary><span id="maintenance-title" class="disclosure-card__title">Agendar manutenção</span><span class="disclosure-card__summary">Planeie uma intervenção para um equipamento.</span></summary><div class="disclosure-card__content">
 		if form.Success != "" {
 			<p class="status-message" role="status" tabindex="-1">{ form.Success }</p>
 		}
-		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="this" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<label for="maintenance-equipment">Equipamento</label>
 			<select id="maintenance-equipment" name="equipment_id" required aria-describedby="equipment_id-error">
@@ -158,5 +176,5 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 			@components.FieldErrorMessage("description", form.Errors["description"])
 			<button type="submit">Agendar manutenção</button>
 		</form>
-	</section>
+	</div></details>
 }

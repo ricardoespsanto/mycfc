@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 )
 
@@ -54,5 +55,43 @@ func TestEventStatusText(t *testing.T) {
 		if got := eventStatusText(input); got != want {
 			t.Errorf("eventStatusText(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestEventsPageNumber(t *testing.T) {
+	for input, want := range map[string]int{"": 1, "0": 1, "invalid": 1, "2": 2, "10001": 1} {
+		if got := eventsPageNumber(input); got != want {
+			t.Errorf("eventsPageNumber(%q) = %d, want %d", input, got, want)
+		}
+	}
+}
+
+func TestEventResponsesPageURL(t *testing.T) {
+	eventID := uuid.MustParse("018f3d5e-8f1d-7f5b-b308-e5391f03e7de")
+	if got, want := eventResponsesPageURL(eventID, 2), "/events/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=2"; got != want {
+		t.Errorf("eventResponsesPageURL() = %q, want %q", got, want)
+	}
+}
+
+func TestAdminDetailPagePaginatesResponses(t *testing.T) {
+	eventID := uuid.MustParse("018f3d5e-8f1d-7f5b-b308-e5391f03e7de")
+	responses := make([]dbgen.ListEventResponsesForAdminRow, eventResponsesPageSize+1)
+	page := (Events{Location: time.UTC}).adminDetailPage(dbgen.Event{ID: eventID}, responses, 1)
+	if got, want := len(page.Responses), eventResponsesPageSize; got != want {
+		t.Errorf("response count = %d, want %d", got, want)
+	}
+	if got, want := page.ResponsesNextURL, "/events/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=2"; got != want {
+		t.Errorf("next URL = %q, want %q", got, want)
+	}
+	if page.ResponsesPreviousURL != "" {
+		t.Errorf("previous URL = %q, want empty", page.ResponsesPreviousURL)
+	}
+
+	page = (Events{Location: time.UTC}).adminDetailPage(dbgen.Event{ID: eventID}, responses[:1], 2)
+	if got, want := page.ResponsesPreviousURL, "/events/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=1"; got != want {
+		t.Errorf("previous URL = %q, want %q", got, want)
+	}
+	if page.ResponsesNextURL != "" {
+		t.Errorf("next URL = %q, want empty", page.ResponsesNextURL)
 	}
 }

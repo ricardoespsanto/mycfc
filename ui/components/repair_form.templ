@@ -13,15 +13,16 @@ type RepairFormData struct {
 }
 
 templ RepairForm(form RepairFormData) {
-	<section class="dashboard-card" id="repair-form" aria-labelledby="repair-form-title">
-		<h2 id="repair-form-title">Reportar avaria</h2>
+	<details id="repair-form" class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 || form.Success != "" }>
+		<summary><span class="disclosure-card__title">Reportar avaria</span><span class="disclosure-card__summary">Comunique um problema num equipamento do clube.</span></summary>
+		<div class="disclosure-card__content">
 		if form.Success != "" {
 			<p class="flash" role="status" tabindex="-1">{ form.Success }</p>
 		}
 		if form.Errors["form"] != "" {
 			<p class="field-error" role="alert">{ form.Errors["form"] }</p>
 		}
-		<form class="form-layout" method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="#repair-form" hx-swap="outerHTML" hx-target-422="#repair-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
 			<div class="form-field"><label for="equipment_id">Equipamento</label><select id="equipment_id" name="equipment_id" required><option value="">Selecione</option>
@@ -33,5 +34,6 @@ templ RepairForm(form RepairFormData) {
 			<div class="form-field"><label for="photo">Fotografia (opcional)</label><input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp"/>@FieldErrorMessage("photo", form.Errors["photo"])</div>
 			<button type="submit">Reportar avaria</button>
 		</form>
-	</section>
+		</div>
+	</details>
 }

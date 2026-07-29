@@ -81,14 +81,39 @@ func TestNewsStatusRejectsInvalidTransition(t *testing.T) {
 	}
 }
 
-type newsStoreFake struct {
-	changed   int64
-	id        uuid.UUID
-	published bool
+func TestNewsIndexPaginates(t *testing.T) {
+	store := &newsStoreFake{}
+	for i := 0; i < newsPageSize+1; i++ {
+		store.items = append(store.items, dbgen.NewsItem{ID: uuid.New(), TitlePt: "Notícia"})
+	}
+	h := News{Store: store, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/admin/noticias?page=2", nil)
+	w := httptest.NewRecorder()
+
+	h.Index(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if store.listParams != (dbgen.ListNewsForAdminParams{RowLimit: newsPageSize + 1, RowOffset: newsPageSize}) {
+		t.Fatalf("params = %#v", store.listParams)
+	}
+	if !strings.Contains(w.Body.String(), "/admin/noticias?page=1") || !strings.Contains(w.Body.String(), "/admin/noticias?page=3") {
+		t.Fatalf("body = %q", w.Body.String())
+	}
 }
 
-func (s *newsStoreFake) ListNewsForAdmin(context.Context, int32) ([]dbgen.NewsItem, error) {
-	return nil, nil
+type newsStoreFake struct {
+	changed    int64
+	id         uuid.UUID
+	published  bool
+	items      []dbgen.NewsItem
+	listParams dbgen.ListNewsForAdminParams
+}
+
+func (s *newsStoreFake) ListNewsForAdmin(_ context.Context, params dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error) {
+	s.listParams = params
+	return s.items, nil
 }
 func (s *newsStoreFake) CreateNews(context.Context, dbgen.CreateNewsParams) (dbgen.NewsItem, error) {
 	return dbgen.NewsItem{}, nil

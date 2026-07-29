@@ -44,3 +44,26 @@ func TestMemberLoginID(t *testing.T) {
 		t.Fatalf("login ID = %q, want %q", got, want)
 	}
 }
+
+func TestMembersPageNumber(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"", 1},
+		{"3", 3},
+		{"0", 1},
+		{"invalid", 1},
+		{"10001", 1},
+	} {
+		if got := membersPageNumber(tc.value); got != tc.want {
+			t.Errorf("membersPageNumber(%q) = %d, want %d", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestMembersPageURL(t *testing.T) {
+	if got, want := membersPageURL("Ana & João", 2), "/admin/membros?page=2&q=Ana+%26+Jo%C3%A3o"; got != want {
+		t.Errorf("membersPageURL() = %q, want %q", got, want)
+	}
+}

@@ -176,6 +176,17 @@ button:hover {
 .dashboard-card h3 { margin-block-end: 0.25rem; font-size: 1.05rem; }
 .dashboard-card article + article { margin-block-start: 1.25rem; padding-block-start: 1.25rem; border-block-start: 1px solid #dbe2e6; }
 .dashboard-card form { max-width: 44rem; }
+.disclosure-card { padding: 0; }
+.disclosure-card > summary { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem 1rem; align-items: center; padding: clamp(1rem, 3vw, 1.5rem); cursor: pointer; list-style: none; }
+.disclosure-card > summary::-webkit-details-marker { display: none; }
+.disclosure-card > summary::after { content: "+"; display: grid; place-items: center; inline-size: 2rem; block-size: 2rem; border-radius: 50%; color: #075c68; background: #e4f2ec; font-size: 1.35rem; font-weight: 500; }
+.disclosure-card[open] > summary { border-block-end: 1px solid #dbe2e6; }
+.disclosure-card[open] > summary::after { content: "-"; }
+.disclosure-card__title { font-size: clamp(1.25rem, 2vw, 1.5rem); font-weight: 700; }
+.disclosure-card__summary { color: #4d5964; }
+.disclosure-card__content { padding: clamp(1rem, 3vw, 1.5rem); }
+.content-list .inline-disclosure { margin-block-start: 0.65rem; }
+.inline-disclosure > summary { color: #075c68; cursor: pointer; font-weight: 700; }
 .form-layout { display: grid; gap: 0.8rem; min-inline-size: 0; }
 .form-layout > label { display: grid; gap: 0.35rem; font-weight: 650; }
 .form-layout :is(input, select, textarea) { inline-size: 100%; min-inline-size: 0; }
@@ -187,9 +198,14 @@ button:hover {
 .form-layout legend { padding-inline: 0.35rem; font-weight: 700; }
 .form-layout fieldset p { margin: 0; color: #4d5964; }
 .form-layout > button { justify-self: start; }
+.form-layout details { padding: 0.85rem 1rem; border: 1px solid #b7c5cd; border-radius: 0.35rem; }
+.form-layout details > summary { cursor: pointer; font-weight: 700; }
+.form-layout details > fieldset { margin-block: 0.85rem 0; }
 .inline-action { display: inline-block; margin-inline-start: 0.5rem; }
 .inline-action button { min-block-size: 2.25rem; padding: 0.4rem 0.7rem; font-size: 0.9rem; }
 .content-list { display: grid; gap: 0.75rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.pagination { display: flex; align-items: center; gap: 0.75rem; margin-block-start: 1.25rem; }
+.pagination a { color: #075c68; font-weight: 700; }
 .content-list > li { padding: 0.85rem 1rem; border-inline-start: 0.25rem solid #b7c5cd; background: #f7f8fa; overflow-wrap: anywhere; }
 .content-list > li > span { color: #4d5964; }
 .content-list form { margin-block-start: 0.65rem; }

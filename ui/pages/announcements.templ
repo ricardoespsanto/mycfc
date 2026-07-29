@@ -14,15 +14,12 @@ type AnnouncementForm struct {
     Programmes, Teams, Categories, Modalities, Events []AnnouncementAudience
     Errors validation.FieldErrors
 }
-type AnnouncementsPage struct { Meta components.PageMeta; CanManage bool; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
+type AnnouncementsPage struct { Meta components.PageMeta; CanManage bool; VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL string; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
 type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt, DocumentURL, DocumentSource, DocumentReviewedOn string }
 
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
     <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Avisos</h1><p>Comunicados do clube. Não existe chat interno.</p></section>
-    if page.CanManage {
-        @AnnouncementAuthoringForm(page.Form)
-    }
     <section class="dashboard-card"><h2>Para si</h2>
         if len(page.Items) == 0 {
             <p class="empty-state">Não existem avisos ativos.</p>
@@ -38,33 +35,55 @@ templ announcementsContent(page AnnouncementsPage) {
                 }
             </ul>
         }
+        if page.VisiblePreviousURL != "" || page.VisibleNextURL != "" {
+            <nav class="pagination" aria-label="Paginação de avisos para si">
+                if page.VisiblePreviousURL != "" {
+                    <a href={ templ.SafeURL(page.VisiblePreviousURL) }>Anterior</a>
+                }
+                if page.VisibleNextURL != "" {
+                    <a href={ templ.SafeURL(page.VisibleNextURL) }>Seguinte</a>
+                }
+            </nav>
+        }
     </section>
     if page.CanManage {
+        @AnnouncementAuthoringForm(page.Form)
         <section class="dashboard-card"><h2>Os meus avisos</h2><ul class="content-list">
             for _, item := range page.Authored {
                 <li>{ item.Title } · { item.Status }
                     if item.Status == "DRAFT" {
-                        <form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/publish" }>@page.Form.CSRFField<button type="submit">Publicar</button></form>
+                        <details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/publish" }>@page.Form.CSRFField<button type="submit">Publicar</button></form></details>
                     }
                     if item.Status == "PUBLISHED" {
-                        <form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/expire" }>@page.Form.CSRFField<button type="submit">Expirar</button></form>
+                        <details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/announcements/" + item.ID + "/expire" }>@page.Form.CSRFField<button type="submit">Expirar</button></form></details>
                     }
                 </li>
             }
-        </ul></section>
+        </ul>
+        if page.AuthoredPreviousURL != "" || page.AuthoredNextURL != "" {
+            <nav class="pagination" aria-label="Paginação dos meus avisos">
+                if page.AuthoredPreviousURL != "" {
+                    <a href={ templ.SafeURL(page.AuthoredPreviousURL) }>Anterior</a>
+                }
+                if page.AuthoredNextURL != "" {
+                    <a href={ templ.SafeURL(page.AuthoredNextURL) }>Seguinte</a>
+                }
+            </nav>
+        }
+        </section>
     }
 }
 templ AnnouncementAuthoringForm(form AnnouncementForm) {
-    <section class="dashboard-card"><h2>Criar aviso</h2><form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
+    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar aviso</span><span class="disclosure-card__summary">Prepare uma comunicação para os públicos certos.</span></summary><div class="disclosure-card__content"><form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
         <label for="announcement-title">Título</label><input id="announcement-title" name="title" value={ form.Title } required/>@components.FieldErrorMessage("title", form.Errors["title"])
         <label for="announcement-body">Mensagem</label><textarea id="announcement-body" name="body" required>{ form.Body }</textarea>@components.FieldErrorMessage("body", form.Errors["body"])
-        <fieldset><legend>Caderno de prova ou documento oficial (opcional)</legend><p>Publique apenas uma ligação HTTPS revista. A fonte e a data de revisão ficam registadas no aviso.</p>
+        <details><summary>Documento oficial (opcional)</summary><fieldset><legend>Caderno de prova ou documento oficial</legend><p>Publique apenas uma ligação HTTPS revista. A fonte e a data de revisão ficam registadas no aviso.</p>
             <label for="announcement-document-url">Ligação para PDF/documento</label><input id="announcement-document-url" name="document_url" type="url" inputmode="url" value={ form.DocumentURL }/>@components.FieldErrorMessage("document_url", form.Errors["document_url"])
             <label for="announcement-document-source">Fonte oficial</label><input id="announcement-document-source" name="document_source" value={ form.DocumentSource }/>@components.FieldErrorMessage("document_source", form.Errors["document_source"])
             <label for="announcement-reviewed-on">Revisto em</label><input id="announcement-reviewed-on" name="reviewed_on" type="date" value={ form.ReviewedOn }/>@components.FieldErrorMessage("reviewed_on", form.Errors["reviewed_on"])
-        </fieldset>
+        </fieldset></details>
         <label for="announcement-expires">Expira em (opcional)</label><input id="announcement-expires" type="datetime-local" name="expires_at" value={ form.ExpiresAt }/>@components.FieldErrorMessage("expires_at", form.Errors["expires_at"])
-        <fieldset><legend>Contexto e destinatários</legend><p>Os públicos selecionados somam-se. Selecione o evento de competição e/ou a modalidade aplicável. Treinadores só podem usar os seus programas, equipas e eventos.</p>
+        <details><summary>Contexto e destinatários</summary><fieldset><legend>Contexto e destinatários</legend><p>Os públicos selecionados somam-se. Selecione o evento de competição e/ou a modalidade aplicável. Treinadores só podem usar os seus programas, equipas e eventos.</p>
             <label><input type="checkbox" name="guardian" value="true"/> Encarregados de educação</label>
             for _, item := range form.Programmes {
                 <label><input type="checkbox" name="programme_id" value={ item.ID }/> { item.Name }</label>
@@ -81,9 +100,9 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
             for _, item := range form.Events {
                 <label><input type="checkbox" name="event_id" value={ item.ID }/> { item.Name }</label>
             }
-        </fieldset>@components.FieldErrorMessage("audience", form.Errors["audience"])
+        </fieldset></details>@components.FieldErrorMessage("audience", form.Errors["audience"])
         <button name="action" value="draft" type="submit">Guardar rascunho</button><button name="action" value="publish" type="submit">Publicar</button>
-    </form></section>
+    </form></div></details>
 }
 templ AnnouncementDetail(page AnnouncementDetailPage) { @components.Base(page.Meta, announcementDetailContent(page)) }
 templ announcementDetailContent(page AnnouncementDetailPage) {

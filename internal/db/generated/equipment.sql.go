@@ -46,11 +46,17 @@ ORDER BY
     lower(name),
     asset_tag,
     id
-LIMIT $1
+LIMIT $2
+OFFSET $1
 `
 
-func (q *Queries) ListEquipmentForAdmin(ctx context.Context, rowLimit int32) ([]Equipment, error) {
-	rows, err := q.db.Query(ctx, listEquipmentForAdmin, rowLimit)
+type ListEquipmentForAdminParams struct {
+	RowOffset int32 `json:"row_offset"`
+	RowLimit  int32 `json:"row_limit"`
+}
+
+func (q *Queries) ListEquipmentForAdmin(ctx context.Context, arg ListEquipmentForAdminParams) ([]Equipment, error) {
+	rows, err := q.db.Query(ctx, listEquipmentForAdmin, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

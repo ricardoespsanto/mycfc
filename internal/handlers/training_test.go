@@ -84,3 +84,22 @@ func TestManagedTrainingPlansGroupsSessionsAndKeepsEmptyPlans(t *testing.T) {
 		t.Fatalf("session = %#v", plans[0].Sessions[0])
 	}
 }
+
+func TestManagedTrainingPlansPageNumber(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  int
+	}{
+		{"", 1}, {"0", 1}, {"invalid", 1}, {"10001", 1}, {"2", 2},
+	} {
+		if got := managedTrainingPlansPageNumber(test.input); got != test.want {
+			t.Errorf("managedTrainingPlansPageNumber(%q) = %d, want %d", test.input, got, test.want)
+		}
+	}
+}
+
+func TestManagedTrainingPlansPageURL(t *testing.T) {
+	if got, want := managedTrainingPlansPageURL(2), "/treinos?managed_page=2"; got != want {
+		t.Errorf("managedTrainingPlansPageURL(2) = %q, want %q", got, want)
+	}
+}

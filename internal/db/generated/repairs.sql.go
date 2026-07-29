@@ -152,8 +152,14 @@ JOIN equipment e ON e.id = rr.equipment_id
 LEFT JOIN users u ON u.id = rr.reported_by_id
 WHERE rr.status IN ('Pendente', 'Em_Analise')
 ORDER BY rr.date_reported ASC, rr.id ASC
-LIMIT $1
+LIMIT $2
+OFFSET $1
 `
+
+type ListPendingRepairRequestsParams struct {
+	RowOffset int32 `json:"row_offset"`
+	RowLimit  int32 `json:"row_limit"`
+}
 
 type ListPendingRepairRequestsRow struct {
 	ID               uuid.UUID          `json:"id"`
@@ -174,8 +180,8 @@ type ListPendingRepairRequestsRow struct {
 	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
 }
 
-func (q *Queries) ListPendingRepairRequests(ctx context.Context, rowLimit int32) ([]ListPendingRepairRequestsRow, error) {
-	rows, err := q.db.Query(ctx, listPendingRepairRequests, rowLimit)
+func (q *Queries) ListPendingRepairRequests(ctx context.Context, arg ListPendingRepairRequestsParams) ([]ListPendingRepairRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingRepairRequests, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

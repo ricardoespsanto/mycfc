@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,9 +21,10 @@ import (
 )
 
 const newsQueryTimeout = 5 * time.Second
+const newsPageSize = 6
 
 type NewsStore interface {
-	ListNewsForAdmin(context.Context, int32) ([]dbgen.NewsItem, error)
+	ListNewsForAdmin(context.Context, dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error)
 	CreateNews(context.Context, dbgen.CreateNewsParams) (dbgen.NewsItem, error)
 	PublishNews(context.Context, uuid.UUID) (int64, error)
 	ExpireNews(context.Context, uuid.UUID) (int64, error)
@@ -119,12 +121,20 @@ func (h News) validate(r *http.Request) newsForm {
 func (h News) renderIndex(w http.ResponseWriter, r *http.Request, status int, form newsForm) {
 	ctx, cancel := context.WithTimeout(r.Context(), newsQueryTimeout)
 	defer cancel()
-	items, err := h.Store.ListNewsForAdmin(ctx, 100)
+	pageNumber := newsPageNumber(r.URL.Query().Get("page"))
+	items, err := h.Store.ListNewsForAdmin(ctx, dbgen.ListNewsForAdminParams{RowLimit: newsPageSize + 1, RowOffset: int32((pageNumber - 1) * newsPageSize)})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
 	page := pages.NewsPage{Meta: h.meta(r), Form: pages.NewsForm{Title: form.Title, Summary: form.Summary, URL: form.URL, PublishedAt: form.PublishedAt, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if pageNumber > 1 {
+		page.PreviousURL = newsPageURL(pageNumber - 1)
+	}
+	if len(items) > newsPageSize {
+		page.NextURL = newsPageURL(pageNumber + 1)
+		items = items[:newsPageSize]
+	}
 	for _, item := range items {
 		page.Items = append(page.Items, pages.NewsItem{ID: item.ID.String(), Title: item.TitlePt, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Published: item.IsPublished})
 	}
@@ -132,6 +142,16 @@ func (h News) renderIndex(w http.ResponseWriter, r *http.Request, status int, fo
 	w.WriteHeader(status)
 	_ = pages.News(page).Render(r.Context(), w)
 }
+
+func newsPageNumber(value string) int {
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 || page > 10000 {
+		return 1
+	}
+	return page
+}
+
+func newsPageURL(page int) string { return "/admin/noticias?page=" + strconv.Itoa(page) }
 
 func (h News) meta(r *http.Request) components.PageMeta {
 	user, _ := CurrentUserFromContext(r.Context())

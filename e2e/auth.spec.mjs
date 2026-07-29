@@ -99,6 +99,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Encarregado de educação' }).click();
     await expect(page).toHaveURL('/dashboard/guardian');
 
+    await page.locator('#repair-form > summary').click();
     const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
@@ -170,6 +171,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Frota' }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
+    await page.locator('#maintenance-form > summary').click();
     await expect(page.getByLabel('Equipamento')).toBeVisible();
     await expectNoSeriousAxeViolations(page);
     await page.setViewportSize({ width: 320, height: 720 });
@@ -215,15 +217,19 @@ test.describe('authentication', () => {
     await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
     await expect(page).toHaveURL('/admin/membros');
+    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(athleteName);
     await page.locator('#member-email').fill(athleteEmail);
     await page.locator('#member-birth').fill('2000-01-01');
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page).toHaveURL('/admin/membros');
+    await page.getByLabel('Nome, email ou identificador de menor').fill(athleteName);
+    await page.getByRole('button', { name: 'Procurar' }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
 
     await page.getByRole('link', { name: athleteName }).click();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
     await membershipForm.getByLabel('Competição').check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
@@ -258,23 +264,29 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
+    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(waitlistedName);
     await page.locator('#member-email').fill(waitlistedEmail);
     await page.locator('#member-birth').fill('2000-01-01');
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
+    await page.getByLabel('Nome, email ou identificador de menor').fill(waitlistedName);
+    await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: waitlistedName }).click();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
     await membershipForm.getByLabel('Competição').check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
 
     await page.goto('/events');
+    await page.locator('summary').filter({ hasText: 'Criar evento' }).click();
     await page.locator('#event-title').fill(futureTitle);
     await page.locator('#event-description').fill('Evento de teste para confirmar lotação e lista de espera.');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(futureStart));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(futureEnd));
     await page.locator('#event-capacity').fill('1');
+    await page.getByText('Destinatários (opcional)', { exact: true }).click();
     await page.getByLabel('Competição').check();
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await page.getByRole('link', { name: futureTitle }).click();
@@ -312,15 +324,20 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/events');
     await page.getByRole('link', { name: futureTitle }).click();
+    await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Confirmar vaga' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Vou');
 
     await page.goto('/events');
+    await page.locator('summary').filter({ hasText: 'Criar evento' }).click();
     await page.locator('#event-title').fill(pastTitle);
     await page.locator('#event-description').fill('Evento de teste para registar uma presença após o início.');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(pastStart));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(pastEnd));
     await page.getByRole('button', { name: 'Criar evento' }).click();
+    while (await page.getByRole('link', { name: pastTitle }).count() === 0) {
+      await page.getByRole('link', { name: 'Seguinte' }).click();
+    }
     const pastEventURL = await page.getByRole('link', { name: pastTitle }).getAttribute('href');
     expect(pastEventURL).not.toBeNull();
 
@@ -335,8 +352,8 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/events');
-    await page.getByRole('link', { name: pastTitle }).click();
+    await page.goto(pastEventURL);
+    await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Registar presença' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Presença:');
   });
@@ -348,8 +365,10 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/announcements');
+    await page.locator('summary').filter({ hasText: 'Criar aviso' }).click();
     await page.locator('#announcement-title').fill(title);
     await page.locator('#announcement-body').fill('Aviso dirigido aos atletas de competição.');
+    await page.locator('summary').filter({ hasText: 'Contexto e destinatários' }).click();
     await page.getByLabel('Competição').check();
     await page.getByRole('button', { name: 'Publicar' }).click();
     await expect(page.getByText(title)).toContainText('PUBLISHED');
@@ -371,6 +390,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/announcements');
+    await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
@@ -392,22 +412,28 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Membros' }).click();
+    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(memberName);
     await page.locator('#member-email').fill(leisureEmail);
     await page.locator('#member-birth').fill('2000-01-01');
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
+    await page.getByLabel('Nome, email ou identificador de menor').fill(memberName);
+    await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Lazer') });
     await membershipForm.getByLabel('Lazer').check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await page.getByLabel('Secções de administração').getByRole('link', { name: 'Notícias' }).click();
+    await page.locator('summary').filter({ hasText: 'Criar notícia' }).click();
     await page.locator('#news-title').fill(title);
     await page.locator('#news-summary').fill('Notícia publicada no painel de lazer.');
     await page.locator('#news-published-at').fill(publishedAt);
     await page.getByRole('button', { name: 'Guardar rascunho' }).click();
     const item = page.locator('li', { hasText: title });
+    await item.getByText('Ações', { exact: true }).click();
     await item.getByRole('button', { name: 'Publicar' }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
@@ -424,6 +450,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.locator('summary').filter({ hasText: 'Administração' }).click();
     await page.getByRole('link', { name: 'Notícias' }).click();
+    await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
   });
 });

@@ -7,7 +7,7 @@ type TrainingSession struct { ID, Plan, Title, Detail, When, Modality, Outcome s
 type ManagedTrainingSession struct { Title, Description, When, Modality string }
 type ManagedTrainingPlan struct { ID, Title, Description string; Sessions []ManagedTrainingSession }
 type CompetitionDocument struct { Title, URL, Source, ReviewedOn, Context string }
-type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; ManagedPlans []ManagedTrainingPlan; Programmes, Teams, Modalities, Events, Plans []TrainingChoice }
+type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; ManagedPlans []ManagedTrainingPlan; ManagedPlansPreviousURL, ManagedPlansNextURL string; Programmes, Teams, Modalities, Events, Plans []TrainingChoice }
 
 templ Training(page TrainingPage) { @components.Base(page.Meta, trainingContent(page)) }
 templ trainingContent(page TrainingPage) {
@@ -27,13 +27,13 @@ templ trainingContent(page TrainingPage) {
             } else {
                 <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/><button type="submit">Marcar como concluída</button></form>
                 <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button type="submit">Marcar como não realizada</button></form>
-                <form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="REPLACED"/><label>Sessão de substituição <select name="replacement_session_id" required><option value="">Selecione</option>
+                <details class="inline-disclosure"><summary>Registar substituição</summary><form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="REPLACED"/><label>Sessão de substituição <select name="replacement_session_id" required><option value="">Selecione</option>
                     for _, replacement := range page.Sessions {
                         if replacement.ID != session.ID {
                             <option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
                         }
                     }
-                </select></label><label>Motivo <input name="replacement_reason" minlength="2" maxlength="300" required/></label><button type="submit">Registar substituição</button></form>
+                </select></label><label>Motivo <input name="replacement_reason" minlength="2" maxlength="300" required/></label><button type="submit">Registar substituição</button></form></details>
             }
             </article>
         }
@@ -51,7 +51,7 @@ templ trainingContent(page TrainingPage) {
     }
 }
 templ trainingAuthoring(page TrainingPage) {
-    <section class="dashboard-card"><h2>Planos que gere</h2>
+	<details class="dashboard-card disclosure-card"><summary><span class="disclosure-card__title">Gerir treinos</span><span class="disclosure-card__summary">Consulte planos e crie sessões ou documentos.</span></summary><div class="disclosure-card__content"><section><h2>Planos que gere</h2>
         if len(page.ManagedPlans) == 0 {
             <p class="empty-state">Ainda não existem planos no seu âmbito.</p>
         }
@@ -69,9 +69,19 @@ templ trainingAuthoring(page TrainingPage) {
                 }
             </article>
         }
+        if page.ManagedPlansPreviousURL != "" || page.ManagedPlansNextURL != "" {
+            <nav class="pagination" aria-label="Paginação de planos geridos">
+                if page.ManagedPlansPreviousURL != "" {
+                    <a href={ templ.SafeURL(page.ManagedPlansPreviousURL) }>Anterior</a>
+                }
+                if page.ManagedPlansNextURL != "" {
+                    <a href={ templ.SafeURL(page.ManagedPlansNextURL) }>Seguinte</a>
+                }
+            </nav>
+        }
     </section>
-    <section class="dashboard-card"><h2>Criar plano</h2><form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField<label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label>@trainingScopeChoices(page)<button type="submit">Criar plano</button></form></section>
-    <section class="dashboard-card"><h2>Criar sessão</h2><form class="form-layout" method="post" action="/treinos/sessoes">@page.CSRFField
+    <details class="inline-disclosure"><summary>Criar plano</summary><form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField<label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label>@trainingScopeChoices(page)<button type="submit">Criar plano</button></form></details>
+    <details class="inline-disclosure"><summary>Criar sessão</summary><form class="form-layout" method="post" action="/treinos/sessoes">@page.CSRFField
         <label>Plano <select name="plan_id" required><option value="">Selecione</option>
             for _, item := range page.Plans {
                 <option value={ item.ID }>{ item.Name }</option>
@@ -80,8 +90,8 @@ templ trainingAuthoring(page TrainingPage) {
             for _, item := range page.Modalities {
                 <option value={ item.ID }>{ item.Name }</option>
             }
-        </select></label><button type="submit">Criar sessão</button></form></section>
-    <section class="dashboard-card"><h2>Publicar documento de competição</h2><form class="form-layout" method="post" action="/treinos/documentos">@page.CSRFField<label>Título <input name="title" required/></label><label>Ligação HTTPS <input name="url" type="url" required/></label><label>Fonte oficial <input name="source" required/></label><label>Revisto em <input name="reviewed_on" type="date" required/></label><label>Evento <select name="event_id"><option value="">Sem evento</option>
+        </select></label><button type="submit">Criar sessão</button></form></details>
+    <details class="inline-disclosure"><summary>Publicar documento de competição</summary><form class="form-layout" method="post" action="/treinos/documentos">@page.CSRFField<label>Título <input name="title" required/></label><label>Ligação HTTPS <input name="url" type="url" required/></label><label>Fonte oficial <input name="source" required/></label><label>Revisto em <input name="reviewed_on" type="date" required/></label><label>Evento <select name="event_id"><option value="">Sem evento</option>
         for _, item := range page.Events {
             <option value={ item.ID }>{ item.Name }</option>
         }
@@ -89,7 +99,7 @@ templ trainingAuthoring(page TrainingPage) {
         for _, item := range page.Modalities {
             <option value={ item.ID }>{ item.Name }</option>
         }
-    </select></label><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page)<button type="submit">Publicar documento</button></form></section>
+    </select></label><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page)<button type="submit">Publicar documento</button></form></details></div></details>
 }
 templ trainingScopeChoices(page TrainingPage) { <label>Equipa (preferencial) <select name="team_id"><option value="">Sem equipa</option>
     for _, item := range page.Teams {

@@ -578,12 +578,14 @@ WHERE $1::text IS NULL
    OR u.email::text ILIKE '%' || $1::text || '%'
    OR u.minor_login_id::text ILIKE '%' || $1::text || '%'
 ORDER BY u.is_active DESC, lower(u.name), u.id
-LIMIT $2
+LIMIT $3
+OFFSET $2
 `
 
 type ListMembersForAdminParams struct {
-	Search   *string `json:"search"`
-	RowLimit int32   `json:"row_limit"`
+	Search    *string `json:"search"`
+	RowOffset int32   `json:"row_offset"`
+	RowLimit  int32   `json:"row_limit"`
 }
 
 type ListMembersForAdminRow struct {
@@ -599,7 +601,7 @@ type ListMembersForAdminRow struct {
 }
 
 func (q *Queries) ListMembersForAdmin(ctx context.Context, arg ListMembersForAdminParams) ([]ListMembersForAdminRow, error) {
-	rows, err := q.db.Query(ctx, listMembersForAdmin, arg.Search, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listMembersForAdmin, arg.Search, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
