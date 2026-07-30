@@ -19,14 +19,14 @@ resource "hcloud_firewall" "server" {
     direction  = "in"
     protocol   = "tcp"
     port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
+    source_ips = var.cloudflare_proxy_cidrs
   }
 
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
+    source_ips = var.cloudflare_proxy_cidrs
   }
 
   dynamic "rule" {
