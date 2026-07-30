@@ -22,8 +22,8 @@ apply_rules() {
 
 	"$tool" -A "$chain" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
 	for cidr in $(curl --fail --silent --show-error "$cloudflare_ips" | jq -r "$filter"); do
-		"$tool" -A "$chain" -i "$interface" -p tcp -s "$cidr" --dport 80 -j RETURN
-		"$tool" -A "$chain" -i "$interface" -p tcp -s "$cidr" --dport 443 -j RETURN
+		"$tool" -A "$chain" -i "$interface" -p tcp -s "$cidr" --dport 80 -j ACCEPT
+		"$tool" -A "$chain" -i "$interface" -p tcp -s "$cidr" --dport 443 -j ACCEPT
 	done
 	"$tool" -A "$chain" -i "$interface" -p tcp --dport 80 -j DROP
 	"$tool" -A "$chain" -i "$interface" -p tcp --dport 443 -j DROP
