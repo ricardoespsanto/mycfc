@@ -67,9 +67,6 @@ services:
     image: caddy:2.10.2-alpine
     environment:
       MYCFC_DOMAIN: ${MYCFC_DOMAIN:?set MYCFC_DOMAIN in /etc/mycfc/mycfc.env}
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -84,6 +81,16 @@ services:
       timeout: 3s
       retries: 6
       start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in /etc/mycfc/mycfc.env}
+    depends_on:
+      caddy:
+        condition: service_healthy
+    networks: [mycfc]
     restart: unless-stopped
     stop_grace_period: 30s
 

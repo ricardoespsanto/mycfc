@@ -15,20 +15,6 @@ resource "hcloud_ssh_key" "deploy" {
 resource "hcloud_firewall" "server" {
   name = "${local.name}-server"
 
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-
   dynamic "rule" {
     for_each = length(var.ssh_source_ips) > 0 ? [1] : []
 
