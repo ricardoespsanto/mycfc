@@ -39,7 +39,9 @@ if ! flock -n 9; then
 fi
 
 # This file is root-owned and mode 0600; it is the host's deployment configuration.
+set -a
 . "$env_file"
+set +a
 : "${AWS_REGION:?}"
 : "${ECR_REPOSITORY_URL:?}"
 : "${MYCFC_DOMAIN:?}"
