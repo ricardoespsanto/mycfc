@@ -2,6 +2,8 @@
 
 This directory runs MyCFC on one Hetzner host: Caddy is the only public service, PostgreSQL has no host port, and a systemd timer pulls approved immutable ECR releases. Caddy obtains and renews TLS certificates for `MYCFC_DOMAIN`.
 
+Cloudflare must proxy the production DNS records. Caddy trusts `CF-Connecting-IP` only from Cloudflare's published network ranges, and the host firewall permits web traffic only from those ranges. Review both lists when Cloudflare changes its published IP ranges.
+
 ## Host setup
 
 1. Clone this repository at `/opt/mycfc` on the host. The Compose file mounts `internal/db/schema.sql` to initialize a new PostgreSQL volume.
