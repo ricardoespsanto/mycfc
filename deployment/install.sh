@@ -30,11 +30,6 @@ done
 
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
-install -m 0755 "$deployment_dir/edge-firewall.sh" /usr/local/sbin/mycfc-edge-firewall
-install -m 0644 "$deployment_dir/mycfc-edge-firewall.service" /etc/systemd/system/mycfc-edge-firewall.service
-install -m 0644 "$deployment_dir/mycfc-edge-firewall.timer" /etc/systemd/system/mycfc-edge-firewall.timer
 systemctl daemon-reload
-systemctl enable --now mycfc-edge-firewall.timer
-systemctl start mycfc-edge-firewall.service
 systemctl enable --now mycfc-pull-release.timer
 systemctl start mycfc-pull-release.service
