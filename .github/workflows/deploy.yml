@@ -67,16 +67,16 @@ jobs:
           docker build --label "org.opencontainers.image.revision=$SHA" -t "$IMAGE" .
           docker push "$IMAGE"
           DIGEST="$(aws ecr describe-images --repository-name mycfc-production --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)"
-          printf 'image=%s@%s\nregistry=%s\nsha=%s\n' "$REPOSITORY" "$DIGEST" "${REPOSITORY%%/*}" "$SHA" >> "$GITHUB_OUTPUT"
+          RELEASE_TAG="release-$(date -u +%Y%m%d%H%M%S)-$SHA"
+          docker tag "$IMAGE" "$REPOSITORY:$RELEASE_TAG"
+          docker push "$REPOSITORY:$RELEASE_TAG"
+          printf 'image=%s@%s\nregistry=%s\nrelease_tag=%s\nsha=%s\n' "$REPOSITORY" "$DIGEST" "${REPOSITORY%%/*}" "$RELEASE_TAG" "$SHA" >> "$GITHUB_OUTPUT"
       - name: Promote the tested image for production pickup
         env:
-          REPOSITORY: ${{ steps.image.outputs.image }}
-          SHA: ${{ steps.image.outputs.sha }}
+          RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          repository="${REPOSITORY%@*}"
-          docker tag "$repository:git-$SHA" "$repository:production"
-          docker push "$repository:production"
+          test -n "$RELEASE_TAG"
       - name: Write deployment summary
         run: |
           {
@@ -84,5 +84,6 @@ jobs:
             echo
             echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
-            echo "- The Hetzner pull-release timer will deploy this digest."
+            echo "- Release tag: \`${{ steps.image.outputs.release_tag }}\`"
+            echo "- The Hetzner pull-release timer will deploy this immutable release."
           } >> "$GITHUB_STEP_SUMMARY"

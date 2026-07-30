@@ -47,14 +47,25 @@ set +a
 : "${MYCFC_DOMAIN:?}"
 
 registry=${ECR_REPOSITORY_URL%%/*}
+repository_name=${ECR_REPOSITORY_URL#*/}
 # The systemd unit makes home directories inaccessible, so keep the temporary
 # ECR credential helper state under its writable runtime directory.
 export DOCKER_CONFIG=/run/mycfc-pull-release-docker
 mkdir -p "$DOCKER_CONFIG"
-aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
-docker pull "$ECR_REPOSITORY_URL:production"
+ecr_password=$(aws ecr get-login-password --region "$AWS_REGION")
+printf '%s' "$ecr_password" | docker login --username AWS --password-stdin "$registry"
 
-image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ECR_REPOSITORY_URL:production")
+tags_json=$(curl --fail --silent --show-error --user "AWS:$ecr_password" "https://$registry/v2/$repository_name/tags/list")
+release_tags=$(printf '%s' "$tags_json" | jq -r '.tags[] | select(startswith("release-"))')
+release_tag=$(printf '%s\n' "$release_tags" | sort | tail -n 1)
+case "$release_tag" in
+	release-??????????????-????????????????????????????????????????) ;;
+	*) log "ECR has no valid release tag"; exit 1 ;;
+esac
+
+docker pull "$ECR_REPOSITORY_URL:$release_tag"
+
+image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ECR_REPOSITORY_URL:$release_tag")
 digest=${image##*@}
 case "$digest" in
 	sha256:*) ;;
@@ -66,7 +77,7 @@ if [ "${MYCFC_IMAGE:-}" = "$image" ]; then
 	exit 0
 fi
 
-sha=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECR_REPOSITORY_URL:production")
+sha=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECR_REPOSITORY_URL:$release_tag")
 case "$sha" in
 	????????????????????????????????????????) ;;
 	*) log "release $digest has no valid git SHA label"; exit 1 ;;

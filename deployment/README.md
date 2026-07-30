@@ -1,6 +1,6 @@
 # Single-host deployment
 
-This directory runs MyCFC on one Hetzner host: Caddy is the only public service, PostgreSQL has no host port, and a systemd timer pulls approved ECR releases. Caddy obtains and renews TLS certificates for `MYCFC_DOMAIN`.
+This directory runs MyCFC on one Hetzner host: Caddy is the only public service, PostgreSQL has no host port, and a systemd timer pulls approved immutable ECR releases. Caddy obtains and renews TLS certificates for `MYCFC_DOMAIN`.
 
 ## Host setup
 
@@ -53,9 +53,9 @@ CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
 CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
-The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. The timer resolves the mutable ECR `production` tag to an immutable digest, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through local Caddy; a failure restores the prior release.
+The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through local Caddy; a failure restores the prior release.
 
-The ECR repository must allow the `production` tag to move while retaining immutable `git-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent reads the resolved digest and revision label from the pulled local image, so it does not need `ecr:DescribeImages`. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
+The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent reads the release list through the Docker Registry API, then reads the resolved digest and revision label from the pulled local image, so it does not need `ecr:DescribeImages`. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 
 ## Operations
 
