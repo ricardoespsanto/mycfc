@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict MyCFC Docker web ports to Cloudflare
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mycfc-edge-firewall
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full

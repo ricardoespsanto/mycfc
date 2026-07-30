@@ -2,7 +2,7 @@
 
 This directory runs MyCFC on one Hetzner host: Caddy is the only public service, PostgreSQL has no host port, and a systemd timer pulls approved immutable ECR releases. Caddy obtains and renews TLS certificates for `MYCFC_DOMAIN`.
 
-Cloudflare must proxy the production DNS records. Caddy trusts `CF-Connecting-IP` only from Cloudflare's published network ranges, and the host firewall permits web traffic only from those ranges. Review both lists when Cloudflare changes its published IP ranges.
+Cloudflare must proxy the production DNS records. Caddy trusts `CF-Connecting-IP` only from Cloudflare's published network ranges. UFW restricts host services, while the `mycfc-edge-firewall` timer refreshes `DOCKER-USER` rules every six hours so Docker-published ports 80 and 443 accept traffic only from Cloudflare. Review both controls when Cloudflare changes its published IP ranges.
 
 ## Host setup
 
@@ -69,6 +69,8 @@ sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml l
 sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml up -d --pull always
 sudo systemctl status mycfc-pull-release.timer
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
+sudo systemctl status mycfc-edge-firewall.timer
+sudo iptables -S MYCFC_EDGE
 ```
 
 Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. The schema is mounted from `internal/db/schema.sql` and applied only when PostgreSQL initializes an empty volume; this bundle does not provide an in-place database migration path.
