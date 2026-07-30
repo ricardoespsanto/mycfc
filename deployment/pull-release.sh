@@ -17,7 +17,7 @@ rollback() {
 	if [ "$release_updated" = true ]; then
 		log "deployment failed; restoring the previous release"
 		mv "$backup_file" "$env_file"
-		docker compose --env-file "$env_file" -f "$compose_file" up -d --wait || log "rollback compose update failed"
+		docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app || log "rollback compose update failed"
 	fi
 	exit "$status"
 }
@@ -77,7 +77,8 @@ case "$image" in
 	*) log "pulled image digest does not match ECR release metadata"; exit 1 ;;
 esac
 
-if [ "${MYCFC_IMAGE:-}" = "$image" ]; then
+running_image=$(docker inspect --format '{{.Config.Image}}' mycfc-production-app-1 2>/dev/null || true)
+if [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
 	log "release $digest is already deployed"
 	exit 0
 fi
@@ -102,7 +103,7 @@ release_updated=true
 
 log "deploying SHA $sha with digest $digest"
 docker compose --env-file "$env_file" -f "$compose_file" pull
-docker compose --env-file "$env_file" -f "$compose_file" up -d --wait
+docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app
 
 asset_path=$(jq -r '."app.js"' "$deployment_dir/../ui/static/dist/manifest.json")
 for path in /health/ready /login "$asset_path"; do
