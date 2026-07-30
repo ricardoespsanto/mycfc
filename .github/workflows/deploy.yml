@@ -31,6 +31,7 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       HETZNER_HOST: ${{ vars.HETZNER_HOST }}
+      HETZNER_KNOWN_HOSTS: ${{ vars.HETZNER_KNOWN_HOSTS }}
       HETZNER_DEPLOY_SSH_KEY: ${{ secrets.HETZNER_DEPLOY_SSH_KEY }}
     steps:
       # actions/checkout v7.0.1
@@ -76,7 +77,8 @@ jobs:
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$HETZNER_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          ssh-keyscan -H "$HETZNER_HOST" >> ~/.ssh/known_hosts
+          test -n "$HETZNER_KNOWN_HOSTS"
+          printf '%s\n' "$HETZNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Authenticate Hetzner Docker to ECR
         env:
           ECR_REGISTRY: ${{ steps.image.outputs.registry }}
