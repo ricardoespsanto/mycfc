@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll for a MyCFC production release
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=mycfc-pull-release.service
+
+[Install]
+WantedBy=timers.target

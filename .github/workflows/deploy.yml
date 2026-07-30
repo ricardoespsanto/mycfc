@@ -30,9 +30,6 @@ jobs:
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      HETZNER_HOST: ${{ vars.HETZNER_HOST }}
-      HETZNER_KNOWN_HOSTS: ${{ vars.HETZNER_KNOWN_HOSTS }}
-      HETZNER_DEPLOY_SSH_KEY: ${{ secrets.HETZNER_DEPLOY_SSH_KEY }}
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -71,53 +68,21 @@ jobs:
           docker push "$IMAGE"
           DIGEST="$(aws ecr describe-images --repository-name mycfc-production --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)"
           printf 'image=%s@%s\nregistry=%s\nsha=%s\n' "$REPOSITORY" "$DIGEST" "${REPOSITORY%%/*}" "$SHA" >> "$GITHUB_OUTPUT"
-      - name: Configure deployment SSH key
-        run: |
-          set -Eeuo pipefail
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$HETZNER_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          test -n "$HETZNER_KNOWN_HOSTS"
-          printf '%s\n' "$HETZNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
-      - name: Authenticate Hetzner Docker to ECR
+      - name: Promote the tested image for production pickup
         env:
-          ECR_REGISTRY: ${{ steps.image.outputs.registry }}
-        run: |
-          set -Eeuo pipefail
-          aws ecr get-login-password --region "$AWS_REGION" | ssh deploy@"$HETZNER_HOST" \
-            "sudo docker login --username AWS --password-stdin $ECR_REGISTRY"
-      - name: Update the Hetzner application
-        env:
-          IMAGE: ${{ steps.image.outputs.image }}
+          REPOSITORY: ${{ steps.image.outputs.image }}
           SHA: ${{ steps.image.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          ssh deploy@"$HETZNER_HOST" "
-            sudo sed -i 's|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$IMAGE|; s|^APP_VERSION=.*|APP_VERSION=$SHA|; s|^GIT_SHA=.*|GIT_SHA=$SHA|' /etc/mycfc/mycfc.env
-            sudo docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml pull
-            sudo docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml up -d --wait
-          "
-      - name: Smoke test production endpoints
-        run: |
-          set -Eeuo pipefail
-          asset_path="$(jq -r '."app.js"' ui/static/dist/manifest.json)"
-          for attempt in {1..20}; do
-            health="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 https://mycfcoimbra.com/health/ready || true)"
-            login="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 https://mycfcoimbra.com/login || true)"
-            asset="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "https://mycfcoimbra.com$asset_path" || true)"
-            if [[ "$health" == 200 && "$login" == 200 && "$asset" == 200 ]]; then
-              exit 0
-            fi
-            sleep 15
-          done
-          printf 'Smoke checks failed: health=%s login=%s static_asset=%s\n' "$health" "$login" "$asset" >&2
-          exit 1
+          repository="${REPOSITORY%@*}"
+          docker tag "$repository:git-$SHA" "$repository:production"
+          docker push "$repository:production"
       - name: Write deployment summary
         run: |
           {
-            echo "## Hetzner production deployment"
+            echo "## Production release published"
             echo
             echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
-            echo "- Host: \`$HETZNER_HOST\`"
+            echo "- The Hetzner pull-release timer will deploy this digest."
           } >> "$GITHUB_STEP_SUMMARY"

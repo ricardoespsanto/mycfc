@@ -20,5 +20,16 @@ if [ "$(stat -c '%u:%a' "$env_file")" != '0:600' ]; then
 fi
 
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" config -q
-docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" pull
-docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --wait
+
+for command in aws curl flock jq logger; do
+	if ! command -v "$command" >/dev/null 2>&1; then
+		printf '%s\n' "Missing required command: $command" >&2
+		exit 1
+	fi
+done
+
+install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
+install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
+systemctl daemon-reload
+systemctl enable --now mycfc-pull-release.timer
+systemctl start mycfc-pull-release.service
