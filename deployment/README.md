@@ -55,7 +55,7 @@ CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 
 The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through local Caddy; a failure restores the prior release.
 
-The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent reads the release list through the Docker Registry API, then reads the resolved digest and revision label from the pulled local image, so it does not need `ecr:DescribeImages`. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
+The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 
 ## Operations
 

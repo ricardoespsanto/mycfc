@@ -55,8 +55,8 @@ mkdir -p "$DOCKER_CONFIG"
 ecr_password=$(aws ecr get-login-password --region "$AWS_REGION")
 printf '%s' "$ecr_password" | docker login --username AWS --password-stdin "$registry"
 
-tags_json=$(curl --fail --silent --show-error --user "AWS:$ecr_password" "https://$registry/v2/$repository_name/tags/list")
-release_tags=$(printf '%s' "$tags_json" | jq -r '.tags[] | select(startswith("release-"))')
+tags=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --query 'imageDetails[].imageTags[]' --output text)
+release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-/')
 release_tag=$(printf '%s\n' "$release_tags" | sort | tail -n 1)
 case "$release_tag" in
 	release-??????????????-????????????????????????????????????????) ;;
@@ -66,10 +66,15 @@ esac
 docker pull "$ECR_REPOSITORY_URL:$release_tag"
 
 image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ECR_REPOSITORY_URL:$release_tag")
-digest=${image##*@}
+digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
 case "$digest" in
 	sha256:*) ;;
 	*) log "pulled production image has no digest"; exit 1 ;;
+esac
+
+case "$image" in
+	*"@$digest") ;;
+	*) log "pulled image digest does not match ECR release metadata"; exit 1 ;;
 esac
 
 if [ "${MYCFC_IMAGE:-}" = "$image" ]; then
