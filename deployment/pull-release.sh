@@ -47,29 +47,31 @@ set +a
 : "${MYCFC_DOMAIN:?}"
 
 registry=${ECR_REPOSITORY_URL%%/*}
-digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "${ECR_REPOSITORY_URL#*/}" --image-ids imageTag=production --query 'imageDetails[0].imageDigest' --output text)
-case "$digest" in
-	sha256:*) ;;
-	*) log "ECR production tag has no image digest"; exit 1 ;;
-esac
-
-image="$ECR_REPOSITORY_URL@$digest"
-if [ "${MYCFC_IMAGE:-}" = "$image" ]; then
-	log "release $digest is already deployed"
-	exit 0
-fi
-
-sha=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "${ECR_REPOSITORY_URL#*/}" --image-ids imageDigest="$digest" --query 'imageDetails[0].imageTags[?starts_with(@, `git-`)] | [0]' --output text)
-case "$sha" in
-	git-????????????????????????????????????????) sha=${sha#git-} ;;
-	*) log "release $digest has no valid git SHA tag"; exit 1 ;;
-esac
-
 # The systemd unit makes home directories inaccessible, so keep the temporary
 # ECR credential helper state under its writable runtime directory.
 export DOCKER_CONFIG=/run/mycfc-pull-release-docker
 mkdir -p "$DOCKER_CONFIG"
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
+docker pull "$ECR_REPOSITORY_URL:production"
+
+image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ECR_REPOSITORY_URL:production")
+digest=${image##*@}
+case "$digest" in
+	sha256:*) ;;
+	*) log "pulled production image has no digest"; exit 1 ;;
+esac
+
+if [ "${MYCFC_IMAGE:-}" = "$image" ]; then
+	log "release $digest is already deployed"
+	exit 0
+fi
+
+sha=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECR_REPOSITORY_URL:production")
+case "$sha" in
+	????????????????????????????????????????) ;;
+	*) log "release $digest has no valid git SHA label"; exit 1 ;;
+esac
+
 backup_file=$(mktemp "${env_file}.previous.XXXXXX")
 cp "$env_file" "$backup_file"
 trap rollback EXIT HUP INT TERM
