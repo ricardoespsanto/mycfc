@@ -10,6 +10,9 @@ variable "environment" {
   type    = string
   default = "production"
 }
+variable "state_bucket_name" {
+  type = string
+}
 variable "domain_name" {
   type    = string
   default = "mycfc.pt"

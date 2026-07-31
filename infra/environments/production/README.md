@@ -1,10 +1,5 @@
-# Production Terraform
+# Retained AWS Terraform
 
-1. Apply `../../bootstrap` using its local state.
-2. Copy `backend.hcl.example` to untracked `backend.hcl` and provide the state bucket and region.
-3. Copy `terraform.tfvars.example` to untracked `terraform.tfvars`, replacing every account-specific value.
-4. Run `terraform init -backend-config=backend.hcl`, then `terraform plan -var-file=terraform.tfvars`.
+The ECS/RDS/ALB runtime was retired. This module manages only the private repair-photo bucket and immutable ECR repository. PostgreSQL backup storage and the Hetzner host are managed by `../hetzner`.
 
-Set `app_db_username` and `migration_db_username` to distinct PostgreSQL identifiers in the tfvars file. Terraform generates and stores both role passwords; do not provide a migration-password secret ARN. Deploy registers a bootstrap task that reads the RDS-managed master secret, reconciles the roles and grants, then runs the reset-only baseline migration.
-
-The Google Calendar browser key is not confidential, but it must be restricted in Google Cloud to the production origin and Google Calendar API. Terraform state contains sensitive generated secret values; restrict state-bucket access accordingly.
+Use the existing remote backend and run `terraform plan` before applying a retained-resource change. Do not restore retired runtime resources from this module.
