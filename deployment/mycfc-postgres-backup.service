@@ -1,0 +1,14 @@
+[Unit]
+Description=MyCFC encrypted PostgreSQL backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/postgres-backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/tmp

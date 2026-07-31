@@ -56,7 +56,7 @@ CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
 CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
-The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through local Caddy; a failure restores the prior release.
+The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
 
 The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 
@@ -73,3 +73,19 @@ sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 ```
 
 Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. The schema is mounted from `internal/db/schema.sql` and applied only when PostgreSQL initializes an empty volume; this bundle does not provide an in-place database migration path.
+
+## PostgreSQL recovery
+
+`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
+
+The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
+
+Run a non-destructive restore drill with:
+
+```sh
+sudo /opt/mycfc/deployment/postgres-restore-drill.sh
+```
+
+The drill downloads the newest daily recovery point, verifies its ciphertext checksum, decrypts the envelope key through KMS, restores into an isolated temporary PostgreSQL container with `--no-owner`, verifies the application `users` table, and removes the container and temporary files. Run it after any backup-script, PostgreSQL-major-version, KMS-policy, or credential change, and at least quarterly. Record its date, recovery-point timestamp, duration, and result in the #43 issue.
+
+Check backup status with `sudo systemctl status mycfc-postgres-backup.service` and `sudo journalctl -u mycfc-postgres-backup.service -n 100 --no-pager`. Investigate any failed run before the next backup window; confirm free disk space before retrying. Rotate the `mycfc-production-postgres-backups` IAM access key by creating its replacement, atomically replacing `/etc/mycfc/backup-aws/credentials` as root mode `0600`, running a backup and restore drill, then disabling and deleting the previous key. Review Docker, PostgreSQL, Caddy, and application releases monthly; apply Ubuntu security updates automatically and schedule PostgreSQL major-version upgrades with a tested restore path.

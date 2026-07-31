@@ -107,9 +107,11 @@ docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-re
 
 asset_path=$(jq -r '."app.js"' "$deployment_dir/../ui/static/dist/manifest.json")
 for path in /health/ready /login "$asset_path"; do
-	status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --resolve "$MYCFC_DOMAIN:443:127.0.0.1" --max-time 10 "https://$MYCFC_DOMAIN$path")
-	if [ "$status" != 200 ]; then
-		log "release check failed for $path with HTTP $status"
+	# Caddy is private behind cloudflared. Validate the exact virtual host locally;
+	# Cloudflare can reject a request sourced from the host itself, so the public
+	# edge is checked by an external monitor rather than the release transaction.
+	if ! docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
+		log "release check failed for $path"
 		exit 1
 	fi
 done
