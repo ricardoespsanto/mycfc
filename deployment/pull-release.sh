@@ -16,7 +16,7 @@ rollback() {
 	status=$?
 	if [ "$release_updated" = true ]; then
 		log "deployment failed; restoring the previous release"
-		mv "$backup_file" "$env_file"
+		cp "$backup_file" "$env_file"
 		docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app || log "rollback compose update failed"
 	fi
 	exit "$status"
@@ -89,8 +89,10 @@ case "$sha" in
 	*) log "release $digest has no valid git SHA label"; exit 1 ;;
 esac
 
-backup_file=$(mktemp "${env_file}.previous.XXXXXX")
+backup_file="${env_file}.previous"
 cp "$env_file" "$backup_file"
+chmod 600 "$backup_file"
+chown root:root "$backup_file"
 trap rollback EXIT HUP INT TERM
 
 next_file=$(mktemp "${env_file}.next.XXXXXX")
@@ -117,6 +119,5 @@ for path in /health/ready /login "$asset_path"; do
 done
 
 release_updated=false
-rm -f "$backup_file"
 trap - EXIT HUP INT TERM
 log "deployed SHA $sha with digest $digest"

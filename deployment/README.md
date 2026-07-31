@@ -38,6 +38,10 @@ AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
 # AWS_SESSION_TOKEN=<optional-session-token>
 S3_BUCKET_NAME=<private-s3-bucket>
 
+# Root-only backup identity, stored separately from these application credentials.
+BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
+BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
+
 GOOGLE_CALENDAR_API_KEY=<google-api-key>
 CALENDAR_COMPETITION_ID=<calendar-id>
 CALENDAR_TRAINING_ID=<calendar-id>
@@ -60,6 +64,16 @@ The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It u
 
 The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 
+Create `/etc/mycfc/backup-aws/credentials` as `root:root` mode `0600` before running the installer. It must contain the dedicated `mycfc-backup` profile used only for the backup bucket and KMS key:
+
+```text
+[mycfc-backup]
+aws_access_key_id=<backup-access-key-id>
+aws_secret_access_key=<backup-secret-access-key>
+```
+
+The installer refuses to proceed until this credential file and `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID` are present, then enables both the release-poll and nightly backup timers.
+
 ## Operations
 
 Run all commands with the protected environment file:
@@ -73,6 +87,20 @@ sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 ```
 
 Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. The schema is mounted from `internal/db/schema.sql` and applied only when PostgreSQL initializes an empty volume; this bundle does not provide an in-place database migration path.
+
+## Release rollback and incident access
+
+The release agent saves the last known-good environment as `/etc/mycfc/mycfc.env.previous` before every rollout. A failed rollout restores it automatically. To hold a manual rollback while investigating a bad release, stop the polling timer before restoring it:
+
+```sh
+sudo systemctl stop mycfc-pull-release.timer
+sudo cp /etc/mycfc/mycfc.env.previous /etc/mycfc/mycfc.env
+sudo docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml up -d --wait --force-recreate app
+```
+
+Check `/health/ready`, `/login`, and the fingerprinted browser asset through Cloudflare from an external network. Leave the timer stopped until a replacement release is available; restarting it immediately promotes the newest ECR release again. Restore normal polling with `sudo systemctl start mycfc-pull-release.timer`.
+
+For a host incident, use the separate operator SSH key from an approved SSH CIDR. The deploy key is limited to deployment automation. Keep the Cloudflare Tunnel public hostname enabled during application rollback. Revert the public hostname to the retained AWS origin only during the approved rollback window, validate the same external checks, and do not retire AWS resources until that path and the PostgreSQL restore drill are accepted.
 
 ## PostgreSQL recovery
 
