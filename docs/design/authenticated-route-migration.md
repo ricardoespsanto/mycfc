@@ -15,8 +15,8 @@ the #56 migration.
 | `/dashboard/{programme}` | programme workspace | complete | #64 programme PR |
 | coach/moderator compatibility routes | contextual redirect or intentional placeholder | review after #56 lands | #56 / #64 |
 | `/admin/membros`, `/admin/membros/{id}` | dense directory and detail | foundation complete; detail polish planned | #58 / #64 |
-| `/admin/noticias` | dense publishing workflow | planned administration slice | #64 |
-| `/admin/fleet` | operational dashboard and forms | planned administration slice | #64 |
+| `/admin/noticias` | dense publishing workflow | complete | #64 admin operations PR |
+| `/admin/fleet` | operational dashboard and forms | complete | #64 admin operations PR |
 | authenticated system/error states | bounded system state | planned final page-family slice | #64 |
 
 Each page-family slice uses the shared page header, module, record list, badge,

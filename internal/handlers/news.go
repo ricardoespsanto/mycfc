@@ -11,6 +11,7 @@ import (
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
@@ -35,6 +36,7 @@ type News struct {
 	System   System
 	PageMeta components.PageMeta
 	Location *time.Location
+	Sessions *scs.SessionManager
 }
 
 type newsForm struct {
@@ -67,6 +69,7 @@ func (h News) Create(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	h.flash(r, "Rascunho guardado.")
 	httpx.Redirect(w, r, "/admin/noticias", http.StatusSeeOther)
 }
 
@@ -94,6 +97,11 @@ func (h News) changeStatus(w http.ResponseWriter, r *http.Request, publish bool)
 	if changed == 0 {
 		http.Error(w, "A operação não é válida para esta notícia.", http.StatusConflict)
 		return
+	}
+	if publish {
+		h.flash(r, "Notícia publicada.")
+	} else {
+		h.flash(r, "Notícia expirada.")
 	}
 	httpx.Redirect(w, r, "/admin/noticias", http.StatusSeeOther)
 }
@@ -128,6 +136,9 @@ func (h News) renderIndex(w http.ResponseWriter, r *http.Request, status int, fo
 		return
 	}
 	page := pages.NewsPage{Meta: h.meta(r), Form: pages.NewsForm{Title: form.Title, Summary: form.Summary, URL: form.URL, PublishedAt: form.PublishedAt, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "news_flash")
+	}
 	if pageNumber > 1 {
 		page.PreviousURL = newsPageURL(pageNumber - 1)
 	}
@@ -141,6 +152,12 @@ func (h News) renderIndex(w http.ResponseWriter, r *http.Request, status int, fo
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.News(page).Render(r.Context(), w)
+}
+
+func (h News) flash(r *http.Request, message string) {
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "news_flash", message)
+	}
 }
 
 func newsPageNumber(value string) int {

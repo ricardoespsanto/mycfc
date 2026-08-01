@@ -12,14 +12,14 @@ const personas = [
   { key: 'tutor', email: 'review-tutor@example.test', routes: ['/today', '/dashboard/guardian'] },
   { key: 'athlete', email: 'review-athlete@example.test', programmeShortcut: 'Atleta de competição', routes: ['/today', '/dashboard/competition', '/treinos'] },
   { key: 'coach', email: 'review-coach@example.test', routes: ['/today', '/events', '/treinos'] },
-  { key: 'admin', email: 'review-admin@example.test', routes: ['/today', '/admin/membros', '/admin/fleet'] },
+  { key: 'admin', email: 'review-admin@example.test', routes: ['/today', '/admin/membros', '/admin/noticias', '/admin/fleet'] },
   { key: 'multi', email: 'review-multi@example.test', programmeShortcut: 'Lazer', routes: ['/today', '/dashboard/leisure', '/dashboard/competition', '/events'] },
 ];
 const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
-const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure']);
+const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/noticias', '/admin/fleet']);
 
 async function expectMigratedResponsiveContract(page, route, viewport) {
   if (!migratedRoutes.has(route)) return;
