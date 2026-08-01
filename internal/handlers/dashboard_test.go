@@ -29,6 +29,8 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		user    CurrentUser
 		handler http.HandlerFunc
 	}{
+		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos"}, []string{"Tutor", "O meu programa", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
+		{"tutor", []string{"Membro", "Tutor", "Hoje"}, []string{"Atleta de competição", "Treinador", "Moderador", "Frota"}, CurrentUser{}, dashboard.Guardian},
 		{"competition athlete", []string{"Atleta de competição"}, []string{"Atleta de iniciação", "Atleta de kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
 		{"multiple memberships", []string{"Lazer", "Atleta de iniciação", "Atleta de competição", "Atleta de kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
 		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
@@ -44,6 +46,11 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 				t.Fatalf("status = %d", response.Code)
 			}
 			body := response.Body.String()
+			for _, shellText := range []string{"Maria Silva", "Conta com responsabilidades cumulativas", "Conta e início", "Terminar sessão"} {
+				if !strings.Contains(body, shellText) {
+					t.Fatalf("dashboard shell does not contain %q", shellText)
+				}
+			}
 			for _, label := range tc.present {
 				if !strings.Contains(body, label) {
 					t.Fatalf("dashboard does not contain %q: %q", label, body)

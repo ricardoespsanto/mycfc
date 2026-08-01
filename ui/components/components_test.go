@@ -40,15 +40,30 @@ func TestBaseRendersDocumentContract(t *testing.T) {
 func TestBaseRendersAdminSubNavOnAdminPages(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:         "Gestão de membros | MyCFC",
-		StylesheetURL: "/assets/app.css",
-		ScriptURL:     "/assets/app.js",
-		CurrentPath:   "/admin/membros",
+		Title:           "Gestão de membros | MyCFC",
+		StylesheetURL:   "/assets/app.css",
+		ScriptURL:       "/assets/app.js",
+		CurrentPath:     "/admin/membros",
+		CurrentUserName: "Beatriz Administradora",
+		Navigation:      []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}, {Label: "Administração", Items: []NavigationItem{{Label: "Membros", Path: "/admin/membros"}}}},
 	}, Flash("")).Render(context.Background(), &output)
 	if err != nil {
 		t.Fatalf("render base: %v", err)
 	}
 	body := output.String()
+	for _, expected := range []string{
+		`class="app-shell"`,
+		`aria-label="Conta atual"`,
+		`Beatriz Administradora`,
+		`Conta com responsabilidades cumulativas`,
+		`aria-label="Localização atual"`,
+		`<li>Administração</li>`,
+		`<li aria-current="page">Membros</li>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("authenticated shell does not contain %q", expected)
+		}
+	}
 	if !strings.Contains(body, `class="admin-subnav"`) {
 		t.Error("admin page should render the admin sub-nav")
 	}
@@ -57,6 +72,29 @@ func TestBaseRendersAdminSubNavOnAdminPages(t *testing.T) {
 	}
 	if strings.Contains(body, `href="/admin/fleet" aria-current="page"`) {
 		t.Error("admin sub-nav should not mark other sections as current")
+	}
+}
+
+func TestBaseRendersSubjectContext(t *testing.T) {
+	var output strings.Builder
+	err := Base(PageMeta{
+		Title:           "Detalhe do membro | MyCFC",
+		StylesheetURL:   "/assets/app.css",
+		ScriptURL:       "/assets/app.js",
+		CurrentPath:     "/admin/membros/member-123",
+		CurrentUserName: "Beatriz Administradora",
+		Navigation:      []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}, {Label: "Administração", Items: []NavigationItem{{Label: "Membros", Path: "/admin/membros"}}}},
+		PageLabel:       "Detalhe do membro",
+		SubjectContext:  "Rui Atleta",
+	}, Flash("")).Render(context.Background(), &output)
+	if err != nil {
+		t.Fatalf("render base: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`<li aria-current="page">Detalhe do membro</li>`, `A atuar sobre`, `Rui Atleta`, `href="/admin/membros" aria-current="page"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("member context does not contain %q", expected)
+		}
 	}
 }
 
@@ -79,7 +117,7 @@ func TestNavigationMarksCurrentPath(t *testing.T) {
 	}
 }
 
-func TestNavigationGroupsSecondaryLinksInDisclosures(t *testing.T) {
+func TestNavigationKeepsCumulativeCapabilitiesVisible(t *testing.T) {
 	var output strings.Builder
 	err := Navigation("/admin/membros", []NavigationGroup{
 		{Items: []NavigationItem{{Label: "Eventos", Path: "/events"}}},
@@ -89,17 +127,23 @@ func TestNavigationGroupsSecondaryLinksInDisclosures(t *testing.T) {
 		t.Fatalf("render navigation: %v", err)
 	}
 	body := output.String()
-	if !strings.Contains(body, `<details class="site-nav__group"`) {
-		t.Error("labelled group should render as a disclosure")
+	if strings.Contains(body, `<details`) {
+		t.Error("capability navigation must not hide links in ambiguous menus")
 	}
-	if !strings.Contains(body, `<summary>`) || !strings.Contains(body, `Administração`) {
-		t.Error("labelled group should show its label in the summary")
+	for _, expected := range []string{`class="site-nav__section"`, `Administração`, `href="/admin/membros" aria-current="page"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("navigation does not contain %q", expected)
+		}
 	}
-	if !strings.Contains(body, `site-nav__group-indicator`) {
-		t.Error("group containing the current path should show an indicator")
+}
+
+func TestNavigationMarksOwningDestinationForNestedRoute(t *testing.T) {
+	var output strings.Builder
+	if err := Navigation("/events/event-123", []NavigationGroup{{Items: []NavigationItem{{Label: "Eventos", Path: "/events"}}}}).Render(context.Background(), &output); err != nil {
+		t.Fatalf("render navigation: %v", err)
 	}
-	if !strings.Contains(body, `<details class="site-nav__group" open>`) {
-		t.Error("group containing the current path should be open")
+	if !strings.Contains(output.String(), `href="/events" aria-current="page"`) {
+		t.Error("nested route should mark its owning navigation destination")
 	}
 }
 
