@@ -151,8 +151,8 @@ func New(ctx context.Context) (*Application, error) {
 	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
-	training := handlers.Training{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
+	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
+	training := handlers.Training{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	foundation := handlers.Foundation{PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}}

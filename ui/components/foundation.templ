@@ -19,6 +19,41 @@ templ Surface(title string, content templ.Component) {
 	<section class="module"><h2>{ title }</h2>@content</section>
 }
 
+templ SectionHeading(eyebrow, title, summary string) {
+	<header class="section-heading">
+		<div>
+			if eyebrow != "" {
+				<p class="eyebrow">{ eyebrow }</p>
+			}
+			<h2>{ title }</h2>
+			if summary != "" {
+				<p>{ summary }</p>
+			}
+		</div>
+		{ children... }
+	</header>
+}
+
+templ RecordList(label string) {
+	<ul class="record-list" aria-label={ label }>{ children... }</ul>
+}
+
+templ RecordItem(title, href, meta string) {
+	<li class="record-item">
+		<div class="record-item__copy">
+			if href != "" {
+				<h3><a href={ templ.SafeURL(href) }>{ title }</a></h3>
+			} else {
+				<h3>{ title }</h3>
+			}
+			if meta != "" {
+				<p class="record-meta">{ meta }</p>
+			}
+		</div>
+		{ children... }
+	</li>
+}
+
 templ Badge(label, tone string) { <span class={ "badge badge--" + tone }><span class="badge__cue" aria-hidden="true"></span>{ label }</span> }
 
 templ EmptyState(title, description string) {
