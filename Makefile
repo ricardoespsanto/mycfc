@@ -9,7 +9,7 @@ AIR := $(BIN_DIR)/air
 TERRAFORM_VERSION := 1.15.8
 TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -53,6 +53,15 @@ dev-bootstrap: ## Create .env, start infrastructure, migrate and build assets
 
 dev: ## Run the application through Air (never go run)
 	@set -a; source .env; set +a; exec $(AIR) -c .air.toml
+
+ui-review-reset: ## Recreate the isolated UI-review database and deterministic personas
+	./scripts/ui-review-reset.sh
+
+ui-review-dev: ui-review-reset ## Run the UI-review dataset through Air
+	@set -a; source .env; set +a; DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_ui_review?sslmode=disable" exec $(AIR) -c .air.toml
+
+ui-review-screenshots: ui-review-reset ## Capture deterministic desktop/mobile UI-review screenshots
+	docker compose --profile ui-review up --force-recreate --abort-on-container-exit --exit-code-from ui-review-capture ui-review-app ui-review-capture
 
 test: ## Run unit tests
 	go test ./internal/... ./cmd/...
