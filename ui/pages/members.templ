@@ -54,12 +54,12 @@ templ membersContent(page MembersPage) {
     @MemberCreate(page.Form)
 }
 templ MemberCreate(form MemberCreateForm) {
-    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar conta</span><span class="disclosure-card__summary">Adicione um adulto ou um menor a cargo.</span></summary><div class="disclosure-card__content"><p>Para um menor, selecione o encarregado de educação. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
+    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar conta</span><span class="disclosure-card__summary">Adicione um adulto ou um menor a cargo.</span></summary><div class="disclosure-card__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
         <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>
         <label for="member-name">Nome</label><input id="member-name" name="name" value={ form.Name } required/>@components.FieldErrorMessage("name", form.Errors["name"])
         <label for="member-birth">Data de nascimento</label><input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])
         <label for="member-email">Email (adultos)</label><input id="member-email" type="email" name="email" value={ form.Email }/>@components.FieldErrorMessage("email", form.Errors["email"])
-        <label for="member-guardian">Encarregado de educação (menores)</label><select id="member-guardian" name="guardian_id"><option value="">Selecione</option>
+        <label for="member-guardian">Tutor (menores)</label><select id="member-guardian" name="guardian_id"><option value="">Selecione</option>
         for _, guardian := range form.Guardians {
             <option value={ guardian.ID } selected?={ guardian.ID == form.GuardianID }>{ guardian.Name } ({ guardian.Email })</option>
         }
@@ -85,13 +85,13 @@ templ memberDetailContent(page MemberDetailPage) {
             <p>Email: { page.Member.Email }</p>
         }
         if page.Member.Guardian != "" {
-            <p>Encarregado de educação: { page.Member.Guardian }</p>
+            <p>Tutor: { page.Member.Guardian }</p>
         }
         if page.Member.LoginID != "" {
             <p>Identificador de acesso: <strong>{ page.Member.LoginID }</strong></p>
         }
         if page.Member.Dependent && page.Member.Active {
-            <details class="inline-disclosure" open?={ page.Errors["password"] != "" }><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao encarregado de educação.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
+            <details class="inline-disclosure" open?={ page.Errors["password"] != "" }><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
             <label for="minor-password">Palavra-passe</label><input id="minor-password" type="password" name="password" autocomplete="new-password" required/>@components.FieldErrorMessage("password", page.Errors["password"])
             <label for="minor-password-confirmation">Confirmar palavra-passe</label><input id="minor-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required/>@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])
             <button type="submit">Emitir ou recuperar credencial</button></form></details>

@@ -563,7 +563,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Painel de encarregado de educação | MyCFC"
+	meta.Title = "Painel de tutor | MyCFC"
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name
 	meta.Navigation = dashboardNavigation(user)
@@ -727,7 +727,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 
 	var programme []components.NavigationItem
 	if !user.IsDependent {
-		programme = append(programme, components.NavigationItem{Label: "Encarregado de educação", Path: "/dashboard/guardian"})
+		programme = append(programme, components.NavigationItem{Label: "Tutor", Path: "/dashboard/guardian"})
 	}
 	if user.Programmes["Leisure"] {
 		programme = append(programme, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})

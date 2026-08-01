@@ -307,7 +307,7 @@ func MemberCreate(form MemberCreateForm) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "><summary><span class=\"disclosure-card__title\">Criar conta</span><span class=\"disclosure-card__summary\">Adicione um adulto ou um menor a cargo.</span></summary><div class=\"disclosure-card__content\"><p>Para um menor, selecione o encarregado de educação. A credencial individual é emitida depois no detalhe do menor.</p><form class=\"form-layout\" method=\"post\" action=\"/admin/membros\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "><summary><span class=\"disclosure-card__title\">Criar conta</span><span class=\"disclosure-card__summary\">Adicione um adulto ou um menor a cargo.</span></summary><div class=\"disclosure-card__content\"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class=\"form-layout\" method=\"post\" action=\"/admin/membros\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -398,7 +398,7 @@ func MemberCreate(form MemberCreateForm) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "<label for=\"member-guardian\">Encarregado de educação (menores)</label><select id=\"member-guardian\" name=\"guardian_id\"><option value=\"\">Selecione</option> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "<label for=\"member-guardian\">Tutor (menores)</label><select id=\"member-guardian\" name=\"guardian_id\"><option value=\"\">Selecione</option> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -597,14 +597,14 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 			}
 		}
 		if page.Member.Guardian != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<p>Encarregado de educação: ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<p>Tutor: ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var21 string
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(page.Member.Guardian)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 88, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 88, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 			if templ_7745c5c3_Err != nil {
@@ -645,14 +645,14 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao encarregado de educação.</p><form class=\"form-layout\" method=\"post\" action=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class=\"form-layout\" method=\"post\" action=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var23 templ.SafeURL
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/membros/" + page.Member.ID + "/credencial-menor")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 94, Col: 372}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 94, Col: 352}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 			if templ_7745c5c3_Err != nil {

@@ -1103,7 +1103,7 @@ All rendered interfaces must meet WCAG 2.2 Level AA for the implemented flows an
 | Password | Palavra-passe |
 | Login | Iniciar sessão |
 | Logout | Terminar sessão |
-| Guardian | Encarregado de educação |
+| Guardian | Tutor |
 | Dependent/minor | Menor a cargo |
 | Submit | Enviar |
 | Cancel | Cancelar |

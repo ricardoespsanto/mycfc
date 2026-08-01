@@ -116,7 +116,7 @@ func (h Members) Create(w http.ResponseWriter, r *http.Request) {
 		guardianID, _ := uuid.Parse(form.GuardianID)
 		guardian, err := h.Store.GetMemberForAdmin(ctx, guardianID)
 		if err != nil || guardian.IsDependent || !guardian.IsActive {
-			form.Errors.Add("guardian_id", "Selecione um encarregado de educação ativo.")
+			form.Errors.Add("guardian_id", "Selecione um tutor ativo.")
 		}
 	}
 	if !form.Errors.Empty() {
@@ -288,7 +288,7 @@ func (h Members) validateCreate(r *http.Request) memberForm {
 	}
 	if f.Dependent {
 		if _, err := uuid.Parse(f.GuardianID); err != nil {
-			f.Errors.Add("guardian_id", "Selecione um encarregado de educação válido.")
+			f.Errors.Add("guardian_id", "Selecione um tutor válido.")
 		}
 		return f
 	}

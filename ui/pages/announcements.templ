@@ -84,7 +84,7 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
         </fieldset></details>
         <label for="announcement-expires">Expira em (opcional)</label><input id="announcement-expires" type="datetime-local" name="expires_at" value={ form.ExpiresAt }/>@components.FieldErrorMessage("expires_at", form.Errors["expires_at"])
         <details><summary>Contexto e destinatários</summary><fieldset><legend>Contexto e destinatários</legend><p>Os públicos selecionados somam-se. Selecione o evento de competição e/ou a modalidade aplicável. Treinadores só podem usar os seus programas, equipas e eventos.</p>
-            <label><input type="checkbox" name="guardian" value="true"/> Encarregados de educação</label>
+            <label><input type="checkbox" name="guardian" value="true"/> Tutores</label>
             for _, item := range form.Programmes {
                 <label><input type="checkbox" name="programme_id" value={ item.ID }/> { item.Name }</label>
             }

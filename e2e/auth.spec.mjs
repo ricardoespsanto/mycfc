@@ -96,7 +96,7 @@ test.describe('authentication', () => {
 
     await expect(page).toHaveURL('/today');
     await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
-    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await page.getByRole('link', { name: 'Tutor' }).click();
     await expect(page).toHaveURL('/dashboard/guardian');
 
     await page.locator('#repair-form > summary').click();
@@ -107,7 +107,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
     await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
-    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await page.getByRole('link', { name: 'Tutor' }).click();
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
     const firstReference = await success.textContent();
@@ -118,7 +118,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
     await page.locator('summary').filter({ hasText: 'O meu programa' }).click();
-    await page.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await page.getByRole('link', { name: 'Tutor' }).click();
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
@@ -144,7 +144,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await noJavaScriptPage.locator('summary').filter({ hasText: 'O meu programa' }).click();
-    await noJavaScriptPage.getByRole('link', { name: 'Encarregado de educação' }).click();
+    await noJavaScriptPage.getByRole('link', { name: 'Tutor' }).click();
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
     await noJavaScriptPage.getByLabel('Nome').fill('Menor de teste');
