@@ -37,7 +37,7 @@ func TestBaseRendersDocumentContract(t *testing.T) {
 	}
 }
 
-func TestBaseRendersAdminSubNavOnAdminPages(t *testing.T) {
+func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
 		Title:           "Gestão de membros | MyCFC",
@@ -64,14 +64,11 @@ func TestBaseRendersAdminSubNavOnAdminPages(t *testing.T) {
 			t.Errorf("authenticated shell does not contain %q", expected)
 		}
 	}
-	if !strings.Contains(body, `class="admin-subnav"`) {
-		t.Error("admin page should render the admin sub-nav")
+	if strings.Contains(body, `class="admin-subnav"`) {
+		t.Error("admin destinations must not be duplicated in local navigation")
 	}
 	if !strings.Contains(body, `href="/admin/membros" aria-current="page"`) {
-		t.Error("admin sub-nav should mark the current section")
-	}
-	if strings.Contains(body, `href="/admin/fleet" aria-current="page"`) {
-		t.Error("admin sub-nav should not mark other sections as current")
+		t.Error("global navigation should mark the current administration section")
 	}
 }
 
@@ -86,12 +83,13 @@ func TestBaseRendersSubjectContext(t *testing.T) {
 		Navigation:      []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}, {Label: "Administração", Items: []NavigationItem{{Label: "Membros", Path: "/admin/membros"}}}},
 		PageLabel:       "Detalhe do membro",
 		SubjectContext:  "Rui Atleta",
+		Breadcrumbs:     []NavigationItem{{Label: "Membros", Path: "/admin/membros"}},
 	}, Flash("")).Render(context.Background(), &output)
 	if err != nil {
 		t.Fatalf("render base: %v", err)
 	}
 	body := output.String()
-	for _, expected := range []string{`<li aria-current="page">Detalhe do membro</li>`, `A atuar sobre`, `Rui Atleta`, `href="/admin/membros" aria-current="page"`} {
+	for _, expected := range []string{`<a href="/admin/membros">Membros</a>`, `<li aria-current="page">Detalhe do membro</li>`, `A atuar sobre`, `Rui Atleta`, `href="/admin/membros" aria-current="page"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("member context does not contain %q", expected)
 		}

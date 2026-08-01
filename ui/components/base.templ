@@ -14,6 +14,7 @@ type PageMeta struct {
 	AreaLabel       string
 	PageLabel       string
 	SubjectContext  string
+	Breadcrumbs     []NavigationItem
 }
 
 templ PublicBase(meta PageMeta, content templ.Component) {
@@ -80,14 +81,18 @@ templ Base(meta PageMeta, content templ.Component) {
 						</form></div>
 					</aside>
 					<div class="app-workspace">
-						<header class="workspace-header"><nav aria-label="Localização atual"><ol><li>MyCFC</li><li>{ resolvedArea(meta) }</li><li aria-current="page">{ resolvedPage(meta) }</li></ol></nav>
+						<header class="workspace-header"><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFC</a></li>
+							for _, item := range meta.Breadcrumbs {
+								<li><a href={ item.Path }>{ item.Label }</a></li>
+							}
+							if len(meta.Breadcrumbs) == 0 && resolvedArea(meta) != resolvedPage(meta) {
+								<li>{ resolvedArea(meta) }</li>
+							}
+							<li aria-current="page">{ resolvedPage(meta) }</li></ol></nav>
 							if meta.SubjectContext != "" {
 								<p class="subject-context"><span>A atuar sobre</span><strong>{ meta.SubjectContext }</strong></p>
 							}
 						</header>
-						if strings.HasPrefix(meta.CurrentPath, "/admin/") {
-							@AdminSubNav(meta.CurrentPath)
-						}
 						<main id="conteudo-principal">@content</main>
 						<footer class="site-footer">Clube Fluvial de Coimbra</footer>
 					</div>
@@ -101,9 +106,9 @@ templ Base(meta PageMeta, content templ.Component) {
 
 func capabilityLabels(groups []NavigationGroup) []string {
 	labels := []string{"Membro"}
-	for _, group := range groups { if group.Label != "" { for _, item := range group.Items { labels = append(labels, item.Label) } } }
+	for _, group := range groups { labels = append(labels, group.Capabilities...) }
 	return labels
 }
 
-func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Os meus espaços" }; return "Atividade" }
+func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if meta.CurrentPath == "/today" { return "Hoje" }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Os meus espaços" }; return "Atividade" }
 func resolvedPage(meta PageMeta) string { if meta.PageLabel != "" { return meta.PageLabel }; for _, group := range meta.Navigation { for _, item := range group.Items { if navigationMatches(meta.CurrentPath, item.Path) { return item.Label } } }; return "Página atual" }

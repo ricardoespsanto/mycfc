@@ -11,14 +11,16 @@ type NavigationItem struct {
 // groups remain visible so people with several responsibilities can see their
 // complete working context without switching roles or opening menus.
 type NavigationGroup struct {
-	Label string
-	Items []NavigationItem
+	Label        string
+	Items        []NavigationItem
+	Capabilities []string
 }
 
 templ Navigation(currentPath string, groups []NavigationGroup) {
 	<nav aria-label="Navegação principal" class="site-nav">
 		for _, group := range groups {
-			<div class="site-nav__section">
+			if len(group.Items) > 0 {
+				<div class="site-nav__section">
 				if group.Label != "" {
 					<p>{ group.Label }</p>
 				}
@@ -27,7 +29,8 @@ templ Navigation(currentPath string, groups []NavigationGroup) {
 						@navItem(currentPath, item)
 					}
 				</ul>
-			</div>
+				</div>
+			}
 		}
 	</nav>
 }

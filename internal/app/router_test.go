@@ -62,6 +62,15 @@ func TestRouterReadinessFailure(t *testing.T) {
 	}
 }
 
+func TestCompatibilityRedirectPreservesQueryParameters(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/dashboard/coach?scope=competition&return=%2Ftoday", nil)
+	response := httptest.NewRecorder()
+	compatibilityRedirect("/events").ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/events?scope=competition&return=%2Ftoday" {
+		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
 func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 	called := false
 	handler := csrfProtection(make([]byte, 32))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

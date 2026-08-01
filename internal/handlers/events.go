@@ -193,6 +193,10 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 		page = h.memberDetailPage(event, dependents)
 	}
 	page.Meta = h.meta(r, user, "/events", "Evento")
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = page.Title
+	page.Meta.Title = page.Title + " | MyCFC"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: "/events"}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.EventDetail(page).Render(r.Context(), w)

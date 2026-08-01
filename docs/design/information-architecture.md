@@ -1,7 +1,7 @@
 # Authenticated information architecture
 
-Status: proposed decision record for issue #54. Review this document before
-implementing the authenticated shell (#55) or route migration (#56).
+Status: approved in issue #54. The authenticated shell was implemented in #55;
+the approved route and ownership migration was implemented in #56.
 
 ## Evidence and boundary
 
@@ -195,9 +195,9 @@ the signed-in identity and capabilities.
 
 ## Existing-to-target route decisions
 
-No redirect is implemented by this decision ticket. Issue #56 applies approved
-changes with `303 See Other` for authenticated GET compatibility aliases and
-retains server-side authorization on every target.
+Issue #56 applies these approved changes with `303 See Other` for authenticated
+GET compatibility aliases, preserves query parameters, and retains server-side
+authorization on every target.
 
 | Existing route | Target decision | Reason |
 | --- | --- | --- |

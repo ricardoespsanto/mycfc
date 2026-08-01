@@ -351,7 +351,10 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	}
 	meta := h.meta(r, "Membro", "/admin/membros")
 	meta.PageLabel = "Detalhe do membro"
+	meta.Title = member.Name + " | MyCFC"
 	meta.SubjectContext = member.Name
+	meta.CurrentPath = r.URL.Path
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: "/admin/membros"}}
 	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, Errors: fieldErrors}
 	for _, programme := range programmes {
 		page.Programmes = append(page.Programmes, pages.MemberProgramme{ID: programme.ID.String(), Name: programme.NamePt, Active: activeIDs[programme.ID]})
