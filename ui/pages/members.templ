@@ -15,30 +15,13 @@ type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Se
 
 templ Members(page MembersPage) { @components.Base(page.Meta, membersContent(page)) }
 templ membersContent(page MembersPage) {
-    <section class="dashboard-hero"><p class="eyebrow">Operações</p><h1>Gestão de membros</h1><p>Crie contas de teste e atribua programas sem alterar funções permanentes.</p></section>
-    <section class="dashboard-card"><h2>Procurar membros</h2><form class="form-layout" method="get" action="/admin/membros"><label for="member-search">Nome, email ou identificador de menor</label><input id="member-search" name="q" value={ page.Search }/><button type="submit">Procurar</button></form>
+    @components.PageHeader("Administração", "Membros", "Pesquise contas e compreenda o respetivo estado antes de atuar.", []components.PageAction{{Label: "Criar conta", Href: "#criar-conta", Variant: "primary"}})
+    <section class="module"><div class="module__heading"><div><p class="eyebrow">Diretório</p><h2>Procurar membros</h2></div><form class="search-form" method="get" action="/admin/membros"><label class="visually-hidden" for="member-search">Nome, email ou identificador de menor</label><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></form></div>
         if len(page.Members) == 0 {
-            <p class="empty-state">Não foram encontrados membros.</p>
+            @components.EmptyState("Sem membros encontrados", "Altere a pesquisa ou crie uma nova conta.")
         }
         if len(page.Members) > 0 {
-            <ul class="content-list">
-            for _, member := range page.Members {
-                <li><a href={ "/admin/membros/" + member.ID }>{ member.Name }</a>
-                if member.Dependent {
-                    <span> · menor a cargo</span>
-                }
-                if member.Email != "" {
-                    <span> · { member.Email }</span>
-                }
-                if member.LoginID != "" {
-                    <span> · { member.LoginID }</span>
-                }
-                if !member.Active {
-                    <strong> · desativada</strong>
-                }
-                </li>
-            }
-            </ul>
+            @components.DataRegion("Lista de membros", memberTable(page.Members))
         }
         if page.PreviousURL != "" || page.NextURL != "" {
             <nav class="pagination" aria-label="Paginação de membros">
@@ -53,8 +36,35 @@ templ membersContent(page MembersPage) {
     </section>
     @MemberCreate(page.Form)
 }
+templ memberTable(members []MemberListItem) {
+    <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col"><span class="visually-hidden">Ação</span></th></tr></thead><tbody>
+    for _, member := range members {
+        <tr><th scope="row"><a href={ "/admin/membros/" + member.ID }>{ member.Name }</a></th><td>
+            if member.Dependent {
+                Menor a cargo
+            } else {
+                Adulto
+            }
+        </td><td>
+            if member.Email != "" {
+                { member.Email }
+            } else if member.LoginID != "" {
+                { member.LoginID }
+            } else {
+                —
+            }
+        </td><td>
+            if member.Active {
+                @components.Badge("Ativa", "success")
+            } else {
+                @components.Badge("Desativada", "error")
+            }
+        </td><td><a class="action action--quiet" href={ "/admin/membros/" + member.ID }>Abrir</a></td></tr>
+    }
+    </tbody></table>
+}
 templ MemberCreate(form MemberCreateForm) {
-    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar conta</span><span class="disclosure-card__summary">Adicione um adulto ou um menor a cargo.</span></summary><div class="disclosure-card__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
+    <details id="criar-conta" class="module disclosure" open?={ len(form.Errors) > 0 }><summary><span><strong>Criar conta</strong><small>Adicione um adulto ou um menor a cargo.</small></span></summary><div class="disclosure__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
         <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>
         <label for="member-name">Nome</label><input id="member-name" name="name" value={ form.Name } required/>@components.FieldErrorMessage("name", form.Errors["name"])
         <label for="member-birth">Data de nascimento</label><input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])

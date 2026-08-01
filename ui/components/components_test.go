@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/a-h/templ"
 )
 
 func TestBaseRendersDocumentContract(t *testing.T) {
@@ -119,5 +121,37 @@ func TestFlashUsesSharedStatusStyling(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `class="flash status-message"`) {
 		t.Fatalf("rendered flash = %q", output.String())
+	}
+}
+
+func TestFoundationComponentsExposeSemanticStates(t *testing.T) {
+	var output strings.Builder
+	gallery := templ.Join(
+		Badge("Pendente", "warning"),
+		Callout("Erro", "Corrija os dados.", "error"),
+		EmptyState("Sem resultados", "Altere os filtros."),
+		DataRegion("Lista de membros", Flash("Conteúdo")),
+	)
+	if err := gallery.Render(context.Background(), &output); err != nil {
+		t.Fatalf("render foundation components: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`badge--warning`, `badge__cue`, `role="alert"`, `empty-state__icon`, `role="region"`, `aria-label="Lista de membros"`, `tabindex="0"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("foundation output does not contain %q", expected)
+		}
+	}
+}
+
+func TestPageHeaderRendersActionContract(t *testing.T) {
+	var output strings.Builder
+	if err := PageHeader("Administração", "Membros", "Gerir contas.", []PageAction{{Label: "Criar conta", Href: "#criar", Variant: "primary"}}).Render(context.Background(), &output); err != nil {
+		t.Fatalf("render page header: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`class="page-header"`, `<h1>Membros</h1>`, `class="action action--primary"`, `href="#criar"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("page header does not contain %q", expected)
+		}
 	}
 }

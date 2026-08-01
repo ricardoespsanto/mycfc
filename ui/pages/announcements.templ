@@ -19,17 +19,23 @@ type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, Publ
 
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
-    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Avisos</h1><p>Comunicados do clube. Não existe chat interno.</p></section>
-    <section class="dashboard-card"><h2>Para si</h2>
+    @components.PageHeader("Comunidade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", nil)
+    @components.Surface("Para si", announcementItems(page))
+    if page.CanManage {
+        @AnnouncementAuthoringForm(page.Form)
+        @components.Surface("Os meus avisos", authoredAnnouncementItems(page))
+    }
+}
+templ announcementItems(page AnnouncementsPage) {
         if len(page.Items) == 0 {
-            <p class="empty-state">Não existem avisos ativos.</p>
+            @components.EmptyState("Sem avisos ativos", "Quando o clube publicar algo relevante, aparece aqui.")
         }
         if len(page.Items) > 0 {
             <ul class="content-list">
                 for _, item := range page.Items {
                     <li><a href={ "/announcements/" + item.ID }>{ item.Title }</a> <span>{ item.PublishedAt }</span>
                         if item.Unread {
-                            <strong> Não lido</strong>
+                            @components.Badge("Não lido", "selected")
                         }
                     </li>
                 }
@@ -45,10 +51,8 @@ templ announcementsContent(page AnnouncementsPage) {
                 }
             </nav>
         }
-    </section>
-    if page.CanManage {
-        @AnnouncementAuthoringForm(page.Form)
-        <section class="dashboard-card"><h2>Os meus avisos</h2><ul class="content-list">
+}
+templ authoredAnnouncementItems(page AnnouncementsPage) { <ul class="content-list">
             for _, item := range page.Authored {
                 <li>{ item.Title } · { item.Status }
                     if item.Status == "DRAFT" {
@@ -70,8 +74,6 @@ templ announcementsContent(page AnnouncementsPage) {
                 }
             </nav>
         }
-        </section>
-    }
 }
 templ AnnouncementAuthoringForm(form AnnouncementForm) {
     <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar aviso</span><span class="disclosure-card__summary">Prepare uma comunicação para os públicos certos.</span></summary><div class="disclosure-card__content"><form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
