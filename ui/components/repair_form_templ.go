@@ -41,7 +41,7 @@ func RepairForm(form RepairFormData) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<details id=\"repair-form\" class=\"dashboard-card disclosure-card\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<details id=\"repair-form\" class=\"module disclosure\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -51,7 +51,7 @@ func RepairForm(form RepairFormData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "><summary><span class=\"disclosure-card__title\">Reportar avaria</span><span class=\"disclosure-card__summary\">Comunique um problema num equipamento do clube.</span></summary><div class=\"disclosure-card__content\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "><summary><span><strong>Reportar avaria</strong><small>Comunique um problema num equipamento do clube.</small></span></summary><div class=\"disclosure__content\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

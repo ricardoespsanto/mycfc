@@ -49,6 +49,20 @@ func TestAddDependentValidatesBeforeStore(t *testing.T) {
 	}
 }
 
+func TestAddDependentPreservesAcceptedResponsibilityOnValidationError(t *testing.T) {
+	store := &guardianDependentStoreFake{}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, store)
+	form := validDependentForm()
+	form.Set("name", "X")
+	response := guardianResponse(t, dashboard.AddDependent, uuid.New(), form)
+	if response.Code != http.StatusUnprocessableEntity || store.called {
+		t.Fatalf("response = %d, called = %t", response.Code, store.called)
+	}
+	if !strings.Contains(response.Body.String(), `id="accept_minor_responsibility" name="accept_minor_responsibility" type="checkbox" required checked`) {
+		t.Fatalf("accepted responsibility was not preserved: %q", response.Body.String())
+	}
+}
+
 func TestAddDependentCreatesFromCurrentGuardianAndRedirects(t *testing.T) {
 	guardianID := uuid.New()
 	store := &guardianDependentStoreFake{}

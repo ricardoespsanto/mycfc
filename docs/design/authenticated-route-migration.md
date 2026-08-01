@@ -8,11 +8,11 @@ the #56 migration.
 | Route family | Page pattern | Migration state | Evidence owner |
 | --- | --- | --- | --- |
 | `/today` | composed home | complete | #57 |
-| `/events`, `/events/{id}` | activity collection, detail and staff authoring | activity slice | #64 activity PR |
-| `/treinos` | dense activity collection and staff authoring | activity slice | #64 activity PR |
-| `/announcements`, `/announcements/{id}` | sparse activity collection, detail and staff authoring | activity slice | #64 activity PR |
-| `/dashboard/guardian` | tutor collection and contextual forms | planned tutor/programme slice | #64 |
-| `/dashboard/{programme}` | programme workspace | planned tutor/programme slice | #64 |
+| `/events`, `/events/{id}` | activity collection, detail and staff authoring | complete | #64 activity PR |
+| `/treinos` | dense activity collection and staff authoring | complete | #64 activity PR |
+| `/announcements`, `/announcements/{id}` | sparse activity collection, detail and staff authoring | complete | #64 activity PR |
+| `/dashboard/guardian` | tutor collection and contextual forms | complete | #64 programme PR |
+| `/dashboard/{programme}` | programme workspace | complete | #64 programme PR |
 | coach/moderator compatibility routes | contextual redirect or intentional placeholder | review after #56 lands | #56 / #64 |
 | `/admin/membros`, `/admin/membros/{id}` | dense directory and detail | foundation complete; detail polish planned | #58 / #64 |
 | `/admin/noticias` | dense publishing workflow | planned administration slice | #64 |
