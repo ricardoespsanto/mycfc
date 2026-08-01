@@ -225,7 +225,7 @@ button:hover {
   .site-nav__group ul { position: static; box-shadow: none; padding-inline-start: 0.75rem; background: transparent; }
   .dashboard-card { border-radius: 0.4rem; }
   .form-layout > button { inline-size: 100%; }
-  .admin-subnav ul { flex-wrap: nowrap; overflow-x: auto; gap: 0 1rem; }
+  .admin-subnav ul { flex-wrap: wrap; overflow-x: visible; gap: 0 1rem; }
 }
 
 /* River Clubhouse foundation. Public-site rules below remain intentionally
