@@ -717,13 +717,10 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 	return items
 }
 
-// dashboardNavigation builds the signed-in navigation as a small set of
-// groups rather than one flat list: everyday links stay always visible,
-// while role-specific and administrative links are clustered under their
-// own disclosure so the header doesn't grow unbounded as a member picks up
-// more roles (guardian + coach + admin, for example).
+// dashboardNavigation keeps everyday destinations first and clusters every
+// additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
-	primary := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+	primary := []components.NavigationItem{{Label: "Hoje", Path: "/today"}, {Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
 
 	var programme []components.NavigationItem
 	if !user.IsDependent {

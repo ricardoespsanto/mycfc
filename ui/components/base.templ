@@ -11,6 +11,9 @@ type PageMeta struct {
 	CurrentUserName string
 	Navigation      []NavigationGroup
 	CSRFField       templ.Component
+	AreaLabel       string
+	PageLabel       string
+	SubjectContext  string
 }
 
 templ PublicBase(meta PageMeta, content templ.Component) {
@@ -57,18 +60,50 @@ templ Base(meta PageMeta, content templ.Component) {
 			<link rel="stylesheet" href={ meta.StylesheetURL }/>
 			<script src={ meta.ScriptURL } defer></script>
 		</head>
-		<body>
+		<body class="app-body">
 			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
 			if len(meta.Navigation) > 0 {
-				<header class="site-header"><div class="site-header__content"><a class="site-brand" href="/today">MyCFC</a>@Navigation(meta.CurrentPath, meta.Navigation)<form method="post" action="/logout">@meta.CSRFField<button class="logout-button" type="submit">Terminar sessão</button></form></div></header>
+				<div class="app-shell">
+					<aside class="app-rail" aria-label="Contexto e navegação MyCFC">
+						<a class="site-brand" href="/today"><span class="site-brand__mark" aria-hidden="true">≈</span><span>MyCFC</span></a>
+						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><span>Conta com responsabilidades cumulativas</span><div class="capability-list">
+							for _, label := range capabilityLabels(meta.Navigation) {
+								<span>{ label }</span>
+							}
+						</div></section>
+						@Navigation(meta.CurrentPath, meta.Navigation)
+						<div class="account-actions"><a href="/today">Conta e início</a><form method="post" action="/logout">
+							if meta.CSRFField != nil {
+								@meta.CSRFField
+							}
+							<button class="logout-button" type="submit">Terminar sessão</button>
+						</form></div>
+					</aside>
+					<div class="app-workspace">
+						<header class="workspace-header"><nav aria-label="Localização atual"><ol><li>MyCFC</li><li>{ resolvedArea(meta) }</li><li aria-current="page">{ resolvedPage(meta) }</li></ol></nav>
+							if meta.SubjectContext != "" {
+								<p class="subject-context"><span>A atuar sobre</span><strong>{ meta.SubjectContext }</strong></p>
+							}
+						</header>
+						if strings.HasPrefix(meta.CurrentPath, "/admin/") {
+							@AdminSubNav(meta.CurrentPath)
+						}
+						<main id="conteudo-principal">@content</main>
+						<footer class="site-footer">Clube Fluvial de Coimbra</footer>
+					</div>
+				</div>
+			} else {
+				<main id="conteudo-principal">@content</main><footer class="site-footer">Clube Fluvial de Coimbra</footer>
 			}
-			if strings.HasPrefix(meta.CurrentPath, "/admin/") {
-				@AdminSubNav(meta.CurrentPath)
-			}
-			<main id="conteudo-principal">
-				@content
-			</main>
-			<footer class="site-footer">Clube Fluvial de Coimbra</footer>
 		</body>
 	</html>
 }
+
+func capabilityLabels(groups []NavigationGroup) []string {
+	labels := []string{"Membro"}
+	for _, group := range groups { if group.Label != "" { for _, item := range group.Items { labels = append(labels, item.Label) } } }
+	return labels
+}
+
+func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Os meus espaços" }; return "Atividade" }
+func resolvedPage(meta PageMeta) string { if meta.PageLabel != "" { return meta.PageLabel }; for _, group := range meta.Navigation { for _, item := range group.Items { if navigationMatches(meta.CurrentPath, item.Path) { return item.Label } } }; return "Página atual" }

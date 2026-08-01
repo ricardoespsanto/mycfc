@@ -349,7 +349,10 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 			activeIDs[membership.ProgrammeID] = true
 		}
 	}
-	page := pages.MemberDetailPage{Meta: h.meta(r, "Membro", "/admin/membros"), Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, Errors: fieldErrors}
+	meta := h.meta(r, "Membro", "/admin/membros")
+	meta.PageLabel = "Detalhe do membro"
+	meta.SubjectContext = member.Name
+	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, Errors: fieldErrors}
 	for _, programme := range programmes {
 		page.Programmes = append(page.Programmes, pages.MemberProgramme{ID: programme.ID.String(), Name: programme.NamePt, Active: activeIDs[programme.ID]})
 	}

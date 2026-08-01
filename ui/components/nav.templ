@@ -1,15 +1,15 @@
 package components
 
+import "strings"
+
 type NavigationItem struct {
 	Label string
 	Path  string
 }
 
-// NavigationGroup clusters related navigation items under an optional label.
-// A group with an empty Label renders as an always-visible inline list (used
-// for the small set of links every signed-in member sees). Labelled groups
-// render as a disclosure ("<details>") so role-specific and admin-only links
-// don't compete for attention with everyday navigation.
+// NavigationGroup clusters related destinations under an optional label. All
+// groups remain visible so people with several responsibilities can see their
+// complete working context without switching roles or opening menus.
 type NavigationGroup struct {
 	Label string
 	Items []NavigationItem
@@ -18,34 +18,23 @@ type NavigationGroup struct {
 templ Navigation(currentPath string, groups []NavigationGroup) {
 	<nav aria-label="Navegação principal" class="site-nav">
 		for _, group := range groups {
-			if group.Label == "" {
-				<ul class="site-nav__primary">
+			<div class="site-nav__section">
+				if group.Label != "" {
+					<p>{ group.Label }</p>
+				}
+				<ul>
 					for _, item := range group.Items {
 						@navItem(currentPath, item)
 					}
 				</ul>
-			} else {
-				<details class="site-nav__group" open?={ groupContainsCurrent(currentPath, group) }>
-					<summary>
-						{ group.Label }
-						if groupContainsCurrent(currentPath, group) {
-							<span class="site-nav__group-indicator" aria-hidden="true"></span>
-						}
-					</summary>
-					<ul>
-						for _, item := range group.Items {
-							@navItem(currentPath, item)
-						}
-					</ul>
-				</details>
-			}
+			</div>
 		}
 	</nav>
 }
 
 templ navItem(currentPath string, item NavigationItem) {
 	<li>
-		if item.Path == currentPath {
+		if navigationMatches(currentPath, item.Path) {
 			<a href={ item.Path } aria-current="page">{ item.Label }</a>
 		} else {
 			<a href={ item.Path }>{ item.Label }</a>
@@ -53,11 +42,4 @@ templ navItem(currentPath string, item NavigationItem) {
 	</li>
 }
 
-func groupContainsCurrent(currentPath string, group NavigationGroup) bool {
-	for _, item := range group.Items {
-		if item.Path == currentPath {
-			return true
-		}
-	}
-	return false
-}
+func navigationMatches(currentPath, itemPath string) bool { return currentPath == itemPath || (itemPath != "/today" && strings.HasPrefix(currentPath, itemPath+"/")) }
