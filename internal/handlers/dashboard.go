@@ -38,6 +38,7 @@ type DashboardStore interface {
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 	ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error)
+	ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error)
 }
 
 type FleetStore interface {
@@ -151,9 +152,43 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.TodayPage{Events: make([]pages.TodayEvent, len(events))}
+	if len(events) > 4 {
+		events = events[:4]
+	}
+	announcements, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: 3})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.TodayPage{Name: user.Name, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user)}
 	for i, event := range events {
 		page.Events[i] = pages.TodayEvent{ID: event.ID.String(), Title: event.Title, When: event.StartsAt.Time.In(h.location()).Format("15:04") + " - " + event.EndsAt.Time.In(h.location()).Format("15:04")}
+		if page.NextEvent == nil && event.EndsAt.Time.After(now) {
+			page.NextEvent = &page.Events[i]
+		}
+	}
+	for _, item := range announcements {
+		page.Announcements = append(page.Announcements, pages.TodayAnnouncement{ID: item.ID.String(), Title: item.Title, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01"), Unread: !item.ReadAt.Valid})
+	}
+	if !user.IsDependent {
+		dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 3})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		for _, dependent := range dependents {
+			page.Dependents = append(page.Dependents, pages.TodayDependent{Name: dependent.Name, HasAccess: dependent.MinorLoginID != nil})
+		}
+	}
+	if user.IsAdmin && h.Fleet != nil {
+		repairs, err := h.Fleet.ListPendingRepairRequests(ctx, dbgen.ListPendingRepairRequestsParams{RowLimit: 3})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		for _, repair := range repairs {
+			page.Operations = append(page.Operations, pages.TodayOperation{Label: repair.AssetTag + " · " + repair.EquipmentName, Detail: todayRepairStatus(repair.Status)})
+		}
 	}
 	page.Meta = h.PageMeta
 	page.Meta.Title = "Hoje | MyCFC"
@@ -163,6 +198,36 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.Today(page).Render(r.Context(), w)
+}
+
+func todayRepairStatus(status string) string {
+	if status == "Em_Analise" {
+		return "Em análise"
+	}
+	return status
+}
+
+func todayShortcuts(user CurrentUser) []pages.TodayShortcut {
+	items := []pages.TodayShortcut{{Label: "Eventos", Detail: "Agenda e respostas", Path: "/events"}, {Label: "Treinos", Detail: "Planos e sessões", Path: "/treinos"}, {Label: "Avisos", Detail: "Comunicações do clube", Path: "/announcements"}}
+	for _, group := range dashboardNavigation(user) {
+		if group.Label == "O meu programa" && len(group.Items) > 0 {
+			for _, item := range group.Items {
+				if item.Path == "/dashboard/guardian" {
+					continue
+				}
+				items = append(items, pages.TodayShortcut{Label: item.Label, Detail: "Abrir o meu espaço", Path: item.Path})
+				break
+			}
+			break
+		}
+	}
+	if user.IsAdmin {
+		items = append(items, pages.TodayShortcut{Label: "Membros", Detail: "Diretório e inscrições", Path: "/admin/membros"})
+	}
+	if len(items) > 5 {
+		items = items[:5]
+	}
+	return items
 }
 func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
