@@ -20,6 +20,7 @@ var AdminTabs = []AdminTab{
 	{Label: "Membros", Path: "/admin/membros"},
 	{Label: "Notícias", Path: "/admin/noticias"},
 	{Label: "Frota", Path: "/admin/fleet"},
+	{Label: "Componentes", Path: "/admin/componentes"},
 }
 
 // AdminSubNav gives every /admin/* page a shared "you are here" strip across
@@ -63,7 +64,7 @@ func AdminSubNav(currentPath string) templ.Component {
 				var templ_7745c5c3_Var2 templ.SafeURL
 				templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinURLErrs(tab.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 26, Col: 24}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 27, Col: 24}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 				if templ_7745c5c3_Err != nil {
@@ -76,7 +77,7 @@ func AdminSubNav(currentPath string) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(tab.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 26, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 27, Col: 58}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -94,7 +95,7 @@ func AdminSubNav(currentPath string) templ.Component {
 				var templ_7745c5c3_Var4 templ.SafeURL
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(tab.Path)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 28, Col: 24}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 29, Col: 24}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -107,7 +108,7 @@ func AdminSubNav(currentPath string) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(tab.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 28, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/admin_nav.templ`, Line: 29, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {

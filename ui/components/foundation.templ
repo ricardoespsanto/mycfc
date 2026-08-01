@@ -1,0 +1,42 @@
+package components
+
+type PageAction struct { Label, Href, Variant string }
+
+templ PageHeader(eyebrow, title, intro string, actions []PageAction) {
+	<header class="page-header">
+		<div class="page-header__copy"><p class="eyebrow">{ eyebrow }</p><h1>{ title }</h1><p>{ intro }</p></div>
+		if len(actions) > 0 {
+			<div class="page-actions">
+				for _, action := range actions {
+					<a class={ "action action--" + action.Variant } href={ templ.SafeURL(action.Href) }>{ action.Label }</a>
+				}
+			</div>
+		}
+	</header>
+}
+
+templ Surface(title string, content templ.Component) {
+	<section class="module"><h2>{ title }</h2>@content</section>
+}
+
+templ Badge(label, tone string) { <span class={ "badge badge--" + tone }><span class="badge__cue" aria-hidden="true"></span>{ label }</span> }
+
+templ EmptyState(title, description string) {
+	<div class="empty-state"><span class="empty-state__icon" aria-hidden="true">≈</span><strong>{ title }</strong><p>{ description }</p></div>
+}
+
+templ Callout(title, message, tone string) {
+	<div class={ "callout callout--" + tone } role={ calloutRole(tone) }><strong>{ title }</strong><p>{ message }</p></div>
+}
+
+templ Icon(label string, decorative bool) {
+	if decorative {
+		<span class="icon" aria-hidden="true">{ children... }</span>
+	} else {
+		<span class="icon" role="img" aria-label={ label }>{ children... }</span>
+	}
+}
+
+templ DataRegion(label string, content templ.Component) { <div class="data-region" role="region" aria-label={ label } tabindex="0">@content</div> }
+
+func calloutRole(tone string) string { if tone == "error" { return "alert" }; return "status" }

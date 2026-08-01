@@ -155,7 +155,8 @@ func New(ctx context.Context) (*Application, error) {
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, news))
+	foundation := handlers.Foundation{PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}}
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, news, foundation))
 	csrfMiddleware := csrfProtection(csrfKey)
 
 	trusted, err := cfg.TrustedProxyCIDRs()
