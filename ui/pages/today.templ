@@ -3,22 +3,86 @@ package pages
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type TodayEvent struct { ID, Title, When string }
-type TodayPage struct { Meta components.PageMeta; Events []TodayEvent }
+type TodayAnnouncement struct { ID, Title, PublishedAt string; Unread bool }
+type TodayDependent struct { Name string; HasAccess bool }
+type TodayOperation struct { Label, Detail string }
+type TodayShortcut struct { Label, Detail, Path string }
+type TodayPage struct {
+	Meta components.PageMeta
+	Name string
+	NextEvent *TodayEvent
+	Events []TodayEvent
+	Announcements []TodayAnnouncement
+	Dependents []TodayDependent
+	Operations []TodayOperation
+	Shortcuts []TodayShortcut
+}
 
 templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
 
 templ todayContent(page TodayPage) {
-	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Hoje</h1><p>Os eventos visíveis para as suas inscrições e responsabilidades ativas.</p></section>
-	<section class="dashboard-card"><h2>Agenda de hoje</h2>
+	<section class="today-hero"><div><p class="eyebrow">O seu dia no clube</p><h1>Olá, { firstName(page.Name) }</h1><p>O que merece a sua atenção agora, reunido num só lugar.</p></div>
+		if page.NextEvent != nil {
+			<a class="today-next" href={ "/events/" + page.NextEvent.ID }><span>A seguir</span><strong>{ page.NextEvent.Title }</strong><small>{ page.NextEvent.When }</small></a>
+		} else {
+			<div class="today-next today-next--empty"><span>A seguir</span><strong>Dia tranquilo</strong><small>Sem atividades pendentes para hoje.</small></div>
+		}
+	</section>
+	<div class="today-grid">
+	<section class="today-module today-module--agenda"><header><div><p class="eyebrow">Agora</p><h2>Agenda de hoje</h2></div><a href="/events">Ver agenda</a></header>
 		if len(page.Events) == 0 {
-			<p>Não existem eventos para hoje.</p>
+			<p class="today-empty">Não existem eventos para hoje. Consulte a agenda para preparar os próximos dias.</p>
 		}
 		if len(page.Events) > 0 {
-			<ul>
+			<ul class="today-list">
 				for _, event := range page.Events {
-					<li><a href={ "/events/" + event.ID }>{ event.Title }</a> <span>{ event.When }</span></li>
+					<li><span>{ event.When }</span><a href={ "/events/" + event.ID }>{ event.Title }</a></li>
 				}
 			</ul>
 		}
 	</section>
+	<section class="today-module"><header><div><p class="eyebrow">Para si</p><h2>Avisos recentes</h2></div><a href="/announcements">Ver todos</a></header>
+		if len(page.Announcements) == 0 {
+			<p class="today-empty">Não há avisos recentes. As novas comunicações do clube aparecerão aqui.</p>
+		}
+		if len(page.Announcements) > 0 {
+			<ul class="today-list">
+				for _, item := range page.Announcements {
+					<li><span>{ item.PublishedAt }</span><a href={ "/announcements/" + item.ID }>{ item.Title }</a>
+						if item.Unread {
+							<small class="today-unread">Novo</small>
+						}
+					</li>
+				}
+			</ul>
+		}
+	</section>
+	if len(page.Dependents) > 0 {
+		<section class="today-module"><header><div><p class="eyebrow">Família</p><h2>Menores a cargo</h2></div><a href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
+			for _, dependent := range page.Dependents {
+				<li><strong>{ dependent.Name }</strong>
+						if dependent.HasAccess {
+							<span>Acesso ativo</span>
+						} else {
+							<span>Sem acesso próprio</span>
+						}
+				</li>
+			}
+		</ul></section>
+	}
+	if len(page.Operations) > 0 {
+		<section class="today-module today-module--attention"><header><div><p class="eyebrow">Operação</p><h2>Requer atenção</h2></div><a href="/admin/fleet">Abrir frota</a></header><ul class="today-list">
+			for _, item := range page.Operations {
+				<li><strong>{ item.Label }</strong><span>{ item.Detail }</span></li>
+			}
+		</ul></section>
+	}
+	<section class="today-module today-module--shortcuts"><header><div><p class="eyebrow">Atalhos</p><h2>Continuar no MyCFC</h2></div></header><div class="today-shortcuts">
+		for _, item := range page.Shortcuts {
+			<a href={ item.Path }><strong>{ item.Label }</strong><span>{ item.Detail }</span></a>
+		}
+	</div></section>
+	</div>
 }
+
+func firstName(name string) string { for i, r := range name { if r == ' ' { return name[:i] } }; return name }

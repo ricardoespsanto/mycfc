@@ -79,6 +79,51 @@ func TestDashboardTodayRendersVisibleEventsAndLocalDayBounds(t *testing.T) {
 	}
 }
 
+func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	dependentLogin := "CFC-1234"
+	store := &dashboardStoreFake{
+		todayEvents: []dbgen.ListEventsForTodayRow{
+			{ID: uuid.New(), Title: "Treino da manhã", StartsAt: pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(2 * time.Hour), Valid: true}},
+			{ID: uuid.New(), Title: "Treino da tarde", StartsAt: pgtype.Timestamptz{Time: now.Add(5 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(6 * time.Hour), Valid: true}},
+		},
+		announcements: []dbgen.ListVisibleAnnouncementsRow{{ID: uuid.New(), Title: "Alteração de cais", PublishedAt: pgtype.Timestamptz{Time: now, Valid: true}}},
+		dependents:    []dbgen.ListDependentsByGuardianRow{{Name: "Rita Silva", MinorLoginID: &dependentLogin}},
+	}
+	dashboard := Dashboard{Store: store, Location: time.UTC, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	request := httptest.NewRequest(http.MethodGet, "/today", nil)
+	user := CurrentUser{ID: uuid.New(), Name: "Maria Silva", Programmes: map[string]bool{"Competition": true}}
+	response := httptest.NewRecorder()
+	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
+	body := response.Body.String()
+	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Avisos recentes", "Alteração de cais", "Novo", "Rita Silva", "Acesso ativo", "Atleta de competição"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Today does not contain %q", want)
+		}
+	}
+	if store.announcementParams.RowLimit != 3 {
+		t.Fatalf("announcement limit = %d", store.announcementParams.RowLimit)
+	}
+}
+
+func TestDashboardTodayShowsBoundedAdminOperations(t *testing.T) {
+	store := &dashboardStoreFake{repairs: []dbgen.ListPendingRepairRequestsRow{{AssetTag: "K-01", EquipmentName: "Kayak", Status: "Em_Analise"}}}
+	dashboard := Dashboard{Store: store, Fleet: store, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	request := httptest.NewRequest(http.MethodGet, "/today", nil)
+	user := CurrentUser{ID: uuid.New(), Name: "Beatriz", IsAdmin: true}
+	response := httptest.NewRecorder()
+	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
+	body := response.Body.String()
+	for _, want := range []string{"Requer atenção", "K-01 · Kayak", "Em análise", "Abrir frota", "Membros"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin Today does not contain %q", want)
+		}
+	}
+	if strings.Contains(body, "Em_Analise") || store.pendingRepairParams.RowLimit != 3 {
+		t.Fatalf("raw status or unbounded repair query: %q %+v", body, store.pendingRepairParams)
+	}
+}
+
 func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	memberID := uuid.New()
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
@@ -180,6 +225,8 @@ type dashboardStoreFake struct {
 	maintenanceParams   dbgen.ListUpcomingMaintenanceParams
 	todayEvents         []dbgen.ListEventsForTodayRow
 	todayParams         dbgen.ListEventsForTodayParams
+	announcements       []dbgen.ListVisibleAnnouncementsRow
+	announcementParams  dbgen.ListVisibleAnnouncementsParams
 }
 
 func (f *dashboardStoreFake) CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error) {
@@ -413,6 +460,11 @@ func (f *dashboardStoreFake) ListOperationalEquipment(_ context.Context, _ int32
 func (f *dashboardStoreFake) ListEventsForToday(_ context.Context, params dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {
 	f.todayParams = params
 	return f.todayEvents, nil
+}
+
+func (f *dashboardStoreFake) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
+	f.announcementParams = params
+	return f.announcements, nil
 }
 
 func (f *dashboardStoreFake) ListRecentPerformanceMetrics(ctx context.Context, params dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error) {

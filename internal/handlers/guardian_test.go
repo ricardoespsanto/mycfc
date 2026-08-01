@@ -156,3 +156,6 @@ func (s *guardianDashboardStore) ListOperationalEquipment(context.Context, int32
 func (s *guardianDashboardStore) ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {
 	return nil, errors.New("not used")
 }
+func (s *guardianDashboardStore) ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
+	return nil, errors.New("not used")
+}

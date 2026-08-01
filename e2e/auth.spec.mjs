@@ -73,7 +73,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Criar conta' }).click();
 
     await expect(page).toHaveURL('/today');
-    await expect(page.getByRole('heading', { name: 'Hoje', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Olá, Pessoa', exact: true })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
     await page.setViewportSize({ width: 320, height: 720 });
@@ -163,7 +163,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Frota' }).click();
+    await page.getByRole('link', { name: 'Frota', exact: true }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await page.locator('#maintenance-form > summary').click();
@@ -209,7 +209,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
-    await page.getByRole('link', { name: 'Membros' }).click();
+    await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await expect(page).toHaveURL('/admin/membros');
     await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(athleteName);
@@ -235,7 +235,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Atleta de competição' }).click();
+    await page.getByRole('link', { name: 'Atleta de competição', exact: true }).click();
     await expect(page).toHaveURL('/dashboard/competition');
     await expect(page.getByRole('heading', { name: 'Painel de atleta de competição' })).toBeVisible();
   });
@@ -255,7 +255,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.getByRole('link', { name: 'Membros' }).click();
+    await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(waitlistedName);
     await page.locator('#member-email').fill(waitlistedEmail);
@@ -402,7 +402,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.getByRole('link', { name: 'Membros' }).click();
+    await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
     await page.locator('#member-name').fill(memberName);
     await page.locator('#member-email').fill(leisureEmail);
@@ -431,7 +431,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(leisureEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.getByRole('link', { name: 'Lazer' }).click();
+    await page.getByRole('link', { name: 'Lazer', exact: true }).click();
     await expect(page.getByText(title)).toBeVisible();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
