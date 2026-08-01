@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
@@ -76,12 +77,14 @@ func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Dashboard) validateDependent(r *http.Request) guardianDependentForm {
-	form := guardianDependentForm{Errors: validation.FieldErrors{}}
-	var err error
-	if form.Name, err = validation.NormalizeName(r.PostForm.Get("name")); err != nil {
+	form := guardianDependentForm{Name: strings.TrimSpace(r.PostForm.Get("name")), DateOfBirth: strings.TrimSpace(r.PostForm.Get("date_of_birth")), Errors: validation.FieldErrors{}}
+	name, err := validation.NormalizeName(form.Name)
+	if err != nil {
 		form.Errors.Add("name", err.Error())
+	} else {
+		form.Name = name
 	}
-	dateOfBirth, err := validation.ParseISODate(r.PostForm.Get("date_of_birth"))
+	dateOfBirth, err := validation.ParseISODate(form.DateOfBirth)
 	if err != nil {
 		form.Errors.Add("date_of_birth", err.Error())
 	} else if err := validation.ValidateDependentDateOfBirth(dateOfBirth, h.now(), h.location()); err != nil {

@@ -8,14 +8,15 @@ import (
 type MemberListItem struct { ID, Name, Email, LoginID string; Dependent, Active bool }
 type MemberGuardian struct { ID, Name, Email string }
 type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID string; Dependent bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
-type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL string; Members []MemberListItem; Form MemberCreateForm }
+type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL, Success string; Members []MemberListItem; Form MemberCreateForm }
 type MemberDetail struct { ID, Name, Email, LoginID, Guardian string; Dependent, Active bool }
 type MemberProgramme struct { ID, Name string; Active bool }
-type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Season string; Programmes []MemberProgramme; Errors validation.FieldErrors }
+type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Season, Success string; Programmes []MemberProgramme; Errors validation.FieldErrors }
 
 templ Members(page MembersPage) { @components.Base(page.Meta, membersContent(page)) }
 templ membersContent(page MembersPage) {
     @components.PageHeader("Administração", "Membros", "Pesquise contas e compreenda o respetivo estado antes de atuar.", []components.PageAction{{Label: "Criar conta", Href: "#criar-conta", Variant: "primary"}})
+    @components.StatusMessage(page.Success, "success")
     <section class="module"><div class="module__heading"><div><p class="eyebrow">Diretório</p><h2>Procurar membros</h2></div><form class="search-form" method="get" action="/admin/membros"><label class="visually-hidden" for="member-search">Nome, email ou identificador de menor</label><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></form></div>
         if len(page.Members) == 0 {
             @components.EmptyState("Sem membros encontrados", "Altere a pesquisa ou crie uma nova conta.")
@@ -65,18 +66,21 @@ templ memberTable(members []MemberListItem) {
 }
 templ MemberCreate(form MemberCreateForm) {
     <details id="criar-conta" class="module disclosure" open?={ len(form.Errors) > 0 }><summary><span><strong>Criar conta</strong><small>Adicione um adulto ou um menor a cargo.</small></span></summary><div class="disclosure__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
+        @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "name", Field: "member-name"}, {Key: "date_of_birth", Field: "member-birth"}, {Key: "email", Field: "member-email"}, {Key: "guardian_id", Field: "member-guardian"}, {Key: "password", Field: "member-password"}, {Key: "password_confirmation", Field: "member-password-confirmation"}}))
+        @components.RequiredNote()
         <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>
-        <label for="member-name">Nome</label><input id="member-name" name="name" value={ form.Name } required/>@components.FieldErrorMessage("name", form.Errors["name"])
-        <label for="member-birth">Data de nascimento</label><input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])
-        <label for="member-email">Email (adultos)</label><input id="member-email" type="email" name="email" value={ form.Email }/>@components.FieldErrorMessage("email", form.Errors["email"])
-        <label for="member-guardian">Tutor (menores)</label><select id="member-guardian" name="guardian_id"><option value="">Selecione</option>
+        @components.FieldLabel("member-name", "Nome", true)<input id="member-name" name="name" value={ form.Name } required aria-invalid?={ form.Errors["name"] != "" } aria-describedby="name-error"/>@components.FieldErrorMessage("name", form.Errors["name"])
+        @components.FieldLabel("member-birth", "Data de nascimento", true)<input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required aria-invalid?={ form.Errors["date_of_birth"] != "" } aria-describedby="date_of_birth-error"/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])
+        @components.FieldLabel("member-email", "Email (obrigatório para adultos)", false)<input id="member-email" type="email" name="email" value={ form.Email } aria-invalid?={ form.Errors["email"] != "" } aria-describedby="email-error"/>@components.FieldErrorMessage("email", form.Errors["email"])
+        @components.FieldLabel("member-guardian", "Tutor (obrigatório para menores)", false)<select id="member-guardian" name="guardian_id" aria-invalid?={ form.Errors["guardian_id"] != "" } aria-describedby="guardian_id-error"><option value="">Selecione</option>
         for _, guardian := range form.Guardians {
             <option value={ guardian.ID } selected?={ guardian.ID == form.GuardianID }>{ guardian.Name } ({ guardian.Email })</option>
         }
         </select>@components.FieldErrorMessage("guardian_id", form.Errors["guardian_id"])
-        <label for="member-password">Palavra-passe (adultos)</label><input id="member-password" type="password" name="password" autocomplete="new-password"/>@components.FieldErrorMessage("password", form.Errors["password"])
-        <label for="member-password-confirmation">Confirmar palavra-passe</label><input id="member-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password"/>@components.FieldErrorMessage("password_confirmation", form.Errors["password_confirmation"])
-        <button type="submit">Criar conta</button></form></div></details>
+        @components.FieldLabel("member-password", "Palavra-passe (obrigatória para adultos)", false)<input id="member-password" type="password" name="password" autocomplete="new-password" aria-invalid?={ form.Errors["password"] != "" } aria-describedby="member-password-help password-error"/>@components.FieldHelp("member-password-help", "Por segurança, a palavra-passe não é reposta após erro.")@components.FieldErrorMessage("password", form.Errors["password"])
+        @components.FieldLabel("member-password-confirmation", "Confirmar palavra-passe", false)<input id="member-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" aria-invalid?={ form.Errors["password_confirmation"] != "" } aria-describedby="password_confirmation-error"/>@components.FieldErrorMessage("password_confirmation", form.Errors["password_confirmation"])
+        @components.FormActions("/admin/membros") { <button type="submit">Criar conta</button> }
+        </form></div></details>
 }
 templ MemberDetailView(page MemberDetailPage) { @components.Base(page.Meta, memberDetailContent(page)) }
 templ memberDetailContent(page MemberDetailPage) {
@@ -90,6 +94,7 @@ templ memberDetailContent(page MemberDetailPage) {
             <span> · Conta desativada</span>
         }
     </p></section>
+    @components.StatusMessage(page.Success, "success")
     <section class="dashboard-card"><h2>Conta</h2>
         if page.Member.Email != "" {
             <p>Email: { page.Member.Email }</p>
@@ -107,7 +112,7 @@ templ memberDetailContent(page MemberDetailPage) {
             <button type="submit">Emitir ou recuperar credencial</button></form></details>
         }
         if page.Member.Active {
-            <details class="inline-disclosure"><summary>Ações da conta</summary><form class="inline-action" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<button type="submit">Desativar conta</button></form></details>
+            <details class="inline-disclosure" open?={ page.Errors["deactivation"] != "" }><summary>Desativar conta</summary><form class="form-layout destructive-region" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<p>Esta pessoa deixa de poder iniciar sessão e usar os espaços ativos.</p>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "deactivation", Field: "confirm-deactivation"}}))<label for="confirm-deactivation"><input id="confirm-deactivation" type="checkbox" name="confirm_deactivation" value="yes" required aria-invalid?={ page.Errors["deactivation"] != "" } aria-describedby="deactivation-error"/> Confirmo que pretendo desativar a conta de { page.Member.Name }.</label>@components.FieldErrorMessage("deactivation", page.Errors["deactivation"])@components.FormActions("/admin/membros/" + page.Member.ID) { <button class="action action--danger" type="submit">Desativar conta de { page.Member.Name }</button> }</form></details>
         }
     </section>
     <details class="dashboard-card disclosure-card" open?={ page.Errors["membership"] != "" }><summary><span class="disclosure-card__title">Inscrições ativas · { page.Season }</span><span class="disclosure-card__summary">Gerir programas e espaços de trabalho disponíveis.</span></summary><div class="disclosure-card__content"><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
