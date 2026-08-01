@@ -132,6 +132,56 @@ services:
     shm_size: 1gb
     networks: [mycfc]
 
+  ui-review-app:
+    image: golang:1.26.5-bookworm
+    profiles: [ui-review]
+    working_dir: /workspace
+    env_file: .env
+    environment:
+      BASE_URL: http://ui-review-app:8080
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mycfc_ui_review?sslmode=disable
+      S3_BUCKET_NAME: mycfc-local
+      S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
+      CONSENT_TERMS_URL: http://ui-review-app:8080/legal/termos-gerais
+      CONSENT_IMAGE_URL: http://ui-review-app:8080/legal/uso-imagem
+      CONSENT_MINOR_URL: http://ui-review-app:8080/legal/responsabilidade-menor
+    command: go run ./cmd/server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+      - e2e_go_cache:/go/pkg/mod
+      - e2e_go_build:/root/.cache/go-build
+    networks: [mycfc]
+
+  ui-review-capture:
+    image: mcr.microsoft.com/playwright:v1.62.0-noble
+    profiles: [ui-review]
+    working_dir: /workspace
+    environment:
+      E2E_BASE_URL: http://ui-review-app:8080
+      UI_REVIEW: "1"
+      CI: "true"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        npm ci
+        node -e 'const url = "http://ui-review-app:8080/health/ready"; const deadline = Date.now() + 600000; const check = async () => { try { if ((await fetch(url)).ok) return; } catch {} if (Date.now() >= deadline) throw new Error("UI-review app readiness timed out"); await new Promise(resolve => setTimeout(resolve, 250)); return check(); }; check().catch(error => { console.error(error); process.exit(1); });'
+        npm exec playwright test e2e/ui-review.spec.mjs
+    depends_on:
+      ui-review-app:
+        condition: service_started
+    volumes:
+      - .:/workspace
+      - e2e_node_modules:/workspace/node_modules
+    shm_size: 1gb
+    networks: [mycfc]
+
 networks:
   mycfc:
     name: mycfc

@@ -47,3 +47,4 @@ go.work.sum
 # Playwright artifacts
 /playwright-report
 /test-results
+/artifacts/ui-review
