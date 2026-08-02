@@ -12,6 +12,7 @@ import (
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
@@ -53,6 +54,7 @@ type Announcements struct {
 	System   System
 	PageMeta components.PageMeta
 	Location *time.Location
+	Sessions *scs.SessionManager
 }
 type announcementForm struct {
 	Title, Body, ExpiresAt, DocumentURL, DocumentSource, ReviewedOn string
@@ -118,6 +120,13 @@ func (h Announcements) Create(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	if h.Sessions != nil {
+		if r.PostForm.Get("action") == "publish" {
+			h.Sessions.Put(r.Context(), "announcements_flash", "Aviso publicado.")
+		} else {
+			h.Sessions.Put(r.Context(), "announcements_flash", "Rascunho guardado.")
+		}
+	}
 	httpx.Redirect(w, r, "/announcements", http.StatusSeeOther)
 }
 func (h Announcements) Publish(w http.ResponseWriter, r *http.Request) { h.changeStatus(w, r, true) }
@@ -157,6 +166,13 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 	if n == 0 {
 		http.Error(w, "A operação não é válida para este aviso.", http.StatusConflict)
 		return
+	}
+	if h.Sessions != nil {
+		if publish {
+			h.Sessions.Put(r.Context(), "announcements_flash", "Aviso publicado.")
+		} else {
+			h.Sessions.Put(r.Context(), "announcements_flash", "Aviso retirado.")
+		}
 	}
 	httpx.Redirect(w, r, "/announcements", http.StatusSeeOther)
 }
@@ -266,7 +282,10 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, GuardianSelected: f.Guardian, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "announcements_flash")
+	}
 	if visiblePage > 1 {
 		page.VisiblePreviousURL = announcementsPageURL(visiblePage-1, authoredPage)
 	}
@@ -289,25 +308,25 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 		e, _ := h.Store.ListAnnouncementEvents(ctx)
 		for _, x := range p {
 			if user.IsAdmin || user.CoachProgrammeIDs[x.ID] {
-				page.Form.Programmes = append(page.Form.Programmes, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt})
+				page.Form.Programmes = append(page.Form.Programmes, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypePROGRAMME, x.ID)})
 			}
 		}
 		for _, x := range t {
 			if user.IsAdmin || user.CoachTeamIDs[x.ID] {
-				page.Form.Teams = append(page.Form.Teams, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Name})
+				page.Form.Teams = append(page.Form.Teams, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Name, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypeTEAM, x.ID)})
 			}
 		}
 		if user.IsAdmin {
 			for _, x := range c {
-				page.Form.Categories = append(page.Form.Categories, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt})
+				page.Form.Categories = append(page.Form.Categories, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypeCATEGORY, x.ID)})
 			}
 			for _, x := range m {
-				page.Form.Modalities = append(page.Form.Modalities, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt})
+				page.Form.Modalities = append(page.Form.Modalities, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.NamePt, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypeMODALITY, x.ID)})
 			}
 		}
 		for _, x := range e {
 			if user.IsAdmin {
-				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
+				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypeEVENT, x.ID)})
 				continue
 			}
 			allowed, err := h.Store.CanCoachManageEvent(ctx, dbgen.CanCoachManageEventParams{EventID: x.ID, UserID: user.ID})
@@ -316,7 +335,7 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 				return
 			}
 			if allowed {
-				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title})
+				page.Form.Events = append(page.Form.Events, pages.AnnouncementAudience{ID: x.ID.String(), Name: x.Title, Selected: announcementTargetSelected(f, dbgen.AnnouncementTargetTypeEVENT, x.ID)})
 			}
 		}
 		authored, err := h.Store.ListAnnouncementsForAuthor(ctx, dbgen.ListAnnouncementsForAuthorParams{AuthorID: user.ID, RowLimit: announcementPageSize + 1, RowOffset: int32((authoredPage - 1) * announcementPageSize)})
@@ -339,6 +358,15 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Announcements(page).Render(r.Context(), w)
+}
+
+func announcementTargetSelected(form announcementForm, kind dbgen.AnnouncementTargetType, id uuid.UUID) bool {
+	for _, selected := range form.Targets[kind] {
+		if selected == id {
+			return true
+		}
+	}
+	return false
 }
 
 func announcementPageNumber(value string) int {

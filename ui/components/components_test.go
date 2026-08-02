@@ -227,3 +227,31 @@ func TestPageHeaderRendersActionContract(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordCollectionRendersSemanticContract(t *testing.T) {
+	var output strings.Builder
+	item := RecordItem("Treino técnico", "/treinos/1", "Hoje · 18:30")
+	if err := RecordList("Próximas sessões").Render(templ.WithChildren(context.Background(), item), &output); err != nil {
+		t.Fatalf("render record list: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`class="record-list"`, `aria-label="Próximas sessões"`, `class="record-item"`, `href="/treinos/1"`, `Treino técnico</a></h3>`, `Hoje · 18:30`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("record collection does not contain %q", expected)
+		}
+	}
+}
+
+func TestSectionHeadingSupportsContextualActions(t *testing.T) {
+	var output strings.Builder
+	ctx := templ.WithChildren(context.Background(), templ.Raw(`<a href="#novo">Novo</a>`))
+	if err := SectionHeading("Agenda", "Próximos eventos", "Atividade relevante.").Render(ctx, &output); err != nil {
+		t.Fatalf("render section heading: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`class="section-heading"`, `Agenda`, `<h2>Próximos eventos</h2>`, `Atividade relevante.`, `href="#novo"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("section heading does not contain %q", expected)
+		}
+	}
+}

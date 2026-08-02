@@ -1,121 +1,309 @@
 package pages
 
-import "github.com/cfcoimbra/mycfc/ui/components"
+import (
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
 
-type TrainingChoice struct { ID, Name string }
-type TrainingSession struct { ID, Plan, Title, Detail, When, Modality, Outcome string }
-type ManagedTrainingSession struct { Title, Description, When, Modality string }
-type ManagedTrainingPlan struct { ID, Title, Description string; Sessions []ManagedTrainingSession }
-type CompetitionDocument struct { Title, URL, Source, ReviewedOn, Context string }
-type TrainingPage struct { Meta components.PageMeta; CSRFField templ.Component; CanManage bool; Sessions []TrainingSession; Documents []CompetitionDocument; ManagedPlans []ManagedTrainingPlan; ManagedPlansPreviousURL, ManagedPlansNextURL string; Programmes, Teams, Modalities, Events, Plans []TrainingChoice }
+type TrainingChoice struct{ ID, Name string }
+type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome string }
+type ManagedTrainingSession struct{ Title, Description, When, Modality string }
+type ManagedTrainingPlan struct {
+	ID, Title, Description string
+	Sessions               []ManagedTrainingSession
+}
+type CompetitionDocument struct{ Title, URL, Source, ReviewedOn, Context string }
+type TrainingPlanForm struct {
+	Title, Description, ProgrammeID, TeamID string
+	Errors                                  validation.FieldErrors
+}
+type TrainingSessionForm struct {
+	PlanID, Title, Description, StartsAt, EndsAt, ModalityID string
+	Errors                                                   validation.FieldErrors
+}
+type TrainingDocumentForm struct {
+	Title, URL, Source, ReviewedOn, EventID, ModalityID, ProgrammeID, TeamID string
+	Errors                                                                   validation.FieldErrors
+}
+type TrainingPage struct {
+	Meta                                         components.PageMeta
+	CSRFField                                    templ.Component
+	CanManage                                    bool
+	Success, Error, OpenForm                     string
+	Sessions                                     []TrainingSession
+	Documents                                    []CompetitionDocument
+	ManagedPlans                                 []ManagedTrainingPlan
+	ManagedPlansPreviousURL, ManagedPlansNextURL string
+	Programmes, Teams, Modalities, Events, Plans []TrainingChoice
+	PlanForm                                     TrainingPlanForm
+	SessionForm                                  TrainingSessionForm
+	DocumentForm                                 TrainingDocumentForm
+}
 
-templ Training(page TrainingPage) { @components.Base(page.Meta, trainingContent(page)) }
+templ Training(page TrainingPage) {
+	@components.Base(page.Meta, trainingContent(page))
+}
+
 templ trainingContent(page TrainingPage) {
-    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Treinos e competição</h1><p>Consulte as sessões do seu grupo e os documentos oficiais aplicáveis.</p></section>
-    <section class="dashboard-card"><h2>As minhas sessões</h2>
-        if len(page.Sessions) == 0 {
-            <p class="empty-state">Ainda não tem sessões disponíveis para o seu grupo.</p>
-        }
-        for _, session := range page.Sessions {
-            <article><h3>{ session.Plan }: { session.Title }</h3><p>{ session.When }
-                if session.Modality != "" {
-                    · { session.Modality }
-                }
-            </p><p>{ session.Detail }</p>
-            if session.Outcome != "" {
-                <p><strong>{ trainingOutcomeLabel(session.Outcome) }</strong></p>
-            } else {
-                <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/><button type="submit">Marcar como concluída</button></form>
-                <form class="inline-action" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button type="submit">Marcar como não realizada</button></form>
-                <details class="inline-disclosure"><summary>Registar substituição</summary><form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="REPLACED"/><label>Sessão de substituição <select name="replacement_session_id" required><option value="">Selecione</option>
-                    for _, replacement := range page.Sessions {
-                        if replacement.ID != session.ID {
-                            <option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
-                        }
-                    }
-                </select></label><label>Motivo <input name="replacement_reason" minlength="2" maxlength="300" required/></label><button type="submit">Registar substituição</button></form></details>
-            }
-            </article>
-        }
-    </section>
-    <section class="dashboard-card"><h2>Cadernos de prova e documentos oficiais</h2>
-        if len(page.Documents) == 0 {
-            <p class="empty-state">Não existem documentos aplicáveis.</p>
-        }
-        for _, document := range page.Documents {
-            <article><h3><a href={ document.URL } target="_blank" rel="noopener noreferrer">{ document.Title }</a></h3><p>{ document.Context }</p><p>Fonte: { document.Source } · Revisto em: { document.ReviewedOn }</p></article>
-        }
-    </section>
-    if page.CanManage {
-        @trainingAuthoring(page)
-    }
+	@components.PageHeader("Atividade", "Treinos e competição", "Consulte as sessões do seu grupo, registe resultados e encontre os documentos oficiais aplicáveis.", trainingPageActions(page))
+	@components.StatusMessage(page.Success, "success")
+	@components.StatusMessage(page.Error, "error")
+	<section class="module">
+		@components.SectionHeading("Agenda", "As minhas sessões", "O trabalho previsto para o seu grupo e o respetivo estado.")
+		if len(page.Sessions) == 0 {
+			@components.EmptyState("Sem sessões disponíveis", "Quando o seu grupo tiver trabalho planeado, ele aparece aqui.")
+		}
+		if len(page.Sessions) > 0 {
+			@components.RecordList("As minhas sessões") {
+				for _, session := range page.Sessions {
+					<li class="record-item record-item--stacked">
+						<div class="record-item__copy">
+							<h3>{ session.Plan }: { session.Title }</h3>
+							<p class="record-meta">
+								{ session.When }
+								if session.Modality != "" {
+									· { session.Modality }
+								}
+							</p>
+							<p>{ session.Detail }</p>
+						</div>
+						if session.Outcome != "" {
+							@components.Badge(trainingOutcomeLabel(session.Outcome), trainingOutcomeTone(session.Outcome))
+						} else {
+							<div class="record-item__actions">
+								<form method="post" action="/treinos/sessoes/resultados">@page.CSRFField
+<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/><button class="action action--primary" type="submit">Marcar concluída</button></form>
+								<form method="post" action="/treinos/sessoes/resultados">@page.CSRFField
+<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button class="action action--secondary" type="submit">Não realizada</button></form>
+							</div>
+							<details class="inline-disclosure record-item__details">
+								<summary>Registar sessão de substituição</summary>
+								<form class="form-layout" method="post" action="/treinos/sessoes/resultados">
+									@page.CSRFField
+									<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="REPLACED"/>@components.FieldLabel("replacement-session-"+session.ID, "Sessão de substituição", true)
+									<select id={ "replacement-session-" + session.ID } name="replacement_session_id" required>
+										<option value="">Selecione</option>
+										for _, replacement := range page.Sessions {
+											if replacement.ID != session.ID {
+												<option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
+											}
+										}
+									</select>@components.FieldLabel("replacement-reason-"+session.ID, "Motivo", true)
+									<input id={ "replacement-reason-" + session.ID } name="replacement_reason" minlength="2" maxlength="300" required/>@components.FormActions("/treinos") {
+	<button type="submit">Registar substituição</button>
 }
+								</form>
+							</details>
+						}
+					</li>
+				}
+			}
+		}
+	</section>
+	<section class="module">
+		@components.SectionHeading("Referências", "Cadernos de prova e documentos oficiais", "Ligações verificadas para a sua atividade competitiva.")
+		if len(page.Documents) == 0 {
+			@components.EmptyState("Sem documentos aplicáveis", "Os documentos oficiais relevantes para o seu contexto aparecem aqui.")
+		}
+		if len(page.Documents) > 0 {
+			@components.RecordList("Documentos oficiais") {
+				for _, document := range page.Documents {
+					<li class="record-item"><a class="record-item__copy" href={ templ.SafeURL(document.URL) } target="_blank" rel="noreferrer"><h3>{ document.Title }</h3><p class="record-meta">{ document.Context } · Fonte: { document.Source } · Revisto em: { document.ReviewedOn }</p></a><span class="record-meta">Documento externo</span></li>
+				}
+			}
+		}
+	</section>
+	if page.CanManage {
+		@trainingAuthoring(page)
+	}
+}
+
 templ trainingAuthoring(page TrainingPage) {
-	<details class="dashboard-card disclosure-card"><summary><span class="disclosure-card__title">Gerir treinos</span><span class="disclosure-card__summary">Consulte planos e crie sessões ou documentos.</span></summary><div class="disclosure-card__content"><section><h2>Planos que gere</h2>
-        if len(page.ManagedPlans) == 0 {
-            <p class="empty-state">Ainda não existem planos no seu âmbito.</p>
-        }
-        for _, plan := range page.ManagedPlans {
-            <article><h3>{ plan.Title }</h3><p>{ plan.Description }</p>
-                if len(plan.Sessions) == 0 {
-                    <p class="empty-state">Este plano ainda não tem sessões.</p>
-                }
-                for _, session := range plan.Sessions {
-                    <div><h4>{ session.Title }</h4><p>{ session.When }
-                        if session.Modality != "" {
-                            · { session.Modality }
-                        }
-                    </p><p>{ session.Description }</p></div>
-                }
-            </article>
-        }
-        if page.ManagedPlansPreviousURL != "" || page.ManagedPlansNextURL != "" {
-            <nav class="pagination" aria-label="Paginação de planos geridos">
-                if page.ManagedPlansPreviousURL != "" {
-                    <a href={ templ.SafeURL(page.ManagedPlansPreviousURL) }>Anterior</a>
-                }
-                if page.ManagedPlansNextURL != "" {
-                    <a href={ templ.SafeURL(page.ManagedPlansNextURL) }>Seguinte</a>
-                }
-            </nav>
-        }
-    </section>
-    <details class="inline-disclosure"><summary>Criar plano</summary><form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField<label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label>@trainingScopeChoices(page)<button type="submit">Criar plano</button></form></details>
-    <details class="inline-disclosure"><summary>Criar sessão</summary><form class="form-layout" method="post" action="/treinos/sessoes">@page.CSRFField
-        <label>Plano <select name="plan_id" required><option value="">Selecione</option>
-            for _, item := range page.Plans {
-                <option value={ item.ID }>{ item.Name }</option>
-            }
-        </select></label><label>Título <input name="title" required/></label><label>Descrição <textarea name="description"></textarea></label><label>Início <input name="starts_at" type="datetime-local" required/></label><label>Fim <input name="ends_at" type="datetime-local" required/></label><label>Modalidade <select name="modality_id"><option value="">Sem modalidade</option>
-            for _, item := range page.Modalities {
-                <option value={ item.ID }>{ item.Name }</option>
-            }
-        </select></label><button type="submit">Criar sessão</button></form></details>
-    <details class="inline-disclosure"><summary>Publicar documento de competição</summary><form class="form-layout" method="post" action="/treinos/documentos">@page.CSRFField<label>Título <input name="title" required/></label><label>Ligação HTTPS <input name="url" type="url" required/></label><label>Fonte oficial <input name="source" required/></label><label>Revisto em <input name="reviewed_on" type="date" required/></label><label>Evento <select name="event_id"><option value="">Sem evento</option>
-        for _, item := range page.Events {
-            <option value={ item.ID }>{ item.Name }</option>
-        }
-    </select></label><label>Modalidade <select name="modality_id"><option value="">Sem modalidade</option>
-        for _, item := range page.Modalities {
-            <option value={ item.ID }>{ item.Name }</option>
-        }
-    </select></label><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page)<button type="submit">Publicar documento</button></form></details></div></details>
+	<details id="gerir-treinos" class="module disclosure" open?={ page.OpenForm != "" }>
+		<summary><span><strong>Gerir treinos</strong><small>Consulte planos e crie sessões ou documentos.</small></span></summary>
+		<div class="disclosure__content">
+			<section>
+				@components.SectionHeading("Planeamento", "Planos que gere", "Âmbitos e sessões sob a sua responsabilidade.")
+				if len(page.ManagedPlans) == 0 {
+					@components.EmptyState("Sem planos no seu âmbito", "Crie o primeiro plano para começar a organizar sessões.")
+				}
+				if len(page.ManagedPlans) > 0 {
+					@components.RecordList("Planos geridos") {
+						for _, plan := range page.ManagedPlans {
+							<li class="record-item record-item--stacked">
+								<div class="record-item__copy">
+									<h3>{ plan.Title }</h3>
+									<p>{ plan.Description }</p>
+									if len(plan.Sessions) == 0 {
+										<p class="record-meta">Ainda sem sessões.</p>
+									}
+									for _, session := range plan.Sessions {
+										<div class="nested-record">
+											<h4>{ session.Title }</h4>
+											<p class="record-meta">
+												{ session.When }
+												if session.Modality != "" {
+													· { session.Modality }
+												}
+											</p>
+											<p>{ session.Description }</p>
+										</div>
+									}
+								</div>
+							</li>
+						}
+					}
+				}
+				if page.ManagedPlansPreviousURL != "" || page.ManagedPlansNextURL != "" {
+					<nav class="pagination" aria-label="Paginação de planos geridos">
+						if page.ManagedPlansPreviousURL != "" {
+							<a href={ templ.SafeURL(page.ManagedPlansPreviousURL) }>Anterior</a>
+						}
+						if page.ManagedPlansNextURL != "" {
+							<a href={ templ.SafeURL(page.ManagedPlansNextURL) }>Seguinte</a>
+						}
+					</nav>
+				}
+			</section>
+			@trainingPlanForm(page)
+			@trainingSessionForm(page)
+			@trainingDocumentForm(page)
+		</div>
+	</details>
 }
-templ trainingScopeChoices(page TrainingPage) { <label>Equipa (preferencial) <select name="team_id"><option value="">Sem equipa</option>
-    for _, item := range page.Teams {
-        <option value={ item.ID }>{ item.Name }</option>
-    }
-</select></label><label>Programa <select name="programme_id"><option value="">Sem programa</option>
-    for _, item := range page.Programmes {
-        <option value={ item.ID }>{ item.Name }</option>
-    }
-</select></label> }
+
+templ trainingPlanForm(page TrainingPage) {
+	<details class="inline-disclosure" open?={ page.OpenForm == "plan" }><summary>Criar plano</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
+<form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField
+@components.RequiredNote()
+@components.FieldLabel("training-plan-title", "Título", true)
+<input id="training-plan-title" name="title" value={ page.PlanForm.Title } required aria-invalid?={ page.PlanForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.PlanForm.Errors["title"])
+@components.FieldLabel("training-plan-description", "Descrição (opcional)", false)
+<textarea id="training-plan-description" name="description" aria-invalid?={ page.PlanForm.Errors["description"] != "" } aria-describedby="description-error">{ page.PlanForm.Description }</textarea>@components.FieldErrorMessage("description", page.PlanForm.Errors["description"])
+<fieldset id="training-plan-scope"><legend>Âmbito</legend>@trainingScopeChoices(page, "training-plan", page.PlanForm.ProgrammeID, page.PlanForm.TeamID)
+</fieldset>@components.FieldErrorMessage("scope", page.PlanForm.Errors["scope"])
+@components.FormActions("/treinos") {
+	<button type="submit">Criar plano</button>
+}
+</form></details>
+}
+
+templ trainingSessionForm(page TrainingPage) {
+	<details class="inline-disclosure" open?={ page.OpenForm == "session" }>
+		<summary>Criar sessão</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
+		<form class="form-layout" method="post" action="/treinos/sessoes">
+			@page.CSRFField
+			@components.RequiredNote()
+			@components.FieldLabel("training-session-plan", "Plano", true)
+			<select id="training-session-plan" name="plan_id" required aria-invalid?={ page.SessionForm.Errors["plan_id"] != "" } aria-describedby="plan_id-error">
+				<option value="">Selecione</option>
+				for _, item := range page.Plans {
+					<option value={ item.ID } selected?={ item.ID == page.SessionForm.PlanID }>{ item.Name }</option>
+				}
+			</select>@components.FieldErrorMessage("plan_id", page.SessionForm.Errors["plan_id"])
+			@components.FieldLabel("training-session-title", "Título", true)
+			<input id="training-session-title" name="title" value={ page.SessionForm.Title } required aria-invalid?={ page.SessionForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
+			@components.FieldLabel("training-session-description", "Descrição (opcional)", false)
+			<textarea id="training-session-description" name="description" aria-invalid?={ page.SessionForm.Errors["description"] != "" } aria-describedby="description-error">{ page.SessionForm.Description }</textarea>@components.FieldErrorMessage("description", page.SessionForm.Errors["description"])
+			@components.FieldLabel("training-session-start", "Início", true)
+			<input id="training-session-start" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required aria-invalid?={ page.SessionForm.Errors["starts_at"] != "" } aria-describedby="starts_at-error"/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
+			@components.FieldLabel("training-session-end", "Fim", true)
+			<input id="training-session-end" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required aria-invalid?={ page.SessionForm.Errors["ends_at"] != "" } aria-describedby="ends_at-error"/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
+			@components.FieldLabel("training-session-modality", "Modalidade (opcional)", false)
+			<select id="training-session-modality" name="modality_id" aria-invalid?={ page.SessionForm.Errors["modality_id"] != "" } aria-describedby="modality_id-error">
+				<option value="">Sem modalidade</option>
+				for _, item := range page.Modalities {
+					<option value={ item.ID } selected?={ item.ID == page.SessionForm.ModalityID }>{ item.Name }</option>
+				}
+			</select>@components.FieldErrorMessage("modality_id", page.SessionForm.Errors["modality_id"])
+			@components.FormActions("/treinos") {
+				<button type="submit">Criar sessão</button>
+			}
+		</form>
+	</details>
+}
+
+templ trainingDocumentForm(page TrainingPage) {
+	<details class="inline-disclosure" open?={ page.OpenForm == "document" }>
+		<summary>Publicar documento de competição</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.DocumentForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-document-title"}, {Key: "url", Field: "training-document-url"}, {Key: "source", Field: "training-document-source"}, {Key: "reviewed_on", Field: "training-document-reviewed"}, {Key: "scope", Field: "training-document-scope"}}))
+		<form class="form-layout" method="post" action="/treinos/documentos">
+			@page.CSRFField
+			@components.RequiredNote()
+			@components.FieldLabel("training-document-title", "Título", true)
+			<input id="training-document-title" name="title" value={ page.DocumentForm.Title } required/>@components.FieldErrorMessage("title", page.DocumentForm.Errors["title"])
+			@components.FieldLabel("training-document-url", "Ligação HTTPS", true)
+			<input id="training-document-url" name="url" type="url" value={ page.DocumentForm.URL } required/>@components.FieldErrorMessage("url", page.DocumentForm.Errors["url"])
+			@components.FieldLabel("training-document-source", "Fonte oficial", true)
+			<input id="training-document-source" name="source" value={ page.DocumentForm.Source } required/>@components.FieldErrorMessage("source", page.DocumentForm.Errors["source"])
+			@components.FieldLabel("training-document-reviewed", "Revisto em", true)
+			<input id="training-document-reviewed" name="reviewed_on" type="date" value={ page.DocumentForm.ReviewedOn } required/>@components.FieldErrorMessage("reviewed_on", page.DocumentForm.Errors["reviewed_on"])
+			@components.FieldLabel("training-document-event", "Evento (opcional)", false)
+			<select id="training-document-event" name="event_id">
+				<option value="">Sem evento</option>
+				for _, item := range page.Events {
+					<option value={ item.ID } selected?={ item.ID == page.DocumentForm.EventID }>{ item.Name }</option>
+				}
+			</select>@components.FieldLabel("training-document-modality", "Modalidade (opcional)", false)
+			<select id="training-document-modality" name="modality_id">
+				<option value="">Sem modalidade</option>
+				for _, item := range page.Modalities {
+					<option value={ item.ID } selected?={ item.ID == page.DocumentForm.ModalityID }>{ item.Name }</option>
+				}
+			</select>
+			<fieldset id="training-document-scope"><legend>Âmbito</legend><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page, "training-document", page.DocumentForm.ProgrammeID, page.DocumentForm.TeamID)
+</fieldset>@components.FieldErrorMessage("scope", page.DocumentForm.Errors["scope"])
+			@components.FormActions("/treinos") {
+				<button type="submit">Publicar documento</button>
+			}
+		</form>
+	</details>
+}
+
+templ trainingScopeChoices(page TrainingPage, prefix, programmeID, teamID string) {
+	@components.FieldLabel(prefix+"-team", "Equipa (preferencial)", false)
+	<select id={ prefix + "-team" } name="team_id">
+		<option value="">Sem equipa</option>
+		for _, item := range page.Teams {
+			<option value={ item.ID } selected?={ item.ID == teamID }>{ item.Name }</option>
+		}
+	</select>@components.FieldLabel(prefix+"-programme", "Programa", false)
+	<select id={ prefix + "-programme" } name="programme_id">
+		<option value="">Sem programa</option>
+		for _, item := range page.Programmes {
+			<option value={ item.ID } selected?={ item.ID == programmeID }>{ item.Name }</option>
+		}
+	</select>
+}
 
 func trainingOutcomeLabel(status string) string {
 	switch status {
-	case "COMPLETED": return "Concluída"
-	case "MISSED": return "Não realizada"
-	case "REPLACED": return "Substituída"
-	default: return status
+	case "COMPLETED":
+		return "Concluída"
+	case "MISSED":
+		return "Não realizada"
+	case "REPLACED":
+		return "Substituída"
+	default:
+		return status
 	}
+}
+
+func trainingOutcomeTone(status string) string {
+	switch status {
+	case "COMPLETED":
+		return "success"
+	case "MISSED":
+		return "error"
+	case "REPLACED":
+		return "selected"
+	default:
+		return "warning"
+	}
+}
+
+func trainingPageActions(page TrainingPage) []components.PageAction {
+	if page.CanManage {
+		return []components.PageAction{{Label: "Gerir treinos", Href: "#gerir-treinos", Variant: "primary"}}
+	}
+	return nil
 }

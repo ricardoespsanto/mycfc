@@ -30,18 +30,21 @@ type EventDetailPage struct {
 
 templ Events(page EventsPage) { @components.Base(page.Meta, eventsContent(page)) }
 templ eventsContent(page EventsPage) {
-    <section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>Eventos</h1><p>Consulte e responda aos eventos do clube.</p></section>
+    @components.PageHeader("Atividade", "Eventos", "Consulte convívios, competições e outras iniciativas do clube e confirme a sua participação.", eventPageActions(page))
     @components.StatusMessage(page.Success, "success")
-    <section class="dashboard-card"><h2>Próximos eventos</h2>
+    <section class="module">
+        @components.SectionHeading("Agenda", "Próximos eventos", "Datas, estado da sua resposta e disponibilidade num só lugar.")
         if len(page.Events) == 0 {
-            <p class="empty-state">Ainda não existem eventos para apresentar.</p>
+            @components.EmptyState("Sem eventos próximos", "Quando o clube marcar uma atividade relevante, ela aparece aqui.")
         }
         if len(page.Events) > 0 {
-            <ul class="content-list">
+            @components.RecordList("Próximos eventos") {
                 for _, event := range page.Events {
-                    <li><a href={ "/events/" + event.ID }>{ event.Title }</a> <span>{ event.When } · { event.Status }{ event.Capacity }</span></li>
+                    @components.RecordItem(event.Title, "/events/" + event.ID, event.When + event.Capacity) {
+                        @components.Badge(event.Status, eventStatusTone(event.Status))
+                    }
                 }
-            </ul>
+            }
         }
         if page.PreviousURL != "" || page.NextURL != "" {
             <nav class="pagination" aria-label="Paginação de eventos">
@@ -60,7 +63,7 @@ templ eventsContent(page EventsPage) {
 }
 
 templ EventAuthoringForm(form EventForm) {
-    <details class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span id="event-authoring-title" class="disclosure-card__title">Criar evento</span><span class="disclosure-card__summary">Defina data, lotação e participantes.</span></summary><div class="disclosure-card__content">
+    <details id="criar-evento" class="module disclosure" open?={ len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">Criar evento</strong><small>Defina data, lotação e participantes.</small></span></summary><div class="disclosure__content">
         @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "title", Field: "event-title"}, {Key: "description", Field: "event-description"}, {Key: "starts_at", Field: "event-starts-at"}, {Key: "ends_at", Field: "event-ends-at"}, {Key: "response_deadline", Field: "event-deadline"}, {Key: "capacity", Field: "event-capacity"}, {Key: "programme_id", Field: "event-audience"}, {Key: "team_id", Field: "event-audience"}, {Key: "audience", Field: "event-audience"}}))
         <form class="form-layout" method="post" action="/admin/events">@form.CSRFField
             @components.RequiredNote()
@@ -91,43 +94,64 @@ templ EventAuthoringForm(form EventForm) {
 
 templ EventDetail(page EventDetailPage) { @components.Base(page.Meta, eventDetailContent(page)) }
 templ eventDetailContent(page EventDetailPage) {
-    <section class="dashboard-hero"><p class="eyebrow">Evento</p><h1>{ page.Title }</h1><p>{ page.Description }</p><p>{ page.When }</p><p>{ page.Deadline }{ page.Capacity }</p></section>
+    @components.PageHeader("Evento", page.Title, page.Description, []components.PageAction{{Label: "Voltar aos eventos", Href: "/events", Variant: "quiet"}})
+    <section class="module event-summary" aria-label="Informação do evento">
+        <p class="record-meta">{ page.When }</p>
+        if page.Deadline != "" {
+            <p>{ page.Deadline }</p>
+        }
+        if page.Capacity != "" {
+            <p>{ page.Capacity }</p>
+        }
+    </section>
     if !page.CanManageEvents {
-        <section class="dashboard-card"><h2>A sua resposta</h2><p>Estado: { page.Status }</p>
+        <section class="module">
+            @components.SectionHeading("Participação", "A sua resposta", "Confirme a participação da pessoa certa.") {
+                <span class="record-item__actions"><span class="record-meta">Estado: { page.Status }</span>@components.Badge(page.Status, eventStatusTone(page.Status))</span>
+            }
             if page.Status != "Fora do prazo" {
                 <form class="form-layout" method="post" action={ "/events/" + page.ID + "/responses" }>
-                    @page.CSRFField<label for="event-subject">Resposta para</label>
+                    @page.CSRFField@components.FieldLabel("event-subject", "Resposta para", false)
                     <select id="event-subject" name="subject_user_id"><option value="">A minha participação</option>
                         for _, dependent := range page.Dependents {
                             <option value={ dependent.ID }>{ dependent.Name }</option>
                         }
                     </select>
-                    <button name="status" value="Going" type="submit">Vou</button><button name="status" value="NotGoing" type="submit">Não vou</button>
+                    @components.FormActions("/events") {
+                        <button class="action action--primary" name="status" value="Going" type="submit">Vou</button>
+                        <button class="action action--secondary" name="status" value="NotGoing" type="submit">Não vou</button>
+                    }
                 </form>
             }
         </section>
     }
     if page.CanManageEvents {
-        <section class="dashboard-card"><h2>Respostas e presenças</h2>
+        <section class="module">
+            @components.SectionHeading("Gestão", "Respostas e presenças", "Acompanhe confirmações, lista de espera e check-in.")
             if len(page.Responses) == 0 {
-                <p class="empty-state">Ainda não há respostas.</p>
+                @components.EmptyState("Ainda sem respostas", "As confirmações dos participantes aparecem aqui.")
             }
             if len(page.Responses) > 0 {
-                <ul class="content-list">
+                @components.RecordList("Respostas ao evento") {
                     for _, response := range page.Responses {
-                        <li><strong>{ response.Name }</strong> · { response.Status } · { response.RespondedAt }
-                            if response.Status == "Em lista de espera" {
-                                <details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button type="submit">Confirmar vaga</button></form></details>
-                            }
-                            if response.Status == "Vou" && response.CheckedInAt == "" {
-                                <details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/events/" + page.ID + "/check-in" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button type="submit">Registar presença</button></form></details>
+                        @components.RecordItem(response.Name, "", response.RespondedAt) {
+                            @components.Badge(response.Status, eventStatusTone(response.Status))
+                            if (response.Status == "Em lista de espera") || (response.Status == "Vou" && response.CheckedInAt == "") {
+                                <details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions">
+                                if response.Status == "Em lista de espera" {
+                                    <form method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Confirmar vaga</button></form>
+                                }
+                                if response.Status == "Vou" && response.CheckedInAt == "" {
+                                    <form method="post" action={ "/admin/events/" + page.ID + "/check-in" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Registar presença</button></form>
+                                }
+                                </div></details>
                             }
                             if response.CheckedInAt != "" {
-                                <span> · Presença: { response.CheckedInAt }</span>
+                                <span class="record-meta">Presença: { response.CheckedInAt }</span>
                             }
-                        </li>
+                        }
                     }
-                </ul>
+                }
             }
             if page.ResponsesPreviousURL != "" || page.ResponsesNextURL != "" {
                 <nav class="pagination" aria-label="Paginação de respostas">
@@ -140,5 +164,25 @@ templ eventDetailContent(page EventDetailPage) {
                 </nav>
             }
         </section>
+    }
+}
+
+func eventPageActions(page EventsPage) []components.PageAction {
+    if page.CanManageEvents {
+        return []components.PageAction{{Label: "Criar evento", Href: "#criar-evento", Variant: "primary"}}
+    }
+    return nil
+}
+
+func eventStatusTone(status string) string {
+    switch status {
+    case "Vou", "Confirmado", "Presente":
+        return "success"
+    case "Em lista de espera", "Pendente":
+        return "warning"
+    case "Não vou", "Fora do prazo":
+        return "error"
+    default:
+        return "selected"
     }
 }
