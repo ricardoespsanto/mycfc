@@ -66,7 +66,7 @@ func dashboardSectionSummary(heading string) string {
 }
 
 templ Calendar(apiKey, sources string, calendars []CalendarLink, intro string) {
-	<section class="module" aria-labelledby="calendar-title">@components.SectionHeading("Calendários", "Agenda", intro)
+	<section class="module">@components.SectionHeading("Calendários", "Agenda", intro)
 		<div class="interactive-calendar" data-calendar data-calendar-api-key={ apiKey } data-calendar-sources={ sources } data-calendar-time-zone="Europe/Lisbon" aria-live="polite"><p>A carregar agenda...</p></div>
 		<p>Consulte os calendários públicos:</p><ul class="calendar-links record-list">
 			for _, calendar := range calendars {

@@ -164,6 +164,7 @@ func TestFormContractRendersRequiredActionsAndFeedback(t *testing.T) {
 		RequiredNote(),
 		FieldLabel("name", "Nome", true),
 		FieldHelp("name-help", "Use o nome completo."),
+		FieldErrorMessage("name", ""),
 		StatusMessage("Membro criado.", "success"),
 	)
 	if err := component.Render(context.Background(), &output); err != nil {
@@ -172,7 +173,7 @@ func TestFormContractRendersRequiredActionsAndFeedback(t *testing.T) {
 	if err := FormActions("/members").Render(templ.WithChildren(context.Background(), templ.Raw(`<button type="submit">Criar membro</button>`)), &output); err != nil {
 		t.Fatalf("render form actions: %v", err)
 	}
-	for _, expected := range []string{`Campos obrigatórios`, `for="name"`, `visually-hidden`, `href="/members"`, `Cancelar`, `role="status"`, `tabindex="-1"`} {
+	for _, expected := range []string{`Campos obrigatórios`, `for="name"`, `visually-hidden`, `id="name-error"`, `hidden`, `href="/members"`, `Cancelar`, `role="status"`, `tabindex="-1"`} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("form contract does not contain %q", expected)
 		}
