@@ -19,20 +19,34 @@ const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
-const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/noticias', '/admin/fleet']);
+const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/membros', '/admin/noticias', '/admin/fleet']);
 
 async function expectMigratedResponsiveContract(page, route, viewport) {
-  if (!migratedRoutes.has(route)) return;
+  if (!migratedRoutes.has(route) && !route.startsWith('/admin/membros/')) return;
   await page.setViewportSize({ width: 320, height: 720 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  const narrowLayout = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    overflowers: [...document.querySelectorAll('*')]
+      .filter((element) => element.getBoundingClientRect().right > 320 || element.scrollWidth > element.clientWidth)
+      .slice(0, 12)
+      .map((element) => ({ tag: element.tagName, className: element.className, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, right: Math.round(element.getBoundingClientRect().right) })),
+  }));
+  expect(narrowLayout.width, JSON.stringify(narrowLayout.overflowers, null, 2)).toBeLessThanOrEqual(320);
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-    await page.evaluate(() => document.documentElement.clientWidth),
-  );
+  const zoomLayout = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    overflowers: [...document.querySelectorAll('*')]
+      .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth || element.scrollWidth > element.clientWidth)
+      .slice(0, 12)
+      .map((element) => ({ tag: element.tagName, className: element.className, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, right: Math.round(element.getBoundingClientRect().right) })),
+  }));
+  expect(zoomLayout.width, JSON.stringify(zoomLayout.overflowers, null, 2)).toBeLessThanOrEqual(zoomLayout.clientWidth);
   await page.evaluate(() => { document.documentElement.style.zoom = ''; });
   await page.keyboard.press('Tab');
   await expect(page.locator(':focus')).toBeVisible();
+  await page.locator(':focus').evaluate((element) => element.blur());
 }
 
 async function login(page, email) {
@@ -84,6 +98,18 @@ for (const persona of personas) {
         await mkdir(directory, { recursive: true });
         const slug = route === '/today' ? 'today' : route.replace(/^\//, '').replaceAll('/', '--');
         await page.screenshot({ path: path.join(directory, `${slug}.png`), fullPage: true });
+        if (route === '/admin/membros') {
+          const detailHref = await page.locator('tbody th a').first().getAttribute('href');
+          expect(detailHref).toMatch(/^\/admin\/membros\/[0-9a-f-]+$/);
+          await page.goto(detailHref);
+          await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+          await expect(page.getByRole('heading', { name: 'Identidade e acesso' })).toBeVisible();
+          await expectMigratedResponsiveContract(page, detailHref, viewport);
+          const detailViolations = (await new AxeBuilder({ page }).analyze()).violations
+            .filter(({ impact }) => impact === 'serious' || impact === 'critical');
+          expect(detailViolations, JSON.stringify(detailViolations, null, 2)).toEqual([]);
+          await page.screenshot({ path: path.join(directory, 'admin--membro-detail.png'), fullPage: true });
+        }
       }
       await context.close();
     }

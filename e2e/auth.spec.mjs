@@ -486,7 +486,8 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel(`Confirmo que pretendo desativar a conta de ${memberName}.`).check();
     await deactivate.click();
     await expect(noJavaScriptPage.getByRole('status')).toHaveText('Conta desativada.');
-    await expect(noJavaScriptPage.locator('.dashboard-hero').getByText('Conta desativada', { exact: false })).toBeVisible();
+    const accountModule = noJavaScriptPage.locator('.module').filter({ has: noJavaScriptPage.getByRole('heading', { name: 'Identidade e acesso' }) });
+    await expect(accountModule.getByText('Desativada', { exact: true })).toBeVisible();
     await context.close();
   });
 });
