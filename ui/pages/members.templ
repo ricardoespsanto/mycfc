@@ -38,7 +38,7 @@ templ membersContent(page MembersPage) {
     @MemberCreate(page.Form)
 }
 templ memberTable(members []MemberListItem) {
-    <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col"><span class="visually-hidden">Ação</span></th></tr></thead><tbody>
+    <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col" aria-label="Ação"></th></tr></thead><tbody>
     for _, member := range members {
         <tr><th scope="row"><a href={ "/admin/membros/" + member.ID }>{ member.Name }</a></th><td>
             if member.Dependent {
@@ -84,40 +84,53 @@ templ MemberCreate(form MemberCreateForm) {
 }
 templ MemberDetailView(page MemberDetailPage) { @components.Base(page.Meta, memberDetailContent(page)) }
 templ memberDetailContent(page MemberDetailPage) {
-    <section class="dashboard-hero"><p class="eyebrow">Membro</p><h1>{ page.Member.Name }</h1><p>
-        if page.Member.Dependent {
-            Menor a cargo
-        } else {
-            Adulto
-        }
-        if !page.Member.Active {
-            <span> · Conta desativada</span>
-        }
-    </p></section>
+    @components.PageHeader("Administração · Membros", page.Member.Name, "Consulte a identidade, o acesso e as inscrições desta pessoa.", []components.PageAction{{Label: "Voltar aos membros", Href: "/admin/membros", Variant: "secondary"}})
     @components.StatusMessage(page.Success, "success")
-    <section class="dashboard-card"><h2>Conta</h2>
-        if page.Member.Email != "" {
-            <p>Email: { page.Member.Email }</p>
-        }
-        if page.Member.Guardian != "" {
-            <p>Tutor: { page.Member.Guardian }</p>
-        }
-        if page.Member.LoginID != "" {
-            <p>Identificador de acesso: <strong>{ page.Member.LoginID }</strong></p>
-        }
-        if page.Member.Dependent && page.Member.Active {
-            <details class="inline-disclosure" open?={ page.Errors["password"] != "" }><summary>Emitir ou recuperar credencial individual</summary><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
-            <label for="minor-password">Palavra-passe</label><input id="minor-password" type="password" name="password" autocomplete="new-password" required/>@components.FieldErrorMessage("password", page.Errors["password"])
-            <label for="minor-password-confirmation">Confirmar palavra-passe</label><input id="minor-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required/>@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])
-            <button type="submit">Emitir ou recuperar credencial</button></form></details>
-        }
-        if page.Member.Active {
-            <details class="inline-disclosure" open?={ page.Errors["deactivation"] != "" }><summary>Desativar conta</summary><form class="form-layout destructive-region" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<p>Esta pessoa deixa de poder iniciar sessão e usar os espaços ativos.</p>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "deactivation", Field: "confirm-deactivation"}}))<label for="confirm-deactivation"><input id="confirm-deactivation" type="checkbox" name="confirm_deactivation" value="yes" required aria-invalid?={ page.Errors["deactivation"] != "" } aria-describedby="deactivation-error"/> Confirmo que pretendo desativar a conta de { page.Member.Name }.</label>@components.FieldErrorMessage("deactivation", page.Errors["deactivation"])@components.FormActions("/admin/membros/" + page.Member.ID) { <button class="action action--danger" type="submit">Desativar conta de { page.Member.Name }</button> }</form></details>
-        }
+    <section class="module">
+        @components.SectionHeading("Conta", "Identidade e acesso", "Confirme a pessoa e o estado da conta antes de fazer alterações.")
+        <ul class="record-list" aria-label="Dados da conta">
+            <li class="record-item"><div class="record-item__copy"><h3>Tipo de conta</h3><p class="record-meta">
+                if page.Member.Dependent {
+                    Menor a cargo
+                } else {
+                    Adulto
+                }
+            </p></div>
+                if page.Member.Active {
+                    @components.Badge("Ativa", "success")
+                } else {
+                    @components.Badge("Desativada", "error")
+                }
+            </li>
+            if page.Member.Email != "" {
+                @memberDatum("Email", page.Member.Email)
+            }
+            if page.Member.Guardian != "" {
+                @memberDatum("Tutor", page.Member.Guardian)
+            }
+            if page.Member.LoginID != "" {
+                @memberDatum("Identificador de acesso", page.Member.LoginID)
+            }
+        </ul>
     </section>
-    <details class="dashboard-card disclosure-card" open?={ page.Errors["membership"] != "" }><summary><span class="disclosure-card__title">Inscrições ativas · { page.Season }</span><span class="disclosure-card__summary">Gerir programas e espaços de trabalho disponíveis.</span></summary><div class="disclosure-card__content"><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
+    if page.Member.Dependent && page.Member.Active {
+        <details class="module disclosure" open?={ page.Errors["password"] != "" }><summary><span><strong>Credencial individual</strong><small>Emitir ou recuperar o acesso deste menor.</small></span></summary><div class="disclosure__content"><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
+            @components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "password", Field: "minor-password"}, {Key: "password_confirmation", Field: "minor-password-confirmation"}}))
+            @components.FieldLabel("minor-password", "Palavra-passe", true)<input id="minor-password" type="password" name="password" autocomplete="new-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-error"/>@components.FieldErrorMessage("password", page.Errors["password"])
+            @components.FieldLabel("minor-password-confirmation", "Confirmar palavra-passe", true)<input id="minor-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required aria-invalid?={ page.Errors["password_confirmation"] != "" } aria-describedby="password_confirmation-error"/>@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])
+            @components.FormActions("/admin/membros/" + page.Member.ID) { <button type="submit">Emitir ou recuperar credencial</button> }
+        </form></div></details>
+    }
+    if page.Member.Active {
+        <details class="module disclosure" open?={ page.Errors["deactivation"] != "" }><summary><span><strong>Desativar conta</strong><small>Impedir o acesso desta pessoa aos espaços ativos.</small></span></summary><div class="disclosure__content"><form class="form-layout destructive-region" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<p>Esta pessoa deixa de poder iniciar sessão e usar os espaços ativos.</p>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "deactivation", Field: "confirm-deactivation"}}))<label for="confirm-deactivation"><input id="confirm-deactivation" type="checkbox" name="confirm_deactivation" value="yes" required aria-invalid?={ page.Errors["deactivation"] != "" } aria-describedby="deactivation-error"/> Confirmo que pretendo desativar a conta de { page.Member.Name }.</label>@components.FieldErrorMessage("deactivation", page.Errors["deactivation"])@components.FormActions("/admin/membros/" + page.Member.ID) { <button class="action action--danger" type="submit">Desativar conta de { page.Member.Name }</button> }</form></div></details>
+    }
+    <details class="module disclosure" open?={ page.Errors["membership"] != "" }><summary><span><strong>Inscrições ativas · { page.Season }</strong><small>Gerir programas e espaços de trabalho disponíveis.</small></span></summary><div class="disclosure__content"><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
+        <div class="record-list" role="list" aria-label="Programas disponíveis">
         for _, programme := range page.Programmes {
-            <form class="inline-action" method="post" action={ "/admin/membros/" + page.Member.ID + "/inscricao" }>@page.Meta.CSRFField<input type="hidden" name="programme_id" value={ programme.ID }/><label><input type="checkbox" name="active" checked?={ programme.Active }/> { programme.Name }</label><button type="submit">Guardar</button></form>
+            <form class="record-item inline-action" role="listitem" method="post" action={ "/admin/membros/" + page.Member.ID + "/inscricao" }>@page.Meta.CSRFField<input type="hidden" name="programme_id" value={ programme.ID }/><label><input type="checkbox" name="active" checked?={ programme.Active }/> { programme.Name }</label><button class="action action--secondary" type="submit">Guardar</button></form>
         }
-    </div></details><p><a href="/admin/membros">Voltar à gestão de membros</a></p>
+        </div>
+    </div></details>
 }
+
+templ memberDatum(label, value string) { <li class="record-item"><div class="record-item__copy"><h3>{ label }</h3><p class="record-meta">{ value }</p></div></li> }
