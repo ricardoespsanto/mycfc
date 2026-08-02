@@ -94,5 +94,6 @@ The harness captures representative current-state screens rather than every rout
 - multi-capability: Today, Lazer, Competição, Eventos.
 
 This set covers sparse and dense pages, ordinary content, tutor/dependant
-management, staff authoring, administration, and cumulative navigation. #65 owns
-the final route-wide regression matrix.
+management, staff authoring, administration, and cumulative navigation. The
+final route-wide evidence and automated/manual/deferred classification is in
+`ui-release-gate.md`.
