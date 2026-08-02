@@ -27,7 +27,7 @@ templ GuardianContent(page GuardianPage) {
 		if page.Success != "" {
 			@components.StatusMessage(page.Success, "success")
 		}
-		<section class="module" aria-labelledby="dependents-title">@components.SectionHeading("Família", "Menores a cargo", "Dependentes associados à sua conta e respetivo acesso.")
+		<section class="module">@components.SectionHeading("Família", "Menores a cargo", "Dependentes associados à sua conta e respetivo acesso.")
 			if len(page.Dependents) == 0 {
 				@components.EmptyState("Ainda sem menores associados", "Adicione o primeiro menor para gerir a responsabilidade a partir da sua conta.")
 			}

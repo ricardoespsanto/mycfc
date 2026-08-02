@@ -88,6 +88,59 @@ async function expectResponsiveContract(page, route, viewport) {
   await page.evaluate(() => document.activeElement?.blur());
 }
 
+async function expectAccessibilityContract(page, route) {
+  const structure = await page.evaluate(() => {
+    const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+      .filter((heading) => heading.getClientRects().length > 0)
+      .map((heading) => ({ level: Number(heading.tagName.slice(1)), text: heading.textContent.trim() }));
+    const skippedHeading = headings.find((heading, index) => index > 0 && heading.level > headings[index - 1].level + 1);
+    const unresolvedReferences = [...document.querySelectorAll('[aria-describedby], [aria-labelledby]')]
+      .flatMap((element) => [...element.attributes]
+        .filter(({ name }) => name === 'aria-describedby' || name === 'aria-labelledby')
+        .flatMap(({ name, value }) => value.split(/\s+/)
+          .filter((id) => id && !document.getElementById(id))
+          .map((id) => ({ element: element.tagName, attribute: name, id }))));
+    return {
+      title: document.title.trim(),
+      h1Count: headings.filter(({ level }) => level === 1).length,
+      mainCount: document.querySelectorAll('main').length,
+      skippedHeading,
+      unresolvedReferences,
+      htmlLanguage: document.documentElement.lang,
+    };
+  });
+  expect(structure.title, `${route} has no document title`).not.toBe('');
+  expect(structure.htmlLanguage).toBe('pt-PT');
+  expect(structure.h1Count, `${route} must have one visible h1`).toBe(1);
+  expect(structure.mainCount, `${route} must have one main landmark`).toBe(1);
+  expect(structure.skippedHeading, `${route} skips a heading level`).toBeUndefined();
+  expect(structure.unresolvedReferences, `${route} has unresolved ARIA references`).toEqual([]);
+
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press('Tab');
+  const skipLink = page.locator('.skip-link');
+  await expect(skipLink, `${route} must expose the skip link first`).toBeFocused();
+  await expect(skipLink).toHaveAttribute('href', '#conteudo-principal');
+  const focusStyle = await skipLink.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { width: parseFloat(style.outlineWidth), style: style.outlineStyle };
+  });
+  expect(focusStyle.width, `${route} focus indicator has no thickness`).toBeGreaterThanOrEqual(2);
+  expect(focusStyle.style, `${route} focus indicator is not visible`).not.toBe('none');
+
+  await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `${route} forced colours were not applied`).toBe(true);
+  expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), `${route} reduced motion was not applied`).toBe(true);
+  const forcedFocusStyle = await skipLink.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { width: parseFloat(style.outlineWidth), style: style.outlineStyle };
+  });
+  expect(forcedFocusStyle.width, `${route} loses focus thickness in forced colours`).toBeGreaterThanOrEqual(2);
+  expect(forcedFocusStyle.style, `${route} loses focus visibility in forced colours`).not.toBe('none');
+  await page.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
+  await page.evaluate(() => document.activeElement?.blur());
+}
+
 async function login(page, email) {
   await page.goto('/login');
   await page.getByLabel('Correio eletrónico ou identificador CFC').fill(email);
@@ -120,6 +173,7 @@ for (const persona of personas) {
     for (const viewport of viewports) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       const page = await context.newPage();
+      const seenTitles = new Map();
       await login(page, persona.email);
       for (const route of persona.routes) {
         const response = await page.goto(route);
@@ -131,8 +185,12 @@ for (const persona of personas) {
 		  await page.setViewportSize({ width: 320, height: 720 });
 		  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 		  await page.setViewportSize({ width: viewport.width, height: viewport.height });
-		}
-        await expectResponsiveContract(page, route, viewport);
+        }
+		await expectAccessibilityContract(page, route);
+		const routeTitle = await page.title();
+		expect(seenTitles.has(routeTitle), `${route} shares its document title with ${seenTitles.get(routeTitle)}`).toBe(false);
+		seenTitles.set(routeTitle, route);
+		await expectResponsiveContract(page, route, viewport);
         const violations = (await new AxeBuilder({ page }).analyze()).violations
           .filter(({ impact }) => impact === 'serious' || impact === 'critical');
         expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
@@ -146,6 +204,10 @@ for (const persona of personas) {
           await page.goto(detailHref);
           await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
           await expect(page.getByRole('heading', { name: 'Identidade e acesso' })).toBeVisible();
+          await expectAccessibilityContract(page, detailHref);
+          const detailTitle = await page.title();
+          expect(seenTitles.has(detailTitle), `${detailHref} shares its document title with ${seenTitles.get(detailTitle)}`).toBe(false);
+          seenTitles.set(detailTitle, detailHref);
           await expectResponsiveContract(page, detailHref, viewport);
           const detailViolations = (await new AxeBuilder({ page }).analyze()).violations
             .filter(({ impact }) => impact === 'serious' || impact === 'critical');

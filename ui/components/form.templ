@@ -37,6 +37,8 @@ templ StatusMessage(message, tone string) {
 templ FieldErrorMessage(field, message string) {
 	if message != "" {
 		<p id={ field + "-error" } class="field-error">{ message }</p>
+	} else {
+		<p id={ field + "-error" } class="field-error" hidden></p>
 	}
 }
 
