@@ -76,6 +76,9 @@ test.describe('authentication', () => {
     await expect(page.getByRole('heading', { name: 'Olá, Pessoa', exact: true })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
+    await page.goto('/dashboard/member?from=legacy');
+    await expect(page).toHaveURL('/today?from=legacy');
+
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
@@ -95,7 +98,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Tutor' }).click();
+    await page.getByRole('link', { name: 'Menores a cargo' }).click();
     await expect(page).toHaveURL('/dashboard/guardian');
 
     await page.locator('#repair-form > summary').click();
@@ -105,7 +108,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Tutor' }).click();
+    await page.getByRole('link', { name: 'Menores a cargo' }).click();
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
     const firstReference = await success.textContent();
@@ -115,7 +118,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Tutor' }).click();
+    await page.getByRole('link', { name: 'Menores a cargo' }).click();
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
@@ -140,7 +143,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Correio eletrónico').fill(guardianEmail);
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await noJavaScriptPage.getByRole('link', { name: 'Tutor' }).click();
+    await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
     await noJavaScriptPage.getByLabel('Nome').fill('X');
@@ -236,6 +239,9 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
 
     await page.getByRole('link', { name: athleteName }).click();
+    const location = page.getByRole('navigation', { name: 'Localização atual' });
+    await expect(location.getByRole('link', { name: 'Membros' })).toHaveAttribute('href', '/admin/membros');
+    await expect(location.getByText('Detalhe do membro')).toHaveAttribute('aria-current', 'page');
     await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
     await membershipForm.getByLabel('Competição').check();
@@ -248,9 +254,9 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Atleta de competição', exact: true }).click();
+    await page.getByRole('link', { name: 'Competição', exact: true }).click();
     await expect(page).toHaveURL('/dashboard/competition');
-    await expect(page.getByRole('heading', { name: 'Painel de atleta de competição' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Competição', exact: true })).toBeVisible();
   });
 
   test('administrator manages event capacity, waitlist confirmation, and check-in', async ({ page }) => {
@@ -306,6 +312,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await expect(page.getByRole('status')).toHaveText('Evento criado.');
     await page.getByRole('link', { name: futureTitle }).click();
+    await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/events');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
@@ -444,7 +451,7 @@ test.describe('authentication', () => {
     });
     await membershipForm.getByRole('checkbox', { name: 'Lazer', exact: true }).check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
-    await page.getByLabel('Secções de administração').getByRole('link', { name: 'Notícias' }).click();
+    await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Notícias' }).click();
     await page.locator('summary').filter({ hasText: 'Criar notícia' }).click();
     await page.locator('#news-title').fill(title);
     await page.locator('#news-summary').fill('Notícia publicada no painel de lazer.');

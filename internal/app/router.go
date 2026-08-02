@@ -38,14 +38,14 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /logout", auth.RequireAuthenticated(http.HandlerFunc(auth.Logout)))
 	mux.Handle("GET /dashboard", auth.RequireAuthenticated(http.HandlerFunc(auth.Dashboard)))
 	mux.Handle("GET /today", auth.RequireAuthenticated(http.HandlerFunc(dashboard.Today)))
-	mux.Handle("GET /dashboard/member", auth.RequireAuthenticated(http.HandlerFunc(dashboard.Member)))
-	mux.Handle("GET /dashboard/competitor", auth.RequireProgramme("Competition", "Initiation", "Kayak_Polo")(http.HandlerFunc(dashboard.Competitor)))
+	mux.Handle("GET /dashboard/member", auth.RequireAuthenticated(compatibilityRedirect("/today")))
+	mux.Handle("GET /dashboard/competitor", auth.RequireProgramme("Competition", "Initiation", "Kayak_Polo")(compatibilityRedirect("/today")))
 	mux.Handle("GET /dashboard/initiation", auth.RequireProgramme("Initiation")(http.HandlerFunc(dashboard.Initiation)))
 	mux.Handle("GET /dashboard/competition", auth.RequireProgramme("Competition")(http.HandlerFunc(dashboard.Competition)))
 	mux.Handle("GET /dashboard/kayak-polo", auth.RequireProgramme("Kayak_Polo")(http.HandlerFunc(dashboard.KayakPolo)))
 	mux.Handle("GET /dashboard/leisure", auth.RequireProgramme("Leisure")(http.HandlerFunc(dashboard.Leisure)))
 	mux.Handle("GET /dashboard/guardian", auth.RequireGuardian(http.HandlerFunc(dashboard.Guardian)))
-	mux.Handle("GET /dashboard/coach", auth.RequireCoach(http.HandlerFunc(dashboard.Coach)))
+	mux.Handle("GET /dashboard/coach", auth.RequireCoach(compatibilityRedirect("/events")))
 	mux.Handle("GET /dashboard/moderator", auth.RequireModerator(http.HandlerFunc(dashboard.Moderator)))
 	mux.Handle("GET /admin/fleet", auth.RequireAdmin(http.HandlerFunc(dashboard.Admin)))
 	mux.Handle("POST /admin/maintenance", auth.RequireAdmin(http.HandlerFunc(dashboard.Maintenance)))
@@ -82,6 +82,19 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /treinos/documentos", auth.RequireEventStaff(http.HandlerFunc(training.CreateDocument)))
 
 	return customNotFound(mux, system.NotFound)
+}
+
+// compatibilityRedirect keeps an approved legacy URL working without weakening
+// the capability middleware wrapped around it. Query parameters are retained so
+// bookmarked filters and return context are not silently discarded.
+func compatibilityRedirect(target string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		location := target
+		if r.URL.RawQuery != "" {
+			location += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, location, http.StatusSeeOther)
+	})
 }
 
 func assetHandler() http.Handler {

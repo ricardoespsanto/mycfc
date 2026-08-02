@@ -199,6 +199,10 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 	body, document := parseOfficialDocument(item.Body)
 	page := pages.AnnouncementDetailPage{Title: item.Title, Body: body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = item.Title
+	page.Meta.Title = item.Title + " | MyCFC"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Avisos", Path: "/announcements"}}
 	if document != nil {
 		page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
 	}

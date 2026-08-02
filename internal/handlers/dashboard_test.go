@@ -29,10 +29,10 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		user    CurrentUser
 		handler http.HandlerFunc
 	}{
-		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos"}, []string{"Tutor", "O meu programa", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
-		{"tutor", []string{"Membro", "Tutor", "Hoje"}, []string{"Atleta de competição", "Treinador", "Moderador", "Frota"}, CurrentUser{}, dashboard.Guardian},
-		{"competition athlete", []string{"Atleta de competição"}, []string{"Atleta de iniciação", "Atleta de kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
-		{"multiple memberships", []string{"Lazer", "Atleta de iniciação", "Atleta de competição", "Atleta de kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
+		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos"}, []string{"Menores a cargo", "Os meus espaços", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
+		{"tutor", []string{"Membro", "Menores a cargo", "Hoje"}, []string{"Competição", "Treinador", "Moderador", "Frota"}, CurrentUser{}, dashboard.Guardian},
+		{"competition athlete", []string{"Competição"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
+		{"multiple memberships", []string{"Lazer", "Iniciação", "Competição", "Kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
 		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
 		{"admin", []string{"Frota"}, []string{"Treinador", "Moderador"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
@@ -62,6 +62,23 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
+	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
+	labels := strings.Join(dashboardCapabilities(user), ",")
+	for _, want := range []string{"Tutor", "Competição", "Treinador", "Moderador", "Administrador"} {
+		if !strings.Contains(labels, want) {
+			t.Errorf("capabilities %q do not contain %q", labels, want)
+		}
+	}
+	for _, group := range dashboardNavigation(user) {
+		for _, item := range group.Items {
+			if item.Label == "Treinador" || item.Label == "Moderador" {
+				t.Errorf("staff capability exposed as destination: %+v", item)
+			}
+		}
 	}
 }
 
@@ -96,7 +113,7 @@ func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 	response := httptest.NewRecorder()
 	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
 	body := response.Body.String()
-	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Avisos recentes", "Alteração de cais", "Novo", "Rita Silva", "Acesso ativo", "Atleta de competição"} {
+	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Avisos recentes", "Alteração de cais", "Novo", "Rita Silva", "Acesso ativo", "Competição"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Today does not contain %q", want)
 		}

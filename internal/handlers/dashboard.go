@@ -76,15 +76,15 @@ func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Dashboard) Initiation(w http.ResponseWriter, r *http.Request) {
-	h.athlete(w, r, "Painel de atleta de iniciação", "/dashboard/initiation", []string{"Initiation"})
+	h.athlete(w, r, "Iniciação", "/dashboard/initiation", []string{"Initiation"})
 }
 
 func (h Dashboard) Competition(w http.ResponseWriter, r *http.Request) {
-	h.athlete(w, r, "Painel de atleta de competição", "/dashboard/competition", []string{"Competition"})
+	h.athlete(w, r, "Competição", "/dashboard/competition", []string{"Competition"})
 }
 
 func (h Dashboard) KayakPolo(w http.ResponseWriter, r *http.Request) {
-	h.athlete(w, r, "Painel de atleta de kayak polo", "/dashboard/kayak-polo", []string{"Kayak_Polo"})
+	h.athlete(w, r, "Kayak polo", "/dashboard/kayak-polo", []string{"Kayak_Polo"})
 }
 
 func (h Dashboard) athlete(w http.ResponseWriter, r *http.Request, heading, path string, programmes []string) {
@@ -127,7 +127,7 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.render(w, r, "Painel de lazer", "Consulte as notícias e a agenda do clube.", "Ainda não existem notícias publicadas.", "/dashboard/leisure", []CalendarVM{h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID)}, []DashboardSectionVM{
+	h.render(w, r, "Lazer", "Consulte as notícias e a agenda do clube.", "Ainda não existem notícias publicadas.", "/dashboard/leisure", []CalendarVM{h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID)}, []DashboardSectionVM{
 		{Heading: "Notícias", Empty: "Ainda não existem notícias publicadas.", Items: newsItems(news)},
 		{Heading: "Grupos WhatsApp", Empty: "Ainda não existem grupos WhatsApp ativos.", Items: whatsappGroupItems(groups)},
 	})
@@ -210,7 +210,7 @@ func todayRepairStatus(status string) string {
 func todayShortcuts(user CurrentUser) []pages.TodayShortcut {
 	items := []pages.TodayShortcut{{Label: "Eventos", Detail: "Agenda e respostas", Path: "/events"}, {Label: "Treinos", Detail: "Planos e sessões", Path: "/treinos"}, {Label: "Avisos", Detail: "Comunicações do clube", Path: "/announcements"}}
 	for _, group := range dashboardNavigation(user) {
-		if group.Label == "O meu programa" && len(group.Items) > 0 {
+		if group.Label == "Os meus espaços" && len(group.Items) > 0 {
 			for _, item := range group.Items {
 				if item.Path == "/dashboard/guardian" {
 					continue
@@ -628,7 +628,8 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Painel de tutor | MyCFC"
+	meta.Title = "Menores a cargo | MyCFC"
+	meta.PageLabel = "Menores a cargo"
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name
 	meta.Navigation = dashboardNavigation(user)
@@ -795,31 +796,24 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 // dashboardNavigation keeps everyday destinations first and clusters every
 // additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
-	primary := []components.NavigationItem{{Label: "Hoje", Path: "/today"}, {Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+	today := []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
+	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
 
 	var programme []components.NavigationItem
 	if !user.IsDependent {
-		programme = append(programme, components.NavigationItem{Label: "Tutor", Path: "/dashboard/guardian"})
+		programme = append(programme, components.NavigationItem{Label: "Menores a cargo", Path: "/dashboard/guardian"})
 	}
 	if user.Programmes["Leisure"] {
 		programme = append(programme, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}
 	if user.Programmes["Initiation"] {
-		programme = append(programme, components.NavigationItem{Label: "Atleta de iniciação", Path: "/dashboard/initiation"})
+		programme = append(programme, components.NavigationItem{Label: "Iniciação", Path: "/dashboard/initiation"})
 	}
 	if user.Programmes["Competition"] {
-		programme = append(programme, components.NavigationItem{Label: "Atleta de competição", Path: "/dashboard/competition"})
+		programme = append(programme, components.NavigationItem{Label: "Competição", Path: "/dashboard/competition"})
 	}
 	if user.Programmes["Kayak_Polo"] {
-		programme = append(programme, components.NavigationItem{Label: "Atleta de kayak polo", Path: "/dashboard/kayak-polo"})
-	}
-
-	var management []components.NavigationItem
-	if user.CanManageEvents {
-		management = append(management, components.NavigationItem{Label: "Treinador", Path: "/dashboard/coach"})
-	}
-	if user.CanModerateContent {
-		management = append(management, components.NavigationItem{Label: "Moderador", Path: "/dashboard/moderator"})
+		programme = append(programme, components.NavigationItem{Label: "Kayak polo", Path: "/dashboard/kayak-polo"})
 	}
 
 	var admin []components.NavigationItem
@@ -827,15 +821,34 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Componentes", Path: "/admin/componentes"})
 	}
 
-	groups := []components.NavigationGroup{{Items: primary}}
+	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}
 	if len(programme) > 0 {
-		groups = append(groups, components.NavigationGroup{Label: "O meu programa", Items: programme})
-	}
-	if len(management) > 0 {
-		groups = append(groups, components.NavigationGroup{Label: "Gestão", Items: management})
+		groups = append(groups, components.NavigationGroup{Label: "Os meus espaços", Items: programme})
 	}
 	if len(admin) > 0 {
 		groups = append(groups, components.NavigationGroup{Label: "Administração", Items: admin})
 	}
 	return groups
+}
+
+func dashboardCapabilities(user CurrentUser) []string {
+	labels := []string{}
+	if !user.IsDependent {
+		labels = append(labels, "Tutor")
+	}
+	for _, programme := range []struct{ key, label string }{{"Leisure", "Lazer"}, {"Initiation", "Iniciação"}, {"Competition", "Competição"}, {"Kayak_Polo", "Kayak polo"}} {
+		if user.Programmes[programme.key] {
+			labels = append(labels, programme.label)
+		}
+	}
+	if user.CanManageEvents {
+		labels = append(labels, "Treinador")
+	}
+	if user.CanModerateContent {
+		labels = append(labels, "Moderador")
+	}
+	if user.IsAdmin {
+		labels = append(labels, "Administrador")
+	}
+	return labels
 }

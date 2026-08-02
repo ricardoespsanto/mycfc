@@ -10,7 +10,7 @@ const outputRoot = path.resolve('artifacts/ui-review');
 const personas = [
   { key: 'member', email: 'review-member@example.test', routes: ['/today', '/events', '/announcements', '/admin/fleet', '/missing'] },
   { key: 'tutor', email: 'review-tutor@example.test', routes: ['/today', '/dashboard/guardian'] },
-  { key: 'athlete', email: 'review-athlete@example.test', programmeShortcut: 'Atleta de competição', routes: ['/today', '/dashboard/competition', '/treinos'] },
+  { key: 'athlete', email: 'review-athlete@example.test', programmeShortcut: 'Competição', routes: ['/today', '/dashboard/competition', '/treinos'] },
   { key: 'coach', email: 'review-coach@example.test', routes: ['/today', '/events', '/treinos'] },
   { key: 'admin', email: 'review-admin@example.test', routes: ['/today', '/admin/membros', '/admin/noticias', '/admin/fleet'] },
   { key: 'multi', email: 'review-multi@example.test', programmeShortcut: 'Lazer', routes: ['/today', '/dashboard/leisure', '/dashboard/competition', '/events'] },
@@ -186,6 +186,14 @@ for (const persona of personas) {
 		  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 		  await page.setViewportSize({ width: viewport.width, height: viewport.height });
         }
+		if (persona.key === 'coach') {
+			await expect(page.getByText('Treinador', { exact: true })).toBeVisible();
+			await expect(page.getByRole('link', { name: 'Treinador', exact: true })).toHaveCount(0);
+		}
+		if (persona.key === 'multi') {
+			await expect(page.getByText('Moderador', { exact: true })).toBeVisible();
+			await expect(page.getByRole('link', { name: 'Moderador', exact: true })).toHaveCount(0);
+		}
 		await expectAccessibilityContract(page, route);
 		const routeTitle = await page.title();
 		expect(seenTitles.has(routeTitle), `${route} shares its document title with ${seenTitles.get(routeTitle)}`).toBe(false);
