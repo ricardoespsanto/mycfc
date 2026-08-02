@@ -36,14 +36,18 @@ passing across the desktop/mobile route set.
 - Removed broken `aria-labelledby` references from the tutor dependent list
   and shared calendar section. Their visible headings retain the native section
   outline without creating an invalid named-region relationship.
+- Restored the native closed-`details` contract after the shared disclosure
+  styling overrode it. Closed disclosure bodies now use `display: none`, so
+  VoiceOver cannot reach form fields or select options before the disclosure is
+  expanded.
 
 ## Manual evidence
 
 | Check | Environment | Evidence | Result |
 | --- | --- | --- | --- |
 | Accessibility-tree structure, administrator Today | Codex in-app Chromium browser, macOS | Skip link, complementary account/navigation landmark, named primary and breadcrumb navigation, single main/H1, textual status cues and contentinfo exposed in reading order | Pass |
-| Member, tutor and administrator screen-reader journeys | Named pairing required before #65 | Follow `docs/accessibility-manual-check.md`; record browser, screen reader, OS, date and tester here | Pending |
-| Keyboard-only key journeys | Playwright Chromium plus manual checklist | Registration order, Enter activation, disclosure/form operation, validation-summary focus, HTMX status focus and JavaScript-disabled journeys | Automated pass; final manual smoke pending |
+| Member, tutor and administrator screen-reader journeys | VoiceOver + Chromium (Codex in-app browser), macOS 15.7.7 (24G720), 2026-08-02, Codex with user-authorized local VoiceOver | VoiceOver was active while the browser accessibility tree and VO navigation order were inspected. Member Today, denied 403 and missing 404; tutor Today, dependants and expanded form semantics; administrator Today, members, member detail, news and fleet all retained identity, cumulative capabilities, named landmarks/navigation, one H1, coherent headings, current-location state and resolved ARIA references. Spoken audio was not transcribed. | Pass after closed-disclosure remediation |
+| Keyboard-only key journeys | Playwright Chromium plus VoiceOver browser smoke | Registration order, disclosure/form exposure, validation-summary focus, HTMX status focus and JavaScript-disabled journeys; the VoiceOver pass confirmed that closed disclosures no longer expose inactive controls and expanded forms expose their names/help in order | Pass |
 | Forced colours and reduced motion | Playwright Chromium emulation | Every maintained route preserves a visible focus outline; both media preferences activate | Automated pass |
 
 No limitation is accepted by this audit without a rationale and a focused
