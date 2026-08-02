@@ -1,50 +1,87 @@
 package pages
 
 import (
-    "github.com/cfcoimbra/mycfc/internal/validation"
-    "github.com/cfcoimbra/mycfc/ui/components"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
 )
 
-type NewsItem struct { ID, Title, PublishedAt string; Published bool }
-type NewsForm struct { CSRFField templ.Component; Title, Summary, URL, PublishedAt string; Errors validation.FieldErrors }
-type NewsPage struct { Meta components.PageMeta; PreviousURL, NextURL string; Items []NewsItem; Form NewsForm }
+type NewsItem struct {
+	ID, Title, PublishedAt string
+	Published              bool
+}
+type NewsForm struct {
+	CSRFField                        templ.Component
+	Title, Summary, URL, PublishedAt string
+	Errors                           validation.FieldErrors
+}
+type NewsPage struct {
+	Meta                          components.PageMeta
+	PreviousURL, NextURL, Success string
+	Items                         []NewsItem
+	Form                          NewsForm
+}
 
-templ News(page NewsPage) { @components.Base(page.Meta, newsContent(page)) }
+templ News(page NewsPage) {
+	@components.Base(page.Meta, newsContent(page))
+}
+
 templ newsContent(page NewsPage) {
-    <section class="dashboard-hero"><p class="eyebrow">Operações</p><h1>Notícias</h1><p>Prepare notícias do clube e publique-as na data definida.</p></section>
-    <details class="dashboard-card disclosure-card" open?={ len(page.Form.Errors) > 0 }><summary><span class="disclosure-card__title">Criar notícia</span><span class="disclosure-card__summary">Prepare um rascunho para publicação programada.</span></summary><div class="disclosure-card__content"><form class="form-layout" method="post" action="/admin/noticias">@page.Form.CSRFField
-        <label for="news-title">Título</label><input id="news-title" name="title" value={ page.Form.Title } required/>@components.FieldErrorMessage("title", page.Form.Errors["title"])
-        <label for="news-summary">Resumo</label><textarea id="news-summary" name="summary" required>{ page.Form.Summary }</textarea>@components.FieldErrorMessage("summary", page.Form.Errors["summary"])
-        <label for="news-url">Ligação HTTPS (opcional)</label><input id="news-url" type="url" name="url" value={ page.Form.URL }/>@components.FieldErrorMessage("url", page.Form.Errors["url"])
-        <label for="news-published-at">Publicar em</label><input id="news-published-at" type="datetime-local" name="published_at" value={ page.Form.PublishedAt } required/>@components.FieldErrorMessage("published_at", page.Form.Errors["published_at"])
-        <button type="submit">Guardar rascunho</button></form></div></details>
-    <section class="dashboard-card"><h2>Notícias do clube</h2>
-        if len(page.Items) == 0 {
-            <p class="empty-state">Ainda não existem notícias.</p>
-        }
-        if len(page.Items) > 0 {
-            <ul class="content-list">
-            for _, item := range page.Items {
-                <li>{ item.Title } · { item.PublishedAt }
-                if item.Published {
-                    <strong> · publicada</strong><details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField<button type="submit">Expirar</button></form></details>
-                }
-                if !item.Published {
-                    <strong> · rascunho</strong><details class="inline-disclosure"><summary>Ações</summary><form class="inline-action" method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField<button type="submit">Publicar</button></form></details>
-                }
-                </li>
-            }
-            </ul>
-        }
-        if page.PreviousURL != "" || page.NextURL != "" {
-            <nav class="pagination" aria-label="Paginação de notícias">
-                if page.PreviousURL != "" {
-                    <a href={ templ.SafeURL(page.PreviousURL) }>Anterior</a>
-                }
-                if page.NextURL != "" {
-                    <a href={ templ.SafeURL(page.NextURL) }>Seguinte</a>
-                }
-            </nav>
-        }
-    </section>
+	@components.PageHeader("Administração", "Notícias", "Prepare notícias do clube e publique-as na data definida.", []components.PageAction{{Label: "Criar notícia", Href: "#criar-noticia", Variant: "primary"}})
+	@components.StatusMessage(page.Success, "success")
+	<details id="criar-noticia" class="module disclosure" open?={ len(page.Form.Errors) > 0 }>
+		<summary><span><strong>Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary>
+		<div class="disclosure__content">
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "title", Field: "news-title"}, {Key: "summary", Field: "news-summary"}, {Key: "url", Field: "news-url"}, {Key: "published_at", Field: "news-published-at"}}))
+			<form class="form-layout" method="post" action="/admin/noticias">
+				@page.Form.CSRFField
+				@components.RequiredNote()
+				@components.FieldLabel("news-title", "Título", true)
+				<input id="news-title" name="title" value={ page.Form.Title } required aria-invalid?={ page.Form.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.Form.Errors["title"])
+				@components.FieldLabel("news-summary", "Resumo", true)
+				<textarea id="news-summary" name="summary" required aria-invalid?={ page.Form.Errors["summary"] != "" } aria-describedby="summary-error">{ page.Form.Summary }</textarea>@components.FieldErrorMessage("summary", page.Form.Errors["summary"])
+				@components.FieldLabel("news-url", "Ligação HTTPS (opcional)", false)
+				<input id="news-url" type="url" name="url" value={ page.Form.URL } aria-invalid?={ page.Form.Errors["url"] != "" } aria-describedby="url-error"/>@components.FieldErrorMessage("url", page.Form.Errors["url"])
+				@components.FieldLabel("news-published-at", "Publicar em", true)
+				<input id="news-published-at" type="datetime-local" name="published_at" value={ page.Form.PublishedAt } required aria-invalid?={ page.Form.Errors["published_at"] != "" } aria-describedby="published_at-error"/>@components.FieldErrorMessage("published_at", page.Form.Errors["published_at"])
+				@components.FormActions("/admin/noticias") {
+					<button type="submit">Guardar rascunho</button>
+				}
+			</form>
+		</div>
+	</details>
+	<section class="module">
+		@components.SectionHeading("Publicação", "Notícias do clube", "Rascunhos e conteúdos publicados para os membros.")
+		if len(page.Items) == 0 {
+			@components.EmptyState("Ainda sem notícias", "Crie o primeiro rascunho para começar a preparar uma publicação.")
+		}
+		if len(page.Items) > 0 {
+			@components.RecordList("Notícias do clube") {
+				for _, item := range page.Items {
+					<li class="record-item">
+						<div class="record-item__copy"><h3>{ item.Title }</h3><p class="record-meta">{ item.PublishedAt }</p></div>
+						if item.Published {
+							@components.Badge("Publicada", "success")
+							<details class="inline-disclosure"><summary>Ações</summary><form method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField
+<button class="action action--secondary" type="submit">Expirar</button></form></details>
+						}
+						if !item.Published {
+							@components.Badge("Rascunho", "warning")
+							<details class="inline-disclosure"><summary>Ações</summary><form method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField
+<button class="action action--secondary" type="submit">Publicar</button></form></details>
+						}
+					</li>
+				}
+			}
+		}
+		if page.PreviousURL != "" || page.NextURL != "" {
+			<nav class="pagination" aria-label="Paginação de notícias">
+				if page.PreviousURL != "" {
+					<a href={ templ.SafeURL(page.PreviousURL) }>Anterior</a>
+				}
+				if page.NextURL != "" {
+					<a href={ templ.SafeURL(page.NextURL) }>Seguinte</a>
+				}
+			</nav>
+		}
+	</section>
 }

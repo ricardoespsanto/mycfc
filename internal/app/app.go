@@ -154,7 +154,7 @@ func New(ctx context.Context) (*Application, error) {
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location}
+	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
 	foundation := handlers.Foundation{PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}}
 	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, news, foundation))
 	csrfMiddleware := csrfProtection(csrfKey)
