@@ -158,6 +158,34 @@ func TestErrorSummaryRendersFieldLinks(t *testing.T) {
 	}
 }
 
+func TestFormContractRendersRequiredActionsAndFeedback(t *testing.T) {
+	var output strings.Builder
+	component := templ.Join(
+		RequiredNote(),
+		FieldLabel("name", "Nome", true),
+		FieldHelp("name-help", "Use o nome completo."),
+		StatusMessage("Membro criado.", "success"),
+	)
+	if err := component.Render(context.Background(), &output); err != nil {
+		t.Fatalf("render form contract: %v", err)
+	}
+	if err := FormActions("/members").Render(templ.WithChildren(context.Background(), templ.Raw(`<button type="submit">Criar membro</button>`)), &output); err != nil {
+		t.Fatalf("render form actions: %v", err)
+	}
+	for _, expected := range []string{`Campos obrigatórios`, `for="name"`, `visually-hidden`, `href="/members"`, `Cancelar`, `role="status"`, `tabindex="-1"`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("form contract does not contain %q", expected)
+		}
+	}
+}
+
+func TestFieldErrorsForMapsValidationKeysToControlIDs(t *testing.T) {
+	items := FieldErrorsFor(map[string]string{"date_of_birth": "Indique uma data válida."}, []FieldErrorRef{{Key: "date_of_birth", Field: "member-birth"}})
+	if len(items) != 1 || items[0].Field != "member-birth" {
+		t.Fatalf("mapped errors = %#v", items)
+	}
+}
+
 func TestFlashUsesSharedStatusStyling(t *testing.T) {
 	var output strings.Builder
 	if err := Flash("Guardado.").Render(context.Background(), &output); err != nil {

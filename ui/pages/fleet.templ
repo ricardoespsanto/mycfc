@@ -156,25 +156,29 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 	<details id="maintenance-form" class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
 		<summary><span id="maintenance-title" class="disclosure-card__title">Agendar manutenção</span><span class="disclosure-card__summary">Planeie uma intervenção para um equipamento.</span></summary><div class="disclosure-card__content">
 		if form.Success != "" {
-			<p class="status-message" role="status" tabindex="-1">{ form.Success }</p>
+			@components.StatusMessage(form.Success, "success")
 		}
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "equipment_id", Field: "maintenance-equipment"}, {Key: "scheduled_for", Field: "maintenance-scheduled-for"}, {Key: "description", Field: "maintenance-description"}}))
 		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
-			<label for="maintenance-equipment">Equipamento</label>
-			<select id="maintenance-equipment" name="equipment_id" required aria-describedby="equipment_id-error">
+			@components.RequiredNote()
+			@components.FieldLabel("maintenance-equipment", "Equipamento", true)
+			<select id="maintenance-equipment" name="equipment_id" required aria-invalid?={ form.Errors["equipment_id"] != "" } aria-describedby="maintenance-equipment-help equipment_id-error">
 				<option value="">Selecione um equipamento</option>
 				for _, equipment := range form.Equipment {
 					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
 				}
 			</select>
+			@components.FieldHelp("maintenance-equipment-help", "Apenas equipamentos disponíveis podem ser agendados.")
 			@components.FieldErrorMessage("equipment_id", form.Errors["equipment_id"])
-			<label for="maintenance-scheduled-for">Data e hora</label>
-			<input id="maintenance-scheduled-for" name="scheduled_for" type="datetime-local" value={ form.ScheduledFor } required/>
+			@components.FieldLabel("maintenance-scheduled-for", "Data e hora", true)
+			<input id="maintenance-scheduled-for" name="scheduled_for" type="datetime-local" value={ form.ScheduledFor } required aria-invalid?={ form.Errors["scheduled_for"] != "" } aria-describedby="scheduled_for-error"/>
 			@components.FieldErrorMessage("scheduled_for", form.Errors["scheduled_for"])
-			<label for="maintenance-description">Descrição</label>
-			<textarea id="maintenance-description" name="description" required>{ form.Description }</textarea>
+			@components.FieldLabel("maintenance-description", "Descrição", true)
+			<textarea id="maintenance-description" name="description" required aria-invalid?={ form.Errors["description"] != "" } aria-describedby="maintenance-description-help description-error">{ form.Description }</textarea>
+			@components.FieldHelp("maintenance-description-help", "Descreva a intervenção prevista (10 a 2000 caracteres).")
 			@components.FieldErrorMessage("description", form.Errors["description"])
-			<button type="submit">Agendar manutenção</button>
+			@components.FormActions("/admin/fleet") { <button type="submit">Agendar manutenção</button> }
 		</form>
 	</div></details>
 }

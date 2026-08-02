@@ -198,6 +198,12 @@ button:hover {
 .form-layout legend { padding-inline: 0.35rem; font-weight: 700; }
 .form-layout fieldset p { margin: 0; color: #4d5964; }
 .form-layout > button { justify-self: start; }
+.form-required-note { margin: 0; color: #4d5964; font-size: .9rem; }
+.required-mark { color: #9d2929; font-weight: 800; }
+.form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin-block-start: .35rem; }
+.form-actions > button { min-inline-size: 10rem; }
+.destructive-region { margin-block-start: .75rem; padding: 1rem; border: 1px solid #deb0ab; border-radius: var(--radius-sm); background: var(--c-error-bg); }
+.destructive-region > p { margin: 0; }
 .form-layout details { padding: 0.85rem 1rem; border: 1px solid #b7c5cd; border-radius: 0.35rem; }
 .form-layout details > summary { cursor: pointer; font-weight: 700; }
 .form-layout details > fieldset { margin-block: 0.85rem 0; }
@@ -225,6 +231,8 @@ button:hover {
   .site-nav__group ul { position: static; box-shadow: none; padding-inline-start: 0.75rem; background: transparent; }
   .dashboard-card { border-radius: 0.4rem; }
   .form-layout > button { inline-size: 100%; }
+  .form-actions { align-items: stretch; flex-direction: column; }
+  .form-actions > :is(button,.action) { inline-size: 100%; }
   .admin-subnav ul { flex-wrap: wrap; overflow-x: visible; gap: 0 1rem; }
 }
 

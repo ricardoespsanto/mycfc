@@ -1,8 +1,37 @@
-const forms = document.querySelectorAll("form[hx-post]");
+function focusReturnedFeedback(root = document) {
+  const target = root.querySelector?.(".error-summary, [role='status'][tabindex='-1'], [role='alert'][tabindex='-1']");
+  if (target instanceof HTMLElement) {
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: "nearest" });
+  }
+}
 
-for (const form of forms) {
-  form.addEventListener("submit", () => {
+focusReturnedFeedback();
+
+document.addEventListener("htmx:afterSwap", (event) => {
+  focusReturnedFeedback(event.detail?.target || document);
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (form instanceof HTMLFormElement && form.matches("form[hx-post]")) {
     form.setAttribute("aria-busy", "true");
+    if (!form.querySelector("[data-pending-status]")) {
+      const pending = document.createElement("span");
+      pending.className = "visually-hidden";
+      pending.dataset.pendingStatus = "true";
+      pending.setAttribute("role", "status");
+      pending.textContent = "A processar pedido.";
+      form.append(pending);
+    }
+  }
+});
+
+for (const eventName of ["htmx:responseError", "htmx:sendError"]) {
+  document.addEventListener(eventName, (event) => {
+    const form = event.detail?.elt?.closest?.("form[hx-post]");
+    form?.removeAttribute("aria-busy");
+    form?.querySelector("[data-pending-status]")?.remove();
   });
 }
 

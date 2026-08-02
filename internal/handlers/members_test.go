@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -9,6 +10,19 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func TestDeactivationRequiresExplicitConfirmation(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{{"", false}, {"confirm_deactivation=no", false}, {"confirm_deactivation=yes", true}} {
+		request := httptest.NewRequest(http.MethodPost, "/admin/membros/member/desativar", strings.NewReader(tc.body))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if got := deactivationConfirmed(request); got != tc.want {
+			t.Errorf("deactivationConfirmed(%q) = %t, want %t", tc.body, got, tc.want)
+		}
+	}
+}
 
 func TestMemberCreateValidation(t *testing.T) {
 	h := Members{Location: time.UTC, Now: func() time.Time { return time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC) }}

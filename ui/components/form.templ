@@ -1,7 +1,43 @@
 package components
 
+templ RequiredNote() {
+	<p class="form-required-note"><span aria-hidden="true">*</span> Campos obrigatórios</p>
+}
+
+templ FieldLabel(forID, label string, required bool) {
+	<label for={ forID }>
+		{ label }
+		if required {
+			<span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden"> (obrigatório)</span>
+		}
+	</label>
+}
+
+templ FieldHelp(id, message string) {
+	if message != "" {
+		<p id={ id } class="field-help">{ message }</p>
+	}
+}
+
+templ FormActions(cancelHref string) {
+	<div class="form-actions">
+		{ children... }
+		if cancelHref != "" {
+			<a class="action action--quiet" href={ templ.SafeURL(cancelHref) }>Cancelar</a>
+		}
+	</div>
+}
+
+templ StatusMessage(message, tone string) {
+	if message != "" {
+		<p class={ "status-message status-message--" + tone } role={ statusRole(tone) } tabindex="-1">{ message }</p>
+	}
+}
+
 templ FieldErrorMessage(field, message string) {
 	if message != "" {
 		<p id={ field + "-error" } class="field-error">{ message }</p>
 	}
 }
+
+func statusRole(tone string) string { if tone == "error" { return "alert" }; return "status" }
