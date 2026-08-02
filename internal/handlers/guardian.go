@@ -32,9 +32,10 @@ type GuardianDependentStore interface {
 }
 
 type guardianDependentForm struct {
-	Name, DateOfBirth string
-	Errors            validation.FieldErrors
-	Success           string
+	Name, DateOfBirth      string
+	ResponsibilityAccepted bool
+	Errors                 validation.FieldErrors
+	Success                string
 }
 
 func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +78,7 @@ func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Dashboard) validateDependent(r *http.Request) guardianDependentForm {
-	form := guardianDependentForm{Name: strings.TrimSpace(r.PostForm.Get("name")), DateOfBirth: strings.TrimSpace(r.PostForm.Get("date_of_birth")), Errors: validation.FieldErrors{}}
+	form := guardianDependentForm{Name: strings.TrimSpace(r.PostForm.Get("name")), DateOfBirth: strings.TrimSpace(r.PostForm.Get("date_of_birth")), ResponsibilityAccepted: r.PostForm.Get("accept_minor_responsibility") == "on", Errors: validation.FieldErrors{}}
 	name, err := validation.NormalizeName(form.Name)
 	if err != nil {
 		form.Errors.Add("name", err.Error())
@@ -92,7 +93,7 @@ func (h Dashboard) validateDependent(r *http.Request) guardianDependentForm {
 	} else {
 		form.DateOfBirth = dateOfBirth.Format("2006-01-02")
 	}
-	if r.PostForm.Get("accept_minor_responsibility") != "on" {
+	if !form.ResponsibilityAccepted {
 		form.Errors.Add("accept_minor_responsibility", "Tem de aceitar a responsabilidade pelo menor a cargo.")
 	}
 	return form

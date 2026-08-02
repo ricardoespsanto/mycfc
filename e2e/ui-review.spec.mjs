@@ -19,10 +19,10 @@ const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
-const activityRoutes = new Set(['/events', '/announcements', '/treinos']);
+const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure']);
 
-async function expectActivityResponsiveContract(page, route, viewport) {
-  if (!activityRoutes.has(route)) return;
+async function expectMigratedResponsiveContract(page, route, viewport) {
+  if (!migratedRoutes.has(route)) return;
   await page.setViewportSize({ width: 320, height: 720 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -76,7 +76,7 @@ for (const persona of personas) {
 		  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 		  await page.setViewportSize({ width: viewport.width, height: viewport.height });
 		}
-        await expectActivityResponsiveContract(page, route, viewport);
+        await expectMigratedResponsiveContract(page, route, viewport);
         const violations = (await new AxeBuilder({ page }).analyze()).violations
           .filter(({ impact }) => impact === 'serious' || impact === 'critical');
         expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
