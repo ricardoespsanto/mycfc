@@ -19,10 +19,62 @@ const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
-const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/membros', '/admin/noticias', '/admin/fleet', '/missing']);
+async function expectResponsiveContract(page, route, viewport) {
+  for (const width of [320, 375, 768]) {
+    await page.setViewportSize({ width, height: 720 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} overflows at ${width}px`).toBeLessThanOrEqual(width);
+  }
 
-async function expectMigratedResponsiveContract(page, route, viewport) {
-  if (!migratedRoutes.has(route) && !route.startsWith('/admin/membros/')) return;
+  // A 640 CSS-pixel layout is the effective viewport at 200% browser zoom
+  // from the agreed 1280-pixel desktop baseline.
+  await page.setViewportSize({ width: 640, height: 720 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} overflows at 200% zoom`).toBeLessThanOrEqual(640);
+
+  await page.setViewportSize({ width: 375, height: 720 });
+  const touchTargetSelector = 'button, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea, summary, label:has(> input[type="checkbox"]), label:has(> input[type="radio"]), .action, .site-nav a, .admin-subnav a, .pagination a';
+  const undersizedTargets = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
+    .filter((element) => element.getClientRects().length > 0)
+    .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width < 44 || rect.height < 44)
+    .map(({ element, rect }) => ({ tag: element.tagName, text: element.textContent.trim().slice(0, 60), width: Math.round(rect.width), height: Math.round(rect.height) })), touchTargetSelector);
+  expect(undersizedTargets, `${route} has undersized frequent touch targets`).toEqual([]);
+
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} clips enlarged text`).toBeLessThanOrEqual(375);
+  await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
+
+  await page.locator('main details').evaluateAll((details) => details.forEach((detail) => {
+    detail.dataset.responsiveWasOpen = String(detail.open);
+    detail.open = true;
+  }));
+  await page.setViewportSize({ width: 320, height: 720 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} overflows with disclosures expanded`).toBeLessThanOrEqual(320);
+  const expandedTargets = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
+    .filter((element) => element.getClientRects().length > 0)
+    .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width < 44 || rect.height < 44)
+    .map(({ element, rect }) => ({ tag: element.tagName, text: element.textContent.trim().slice(0, 60), width: Math.round(rect.width), height: Math.round(rect.height) })), touchTargetSelector);
+  expect(expandedTargets, `${route} has undersized targets in expanded workflows`).toEqual([]);
+  await page.setViewportSize({ width: 375, height: 720 });
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} clips enlarged expanded workflows`).toBeLessThanOrEqual(375);
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '';
+    document.querySelectorAll('main details').forEach((detail) => {
+      detail.open = detail.dataset.responsiveWasOpen === 'true';
+      delete detail.dataset.responsiveWasOpen;
+    });
+  });
+
+  await page.setViewportSize({ width: 375, height: 400 });
+  const focusTarget = page.locator('main input:not([type="hidden"]), main select, main textarea, main button, main summary, main a').filter({ visible: true }).first();
+  if (await focusTarget.count()) {
+    await focusTarget.focus();
+    const focusedRect = await focusTarget.boundingBox();
+    expect(focusedRect.y, `${route} focus is obscured above the compact viewport`).toBeGreaterThanOrEqual(0);
+    expect(focusedRect.y + focusedRect.height, `${route} focus is obscured below the compact viewport`).toBeLessThanOrEqual(400);
+  }
+
   await page.setViewportSize({ width: 320, height: 720 });
   const narrowLayout = await page.evaluate(() => ({
     width: document.documentElement.scrollWidth,
@@ -33,20 +85,7 @@ async function expectMigratedResponsiveContract(page, route, viewport) {
   }));
   expect(narrowLayout.width, JSON.stringify(narrowLayout.overflowers, null, 2)).toBeLessThanOrEqual(320);
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
-  await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
-  const zoomLayout = await page.evaluate(() => ({
-    width: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    overflowers: [...document.querySelectorAll('*')]
-      .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth || element.scrollWidth > element.clientWidth)
-      .slice(0, 12)
-      .map((element) => ({ tag: element.tagName, className: element.className, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, right: Math.round(element.getBoundingClientRect().right) })),
-  }));
-  expect(zoomLayout.width, JSON.stringify(zoomLayout.overflowers, null, 2)).toBeLessThanOrEqual(zoomLayout.clientWidth);
-  await page.evaluate(() => { document.documentElement.style.zoom = ''; });
-  await page.keyboard.press('Tab');
-  await expect(page.locator(':focus')).toBeVisible();
-  await page.locator(':focus').evaluate((element) => element.blur());
+  await page.evaluate(() => document.activeElement?.blur());
 }
 
 async function login(page, email) {
@@ -77,6 +116,7 @@ async function expectTodayComposition(page, persona) {
 
 for (const persona of personas) {
   test(`captures ${persona.key} desktop and mobile journeys`, async ({ browser }) => {
+    test.setTimeout(180_000);
     for (const viewport of viewports) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       const page = await context.newPage();
@@ -92,7 +132,7 @@ for (const persona of personas) {
 		  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 		  await page.setViewportSize({ width: viewport.width, height: viewport.height });
 		}
-        await expectMigratedResponsiveContract(page, route, viewport);
+        await expectResponsiveContract(page, route, viewport);
         const violations = (await new AxeBuilder({ page }).analyze()).violations
           .filter(({ impact }) => impact === 'serious' || impact === 'critical');
         expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
@@ -106,7 +146,7 @@ for (const persona of personas) {
           await page.goto(detailHref);
           await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
           await expect(page.getByRole('heading', { name: 'Identidade e acesso' })).toBeVisible();
-          await expectMigratedResponsiveContract(page, detailHref, viewport);
+          await expectResponsiveContract(page, detailHref, viewport);
           const detailViolations = (await new AxeBuilder({ page }).analyze()).violations
             .filter(({ impact }) => impact === 'serious' || impact === 'critical');
           expect(detailViolations, JSON.stringify(detailViolations, null, 2)).toEqual([]);
