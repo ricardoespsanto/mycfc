@@ -134,12 +134,15 @@ func New(ctx context.Context) (*Application, error) {
 		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
 		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
 	}
+	pageMeta := components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}
+	system := handlers.System{PageMeta: pageMeta}
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
 		Fleet:                 dbgen.New(pool),
 		Objects:               objectStore,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
-		PageMeta:              components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+		PageMeta:              pageMeta,
+		System:                system,
 		Location:              location,
 		Sessions:              sessions,
 		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
@@ -148,16 +151,16 @@ func New(ctx context.Context) (*Application, error) {
 		SocialID: cfg.CalendarSocialID, CleanupsID: cfg.CalendarCleanupsID,
 		CalendarAPIKey: cfg.GoogleCalendarAPIKey,
 	}
-	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions}
+	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions, System: system}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location}
-	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	training := handlers.Training{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	members := handlers.Members{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	news := handlers.News{Store: dbgen.New(pool), PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}, Location: location, Sessions: sessions}
-	foundation := handlers.Foundation{PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}}
+	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	foundation := handlers.Foundation{PageMeta: pageMeta}
 	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, news, foundation))
-	csrfMiddleware := csrfProtection(csrfKey)
+	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()
 	if err != nil {
@@ -168,7 +171,7 @@ func New(ctx context.Context) (*Application, error) {
 
 	handler := httpx.Chain(
 		router,
-		httpx.RecoveryMiddleware(logger),
+		httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)),
 		httpx.RequestIDMiddleware(),
 		httpx.TrustedProxyMiddleware(trusted),
 		httpx.SecurityHeadersMiddleware(cfg.IsProduction()),
@@ -198,11 +201,9 @@ func New(ctx context.Context) (*Application, error) {
 	}, nil
 }
 
-func csrfProtection(authKey []byte) func(http.Handler) http.Handler {
+func csrfProtection(authKey []byte, system handlers.System) func(http.Handler) http.Handler {
 	return csrf.Protect(authKey, csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`<!doctype html><html lang="pt-PT"><title>Pedido recusado</title><main id="conteudo-principal"><h1>Pedido recusado</h1><p>Atualize a página e tente novamente.</p></main></html>`))
+		system.RequestRejected(w, r)
 	})))
 }
 

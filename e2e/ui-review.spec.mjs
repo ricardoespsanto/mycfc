@@ -8,7 +8,7 @@ test.skip(process.env.UI_REVIEW !== '1', 'Run through make ui-review-screenshots
 const password = 'correct horse 7';
 const outputRoot = path.resolve('artifacts/ui-review');
 const personas = [
-  { key: 'member', email: 'review-member@example.test', routes: ['/today', '/events', '/announcements'] },
+  { key: 'member', email: 'review-member@example.test', routes: ['/today', '/events', '/announcements', '/admin/fleet', '/missing'] },
   { key: 'tutor', email: 'review-tutor@example.test', routes: ['/today', '/dashboard/guardian'] },
   { key: 'athlete', email: 'review-athlete@example.test', programmeShortcut: 'Atleta de competição', routes: ['/today', '/dashboard/competition', '/treinos'] },
   { key: 'coach', email: 'review-coach@example.test', routes: ['/today', '/events', '/treinos'] },
@@ -19,7 +19,7 @@ const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
-const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/membros', '/admin/noticias', '/admin/fleet']);
+const migratedRoutes = new Set(['/events', '/announcements', '/treinos', '/dashboard/guardian', '/dashboard/competition', '/dashboard/leisure', '/admin/membros', '/admin/noticias', '/admin/fleet', '/missing']);
 
 async function expectMigratedResponsiveContract(page, route, viewport) {
   if (!migratedRoutes.has(route) && !route.startsWith('/admin/membros/')) return;
@@ -82,7 +82,9 @@ for (const persona of personas) {
       const page = await context.newPage();
       await login(page, persona.email);
       for (const route of persona.routes) {
-        await page.goto(route);
+        const response = await page.goto(route);
+        if (route === '/missing') expect(response.status()).toBe(404);
+        if (persona.key === 'member' && route === '/admin/fleet') expect(response.status()).toBe(403);
         await expect(page.locator('main h1')).toBeVisible();
 		if (route === '/today') {
 		  await expectTodayComposition(page, persona);

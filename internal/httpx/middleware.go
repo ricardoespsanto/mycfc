@@ -51,7 +51,7 @@ func newRequestID() string {
 	return hex.EncodeToString(bytes[:])
 }
 
-func RecoveryMiddleware(logger *slog.Logger) Middleware {
+func RecoveryMiddleware(logger *slog.Logger, errorHandlers ...http.Handler) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -64,6 +64,10 @@ func RecoveryMiddleware(logger *slog.Logger) Middleware {
 						"request_id", requestID,
 						"panic", fmt.Sprint(recovered),
 					)
+					if len(errorHandlers) > 0 && errorHandlers[0] != nil {
+						errorHandlers[0].ServeHTTP(w, r)
+						return
+					}
 					w.Header().Set("Content-Type", "text/html; charset=utf-8")
 					w.WriteHeader(http.StatusInternalServerError)
 					_, _ = io.WriteString(w, "<!doctype html><html lang=\"pt-PT\"><title>Erro interno</title><h1>Não foi possível concluir o pedido</h1><p>Tente novamente mais tarde.</p></html>")

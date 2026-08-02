@@ -13,11 +13,11 @@ the #56 migration.
 | `/announcements`, `/announcements/{id}` | sparse activity collection, detail and staff authoring | complete | #64 activity PR |
 | `/dashboard/guardian` | tutor collection and contextual forms | complete | #64 programme PR |
 | `/dashboard/{programme}` | programme workspace | complete | #64 programme PR |
-| coach/moderator compatibility routes | contextual redirect or intentional placeholder | review after #56 lands | #56 / #64 |
+| coach/moderator compatibility routes | contextual redirect or intentional placeholder | complete: coach redirect in #56; moderator intentionally retained by #54 decision | #56 / #64 |
 | `/admin/membros`, `/admin/membros/{id}` | dense directory and detail | complete | #58 / #64 member detail PR |
 | `/admin/noticias` | dense publishing workflow | complete | #64 admin operations PR |
 | `/admin/fleet` | operational dashboard and forms | complete | #64 admin operations PR |
-| authenticated system/error states | bounded system state | planned final page-family slice | #64 |
+| authenticated system/error states | bounded system state | complete | #64 system states PR |
 
 Each page-family slice uses the shared page header, module, record list, badge,
 empty-state, action and interaction contracts. Routes are only marked complete

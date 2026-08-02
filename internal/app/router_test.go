@@ -64,7 +64,7 @@ func TestRouterReadinessFailure(t *testing.T) {
 
 func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 	called := false
-	handler := csrfProtection(make([]byte, 32))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := csrfProtection(make([]byte, 32), handlers.System{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
 	}))
 	request := httptest.NewRequest(http.MethodPost, "https://mycfc.example/logout", nil)
