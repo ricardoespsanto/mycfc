@@ -11,6 +11,7 @@ type DashboardPage struct {
 	CalendarSources string
 	Calendars []CalendarLink
 	Sections []DashboardSection
+	Actions []components.PageAction
 	RepairForm components.RepairFormData
 }
 
@@ -27,30 +28,20 @@ templ Dashboard(page DashboardPage) {
 }
 
 templ dashboardContent(page DashboardPage) {
-	<section class="dashboard-hero"><p class="eyebrow">MyCFC</p><h1>{ page.Heading }</h1><p>{ page.Intro }</p></section>
-	<section class="dashboard-card" aria-labelledby="summary-title"><h2 id="summary-title">Resumo</h2><p>{ page.EmptyText }</p></section>
+	@components.PageHeader("O meu programa", page.Heading, page.Intro, page.Actions)
 	@components.RepairForm(page.RepairForm)
 	for _, section := range page.Sections {
-		<section class="dashboard-card"><h2>{ section.Heading }</h2>
+		<section class="module">
+			@components.SectionHeading("Visão geral", section.Heading, dashboardSectionSummary(section.Heading))
 			if len(section.Items) == 0 {
-				<p>{ section.Empty }</p>
+				@components.EmptyState("Ainda sem registos", section.Empty)
 			}
 			if len(section.Items) > 0 {
-				<ul>
+				@components.RecordList(section.Heading) {
 					for _, item := range section.Items {
-						<li>
-							if item.URL != "" {
-								<a href={ item.URL }>{ item.Title }</a>
-							}
-							if item.URL == "" {
-								{ item.Title }
-							}
-							if item.Detail != "" {
-								<span> { item.Detail }</span>
-							}
-						</li>
+						@components.RecordItem(item.Title, item.URL, item.Detail)
 					}
-				</ul>
+				}
 			}
 		</section>
 	}
@@ -59,10 +50,25 @@ templ dashboardContent(page DashboardPage) {
 	}
 }
 
+func dashboardSectionSummary(heading string) string {
+	switch heading {
+	case "Desempenho":
+		return "Métricas recentes para acompanhar a sua evolução."
+	case "Treinos recentes":
+		return "Registos das sessões realizadas nos últimos 90 dias."
+	case "Notícias":
+		return "Atualizações publicadas pelo clube."
+	case "Grupos WhatsApp":
+		return "Canais associados às suas inscrições ativas."
+	default:
+		return "Informação relevante para o seu programa."
+	}
+}
+
 templ Calendar(apiKey, sources string, calendars []CalendarLink, intro string) {
-	<section class="dashboard-card" aria-labelledby="calendar-title"><h2 id="calendar-title">Agenda</h2><p>{ intro }</p>
+	<section class="module">@components.SectionHeading("Calendários", "Agenda", intro)
 		<div class="interactive-calendar" data-calendar data-calendar-api-key={ apiKey } data-calendar-sources={ sources } data-calendar-time-zone="Europe/Lisbon" aria-live="polite"><p>A carregar agenda...</p></div>
-		<p>Consulte os calendários públicos:</p><ul class="calendar-links">
+		<p>Consulte os calendários públicos:</p><ul class="calendar-links record-list">
 			for _, calendar := range calendars {
 				<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
 			}

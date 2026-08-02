@@ -11,6 +11,7 @@ import (
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
@@ -33,6 +34,7 @@ type Events struct {
 	PageMeta components.PageMeta
 	Location *time.Location
 	Now      func() time.Time
+	Sessions *scs.SessionManager
 }
 
 type eventForm struct {
@@ -129,6 +131,9 @@ func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
+	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "events_flash", "Evento criado.")
 	}
 	httpx.Redirect(w, r, "/events", http.StatusSeeOther)
 }
@@ -453,6 +458,9 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
 	defer cancel()
 	page := pages.EventsPage{CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
+	}
 	if user.IsAdmin || user.CanManageEvents {
 		if user.IsAdmin {
 			pageNumber := eventsPageNumber(r.URL.Query().Get("page"))

@@ -13,26 +13,26 @@ type RepairFormData struct {
 }
 
 templ RepairForm(form RepairFormData) {
-	<details id="repair-form" class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 || form.Success != "" }>
-		<summary><span class="disclosure-card__title">Reportar avaria</span><span class="disclosure-card__summary">Comunique um problema num equipamento do clube.</span></summary>
-		<div class="disclosure-card__content">
+	<details id="repair-form" class="module disclosure" open?={ len(form.Errors) > 0 || form.Success != "" }>
+		<summary><span><strong>Reportar avaria</strong><small>Comunique um problema num equipamento do clube.</small></span></summary>
+		<div class="disclosure__content">
 		if form.Success != "" {
-			<p class="flash" role="status" tabindex="-1">{ form.Success }</p>
+			@StatusMessage(form.Success, "success")
 		}
-		if form.Errors["form"] != "" {
-			<p class="field-error" role="alert">{ form.Errors["form"] }</p>
-		}
+		@StatusMessage(form.Errors["form"], "error")
+		@ErrorSummary(FieldErrorsFromMap(form.Errors, []string{"equipment_id", "issue_description", "photo"}))
 		<form class="form-layout" method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="#repair-form" hx-swap="outerHTML" hx-target-422="#repair-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
-			<div class="form-field"><label for="equipment_id">Equipamento</label><select id="equipment_id" name="equipment_id" required><option value="">Selecione</option>
+			@RequiredNote()
+			<div class="form-field">@FieldLabel("equipment_id", "Equipamento", true)<select id="equipment_id" name="equipment_id" required aria-invalid?={ form.Errors["equipment_id"] != "" } aria-describedby="equipment-help equipment_id-error"><option value="">Selecione</option>
 				for _, equipment := range form.Equipment {
 					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
 				}
-			</select>@FieldErrorMessage("equipment_id", form.Errors["equipment_id"])</div>
-			<div class="form-field"><label for="issue_description">Descrição da avaria</label><textarea id="issue_description" name="issue_description" required minlength="10" maxlength="2000">{ form.Description }</textarea>@FieldErrorMessage("issue_description", form.Errors["issue_description"])</div>
-			<div class="form-field"><label for="photo">Fotografia (opcional)</label><input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp"/>@FieldErrorMessage("photo", form.Errors["photo"])</div>
-			<button type="submit">Reportar avaria</button>
+			</select>@FieldHelp("equipment-help", "Selecione o equipamento onde detetou o problema.")@FieldErrorMessage("equipment_id", form.Errors["equipment_id"])</div>
+			<div class="form-field">@FieldLabel("issue_description", "Descrição da avaria", true)<textarea id="issue_description" name="issue_description" required minlength="10" maxlength="2000" aria-invalid?={ form.Errors["issue_description"] != "" } aria-describedby="issue-description-help issue_description-error">{ form.Description }</textarea>@FieldHelp("issue-description-help", "Indique onde está o problema e o que observou.")@FieldErrorMessage("issue_description", form.Errors["issue_description"])</div>
+			<div class="form-field">@FieldLabel("photo", "Fotografia (opcional)", false)<input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" aria-invalid?={ form.Errors["photo"] != "" } aria-describedby="photo-help photo-error"/>@FieldHelp("photo-help", "JPEG, PNG ou WebP; o ficheiro não é reposto após erro.")@FieldErrorMessage("photo", form.Errors["photo"])</div>
+			@FormActions("") { <button type="submit">Reportar avaria</button> }
 		</form>
 		</div>
 	</details>

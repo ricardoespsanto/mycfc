@@ -156,6 +156,35 @@ func TestErrorSummaryRendersFieldLinks(t *testing.T) {
 	}
 }
 
+func TestFormContractRendersRequiredActionsAndFeedback(t *testing.T) {
+	var output strings.Builder
+	component := templ.Join(
+		RequiredNote(),
+		FieldLabel("name", "Nome", true),
+		FieldHelp("name-help", "Use o nome completo."),
+		FieldErrorMessage("name", ""),
+		StatusMessage("Membro criado.", "success"),
+	)
+	if err := component.Render(context.Background(), &output); err != nil {
+		t.Fatalf("render form contract: %v", err)
+	}
+	if err := FormActions("/members").Render(templ.WithChildren(context.Background(), templ.Raw(`<button type="submit">Criar membro</button>`)), &output); err != nil {
+		t.Fatalf("render form actions: %v", err)
+	}
+	for _, expected := range []string{`Campos obrigatórios`, `for="name"`, `visually-hidden`, `id="name-error"`, `hidden`, `href="/members"`, `Cancelar`, `role="status"`, `tabindex="-1"`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("form contract does not contain %q", expected)
+		}
+	}
+}
+
+func TestFieldErrorsForMapsValidationKeysToControlIDs(t *testing.T) {
+	items := FieldErrorsFor(map[string]string{"date_of_birth": "Indique uma data válida."}, []FieldErrorRef{{Key: "date_of_birth", Field: "member-birth"}})
+	if len(items) != 1 || items[0].Field != "member-birth" {
+		t.Fatalf("mapped errors = %#v", items)
+	}
+}
+
 func TestFlashUsesSharedStatusStyling(t *testing.T) {
 	var output strings.Builder
 	if err := Flash("Guardado.").Render(context.Background(), &output); err != nil {
@@ -194,6 +223,34 @@ func TestPageHeaderRendersActionContract(t *testing.T) {
 	for _, expected := range []string{`class="page-header"`, `<h1>Membros</h1>`, `class="action action--primary"`, `href="#criar"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("page header does not contain %q", expected)
+		}
+	}
+}
+
+func TestRecordCollectionRendersSemanticContract(t *testing.T) {
+	var output strings.Builder
+	item := RecordItem("Treino técnico", "/treinos/1", "Hoje · 18:30")
+	if err := RecordList("Próximas sessões").Render(templ.WithChildren(context.Background(), item), &output); err != nil {
+		t.Fatalf("render record list: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`class="record-list"`, `aria-label="Próximas sessões"`, `class="record-item"`, `href="/treinos/1"`, `Treino técnico</a></h3>`, `Hoje · 18:30`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("record collection does not contain %q", expected)
+		}
+	}
+}
+
+func TestSectionHeadingSupportsContextualActions(t *testing.T) {
+	var output strings.Builder
+	ctx := templ.WithChildren(context.Background(), templ.Raw(`<a href="#novo">Novo</a>`))
+	if err := SectionHeading("Agenda", "Próximos eventos", "Atividade relevante.").Render(ctx, &output); err != nil {
+		t.Fatalf("render section heading: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`class="section-heading"`, `Agenda`, `<h2>Próximos eventos</h2>`, `Atividade relevante.`, `href="#novo"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("section heading does not contain %q", expected)
 		}
 	}
 }

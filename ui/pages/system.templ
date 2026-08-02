@@ -1,0 +1,32 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type SystemStatePage struct {
+	Meta components.PageMeta
+	Eyebrow, Title, Message, RequestID string
+	Action components.PageAction
+}
+
+templ SystemState(page SystemStatePage) {
+	@components.Base(page.Meta, systemStateContent(page))
+}
+
+templ systemStateContent(page SystemStatePage) {
+	@components.PageHeader(page.Eyebrow, page.Title, page.Message, systemStateActions(page.Action))
+	<section class="module system-state" aria-labelledby="system-state-title">
+		<div class="empty-state">
+			<span class="empty-state__icon" aria-hidden="true">≈</span>
+			<strong id="system-state-title">O que pode fazer agora</strong>
+			<p>Use a ação acima para regressar a um ponto seguro. Se o problema continuar, contacte o clube.</p>
+			if page.RequestID != "" {
+				<p class="record-meta">Referência do pedido: <code>{ page.RequestID }</code></p>
+			}
+		</div>
+	</section>
+}
+
+func systemStateActions(action components.PageAction) []components.PageAction {
+	if action.Label == "" || action.Href == "" { return nil }
+	return []components.PageAction{action}
+}

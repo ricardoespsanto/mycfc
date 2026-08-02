@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"fmt"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 )
@@ -39,58 +40,57 @@ templ Fleet(page FleetPage) {
 }
 
 templ fleetContent(page FleetPage) {
-	<section class="dashboard-hero"><p class="eyebrow">Operações</p><h1>Frota</h1><p>Consulte o estado dos equipamentos, avarias e manutenção.</p></section>
-	<section class="dashboard-card"><h2>Estado da frota</h2><ul class="content-list">
+	@components.PageHeader("Administração", "Frota", "Consulte o estado dos equipamentos, avarias e manutenção.", []components.PageAction{{Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "primary"}})
+	<section class="module">@components.SectionHeading("Operações", "Estado da frota", "Totais atuais por estado operacional.")<ul class="record-list" aria-label="Estado da frota">
 		for _, count := range page.Counts {
-			<li>{ count.Status }: { count.Total }</li>
+			<li class="record-item"><div class="record-item__copy"><h3>{ fleetStatusLabel(count.Status) }</h3></div>@components.Badge(fleetCountLabel(count.Total), fleetStatusTone(count.Status))</li>
 		}
 	</ul></section>
-	<details class="dashboard-card disclosure-card"><summary><span class="disclosure-card__title">Equipamentos</span><span class="disclosure-card__summary">Consulte o inventário e o estado de cada equipamento.</span></summary><div class="disclosure-card__content">
+	<details class="module disclosure"><summary><span><strong>Equipamentos</strong><small>Consulte o inventário e o estado de cada equipamento.</small></span></summary><div class="disclosure__content">
 		if len(page.Equipment) == 0 {
-			<p class="empty-state">Ainda não existem equipamentos registados.</p>
+			@components.EmptyState("Ainda sem equipamentos", "Os equipamentos registados aparecem aqui.")
 		}
 		if len(page.Equipment) > 0 {
-			<ul class="content-list">
+			@components.RecordList("Inventário da frota") {
 				for _, equipment := range page.Equipment {
-					<li>{ equipment.AssetTag } - { equipment.Name } - { equipment.Type } - { equipment.Status }</li>
+					@components.RecordItem(equipment.AssetTag+" · "+equipment.Name, "", equipment.Type) { @components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status)) }
 				}
-			</ul>
+			}
 		}
 		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
 	</div></details>
-	<section class="dashboard-card"><h2>Pedidos de reparação pendentes</h2>
+	<section class="module">@components.SectionHeading("Avarias", "Pedidos de reparação pendentes", "Problemas reportados que ainda exigem acompanhamento.")
 		if len(page.Repairs) == 0 {
-			<p class="empty-state">Não existem pedidos de reparação pendentes.</p>
+			@components.EmptyState("Sem reparações pendentes", "Não existem pedidos de reparação a exigir acompanhamento.")
 		}
 		if len(page.Repairs) > 0 {
-			<ul class="content-list">
+			@components.RecordList("Pedidos de reparação pendentes") {
 				for _, repair := range page.Repairs {
-					<li><strong>{ repair.Equipment }</strong> - { repair.Description } - { repair.Status } - { repair.ReportedAt }
+					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">{ repair.ReportedAt }</p>@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))
 						if repair.PhotoURL != "" {
 							<br/><img src={ repair.PhotoURL } alt="Fotografia da avaria"/>
 						}
 						if repair.PhotoUnavailable != "" {
 							<br/><span>{ repair.PhotoUnavailable }</span>
 						}
-						@RepairStatusForm(repair, page.Meta.CSRFField)
+						@RepairStatusForm(repair, page.Meta.CSRFField)</div>
 					</li>
 				}
-			</ul>
+			}
 		}
 		@fleetPagination(page.RepairsPreviousURL, page.RepairsNextURL, "Paginação de pedidos de reparação")
 	</section>
-	<section class="dashboard-card"><h2>Próximas manutenções</h2>
+	<section class="module">@components.SectionHeading("Planeamento", "Próximas manutenções", "Intervenções previstas para os próximos 90 dias.")
 		if len(page.Maintenance) == 0 {
-			<p class="empty-state">Não existem manutenções nos próximos 90 dias.</p>
+			@components.EmptyState("Sem manutenções agendadas", "Não existem manutenções nos próximos 90 dias.")
 		}
 		if len(page.Maintenance) > 0 {
-			<ul class="content-list">
+			@components.RecordList("Próximas manutenções") {
 				for _, task := range page.Maintenance {
-					<li><strong>{ task.Equipment }</strong> - { task.Description } - { task.Status } - { task.ScheduledFor }
-						@MaintenanceCompletionForm(task, page.Meta.CSRFField)
+					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ task.Equipment }</h3><p>{ task.Description }</p><p class="record-meta">{ task.ScheduledFor }</p>@components.Badge(fleetStatusLabel(task.Status), fleetStatusTone(task.Status))@MaintenanceCompletionForm(task, page.Meta.CSRFField)</div>
 					</li>
 				}
-			</ul>
+			}
 		}
 		@fleetPagination(page.MaintenancePreviousURL, page.MaintenanceNextURL, "Paginação de manutenções")
 	</section>
@@ -142,7 +142,7 @@ templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component
 }
 
 templ FleetActionFeedback(success, errorMessage string) {
-	<section class="dashboard-card" aria-live="polite">
+	<section class="module" aria-live="polite">
 		if success != "" {
 			<p class="status-message" role="status" tabindex="-1">{ success }</p>
 		}
@@ -153,28 +153,56 @@ templ FleetActionFeedback(success, errorMessage string) {
 }
 
 templ MaintenanceForm(form FleetMaintenanceForm) {
-	<details id="maintenance-form" class="dashboard-card disclosure-card" open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
-		<summary><span id="maintenance-title" class="disclosure-card__title">Agendar manutenção</span><span class="disclosure-card__summary">Planeie uma intervenção para um equipamento.</span></summary><div class="disclosure-card__content">
+	<details id="maintenance-form" class="module disclosure" open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
+		<summary><span><strong id="maintenance-title">Agendar manutenção</strong><small>Planeie uma intervenção para um equipamento.</small></span></summary><div class="disclosure__content">
 		if form.Success != "" {
-			<p class="status-message" role="status" tabindex="-1">{ form.Success }</p>
+			@components.StatusMessage(form.Success, "success")
 		}
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "equipment_id", Field: "maintenance-equipment"}, {Key: "scheduled_for", Field: "maintenance-scheduled-for"}, {Key: "description", Field: "maintenance-description"}}))
 		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
-			<label for="maintenance-equipment">Equipamento</label>
-			<select id="maintenance-equipment" name="equipment_id" required aria-describedby="equipment_id-error">
+			@components.RequiredNote()
+			@components.FieldLabel("maintenance-equipment", "Equipamento", true)
+			<select id="maintenance-equipment" name="equipment_id" required aria-invalid?={ form.Errors["equipment_id"] != "" } aria-describedby="maintenance-equipment-help equipment_id-error">
 				<option value="">Selecione um equipamento</option>
 				for _, equipment := range form.Equipment {
 					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
 				}
 			</select>
+			@components.FieldHelp("maintenance-equipment-help", "Apenas equipamentos disponíveis podem ser agendados.")
 			@components.FieldErrorMessage("equipment_id", form.Errors["equipment_id"])
-			<label for="maintenance-scheduled-for">Data e hora</label>
-			<input id="maintenance-scheduled-for" name="scheduled_for" type="datetime-local" value={ form.ScheduledFor } required/>
+			@components.FieldLabel("maintenance-scheduled-for", "Data e hora", true)
+			<input id="maintenance-scheduled-for" name="scheduled_for" type="datetime-local" value={ form.ScheduledFor } required aria-invalid?={ form.Errors["scheduled_for"] != "" } aria-describedby="scheduled_for-error"/>
 			@components.FieldErrorMessage("scheduled_for", form.Errors["scheduled_for"])
-			<label for="maintenance-description">Descrição</label>
-			<textarea id="maintenance-description" name="description" required>{ form.Description }</textarea>
+			@components.FieldLabel("maintenance-description", "Descrição", true)
+			<textarea id="maintenance-description" name="description" required aria-invalid?={ form.Errors["description"] != "" } aria-describedby="maintenance-description-help description-error">{ form.Description }</textarea>
+			@components.FieldHelp("maintenance-description-help", "Descreva a intervenção prevista (10 a 2000 caracteres).")
 			@components.FieldErrorMessage("description", form.Errors["description"])
-			<button type="submit">Agendar manutenção</button>
+			@components.FormActions("/admin/fleet") { <button type="submit">Agendar manutenção</button> }
 		</form>
 	</div></details>
+}
+
+func fleetCountLabel(total int64) string { return fmt.Sprintf("%d", total) }
+
+func fleetStatusLabel(status string) string {
+	switch status {
+	case "Operational": return "Operacional"
+	case "Maintenance", "Scheduled": return "Manutenção"
+	case "Retired": return "Retirado"
+	case "Pendente": return "Pendente"
+	case "Em_Analise": return "Em análise"
+	case "Resolvido", "Completed": return "Concluído"
+	case "In_Progress": return "Em curso"
+	default: return status
+	}
+}
+
+func fleetStatusTone(status string) string {
+	switch status {
+	case "Operational", "Resolvido", "Completed": return "success"
+	case "Maintenance", "Scheduled", "Em_Analise", "In_Progress": return "warning"
+	case "Retired": return "error"
+	default: return "selected"
+	}
 }

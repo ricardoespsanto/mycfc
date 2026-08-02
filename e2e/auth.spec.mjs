@@ -19,7 +19,7 @@ async function expectNoSeriousAxeViolations(page) {
 
 async function expectNoHorizontalOverflow(page) {
   const overflowing = await page.locator('*').evaluateAll((elements) => elements
-    .filter((element) => element.scrollWidth > element.clientWidth + 1)
+    .filter((element) => !element.classList.contains('visually-hidden') && element.scrollWidth > element.clientWidth + 1)
     .map((element) => ({ tag: element.tagName, className: element.className, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })));
   expect(overflowing).toEqual([]);
 }
@@ -146,6 +146,13 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
 
+    await noJavaScriptPage.getByLabel('Nome').fill('X');
+    await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
+    await noJavaScriptPage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
+    await noJavaScriptPage.getByRole('button', { name: 'Adicionar menor' }).click();
+    await expect(noJavaScriptPage.locator('.error-summary')).toBeVisible();
+    await expect(noJavaScriptPage.getByLabel('Nome')).toHaveValue('X');
+
     await noJavaScriptPage.getByLabel('Nome').fill('Menor de teste');
     await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
     await noJavaScriptPage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
@@ -184,7 +191,12 @@ test.describe('authentication', () => {
     await maintenanceForm.getByLabel('Data e hora').fill(scheduledFor);
     await maintenanceForm.getByLabel('Descrição').fill('curta');
     await maintenanceForm.getByRole('button', { name: 'Agendar manutenção' }).click();
-    await expect(maintenanceForm.getByText('A descrição deve ter entre 10 e 2000 caracteres.')).toBeVisible();
+    await expect(maintenanceForm.locator('#description-error')).toHaveText(
+      'A descrição deve ter entre 10 e 2000 caracteres.',
+    );
+    await expect(maintenanceForm.locator('.error-summary')).toBeFocused();
+    await expect(maintenanceForm.getByLabel('Equipamento')).not.toHaveValue('');
+    await expect(maintenanceForm.getByLabel('Data e hora')).toHaveValue(scheduledFor);
 
     const description = `Manutenção e2e ${Date.now()}`;
     await maintenanceForm.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
@@ -221,6 +233,7 @@ test.describe('authentication', () => {
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(page.getByRole('status')).toHaveText('Conta criada.');
     await page.getByLabel('Nome, email ou identificador de menor').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
@@ -279,14 +292,25 @@ test.describe('authentication', () => {
 
     await page.goto('/events');
     await page.locator('summary').filter({ hasText: 'Criar evento' }).click();
+    await page.locator('#event-title').fill('E');
+    await page.locator('#event-description').fill('Valores seguros devem permanecer após validação.');
+    await page.locator('#event-starts-at').fill(asDateTimeLocal(futureEnd));
+    await page.locator('#event-ends-at').fill(asDateTimeLocal(futureStart));
+    await page.getByText('Destinatários (opcional)', { exact: true }).click();
+    await page.getByLabel('Competição').check();
+    await page.getByRole('button', { name: 'Criar evento' }).click();
+    await expect(page.locator('.error-summary')).toBeFocused();
+    await expect(page.locator('#event-title')).toHaveValue('E');
+    await expect(page.locator('#event-description')).toHaveValue('Valores seguros devem permanecer após validação.');
+    await expect(page.getByLabel('Competição')).toBeChecked();
+
     await page.locator('#event-title').fill(futureTitle);
     await page.locator('#event-description').fill('Evento de teste para confirmar lotação e lista de espera.');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(futureStart));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(futureEnd));
     await page.locator('#event-capacity').fill('1');
-    await page.getByText('Destinatários (opcional)', { exact: true }).click();
-    await page.getByLabel('Competição').check();
     await page.getByRole('button', { name: 'Criar evento' }).click();
+    await expect(page.getByRole('status')).toHaveText('Evento criado.');
     await page.getByRole('link', { name: futureTitle }).click();
     await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/events');
 
@@ -400,7 +424,7 @@ test.describe('authentication', () => {
     await expect(page.getByRole('link', { name: title })).toHaveCount(0);
   });
 
-  test('administrator publishes scheduled news to the leisure workspace and expires it', async ({ page }) => {
+  test('administrator publishes news and confirms member deactivation without JavaScript', async ({ page, browser }) => {
     test.setTimeout(120000);
     const memberName = `Lazer E2E ${Date.now()}`;
     const title = `Notícia E2E ${Date.now()}`;
@@ -420,9 +444,12 @@ test.describe('authentication', () => {
     await page.getByLabel('Nome, email ou identificador de menor').fill(memberName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Lazer') });
-    await membershipForm.getByLabel('Lazer').check();
+    const memberships = page.locator('details').filter({ has: page.getByText('Inscrições ativas', { exact: false }) });
+    await memberships.locator('summary').click();
+    const membershipForm = memberships.locator('form').filter({
+      has: page.getByRole('checkbox', { name: 'Lazer', exact: true }),
+    });
+    await membershipForm.getByRole('checkbox', { name: 'Lazer', exact: true }).check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Notícias' }).click();
     await page.locator('summary').filter({ hasText: 'Criar notícia' }).click();
@@ -448,5 +475,26 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Notícias' }).click();
     await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
+
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const noJavaScriptPage = await context.newPage();
+    await noJavaScriptPage.goto('/login');
+    await noJavaScriptPage.getByLabel('Correio eletrónico').fill(adminEmail);
+    await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
+    await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await noJavaScriptPage.getByRole('link', { name: 'Membros', exact: true }).click();
+    await noJavaScriptPage.getByLabel('Nome, email ou identificador de menor').fill(memberName);
+    await noJavaScriptPage.getByRole('button', { name: 'Procurar' }).click();
+    await noJavaScriptPage.getByRole('link', { name: memberName }).click();
+    await noJavaScriptPage.getByText('Desativar conta', { exact: true }).click();
+    const deactivate = noJavaScriptPage.getByRole('button', { name: `Desativar conta de ${memberName}` });
+    await expect(deactivate).toBeVisible();
+    await expect(noJavaScriptPage.getByRole('link', { name: 'Cancelar' }).last()).toHaveAttribute('href', /\/admin\/membros\//);
+    await noJavaScriptPage.getByLabel(`Confirmo que pretendo desativar a conta de ${memberName}.`).check();
+    await deactivate.click();
+    await expect(noJavaScriptPage.getByRole('status')).toHaveText('Conta desativada.');
+    const accountModule = noJavaScriptPage.locator('.module').filter({ has: noJavaScriptPage.getByRole('heading', { name: 'Identidade e acesso' }) });
+    await expect(accountModule.getByText('Desativada', { exact: true })).toBeVisible();
+    await context.close();
   });
 });

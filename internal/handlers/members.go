@@ -12,6 +12,7 @@ import (
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
@@ -47,6 +48,7 @@ type Members struct {
 	PageMeta components.PageMeta
 	Location *time.Location
 	Now      func() time.Time
+	Sessions *scs.SessionManager
 }
 
 type memberForm struct {
@@ -75,6 +77,9 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := pages.MembersPage{Search: search, Form: h.memberFormFromAdults(r, memberForm{Errors: validation.FieldErrors{}}, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "members_flash")
+	}
 	if pageNumber > 1 {
 		page.PreviousURL = membersPageURL(search, pageNumber-1)
 	}
@@ -147,6 +152,9 @@ func (h Members) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "members_flash", "Conta criada.")
+	}
 	httpx.Redirect(w, r, "/admin/membros", http.StatusSeeOther)
 }
 
@@ -216,11 +224,22 @@ func (h Members) Deactivate(w http.ResponseWriter, r *http.Request) {
 		h.System.Forbidden(w, r)
 		return
 	}
+	if !deactivationConfirmed(r) {
+		h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"deactivation": "Confirme que pretende desativar esta conta."}, "")
+		return
+	}
 	if err := h.Store.DeactivateUser(r.Context(), id); err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "member_detail_flash", "Conta desativada.")
+	}
 	httpx.Redirect(w, r, "/admin/membros/"+id.String(), http.StatusSeeOther)
+}
+
+func deactivationConfirmed(r *http.Request) bool {
+	return r.ParseForm() == nil && r.PostForm.Get("confirm_deactivation") == "yes"
 }
 
 func (h Members) IssueMinorCredential(w http.ResponseWriter, r *http.Request) {
@@ -271,10 +290,12 @@ func (h Members) IssueMinorCredential(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Members) validateCreate(r *http.Request) memberForm {
-	f := memberForm{Dependent: r.PostForm.Get("account_type") == "dependent", DateOfBirth: strings.TrimSpace(r.PostForm.Get("date_of_birth")), GuardianID: strings.TrimSpace(r.PostForm.Get("guardian_id")), Password: r.PostForm.Get("password"), PasswordConfirmation: r.PostForm.Get("password_confirmation"), Errors: validation.FieldErrors{}}
-	var err error
-	if f.Name, err = validation.NormalizeName(r.PostForm.Get("name")); err != nil {
+	f := memberForm{Dependent: r.PostForm.Get("account_type") == "dependent", Name: strings.TrimSpace(r.PostForm.Get("name")), Email: strings.TrimSpace(r.PostForm.Get("email")), DateOfBirth: strings.TrimSpace(r.PostForm.Get("date_of_birth")), GuardianID: strings.TrimSpace(r.PostForm.Get("guardian_id")), Password: r.PostForm.Get("password"), PasswordConfirmation: r.PostForm.Get("password_confirmation"), Errors: validation.FieldErrors{}}
+	name, err := validation.NormalizeName(f.Name)
+	if err != nil {
 		f.Errors.Add("name", err.Error())
+	} else {
+		f.Name = name
 	}
 	birth, err := validation.ParseISODate(f.DateOfBirth)
 	if err != nil {
@@ -292,8 +313,11 @@ func (h Members) validateCreate(r *http.Request) memberForm {
 		}
 		return f
 	}
-	if f.Email, err = validation.NormalizeEmail(r.PostForm.Get("email")); err != nil {
+	email, err := validation.NormalizeEmail(f.Email)
+	if err != nil {
 		f.Errors.Add("email", err.Error())
+	} else {
+		f.Email = email
 	}
 	if err := validation.ValidatePassword(f.Password); err != nil {
 		f.Errors.Add("password", err.Error())
@@ -356,6 +380,9 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	meta.CurrentPath = r.URL.Path
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: "/admin/membros"}}
 	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, Errors: fieldErrors}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "member_detail_flash")
+	}
 	for _, programme := range programmes {
 		page.Programmes = append(page.Programmes, pages.MemberProgramme{ID: programme.ID.String(), Name: programme.NamePt, Active: activeIDs[programme.ID]})
 	}

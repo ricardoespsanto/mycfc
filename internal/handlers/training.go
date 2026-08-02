@@ -10,8 +10,10 @@ import (
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
+	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
@@ -26,13 +28,18 @@ type Training struct {
 	System   System
 	PageMeta components.PageMeta
 	Location *time.Location
+	Sessions *scs.SessionManager
 }
 
 func (h Training) Index(w http.ResponseWriter, r *http.Request) {
+	h.renderIndex(w, r, http.StatusOK, pages.TrainingPage{})
+}
+
+func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int, page pages.TrainingPage) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
-	page := pages.TrainingPage{CanManage: user.IsAdmin || user.CanManageEvents}
+	page.CanManage = user.IsAdmin || user.CanManageEvents
 	sessions, err := h.Store.ListTrainingSessionsForAthlete(ctx, dbgen.ListTrainingSessionsForAthleteParams{UserID: user.ID, RowLimit: 100})
 	if err != nil {
 		h.System.InternalError(w, r)
@@ -69,20 +76,34 @@ func (h Training) Index(w http.ResponseWriter, r *http.Request) {
 	}
 	page.Meta = h.meta(r, user)
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	if h.Sessions != nil && page.Success == "" {
+		page.Success = h.Sessions.PopString(r.Context(), "training_flash")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	_ = pages.Training(page).Render(r.Context(), w)
 }
 
 func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "plan"})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	title, description := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("description"))
+	form := pages.TrainingPlanForm{Title: title, Description: description, ProgrammeID: r.PostForm.Get("programme_id"), TeamID: r.PostForm.Get("team_id"), Errors: validation.FieldErrors{}}
 	programmeID, teamID, err := trainingScope(r)
-	if err != nil || !validTrainingText(title, 2, 180) || utf8.RuneCountInString(description) > 4000 || !h.canUseScope(user, programmeID, teamID) {
-		http.Error(w, "Dados ou âmbito inválidos.", http.StatusUnprocessableEntity)
+	if !validTrainingText(title, 2, 180) {
+		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
+	}
+	if utf8.RuneCountInString(description) > 4000 {
+		form.Errors.Add("description", "A descrição não pode exceder 4000 caracteres.")
+	}
+	if err != nil || !h.canUseScope(user, programmeID, teamID) {
+		form.Errors.Add("scope", "Selecione um âmbito que possa gerir.")
+	}
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "plan", PlanForm: form})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -91,46 +112,44 @@ func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	h.flash(r, "Plano criado.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
 func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "session"})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
-	planID, err := uuid.Parse(r.PostForm.Get("plan_id"))
-	if err != nil {
-		http.Error(w, "Plano inválido.", http.StatusUnprocessableEntity)
-		return
-	}
+	form := pages.TrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), ModalityID: r.PostForm.Get("modality_id"), Errors: validation.FieldErrors{}}
+	planID, planErr := uuid.Parse(form.PlanID)
 	starts, startErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
 	ends, endErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("ends_at"), h.location())
-	title, description := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("description"))
+	title, description := form.Title, form.Description
 	modalityID, err := optionalUUID(r.PostForm.Get("modality_id"))
+	if planErr != nil {
+		form.Errors.Add("plan_id", "Selecione um plano válido.")
+	}
 	if err != nil {
-		http.Error(w, "Selecione uma modalidade válida.", http.StatusUnprocessableEntity)
-		return
+		form.Errors.Add("modality_id", "Selecione uma modalidade válida.")
 	}
 	if !validTrainingText(title, 2, 180) {
-		http.Error(w, "O título deve ter entre 2 e 180 caracteres.", http.StatusUnprocessableEntity)
-		return
+		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
 	}
 	if utf8.RuneCountInString(description) > 4000 {
-		http.Error(w, "A descrição não pode exceder 4000 caracteres.", http.StatusUnprocessableEntity)
-		return
+		form.Errors.Add("description", "A descrição não pode exceder 4000 caracteres.")
 	}
 	if startErr != nil {
-		http.Error(w, "Introduza uma data e hora de início válidas.", http.StatusUnprocessableEntity)
-		return
+		form.Errors.Add("starts_at", "Introduza uma data e hora de início válidas.")
 	}
 	if endErr != nil {
-		http.Error(w, "Introduza uma data e hora de fim válidas.", http.StatusUnprocessableEntity)
-		return
+		form.Errors.Add("ends_at", "Introduza uma data e hora de fim válidas.")
+	} else if startErr == nil && !ends.After(starts) {
+		form.Errors.Add("ends_at", "O fim tem de ser posterior ao início.")
 	}
-	if !ends.After(starts) {
-		http.Error(w, "O fim tem de ser posterior ao início.", http.StatusUnprocessableEntity)
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "session", SessionForm: form})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -150,6 +169,7 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	h.flash(r, "Sessão criada.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
@@ -178,22 +198,39 @@ func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "A sessão ou substituição não está disponível no seu âmbito ativo.", http.StatusConflict)
 		return
 	}
+	h.flash(r, "Resultado registado.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
 func (h Training) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "document"})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	title, rawURL, source := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("url")), strings.TrimSpace(r.PostForm.Get("source"))
+	form := pages.TrainingDocumentForm{Title: title, URL: rawURL, Source: source, ReviewedOn: r.PostForm.Get("reviewed_on"), EventID: r.PostForm.Get("event_id"), ModalityID: r.PostForm.Get("modality_id"), ProgrammeID: r.PostForm.Get("programme_id"), TeamID: r.PostForm.Get("team_id"), Errors: validation.FieldErrors{}}
 	eventID, e1 := optionalUUID(r.PostForm.Get("event_id"))
 	modalityID, e2 := optionalUUID(r.PostForm.Get("modality_id"))
 	programmeID, teamID, e3 := trainingScope(r)
 	reviewed, e4 := time.Parse("2006-01-02", r.PostForm.Get("reviewed_on"))
-	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || !validCompetitionDocumentInput(title, rawURL, source, reviewed, eventID, modalityID, programmeID, teamID) {
-		http.Error(w, "Dados do documento inválidos.", http.StatusUnprocessableEntity)
+	if !validTrainingText(title, 2, 180) {
+		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
+	}
+	if !validDocumentURL(rawURL) {
+		form.Errors.Add("url", "Indique uma ligação HTTPS válida.")
+	}
+	if !validTrainingText(source, 2, 180) {
+		form.Errors.Add("source", "A fonte deve ter entre 2 e 180 caracteres.")
+	}
+	if e4 != nil || reviewed.After(time.Now().UTC()) {
+		form.Errors.Add("reviewed_on", "Indique uma data válida, não futura.")
+	}
+	if e1 != nil || e2 != nil || e3 != nil || !validCompetitionDocumentInput(title, rawURL, source, reviewed, eventID, modalityID, programmeID, teamID) {
+		form.Errors.Add("scope", "Selecione um contexto válido para o documento.")
+	}
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "document", DocumentForm: form})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -219,7 +256,14 @@ func (h Training) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	h.flash(r, "Documento publicado.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
+}
+
+func (h Training) flash(r *http.Request, message string) {
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "training_flash", message)
+	}
 }
 
 func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.TrainingPage, pageNumber int) {

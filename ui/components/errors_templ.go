@@ -13,6 +13,8 @@ type FieldError struct {
 	Message string
 }
 
+type FieldErrorRef struct{ Key, Field string }
+
 func ErrorSummary(errors []FieldError) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -47,7 +49,7 @@ func ErrorSummary(errors []FieldError) templ.Component {
 				var templ_7745c5c3_Var2 templ.SafeURL
 				templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinURLErrs("#" + err.Field)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/errors.templ`, Line: 14, Col: 34}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/errors.templ`, Line: 16, Col: 34}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 				if templ_7745c5c3_Err != nil {
@@ -60,7 +62,7 @@ func ErrorSummary(errors []FieldError) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(err.Message)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/errors.templ`, Line: 14, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/components/errors.templ`, Line: 16, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -78,6 +80,26 @@ func ErrorSummary(errors []FieldError) templ.Component {
 		}
 		return nil
 	})
+}
+
+func FieldErrorsFromMap(errors map[string]string, fields []string) []FieldError {
+	items := make([]FieldError, 0, len(errors))
+	for _, field := range fields {
+		if message := errors[field]; message != "" {
+			items = append(items, FieldError{Field: field, Message: message})
+		}
+	}
+	return items
+}
+
+func FieldErrorsFor(errors map[string]string, fields []FieldErrorRef) []FieldError {
+	items := make([]FieldError, 0, len(errors))
+	for _, field := range fields {
+		if message := errors[field.Key]; message != "" {
+			items = append(items, FieldError{Field: field.Field, Message: message})
+		}
+	}
+	return items
 }
 
 var _ = templruntime.GeneratedTemplate

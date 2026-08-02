@@ -622,7 +622,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	if h.Sessions != nil {
 		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
 	}
-	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
+	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, Actions: dashboardPageActions(path), RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
@@ -658,7 +658,7 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	}
 	page := pages.GuardianPage{
 		Meta: meta, Dependents: pageItems,
-		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
+		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -667,6 +667,16 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 		return
 	}
 	_ = pages.Guardian(page).Render(r.Context(), w)
+}
+
+func dashboardPageActions(path string) []components.PageAction {
+	if path == "/dashboard/leisure" {
+		return []components.PageAction{{Label: "Ver eventos", Href: "/events", Variant: "primary"}, {Label: "Ler avisos", Href: "/announcements", Variant: "secondary"}}
+	}
+	if path == "/dashboard/member" || path == "/dashboard/coach" || path == "/dashboard/moderator" {
+		return nil
+	}
+	return []components.PageAction{{Label: "Ver treinos", Href: "/treinos", Variant: "primary"}, {Label: "Ver eventos", Href: "/events", Variant: "secondary"}}
 }
 
 func (h Dashboard) now() time.Time {

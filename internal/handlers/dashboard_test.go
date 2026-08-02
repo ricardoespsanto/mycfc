@@ -152,7 +152,7 @@ func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	dashboard := Dashboard{Store: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Competitor, memberID)
 	body := response.Body.String()
-	for _, want := range []string{"Peso", "72.5 kg", "Treinos recentes", "Série longa", `href="https://chat.whatsapp.com/seniores"`} {
+	for _, want := range []string{"Peso", "72.5 kg", "Treinos recentes", "Série longa", `href="https://chat.whatsapp.com/seniores"`, `class="page-header"`, `href="/treinos"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q: %q", want, body)
 		}
@@ -170,7 +170,7 @@ func TestDashboardLeisureRendersDatabaseContent(t *testing.T) {
 	}, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Leisure, uuid.New())
 	body := response.Body.String()
-	for _, want := range []string{`href="https://example.com/noticia"`, "Inscrições abertas", `href="https://chat.whatsapp.com/lazer"`} {
+	for _, want := range []string{`href="https://example.com/noticia"`, "Inscrições abertas", `href="https://chat.whatsapp.com/lazer"`, `href="/events"`, `href="/announcements"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q: %q", want, body)
 		}
