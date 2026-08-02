@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -100,21 +101,33 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 }
 
 type registrationForm struct {
-	Name, Email string
-	DateOfBirth time.Time
-	Errors      validation.FieldErrors
+	Name, Email, DateOfBirthInput string
+	DateOfBirth                   time.Time
+	TermsAccepted, ImageAccepted  bool
+	Errors                        validation.FieldErrors
 }
 
 func (h Registration) validate(r *http.Request) registrationForm {
-	form := registrationForm{Errors: validation.FieldErrors{}}
+	form := registrationForm{
+		Name: strings.TrimSpace(r.PostForm.Get("name")), Email: strings.TrimSpace(r.PostForm.Get("email")),
+		DateOfBirthInput: strings.TrimSpace(r.PostForm.Get("date_of_birth")),
+		TermsAccepted:    r.PostForm.Get("accept_terms") == "on", ImageAccepted: r.PostForm.Get("accept_image_use") == "on",
+		Errors: validation.FieldErrors{},
+	}
 	var err error
-	if form.Name, err = validation.NormalizeName(r.PostForm.Get("name")); err != nil {
+	if normalized, normalizeErr := validation.NormalizeName(form.Name); normalizeErr != nil {
+		err = normalizeErr
 		form.Errors.Add("name", err.Error())
+	} else {
+		form.Name = normalized
 	}
-	if form.Email, err = validation.NormalizeEmail(r.PostForm.Get("email")); err != nil {
+	if normalized, normalizeErr := validation.NormalizeEmail(form.Email); normalizeErr != nil {
+		err = normalizeErr
 		form.Errors.Add("email", err.Error())
+	} else {
+		form.Email = normalized
 	}
-	if form.DateOfBirth, err = validation.ParseISODate(r.PostForm.Get("date_of_birth")); err != nil {
+	if form.DateOfBirth, err = validation.ParseISODate(form.DateOfBirthInput); err != nil {
 		form.Errors.Add("date_of_birth", err.Error())
 	} else if err := validation.ValidateAdultDateOfBirth(form.DateOfBirth, h.now(), h.Location); err != nil {
 		form.Errors.Add("date_of_birth", err.Error())
@@ -126,10 +139,10 @@ func (h Registration) validate(r *http.Request) registrationForm {
 	if password != r.PostForm.Get("password_confirmation") {
 		form.Errors.Add("password_confirmation", "As palavras-passe não coincidem.")
 	}
-	if r.PostForm.Get("accept_terms") != "on" {
+	if !form.TermsAccepted {
 		form.Errors.Add("accept_terms", "Tem de aceitar os termos gerais.")
 	}
-	if r.PostForm.Get("accept_image_use") != "on" {
+	if !form.ImageAccepted {
 		form.Errors.Add("accept_image_use", "Tem de aceitar a autorização de uso de imagem.")
 	}
 	return form
@@ -140,11 +153,11 @@ func (h Registration) render(w http.ResponseWriter, r *http.Request, status int,
 	w.WriteHeader(status)
 	meta := h.PageMeta
 	meta.Title = "Criar conta | MyCFC"
-	dateOfBirth := ""
-	if !form.DateOfBirth.IsZero() {
+	dateOfBirth := form.DateOfBirthInput
+	if dateOfBirth == "" && !form.DateOfBirth.IsZero() {
 		dateOfBirth = form.DateOfBirth.Format("2006-01-02")
 	}
-	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, TermsURL: h.TermsURL, ImageURL: h.ImageURL, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
+	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, TermsURL: h.TermsURL, ImageURL: h.ImageURL, TermsAccepted: form.TermsAccepted, ImageAccepted: form.ImageAccepted, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
 }
 
 func (h Registration) now() time.Time {

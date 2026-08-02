@@ -47,12 +47,38 @@ func TestLoginGetRendersForm(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
 	for _, expected := range []string{
+		`<body class="auth-body">`,
+		`aria-label="MyCFC, voltar à página inicial"`,
 		`<h1 id="login-title">Iniciar sessão</h1>`,
 		`action="/login"`,
 		`name="next" value="/dashboard/leisure"`,
 		`autocomplete="username"`,
 		`autocomplete="current-password"`,
+		`href="/registo">Criar conta MyCFC</a>`,
 	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Errorf("body does not contain %q", expected)
+		}
+	}
+	for _, forbidden := range []string{`class="app-shell"`, `aria-label="Navegação principal"`, `Terminar sessão`} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Errorf("authentication shell unexpectedly contains %q", forbidden)
+		}
+	}
+}
+
+func TestLoginValidationPreservesIdentifierAndUsesSharedErrorContract(t *testing.T) {
+	handler := Login{Sessions: scs.New(), PageMeta: loginTestPageMeta(), FailureWait: func(context.Context) {}}
+	form := url.Values{"identifier": {"member@example.com"}}
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.Post(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", response.Code)
+	}
+	for _, expected := range []string{`value="member@example.com"`, `class="error-summary"`, `aria-invalid="true"`, `aria-describedby="identifier-help identifier-error"`, `id="identifier-error"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
 		}

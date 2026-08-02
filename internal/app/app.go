@@ -125,6 +125,7 @@ func New(ctx context.Context) (*Application, error) {
 		PageMeta: components.PageMeta{
 			StylesheetURL: assets["app.css"],
 			ScriptURL:     assets["app.js"],
+			BrandImageURL: assets["images/cfc-logo.png"],
 		},
 	}
 	registration := handlers.Registration{
@@ -132,7 +133,7 @@ func New(ctx context.Context) (*Application, error) {
 		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
 		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
 		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
-		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]},
+		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
 	}
 	pageMeta := components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}
 	system := handlers.System{PageMeta: pageMeta}

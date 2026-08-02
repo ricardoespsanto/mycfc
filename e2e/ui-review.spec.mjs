@@ -167,6 +167,54 @@ async function expectTodayComposition(page, persona) {
   }
 }
 
+test('captures River Clubhouse authentication states', async ({ browser }) => {
+  test.setTimeout(180_000);
+  for (const viewport of viewports) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    const directory = path.join(outputRoot, 'authentication', viewport.key);
+    await mkdir(directory, { recursive: true });
+
+    await page.goto('/login');
+    await expect(page.locator('body')).toHaveClass('auth-body');
+    await expect(page.getByRole('link', { name: 'MyCFC, voltar à página inicial' })).toHaveAttribute('href', '/');
+    await expect(page.getByRole('navigation', { name: 'Navegação principal' })).toHaveCount(0);
+    await expectAccessibilityContract(page, '/login');
+    await expectResponsiveContract(page, '/login', viewport);
+    await expect((await new AxeBuilder({ page }).analyze()).violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([]);
+    await page.screenshot({ path: path.join(directory, 'login-empty.png'), fullPage: true });
+
+    await page.getByLabel('Correio eletrónico ou identificador CFC').fill('review-member@example.test');
+    await page.getByLabel('Palavra-passe').fill('palavra-passe-incorreta');
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await expect(page.locator('.error-summary')).toBeFocused();
+    await expect(page.getByLabel('Correio eletrónico ou identificador CFC')).toHaveValue('review-member@example.test');
+    await expect(page.getByLabel('Correio eletrónico ou identificador CFC')).toHaveAttribute('aria-invalid', 'true');
+    await page.screenshot({ path: path.join(directory, 'login-invalid.png'), fullPage: true });
+
+    await page.goto('/registo');
+    await expectAccessibilityContract(page, '/registo');
+    await expectResponsiveContract(page, '/registo', viewport);
+    await expect((await new AxeBuilder({ page }).analyze()).violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([]);
+    await page.screenshot({ path: path.join(directory, 'registration-empty.png'), fullPage: true });
+
+    await page.getByLabel('Nome').fill('M');
+    await page.getByLabel('Correio eletrónico').fill('pessoa@example.test');
+    await page.getByLabel('Data de nascimento').fill('2014-01-01');
+    await page.locator('#password').fill('curta');
+    await page.getByLabel('Confirmar palavra-passe').fill('diferente');
+    await page.getByLabel(/Aceito os termos gerais/).check();
+    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(page.locator('.error-summary')).toBeFocused();
+    await expect(page.getByLabel('Correio eletrónico')).toHaveValue('pessoa@example.test');
+    await expect(page.getByLabel(/Aceito a autorização de uso de imagem/)).toBeChecked();
+    await expect(page.locator('#password')).toHaveValue('');
+    await page.screenshot({ path: path.join(directory, 'registration-invalid.png'), fullPage: true });
+    await context.close();
+  }
+});
+
 for (const persona of personas) {
   test(`captures ${persona.key} desktop and mobile journeys`, async ({ browser }) => {
     test.setTimeout(180_000);

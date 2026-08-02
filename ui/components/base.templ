@@ -51,6 +51,35 @@ templ PublicBase(meta PageMeta, content templ.Component) {
 	</html>
 }
 
+templ AuthBase(meta PageMeta, content templ.Component) {
+	<!doctype html>
+	<html lang="pt-PT">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ meta.Title }</title>
+			<link rel="stylesheet" href={ meta.StylesheetURL }/>
+			<script src={ meta.ScriptURL } defer></script>
+		</head>
+		<body class="auth-body">
+			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
+			<header class="auth-header">
+				<a class="auth-brand" href="/" aria-label="MyCFC, voltar à página inicial">
+					if meta.BrandImageURL != "" {
+						<img src={ meta.BrandImageURL } alt=""/>
+					} else {
+						<span class="site-brand__mark" aria-hidden="true">≈</span>
+					}
+					<span><strong>MyCFC</strong><small>Clube Fluvial de Coimbra</small></span>
+				</a>
+				<a class="auth-back" href="/">Voltar ao início</a>
+			</header>
+			<main id="conteudo-principal" class="auth-main">@content</main>
+			<footer class="auth-footer">Clube Fluvial de Coimbra · Desde 1989</footer>
+		</body>
+	</html>
+}
+
 templ Base(meta PageMeta, content templ.Component) {
 	<!doctype html>
 	<html lang="pt-PT">

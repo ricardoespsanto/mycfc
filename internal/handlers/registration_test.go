@@ -34,7 +34,7 @@ func TestRegistrationGetRendersForm(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	for _, expected := range []string{`<h1 id="registration-title">Criar conta</h1>`, `name="accept_terms"`, `name="accept_image_use"`, `href="https://example.test/termos"`, `href="https://example.test/imagem"`} {
+	for _, expected := range []string{`<body class="auth-body">`, `<h1 id="registration-title">Criar conta</h1>`, `autocomplete="email"`, `autocomplete="bday"`, `autocomplete="new-password"`, `id="password-help"`, `name="accept_terms"`, `name="accept_image_use"`, `href="https://example.test/termos"`, `href="https://example.test/imagem"`, `href="/login">Iniciar sessão</a>`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
 		}
@@ -57,6 +57,11 @@ func TestRegistrationPostValidatesBeforeStore(t *testing.T) {
 	for _, expected := range []string{"Tem de ter pelo menos 18 anos", "Tem de aceitar os termos gerais"} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{`value="Maria Silva"`, `value="member@example.com"`, `value="2020-01-01"`, `name="accept_image_use" type="checkbox" required checked`, `class="error-summary"`, `aria-invalid="true"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Errorf("validation response does not preserve shared contract %q", expected)
 		}
 	}
 }

@@ -48,6 +48,10 @@ same focused suite runs axe on every captured page and fails with the complete
 serious/critical violation payload. Screenshots are review artifacts, not pixel
 comparison baselines.
 
+The same run also captures empty and invalid login/registration states under
+`artifacts/ui-review/authentication/<viewport>/`. Their curated review evidence
+is committed under `docs/design/authentication-evidence/after/`.
+
 The existing application gate remains:
 
 ```bash

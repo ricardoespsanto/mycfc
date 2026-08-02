@@ -2,8 +2,7 @@
 
 This is the completion matrix for epic #53. It ties the maintained capability
 inventory in `ui-review-harness.md` to deterministic automated evidence and
-records the one remaining named-screen-reader check without weakening the
-automated gate.
+the completed named-screen-reader check.
 
 ## Automated route and journey matrix
 
@@ -48,14 +47,13 @@ CI=true make ui-review-screenshots
 Screenshots under `artifacts/ui-review/` are review evidence, not pixel-diff
 tests. Curated before/after evidence is retained under `docs/design/*-evidence/`.
 
-## Manual and deferred evidence
+## Manual evidence
 
 | Check | State | Evidence or follow-up |
 | --- | --- | --- |
 | Desktop/mobile visual pass across all six personas | Complete | Approved staged visual passes and curated evidence for #57, #58, #60 and #64 |
 | Keyboard-only shell, forms, disclosures and focus recovery | Complete | Automated traversal plus manual browser inspection recorded in `accessibility-audit.md` |
-| macOS VoiceOver named-screen-reader pass | Deferred | VoiceOver was not enabled without explicit permission. Keep #61 open until its manual checklist is executed and recorded. |
+| macOS VoiceOver named-screen-reader pass | Complete | VoiceOver + Chromium (Codex in-app browser) on macOS 15.7.7 (24G720), 2026-08-02. Member, tutor, administrator, 403 and 404 journeys are recorded in `accessibility-audit.md`; the pass found and verified the closed-disclosure accessibility-tree remediation. |
 
-Epic #53 may merge the automated and visual work with the VoiceOver item kept
-explicitly open; #61 must not be described as fully closed until that manual pass
-is complete.
+The automated, visual, keyboard and named-screen-reader evidence required for
+Epic #53 is complete.
