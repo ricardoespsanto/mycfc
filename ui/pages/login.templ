@@ -11,30 +11,40 @@ type LoginPage struct {
 }
 
 templ Login(page LoginPage) {
-	@components.Base(page.Meta, loginContent(page))
+	@components.AuthBase(page.Meta, loginContent(page))
 }
 
 templ loginContent(page LoginPage) {
 	<section class="auth-card" aria-labelledby="login-title">
+		<p class="eyebrow">Área reservada</p>
 		<h1 id="login-title">Iniciar sessão</h1>
-			<p>Utilize o seu correio eletrónico ou identificador CFC e palavra-passe.</p>
-		if page.Error != "" {
-			<p class="field-error" role="alert">{ page.Error }</p>
-		}
+		<p>Entre para acompanhar a vida do clube, os seus espaços e responsabilidades.</p>
 		<form class="form-layout" method="post" action="/login">
 			@page.CSRFField
 			if page.Next != "" {
 				<input type="hidden" name="next" value={ page.Next }/>
 			}
+			@components.ErrorSummary(loginErrors(page.Error))
+			@components.RequiredNote()
 			<div class="form-field">
-				<label for="identifier">Correio eletrónico ou identificador CFC</label>
-				<input id="identifier" name="identifier" autocomplete="username" value={ page.Email } required/>
+				@components.FieldLabel("identifier", "Correio eletrónico ou identificador CFC", true)
+				<input id="identifier" name="identifier" autocomplete="username" value={ page.Email } required aria-invalid={ ariaBoolean(page.Error != "") } aria-describedby="identifier-help identifier-error"/>
+				@components.FieldHelp("identifier-help", "Também pode usar o identificador CFC atribuído a um menor.")
+				@components.FieldErrorMessage("identifier", page.Error)
 			</div>
 			<div class="form-field">
-				<label for="password">Palavra-passe</label>
+				@components.FieldLabel("password", "Palavra-passe", true)
 				<input id="password" name="password" type="password" autocomplete="current-password" required/>
 			</div>
-			<button type="submit">Iniciar sessão</button>
+			@components.FormActions("") { <button class="action action--primary" type="submit">Iniciar sessão</button> }
 		</form>
+		<p class="auth-alternate">Ainda não tem acesso? <a href="/registo">Criar conta MyCFC</a></p>
 	</section>
 }
+
+func loginErrors(message string) []components.FieldError {
+	if message == "" { return nil }
+	return []components.FieldError{{Field: "identifier", Message: message}}
+}
+
+func ariaBoolean(value bool) string { if value { return "true" }; return "false" }

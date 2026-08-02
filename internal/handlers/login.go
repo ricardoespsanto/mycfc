@@ -54,7 +54,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	next := validation.SafeNext(r.PostForm.Get("next"))
 	if identifier == "" || password == "" {
 		h.wait(r.Context())
-		h.render(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("email"), next)
+		h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
 		return
 	}
 

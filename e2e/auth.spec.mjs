@@ -66,7 +66,7 @@ test.describe('authentication', () => {
     await name.fill('Pessoa de teste');
     await emailField.fill(email);
     await page.getByLabel('Data de nascimento').fill('1990-01-01');
-    await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
+    await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
@@ -128,7 +128,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Nome').fill('Guardião de teste');
     await page.getByLabel('Correio eletrónico').fill(guardianEmail);
     await page.getByLabel('Data de nascimento').fill('1980-01-01');
-    await page.getByLabel('Palavra-passe', { exact: true }).fill(password);
+    await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
