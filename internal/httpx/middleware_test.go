@@ -114,6 +114,15 @@ func TestRecoveryMiddleware(t *testing.T) {
 	if !strings.Contains(logs.String(), "request-1234") {
 		t.Fatalf("log = %q", logs.String())
 	}
+
+	custom := RecoveryMiddleware(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "estado partilhado", http.StatusInternalServerError)
+	}))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }))
+	customResponse := httptest.NewRecorder()
+	custom.ServeHTTP(customResponse, request)
+	if customResponse.Code != http.StatusInternalServerError || !strings.Contains(customResponse.Body.String(), "estado partilhado") {
+		t.Fatalf("custom recovery response = %d %q", customResponse.Code, customResponse.Body.String())
+	}
 }
 
 func TestMiddlewareOrder(t *testing.T) {
