@@ -29,6 +29,8 @@ services:
       APP_ENV: production
       APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
       GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
+      APP_RELEASED_AT: ${APP_RELEASED_AT:-}
+      RELEASE_REPOSITORY: ${RELEASE_REPOSITORY:-ricardoespsanto/mycfc}
       PORT: "8080"
       BASE_URL: ${BASE_URL:?set BASE_URL in /etc/mycfc/mycfc.env}
       DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
