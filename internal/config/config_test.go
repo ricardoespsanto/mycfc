@@ -13,6 +13,7 @@ func validConfig() Config {
 		AppEnv:                 "local",
 		AppVersion:             "dev",
 		GITSHA:                 strings.Repeat("0", 40),
+		ReleaseRepository:      "cfcoimbra/mycfc",
 		Port:                   8080,
 		BaseURL:                "http://localhost:8080",
 		DatabaseURL:            Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"),
@@ -51,6 +52,8 @@ func validConfig() Config {
 		HTTPWriteTimeout:       30 * time.Second,
 		HTTPIdleTimeout:        60 * time.Second,
 		ShutdownTimeout:        20 * time.Second,
+		ReleaseCheckTimeout:    3 * time.Second,
+		ReleaseCheckCacheTTL:   15 * time.Minute,
 		TrustedProxyCIDRValues: nil,
 	}
 }
@@ -83,6 +86,7 @@ func TestValidateAggregatesAndSortsProblems(t *testing.T) {
 	cfg := validConfig()
 	cfg.Port = 0
 	cfg.AppVersion = " "
+	cfg.ReleaseRepository = "bad/name/extra"
 	cfg.CSRFAuthKeyB64 = Secret("not-base64")
 
 	err := cfg.Validate()
@@ -90,7 +94,7 @@ func TestValidateAggregatesAndSortsProblems(t *testing.T) {
 		t.Fatal("Validate() returned nil")
 	}
 	message := err.Error()
-	for _, expected := range []string{"APP_VERSION", "CSRF_AUTH_KEY_B64", "PORT"} {
+	for _, expected := range []string{"APP_VERSION", "CSRF_AUTH_KEY_B64", "PORT", "RELEASE_REPOSITORY"} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("error %q does not include %s", message, expected)
 		}

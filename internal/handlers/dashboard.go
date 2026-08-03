@@ -18,6 +18,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -51,9 +52,14 @@ type FleetStore interface {
 	CompleteMaintenanceTask(context.Context, uuid.UUID) (dbgen.MaintenanceTask, error)
 }
 
+type ReleaseChecker interface {
+	Snapshot(context.Context) release.Snapshot
+}
+
 type Dashboard struct {
 	Store                 DashboardStore
 	Fleet                 FleetStore
+	Releases              ReleaseChecker
 	System                System
 	PageMeta              components.PageMeta
 	CompetitionID         string
@@ -242,6 +248,19 @@ func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 }
 func (h Dashboard) Admin(w http.ResponseWriter, r *http.Request) {
 	h.renderFleet(w, r, http.StatusOK, fleetMaintenanceForm{})
+}
+
+func (h Dashboard) ReleasesPage(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	page := pages.ReleasesPage{Release: h.releaseStatus(r.Context())}
+	page.Meta = h.PageMeta
+	page.Meta.Title = "Sistema | MyCFC"
+	page.Meta.CurrentPath = "/admin/sistema"
+	page.Meta.CurrentUserName = user.Name
+	page.Meta.Navigation = dashboardNavigation(user)
+	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pages.Releases(page).Render(r.Context(), w)
 }
 
 type fleetMaintenanceForm struct {
@@ -500,6 +519,30 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	}
 	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
 	return page, nil
+}
+
+func (h Dashboard) releaseStatus(ctx context.Context) pages.ReleaseStatus {
+	if h.Releases == nil {
+		return pages.ReleaseStatus{}
+	}
+	snapshot := h.Releases.Snapshot(ctx)
+	return pages.ReleaseStatus{
+		CurrentLabel:      snapshot.Current.Label,
+		CurrentReleasedAt: h.formatReleaseTime(snapshot.Current.PublishedAt),
+		LatestLabel:       snapshot.Latest.Label,
+		LatestReleasedAt:  h.formatReleaseTime(snapshot.Latest.PublishedAt),
+		LatestURL:         snapshot.Latest.URL,
+		CheckedAt:         h.formatReleaseTime(snapshot.CheckedAt),
+		Status:            string(snapshot.Status),
+		CheckUnavailable:  snapshot.CheckUnavailable,
+	}
+}
+
+func (h Dashboard) formatReleaseTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.In(h.location()).Format("02/01/2006 15:04")
 }
 
 func fleetPageNumber(value string) int {
@@ -818,7 +861,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 
 	var admin []components.NavigationItem
 	if user.IsAdmin {
-		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Componentes", Path: "/admin/componentes"})
+		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"}, components.NavigationItem{Label: "Componentes", Path: "/admin/componentes"})
 	}
 
 	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}

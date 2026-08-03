@@ -34,6 +34,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/registo", http.StatusOK, "", ""},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
 		{http.MethodGet, "/admin/fleet", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet"},
+		{http.MethodGet, "/admin/sistema", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fsistema"},
 		{http.MethodGet, "/admin/membros", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros"},
 		{http.MethodGet, "/admin/noticias", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fnoticias"},
 	} {

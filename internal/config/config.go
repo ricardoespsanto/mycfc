@@ -34,11 +34,13 @@ func (Secret) GoString() string { return "[REDACTED]" }
 func (s Secret) Value() string  { return string(s) }
 
 type Config struct {
-	AppEnv     string `env:"APP_ENV,required"`
-	AppVersion string `env:"APP_VERSION,required"`
-	GITSHA     string `env:"GIT_SHA,required"`
-	Port       int    `env:"PORT" envDefault:"8080"`
-	BaseURL    string `env:"BASE_URL,required"`
+	AppEnv            string `env:"APP_ENV,required"`
+	AppVersion        string `env:"APP_VERSION,required"`
+	GITSHA            string `env:"GIT_SHA,required"`
+	AppReleasedAt     string `env:"APP_RELEASED_AT"`
+	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"cfcoimbra/mycfc"`
+	Port              int    `env:"PORT" envDefault:"8080"`
+	BaseURL           string `env:"BASE_URL,required"`
 
 	DatabaseURL    Secret `env:"DATABASE_URL"`
 	DBHost         string `env:"DB_HOST"`
@@ -86,6 +88,8 @@ type Config struct {
 	HTTPWriteTimeout       time.Duration `env:"HTTP_WRITE_TIMEOUT" envDefault:"30s"`
 	HTTPIdleTimeout        time.Duration `env:"HTTP_IDLE_TIMEOUT" envDefault:"60s"`
 	ShutdownTimeout        time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"20s"`
+	ReleaseCheckTimeout    time.Duration `env:"RELEASE_CHECK_TIMEOUT" envDefault:"3s"`
+	ReleaseCheckCacheTTL   time.Duration `env:"RELEASE_CHECK_CACHE_TTL" envDefault:"15m"`
 	CookieDomain           string        `env:"COOKIE_DOMAIN"`
 	TrustedProxyCIDRValues []string      `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
 }
@@ -158,8 +162,16 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.AppVersion) == "" {
 		problems.Add("APP_VERSION", "must not be empty")
 	}
+	if strings.TrimSpace(c.AppReleasedAt) != "" {
+		if _, err := time.Parse(time.RFC3339, c.AppReleasedAt); err != nil {
+			problems.Add("APP_RELEASED_AT", "must be RFC3339 when set")
+		}
+	}
 	if c.IsProduction() && !lowerHex40.MatchString(c.GITSHA) {
 		problems.Add("GIT_SHA", "must be 40 lowercase hexadecimal characters in production")
+	}
+	if !validRepositoryName(c.ReleaseRepository) {
+		problems.Add("RELEASE_REPOSITORY", "must be owner/repository")
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		problems.Add("PORT", "must be between 1 and 65535")
@@ -272,6 +284,8 @@ func (c Config) Validate() error {
 		"HTTP_WRITE_TIMEOUT":       c.HTTPWriteTimeout,
 		"HTTP_IDLE_TIMEOUT":        c.HTTPIdleTimeout,
 		"SHUTDOWN_TIMEOUT":         c.ShutdownTimeout,
+		"RELEASE_CHECK_TIMEOUT":    c.ReleaseCheckTimeout,
+		"RELEASE_CHECK_CACHE_TTL":  c.ReleaseCheckCacheTTL,
 	} {
 		if value <= 0 {
 			problems.Add(field, "must be greater than zero")
@@ -301,6 +315,11 @@ func (c Config) Validate() error {
 	}
 
 	return problems.Err()
+}
+
+func validRepositoryName(value string) bool {
+	owner, repo, ok := strings.Cut(strings.TrimSpace(value), "/")
+	return ok && owner != "" && repo != "" && !strings.Contains(repo, "/")
 }
 
 func validateDatabaseURL(raw string) error {

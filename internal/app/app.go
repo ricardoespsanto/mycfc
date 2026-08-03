@@ -21,6 +21,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -137,9 +138,15 @@ func New(ctx context.Context) (*Application, error) {
 	}
 	pageMeta := components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}
 	system := handlers.System{PageMeta: pageMeta}
+	var appReleasedAt time.Time
+	if cfg.AppReleasedAt != "" {
+		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)
+	}
+	releaseChecker := release.NewChecker(&http.Client{Timeout: cfg.ReleaseCheckTimeout}, cfg.ReleaseRepository, cfg.AppVersion, cfg.GITSHA, appReleasedAt, cfg.ReleaseCheckCacheTTL, time.Now)
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
 		Fleet:                 dbgen.New(pool),
+		Releases:              releaseChecker,
 		Objects:               objectStore,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
 		PageMeta:              pageMeta,

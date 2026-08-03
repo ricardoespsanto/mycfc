@@ -1,0 +1,87 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type ReleasesPage struct {
+	Meta components.PageMeta
+	Release ReleaseStatus
+}
+
+type ReleaseStatus struct { CurrentLabel, CurrentReleasedAt, LatestLabel, LatestReleasedAt, LatestURL, CheckedAt, Status string; CheckUnavailable bool }
+
+templ Releases(page ReleasesPage) {
+	@components.Base(page.Meta, releasesContent(page))
+}
+
+templ releasesContent(page ReleasesPage) {
+	@components.PageHeader("Administração", "Sistema", "Consulte a versão em execução e a última release publicada.", nil)
+	<section class="module release-status" aria-labelledby="release-status-title">
+		<div class="section-heading"><div><p class="eyebrow">Versões</p><h2 id="release-status-title">Estado da versão</h2><p>{ releaseStatusSummary(page.Release) }</p></div>@components.Badge(releaseStatusBadge(page.Release), releaseStatusTone(page.Release))</div>
+		<div class="release-status__grid">
+			<div><span>Em execução</span><strong>{ releaseValue(page.Release.CurrentLabel) }</strong>
+				if page.Release.CurrentReleasedAt != "" {
+					<small>{ page.Release.CurrentReleasedAt }</small>
+				} else {
+					<small>Data de publicação ainda não registada.</small>
+				}
+			</div>
+			<div><span>Última no GitHub</span>
+				if page.Release.CheckUnavailable {
+					<strong>Comparação indisponível</strong><small>Não foi possível consultar as releases públicas.</small>
+				} else if page.Release.LatestLabel == "" {
+					<strong>Sem release publicada</strong><small>O GitHub ainda não devolveu uma release pública.</small>
+				} else if page.Release.LatestURL != "" {
+					<strong><a href={ page.Release.LatestURL }>{ releaseValue(page.Release.LatestLabel) }</a></strong>
+					<small>{ page.Release.LatestReleasedAt }</small>
+				} else {
+					<strong>{ releaseValue(page.Release.LatestLabel) }</strong>
+					<small>{ page.Release.LatestReleasedAt }</small>
+				}
+			</div>
+			<div><span>Última verificação</span>
+				if page.Release.CheckedAt != "" {
+					<strong>{ page.Release.CheckedAt }</strong>
+				} else {
+					<strong>Ainda não verificada</strong>
+				}
+				<small>{ releaseCheckDetail(page.Release) }</small></div>
+		</div>
+	</section>
+}
+
+func releaseStatusSummary(release ReleaseStatus) string {
+	if release.CheckUnavailable { return "Não foi possível comparar com o GitHub nesta verificação." }
+	switch release.Status {
+	case "current": return "A versão instalada coincide com a última release publicada."
+	case "available": return "Existe uma release mais recente publicada no GitHub."
+	default: return "A versão instalada ainda não foi identificada numa release do GitHub."
+	}
+}
+
+func releaseStatusBadge(release ReleaseStatus) string {
+	if release.CheckUnavailable { return "Verificação indisponível" }
+	switch release.Status {
+	case "current": return "Atualizada"
+	case "available": return "Nova versão"
+	default: return "Por confirmar"
+	}
+}
+
+func releaseStatusTone(release ReleaseStatus) string {
+	if release.CheckUnavailable { return "warning" }
+	switch release.Status {
+	case "current": return "success"
+	case "available": return "warning"
+	default: return "selected"
+	}
+}
+
+func releaseValue(value string) string {
+	if value == "" { return "Versão instalada" }
+	return value
+}
+
+func releaseCheckDetail(release ReleaseStatus) string {
+	if release.CheckUnavailable { return "GitHub não respondeu a tempo." }
+	return "Comparação com releases públicas."
+}

@@ -119,6 +119,7 @@ var allowedNextPaths = map[string]struct{}{
 	"/dashboard/coach":       {},
 	"/dashboard/moderator":   {},
 	"/admin/fleet":           {},
+	"/admin/sistema":         {},
 	"/admin/membros":         {},
 }
 

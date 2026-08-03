@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
@@ -399,6 +400,7 @@ func TestCompleteMaintenanceSupportsHTMXAndNormalForms(t *testing.T) {
 func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	key, contentType := "repairs/2026/07/photo.jpg", "image/jpeg"
+	sha := strings.Repeat("a", 40)
 	equipment := make([]dbgen.Equipment, 7)
 	for i := range equipment {
 		equipment[i] = dbgen.Equipment{ID: uuid.New(), AssetTag: "EQ", Name: "Barco", Type: "Boat", Status: "Operational"}
@@ -410,6 +412,10 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
+	body := response.Body.String()
+	if strings.Contains(body, "Estado da versão") || strings.Contains(body, sha) {
+		t.Fatalf("fleet unexpectedly contains release status: %q", body)
+	}
 	if store.adminParams.RowLimit != 7 || store.adminParams.RowOffset != 0 || store.pendingRepairParams.RowLimit != 7 || store.pendingRepairParams.RowOffset != 0 || store.maintenanceParams.RowLimit != 7 || store.maintenanceParams.RowOffset != 0 || !store.maintenanceParams.ToTime.Time.Equal(now.AddDate(0, 0, 90)) {
 		t.Fatalf("unexpected fleet limits: %+v", store)
 	}
@@ -420,6 +426,45 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	response = dashboardResponse(t, dashboard.Admin, uuid.New())
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Imagem temporariamente indisponível") {
 		t.Fatalf("presign failure should not fail the fleet page: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestDashboardReleasesPageShowsPublicVersionStatus(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	sha := strings.Repeat("a", 40)
+	releases := releaseCheckerFake{snapshot: release.Snapshot{
+		Current:   release.Version{Label: "Versão instalada", PublishedAt: time.Date(2026, 7, 20, 9, 30, 0, 0, time.UTC)},
+		Latest:    release.Version{Label: "v1.3.0", PublishedAt: time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC), URL: "https://github.com/cfcoimbra/mycfc/releases/tag/v1.3.0"},
+		CheckedAt: now,
+		Status:    release.StatusAvailable,
+	}}
+	dashboard := Dashboard{Releases: releases, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	response := dashboardResponse(t, dashboard.ReleasesPage, uuid.New())
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	body := response.Body.String()
+	for _, want := range []string{"Sistema", "Estado da versão", "Nova versão", "Versão instalada", "v1.3.0", "20/07/2026 09:30", "24/07/2026 12:00", `href="https://github.com/cfcoimbra/mycfc/releases/tag/v1.3.0"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("release page does not contain %q", want)
+		}
+	}
+	if strings.Contains(body, sha) {
+		t.Fatalf("release page leaked a technical version: %q", body)
+	}
+}
+
+func TestDashboardReleasesPageExplainsMissingReleaseMetadata(t *testing.T) {
+	dashboard := Dashboard{Releases: releaseCheckerFake{snapshot: release.Snapshot{CheckedAt: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC), CheckUnavailable: true}}, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	response := dashboardResponse(t, dashboard.ReleasesPage, uuid.New())
+	body := response.Body.String()
+	for _, want := range []string{"Versão instalada", "Data de publicação ainda não registada.", "Comparação indisponível", "Verificação indisponível"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("release page does not explain missing metadata with %q", want)
+		}
+	}
+	if strings.Contains(body, "Não identificada") || strings.Contains(body, "Data não disponível") {
+		t.Fatalf("release page contains generic missing-data placeholders: %q", body)
 	}
 }
 
@@ -458,6 +503,14 @@ type presignStoreFake struct {
 	calls    int
 	lifetime time.Duration
 	err      error
+}
+
+type releaseCheckerFake struct {
+	snapshot release.Snapshot
+}
+
+func (f releaseCheckerFake) Snapshot(context.Context) release.Snapshot {
+	return f.snapshot
 }
 
 func (f *presignStoreFake) PutRepairPhoto(context.Context, string, string, int64, io.Reader) error {

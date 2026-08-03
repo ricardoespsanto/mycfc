@@ -48,6 +48,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /dashboard/coach", auth.RequireCoach(compatibilityRedirect("/events")))
 	mux.Handle("GET /dashboard/moderator", auth.RequireModerator(http.HandlerFunc(dashboard.Moderator)))
 	mux.Handle("GET /admin/fleet", auth.RequireAdmin(http.HandlerFunc(dashboard.Admin)))
+	mux.Handle("GET /admin/sistema", auth.RequireAdmin(http.HandlerFunc(dashboard.ReleasesPage)))
 	mux.Handle("POST /admin/maintenance", auth.RequireAdmin(http.HandlerFunc(dashboard.Maintenance)))
 	mux.Handle("POST /admin/repairs/status", auth.RequireAdmin(http.HandlerFunc(dashboard.RepairStatus)))
 	mux.Handle("POST /admin/maintenance/{id}/complete", auth.RequireAdmin(http.HandlerFunc(dashboard.CompleteMaintenance)))

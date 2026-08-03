@@ -88,6 +88,9 @@ case "$sha" in
 	????????????????????????????????????????) ;;
 	*) log "release $digest has no valid git SHA label"; exit 1 ;;
 esac
+stamp=${release_tag#release-}
+stamp=${stamp%%-*}
+released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
 
 backup_file="${env_file}.previous"
 cp "$env_file" "$backup_file"
@@ -97,7 +100,13 @@ trap rollback EXIT HUP INT TERM
 
 next_file=$(mktemp "${env_file}.next.XXXXXX")
 cp "$env_file" "$next_file"
-sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$sha|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
+if ! grep -q '^APP_RELEASED_AT=' "$next_file"; then
+	printf '\nAPP_RELEASED_AT=\n' >> "$next_file"
+fi
+if ! grep -q '^RELEASE_REPOSITORY=' "$next_file"; then
+	printf 'RELEASE_REPOSITORY=cfcoimbra/mycfc\n' >> "$next_file"
+fi
+sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
 chmod 600 "$next_file"
 chown root:root "$next_file"
 mv "$next_file" "$env_file"
