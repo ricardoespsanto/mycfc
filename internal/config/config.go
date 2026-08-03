@@ -38,7 +38,7 @@ type Config struct {
 	AppVersion        string `env:"APP_VERSION,required"`
 	GITSHA            string `env:"GIT_SHA,required"`
 	AppReleasedAt     string `env:"APP_RELEASED_AT"`
-	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"cfcoimbra/mycfc"`
+	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
 	Port              int    `env:"PORT" envDefault:"8080"`
 	BaseURL           string `env:"BASE_URL,required"`
 

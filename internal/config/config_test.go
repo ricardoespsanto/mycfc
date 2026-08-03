@@ -13,7 +13,7 @@ func validConfig() Config {
 		AppEnv:                 "local",
 		AppVersion:             "dev",
 		GITSHA:                 strings.Repeat("0", 40),
-		ReleaseRepository:      "cfcoimbra/mycfc",
+		ReleaseRepository:      "ricardoespsanto/mycfc",
 		Port:                   8080,
 		BaseURL:                "http://localhost:8080",
 		DatabaseURL:            Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"),

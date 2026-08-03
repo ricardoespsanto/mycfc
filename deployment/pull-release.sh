@@ -104,7 +104,9 @@ if ! grep -q '^APP_RELEASED_AT=' "$next_file"; then
 	printf '\nAPP_RELEASED_AT=\n' >> "$next_file"
 fi
 if ! grep -q '^RELEASE_REPOSITORY=' "$next_file"; then
-	printf 'RELEASE_REPOSITORY=cfcoimbra/mycfc\n' >> "$next_file"
+	printf 'RELEASE_REPOSITORY=ricardoespsanto/mycfc\n' >> "$next_file"
+elif grep -q '^RELEASE_REPOSITORY=cfcoimbra/mycfc$' "$next_file"; then
+	sed -i 's|^RELEASE_REPOSITORY=cfcoimbra/mycfc$|RELEASE_REPOSITORY=ricardoespsanto/mycfc|' "$next_file"
 fi
 sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
 chmod 600 "$next_file"
