@@ -47,7 +47,7 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 				t.Fatalf("status = %d", response.Code)
 			}
 			body := response.Body.String()
-			for _, shellText := range []string{"Maria Silva", "Conta com responsabilidades cumulativas", "Conta e início", "Terminar sessão"} {
+			for _, shellText := range []string{"Maria Silva", "Conta com responsabilidades cumulativas", "Terminar sessão"} {
 				if !strings.Contains(body, shellText) {
 					t.Fatalf("dashboard shell does not contain %q", shellText)
 				}
@@ -125,7 +125,11 @@ func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 }
 
 func TestDashboardTodayShowsBoundedAdminOperations(t *testing.T) {
-	store := &dashboardStoreFake{repairs: []dbgen.ListPendingRepairRequestsRow{{AssetTag: "K-01", EquipmentName: "Kayak", Status: "Em_Analise"}}}
+	eventID := uuid.New()
+	store := &dashboardStoreFake{
+		todayEvents: []dbgen.ListEventsForTodayRow{{ID: eventID, Title: "Treino administrativo", StartsAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, EndsAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}}},
+		repairs:     []dbgen.ListPendingRepairRequestsRow{{AssetTag: "K-01", EquipmentName: "Kayak", Status: "Em_Analise"}},
+	}
 	dashboard := Dashboard{Store: store, Fleet: store, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	request := httptest.NewRequest(http.MethodGet, "/today", nil)
 	user := CurrentUser{ID: uuid.New(), Name: "Beatriz", IsAdmin: true}
@@ -139,6 +143,9 @@ func TestDashboardTodayShowsBoundedAdminOperations(t *testing.T) {
 	}
 	if strings.Contains(body, "Em_Analise") || store.pendingRepairParams.RowLimit != 3 {
 		t.Fatalf("raw status or unbounded repair query: %q %+v", body, store.pendingRepairParams)
+	}
+	if !strings.Contains(body, "/admin/eventos/"+eventID.String()) {
+		t.Fatalf("admin event link does not use the management route: %q", body)
 	}
 }
 

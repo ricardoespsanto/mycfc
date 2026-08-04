@@ -74,14 +74,14 @@ func releasesContent(page ReleasesPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"module release-status\" aria-labelledby=\"release-status-title\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Versões</p><h2 id=\"release-status-title\">Estado da versão</h2><p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"module release-status\" aria-labelledby=\"release-status-title\"><div class=\"section-heading\"><div><h2 id=\"release-status-title\">Estado da versão</h2><p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var3 string
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(releaseStatusSummary(page.Release))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/releases.templ`, Line: 19, Col: 158}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/releases.templ`, Line: 19, Col: 127}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {

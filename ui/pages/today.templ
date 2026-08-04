@@ -13,6 +13,7 @@ type TodayLeaderboard struct { Period string; Rows []TodayLeaderboardRow; Curren
 type TodayPage struct {
 	Meta components.PageMeta
 	Name string
+	EventBasePath string
 	NextEvent *TodayEvent
 	Events []TodayEvent
 	Announcements []TodayAnnouncement
@@ -27,28 +28,28 @@ type TodayPage struct {
 templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
 
 templ todayContent(page TodayPage) {
-	<section class="today-hero"><div><p class="eyebrow">O seu dia no clube</p><h1>Olá, { firstName(page.Name) }</h1><p>O que merece a sua atenção agora, reunido num só lugar.</p></div>
+	<section class="today-hero"><div><h1>Olá, { firstName(page.Name) }</h1><p>O que merece a sua atenção agora, reunido num só lugar.</p></div>
 		if page.NextEvent != nil {
-			<a class="today-next" href={ "/events/" + page.NextEvent.ID }><span>A seguir</span><strong>{ page.NextEvent.Title }</strong><small>{ page.NextEvent.When }</small></a>
+			<a class="today-next" href={ todayEventPath(page, page.NextEvent.ID) }><span>A seguir</span><strong>{ page.NextEvent.Title }</strong><small>{ page.NextEvent.When }</small></a>
 		} else {
 			<div class="today-next today-next--empty"><span>A seguir</span><strong>Dia tranquilo</strong><small>Sem atividades pendentes para hoje.</small></div>
 		}
 		</section>
 		@components.StatusMessage(page.Success, "success")
 		<div class="today-grid">
-	<section class="today-module today-module--agenda"><header><div><p class="eyebrow">Agora</p><h2>Agenda de hoje</h2></div><a href="/events">Ver agenda</a></header>
+	<section class="today-module today-module--agenda"><header><div><h2>Agenda de hoje</h2></div><a href={ todayEventsPath(page) }>Ver agenda</a></header>
 		if len(page.Events) == 0 {
 			<p class="today-empty">Não existem eventos para hoje. Consulte a agenda para preparar os próximos dias.</p>
 		}
 		if len(page.Events) > 0 {
 			<ul class="today-list">
 				for _, event := range page.Events {
-					<li><span>{ event.When }</span><a href={ "/events/" + event.ID }>{ event.Title }</a></li>
+					<li><span>{ event.When }</span><a href={ todayEventPath(page, event.ID) }>{ event.Title }</a></li>
 				}
 			</ul>
 		}
 		</section>
-	<section class="today-module"><header><div><p class="eyebrow">Para si</p><h2>Avisos recentes</h2></div><a href="/announcements">Ver todos</a></header>
+	<section class="today-module"><header><div><h2>Avisos recentes</h2></div><a href="/announcements">Ver todos</a></header>
 		if len(page.Announcements) == 0 {
 			<p class="today-empty">Não há avisos recentes. As novas comunicações do clube aparecerão aqui.</p>
 		}
@@ -64,7 +65,7 @@ templ todayContent(page TodayPage) {
 			</ul>
 		}
 	</section>
-		<section id="leaderboard" class="today-module today-module--leaderboard"><header><div><p class="eyebrow">Distância</p><h2>Classificação do clube</h2></div></header>
+		<section id="leaderboard" class="today-module today-module--leaderboard"><header><div><h2>Classificação do clube</h2></div></header>
 			<nav class="leaderboard-tabs" aria-label="Período da classificação">
 				@leaderboardTab("week", "Semana", page.Leaderboard.Period)
 				@leaderboardTab("month", "Mês", page.Leaderboard.Period)
@@ -91,7 +92,7 @@ templ todayContent(page TodayPage) {
 			}
 		</section>
 	if len(page.Dependents) > 0 {
-		<section class="today-module"><header><div><p class="eyebrow">Família</p><h2>Menores a cargo</h2></div><a href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
+		<section class="today-module"><header><div><h2>Menores a cargo</h2></div><a href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
 			for _, dependent := range page.Dependents {
 				<li><strong>{ dependent.Name }</strong>
 						if dependent.HasAccess {
@@ -104,14 +105,14 @@ templ todayContent(page TodayPage) {
 		</ul></section>
 	}
 	if len(page.Operations) > 0 {
-		<section class="today-module today-module--attention"><header><div><p class="eyebrow">Operação</p><h2>Requer atenção</h2></div><a href="/admin/fleet">Abrir frota</a></header><ul class="today-list">
+		<section class="today-module today-module--attention"><header><div><h2>Requer atenção</h2></div><a href="/admin/fleet">Abrir frota</a></header><ul class="today-list">
 			for _, item := range page.Operations {
 				<li><strong>{ item.Label }</strong><span>{ item.Detail }</span></li>
 			}
 		</ul></section>
 	}
 		if page.ShowShortcuts {
-			<section class="today-module today-module--shortcuts"><header><div><p class="eyebrow">Atalhos</p><h2>Continuar no MyCFC</h2></div></header><div class="today-shortcuts">
+			<section class="today-module today-module--shortcuts"><header><div><h2>Continuar no MyCFC</h2></div></header><div class="today-shortcuts">
 				for _, item := range page.Shortcuts {
 					<a href={ item.Path }><strong>{ item.Label }</strong><span>{ item.Detail }</span></a>
 				}
@@ -121,6 +122,9 @@ templ todayContent(page TodayPage) {
 }
 
 func firstName(name string) string { for i, r := range name { if r == ' ' { return name[:i] } }; return name }
+
+func todayEventsPath(page TodayPage) string { if page.EventBasePath != "" { return page.EventBasePath }; return "/events" }
+func todayEventPath(page TodayPage, id string) string { return todayEventsPath(page) + "/" + id }
 
 templ leaderboardTab(period, label, selected string) {
 	if period == selected {

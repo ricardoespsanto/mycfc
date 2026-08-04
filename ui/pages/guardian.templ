@@ -28,12 +28,12 @@ templ GuardianContent(page GuardianPage) {
 		if page.Success != "" {
 			@components.StatusMessage(page.Success, "success")
 		}
-		<section class="module">@components.SectionHeading("Família", "Menores a cargo", "Dependentes associados à sua conta e respetivo acesso.")
+		<section class="module">@components.SectionHeading("Família", "Dependentes associados", "Menores associados à sua conta e respetivo acesso.")
 			if len(page.Dependents) == 0 {
 				@components.EmptyState("Ainda sem menores associados", "Adicione o primeiro menor para gerir a responsabilidade a partir da sua conta.")
 			}
 				if len(page.Dependents) > 0 {
-					@components.RecordList("Menores a cargo") {
+					@components.RecordList("Dependentes associados") {
 						for _, dependent := range page.Dependents {
 							<li class="record-item"><div class="record-item__copy"><h3>{ dependent.Name }</h3><p class="record-meta">{ dependent.Detail }</p></div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
 						}

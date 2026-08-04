@@ -22,9 +22,6 @@ templ Surface(title string, content templ.Component) {
 templ SectionHeading(eyebrow, title, summary string) {
 	<header class="section-heading">
 		<div>
-			if eyebrow != "" {
-				<p class="eyebrow">{ eyebrow }</p>
-			}
 			<h2>{ title }</h2>
 			if summary != "" {
 				<p>{ summary }</p>

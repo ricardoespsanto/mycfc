@@ -127,7 +127,7 @@ func (h Announcements) Create(w http.ResponseWriter, r *http.Request) {
 			h.Sessions.Put(r.Context(), "announcements_flash", "Rascunho guardado.")
 		}
 	}
-	httpx.Redirect(w, r, "/announcements", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/avisos", http.StatusSeeOther)
 }
 func (h Announcements) Publish(w http.ResponseWriter, r *http.Request) { h.changeStatus(w, r, true) }
 func (h Announcements) Expire(w http.ResponseWriter, r *http.Request)  { h.changeStatus(w, r, false) }
@@ -174,7 +174,7 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 			h.Sessions.Put(r.Context(), "announcements_flash", "Aviso retirado.")
 		}
 	}
-	httpx.Redirect(w, r, "/announcements", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/avisos", http.StatusSeeOther)
 }
 func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
@@ -279,32 +279,35 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
 	defer cancel()
+	management := strings.HasPrefix(r.URL.Path, "/admin/")
 	visiblePage := announcementPageNumber(r.URL.Query().Get("page"))
 	authoredPage := announcementPageNumber(r.URL.Query().Get("authored_page"))
-	visible, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: announcementPageSize + 1, RowOffset: int32((visiblePage - 1) * announcementPageSize)})
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	page := pages.AnnouncementsPage{CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, GuardianSelected: f.Guardian, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	page := pages.AnnouncementsPage{Management: management, CanManage: user.IsAdmin || user.CanManageEvents, Form: pages.AnnouncementForm{Title: f.Title, Body: f.Body, ExpiresAt: f.ExpiresAt, DocumentURL: f.DocumentURL, DocumentSource: f.DocumentSource, ReviewedOn: f.ReviewedOn, GuardianSelected: f.Guardian, Errors: f.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "announcements_flash")
 	}
-	if visiblePage > 1 {
-		page.VisiblePreviousURL = announcementsPageURL(visiblePage-1, authoredPage)
-	}
-	if len(visible) > announcementPageSize {
-		page.VisibleNextURL = announcementsPageURL(visiblePage+1, authoredPage)
-		visible = visible[:announcementPageSize]
-	}
-	for _, item := range visible {
-		if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: item.ID, UserID: user.ID}); err != nil {
+	if !management {
+		visible, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: announcementPageSize + 1, RowOffset: int32((visiblePage - 1) * announcementPageSize)})
+		if err != nil {
 			h.System.InternalError(w, r)
 			return
 		}
-		page.Items = append(page.Items, pages.AnnouncementItem{ID: item.ID.String(), Title: item.Title, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Unread: !item.ReadAt.Valid})
+		if visiblePage > 1 {
+			page.VisiblePreviousURL = announcementsPageURL(visiblePage-1, 1)
+		}
+		if len(visible) > announcementPageSize {
+			page.VisibleNextURL = announcementsPageURL(visiblePage+1, 1)
+			visible = visible[:announcementPageSize]
+		}
+		for _, item := range visible {
+			if err := dbgen.New(h.DB).RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: item.ID, UserID: user.ID}); err != nil {
+				h.System.InternalError(w, r)
+				return
+			}
+			page.Items = append(page.Items, pages.AnnouncementItem{ID: item.ID.String(), Title: item.Title, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Unread: !item.ReadAt.Valid})
+		}
 	}
-	if page.CanManage {
+	if management {
 		p, _ := h.Store.ListAnnouncementProgrammes(ctx)
 		t, _ := h.Store.ListAnnouncementTeams(ctx)
 		c, _ := h.Store.ListAnnouncementCategories(ctx)
@@ -348,17 +351,21 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 			return
 		}
 		if authoredPage > 1 {
-			page.AuthoredPreviousURL = announcementsPageURL(visiblePage, authoredPage-1)
+			page.AuthoredPreviousURL = managedAnnouncementsPageURL(authoredPage - 1)
 		}
 		if len(authored) > announcementPageSize {
-			page.AuthoredNextURL = announcementsPageURL(visiblePage, authoredPage+1)
+			page.AuthoredNextURL = managedAnnouncementsPageURL(authoredPage + 1)
 			authored = authored[:announcementPageSize]
 		}
 		for _, x := range authored {
 			page.Authored = append(page.Authored, pages.AuthoredAnnouncement{ID: x.ID.String(), Title: x.Title, Status: x.Status})
 		}
 	}
-	page.Meta = h.meta(r, user, "/announcements", "Avisos")
+	currentPath := "/announcements"
+	if management {
+		currentPath = "/admin/avisos"
+	}
+	page.Meta = h.meta(r, user, currentPath, "Avisos")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Announcements(page).Render(r.Context(), w)
@@ -384,6 +391,10 @@ func announcementPageNumber(value string) int {
 func announcementsPageURL(visiblePage, authoredPage int) string {
 	query := url.Values{"page": {strconv.Itoa(visiblePage)}, "authored_page": {strconv.Itoa(authoredPage)}}
 	return "/announcements?" + query.Encode()
+}
+
+func managedAnnouncementsPageURL(authoredPage int) string {
+	return "/admin/avisos?authored_page=" + strconv.Itoa(authoredPage)
 }
 
 const documentMarker = "[DOCUMENTO_OFICIAL]"

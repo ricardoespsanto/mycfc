@@ -70,7 +70,7 @@ func registrationContent(page RegistrationPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"registration-title\"><p class=\"eyebrow\">Junte-se ao clube</p><h1 id=\"registration-title\">Criar conta</h1><p>Crie o seu acesso pessoal ao MyCFC. Os campos assinalados são obrigatórios.</p><form class=\"form-layout\" method=\"post\" action=\"/registo\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--registration\" aria-labelledby=\"registration-title\"><p class=\"eyebrow\">Junte-se ao clube</p><h1 id=\"registration-title\">Criar conta</h1><p>Crie o seu acesso pessoal ao MyCFC. Os campos assinalados são obrigatórios.</p><form class=\"form-layout\" method=\"post\" action=\"/registo\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -313,20 +313,20 @@ func registrationContent(page RegistrationPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" aria-describedby=\"accept_terms-error\"> Aceito os <a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" aria-describedby=\"accept_terms-error\"><span>Aceito os <a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var12 templ.SafeURL
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.TermsURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 33, Col: 310}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 33, Col: 315}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\" target=\"_blank\" rel=\"noopener\">termos gerais</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></label>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\" target=\"_blank\" rel=\"noopener\">termos gerais</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></span></label>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -357,20 +357,20 @@ func registrationContent(page RegistrationPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\" aria-describedby=\"accept_image_use-error\"> Aceito a <a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\" aria-describedby=\"accept_image_use-error\"><span>Aceito a <a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var14 templ.SafeURL
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ImageURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 34, Col: 329}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 34, Col: 334}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "\" target=\"_blank\" rel=\"noopener\">autorização de uso de imagem</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></label>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "\" target=\"_blank\" rel=\"noopener\">autorização de uso de imagem</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></span></label>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

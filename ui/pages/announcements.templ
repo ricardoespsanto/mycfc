@@ -15,21 +15,27 @@ type AnnouncementForm struct {
     Programmes, Teams, Categories, Modalities, Events []AnnouncementAudience
     Errors validation.FieldErrors
 }
-type AnnouncementsPage struct { Meta components.PageMeta; CanManage bool; VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL, Success string; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
+type AnnouncementsPage struct { Meta components.PageMeta; Management, CanManage bool; VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL, Success string; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
 type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt, DocumentURL, DocumentSource, DocumentReviewedOn string }
 
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
-    @components.PageHeader("Atividade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", announcementPageActions(page))
-    @components.StatusMessage(page.Success, "success")
-    <section class="module">
-        @components.SectionHeading("Comunidade", "Para si", "Informação publicada para os seus programas, equipas e responsabilidades.")
-        @announcementItems(page)
-    </section>
-    if page.CanManage {
-        @AnnouncementAuthoringForm(page.Form)
-        <section class="module">
-            @components.SectionHeading("Publicação", "Os meus avisos", "Rascunhos e comunicações publicadas por si.")
+	if page.Management {
+		@components.PageHeader("Administração", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page))
+	} else {
+		@components.PageHeader("Atividade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", nil)
+	}
+	@components.StatusMessage(page.Success, "success")
+	if !page.Management {
+		<section class="module">
+			@components.SectionHeading("", "Avisos para si", "Informação publicada para os seus programas, equipas e responsabilidades.")
+			@announcementItems(page)
+		</section>
+	}
+	if page.Management {
+		@AnnouncementAuthoringForm(page.Form)
+		<section class="module">
+			@components.SectionHeading("", "Avisos publicados", "Rascunhos e comunicações publicadas por si.")
             @authoredAnnouncementItems(page)
         </section>
     }
@@ -95,7 +101,7 @@ templ authoredAnnouncementItems(page AnnouncementsPage) {
         }
 }
 templ AnnouncementAuthoringForm(form AnnouncementForm) {
-    <details id="criar-aviso" class="module disclosure" open?={ len(form.Errors) > 0 }><summary><span><strong>Criar aviso</strong><small>Prepare uma comunicação para os públicos certos.</small></span></summary><div class="disclosure__content">
+    <details id="criar-aviso" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 } aria-labelledby="announcement-authoring-title"><summary><span><strong id="announcement-authoring-title">Criar aviso</strong><small>Prepare uma comunicação para os públicos certos.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
     @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "title", Field: "announcement-title"}, {Key: "body", Field: "announcement-body"}, {Key: "document_url", Field: "announcement-document-url"}, {Key: "document_source", Field: "announcement-document-source"}, {Key: "reviewed_on", Field: "announcement-reviewed-on"}, {Key: "expires_at", Field: "announcement-expires"}, {Key: "audience", Field: "announcement-audience"}}))
     <form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
         @components.RequiredNote()
@@ -125,7 +131,7 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
                 <label><input type="checkbox" name="event_id" value={ item.ID } checked?={ item.Selected }/> { item.Name }</label>
             }
         </fieldset></details>@components.FieldErrorMessage("audience", form.Errors["audience"])
-        @components.FormActions("/announcements") {
+		@components.FormActions("/admin/avisos") {
             <button class="action action--primary" name="action" value="publish" type="submit">Publicar aviso</button>
             <button class="action action--secondary" name="action" value="draft" type="submit">Guardar rascunho</button>
         }
@@ -144,7 +150,7 @@ templ announcementDetailContent(page AnnouncementDetailPage) {
 }
 
 func announcementPageActions(page AnnouncementsPage) []components.PageAction {
-    if page.CanManage {
+    if page.Management {
         return []components.PageAction{{Label: "Criar aviso", Href: "#criar-aviso", Variant: "primary"}}
     }
     return nil

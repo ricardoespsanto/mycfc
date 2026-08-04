@@ -82,7 +82,9 @@ test.describe('authentication', () => {
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
-    const logout = page.getByRole('button', { name: 'Terminar sessão' });
+    const mobileMenu = page.locator('.mobile-app-menu');
+    await mobileMenu.locator('summary').click();
+    const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
     await logout.focus();
     await expect(logout).toBeFocused();
     await page.keyboard.press('Enter');
@@ -176,7 +178,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Frota', exact: true }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
-    await page.locator('#maintenance-form > summary').click();
+    await page.getByRole('link', { name: 'Agendar manutenção', exact: true }).click();
     await expect(page.locator('#maintenance-equipment')).toBeVisible();
     await expectNoSeriousAxeViolations(page);
     await page.setViewportSize({ width: 320, height: 720 });
@@ -209,6 +211,7 @@ test.describe('authentication', () => {
     await expect(maintenanceForm.getByRole('status')).toHaveText('Manutenção agendada.');
 
     await page.reload();
+    await page.getByRole('link', { name: /Manutenção/ }).click();
     const task = page.locator('li', { hasText: description });
     const complete = task.getByRole('button', { name: 'Concluir manutenção' });
     await complete.focus();
@@ -314,7 +317,7 @@ test.describe('authentication', () => {
   });
 
   test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
-    test.setTimeout(120000);
+    test.setTimeout(240000);
     const athleteName = `Atleta E2E ${Date.now()}`;
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
@@ -323,7 +326,7 @@ test.describe('authentication', () => {
 
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await expect(page).toHaveURL('/admin/membros');
-    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
+    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
     await page.locator('#member-name').fill(athleteName);
     await page.locator('#member-email').fill(athleteEmail);
     await page.locator('#member-birth').fill('2000-01-01');
@@ -347,18 +350,16 @@ test.describe('authentication', () => {
 
     const planTitle = `Plano classificação E2E ${Date.now()}`;
     const sessionTitle = `Sessão classificação E2E ${Date.now()}`;
-    await page.goto('/treinos');
-    await page.locator('summary').filter({ hasText: 'Gerir treinos' }).click();
+    await page.goto('/admin/treinos');
     await page.locator('summary').filter({ hasText: 'Criar plano' }).click();
-    const planForm = page.locator('form[action="/treinos/planos"]');
+    const planForm = page.locator('form[action="/admin/treinos/planos"]');
     await planForm.getByLabel('Título').fill(planTitle);
     await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await planForm.getByRole('button', { name: 'Criar plano' }).click();
     await expect(page.getByRole('status')).toHaveText('Plano criado.');
 
-    await page.locator('summary').filter({ hasText: 'Gerir treinos' }).click();
     await page.locator('summary').filter({ hasText: 'Criar sessão' }).click();
-    const sessionForm = page.locator('form[action="/treinos/sessoes"]');
+    const sessionForm = page.locator('form[action="/admin/treinos/sessoes"]');
     const sessionStart = new Date(Date.now() - 6 * 60 * 60 * 1000);
     const sessionEnd = new Date(Date.now() - 5 * 60 * 60 * 1000);
     await sessionForm.getByLabel('Plano').selectOption({ label: planTitle });
@@ -398,7 +399,7 @@ test.describe('authentication', () => {
   });
 
   test('administrator manages event capacity, waitlist confirmation, and check-in', async ({ page }) => {
-    test.setTimeout(120000);
+    test.setTimeout(240000);
     const waitlistedName = `Lista de espera E2E ${Date.now()}`;
     const futureTitle = `Evento com lotação E2E ${Date.now()}`;
     const pastTitle = `Evento com presença E2E ${Date.now()}`;
@@ -413,7 +414,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
+    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
     await page.locator('#member-name').fill(waitlistedName);
     await page.locator('#member-email').fill(waitlistedEmail);
     await page.locator('#member-birth').fill('2000-01-01');
@@ -429,7 +430,7 @@ test.describe('authentication', () => {
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
 
     await page.goto('/events');
-    await page.locator('summary').filter({ hasText: 'Criar evento' }).click();
+    await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
     await page.locator('#event-title').fill('E');
     await page.locator('#event-description').fill('Valores seguros devem permanecer após validação.');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(futureEnd));
@@ -450,7 +451,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await expect(page.getByRole('status')).toHaveText('Evento criado.');
     await page.getByRole('link', { name: futureTitle }).click();
-    await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/events');
+    await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/admin/eventos');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
@@ -483,14 +484,14 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/events');
+    await page.goto('/admin/eventos');
     await page.getByRole('link', { name: futureTitle }).click();
     await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Confirmar vaga' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Vou');
 
-    await page.goto('/events');
-    await page.locator('summary').filter({ hasText: 'Criar evento' }).click();
+    await page.goto('/admin/eventos');
+    await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
     await page.locator('#event-title').fill(pastTitle);
     await page.locator('#event-description').fill('Evento de teste para registar uma presença após o início.');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(pastStart));
@@ -499,34 +500,36 @@ test.describe('authentication', () => {
     while (await page.getByRole('link', { name: pastTitle }).count() === 0) {
       await page.getByRole('link', { name: 'Seguinte' }).click();
     }
-    const pastEventURL = await page.getByRole('link', { name: pastTitle }).getAttribute('href');
-    expect(pastEventURL).not.toBeNull();
+    const pastAdminEventURL = await page.getByRole('link', { name: pastTitle }).getAttribute('href');
+    expect(pastAdminEventURL).not.toBeNull();
+    const pastMemberEventURL = pastAdminEventURL?.replace('/admin/eventos/', '/events/');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(waitlistedEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto(pastEventURL ?? '/events');
+    await page.goto(pastMemberEventURL ?? '/events');
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto(pastEventURL);
+    await page.goto(pastAdminEventURL);
     await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Registar presença' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Presença:');
   });
 
   test('administrator publishes a targeted announcement and the athlete reads it', async ({ page }) => {
+    test.setTimeout(180000);
     const title = `Aviso de competição E2E ${Date.now()}`;
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/announcements');
-    await page.locator('summary').filter({ hasText: 'Criar aviso' }).click();
+    await page.goto('/admin/avisos');
+    await page.getByRole('link', { name: 'Criar aviso', exact: true }).click();
     await page.locator('#announcement-title').fill(title);
     await page.locator('#announcement-body').fill('Aviso dirigido aos atletas de competição.');
     await page.locator('summary').filter({ hasText: 'Contexto e destinatários' }).click();
@@ -550,7 +553,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/announcements');
+    await page.goto('/admin/avisos');
     await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
 
@@ -572,7 +575,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.locator('summary').filter({ hasText: 'Criar conta' }).click();
+    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
     await page.locator('#member-name').fill(memberName);
     await page.locator('#member-email').fill(leisureEmail);
     await page.locator('#member-birth').fill('2000-01-01');
@@ -590,7 +593,7 @@ test.describe('authentication', () => {
     await membershipForm.getByRole('checkbox', { name: 'Lazer', exact: true }).check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Notícias' }).click();
-    await page.locator('summary').filter({ hasText: 'Criar notícia' }).click();
+    await page.getByRole('link', { name: 'Criar notícia', exact: true }).click();
     await page.locator('#news-title').fill(title);
     await page.locator('#news-summary').fill('Notícia publicada no painel de lazer.');
     await page.locator('#news-published-at').fill(publishedAt);

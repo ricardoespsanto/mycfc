@@ -17,7 +17,7 @@ type EventForm struct {
     Teams []EventTeam
     Errors validation.FieldErrors
 }
-type EventsPage struct { Meta components.PageMeta; CanManageEvents bool; PreviousURL, NextURL, Success string; Events []EventItem; Form EventForm }
+type EventsPage struct { Meta components.PageMeta; Management, CanManageEvents bool; PreviousURL, NextURL, Success string; Events []EventItem; Form EventForm }
 type EventDetailPage struct {
     Meta components.PageMeta
     CanManageEvents bool
@@ -30,21 +30,26 @@ type EventDetailPage struct {
 
 templ Events(page EventsPage) { @components.Base(page.Meta, eventsContent(page)) }
 templ eventsContent(page EventsPage) {
-    @components.PageHeader("Atividade", "Eventos", "Consulte convívios, competições e outras iniciativas do clube e confirme a sua participação.", eventPageActions(page))
+    <div class="collection-page">
+    if page.Management {
+        @components.PageHeader("Administração", "Eventos", "Crie eventos e acompanhe as respostas dos participantes.", eventPageActions(page))
+    } else {
+        @components.PageHeader("Atividade", "Eventos", "Consulte a agenda e responda às atividades relevantes para si.", nil)
+    }
     @components.StatusMessage(page.Success, "success")
-    <section class="module">
-        @components.SectionHeading("Agenda", "Próximos eventos", "Datas, estado da sua resposta e disponibilidade num só lugar.")
+    <section class="collection-view">
+        @components.SectionHeading("Agenda", "Próximos eventos", "Datas, estado da sua resposta e disponibilidade num só lugar.") {
+            <span class="collection-count">{ len(page.Events) } eventos</span>
+        }
         if len(page.Events) == 0 {
             @components.EmptyState("Sem eventos próximos", "Quando o clube marcar uma atividade relevante, ela aparece aqui.")
         }
         if len(page.Events) > 0 {
-            @components.RecordList("Próximos eventos") {
+            <ul class="record-list collection-list" aria-label="Próximos eventos">
                 for _, event := range page.Events {
-                    @components.RecordItem(event.Title, "/events/" + event.ID, event.When + event.Capacity) {
-                        @components.Badge(event.Status, eventStatusTone(event.Status))
-                    }
+                    <li class="record-item"><div class="record-item__copy"><h3><a href={ eventPageURL(page, event.ID) }>{ event.Title }</a></h3><p class="record-meta">{ event.When }{ event.Capacity }</p></div>@components.Badge(event.Status, eventStatusTone(event.Status))<a class="action action--quiet collection-open" href={ eventPageURL(page, event.ID) }>Abrir</a></li>
                 }
-            }
+            </ul>
         }
         if page.PreviousURL != "" || page.NextURL != "" {
             <nav class="pagination" aria-label="Paginação de eventos">
@@ -57,13 +62,14 @@ templ eventsContent(page EventsPage) {
             </nav>
         }
     </section>
-    if page.CanManageEvents {
+    if page.Management {
         @EventAuthoringForm(page.Form)
     }
+    </div>
 }
 
 templ EventAuthoringForm(form EventForm) {
-    <details id="criar-evento" class="module disclosure" open?={ len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">Criar evento</strong><small>Defina data, lotação e participantes.</small></span></summary><div class="disclosure__content">
+    <details id="criar-evento" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">Criar evento</strong><small>Defina data, lotação e participantes.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
         @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "title", Field: "event-title"}, {Key: "description", Field: "event-description"}, {Key: "starts_at", Field: "event-starts-at"}, {Key: "ends_at", Field: "event-ends-at"}, {Key: "response_deadline", Field: "event-deadline"}, {Key: "capacity", Field: "event-capacity"}, {Key: "programme_id", Field: "event-audience"}, {Key: "team_id", Field: "event-audience"}, {Key: "audience", Field: "event-audience"}}))
         <form class="form-layout" method="post" action="/admin/events">@form.CSRFField
             @components.RequiredNote()
@@ -87,14 +93,14 @@ templ EventAuthoringForm(form EventForm) {
                     <label><input name="team_id" type="checkbox" value={ team.ID } checked?={ team.Selected }/> { team.Name }</label>
                 }
             </fieldset></details>@components.FieldErrorMessage("programme_id", form.Errors["programme_id"])@components.FieldErrorMessage("team_id", form.Errors["team_id"])@components.FieldErrorMessage("audience", form.Errors["audience"])
-            @components.FormActions("/events") { <button type="submit">Criar evento</button> }
+            @components.FormActions("/admin/eventos") { <button type="submit">Criar evento</button> }
         </form>
     </div></details>
 }
 
 templ EventDetail(page EventDetailPage) { @components.Base(page.Meta, eventDetailContent(page)) }
 templ eventDetailContent(page EventDetailPage) {
-    @components.PageHeader("Evento", page.Title, page.Description, []components.PageAction{{Label: "Voltar aos eventos", Href: "/events", Variant: "quiet"}})
+	@components.PageHeader(eventDetailArea(page), page.Title, page.Description, []components.PageAction{{Label: "Voltar aos eventos", Href: eventDetailBackURL(page), Variant: "quiet"}})
     <section class="module event-summary" aria-label="Informação do evento">
         <p class="record-meta">{ page.When }</p>
         if page.Deadline != "" {
@@ -168,11 +174,15 @@ templ eventDetailContent(page EventDetailPage) {
 }
 
 func eventPageActions(page EventsPage) []components.PageAction {
-    if page.CanManageEvents {
+    if page.Management {
         return []components.PageAction{{Label: "Criar evento", Href: "#criar-evento", Variant: "primary"}}
     }
     return nil
 }
+
+func eventPageURL(page EventsPage, id string) string { if page.Management { return "/admin/eventos/" + id }; return "/events/" + id }
+func eventDetailArea(page EventDetailPage) string { if page.CanManageEvents { return "Administração · Eventos" }; return "Evento" }
+func eventDetailBackURL(page EventDetailPage) string { if page.CanManageEvents { return "/admin/eventos" }; return "/events" }
 
 func eventStatusTone(status string) string {
     switch status {
