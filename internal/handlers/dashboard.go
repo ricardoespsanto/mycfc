@@ -55,6 +55,15 @@ type FleetStore interface {
 	CompleteMaintenanceTask(context.Context, uuid.UUID) (dbgen.MaintenanceTask, error)
 }
 
+type EquipmentStore interface {
+	GetEquipmentByID(context.Context, uuid.UUID) (dbgen.Equipment, error)
+	CreateEquipmentWithAudit(context.Context, dbgen.CreateEquipmentWithAuditParams) (dbgen.CreateEquipmentWithAuditRow, error)
+	UpdateEquipmentWithAudit(context.Context, dbgen.UpdateEquipmentWithAuditParams) (dbgen.UpdateEquipmentWithAuditRow, error)
+	RetireEquipmentWithAudit(context.Context, dbgen.RetireEquipmentWithAuditParams) (dbgen.RetireEquipmentWithAuditRow, error)
+	ReactivateEquipmentWithAudit(context.Context, dbgen.ReactivateEquipmentWithAuditParams) (dbgen.ReactivateEquipmentWithAuditRow, error)
+	ListEquipmentAuditEvents(context.Context, dbgen.ListEquipmentAuditEventsParams) ([]dbgen.ListEquipmentAuditEventsRow, error)
+}
+
 type ReleaseChecker interface {
 	Snapshot(context.Context) release.Snapshot
 }
@@ -62,6 +71,7 @@ type ReleaseChecker interface {
 type Dashboard struct {
 	Store                 DashboardStore
 	Fleet                 FleetStore
+	Equipment             EquipmentStore
 	Releases              ReleaseChecker
 	System                System
 	PageMeta              components.PageMeta
@@ -78,6 +88,8 @@ type Dashboard struct {
 	ResponsibilityURL     string
 	Sessions              *scs.SessionManager
 	Objects               storage.ObjectStore
+	MaxRequestBytes       int64
+	MaxPhotoBytes         int64
 }
 
 func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
@@ -566,8 +578,10 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
-	if page.MaintenanceForm.Success == "" && h.Sessions != nil {
+	page.EquipmentForm.CSRFField = page.Meta.CSRFField
+	if h.Sessions != nil {
 		page.MaintenanceForm.Success = h.Sessions.PopString(r.Context(), "fleet_flash")
+		page.Success = h.Sessions.PopString(r.Context(), "equipment_flash")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -624,13 +638,14 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 		h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID),
 		h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID),
 	})
-	page := pages.FleetPage{Counts: fleetStatusCounts(counts), CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	page := pages.FleetPage{Counts: fleetStatusCounts(counts), CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, EquipmentForm: pages.EquipmentForm{Type: "Boat", Status: "Operational", Errors: validation.FieldErrors{}}, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
 	page.EquipmentPreviousURL, page.EquipmentNextURL, equipment = fleetPaginationURLs(r.URL.Query(), "equipment_page", equipmentPage, equipment)
 	page.RepairsPreviousURL, page.RepairsNextURL, repairs = fleetPaginationURLs(r.URL.Query(), "repairs_page", repairsPage, repairs)
 	page.MaintenancePreviousURL, page.MaintenanceNextURL, maintenance = fleetPaginationURLs(r.URL.Query(), "maintenance_page", maintenancePage, maintenance)
 	page.Equipment = make([]pages.FleetEquipment, len(equipment))
 	for i, item := range equipment {
-		page.Equipment[i] = pages.FleetEquipment{AssetTag: item.AssetTag, Name: item.Name, Type: item.Type, Status: item.Status}
+		photoURL, photoUnavailable := h.equipmentPhotoURL(ctx, r, item.ImageObjectKey, item.ImageContentType, item.ID)
+		page.Equipment[i] = pages.FleetEquipment{ID: item.ID.String(), AssetTag: item.AssetTag, Name: item.Name, Type: item.Type, Status: item.Status, Notes: item.Notes, PhotoURL: photoURL, PhotoUnavailable: photoUnavailable}
 	}
 	page.Repairs = h.fleetRepairs(ctx, r, repairs)
 	for i := range page.Repairs {

@@ -1,0 +1,127 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type EquipmentForm struct {
+	CSRFField templ.Component
+	ID, AssetTag, Name, Type, Status, Notes, ExpectedUpdatedAt string
+	PhotoURL, PhotoUnavailable string
+	HasPhoto bool
+	Retired bool
+	Errors validation.FieldErrors
+}
+
+type EquipmentAuditItem struct {
+	Action, Actor, OccurredAt string
+	Changes []string
+	CancelledMaintenance int
+}
+
+type EquipmentEditPage struct {
+	Meta components.PageMeta
+	Form EquipmentForm
+	Audit []EquipmentAuditItem
+	Conflict string
+}
+
+templ EquipmentCreateForm(form EquipmentForm) {
+	<details id="equipment-form" class="module disclosure" open?={ len(form.Errors) > 0 } aria-labelledby="equipment-form-title">
+		<summary><span><strong id="equipment-form-title">Adicionar equipamento</strong><small>Registe uma embarcação, pagaia ou veículo.</small></span></summary>
+		<div class="disclosure__content">
+			@equipmentErrorSummary(form, "create")
+			<form class="form-layout" method="post" action="/admin/fleet/equipment" enctype="multipart/form-data">
+				@form.CSRFField
+				@equipmentFields(form, "create")
+				@components.FormActions("/admin/fleet") { <button type="submit">Adicionar equipamento</button> }
+			</form>
+		</div>
+	</details>
+}
+
+templ EquipmentEdit(page EquipmentEditPage) {
+	@components.Base(page.Meta, equipmentEditContent(page))
+}
+
+templ equipmentEditContent(page EquipmentEditPage) {
+	@components.PageHeader("Frota", "Editar equipamento", page.Form.AssetTag+" · "+page.Form.Name, []components.PageAction{{Label: "Voltar à frota", Href: "/admin/fleet", Variant: "secondary"}})
+	@components.StatusMessage(page.Conflict, "error")
+	<section class="module">
+		@components.SectionHeading("Inventário", "Dados do equipamento", "Atualize a identificação, classificação e estado operacional.")
+		@equipmentErrorSummary(page.Form, "edit")
+		if page.Form.PhotoURL != "" {
+			<img src={ page.Form.PhotoURL } alt={ "Fotografia de " + page.Form.Name } loading="lazy"/>
+		}
+		if page.Form.PhotoUnavailable != "" {
+			<p role="status">{ page.Form.PhotoUnavailable }</p>
+		}
+		<form class="form-layout" method="post" action={ "/admin/fleet/equipment/" + page.Form.ID } enctype="multipart/form-data">
+			@page.Form.CSRFField
+			<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
+			@equipmentFields(page.Form, "edit")
+			@components.FormActions("/admin/fleet") { <button type="submit">Guardar alterações</button> }
+		</form>
+	</section>
+	<section class="module">
+		@components.SectionHeading("Auditoria", "Histórico do equipamento", "Alterações administrativas preservadas por ordem cronológica.")
+		if len(page.Audit) == 0 {
+			@components.EmptyState("Sem histórico", "Ainda não existem eventos de auditoria para este equipamento.")
+		}
+		if len(page.Audit) > 0 {
+			@components.RecordList("Histórico do equipamento") {
+				for _, event := range page.Audit {
+					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ event.Action }</h3><p class="record-meta">{ event.Actor } · { event.OccurredAt }</p>
+						if len(event.Changes) > 0 {
+							<ul>
+								for _, change := range event.Changes {
+									<li>{ change }</li>
+								}
+							</ul>
+						}
+						if event.CancelledMaintenance > 0 {
+							<p>{ maintenanceCancellationLabel(event.CancelledMaintenance) }</p>
+						}
+					</div></li>
+				}
+			}
+		}
+	</section>
+}
+
+templ equipmentErrorSummary(form EquipmentForm, prefix string) {
+	@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "asset_tag", Field: "equipment-"+prefix+"-asset-tag"}, {Key: "name", Field: "equipment-"+prefix+"-name"}, {Key: "type", Field: "equipment-"+prefix+"-type"}, {Key: "status", Field: "equipment-"+prefix+"-status"}, {Key: "notes", Field: "equipment-"+prefix+"-notes"}, {Key: "photo", Field: "equipment-"+prefix+"-photo"}}))
+}
+
+templ equipmentFields(form EquipmentForm, prefix string) {
+	@components.RequiredNote()
+	@components.FieldLabel("equipment-"+prefix+"-asset-tag", "Identificador", true)
+	<input id={ "equipment-"+prefix+"-asset-tag" } name="asset_tag" value={ form.AssetTag } required maxlength="40" aria-invalid?={ form.Errors["asset_tag"] != "" } aria-describedby="asset_tag-error"/>@components.FieldErrorMessage("asset_tag", form.Errors["asset_tag"])
+	@components.FieldLabel("equipment-"+prefix+"-name", "Nome", true)
+	<input id={ "equipment-"+prefix+"-name" } name="name" value={ form.Name } required maxlength="120" aria-invalid?={ form.Errors["name"] != "" } aria-describedby="name-error"/>@components.FieldErrorMessage("name", form.Errors["name"])
+	@components.FieldLabel("equipment-"+prefix+"-type", "Tipo", true)
+	<select id={ "equipment-"+prefix+"-type" } name="type" required aria-invalid?={ form.Errors["type"] != "" } aria-describedby="type-error"><option value="Boat" selected?={ form.Type == "Boat" }>Embarcação</option><option value="Paddle" selected?={ form.Type == "Paddle" }>Pagaia</option><option value="Vehicle" selected?={ form.Type == "Vehicle" }>Veículo</option></select>@components.FieldErrorMessage("type", form.Errors["type"])
+	@components.FieldLabel("equipment-"+prefix+"-status", "Estado", true)
+	if form.Retired {
+		<input type="hidden" name="status" value="Retired"/><p id={ "equipment-"+prefix+"-status" }>@components.Badge("Retirado", "neutral")</p>
+	} else {
+		<select id={ "equipment-"+prefix+"-status" } name="status" required aria-invalid?={ form.Errors["status"] != "" } aria-describedby="status-error"><option value="Operational" selected?={ form.Status == "Operational" }>Operacional</option><option value="Maintenance" selected?={ form.Status == "Maintenance" }>Manutenção</option></select>@components.FieldErrorMessage("status", form.Errors["status"])
+	}
+	@components.FieldLabel("equipment-"+prefix+"-notes", "Notas (opcional)", false)
+	<textarea id={ "equipment-"+prefix+"-notes" } name="notes" maxlength="4000" aria-invalid?={ form.Errors["notes"] != "" } aria-describedby="notes-error">{ form.Notes }</textarea>@components.FieldErrorMessage("notes", form.Errors["notes"])
+	@components.FieldLabel("equipment-"+prefix+"-photo", equipmentPhotoLabel(form.HasPhoto), false)
+	<input id={ "equipment-"+prefix+"-photo" } name="photo" type="file" accept="image/jpeg,image/png,image/webp" aria-invalid?={ form.Errors["photo"] != "" } aria-describedby="photo-error"/>@components.FieldErrorMessage("photo", form.Errors["photo"])
+	<p class="field-hint">JPEG, PNG ou WebP. Máximo de 10 MB.</p>
+}
+
+func equipmentPhotoLabel(hasPhoto bool) string {
+	if hasPhoto { return "Substituir fotografia (opcional)" }
+	return "Fotografia (opcional)"
+}
+
+func maintenanceCancellationLabel(total int) string {
+	if total == 1 { return "1 tarefa de manutenção ativa foi cancelada." }
+	return fmt.Sprintf("%d tarefas de manutenção ativas foram canceladas.", total)
+}

@@ -2,18 +2,16 @@
 
 ## Decision
 
-Club operations owns the data presented by dashboards. The initial source is a
-controlled CLI/import process operated by a platform administrator; it is not
-entered by athletes, guardians, coaches, or dashboard handlers. This keeps the
-current read models authoritative while the broader operational authoring work
-is deferred to issue #19.
+Club operations owns the data presented by dashboards. Equipment is managed by
+platform administrators through the audited fleet UI. Controlled imports remain
+available for reviewed bulk provisioning; other dashboard read models continue
+to use the controlled CLI/import process.
 
-The import process is the sole initial write path for the following dashboard
-data:
+The authoritative write paths are:
 
 | Dashboard data | Authoritative record | Operational owner |
 |---|---|---|
-| Equipment | `equipment` | Fleet administrator |
+| Equipment | `equipment` | Fleet administrator through `/admin/fleet`; reviewed import for bulk provisioning |
 | Training logs | `training_logs` | Coach or sports director |
 | Performance metrics | `performance_metrics` | Coach or sports director |
 | News | `news_items` | Club communications administrator |
@@ -44,10 +42,10 @@ not an acceptable dashboard state.
 
 ## Scope boundary
 
-This is an operational provision path, not an administrator authoring UI.
-Issue #19 may replace individual imports with audited UI workflows only after
-the responsible club role and editing/review rules are agreed. Issue #6 owns
-targeted announcements and any later WhatsApp audience-management workflow.
+The import path is operational provisioning, not an alternative interactive
+editor. Equipment created or changed interactively is recorded in the immutable
+equipment audit history. Issue #6 owns targeted announcements and any later
+WhatsApp audience-management workflow.
 
 Dashboard populated-state acceptance requires a successful import for the
 relevant programme and a browser check against that imported data. Empty-state

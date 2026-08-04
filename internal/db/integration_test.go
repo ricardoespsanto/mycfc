@@ -4,6 +4,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -64,6 +65,105 @@ func TestScheduleMaintenanceTaskUpdatesOnlyDueEquipment(t *testing.T) {
 				t.Fatalf("equipment status = %q, want %q", equipment.Status, tc.wantEquipment)
 			}
 		})
+	}
+}
+
+func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+
+	actorID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Gestora de frota', $2, 'hash', '1980-01-01')`, actorID, "fleet-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	queries := dbgen.New(pool)
+	created, err := queries.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: "IT-" + uuid.NewString()[:8], Name: "K1 de integração", Type: "Boat", Status: "Operational", Notes: "Azul", ActorUserID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	updated, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "K1 atualizado", Type: "Boat", Status: "Maintenance", Notes: "Casco revisto", ActorUserID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "Alteração obsoleta", Type: "Boat", Status: "Operational", ActorUserID: actorID}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale update error = %v", err)
+	}
+
+	taskIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO maintenance_tasks (id, equipment_id, scheduled_for, description, status, completed_at)
+		VALUES ($1,$5,$6,'Agendada para cancelamento','Scheduled',NULL),
+		       ($2,$5,$6,'Em curso para cancelamento','In_Progress',NULL),
+		       ($3,$5,$6,'Manutenção já concluída','Completed',$6),
+		       ($4,$5,$6,'Manutenção já cancelada','Cancelled',NULL)`, taskIDs[0], taskIDs[1], taskIDs[2], taskIDs[3], created.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	repairID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO repair_requests (id, idempotency_key, equipment_id, issue_description) VALUES ($1,$2,$3,'Pedido que deve permanecer após retirada')`, repairID, uuid.New(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retired, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: created.ID, ActorUserID: actorID})
+	if err != nil || retired.Status != "Retired" {
+		t.Fatalf("retired = %#v, err = %v", retired, err)
+	}
+	var statuses []string
+	rows, err := pool.Query(ctx, `SELECT status::text FROM maintenance_tasks WHERE equipment_id = $1 ORDER BY id`, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, status)
+	}
+	rows.Close()
+	counts := map[string]int{}
+	for _, status := range statuses {
+		counts[status]++
+	}
+	if counts["Cancelled"] != 3 || counts["Completed"] != 1 {
+		t.Fatalf("maintenance statuses = %#v", counts)
+	}
+	var repairCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM repair_requests WHERE id = $1`, repairID).Scan(&repairCount); err != nil || repairCount != 1 {
+		t.Fatalf("repair count = %d, err = %v", repairCount, err)
+	}
+
+	operational, err := queries.ListOperationalEquipment(ctx, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range operational {
+		if item.ID == created.ID {
+			t.Fatal("retired equipment remained operational")
+		}
+	}
+	reactivated, err := queries.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: created.ID, ActorUserID: actorID})
+	if err != nil || reactivated.Status != "Operational" {
+		t.Fatalf("reactivated = %#v, err = %v", reactivated, err)
+	}
+
+	events, err := queries.ListEquipmentAuditEvents(ctx, dbgen.ListEquipmentAuditEventsParams{EquipmentID: created.ID, RowLimit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 || events[0].Action != "REACTIVATED" || events[1].Action != "RETIRED" || len(events[1].AffectedMaintenanceIds) != 2 || events[2].Action != "UPDATED" || events[3].Action != "CREATED" {
+		t.Fatalf("audit events = %#v", events)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE equipment_audit_events SET action = 'UPDATED' WHERE id = $1`, events[0].ID); err == nil {
+		t.Fatal("audit event update unexpectedly succeeded")
+	}
+	if updated.Name != "K1 atualizado" {
+		t.Fatalf("updated = %#v", updated)
 	}
 }
 

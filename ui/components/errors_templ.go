@@ -37,7 +37,7 @@ func ErrorSummary(errors []FieldError) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if len(errors) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"error-summary\" aria-labelledby=\"error-summary-title\" role=\"alert\" tabindex=\"-1\"><h2 id=\"error-summary-title\">Corrija os seguintes campos</h2><ul>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"error-summary\" aria-labelledby=\"error-summary-title\" role=\"alert\" tabindex=\"-1\" autofocus><h2 id=\"error-summary-title\">Corrija os seguintes campos</h2><ul>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
