@@ -23,6 +23,13 @@ func TestRoleStatementQuotesCredentials(t *testing.T) {
 	}
 }
 
+func TestTransferOwnershipStatementQuotesRole(t *testing.T) {
+	statement := transferOwnershipStatement("migration_user")
+	if !strings.Contains(statement, "ALTER FUNCTION") || !strings.Contains(statement, "ALTER TYPE") || !strings.Contains(statement, "'migration_user'") {
+		t.Fatalf("statement = %q", statement)
+	}
+}
+
 func TestMigrationVersion(t *testing.T) {
 	version := migrationVersion("migrations/202608040001_leaderboard_distance.sql")
 	if version != "202608040001_leaderboard_distance" {

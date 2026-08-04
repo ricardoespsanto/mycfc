@@ -12,7 +12,6 @@ services:
     command: ["postgres", "-c", "timezone=Europe/Lisbon"]
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ../internal/db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     networks: [mycfc]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -33,7 +32,7 @@ services:
       RELEASE_REPOSITORY: ${RELEASE_REPOSITORY:-ricardoespsanto/mycfc}
       PORT: "8080"
       BASE_URL: ${BASE_URL:?set BASE_URL in /etc/mycfc/mycfc.env}
-      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      DATABASE_URL: postgres://${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
       CSRF_AUTH_KEY_B64: ${CSRF_AUTH_KEY_B64:?set CSRF_AUTH_KEY_B64 in /etc/mycfc/mycfc.env}
       AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
@@ -64,6 +63,33 @@ services:
     networks: [mycfc]
     restart: unless-stopped
     stop_grace_period: 30s
+
+  db-bootstrap:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["bootstrap-db"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
+      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [release]
+
+  migrate:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}:${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [release]
 
   caddy:
     image: caddy:2.10.2-alpine

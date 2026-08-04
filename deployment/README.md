@@ -6,7 +6,7 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 
 ## Host setup
 
-1. Clone this repository at `/opt/mycfc` on the host. The Compose file mounts `internal/db/schema.sql` to initialize a new PostgreSQL volume.
+1. Clone this repository at `/opt/mycfc` on the host. The one-off migration container applies the embedded baseline when PostgreSQL is empty.
 2. Install Docker Engine with the Compose plugin. Do not permit inbound TCP 80 or 443.
 3. Install AWS CLI v2, `curl`, `jq`, and Docker Engine with the Compose plugin. Configure an AWS identity that can only read the production ECR repository.
 4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
@@ -28,8 +28,12 @@ GIT_SHA=<40-lowercase-hex-commit>
 BASE_URL=https://example.com
 
 POSTGRES_DB=<database-name>
-POSTGRES_USER=<database-user>
-POSTGRES_PASSWORD=<database-password>
+POSTGRES_USER=<bootstrap-superuser>
+POSTGRES_PASSWORD=<bootstrap-superuser-password>
+APP_DB_USER=<restricted-application-user>
+APP_DB_PASSWORD=<restricted-application-password>
+MIGRATION_DB_USER=<schema-migration-user>
+MIGRATION_DB_PASSWORD=<schema-migration-password>
 CSRF_AUTH_KEY_B64=<base64-encoded-32-byte-key>
 
 AWS_REGION=<aws-region>
@@ -60,7 +64,7 @@ CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
 CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
-The Compose bundle constructs `DATABASE_URL` from the PostgreSQL variables. It uses `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+The long-running application receives only the restricted `APP_DB_*` credential. The release agent uses the bootstrap credential in a one-off role-provisioning container and then uses only the `MIGRATION_DB_*` credential for the one-off migration container. Neither privileged credential is present in the application container. Database URLs use `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
 
 The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 
@@ -86,7 +90,7 @@ sudo systemctl status mycfc-pull-release.timer
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 ```
 
-Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. PostgreSQL applies the mounted `internal/db/schema.sql` baseline only when initializing an empty volume. For an existing database, the release agent runs the new image's `migrate` command before replacing the application container; it records applied versions in `mycfc_meta.schema_migrations` and applies pending forward-only migrations from `internal/db/migrations`. A migration failure aborts the rollout before the application is replaced.
+Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before replacing the application container, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before the application is replaced.
 
 ## Release rollback and incident access
 

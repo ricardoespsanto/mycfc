@@ -23,10 +23,6 @@ func main() {
 		}
 		return
 	}
-	if err := runDatabaseCommand(ctx, "migrate"); err != nil {
-		slog.Error("database migration failed", "error", err)
-		os.Exit(1)
-	}
 	application, err := app.New(ctx)
 	if err != nil {
 		slog.Error("application startup failed", "error", err)
