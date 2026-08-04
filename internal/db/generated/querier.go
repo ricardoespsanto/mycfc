@@ -61,7 +61,7 @@ type Querier interface {
 	GetRepairRequestByID(ctx context.Context, id uuid.UUID) (RepairRequest, error)
 	GetRespondableEvent(ctx context.Context, arg GetRespondableEventParams) (Event, error)
 	GetTeamByID(ctx context.Context, id uuid.UUID) (Team, error)
-	GetUserByEmail(ctx context.Context, email *string) (User, error)
+	GetUserByEmail(ctx context.Context, email *string) (GetUserByEmailRow, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error)
 	GetVisibleAnnouncement(ctx context.Context, arg GetVisibleAnnouncementParams) (GetVisibleAnnouncementRow, error)
 	GrantPlatformRoleByCode(ctx context.Context, arg GrantPlatformRoleByCodeParams) error
@@ -81,6 +81,7 @@ type Querier interface {
 	ListCompetitionDocumentsForAthlete(ctx context.Context, arg ListCompetitionDocumentsForAthleteParams) ([]ListCompetitionDocumentsForAthleteRow, error)
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)
 	ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error)
+	ListDistanceLeaderboard(ctx context.Context, arg ListDistanceLeaderboardParams) ([]ListDistanceLeaderboardRow, error)
 	ListEquipmentForAdmin(ctx context.Context, arg ListEquipmentForAdminParams) ([]Equipment, error)
 	ListEventResponsesForAdmin(ctx context.Context, arg ListEventResponsesForAdminParams) ([]ListEventResponsesForAdminRow, error)
 	ListEventsForAdmin(ctx context.Context, arg ListEventsForAdminParams) ([]ListEventsForAdminRow, error)
@@ -115,6 +116,9 @@ type Querier interface {
 	SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error)
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
+	UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error)
+	UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error)
+	UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)
 	UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error)
 }

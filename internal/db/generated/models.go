@@ -783,22 +783,24 @@ type TrainingSessionOutcome struct {
 	Status               TrainingOutcomeStatus `json:"status"`
 	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
 	ReplacementReason    *string               `json:"replacement_reason"`
+	DistanceMetres       *int32                `json:"distance_metres"`
 	ReportedAt           pgtype.Timestamptz    `json:"reported_at"`
 	UpdatedAt            pgtype.Timestamptz    `json:"updated_at"`
 }
 
 type User struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	MinorLoginID *string            `json:"minor_login_id"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	Name               string             `json:"name"`
+	Email              *string            `json:"email"`
+	MinorLoginID       *string            `json:"minor_login_id"`
+	PasswordHash       *string            `json:"password_hash"`
+	GuardianID         *uuid.UUID         `json:"guardian_id"`
+	IsDependent        bool               `json:"is_dependent"`
+	DateOfBirth        pgtype.Date        `json:"date_of_birth"`
+	IsActive           bool               `json:"is_active"`
+	LeaderboardVisible bool               `json:"leaderboard_visible"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type UserMembership struct {

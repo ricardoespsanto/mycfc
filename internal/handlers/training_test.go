@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,4 +103,99 @@ func TestManagedTrainingPlansPageURL(t *testing.T) {
 	if got, want := managedTrainingPlansPageURL(2), "/treinos?managed_page=2"; got != want {
 		t.Errorf("managedTrainingPlansPageURL(2) = %q, want %q", got, want)
 	}
+}
+
+func TestParseKilometresUsesExactMetres(t *testing.T) {
+	tests := []struct {
+		value string
+		want  *int32
+		valid bool
+	}{
+		{value: "", valid: true},
+		{value: "0.01", want: int32Ptr(10), valid: true},
+		{value: "12.5", want: int32Ptr(12500), valid: true},
+		{value: "12,34", want: int32Ptr(12340), valid: true},
+		{value: "200.00", want: int32Ptr(200000), valid: true},
+		{value: "0", valid: false},
+		{value: "-1", valid: false},
+		{value: "1.234", valid: false},
+		{value: "200.01", valid: false},
+		{value: "1,2.3", valid: false},
+	}
+	for _, test := range tests {
+		got, err := parseKilometres(test.value)
+		if (err == nil) != test.valid {
+			t.Errorf("parseKilometres(%q) error = %v", test.value, err)
+			continue
+		}
+		if test.valid && !equalInt32Pointers(got, test.want) {
+			t.Errorf("parseKilometres(%q) = %v, want %v", test.value, got, test.want)
+		}
+	}
+	if got := formatKilometres(12340); got != "12,34 km" {
+		t.Fatalf("formatKilometres = %q", got)
+	}
+}
+
+func TestReportTrainingOutcomePersistsOnlyCompletedDistance(t *testing.T) {
+	sessionID := uuid.New()
+	userID := uuid.New()
+	store := &trainingOutcomeStore{saveRows: 1}
+	training := Training{Store: store}
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=COMPLETED&distance_km=12.34"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	response := httptest.NewRecorder()
+	training.ReportOutcome(response, request)
+	if response.Code != http.StatusSeeOther || store.saveParams.DistanceMetres == nil || *store.saveParams.DistanceMetres != 12340 {
+		t.Fatalf("response = %d, params = %+v", response.Code, store.saveParams)
+	}
+
+	store.saveParams = dbgen.SaveTrainingSessionOutcomeParams{}
+	request = httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=MISSED&distance_km=2"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	response = httptest.NewRecorder()
+	training.ReportOutcome(response, request)
+	if response.Code != http.StatusUnprocessableEntity || store.saveParams.SessionID != uuid.Nil {
+		t.Fatalf("invalid response = %d, params = %+v", response.Code, store.saveParams)
+	}
+}
+
+func TestUpdateTrainingDistanceRequiresOwnCompletedOutcome(t *testing.T) {
+	store := &trainingOutcomeStore{updateRows: 1}
+	training := Training{Store: store}
+	userID, sessionID := uuid.New(), uuid.New()
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/distancia", strings.NewReader("session_id="+sessionID.String()+"&distance_km=7.5"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	response := httptest.NewRecorder()
+	training.UpdateDistance(response, request)
+	if response.Code != http.StatusSeeOther || store.updateParams.UserID != userID || store.updateParams.DistanceMetres == nil || *store.updateParams.DistanceMetres != 7500 {
+		t.Fatalf("response = %d, params = %+v", response.Code, store.updateParams)
+	}
+}
+
+type trainingOutcomeStore struct {
+	dbgen.Querier
+	saveParams   dbgen.SaveTrainingSessionOutcomeParams
+	updateParams dbgen.UpdateOwnCompletedSessionDistanceParams
+	saveRows     int64
+	updateRows   int64
+}
+
+func (s *trainingOutcomeStore) SaveTrainingSessionOutcome(_ context.Context, params dbgen.SaveTrainingSessionOutcomeParams) (int64, error) {
+	s.saveParams = params
+	return s.saveRows, nil
+}
+
+func (s *trainingOutcomeStore) UpdateOwnCompletedSessionDistance(_ context.Context, params dbgen.UpdateOwnCompletedSessionDistanceParams) (int64, error) {
+	s.updateParams = params
+	return s.updateRows, nil
+}
+
+func int32Ptr(value int32) *int32 { return &value }
+
+func equalInt32Pointers(left, right *int32) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }

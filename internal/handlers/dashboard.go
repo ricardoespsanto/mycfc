@@ -40,6 +40,9 @@ type DashboardStore interface {
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 	ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error)
 	ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error)
+	ListDistanceLeaderboard(context.Context, dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error)
+	UpdateOwnLeaderboardVisibility(context.Context, dbgen.UpdateOwnLeaderboardVisibilityParams) (int64, error)
+	UpdateDependentLeaderboardVisibility(context.Context, dbgen.UpdateDependentLeaderboardVisibilityParams) (int64, error)
 }
 
 type FleetStore interface {
@@ -150,6 +153,8 @@ func (h Dashboard) Moderator(w http.ResponseWriter, r *http.Request) {
 func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
 	now := h.now().In(h.location())
+	period := selectedLeaderboardPeriod(r.URL.Query().Get("leaderboard_period"))
+	periodStart, periodEnd := leaderboardPeriodBounds(period, now, h.location())
 	dayStartsAt := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, h.location())
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
@@ -166,7 +171,29 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.TodayPage{Name: user.Name, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user)}
+	leaders, err := h.Store.ListDistanceLeaderboard(ctx, dbgen.ListDistanceLeaderboardParams{
+		CurrentUserID: user.ID,
+		ActiveOn:      pgtype.Date{Time: dayStartsAt, Valid: true},
+		AsOf:          pgtype.Timestamptz{Time: now, Valid: true},
+		PeriodStart:   periodStart,
+		PeriodEnd:     periodEnd,
+	})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.TodayPage{Name: user.Name, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user), ShowShortcuts: true}
+	page.Leaderboard = pages.TodayLeaderboard{Period: string(period), IsAthlete: len(user.Programmes) > 0, Visible: user.LeaderboardVisible}
+	for _, leader := range leaders {
+		row := pages.TodayLeaderboardRow{Position: leader.Position, Name: leader.Name, Distance: formatKilometres(leader.TotalMetres)}
+		if leader.UserID == user.ID && leader.Position > 10 {
+			page.Leaderboard.Current = &row
+			continue
+		}
+		if leader.Position <= 10 {
+			page.Leaderboard.Rows = append(page.Leaderboard.Rows, row)
+		}
+	}
 	for i, event := range events {
 		page.Events[i] = pages.TodayEvent{ID: event.ID.String(), Title: event.Title, When: event.StartsAt.Time.In(h.location()).Format("15:04") + " - " + event.EndsAt.Time.In(h.location()).Format("15:04")}
 		if page.NextEvent == nil && event.EndsAt.Time.After(now) {
@@ -196,6 +223,12 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 			page.Operations = append(page.Operations, pages.TodayOperation{Label: repair.AssetTag + " · " + repair.EquipmentName, Detail: todayRepairStatus(repair.Status)})
 		}
 	}
+	if len(page.Dependents) > 0 && len(page.Operations) > 0 {
+		page.ShowShortcuts = false
+	}
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "leaderboard_flash")
+	}
 	page.Meta = h.PageMeta
 	page.Meta.Title = "Hoje | MyCFC"
 	page.Meta.CurrentPath = "/today"
@@ -204,6 +237,102 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.Today(page).Render(r.Context(), w)
+}
+
+type leaderboardPeriod string
+
+const (
+	leaderboardWeek  leaderboardPeriod = "week"
+	leaderboardMonth leaderboardPeriod = "month"
+	leaderboardYear  leaderboardPeriod = "year"
+	leaderboardAll   leaderboardPeriod = "all"
+)
+
+func selectedLeaderboardPeriod(value string) leaderboardPeriod {
+	switch leaderboardPeriod(value) {
+	case leaderboardMonth, leaderboardYear, leaderboardAll:
+		return leaderboardPeriod(value)
+	default:
+		return leaderboardWeek
+	}
+}
+
+func leaderboardPeriodBounds(period leaderboardPeriod, now time.Time, location *time.Location) (pgtype.Timestamptz, pgtype.Timestamptz) {
+	local := now.In(location)
+	var start, end time.Time
+	switch period {
+	case leaderboardMonth:
+		start = time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, location)
+		end = start.AddDate(0, 1, 0)
+	case leaderboardYear:
+		start = time.Date(local.Year(), time.January, 1, 0, 0, 0, 0, location)
+		end = start.AddDate(1, 0, 0)
+	case leaderboardAll:
+		return pgtype.Timestamptz{}, pgtype.Timestamptz{}
+	default:
+		daysSinceMonday := (int(local.Weekday()) + 6) % 7
+		start = time.Date(local.Year(), local.Month(), local.Day()-daysSinceMonday, 0, 0, 0, 0, location)
+		end = start.AddDate(0, 0, 7)
+	}
+	return pgtype.Timestamptz{Time: start, Valid: true}, pgtype.Timestamptz{Time: end, Valid: true}
+}
+
+func (h Dashboard) LeaderboardPrivacy(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if len(user.Programmes) == 0 {
+		h.System.Forbidden(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		return
+	}
+	visible := r.PostForm.Get("leaderboard_visible") == "on"
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	n, err := h.Store.UpdateOwnLeaderboardVisibility(ctx, dbgen.UpdateOwnLeaderboardVisibilityParams{UserID: user.ID, LeaderboardVisible: visible})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if n != 1 {
+		http.Error(w, "A preferência não está disponível.", http.StatusConflict)
+		return
+	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "leaderboard_flash", "Privacidade da classificação atualizada.")
+	}
+	period := selectedLeaderboardPeriod(r.PostForm.Get("leaderboard_period"))
+	http.Redirect(w, r, "/today?leaderboard_period="+string(period)+"#leaderboard", http.StatusSeeOther)
+}
+
+func (h Dashboard) DependentLeaderboardPrivacy(w http.ResponseWriter, r *http.Request) {
+	dependentID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "Menor inválido.", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		return
+	}
+	guardian, _ := CurrentUserFromContext(r.Context())
+	visible := r.PostForm.Get("leaderboard_visible") == "on"
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	n, err := h.Store.UpdateDependentLeaderboardVisibility(ctx, dbgen.UpdateDependentLeaderboardVisibilityParams{DependentUserID: dependentID, GuardianUserID: &guardian.ID, LeaderboardVisible: visible})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if n != 1 {
+		h.System.Forbidden(w, r)
+		return
+	}
+	if h.Sessions != nil {
+		h.Sessions.Put(r.Context(), "guardian_flash", "Privacidade da classificação atualizada.")
+	}
+	http.Redirect(w, r, "/dashboard/guardian", http.StatusSeeOther)
 }
 
 func todayRepairStatus(status string) string {
@@ -678,9 +807,9 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	items := guardianDependentItems(dependents, h.now(), h.location())
-	pageItems := make([]pages.DashboardItem, len(items))
+	pageItems := make([]pages.GuardianDependent, len(items))
 	for i, item := range items {
-		pageItems[i] = pages.DashboardItem{Title: item.Title, Detail: item.Detail, URL: item.URL}
+		pageItems[i] = pages.GuardianDependent{ID: dependents[i].ID.String(), Name: item.Title, Detail: item.Detail, LeaderboardVisible: dependents[i].LeaderboardVisible}
 	}
 	success := form.Success
 	if success == "" && h.Sessions != nil {
@@ -861,7 +990,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 
 	var admin []components.NavigationItem
 	if user.IsAdmin {
-		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"}, components.NavigationItem{Label: "Componentes", Path: "/admin/componentes"})
+		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
 	}
 
 	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}

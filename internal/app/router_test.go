@@ -30,6 +30,7 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/health/live", http.StatusOK, "", ""},
 		{http.MethodPost, "/health/live", http.StatusMethodNotAllowed, "GET, HEAD", ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, "", ""},
+		{http.MethodGet, "/admin/componentes", http.StatusNotFound, "", ""},
 		{http.MethodGet, "/login", http.StatusOK, "", ""},
 		{http.MethodGet, "/registo", http.StatusOK, "", ""},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},

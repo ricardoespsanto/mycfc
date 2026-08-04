@@ -9,9 +9,9 @@ VALUES (sqlc.arg(plan_id), sqlc.arg(title), sqlc.arg(description), sqlc.arg(star
 RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, created_by_id, created_at, updated_at;
 
 -- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason)
+INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)
 SELECT sqlc.arg(session_id), sqlc.arg(user_id), sqlc.arg(status)::training_outcome_status,
-       sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason)
+       sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason), sqlc.narg(distance_metres)
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 WHERE s.id = sqlc.arg(session_id)
@@ -38,11 +38,12 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
     status = EXCLUDED.status,
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
+    distance_metres = EXCLUDED.distance_metres,
     updated_at = now();
 
 -- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       COALESCE(o.status::text, ''::text) AS outcome_status
+       COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -54,6 +55,13 @@ WHERE EXISTS (
       AND (p.team_id IS NULL OR p.team_id = membership.team_id)
 )
 ORDER BY s.starts_at DESC, s.id DESC LIMIT sqlc.arg(row_limit);
+
+-- name: UpdateOwnCompletedSessionDistance :execrows
+UPDATE training_session_outcomes
+SET distance_metres = sqlc.narg(distance_metres), updated_at = now()
+WHERE session_id = sqlc.arg(session_id)
+  AND user_id = sqlc.arg(user_id)
+  AND status = 'COMPLETED';
 
 -- name: ListTrainingPlansForCoach :many
 SELECT p.id, p.title, p.description, p.programme_id, p.team_id, p.created_at

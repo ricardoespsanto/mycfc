@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +24,8 @@ import (
 
 const trainingQueryTimeout = 5 * time.Second
 const managedTrainingPlansPageSize = 6
+
+var errInvalidKilometres = errors.New("invalid kilometres")
 
 type Training struct {
 	Store    dbgen.Querier
@@ -51,7 +55,12 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 			modality = *session.ModalityName
 		}
 		outcome, _ := session.OutcomeStatus.(string)
-		page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome})
+		distance, distanceInput := "", ""
+		if session.DistanceMetres != nil {
+			distance = formatKilometres(int64(*session.DistanceMetres))
+			distanceInput = kilometreInput(*session.DistanceMetres)
+		}
+		page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
 	}
 	documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
 	if err != nil {
@@ -182,14 +191,15 @@ func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 	status := r.PostForm.Get("status")
 	replacementSessionID, replacementErr := optionalUUID(r.PostForm.Get("replacement_session_id"))
 	replacementReason := strings.TrimSpace(r.PostForm.Get("replacement_reason"))
-	if err != nil || replacementErr != nil || !validTrainingOutcome(status, replacementSessionID, replacementReason) {
+	distanceMetres, distanceErr := parseKilometres(r.PostForm.Get("distance_km"))
+	if err != nil || replacementErr != nil || distanceErr != nil || !validTrainingOutcome(status, replacementSessionID, replacementReason) || (status != "COMPLETED" && distanceMetres != nil) {
 		http.Error(w, "Resultado da sessão inválido.", http.StatusUnprocessableEntity)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
-	n, err := h.Store.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: user.ID, Status: dbgen.TrainingOutcomeStatus(status), ReplacementSessionID: replacementSessionID, ReplacementReason: optionalString(replacementReason)})
+	n, err := h.Store.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: user.ID, Status: dbgen.TrainingOutcomeStatus(status), ReplacementSessionID: replacementSessionID, ReplacementReason: optionalString(replacementReason), DistanceMetres: distanceMetres})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -199,6 +209,33 @@ func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Resultado registado.")
+	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
+}
+
+func (h Training) UpdateDistance(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		return
+	}
+	sessionID, sessionErr := uuid.Parse(r.PostForm.Get("session_id"))
+	distanceMetres, distanceErr := parseKilometres(r.PostForm.Get("distance_km"))
+	if sessionErr != nil || distanceErr != nil {
+		http.Error(w, "Distância inválida.", http.StatusUnprocessableEntity)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	n, err := h.Store.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: user.ID, DistanceMetres: distanceMetres})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if n != 1 {
+		http.Error(w, "A sessão concluída não está disponível.", http.StatusConflict)
+		return
+	}
+	h.flash(r, "Distância atualizada.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
@@ -390,6 +427,68 @@ func validTrainingOutcome(status string, replacementSessionID *uuid.UUID, replac
 		return replacementSessionID != nil && validTrainingText(replacementReason, 2, 300)
 	}
 	return (status == "COMPLETED" || status == "MISSED") && replacementSessionID == nil && replacementReason == ""
+}
+
+func parseKilometres(value string) (*int32, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if strings.Contains(value, ",") {
+		if strings.Contains(value, ".") {
+			return nil, errInvalidKilometres
+		}
+		value = strings.Replace(value, ",", ".", 1)
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || parts[0] == "" || len(parts) == 2 && (parts[1] == "" || len(parts[1]) > 2) {
+		return nil, errInvalidKilometres
+	}
+	for _, part := range parts {
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return nil, errInvalidKilometres
+			}
+		}
+	}
+	whole, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return nil, errInvalidKilometres
+	}
+	fraction := 0
+	if len(parts) == 2 {
+		fraction, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, errInvalidKilometres
+		}
+		if len(parts[1]) == 1 {
+			fraction *= 10
+		}
+	}
+	metres := whole*1000 + fraction*10
+	if metres < 1 || metres > 200000 {
+		return nil, errInvalidKilometres
+	}
+	result := int32(metres)
+	return &result, nil
+}
+
+func kilometreInput(metres int32) string {
+	whole, remainder := metres/1000, metres%1000
+	if remainder == 0 {
+		return strconv.FormatInt(int64(whole), 10)
+	}
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(float64(metres)/1000, 'f', 2, 64), "0"), ".")
+}
+
+func formatKilometres(metres int64) string {
+	whole, remainder := metres/1000, metres%1000
+	value := strconv.FormatInt(whole, 10)
+	if remainder != 0 {
+		fraction := fmt.Sprintf("%03d", remainder)
+		value += "," + strings.TrimRight(fraction, "0")
+	}
+	return value + " km"
 }
 func optionalString(value string) *string {
 	if value == "" {
