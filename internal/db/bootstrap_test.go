@@ -22,3 +22,10 @@ func TestRoleStatementQuotesCredentials(t *testing.T) {
 		t.Fatalf("statement = %q", statement)
 	}
 }
+
+func TestMigrationVersion(t *testing.T) {
+	version := migrationVersion("migrations/202608040001_leaderboard_distance.sql")
+	if version != "202608040001_leaderboard_distance" {
+		t.Fatalf("version = %q", version)
+	}
+}

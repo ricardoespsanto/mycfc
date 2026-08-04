@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -63,13 +62,13 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 }
 
 func databaseURLFromEnvironment() (string, error) {
+	if raw := os.Getenv("DATABASE_URL"); raw != "" {
+		return raw, nil
+	}
 	for _, name := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
 		if os.Getenv(name) == "" {
 			return "", fmt.Errorf("%s is required", name)
 		}
-	}
-	if os.Getenv("DATABASE_URL") != "" {
-		return "", errors.New("DATABASE_URL is not supported by database commands")
 	}
 	u := &url.URL{Scheme: "postgres", User: url.UserPassword(os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD")), Host: net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")), Path: os.Getenv("DB_NAME")}
 	query := u.Query()

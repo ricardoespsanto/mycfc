@@ -26,3 +26,15 @@ func TestDatabaseURLFromEnvironmentEscapesCredentials(t *testing.T) {
 		t.Fatalf("database URL = %q", raw)
 	}
 }
+
+func TestDatabaseURLFromEnvironmentAcceptsDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:password@localhost:5432/mycfc?sslmode=disable")
+
+	raw, err := databaseURLFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != "postgres://user:password@localhost:5432/mycfc?sslmode=disable" {
+		t.Fatalf("database URL = %q", raw)
+	}
+}

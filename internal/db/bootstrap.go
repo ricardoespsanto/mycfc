@@ -2,9 +2,10 @@ package db
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 
@@ -13,6 +14,9 @@ import (
 
 //go:embed schema.sql
 var baselineSchema string
+
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
 
 var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
@@ -69,18 +73,22 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 		return fmt.Errorf("lock baseline migration: %w", err)
 	}
 
-	var markerExists bool
-	if err := tx.QueryRow(ctx, "SELECT to_regclass('mycfc_meta.schema_migrations') IS NOT NULL").Scan(&markerExists); err != nil {
-		return fmt.Errorf("check baseline marker: %w", err)
+	if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS mycfc_meta"); err != nil {
+		return fmt.Errorf("create migration metadata schema: %w", err)
 	}
-	if markerExists {
-		var installed bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed); err != nil {
-			return fmt.Errorf("check baseline migration: %w", err)
+	if _, err := tx.Exec(ctx, "CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"); err != nil {
+		return fmt.Errorf("create migration marker: %w", err)
+	}
+
+	var installed bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", baselineVersion).Scan(&installed); err != nil {
+		return fmt.Errorf("check baseline migration: %w", err)
+	}
+	if installed {
+		if err := applyIncrementalMigrations(ctx, tx); err != nil {
+			return err
 		}
-		if installed {
-			return tx.Commit(ctx)
-		}
+		return tx.Commit(ctx)
 	}
 
 	var objectCount int
@@ -88,11 +96,16 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 		return fmt.Errorf("inspect public schema: %w", err)
 	}
 	if objectCount != 0 {
-		return errors.New("refusing to apply reset baseline to a non-empty unmarked public schema")
-	}
-
-	if _, err := tx.Exec(ctx, "CREATE TABLE mycfc_meta.schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"); err != nil {
-		return fmt.Errorf("create baseline marker: %w", err)
+		if err := verifyLegacyBaseline(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO mycfc_meta.schema_migrations (version) VALUES ($1)", baselineVersion); err != nil {
+			return fmt.Errorf("record adopted baseline migration: %w", err)
+		}
+		if err := applyIncrementalMigrations(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	if _, err := tx.Conn().PgConn().Exec(ctx, baselineSchema).ReadAll(); err != nil {
 		return fmt.Errorf("apply reset baseline: %w", err)
@@ -100,10 +113,60 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 	if _, err := tx.Exec(ctx, "INSERT INTO mycfc_meta.schema_migrations (version) VALUES ($1)", baselineVersion); err != nil {
 		return fmt.Errorf("record baseline migration: %w", err)
 	}
+	if err := applyIncrementalMigrations(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit baseline migration: %w", err)
 	}
 	return nil
+}
+
+func verifyLegacyBaseline(ctx context.Context, tx pgx.Tx) error {
+	requiredTables := []string{"users", "training_session_outcomes", "sessions"}
+	for _, table := range requiredTables {
+		var exists bool
+		if err := tx.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+table).Scan(&exists); err != nil {
+			return fmt.Errorf("inspect legacy baseline table %s: %w", table, err)
+		}
+		if !exists {
+			return fmt.Errorf("refusing to adopt unmarked public schema without %s table", table)
+		}
+	}
+	return nil
+}
+
+func applyIncrementalMigrations(ctx context.Context, tx pgx.Tx) error {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		return fmt.Errorf("list migrations: %w", err)
+	}
+	for _, name := range entries {
+		version := migrationVersion(name)
+		var installed bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version = $1)", version).Scan(&installed); err != nil {
+			return fmt.Errorf("check migration %s: %w", version, err)
+		}
+		if installed {
+			continue
+		}
+		sql, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("read migration %s: %w", version, err)
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			return fmt.Errorf("apply migration %s: %w", version, err)
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO mycfc_meta.schema_migrations (version) VALUES ($1)", version); err != nil {
+			return fmt.Errorf("record migration %s: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func migrationVersion(path string) string {
+	path = strings.TrimPrefix(path, "migrations/")
+	return strings.TrimSuffix(path, ".sql")
 }
 
 func validateBootstrapInput(databaseName string, credentials RoleCredentials) error {

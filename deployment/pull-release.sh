@@ -116,6 +116,8 @@ release_updated=true
 
 log "deploying SHA $sha with digest $digest"
 docker compose --env-file "$env_file" -f "$compose_file" pull
+docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
+docker compose --env-file "$env_file" -f "$compose_file" run --rm --no-deps app migrate
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app
 
 asset_path=$(jq -r '."app.js"' "$deployment_dir/../ui/static/dist/manifest.json")
