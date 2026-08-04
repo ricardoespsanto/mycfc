@@ -27,7 +27,7 @@ make verify
 make reset-local
 ```
 
-`internal/db/schema.sql` is a reset-only baseline, not a migration history. `make reset-local` deletes local PostgreSQL and MinIO data after confirmation, then recreates the local and test databases from it.
+`internal/db/schema.sql` is the complete baseline for fresh databases. Forward-only migrations for existing databases live in `internal/db/migrations` and are applied by `cmd/server migrate`; normal server startup also applies pending migrations before serving traffic. `make reset-local` deletes local PostgreSQL and MinIO data after confirmation, then recreates the local and test databases from the baseline.
 
 Create or manage an administrator with a password file rather than shell input:
 
@@ -39,4 +39,4 @@ The CLI also supports `set-password --email ...` and `deactivate --email ...`. W
 
 ## Current scope
 
-The foundation now includes login, adult registration, database-authoritative authorization, and administrator credential management. The remaining business UI is tracked in `docs/implementation-status.md`; incomplete routes return `501 Not Implemented` rather than fake successful responses.
+The application includes authentication and consent, membership-aware programme dashboards, guardian and dependant management, events and RSVP workflows, targeted announcements, training plans and outcomes, repair reporting, fleet operations, and administrator tooling. See `docs/implementation-status.md` for the authoritative implemented, partial, and deferred boundaries.

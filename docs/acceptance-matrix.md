@@ -25,4 +25,4 @@ This is the phase-10 status for the implemented application slice. A row is only
 | Database and object-storage integration | `make test-integration` | Docker, `.env`, PostgreSQL and MinIO |
 | Browser and axe | `make test-e2e` | Docker, `.env`; starts the pinned Playwright container and seeded local stack |
 
-`make verify-foundation` remains the deterministic foundation gate. `make verify` is intentionally not an acceptance gate until the documented production Terraform and remaining acceptance scope are implemented.
+`make verify-foundation` remains the faster deterministic focused gate. `make verify` runs the full available source gate, including generation, Go checks, browser coverage, and Terraform formatting/validation; environment-dependent and remaining acceptance gaps are still recorded below rather than treated as covered.

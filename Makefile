@@ -76,26 +76,25 @@ terraform-fmt: ## Check Terraform formatting through the pinned container
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) fmt -check -recursive infra
 
 terraform-validate: ## Validate Terraform stacks through the pinned container without remote state
-	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) -ec 'terraform -chdir=infra/bootstrap init -backend=false && terraform -chdir=infra/bootstrap validate && terraform -chdir=infra/environments/production init -backend=false && terraform -chdir=infra/environments/production validate'
+	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap init -backend=false && TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap validate && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production validate'
 
 terraform-check: terraform-fmt terraform-validate ## Run all containerized Terraform checks
 
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }
 
-verify-foundation: fmt-check ## Verify the currently implemented foundation slice
+verify-foundation: fmt-check ## Run fast focused checks and build browser assets
 	go vet ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	go test ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	npm ci
 	npm run build
 
-verify: verify-foundation ## Run the full production gate; expected to fail until all slices are complete
+verify: verify-foundation terraform-check ## Run the full source verification gate
 	$(SQLC) compile
 	$(SQLC) generate
 	$(TEMPL) generate
 	go vet ./...
 	go test ./...
 	npm run test:e2e
-	@test -d infra/environments/production/.terraform || { echo "Terraform production stack is not implemented" >&2; exit 1; }
 
 reset-local: dev-infra-clean dev-bootstrap ## Delete and recreate the local environment

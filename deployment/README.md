@@ -86,7 +86,7 @@ sudo systemctl status mycfc-pull-release.timer
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 ```
 
-Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. The schema is mounted from `internal/db/schema.sql` and applied only when PostgreSQL initializes an empty volume; this bundle does not provide an in-place database migration path.
+Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. PostgreSQL applies the mounted `internal/db/schema.sql` baseline only when initializing an empty volume. For an existing database, the release agent runs the new image's `migrate` command before replacing the application container; it records applied versions in `mycfc_meta.schema_migrations` and applies pending forward-only migrations from `internal/db/migrations`. A migration failure aborts the rollout before the application is replaced.
 
 ## Release rollback and incident access
 
