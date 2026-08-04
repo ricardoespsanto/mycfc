@@ -248,7 +248,7 @@ func TestSectionHeadingSupportsContextualActions(t *testing.T) {
 		t.Fatalf("render section heading: %v", err)
 	}
 	body := output.String()
-	for _, expected := range []string{`class="section-heading"`, `Agenda`, `<h2>Próximos eventos</h2>`, `Atividade relevante.`, `href="#novo"`} {
+	for _, expected := range []string{`class="section-heading"`, `<h2>Próximos eventos</h2>`, `Atividade relevante.`, `href="#novo"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("section heading does not contain %q", expected)
 		}

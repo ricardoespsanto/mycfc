@@ -121,6 +121,9 @@ var allowedNextPaths = map[string]struct{}{
 	"/admin/fleet":           {},
 	"/admin/sistema":         {},
 	"/admin/membros":         {},
+	"/admin/eventos":         {},
+	"/admin/avisos":          {},
+	"/admin/treinos":         {},
 }
 
 func SafeNext(raw string) string {

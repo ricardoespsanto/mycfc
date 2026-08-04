@@ -28,7 +28,7 @@ type TrainingDocumentForm struct {
 type TrainingPage struct {
 	Meta                                         components.PageMeta
 	CSRFField                                    templ.Component
-	CanManage                                    bool
+	Management, CanManage                        bool
 	Success, Error, OpenForm                     string
 	Sessions                                     []TrainingSession
 	Documents                                    []CompetitionDocument
@@ -45,9 +45,14 @@ templ Training(page TrainingPage) {
 }
 
 templ trainingContent(page TrainingPage) {
-	@components.PageHeader("Atividade", "Treinos e competição", "Consulte as sessões do seu grupo, registe resultados e encontre os documentos oficiais aplicáveis.", trainingPageActions(page))
+	if page.Management {
+		@components.PageHeader("Administração", "Treinos", "Organize planos, sessões e documentos oficiais para os grupos sob a sua responsabilidade.", trainingPageActions(page))
+	} else {
+		@components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo, registe resultados e encontre os documentos oficiais aplicáveis.", nil)
+	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Error, "error")
+	if !page.Management {
 	<section class="module">
 		@components.SectionHeading("Agenda", "As minhas sessões", "O trabalho previsto para o seu grupo e o respetivo estado.")
 		if len(page.Sessions) == 0 {
@@ -125,17 +130,16 @@ templ trainingContent(page TrainingPage) {
 			}
 		}
 	</section>
-	if page.CanManage {
+	}
+	if page.Management {
 		@trainingAuthoring(page)
 	}
 }
 
 templ trainingAuthoring(page TrainingPage) {
-	<details id="gerir-treinos" class="module disclosure" open?={ page.OpenForm != "" }>
-		<summary><span><strong>Gerir treinos</strong><small>Consulte planos e crie sessões ou documentos.</small></span></summary>
-		<div class="disclosure__content">
+	<section id="gerir-treinos" class="module">
 			<section>
-				@components.SectionHeading("Planeamento", "Planos que gere", "Âmbitos e sessões sob a sua responsabilidade.")
+				@components.SectionHeading("", "Planos e sessões", "Âmbitos e sessões sob a sua responsabilidade.")
 				if len(page.ManagedPlans) == 0 {
 					@components.EmptyState("Sem planos no seu âmbito", "Crie o primeiro plano para começar a organizar sessões.")
 				}
@@ -180,13 +184,12 @@ templ trainingAuthoring(page TrainingPage) {
 			@trainingPlanForm(page)
 			@trainingSessionForm(page)
 			@trainingDocumentForm(page)
-		</div>
-	</details>
+	</section>
 }
 
 templ trainingPlanForm(page TrainingPage) {
-	<details class="inline-disclosure" open?={ page.OpenForm == "plan" }><summary>Criar plano</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
-<form class="form-layout" method="post" action="/treinos/planos">@page.CSRFField
+	<details id="criar-plano" class="inline-disclosure" open?={ page.OpenForm == "plan" }><summary>Criar plano</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
+<form class="form-layout" method="post" action="/admin/treinos/planos">@page.CSRFField
 @components.RequiredNote()
 @components.FieldLabel("training-plan-title", "Título", true)
 <input id="training-plan-title" name="title" value={ page.PlanForm.Title } required aria-invalid?={ page.PlanForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.PlanForm.Errors["title"])
@@ -194,16 +197,16 @@ templ trainingPlanForm(page TrainingPage) {
 <textarea id="training-plan-description" name="description" aria-invalid?={ page.PlanForm.Errors["description"] != "" } aria-describedby="description-error">{ page.PlanForm.Description }</textarea>@components.FieldErrorMessage("description", page.PlanForm.Errors["description"])
 <fieldset id="training-plan-scope"><legend>Âmbito</legend>@trainingScopeChoices(page, "training-plan", page.PlanForm.ProgrammeID, page.PlanForm.TeamID)
 </fieldset>@components.FieldErrorMessage("scope", page.PlanForm.Errors["scope"])
-@components.FormActions("/treinos") {
+@components.FormActions("/admin/treinos") {
 	<button type="submit">Criar plano</button>
 }
 </form></details>
 }
 
 templ trainingSessionForm(page TrainingPage) {
-	<details class="inline-disclosure" open?={ page.OpenForm == "session" }>
+	<details id="criar-sessao" class="inline-disclosure" open?={ page.OpenForm == "session" }>
 		<summary>Criar sessão</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
-		<form class="form-layout" method="post" action="/treinos/sessoes">
+		<form class="form-layout" method="post" action="/admin/treinos/sessoes">
 			@page.CSRFField
 			@components.RequiredNote()
 			@components.FieldLabel("training-session-plan", "Plano", true)
@@ -228,7 +231,7 @@ templ trainingSessionForm(page TrainingPage) {
 					<option value={ item.ID } selected?={ item.ID == page.SessionForm.ModalityID }>{ item.Name }</option>
 				}
 			</select>@components.FieldErrorMessage("modality_id", page.SessionForm.Errors["modality_id"])
-			@components.FormActions("/treinos") {
+			@components.FormActions("/admin/treinos") {
 				<button type="submit">Criar sessão</button>
 			}
 		</form>
@@ -236,9 +239,9 @@ templ trainingSessionForm(page TrainingPage) {
 }
 
 templ trainingDocumentForm(page TrainingPage) {
-	<details class="inline-disclosure" open?={ page.OpenForm == "document" }>
+	<details id="publicar-documento" class="inline-disclosure" open?={ page.OpenForm == "document" }>
 		<summary>Publicar documento de competição</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.DocumentForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-document-title"}, {Key: "url", Field: "training-document-url"}, {Key: "source", Field: "training-document-source"}, {Key: "reviewed_on", Field: "training-document-reviewed"}, {Key: "scope", Field: "training-document-scope"}}))
-		<form class="form-layout" method="post" action="/treinos/documentos">
+		<form class="form-layout" method="post" action="/admin/treinos/documentos">
 			@page.CSRFField
 			@components.RequiredNote()
 			@components.FieldLabel("training-document-title", "Título", true)
@@ -264,7 +267,7 @@ templ trainingDocumentForm(page TrainingPage) {
 			</select>
 			<fieldset id="training-document-scope"><legend>Âmbito</legend><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page, "training-document", page.DocumentForm.ProgrammeID, page.DocumentForm.TeamID)
 </fieldset>@components.FieldErrorMessage("scope", page.DocumentForm.Errors["scope"])
-			@components.FormActions("/treinos") {
+			@components.FormActions("/admin/treinos") {
 				<button type="submit">Publicar documento</button>
 			}
 		</form>
@@ -315,7 +318,7 @@ func trainingOutcomeTone(status string) string {
 
 func trainingPageActions(page TrainingPage) []components.PageAction {
 	if page.CanManage {
-		return []components.PageAction{{Label: "Gerir treinos", Href: "#gerir-treinos", Variant: "primary"}}
+		return []components.PageAction{{Label: "Criar plano", Href: "#criar-plano", Variant: "primary"}, {Label: "Criar sessão", Href: "#criar-sessao", Variant: "secondary"}}
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ func TestAdminDetailPagePaginatesResponses(t *testing.T) {
 	if got, want := len(page.Responses), eventResponsesPageSize; got != want {
 		t.Errorf("response count = %d, want %d", got, want)
 	}
-	if got, want := page.ResponsesNextURL, "/events/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=2"; got != want {
+	if got, want := page.ResponsesNextURL, "/admin/eventos/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=2"; got != want {
 		t.Errorf("next URL = %q, want %q", got, want)
 	}
 	if page.ResponsesPreviousURL != "" {
@@ -88,7 +88,7 @@ func TestAdminDetailPagePaginatesResponses(t *testing.T) {
 	}
 
 	page = (Events{Location: time.UTC}).adminDetailPage(dbgen.Event{ID: eventID}, responses[:1], 2)
-	if got, want := page.ResponsesPreviousURL, "/events/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=1"; got != want {
+	if got, want := page.ResponsesPreviousURL, "/admin/eventos/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=1"; got != want {
 		t.Errorf("previous URL = %q, want %q", got, want)
 	}
 	if page.ResponsesNextURL != "" {

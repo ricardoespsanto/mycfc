@@ -43,47 +43,50 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
+	page.Management = strings.HasPrefix(r.URL.Path, "/admin/")
 	page.CanManage = user.IsAdmin || user.CanManageEvents
-	sessions, err := h.Store.ListTrainingSessionsForAthlete(ctx, dbgen.ListTrainingSessionsForAthleteParams{UserID: user.ID, RowLimit: 100})
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	for _, session := range sessions {
-		modality := ""
-		if session.ModalityName != nil {
-			modality = *session.ModalityName
+	if !page.Management {
+		sessions, err := h.Store.ListTrainingSessionsForAthlete(ctx, dbgen.ListTrainingSessionsForAthleteParams{UserID: user.ID, RowLimit: 100})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
 		}
-		outcome, _ := session.OutcomeStatus.(string)
-		distance, distanceInput := "", ""
-		if session.DistanceMetres != nil {
-			distance = formatKilometres(int64(*session.DistanceMetres))
-			distanceInput = kilometreInput(*session.DistanceMetres)
-		}
-		page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
-	}
-	documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	for _, document := range documents {
-		context := ""
-		if document.EventTitle != nil {
-			context = *document.EventTitle
-		}
-		if document.ModalityName != nil {
-			if context != "" {
-				context += " · "
+		for _, session := range sessions {
+			modality := ""
+			if session.ModalityName != nil {
+				modality = *session.ModalityName
 			}
-			context += *document.ModalityName
+			outcome, _ := session.OutcomeStatus.(string)
+			distance, distanceInput := "", ""
+			if session.DistanceMetres != nil {
+				distance = formatKilometres(int64(*session.DistanceMetres))
+				distanceInput = kilometreInput(*session.DistanceMetres)
+			}
+			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
 		}
-		page.Documents = append(page.Documents, pages.CompetitionDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006"), Context: context})
+		documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		for _, document := range documents {
+			context := ""
+			if document.EventTitle != nil {
+				context = *document.EventTitle
+			}
+			if document.ModalityName != nil {
+				if context != "" {
+					context += " · "
+				}
+				context += *document.ModalityName
+			}
+			page.Documents = append(page.Documents, pages.CompetitionDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006"), Context: context})
+		}
 	}
-	if page.CanManage {
+	if page.Management {
 		h.authoring(ctx, user, &page, managedTrainingPlansPageNumber(r.URL.Query().Get("managed_page")))
 	}
-	page.Meta = h.meta(r, user)
+	page.Meta = h.meta(r, user, page.Management)
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	if h.Sessions != nil && page.Success == "" {
 		page.Success = h.Sessions.PopString(r.Context(), "training_flash")
@@ -122,7 +125,7 @@ func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Plano criado.")
-	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
 }
 
 func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +182,7 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Sessão criada.")
-	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
 }
 
 func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +297,7 @@ func (h Training) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Documento publicado.")
-	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
 }
 
 func (h Training) flash(r *http.Request, message string) {
@@ -362,7 +365,7 @@ func managedTrainingPlansPageNumber(value string) int {
 }
 
 func managedTrainingPlansPageURL(page int) string {
-	return "/treinos?managed_page=" + strconv.Itoa(page)
+	return "/admin/treinos?managed_page=" + strconv.Itoa(page)
 }
 
 func managedTrainingPlans(rows []dbgen.ListTrainingPlansForAuthoringRow, location *time.Location) []pages.ManagedTrainingPlan {
@@ -505,10 +508,14 @@ func (h Training) location() *time.Location {
 	}
 	return time.UTC
 }
-func (h Training) meta(r *http.Request, user CurrentUser) components.PageMeta {
+func (h Training) meta(r *http.Request, user CurrentUser, management bool) components.PageMeta {
 	meta := h.PageMeta
 	meta.Title = "Treinos e competição | MyCFC"
 	meta.CurrentPath = "/treinos"
+	if management {
+		meta.Title = "Gestão de treinos | MyCFC"
+		meta.CurrentPath = "/admin/treinos"
+	}
 	meta.CurrentUserName = user.Name
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))

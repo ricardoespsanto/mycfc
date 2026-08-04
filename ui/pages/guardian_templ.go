@@ -97,7 +97,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = components.SectionHeading("Família", "Menores a cargo", "Dependentes associados à sua conta e respetivo acesso.").Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.SectionHeading("Família", "Dependentes associados", "Menores associados à sua conta e respetivo acesso.").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -185,7 +185,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 				}
 				return nil
 			})
-			templ_7745c5c3_Err = components.RecordList("Menores a cargo").Render(templ.WithChildren(ctx, templ_7745c5c3_Var3), templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.RecordList("Dependentes associados").Render(templ.WithChildren(ctx, templ_7745c5c3_Var3), templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

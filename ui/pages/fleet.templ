@@ -42,78 +42,92 @@ templ Fleet(page FleetPage) {
 }
 
 templ fleetContent(page FleetPage) {
-	@components.PageHeader("Administração", "Frota", "Consulte e gira os equipamentos, avarias e manutenção.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}})
+	<div class="collection-page fleet-collection">
+	@components.PageHeader("Administração", "Frota", "Inventário, avarias e manutenção organizados por tarefa.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}})
 	@components.StatusMessage(page.Success, "success")
-	<section class="module">@components.SectionHeading("Operações", "Estado da frota", "Totais atuais por estado operacional.")<ul class="record-list" aria-label="Estado da frota">
+	<section class="fleet-overview" aria-labelledby="fleet-overview-title"><h2 id="fleet-overview-title" class="visually-hidden">Estado da frota</h2><ul aria-label="Totais atuais por estado operacional">
 		for _, count := range page.Counts {
-			<li class="record-item"><div class="record-item__copy"><h3>{ fleetStatusLabel(count.Status) }</h3></div>@components.Badge(fleetCountLabel(count.Total), fleetStatusTone(count.Status))</li>
+			<li><strong>{ fleetCountLabel(count.Total) }</strong><span>{ fleetStatusLabel(count.Status) }</span></li>
 		}
 	</ul></section>
-	@EquipmentCreateForm(page.EquipmentForm)
-	<details id="equipment-inventory" class="module disclosure"><summary><span><strong>Equipamentos</strong><small>Consulte o inventário e o estado de cada equipamento.</small></span></summary><div class="disclosure__content">
+	<nav class="collection-tabs" aria-label="Áreas da frota" data-collection-tabs><a href="#equipment-inventory" aria-current="page">Equipamentos</a><a href="#repair-requests">Reparações <span>{ len(page.Repairs) }</span></a><a href="#maintenance-schedule">Manutenção <span>{ len(page.Maintenance) }</span></a></nav>
+	<section id="equipment-inventory" class="collection-view collection-tab-panel" data-tab-panel>
+		@components.SectionHeading("Inventário", "Equipamentos", "Consulte o inventário e o estado de cada equipamento.") {
+			<span class="collection-count">{ len(page.Equipment) } nesta página</span>
+		}
 		if len(page.Equipment) == 0 {
 			@components.EmptyState("Ainda sem equipamentos", "Os equipamentos registados aparecem aqui.")
 		}
 		if len(page.Equipment) > 0 {
-			@components.RecordList("Inventário da frota") {
+			@components.DataRegion("Inventário da frota", fleetEquipmentTable(page))
+		}
+		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
+	</section>
+	<section id="repair-requests" class="collection-view collection-tab-panel" data-tab-panel>
+		@components.SectionHeading("Avarias", "Pedidos de reparação pendentes", "Problemas reportados que ainda exigem acompanhamento.") {
+			<span class="collection-count">{ len(page.Repairs) } pendentes</span>
+		}
+		if len(page.Repairs) == 0 {
+			@components.EmptyState("Sem reparações pendentes", "Não existem pedidos de reparação a exigir acompanhamento.")
+		}
+		if len(page.Repairs) > 0 {
+			<ul class="record-list collection-list" aria-label="Pedidos de reparação pendentes">
+			for _, repair := range page.Repairs {
+				<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">{ repair.ReportedAt }</p>
+					if repair.PhotoURL != "" {
+						<img class="record-thumbnail" src={ repair.PhotoURL } alt="Fotografia da avaria"/>
+					}
+					if repair.PhotoUnavailable != "" {
+						<span class="record-meta">{ repair.PhotoUnavailable }</span>
+					}
+				</div>@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))<div class="record-item__actions">@RepairStatusForm(repair, page.Meta.CSRFField)</div></li>
+			}
+			</ul>
+		}
+		@fleetPagination(page.RepairsPreviousURL, page.RepairsNextURL, "Paginação de pedidos de reparação")
+	</section>
+	<section id="maintenance-schedule" class="collection-view collection-tab-panel" data-tab-panel>
+		@components.SectionHeading("Planeamento", "Próximas manutenções", "Intervenções previstas para os próximos 90 dias.") {
+			<span class="collection-count">{ len(page.Maintenance) } agendadas</span>
+		}
+		if len(page.Maintenance) == 0 {
+			@components.EmptyState("Sem manutenções agendadas", "Não existem manutenções nos próximos 90 dias.")
+		}
+		if len(page.Maintenance) > 0 {
+			<ul class="record-list collection-list" aria-label="Próximas manutenções">
+			for _, task := range page.Maintenance {
+				<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ task.Equipment }</h3><p>{ task.Description }</p><p class="record-meta">{ task.ScheduledFor }</p></div>@components.Badge(fleetStatusLabel(task.Status), fleetStatusTone(task.Status))<div class="record-item__actions">@MaintenanceCompletionForm(task, page.Meta.CSRFField)</div></li>
+			}
+			</ul>
+		}
+		@fleetPagination(page.MaintenancePreviousURL, page.MaintenanceNextURL, "Paginação de manutenções")
+		<div class="collection-secondary">@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte todos os calendários públicos do clube.")</div>
+	</section>
+	@EquipmentCreateForm(page.EquipmentForm)
+	@MaintenanceForm(page.MaintenanceForm)
+	</div>
+}
+
+templ fleetEquipmentTable(page FleetPage) {
+	<table class="data-table collection-table"><thead><tr><th scope="col">Equipamento</th><th scope="col">Tipo</th><th scope="col">Estado</th><th scope="col" aria-label="Ações"></th></tr></thead><tbody>
 				for _, equipment := range page.Equipment {
-					<li class="record-item record-item--stacked"><div class="record-item__copy">
+					<tr><th scope="row"><span class="equipment-identity">
 						if equipment.PhotoURL != "" {
-							<img src={ equipment.PhotoURL } alt={ "Fotografia de " + equipment.Name } loading="lazy"/>
+							<img class="equipment-thumbnail" src={ equipment.PhotoURL } alt="" loading="lazy"/>
 						}
+						<span><strong>{ equipment.AssetTag } · { equipment.Name }</strong>
 						if equipment.PhotoUnavailable != "" {
-							<p>{ equipment.PhotoUnavailable }</p>
+							<small>{ equipment.PhotoUnavailable }</small>
 						}
-						<h3>{ equipment.AssetTag } · { equipment.Name }</h3><p>{ equipmentTypeLabel(equipment.Type) }</p>@components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status))
-						<details class="inline-disclosure"><summary>Ações</summary><div class="form-actions"><a class="action action--secondary" href={ templ.SafeURL("/admin/fleet/equipment/" + equipment.ID + "/edit") }>Editar</a>
+						</span></span></th><td>{ equipmentTypeLabel(equipment.Type) }</td><td>@components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status))</td><td><details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions"><a class="action action--secondary" href={ templ.SafeURL("/admin/fleet/equipment/" + equipment.ID + "/edit") }>Editar</a>
 							if equipment.Status == "Retired" {
 								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/reactivate" }>@page.Meta.CSRFField<button type="submit">Reativar</button></form>
 							} else {
 								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/retire" }>@page.Meta.CSRFField<button class="action action--secondary" type="submit">Retirar da frota</button></form>
 							}
-						</div></details></div></li>
+						</div></details></td></tr>
 				}
-			}
-		}
-		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
-	</div></details>
-	<section class="module">@components.SectionHeading("Avarias", "Pedidos de reparação pendentes", "Problemas reportados que ainda exigem acompanhamento.")
-		if len(page.Repairs) == 0 {
-			@components.EmptyState("Sem reparações pendentes", "Não existem pedidos de reparação a exigir acompanhamento.")
-		}
-		if len(page.Repairs) > 0 {
-			@components.RecordList("Pedidos de reparação pendentes") {
-				for _, repair := range page.Repairs {
-					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">{ repair.ReportedAt }</p>@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))
-						if repair.PhotoURL != "" {
-							<br/><img src={ repair.PhotoURL } alt="Fotografia da avaria"/>
-						}
-						if repair.PhotoUnavailable != "" {
-							<br/><span>{ repair.PhotoUnavailable }</span>
-						}
-						@RepairStatusForm(repair, page.Meta.CSRFField)</div>
-					</li>
-				}
-			}
-		}
-		@fleetPagination(page.RepairsPreviousURL, page.RepairsNextURL, "Paginação de pedidos de reparação")
-	</section>
-	<section class="module">@components.SectionHeading("Planeamento", "Próximas manutenções", "Intervenções previstas para os próximos 90 dias.")
-		if len(page.Maintenance) == 0 {
-			@components.EmptyState("Sem manutenções agendadas", "Não existem manutenções nos próximos 90 dias.")
-		}
-		if len(page.Maintenance) > 0 {
-			@components.RecordList("Próximas manutenções") {
-				for _, task := range page.Maintenance {
-					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ task.Equipment }</h3><p>{ task.Description }</p><p class="record-meta">{ task.ScheduledFor }</p>@components.Badge(fleetStatusLabel(task.Status), fleetStatusTone(task.Status))@MaintenanceCompletionForm(task, page.Meta.CSRFField)</div>
-					</li>
-				}
-			}
-		}
-		@fleetPagination(page.MaintenancePreviousURL, page.MaintenanceNextURL, "Paginação de manutenções")
-	</section>
-	@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte todos os calendários públicos do clube.")
-	@MaintenanceForm(page.MaintenanceForm)
+	</tbody></table>
 }
 
 templ fleetPagination(previousURL, nextURL, label string) {
@@ -171,8 +185,8 @@ templ FleetActionFeedback(success, errorMessage string) {
 }
 
 templ MaintenanceForm(form FleetMaintenanceForm) {
-	<details id="maintenance-form" class="module disclosure" open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
-		<summary><span><strong id="maintenance-title">Agendar manutenção</strong><small>Planeie uma intervenção para um equipamento.</small></span></summary><div class="disclosure__content">
+	<details id="maintenance-form" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
+		<summary><span><strong id="maintenance-title">Agendar manutenção</strong><small>Planeie uma intervenção para um equipamento.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
 		if form.Success != "" {
 			@components.StatusMessage(form.Success, "success")
 		}

@@ -15,9 +15,11 @@ type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Se
 
 templ Members(page MembersPage) { @components.Base(page.Meta, membersContent(page)) }
 templ membersContent(page MembersPage) {
-    @components.PageHeader("Administração", "Membros", "Pesquise contas e compreenda o respetivo estado antes de atuar.", []components.PageAction{{Label: "Criar conta", Href: "#criar-conta", Variant: "primary"}})
+    <div class="collection-page">
+    @components.PageHeader("Administração", "Membros", "Encontre uma pessoa, confirme o estado e atue sem sair do diretório.", []components.PageAction{{Label: "Criar conta", Href: "#criar-conta", Variant: "primary"}})
     @components.StatusMessage(page.Success, "success")
-    <section class="module"><div class="module__heading"><div><p class="eyebrow">Diretório</p><h2>Procurar membros</h2></div><form class="search-form" method="get" action="/admin/membros"><label class="visually-hidden" for="member-search">Nome, email ou identificador de menor</label><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></form></div>
+    <section class="collection-view" aria-labelledby="member-directory-title">
+        <div class="collection-toolbar"><h2 id="member-directory-title" class="visually-hidden">Diretório de membros</h2><form class="search-form" method="get" action="/admin/membros"><label for="member-search">Pesquisar membros</label><div class="search-control"><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></div></form><span class="collection-count">{ len(page.Members) } nesta página</span></div>
         if len(page.Members) == 0 {
             @components.EmptyState("Sem membros encontrados", "Altere a pesquisa ou crie uma nova conta.")
         }
@@ -36,6 +38,7 @@ templ membersContent(page MembersPage) {
         }
     </section>
     @MemberCreate(page.Form)
+    </div>
 }
 templ memberTable(members []MemberListItem) {
     <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col" aria-label="Ação"></th></tr></thead><tbody>
@@ -65,7 +68,7 @@ templ memberTable(members []MemberListItem) {
     </tbody></table>
 }
 templ MemberCreate(form MemberCreateForm) {
-    <details id="criar-conta" class="module disclosure" open?={ len(form.Errors) > 0 }><summary><span><strong>Criar conta</strong><small>Adicione um adulto ou um menor a cargo.</small></span></summary><div class="disclosure__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
+    <details id="criar-conta" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 }><summary><span><strong>Criar conta</strong><small>Adicione um adulto ou um menor a cargo.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
         @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "name", Field: "member-name"}, {Key: "date_of_birth", Field: "member-birth"}, {Key: "email", Field: "member-email"}, {Key: "guardian_id", Field: "member-guardian"}, {Key: "password", Field: "member-password"}, {Key: "password_confirmation", Field: "member-password-confirmation"}}))
         @components.RequiredNote()
         <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>

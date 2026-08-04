@@ -87,7 +87,7 @@ func newsContent(page NewsPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<details id=\"criar-noticia\" class=\"module disclosure\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<details id=\"criar-noticia\" class=\"module disclosure create-panel\" data-create-panel")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -97,7 +97,7 @@ func newsContent(page NewsPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "><summary><span><strong>Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary><div class=\"disclosure__content\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, " aria-labelledby=\"news-authoring-title\"><summary><span><strong id=\"news-authoring-title\">Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary> <button class=\"create-panel__close\" type=\"button\">Fechar</button><div class=\"disclosure__content\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -128,7 +128,7 @@ func newsContent(page NewsPage) templ.Component {
 		var templ_7745c5c3_Var3 string
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Form.Title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 39, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 40, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var3)
 		if templ_7745c5c3_Err != nil {
@@ -173,7 +173,7 @@ func newsContent(page NewsPage) templ.Component {
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(page.Form.Summary)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 41, Col: 160}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 42, Col: 160}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -198,7 +198,7 @@ func newsContent(page NewsPage) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Form.URL)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 43, Col: 68}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 44, Col: 68}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 		if templ_7745c5c3_Err != nil {
@@ -233,7 +233,7 @@ func newsContent(page NewsPage) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Form.PublishedAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 45, Col: 105}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 46, Col: 105}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
 		if templ_7745c5c3_Err != nil {
@@ -314,7 +314,7 @@ func newsContent(page NewsPage) templ.Component {
 					var templ_7745c5c3_Var9 string
 					templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 61, Col: 53}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 62, Col: 53}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 					if templ_7745c5c3_Err != nil {
@@ -327,7 +327,7 @@ func newsContent(page NewsPage) templ.Component {
 					var templ_7745c5c3_Var10 string
 					templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(item.PublishedAt)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 61, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 62, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 					if templ_7745c5c3_Err != nil {
@@ -349,7 +349,7 @@ func newsContent(page NewsPage) templ.Component {
 						var templ_7745c5c3_Var11 templ.SafeURL
 						templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/noticias/" + item.ID + "/expirar")
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 64, Col: 138}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 65, Col: 138}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 						if templ_7745c5c3_Err != nil {
@@ -380,7 +380,7 @@ func newsContent(page NewsPage) templ.Component {
 						var templ_7745c5c3_Var12 templ.SafeURL
 						templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/noticias/" + item.ID + "/publicar")
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 69, Col: 139}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 70, Col: 139}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 						if templ_7745c5c3_Err != nil {
@@ -424,7 +424,7 @@ func newsContent(page NewsPage) templ.Component {
 				var templ_7745c5c3_Var13 templ.SafeURL
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.PreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 79, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 80, Col: 46}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
@@ -443,7 +443,7 @@ func newsContent(page NewsPage) templ.Component {
 				var templ_7745c5c3_Var14 templ.SafeURL
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.NextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 82, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/news.templ`, Line: 83, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {

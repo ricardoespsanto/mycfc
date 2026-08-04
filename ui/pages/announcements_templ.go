@@ -31,7 +31,7 @@ type AnnouncementForm struct {
 }
 type AnnouncementsPage struct {
 	Meta                                                                              components.PageMeta
-	CanManage                                                                         bool
+	Management, CanManage                                                             bool
 	VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL, Success string
 	Items                                                                             []AnnouncementItem
 	Authored                                                                          []AuthoredAnnouncement
@@ -92,31 +92,40 @@ func announcementsContent(page AnnouncementsPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = components.PageHeader("Atividade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", announcementPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
+		if page.Management {
+			templ_7745c5c3_Err = components.PageHeader("Administração", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = components.PageHeader("Atividade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", nil).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 		}
 		templ_7745c5c3_Err = components.StatusMessage(page.Success, "success").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"module\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
+		if !page.Management {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"module\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = components.SectionHeading("", "Avisos para si", "Informação publicada para os seus programas, equipas e responsabilidades.").Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = announcementItems(page).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</section>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 		}
-		templ_7745c5c3_Err = components.SectionHeading("Comunidade", "Para si", "Informação publicada para os seus programas, equipas e responsabilidades.").Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = announcementItems(page).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</section>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if page.CanManage {
+		if page.Management {
 			templ_7745c5c3_Err = AnnouncementAuthoringForm(page.Form).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -125,7 +134,7 @@ func announcementsContent(page AnnouncementsPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = components.SectionHeading("Publicação", "Os meus avisos", "Rascunhos e comunicações publicadas por si.").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.SectionHeading("", "Avisos publicados", "Rascunhos e comunicações publicadas por si.").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -233,7 +242,7 @@ func announcementItems(page AnnouncementsPage) templ.Component {
 				var templ_7745c5c3_Var6 templ.SafeURL
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.VisiblePreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 57, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 63, Col: 68}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -252,7 +261,7 @@ func announcementItems(page AnnouncementsPage) templ.Component {
 				var templ_7745c5c3_Var7 templ.SafeURL
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.VisibleNextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 60, Col: 64}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 66, Col: 64}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -320,7 +329,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 					var templ_7745c5c3_Var10 string
 					templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 72, Col: 87}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 78, Col: 87}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 					if templ_7745c5c3_Err != nil {
@@ -333,7 +342,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 					var templ_7745c5c3_Var11 string
 					templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(item.Status)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 72, Col: 133}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 78, Col: 133}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 					if templ_7745c5c3_Err != nil {
@@ -346,7 +355,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 					var templ_7745c5c3_Var12 string
 					templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(announcementStatusLabel(item.Status))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 72, Col: 208}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 78, Col: 208}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 					if templ_7745c5c3_Err != nil {
@@ -368,7 +377,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 						var templ_7745c5c3_Var13 templ.SafeURL
 						templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/announcements/" + item.ID + "/publish")
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 76, Col: 99}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 82, Col: 99}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 						if templ_7745c5c3_Err != nil {
@@ -395,7 +404,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 						var templ_7745c5c3_Var14 templ.SafeURL
 						templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/announcements/" + item.ID + "/expire")
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 79, Col: 98}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 85, Col: 98}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 						if templ_7745c5c3_Err != nil {
@@ -439,7 +448,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 				var templ_7745c5c3_Var15 templ.SafeURL
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.AuthoredPreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 89, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 95, Col: 69}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -458,7 +467,7 @@ func authoredAnnouncementItems(page AnnouncementsPage) templ.Component {
 				var templ_7745c5c3_Var16 templ.SafeURL
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.AuthoredNextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 92, Col: 65}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 98, Col: 65}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -499,7 +508,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			templ_7745c5c3_Var17 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<details id=\"criar-aviso\" class=\"module disclosure\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<details id=\"criar-aviso\" class=\"module disclosure create-panel\" data-create-panel")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -509,7 +518,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "><summary><span><strong>Criar aviso</strong><small>Prepare uma comunicação para os públicos certos.</small></span></summary><div class=\"disclosure__content\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, " aria-labelledby=\"announcement-authoring-title\"><summary><span><strong id=\"announcement-authoring-title\">Criar aviso</strong><small>Prepare uma comunicação para os públicos certos.</small></span></summary><button class=\"create-panel__close\" type=\"button\">Fechar</button><div class=\"disclosure__content\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -540,7 +549,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var18 string
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.Title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 102, Col: 131}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 108, Col: 131}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var18)
 		if templ_7745c5c3_Err != nil {
@@ -589,7 +598,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var19 string
 		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(form.Body)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 103, Col: 231}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 109, Col: 231}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 		if templ_7745c5c3_Err != nil {
@@ -622,7 +631,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentURL)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 105, Col: 211}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 111, Col: 211}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 		if templ_7745c5c3_Err != nil {
@@ -657,7 +666,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentSource)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 106, Col: 181}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 112, Col: 181}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 		if templ_7745c5c3_Err != nil {
@@ -692,7 +701,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.ReviewedOn)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 107, Col: 174}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 113, Col: 174}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 		if templ_7745c5c3_Err != nil {
@@ -731,7 +740,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.ExpiresAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 109, Col: 180}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 115, Col: 180}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {
@@ -787,7 +796,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var24 string
 			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 113, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 119, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 			if templ_7745c5c3_Err != nil {
@@ -810,7 +819,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 113, Col: 124}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 119, Col: 124}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -829,7 +838,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 116, Col: 76}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 122, Col: 76}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 			if templ_7745c5c3_Err != nil {
@@ -852,7 +861,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 116, Col: 119}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 122, Col: 119}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -871,7 +880,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var28 string
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 119, Col: 80}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 125, Col: 80}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var28)
 			if templ_7745c5c3_Err != nil {
@@ -894,7 +903,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var29 string
 			templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 119, Col: 123}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 125, Col: 123}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 			if templ_7745c5c3_Err != nil {
@@ -913,7 +922,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var30 string
 			templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 122, Col: 80}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 128, Col: 80}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 			if templ_7745c5c3_Err != nil {
@@ -936,7 +945,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 122, Col: 123}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 128, Col: 123}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -955,7 +964,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 125, Col: 77}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 131, Col: 77}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var32)
 			if templ_7745c5c3_Err != nil {
@@ -978,7 +987,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			var templ_7745c5c3_Var33 string
 			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(item.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 125, Col: 120}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 131, Col: 120}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 			if templ_7745c5c3_Err != nil {
@@ -1015,7 +1024,7 @@ func AnnouncementAuthoringForm(form AnnouncementForm) templ.Component {
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = components.FormActions("/announcements").Render(templ.WithChildren(ctx, templ_7745c5c3_Var34), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.FormActions("/admin/avisos").Render(templ.WithChildren(ctx, templ_7745c5c3_Var34), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1105,7 +1114,7 @@ func announcementDetailContent(page AnnouncementDetailPage) templ.Component {
 				var templ_7745c5c3_Var38 templ.SafeURL
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinURLErrs(page.DocumentURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 140, Col: 75}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/announcements.templ`, Line: 146, Col: 75}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
@@ -1131,7 +1140,7 @@ func announcementDetailContent(page AnnouncementDetailPage) templ.Component {
 }
 
 func announcementPageActions(page AnnouncementsPage) []components.PageAction {
-	if page.CanManage {
+	if page.Management {
 		return []components.PageAction{{Label: "Criar aviso", Href: "#criar-aviso", Variant: "primary"}}
 	}
 	return nil

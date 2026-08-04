@@ -100,7 +100,7 @@ func TestManagedTrainingPlansPageNumber(t *testing.T) {
 }
 
 func TestManagedTrainingPlansPageURL(t *testing.T) {
-	if got, want := managedTrainingPlansPageURL(2), "/treinos?managed_page=2"; got != want {
+	if got, want := managedTrainingPlansPageURL(2), "/admin/treinos?managed_page=2"; got != want {
 		t.Errorf("managedTrainingPlansPageURL(2) = %q, want %q", got, want)
 	}
 }

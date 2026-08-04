@@ -135,7 +135,7 @@ func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "events_flash", "Evento criado.")
 	}
-	httpx.Redirect(w, r, "/events", http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/eventos", http.StatusSeeOther)
 }
 
 func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +148,8 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
 	defer cancel()
 	page := pages.EventDetailPage{}
-	if user.IsAdmin || user.CanManageEvents {
+	management := strings.HasPrefix(r.URL.Path, "/admin/")
+	if management {
 		if !user.IsAdmin {
 			allowed, err := h.Store.CanCoachManageEvent(ctx, dbgen.CanCoachManageEventParams{EventID: eventID, UserID: user.ID})
 			if err != nil {
@@ -197,11 +198,15 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 		}
 		page = h.memberDetailPage(event, dependents)
 	}
-	page.Meta = h.meta(r, user, "/events", "Evento")
+	basePath, pageLabel := "/events", "Evento"
+	if management {
+		basePath, pageLabel = "/admin/eventos", "Evento"
+	}
+	page.Meta = h.meta(r, user, basePath, pageLabel)
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = page.Title
 	page.Meta.Title = page.Title + " | MyCFC"
-	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: "/events"}}
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: basePath}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.EventDetail(page).Render(r.Context(), w)
@@ -370,7 +375,7 @@ func (h Events) staffAction(w http.ResponseWriter, r *http.Request, confirm bool
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/events/"+eventID.String(), http.StatusSeeOther)
+	httpx.Redirect(w, r, "/admin/eventos/"+eventID.String(), http.StatusSeeOther)
 }
 
 var (
@@ -457,11 +462,12 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
 	defer cancel()
-	page := pages.EventsPage{CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	management := strings.HasPrefix(r.URL.Path, "/admin/")
+	page := pages.EventsPage{Management: management, CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
 	}
-	if user.IsAdmin || user.CanManageEvents {
+	if management {
 		if user.IsAdmin {
 			pageNumber := eventsPageNumber(r.URL.Query().Get("page"))
 			items, err := h.Store.ListEventsForAdmin(ctx, dbgen.ListEventsForAdminParams{RowLimit: eventsPageSize + 1, RowOffset: int32((pageNumber - 1) * eventsPageSize)})
@@ -470,10 +476,10 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 				return
 			}
 			if pageNumber > 1 {
-				page.PreviousURL = eventsPageURL(pageNumber - 1)
+				page.PreviousURL = managedEventsPageURL(pageNumber - 1)
 			}
 			if len(items) > eventsPageSize {
-				page.NextURL = eventsPageURL(pageNumber + 1)
+				page.NextURL = managedEventsPageURL(pageNumber + 1)
 				items = items[:eventsPageSize]
 			}
 			for _, item := range items {
@@ -527,7 +533,11 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 			page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: eventStatus(item.ResponseStatus), Capacity: h.capacity(item.Capacity)})
 		}
 	}
-	page.Meta = h.meta(r, user, "/events", "Eventos")
+	currentPath, area := "/events", "Eventos"
+	if management {
+		currentPath, area = "/admin/eventos", "Eventos"
+	}
+	page.Meta = h.meta(r, user, currentPath, area)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Events(page).Render(r.Context(), w)
@@ -541,10 +551,15 @@ func eventsPageNumber(value string) int {
 	return page
 }
 
-func eventsPageURL(page int) string { return "/events?page=" + strconv.Itoa(page) }
+func eventsPageURL(page int) string        { return "/events?page=" + strconv.Itoa(page) }
+func managedEventsPageURL(page int) string { return "/admin/eventos?page=" + strconv.Itoa(page) }
 
 func eventResponsesPageURL(eventID uuid.UUID, page int) string {
 	return "/events/" + eventID.String() + "?response_page=" + strconv.Itoa(page)
+}
+
+func managedEventResponsesPageURL(eventID uuid.UUID, page int) string {
+	return "/admin/eventos/" + eventID.String() + "?response_page=" + strconv.Itoa(page)
 }
 
 func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, dependents []dbgen.ListDependentsByGuardianRow) pages.EventDetailPage {
@@ -560,10 +575,10 @@ func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, depende
 func (h Events) adminDetailPage(event dbgen.Event, responses []dbgen.ListEventResponsesForAdminRow, responsePage int) pages.EventDetailPage {
 	page := pages.EventDetailPage{CanManageEvents: true, ID: event.ID.String(), Title: event.Title, Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity)}
 	if responsePage > 1 {
-		page.ResponsesPreviousURL = eventResponsesPageURL(event.ID, responsePage-1)
+		page.ResponsesPreviousURL = managedEventResponsesPageURL(event.ID, responsePage-1)
 	}
 	if len(responses) > eventResponsesPageSize {
-		page.ResponsesNextURL = eventResponsesPageURL(event.ID, responsePage+1)
+		page.ResponsesNextURL = managedEventResponsesPageURL(event.ID, responsePage+1)
 		responses = responses[:eventResponsesPageSize]
 	}
 	for _, response := range responses {

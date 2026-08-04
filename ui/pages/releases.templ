@@ -16,7 +16,7 @@ templ Releases(page ReleasesPage) {
 templ releasesContent(page ReleasesPage) {
 	@components.PageHeader("Administração", "Sistema", "Consulte a versão em execução e a última release publicada.", nil)
 	<section class="module release-status" aria-labelledby="release-status-title">
-		<div class="section-heading"><div><p class="eyebrow">Versões</p><h2 id="release-status-title">Estado da versão</h2><p>{ releaseStatusSummary(page.Release) }</p></div>@components.Badge(releaseStatusBadge(page.Release), releaseStatusTone(page.Release))</div>
+		<div class="section-heading"><div><h2 id="release-status-title">Estado da versão</h2><p>{ releaseStatusSummary(page.Release) }</p></div>@components.Badge(releaseStatusBadge(page.Release), releaseStatusTone(page.Release))</div>
 		<div class="release-status__grid">
 			<div><span>Em execução</span><strong>{ releaseValue(page.Release.CurrentLabel) }</strong>
 				if page.Release.CurrentReleasedAt != "" {

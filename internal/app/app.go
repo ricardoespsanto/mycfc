@@ -136,7 +136,11 @@ func New(ctx context.Context) (*Application, error) {
 		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
 		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
 	}
-	pageMeta := components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"]}
+	pageMeta := components.PageMeta{
+		StylesheetURL: assets["app.css"],
+		ScriptURL:     assets["app.js"],
+		BrandImageURL: assets["images/cfc-logo.png"],
+	}
 	system := handlers.System{PageMeta: pageMeta}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {

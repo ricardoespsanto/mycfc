@@ -28,8 +28,9 @@ templ News(page NewsPage) {
 templ newsContent(page NewsPage) {
 	@components.PageHeader("Administração", "Notícias", "Prepare notícias do clube e publique-as na data definida.", []components.PageAction{{Label: "Criar notícia", Href: "#criar-noticia", Variant: "primary"}})
 	@components.StatusMessage(page.Success, "success")
-	<details id="criar-noticia" class="module disclosure" open?={ len(page.Form.Errors) > 0 }>
-		<summary><span><strong>Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary>
+	<details id="criar-noticia" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="news-authoring-title">
+		<summary><span><strong id="news-authoring-title">Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary>
+		<button class="create-panel__close" type="button">Fechar</button>
 		<div class="disclosure__content">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "title", Field: "news-title"}, {Key: "summary", Field: "news-summary"}, {Key: "url", Field: "news-url"}, {Key: "published_at", Field: "news-published-at"}}))
 			<form class="form-layout" method="post" action="/admin/noticias">

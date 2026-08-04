@@ -83,7 +83,7 @@ func TestAnnouncementPaginationURLsAreIndependent(t *testing.T) {
 	}
 }
 
-func TestAnnouncementsIndexPaginatesVisibleAndAuthoredIndependently(t *testing.T) {
+func TestAnnouncementsManagementIndexPaginatesAuthoredItems(t *testing.T) {
 	userID := uuid.New()
 	store := &paginatedAnnouncementStore{}
 	for range announcementPageSize + 1 {
@@ -93,7 +93,7 @@ func TestAnnouncementsIndexPaginatesVisibleAndAuthoredIndependently(t *testing.T
 		store.authored = append(store.authored, dbgen.ListAnnouncementsForAuthorRow{ID: uuid.New(), Title: "Aviso", Status: "DRAFT"})
 	}
 	h := Announcements{Store: store, DB: announcementDBFake{}, Location: time.UTC}
-	r := httptest.NewRequest(http.MethodGet, "/announcements?page=2&authored_page=3", nil)
+	r := httptest.NewRequest(http.MethodGet, "/admin/avisos?authored_page=3", nil)
 	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
 	w := httptest.NewRecorder()
 
@@ -102,13 +102,13 @@ func TestAnnouncementsIndexPaginatesVisibleAndAuthoredIndependently(t *testing.T
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-	if got, want := store.visibleParams, (dbgen.ListVisibleAnnouncementsParams{UserID: userID, RowLimit: announcementPageSize + 1, RowOffset: announcementPageSize}); got != want {
-		t.Fatalf("visible params = %#v, want %#v", got, want)
+	if got := store.visibleParams; got != (dbgen.ListVisibleAnnouncementsParams{}) {
+		t.Fatalf("visible announcements queried on management page: %#v", got)
 	}
 	if got, want := store.authoredParams, (dbgen.ListAnnouncementsForAuthorParams{AuthorID: userID, RowLimit: announcementPageSize + 1, RowOffset: announcementPageSize * 2}); got != want {
 		t.Fatalf("authored params = %#v, want %#v", got, want)
 	}
-	for _, link := range []string{"/announcements?authored_page=3&amp;page=1", "/announcements?authored_page=3&amp;page=3", "/announcements?authored_page=2&amp;page=2", "/announcements?authored_page=4&amp;page=2"} {
+	for _, link := range []string{"/admin/avisos?authored_page=2", "/admin/avisos?authored_page=4"} {
 		if !strings.Contains(w.Body.String(), link) {
 			t.Errorf("body does not contain %q", link)
 		}

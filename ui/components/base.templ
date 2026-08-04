@@ -93,16 +93,47 @@ templ Base(meta PageMeta, content templ.Component) {
 		<body class="app-body">
 			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
 			if len(meta.Navigation) > 0 {
-				<div class="app-shell">
-					<aside class="app-rail" aria-label="Contexto e navegação MyCFC">
-						<a class="site-brand" href="/today"><span class="site-brand__mark" aria-hidden="true">≈</span><span>MyCFC</span></a>
-						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><span>Conta com responsabilidades cumulativas</span><div class="capability-list">
+				<header class="mobile-app-header">
+					<a class="mobile-app-brand" href="/today">
+						if meta.BrandImageURL != "" {
+							<img src={ meta.BrandImageURL } alt=""/>
+						} else {
+							<span class="site-brand__mark" aria-hidden="true">≈</span>
+						}
+						<span>MyCFC</span>
+					</a>
+					<details class="mobile-app-menu"><summary>Menu</summary><div class="mobile-app-menu__content">
+						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><span class="visually-hidden">Conta com responsabilidades cumulativas</span><div class="capability-list">
 							for _, label := range capabilityLabels(meta.Navigation) {
 								<span>{ label }</span>
 							}
 						</div></section>
 						@Navigation(meta.CurrentPath, meta.Navigation)
-						<div class="account-actions"><a href="/today">Conta e início</a><form method="post" action="/logout">
+						<div class="account-actions"><form method="post" action="/logout">
+							if meta.CSRFField != nil {
+								@meta.CSRFField
+							}
+							<button class="logout-button" type="submit">Terminar sessão</button>
+						</form></div>
+					</div></details>
+				</header>
+				<div class="app-shell">
+					<aside class="app-rail" aria-label="Contexto e navegação MyCFC">
+						<a class="site-brand" href="/today">
+							if meta.BrandImageURL != "" {
+								<img src={ meta.BrandImageURL } alt=""/>
+							} else {
+								<span class="site-brand__mark" aria-hidden="true">≈</span>
+							}
+							<span>MyCFC</span>
+						</a>
+						@Navigation(meta.CurrentPath, meta.Navigation)
+						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><div class="capability-list">
+							for _, label := range capabilityLabels(meta.Navigation) {
+								<span>{ label }</span>
+							}
+						</div></section>
+						<div class="account-actions"><form method="post" action="/logout">
 							if meta.CSRFField != nil {
 								@meta.CSRFField
 							}
@@ -110,7 +141,7 @@ templ Base(meta PageMeta, content templ.Component) {
 						</form></div>
 					</aside>
 					<div class="app-workspace">
-						<header class="workspace-header"><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFC</a></li>
+						<header class={ "workspace-header " + workspaceHeaderClass(meta) }><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFC</a></li>
 							for _, item := range meta.Breadcrumbs {
 								<li><a href={ item.Path }>{ item.Label }</a></li>
 							}
@@ -141,3 +172,4 @@ func capabilityLabels(groups []NavigationGroup) []string {
 
 func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if meta.CurrentPath == "/today" { return "Hoje" }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Os meus espaços" }; return "Atividade" }
 func resolvedPage(meta PageMeta) string { if meta.PageLabel != "" { return meta.PageLabel }; for _, group := range meta.Navigation { for _, item := range group.Items { if navigationMatches(meta.CurrentPath, item.Path) { return item.Label } } }; return "Página atual" }
+func workspaceHeaderClass(meta PageMeta) string { if meta.SubjectContext == "" && len(meta.Breadcrumbs) == 0 { return "workspace-header--root" }; return "workspace-header--detail" }

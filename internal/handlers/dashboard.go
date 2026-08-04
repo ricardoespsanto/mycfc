@@ -194,7 +194,11 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.TodayPage{Name: user.Name, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user), ShowShortcuts: true}
+	eventBasePath := "/events"
+	if user.IsAdmin {
+		eventBasePath = "/admin/eventos"
+	}
+	page := pages.TodayPage{Name: user.Name, EventBasePath: eventBasePath, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user), ShowShortcuts: true}
 	page.Leaderboard = pages.TodayLeaderboard{Period: string(period), IsAthlete: len(user.Programmes) > 0, Visible: user.LeaderboardVisible}
 	for _, leader := range leaders {
 		row := pages.TodayLeaderboardRow{Position: leader.Position, Name: leader.Name, Distance: formatKilometres(leader.TotalMetres)}
@@ -1004,6 +1008,9 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	}
 
 	var admin []components.NavigationItem
+	if user.IsAdmin || user.CanManageEvents {
+		admin = append(admin, components.NavigationItem{Label: "Eventos", Path: "/admin/eventos"}, components.NavigationItem{Label: "Treinos", Path: "/admin/treinos"}, components.NavigationItem{Label: "Avisos", Path: "/admin/avisos"})
+	}
 	if user.IsAdmin {
 		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
 	}

@@ -68,7 +68,7 @@ func loginContent(page LoginPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"login-title\"><p class=\"eyebrow\">Área reservada</p><h1 id=\"login-title\">Iniciar sessão</h1><p>Entre para acompanhar a vida do clube, os seus espaços e responsabilidades.</p><form class=\"form-layout\" method=\"post\" action=\"/login\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"login-title\"><p class=\"eyebrow\">Área reservada</p><h1 id=\"login-title\">Iniciar sessão</h1><p>Entre para acompanhar a vida do clube, os seus espaços e responsabilidades.</p><form class=\"form-layout\" method=\"post\" action=\"/login\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
