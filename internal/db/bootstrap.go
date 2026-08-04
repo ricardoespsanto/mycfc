@@ -51,6 +51,9 @@ func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, cr
 		{"create metadata schema", "CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration},
 		{"set metadata schema owner", "ALTER SCHEMA mycfc_meta OWNER TO " + migration},
 		{"revoke public metadata access", "REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC"},
+		{"transfer existing schema objects", transferOwnershipStatement(credentials.MigrationUsername)},
+		{"grant existing tables", "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + app},
+		{"grant existing sequences", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO " + app},
 		{"set table defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app},
 		{"set sequence defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app},
 	}
@@ -190,7 +193,23 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 
 func roleStatement(username, password string) string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
-		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; END IF; END $$"
+		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION; END IF; " +
+		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; END $$"
+}
+
+func transferOwnershipStatement(migrationUsername string) string {
+	owner := quoteLiteral(migrationUsername)
+	return `DO $$ DECLARE object record; BEGIN
+		FOR object IN SELECT n.nspname, c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'mycfc_meta') AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e') LOOP
+			EXECUTE format(CASE object.relkind WHEN 'S' THEN 'ALTER SEQUENCE %I.%I OWNER TO %I' WHEN 'v' THEN 'ALTER VIEW %I.%I OWNER TO %I' WHEN 'm' THEN 'ALTER MATERIALIZED VIEW %I.%I OWNER TO %I' WHEN 'f' THEN 'ALTER FOREIGN TABLE %I.%I OWNER TO %I' ELSE 'ALTER TABLE %I.%I OWNER TO %I' END, object.nspname, object.relname, ` + owner + `);
+		END LOOP;
+		FOR object IN SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e') LOOP
+			EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', object.nspname, object.proname, object.arguments, ` + owner + `);
+		END LOOP;
+		FOR object IN SELECT n.nspname, t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public' AND t.typtype IN ('d', 'e') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e') LOOP
+			EXECUTE format('ALTER TYPE %I.%I OWNER TO %I', object.nspname, object.typname, ` + owner + `);
+		END LOOP;
+	END $$`
 }
 
 func quoteIdentifier(value string) string { return `"` + strings.ReplaceAll(value, `"`, `""`) + `"` }
