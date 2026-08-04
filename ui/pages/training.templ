@@ -6,7 +6,7 @@ import (
 )
 
 type TrainingChoice struct{ ID, Name string }
-type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM string }
+type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome string }
 type ManagedTrainingSession struct{ Title, Description, When, Modality string }
 type ManagedTrainingPlan struct {
 	ID, Title, Description string
@@ -68,23 +68,11 @@ templ trainingContent(page TrainingPage) {
 							<p>{ session.Detail }</p>
 						</div>
 						if session.Outcome != "" {
-							<div class="record-item__actions">
-								@components.Badge(trainingOutcomeLabel(session.Outcome), trainingOutcomeTone(session.Outcome))
-								if session.Outcome == "COMPLETED" {
-									if session.Distance != "" {
-										<span>{ session.Distance }</span>
-									}
-									<details class="inline-disclosure"><summary>Registar ou corrigir distância</summary><form class="form-layout" method="post" action="/treinos/sessoes/distancia">@page.CSRFField
-										<input type="hidden" name="session_id" value={ session.ID }/>@components.FieldLabel("distance-update-"+session.ID, "Distância (km)", false)
-										<input id={ "distance-update-"+session.ID } name="distance_km" type="number" min="0.01" max="200" step="0.01" inputmode="decimal" value={ session.DistanceKM } aria-describedby={ "distance-update-help-"+session.ID }/>@components.FieldHelp("distance-update-help-"+session.ID, "Deixe vazio para remover a distância.")
-										@components.FormActions("/treinos") { <button type="submit">Guardar distância</button> }
-									</form></details>
-								}
-							</div>
+							@components.Badge(trainingOutcomeLabel(session.Outcome), trainingOutcomeTone(session.Outcome))
 						} else {
 							<div class="record-item__actions">
-								<details class="inline-disclosure"><summary>Marcar concluída</summary><form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField
-	<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/>@components.FieldLabel("distance-"+session.ID, "Distância (km)", false)<input id={ "distance-"+session.ID } name="distance_km" type="number" min="0.01" max="200" step="0.01" inputmode="decimal" aria-describedby={ "distance-help-"+session.ID }/>@components.FieldHelp("distance-help-"+session.ID, "Opcional para sessões com distância.")<button type="submit">Concluir sessão</button></form></details>
+								<form method="post" action="/treinos/sessoes/resultados">@page.CSRFField
+<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/><button class="action action--primary" type="submit">Marcar concluída</button></form>
 								<form method="post" action="/treinos/sessoes/resultados">@page.CSRFField
 <input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button class="action action--secondary" type="submit">Não realizada</button></form>
 							</div>

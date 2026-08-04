@@ -194,7 +194,7 @@ func (q *Queries) GetAccountByEmail(ctx context.Context, email *string) (GetAcco
 }
 
 const getActiveAccountByID = `-- name: GetActiveAccountByID :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.is_dependent, u.is_active,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -206,12 +206,11 @@ WHERE u.id = $1
 `
 
 type GetActiveAccountByIDRow struct {
-	ID                 uuid.UUID `json:"id"`
-	Name               string    `json:"name"`
-	IsDependent        bool      `json:"is_dependent"`
-	IsActive           bool      `json:"is_active"`
-	LeaderboardVisible bool      `json:"leaderboard_visible"`
-	IsAdmin            bool      `json:"is_admin"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	IsDependent bool      `json:"is_dependent"`
+	IsActive    bool      `json:"is_active"`
+	IsAdmin     bool      `json:"is_admin"`
 }
 
 func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDRow, error) {
@@ -222,7 +221,6 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 		&i.Name,
 		&i.IsDependent,
 		&i.IsActive,
-		&i.LeaderboardVisible,
 		&i.IsAdmin,
 	)
 	return i, err
@@ -354,23 +352,9 @@ WHERE email = $1
   AND is_dependent = false
 `
 
-type GetUserByEmailRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	MinorLoginID *string            `json:"minor_login_id"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (GetUserByEmailRow, error) {
+func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, email)
-	var i GetUserByEmailRow
+	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -528,7 +512,7 @@ func (q *Queries) ListActiveAdultsForAdmin(ctx context.Context, rowLimit int32) 
 
 const listDependentsByGuardian = `-- name: ListDependentsByGuardian :many
 SELECT id, name, guardian_id, is_dependent,
-       date_of_birth, is_active, leaderboard_visible, created_at, updated_at, minor_login_id
+       date_of_birth, is_active, created_at, updated_at, minor_login_id
 FROM users
 WHERE guardian_id = $1
   AND is_dependent = true
@@ -543,16 +527,15 @@ type ListDependentsByGuardianParams struct {
 }
 
 type ListDependentsByGuardianRow struct {
-	ID                 uuid.UUID          `json:"id"`
-	Name               string             `json:"name"`
-	GuardianID         *uuid.UUID         `json:"guardian_id"`
-	IsDependent        bool               `json:"is_dependent"`
-	DateOfBirth        pgtype.Date        `json:"date_of_birth"`
-	IsActive           bool               `json:"is_active"`
-	LeaderboardVisible bool               `json:"leaderboard_visible"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	MinorLoginID       *string            `json:"minor_login_id"`
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	IsDependent  bool               `json:"is_dependent"`
+	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	MinorLoginID *string            `json:"minor_login_id"`
 }
 
 func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error) {
@@ -571,7 +554,6 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 			&i.IsDependent,
 			&i.DateOfBirth,
 			&i.IsActive,
-			&i.LeaderboardVisible,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MinorLoginID,
@@ -680,47 +662,4 @@ type SetUserPasswordHashParams struct {
 func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, setUserPasswordHash, arg.PasswordHash, arg.ID)
 	return err
-}
-
-const updateDependentLeaderboardVisibility = `-- name: UpdateDependentLeaderboardVisibility :execrows
-UPDATE users
-SET leaderboard_visible = $1, updated_at = now()
-WHERE id = $2
-  AND guardian_id = $3
-  AND is_dependent = true
-  AND is_active = true
-`
-
-type UpdateDependentLeaderboardVisibilityParams struct {
-	LeaderboardVisible bool       `json:"leaderboard_visible"`
-	DependentUserID    uuid.UUID  `json:"dependent_user_id"`
-	GuardianUserID     *uuid.UUID `json:"guardian_user_id"`
-}
-
-func (q *Queries) UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateDependentLeaderboardVisibility, arg.LeaderboardVisible, arg.DependentUserID, arg.GuardianUserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const updateOwnLeaderboardVisibility = `-- name: UpdateOwnLeaderboardVisibility :execrows
-UPDATE users
-SET leaderboard_visible = $1, updated_at = now()
-WHERE id = $2
-  AND is_active = true
-`
-
-type UpdateOwnLeaderboardVisibilityParams struct {
-	LeaderboardVisible bool      `json:"leaderboard_visible"`
-	UserID             uuid.UUID `json:"user_id"`
-}
-
-func (q *Queries) UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateOwnLeaderboardVisibility, arg.LeaderboardVisible, arg.UserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

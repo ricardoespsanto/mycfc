@@ -24,7 +24,6 @@ type CurrentUser struct {
 	Name               string
 	IsDependent        bool
 	IsAdmin            bool
-	LeaderboardVisible bool
 	Programmes         map[string]bool
 	CoachProgrammeIDs  map[uuid.UUID]bool
 	CoachTeamIDs       map[uuid.UUID]bool
@@ -68,7 +67,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
+		current := CurrentUser{ID: user.ID, Name: user.Name, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
 		}

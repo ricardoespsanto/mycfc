@@ -59,7 +59,7 @@ WHERE email = sqlc.arg(email)
 
 -- name: ListDependentsByGuardian :many
 SELECT id, name, guardian_id, is_dependent,
-       date_of_birth, is_active, leaderboard_visible, created_at, updated_at, minor_login_id
+       date_of_birth, is_active, created_at, updated_at, minor_login_id
 FROM users
 WHERE guardian_id = sqlc.arg(guardian_id)
   AND is_dependent = true
@@ -125,7 +125,7 @@ WITH issued AS (
 SELECT minor_user_id FROM audited;
 
 -- name: GetActiveAccountByID :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.is_dependent, u.is_active,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -134,20 +134,6 @@ SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
        ) AS is_admin
 FROM users u
 WHERE u.id = sqlc.arg(id);
-
--- name: UpdateOwnLeaderboardVisibility :execrows
-UPDATE users
-SET leaderboard_visible = sqlc.arg(leaderboard_visible), updated_at = now()
-WHERE id = sqlc.arg(user_id)
-  AND is_active = true;
-
--- name: UpdateDependentLeaderboardVisibility :execrows
-UPDATE users
-SET leaderboard_visible = sqlc.arg(leaderboard_visible), updated_at = now()
-WHERE id = sqlc.arg(dependent_user_id)
-  AND guardian_id = sqlc.arg(guardian_user_id)
-  AND is_dependent = true
-  AND is_active = true;
 
 -- name: GetAccountByEmail :one
 SELECT u.id, u.name, u.is_dependent, u.is_active,

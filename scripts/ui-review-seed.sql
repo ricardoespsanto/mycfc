@@ -91,13 +91,6 @@ INSERT INTO training_plans (id, title, description, programme_id, created_by_id)
 SELECT '71000000-0000-0000-0000-000000000001', 'Preparação de velocidade — bloco de carga progressiva', 'Plano representativo com uma designação longa para validar cartões, formulários e tabelas.', id, '10000000-0000-0000-0000-000000000004' FROM programmes WHERE code = 'Competition';
 INSERT INTO training_sessions (id, plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 SELECT ('72000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '71000000-0000-0000-0000-000000000001', 'Sessão técnica de velocidade ' || n, 'Aquecimento, séries, recuperação ativa e retorno à calma.', date_trunc('day', now()) + ((n - 4) || ' days 18 hours')::interval, date_trunc('day', now()) + ((n - 4) || ' days 20 hours')::interval, m.id, '10000000-0000-0000-0000-000000000004' FROM generate_series(1, 8) AS n CROSS JOIN modalities m WHERE m.code = 'K1';
-INSERT INTO training_sessions (id, plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
-SELECT '72000000-0000-0000-0000-000000000009', '71000000-0000-0000-0000-000000000001', 'Sessão concluída para classificação', 'Sessão determinística com distância para rever a classificação.', now() - interval '2 hours', now() - interval '1 hour', m.id, '10000000-0000-0000-0000-000000000004' FROM modalities m WHERE m.code = 'K1';
-
-INSERT INTO training_session_outcomes (session_id, user_id, status, distance_metres)
-VALUES
-  ('72000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000003', 'COMPLETED', 12500),
-  ('72000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000006', 'COMPLETED', 9750);
 
 INSERT INTO news_items (title_pt, summary_pt, url, published_at, is_published)
 SELECT 'Notícia de revisão visual ' || n || ': atividade do Clube Fluvial de Coimbra', 'Resumo realista e suficientemente longo sobre treinos, provas, voluntariado e vida do clube para testar conteúdo denso e quebras de linha.', 'https://cfcoimbra.com/noticias/', now() - (n || ' days')::interval, n <= 9 FROM generate_series(1, 12) AS n;

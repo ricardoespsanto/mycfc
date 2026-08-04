@@ -173,12 +173,3 @@ func (s *guardianDashboardStore) ListEventsForToday(context.Context, dbgen.ListE
 func (s *guardianDashboardStore) ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	return nil, errors.New("not used")
 }
-func (s *guardianDashboardStore) ListDistanceLeaderboard(context.Context, dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error) {
-	return nil, errors.New("not used")
-}
-func (s *guardianDashboardStore) UpdateOwnLeaderboardVisibility(context.Context, dbgen.UpdateOwnLeaderboardVisibilityParams) (int64, error) {
-	return 0, errors.New("not used")
-}
-func (s *guardianDashboardStore) UpdateDependentLeaderboardVisibility(context.Context, dbgen.UpdateDependentLeaderboardVisibilityParams) (int64, error) {
-	return 0, errors.New("not used")
-}

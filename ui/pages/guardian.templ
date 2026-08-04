@@ -5,7 +5,7 @@ import "github.com/cfcoimbra/mycfc/ui/components"
 
 type GuardianPage struct {
 	Meta       components.PageMeta
-	Dependents []GuardianDependent
+	Dependents []DashboardItem
 	Calendars  []CalendarLink
 	CalendarAPIKey string
 	CalendarSources string
@@ -16,7 +16,6 @@ type GuardianPage struct {
 	Success    string
 	RepairForm components.RepairFormData
 }
-type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible bool }
 
 templ Guardian(page GuardianPage) {
 	@components.Base(page.Meta, GuardianContent(page))
@@ -32,11 +31,11 @@ templ GuardianContent(page GuardianPage) {
 			if len(page.Dependents) == 0 {
 				@components.EmptyState("Ainda sem menores associados", "Adicione o primeiro menor para gerir a responsabilidade a partir da sua conta.")
 			}
-				if len(page.Dependents) > 0 {
-					@components.RecordList("Menores a cargo") {
-						for _, dependent := range page.Dependents {
-							<li class="record-item"><div class="record-item__copy"><h3>{ dependent.Name }</h3><p class="record-meta">{ dependent.Detail }</p></div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
-						}
+			if len(page.Dependents) > 0 {
+				@components.RecordList("Menores a cargo") {
+					for _, dependent := range page.Dependents {
+						@components.RecordItem(dependent.Title, dependent.URL, dependent.Detail)
+					}
 				}
 			}
 		</section>

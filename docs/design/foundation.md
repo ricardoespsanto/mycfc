@@ -22,7 +22,7 @@ Public-site rules remain scoped under `.public-body`. New authenticated componen
 - `DataRegion` creates a named, keyboard-focusable responsive table viewport.
 - `Icon` requires an accessible label unless explicitly decorative.
 
-The component catalogue demonstrates default, hover/focus-ready, pressed, selected, disabled, expanded, success, warning, error, form-help, invalid, and empty states with Portuguese content.
+The admin-only `/admin/componentes` gallery demonstrates default, hover/focus-ready, pressed, selected, disabled, expanded, success, warning, error, form-help, invalid, and empty states with Portuguese content.
 
 ## Proof pages
 
