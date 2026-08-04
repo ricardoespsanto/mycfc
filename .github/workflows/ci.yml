@@ -47,6 +47,19 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: make verify-foundation
+      - run: make test
+
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-go v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.26.5
+      - run: cp .env.example .env
+      - run: CI=true make test-integration
 
   e2e:
     runs-on: ubuntu-24.04
@@ -67,10 +80,10 @@ jobs:
 
   summary:
     if: always()
-    needs: [generated-and-format, foundation, e2e]
+    needs: [generated-and-format, foundation, integration, e2e]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require all foundation gates
+      - name: Require all CI gates
         env:
           RESULTS: ${{ join(needs.*.result, ',') }}
-        run: test "$RESULTS" = success,success,success
+        run: test "$RESULTS" = success,success,success,success
