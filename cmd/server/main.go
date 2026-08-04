@@ -15,21 +15,26 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
 	if len(os.Args) > 1 && os.Args[1] != "serve" {
-		if err := runDatabaseCommand(context.Background(), os.Args[1]); err != nil {
+		if err := runDatabaseCommand(ctx, os.Args[1]); err != nil {
 			slog.Error("database command failed", "error", err)
 			os.Exit(1)
 		}
 		return
 	}
-	application, err := app.New(context.Background())
+	if err := runDatabaseCommand(ctx, "migrate"); err != nil {
+		slog.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+	application, err := app.New(ctx)
 	if err != nil {
 		slog.Error("application startup failed", "error", err)
 		os.Exit(1)
 	}
 	defer application.Close()
 
-	if err := application.Run(context.Background()); err != nil {
+	if err := application.Run(ctx); err != nil {
 		application.Logger.Error("application stopped with error", "error", err)
 		os.Exit(1)
 	}
