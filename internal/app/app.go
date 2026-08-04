@@ -146,8 +146,11 @@ func New(ctx context.Context) (*Application, error) {
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
 		Fleet:                 dbgen.New(pool),
+		Equipment:             dbgen.New(pool),
 		Releases:              releaseChecker,
 		Objects:               objectStore,
+		MaxRequestBytes:       cfg.MaxRequestBytes,
+		MaxPhotoBytes:         cfg.MaxPhotoBytes,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
 		PageMeta:              pageMeta,
 		System:                system,

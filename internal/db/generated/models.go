@@ -568,14 +568,28 @@ type ConsentForm struct {
 }
 
 type Equipment struct {
-	ID        uuid.UUID          `json:"id"`
-	AssetTag  string             `json:"asset_tag"`
-	Name      string             `json:"name"`
-	Type      string             `json:"type"`
-	Status    string             `json:"status"`
-	Notes     string             `json:"notes"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID               uuid.UUID          `json:"id"`
+	AssetTag         string             `json:"asset_tag"`
+	Name             string             `json:"name"`
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	Notes            string             `json:"notes"`
+	ImageObjectKey   *string            `json:"image_object_key"`
+	ImageContentType *string            `json:"image_content_type"`
+	ImageSizeBytes   *int64             `json:"image_size_bytes"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EquipmentAuditEvent struct {
+	ID                     uuid.UUID          `json:"id"`
+	EquipmentID            uuid.UUID          `json:"equipment_id"`
+	ActorUserID            uuid.UUID          `json:"actor_user_id"`
+	Action                 string             `json:"action"`
+	BeforeState            []byte             `json:"before_state"`
+	AfterState             []byte             `json:"after_state"`
+	AffectedMaintenanceIds []uuid.UUID        `json:"affected_maintenance_ids"`
+	OccurredAt             pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type Event struct {

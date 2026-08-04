@@ -177,7 +177,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await page.locator('#maintenance-form > summary').click();
-    await expect(page.getByLabel('Equipamento')).toBeVisible();
+    await expect(page.locator('#maintenance-equipment')).toBeVisible();
     await expectNoSeriousAxeViolations(page);
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
@@ -215,6 +215,102 @@ test.describe('authentication', () => {
     await expect(complete).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('status')).toHaveText('Manutenção concluída.');
+  });
+
+  test('administrator manages equipment lifecycle and audit history without JavaScript', async ({ browser }) => {
+    test.setTimeout(120000);
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const page = await context.newPage();
+    const suffix = Date.now();
+    const assetTag = `E2E-${suffix}`;
+    const updatedTag = `${assetTag}-U`;
+    const maintenanceDescription = `Revisão antes da retirada ${suffix}`;
+
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+
+    await page.locator('#equipment-form > summary').click();
+    const create = page.locator('#equipment-form');
+    await create.getByLabel('Identificador').fill('X');
+    await create.getByLabel('Nome').fill('X');
+    await create.getByRole('button', { name: 'Adicionar equipamento' }).click();
+    await expect(create.locator('.error-summary')).toBeFocused();
+    await expect(create.getByLabel('Identificador')).toHaveValue('X');
+
+    await create.getByLabel('Identificador').fill(assetTag);
+    await create.getByLabel('Nome').fill('Embarcação E2E');
+    await create.getByLabel('Tipo').selectOption('Boat');
+    await create.getByLabel('Estado').selectOption('Operational');
+    await create.getByLabel('Notas (opcional)').fill('Registo inicial');
+    await create.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'embarcacao.png', mimeType: 'image/png', buffer: validPNG });
+    await create.getByRole('button', { name: 'Adicionar equipamento' }).click();
+    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page.getByRole('status')).toHaveText('Equipamento adicionado.');
+
+    await page.locator('#equipment-inventory > summary').click();
+    let equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: assetTag });
+    await equipment.getByText('Ações').click();
+    await equipment.getByRole('link', { name: 'Editar' }).click();
+    const equipmentEditURL = page.url();
+    await page.getByLabel('Identificador').fill(updatedTag);
+    await page.getByLabel('Nome').fill('Pagaia E2E atualizada');
+    await page.getByLabel('Tipo').selectOption('Paddle');
+    await page.getByLabel('Estado').selectOption('Maintenance');
+    await page.getByLabel('Notas (opcional)').fill('Notas atualizadas');
+    await page.getByLabel('Substituir fotografia (opcional)').setInputFiles({ name: 'pagaia.png', mimeType: 'image/png', buffer: validPNG });
+    await page.getByRole('button', { name: 'Guardar alterações' }).click();
+    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
+
+    await page.locator('#equipment-inventory > summary').click();
+    equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+    await equipment.getByText('Ações').click();
+    await equipment.getByRole('link', { name: 'Editar' }).click();
+    await expect(page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Histórico do equipamento' })).toBeVisible();
+    await expect(page.getByText('Equipamento atualizado')).toBeVisible();
+    await expect(page.getByText('Fotografia atualizada')).toBeVisible();
+    await expect(page.getByText('Equipamento criado')).toBeVisible();
+    await page.getByRole('link', { name: 'Voltar à frota' }).click();
+
+    await page.locator('#maintenance-form > summary').click();
+    const maintenance = page.locator('#maintenance-form');
+    await maintenance.getByLabel('Equipamento').selectOption({ label: `${updatedTag} - Pagaia E2E atualizada` });
+    await maintenance.getByLabel('Data e hora').fill(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+    await maintenance.getByLabel('Descrição').fill(maintenanceDescription);
+    await maintenance.getByRole('button', { name: 'Agendar manutenção' }).click();
+    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page.getByText(maintenanceDescription)).toBeVisible();
+
+    await page.locator('#equipment-inventory > summary').click();
+    equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+    await equipment.getByText('Ações').click();
+    await equipment.getByRole('button', { name: 'Retirar da frota' }).click();
+    await expect(page.getByRole('status')).toContainText('Equipamento retirado da frota');
+    await expect(page.getByText(maintenanceDescription)).toHaveCount(0);
+
+    await page.goto(equipmentEditURL);
+    await expect(page.getByText('Equipamento retirado')).toBeVisible();
+    await expect(page.getByText('1 tarefa de manutenção ativa foi cancelada.')).toBeVisible();
+    await page.getByRole('link', { name: 'Voltar à frota' }).click();
+
+    for (let equipmentPage = 0; equipmentPage < 50; equipmentPage += 1) {
+      await page.locator('#equipment-inventory > summary').click();
+      equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+      if (await equipment.count()) break;
+      const next = page.getByRole('navigation', { name: 'Paginação de equipamentos' }).getByRole('link', { name: 'Seguinte' });
+      await expect(next, `equipment ${updatedTag} was not found in the paginated inventory`).toBeVisible();
+      await next.click();
+    }
+    await equipment.getByText('Ações').click();
+    await equipment.getByRole('button', { name: 'Reativar' }).click();
+    await expect(page.getByRole('status')).toHaveText('Equipamento reativado como operacional.');
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+    await context.close();
   });
 
   test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
@@ -283,12 +379,12 @@ test.describe('authentication', () => {
     await expect(page.getByRole('heading', { name: 'Competição', exact: true })).toBeVisible();
 
     await page.goto('/treinos');
-    const athleteSession = page.locator('li', { hasText: sessionTitle });
+    const athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
     await athleteSession.locator('summary').filter({ hasText: 'Marcar concluída' }).click();
     await athleteSession.getByLabel('Distância (km)').fill('12.34');
     await athleteSession.getByRole('button', { name: 'Concluir sessão' }).click();
     await expect(page.getByRole('status')).toHaveText('Resultado registado.');
-    await expect(page.locator('li', { hasText: sessionTitle })).toContainText('12,34 km');
+    await expect(page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]')).toContainText('12,34 km');
 
     await page.goto('/today?leaderboard_period=all');
     const leaderboard = page.locator('#leaderboard');

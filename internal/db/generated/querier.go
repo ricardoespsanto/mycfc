@@ -30,6 +30,7 @@ type Querier interface {
 	CreateCompetitionDocument(ctx context.Context, arg CreateCompetitionDocumentParams) (CompetitionDocument, error)
 	CreateConsentForm(ctx context.Context, arg CreateConsentFormParams) (ConsentForm, error)
 	CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (CreateDependentUserRow, error)
+	CreateEquipmentWithAudit(ctx context.Context, arg CreateEquipmentWithAuditParams) (CreateEquipmentWithAuditRow, error)
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	CreateMaintenanceTask(ctx context.Context, arg CreateMaintenanceTaskParams) (MaintenanceTask, error)
 	CreateNews(ctx context.Context, arg CreateNewsParams) (NewsItem, error)
@@ -82,6 +83,7 @@ type Querier interface {
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)
 	ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error)
 	ListDistanceLeaderboard(ctx context.Context, arg ListDistanceLeaderboardParams) ([]ListDistanceLeaderboardRow, error)
+	ListEquipmentAuditEvents(ctx context.Context, arg ListEquipmentAuditEventsParams) ([]ListEquipmentAuditEventsRow, error)
 	ListEquipmentForAdmin(ctx context.Context, arg ListEquipmentForAdminParams) ([]Equipment, error)
 	ListEventResponsesForAdmin(ctx context.Context, arg ListEventResponsesForAdminParams) ([]ListEventResponsesForAdminRow, error)
 	ListEventsForAdmin(ctx context.Context, arg ListEventsForAdminParams) ([]ListEventsForAdminRow, error)
@@ -110,13 +112,16 @@ type Querier interface {
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
+	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
+	RetireEquipmentWithAudit(ctx context.Context, arg RetireEquipmentWithAuditParams) (RetireEquipmentWithAuditRow, error)
 	RevokeStaffGrant(ctx context.Context, arg RevokeStaffGrantParams) (int64, error)
 	SaveEventResponse(ctx context.Context, arg SaveEventResponseParams) error
 	SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error)
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error)
+	UpdateEquipmentWithAudit(ctx context.Context, arg UpdateEquipmentWithAuditParams) (UpdateEquipmentWithAuditRow, error)
 	UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error)
 	UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)

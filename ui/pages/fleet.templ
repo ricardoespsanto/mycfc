@@ -8,6 +8,7 @@ import (
 
 type FleetPage struct {
 	Meta                 components.PageMeta
+	Success              string
 	Counts               []FleetStatusCount
 	Equipment            []FleetEquipment
 	EquipmentPreviousURL string
@@ -19,13 +20,14 @@ type FleetPage struct {
 	MaintenancePreviousURL string
 	MaintenanceNextURL     string
 	MaintenanceForm      FleetMaintenanceForm
+	EquipmentForm        EquipmentForm
 	CalendarAPIKey       string
 	CalendarSources      string
 	Calendars            []CalendarLink
 }
 
 type FleetStatusCount struct { Status string; Total int64 }
-type FleetEquipment struct { AssetTag, Name, Type, Status string }
+type FleetEquipment struct { ID, AssetTag, Name, Type, Status, Notes, PhotoURL, PhotoUnavailable string }
 type FleetRepair struct { ID, Equipment, Description, Status, ReportedAt, PhotoURL, PhotoUnavailable, ActionError string }
 type FleetMaintenance struct { ID, Equipment, Description, Status, ScheduledFor, ActionError string }
 type FleetMaintenanceForm struct {
@@ -40,20 +42,36 @@ templ Fleet(page FleetPage) {
 }
 
 templ fleetContent(page FleetPage) {
-	@components.PageHeader("Administração", "Frota", "Consulte o estado dos equipamentos, avarias e manutenção.", []components.PageAction{{Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "primary"}})
+	@components.PageHeader("Administração", "Frota", "Consulte e gira os equipamentos, avarias e manutenção.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}})
+	@components.StatusMessage(page.Success, "success")
 	<section class="module">@components.SectionHeading("Operações", "Estado da frota", "Totais atuais por estado operacional.")<ul class="record-list" aria-label="Estado da frota">
 		for _, count := range page.Counts {
 			<li class="record-item"><div class="record-item__copy"><h3>{ fleetStatusLabel(count.Status) }</h3></div>@components.Badge(fleetCountLabel(count.Total), fleetStatusTone(count.Status))</li>
 		}
 	</ul></section>
-	<details class="module disclosure"><summary><span><strong>Equipamentos</strong><small>Consulte o inventário e o estado de cada equipamento.</small></span></summary><div class="disclosure__content">
+	@EquipmentCreateForm(page.EquipmentForm)
+	<details id="equipment-inventory" class="module disclosure"><summary><span><strong>Equipamentos</strong><small>Consulte o inventário e o estado de cada equipamento.</small></span></summary><div class="disclosure__content">
 		if len(page.Equipment) == 0 {
 			@components.EmptyState("Ainda sem equipamentos", "Os equipamentos registados aparecem aqui.")
 		}
 		if len(page.Equipment) > 0 {
 			@components.RecordList("Inventário da frota") {
 				for _, equipment := range page.Equipment {
-					@components.RecordItem(equipment.AssetTag+" · "+equipment.Name, "", equipment.Type) { @components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status)) }
+					<li class="record-item record-item--stacked"><div class="record-item__copy">
+						if equipment.PhotoURL != "" {
+							<img src={ equipment.PhotoURL } alt={ "Fotografia de " + equipment.Name } loading="lazy"/>
+						}
+						if equipment.PhotoUnavailable != "" {
+							<p>{ equipment.PhotoUnavailable }</p>
+						}
+						<h3>{ equipment.AssetTag } · { equipment.Name }</h3><p>{ equipmentTypeLabel(equipment.Type) }</p>@components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status))
+						<details class="inline-disclosure"><summary>Ações</summary><div class="form-actions"><a class="action action--secondary" href={ templ.SafeURL("/admin/fleet/equipment/" + equipment.ID + "/edit") }>Editar</a>
+							if equipment.Status == "Retired" {
+								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/reactivate" }>@page.Meta.CSRFField<button type="submit">Reativar</button></form>
+							} else {
+								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/retire" }>@page.Meta.CSRFField<button class="action action--secondary" type="submit">Retirar da frota</button></form>
+							}
+						</div></details></div></li>
 				}
 			}
 		}
@@ -204,5 +222,14 @@ func fleetStatusTone(status string) string {
 	case "Maintenance", "Scheduled", "Em_Analise", "In_Progress": return "warning"
 	case "Retired": return "error"
 	default: return "selected"
+	}
+}
+
+func equipmentTypeLabel(value string) string {
+	switch value {
+	case "Boat": return "Embarcação"
+	case "Paddle": return "Pagaia"
+	case "Vehicle": return "Veículo"
+	default: return value
 	}
 }
