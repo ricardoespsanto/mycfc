@@ -390,7 +390,7 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       COALESCE(o.status::text, ''::text) AS outcome_status
+       COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -410,14 +410,15 @@ type ListTrainingSessionsForAthleteParams struct {
 }
 
 type ListTrainingSessionsForAthleteRow struct {
-	ID            uuid.UUID          `json:"id"`
-	PlanTitle     string             `json:"plan_title"`
-	Title         string             `json:"title"`
-	Description   string             `json:"description"`
-	StartsAt      pgtype.Timestamptz `json:"starts_at"`
-	EndsAt        pgtype.Timestamptz `json:"ends_at"`
-	ModalityName  *string            `json:"modality_name"`
-	OutcomeStatus interface{}        `json:"outcome_status"`
+	ID             uuid.UUID          `json:"id"`
+	PlanTitle      string             `json:"plan_title"`
+	Title          string             `json:"title"`
+	Description    string             `json:"description"`
+	StartsAt       pgtype.Timestamptz `json:"starts_at"`
+	EndsAt         pgtype.Timestamptz `json:"ends_at"`
+	ModalityName   *string            `json:"modality_name"`
+	OutcomeStatus  interface{}        `json:"outcome_status"`
+	DistanceMetres *int32             `json:"distance_metres"`
 }
 
 func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error) {
@@ -438,6 +439,7 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.EndsAt,
 			&i.ModalityName,
 			&i.OutcomeStatus,
+			&i.DistanceMetres,
 		); err != nil {
 			return nil, err
 		}
@@ -450,9 +452,9 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 }
 
 const saveTrainingSessionOutcome = `-- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason)
+INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)
 SELECT $1, $2, $3::training_outcome_status,
-       $4, $5
+       $4, $5, $6
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 WHERE s.id = $1
@@ -479,6 +481,7 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
     status = EXCLUDED.status,
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
+    distance_metres = EXCLUDED.distance_metres,
     updated_at = now()
 `
 
@@ -488,6 +491,7 @@ type SaveTrainingSessionOutcomeParams struct {
 	Status               TrainingOutcomeStatus `json:"status"`
 	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
 	ReplacementReason    *string               `json:"replacement_reason"`
+	DistanceMetres       *int32                `json:"distance_metres"`
 }
 
 func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error) {
@@ -497,7 +501,30 @@ func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTraini
 		arg.Status,
 		arg.ReplacementSessionID,
 		arg.ReplacementReason,
+		arg.DistanceMetres,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateOwnCompletedSessionDistance = `-- name: UpdateOwnCompletedSessionDistance :execrows
+UPDATE training_session_outcomes
+SET distance_metres = $1, updated_at = now()
+WHERE session_id = $2
+  AND user_id = $3
+  AND status = 'COMPLETED'
+`
+
+type UpdateOwnCompletedSessionDistanceParams struct {
+	DistanceMetres *int32    `json:"distance_metres"`
+	SessionID      uuid.UUID `json:"session_id"`
+	UserID         uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateOwnCompletedSessionDistance, arg.DistanceMetres, arg.SessionID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}

@@ -35,7 +35,7 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		{"competition athlete", []string{"Competição"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
 		{"multiple memberships", []string{"Lazer", "Iniciação", "Competição", "Kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
 		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
-		{"admin", []string{"Frota"}, []string{"Treinador", "Moderador"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
+		{"admin", []string{"Frota", "Sistema"}, []string{"Treinador", "Moderador", "Componentes"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
@@ -142,6 +142,80 @@ func TestDashboardTodayShowsBoundedAdminOperations(t *testing.T) {
 	}
 }
 
+func TestDashboardTodayRendersSelectedLeaderboardAndCurrentPosition(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Lisbon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.March, 29, 12, 0, 0, 0, location)
+	userID := uuid.New()
+	store := &dashboardStoreFake{leaders: []dbgen.ListDistanceLeaderboardRow{
+		{UserID: uuid.New(), Name: "Ana Costa", TotalMetres: 12340, Position: 1},
+		{UserID: userID, Name: "Maria Silva", TotalMetres: 2500, Position: 12},
+	}}
+	dashboard := Dashboard{Store: store, Location: location, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	request := httptest.NewRequest(http.MethodGet, "/today?leaderboard_period=month", nil)
+	user := CurrentUser{ID: userID, Name: "Maria Silva", LeaderboardVisible: true, Programmes: map[string]bool{"Competition": true}}
+	response := httptest.NewRecorder()
+	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
+	body := response.Body.String()
+	for _, want := range []string{"Classificação do clube", "Ana Costa", "12,34 km", "A sua posição", "2,5 km", `aria-current="page">Mês`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Today does not contain %q: %q", want, body)
+		}
+	}
+	if got := store.leaderboardParams.PeriodStart.Time; got != time.Date(2026, time.March, 1, 0, 0, 0, 0, location) {
+		t.Fatalf("period start = %v", got)
+	}
+}
+
+func TestLeaderboardPeriodBoundsUseLisbonCalendarAcrossDST(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Lisbon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.March, 29, 15, 0, 0, 0, location)
+	start, end := leaderboardPeriodBounds(leaderboardWeek, now, location)
+	if start.Time.Day() != 23 || start.Time.Hour() != 0 || end.Time.Day() != 30 || end.Time.Hour() != 0 {
+		t.Fatalf("week bounds = %v - %v", start.Time, end.Time)
+	}
+	if end.Time.Sub(start.Time) != 167*time.Hour {
+		t.Fatalf("DST week duration = %v", end.Time.Sub(start.Time))
+	}
+	if selectedLeaderboardPeriod("unsupported") != leaderboardWeek {
+		t.Fatal("unsupported period did not default to week")
+	}
+}
+
+func TestLeaderboardPrivacyUpdatesCurrentAthlete(t *testing.T) {
+	store := &dashboardStoreFake{visibilityRows: 1}
+	dashboard := Dashboard{Store: store}
+	userID := uuid.New()
+	request := httptest.NewRequest(http.MethodPost, "/leaderboard/privacy", strings.NewReader("leaderboard_visible=on&leaderboard_period=year"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	user := CurrentUser{ID: userID, Programmes: map[string]bool{"Competition": true}}
+	response := httptest.NewRecorder()
+	dashboard.LeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/today?leaderboard_period=year#leaderboard" || store.visibilityParams.UserID != userID || !store.visibilityParams.LeaderboardVisible {
+		t.Fatalf("response = %d %q, params = %+v", response.Code, response.Header().Get("Location"), store.visibilityParams)
+	}
+}
+
+func TestDependentLeaderboardPrivacyUsesGuardianRelationship(t *testing.T) {
+	store := &dashboardStoreFake{visibilityRows: 1}
+	dashboard := Dashboard{Store: store}
+	guardianID, dependentID := uuid.New(), uuid.New()
+	request := httptest.NewRequest(http.MethodPost, "/dashboard/guardian/dependents/"+dependentID.String()+"/leaderboard-privacy", strings.NewReader("leaderboard_visible=on"))
+	request.SetPathValue("id", dependentID.String())
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	dashboard.DependentLeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: guardianID})))
+	params := store.dependentVisibilityParams
+	if response.Code != http.StatusSeeOther || params.DependentUserID != dependentID || params.GuardianUserID == nil || *params.GuardianUserID != guardianID || !params.LeaderboardVisible {
+		t.Fatalf("response = %d, params = %+v", response.Code, params)
+	}
+}
+
 func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	memberID := uuid.New()
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
@@ -216,35 +290,42 @@ func dashboardResponse(t *testing.T, handler http.HandlerFunc, userID uuid.UUID)
 }
 
 type dashboardStoreFake struct {
-	metrics             []dbgen.PerformanceMetric
-	logs                []dbgen.TrainingLog
-	news                []dbgen.NewsItem
-	groups              []dbgen.WhatsappGroup
-	dependents          []dbgen.ListDependentsByGuardianRow
-	metricsErr          error
-	logsErr             error
-	newsErr             error
-	groupsErr           error
-	metricsParams       dbgen.ListRecentPerformanceMetricsParams
-	logsParams          dbgen.ListRecentTrainingLogsParams
-	deadlineSeen        bool
-	scheduleParams      dbgen.ScheduleMaintenanceTaskParams
-	scheduleErr         error
-	repairParams        dbgen.UpdateRepairStatusParams
-	repairErr           error
-	completeID          uuid.UUID
-	completeErr         error
-	counts              []dbgen.CountEquipmentByStatusRow
-	adminEquipment      []dbgen.Equipment
-	repairs             []dbgen.ListPendingRepairRequestsRow
-	maintenance         []dbgen.ListUpcomingMaintenanceRow
-	adminParams         dbgen.ListEquipmentForAdminParams
-	pendingRepairParams dbgen.ListPendingRepairRequestsParams
-	maintenanceParams   dbgen.ListUpcomingMaintenanceParams
-	todayEvents         []dbgen.ListEventsForTodayRow
-	todayParams         dbgen.ListEventsForTodayParams
-	announcements       []dbgen.ListVisibleAnnouncementsRow
-	announcementParams  dbgen.ListVisibleAnnouncementsParams
+	metrics                   []dbgen.PerformanceMetric
+	logs                      []dbgen.TrainingLog
+	news                      []dbgen.NewsItem
+	groups                    []dbgen.WhatsappGroup
+	dependents                []dbgen.ListDependentsByGuardianRow
+	metricsErr                error
+	logsErr                   error
+	newsErr                   error
+	groupsErr                 error
+	metricsParams             dbgen.ListRecentPerformanceMetricsParams
+	logsParams                dbgen.ListRecentTrainingLogsParams
+	deadlineSeen              bool
+	scheduleParams            dbgen.ScheduleMaintenanceTaskParams
+	scheduleErr               error
+	repairParams              dbgen.UpdateRepairStatusParams
+	repairErr                 error
+	completeID                uuid.UUID
+	completeErr               error
+	counts                    []dbgen.CountEquipmentByStatusRow
+	adminEquipment            []dbgen.Equipment
+	repairs                   []dbgen.ListPendingRepairRequestsRow
+	maintenance               []dbgen.ListUpcomingMaintenanceRow
+	adminParams               dbgen.ListEquipmentForAdminParams
+	pendingRepairParams       dbgen.ListPendingRepairRequestsParams
+	maintenanceParams         dbgen.ListUpcomingMaintenanceParams
+	todayEvents               []dbgen.ListEventsForTodayRow
+	todayParams               dbgen.ListEventsForTodayParams
+	announcements             []dbgen.ListVisibleAnnouncementsRow
+	announcementParams        dbgen.ListVisibleAnnouncementsParams
+	leaders                   []dbgen.ListDistanceLeaderboardRow
+	leaderboardParams         dbgen.ListDistanceLeaderboardParams
+	leaderboardErr            error
+	visibilityParams          dbgen.UpdateOwnLeaderboardVisibilityParams
+	dependentVisibilityParams dbgen.UpdateDependentLeaderboardVisibilityParams
+	visibilityRows            int64
+	visibilityErr             error
 }
 
 func (f *dashboardStoreFake) CountEquipmentByStatus(context.Context) ([]dbgen.CountEquipmentByStatusRow, error) {
@@ -535,6 +616,21 @@ func (f *dashboardStoreFake) ListEventsForToday(_ context.Context, params dbgen.
 func (f *dashboardStoreFake) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	f.announcementParams = params
 	return f.announcements, nil
+}
+
+func (f *dashboardStoreFake) ListDistanceLeaderboard(_ context.Context, params dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error) {
+	f.leaderboardParams = params
+	return f.leaders, f.leaderboardErr
+}
+
+func (f *dashboardStoreFake) UpdateOwnLeaderboardVisibility(_ context.Context, params dbgen.UpdateOwnLeaderboardVisibilityParams) (int64, error) {
+	f.visibilityParams = params
+	return f.visibilityRows, f.visibilityErr
+}
+
+func (f *dashboardStoreFake) UpdateDependentLeaderboardVisibility(_ context.Context, params dbgen.UpdateDependentLeaderboardVisibilityParams) (int64, error) {
+	f.dependentVisibilityParams = params
+	return f.visibilityRows, f.visibilityErr
 }
 
 func (f *dashboardStoreFake) ListRecentPerformanceMetrics(ctx context.Context, params dbgen.ListRecentPerformanceMetricsParams) ([]dbgen.PerformanceMetric, error) {

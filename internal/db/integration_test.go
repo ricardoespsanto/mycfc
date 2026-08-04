@@ -4,6 +4,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -322,3 +323,121 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 	assertTitles(coachID, false, public.Title, competitionEvent.Title)
 	assertTitles(outsiderID, true, public.Title, competitionEvent.Title, hidden.Title)
 }
+
+func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+	queries := dbgen.New(pool)
+	competition, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	seasonID, planID := uuid.New(), uuid.New()
+	athleteA, athleteB, currentAthlete := uuid.New(), uuid.New(), uuid.New()
+	privateAthlete, expiredAthlete := uuid.New(), uuid.New()
+	guardianID, dependentID := uuid.New(), uuid.New()
+	userIDs := []uuid.UUID{athleteA, athleteB, currentAthlete, privateAthlete, expiredAthlete, guardianID, dependentID}
+	sessionID, futureSessionID, oldSessionID := uuid.New(), uuid.New(), uuid.New()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE id = $1`, planID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, userIDs)
+	})
+
+	for i, id := range userIDs[:6] {
+		email := "leaderboard-" + uuid.NewString() + "@example.test"
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '2000-01-01')`, id, fmt.Sprintf("Atleta %02d", i+1), email); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Menor leaderboard', $2, true, '2014-01-01')`, dependentID, guardianID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET leaderboard_visible = false WHERE id = $1`, privateAthlete); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época leaderboard', $3, $4)`, seasonID, "IT_"+uuid.NewString()[:8], today.AddDate(-1, 0, 0), today.AddDate(1, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uuid.UUID{athleteA, athleteB, currentAthlete, privateAthlete} {
+		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4)`, id, seasonID, competition.ID, today.AddDate(0, 0, -1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on, ends_on) VALUES ($1, $2, $3, $4, $5)`, expiredAthlete, seasonID, competition.ID, today.AddDate(0, 0, -10), today.AddDate(0, 0, -1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO training_plans (id, title, description, programme_id, created_by_id) VALUES ($1, 'Plano leaderboard', '', $2, $3)`, planID, competition.ID, athleteA); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []struct {
+		id    uuid.UUID
+		start time.Time
+	}{
+		{sessionID, now.Add(-time.Hour)},
+		{futureSessionID, now.Add(time.Hour)},
+		{oldSessionID, now.AddDate(0, -2, 0)},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO training_sessions (id, plan_id, title, description, starts_at, ends_at, created_by_id) VALUES ($1, $2, 'Sessão leaderboard', '', $3, $4, $5)`, session.id, planID, session.start, session.start.Add(time.Hour), athleteA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, outcome := range []struct {
+		user     uuid.UUID
+		session  uuid.UUID
+		distance int
+	}{
+		{athleteA, sessionID, 12000}, {athleteB, sessionID, 12000}, {currentAthlete, sessionID, 1000},
+		{privateAthlete, sessionID, 99000}, {expiredAthlete, sessionID, 88000},
+		{athleteA, futureSessionID, 200000}, {athleteA, oldSessionID, 50000},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO training_session_outcomes (session_id, user_id, status, distance_metres) VALUES ($1, $2, 'COMPLETED', $3)`, outcome.session, outcome.user, outcome.distance); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	params := dbgen.ListDistanceLeaderboardParams{
+		CurrentUserID: currentAthlete,
+		ActiveOn:      pgtype.Date{Time: today, Valid: true},
+		AsOf:          pgtype.Timestamptz{Time: now, Valid: true},
+		PeriodStart:   pgtype.Timestamptz{Time: today.AddDate(0, -1, 0), Valid: true},
+		PeriodEnd:     pgtype.Timestamptz{Time: today.AddDate(0, 1, 0), Valid: true},
+	}
+	rows, err := queries.ListDistanceLeaderboard(ctx, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0].Position != 1 || rows[1].Position != 1 || rows[2].Position != 3 || rows[2].UserID != currentAthlete {
+		t.Fatalf("leaderboard rows = %#v", rows)
+	}
+	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: athleteA, DistanceMetres: int32PtrDB(2500)}); err != nil || n != 1 {
+		t.Fatalf("own correction rows = %d, err = %v", n, err)
+	}
+	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: uuid.New(), DistanceMetres: int32PtrDB(2500)}); err != nil || n != 0 {
+		t.Fatalf("foreign correction rows = %d, err = %v", n, err)
+	}
+	if n, err := queries.UpdateOwnLeaderboardVisibility(ctx, dbgen.UpdateOwnLeaderboardVisibilityParams{UserID: currentAthlete, LeaderboardVisible: false}); err != nil || n != 1 {
+		t.Fatalf("privacy rows = %d, err = %v", n, err)
+	}
+	rows, err = queries.ListDistanceLeaderboard(ctx, params)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("private leaderboard rows = %#v, err = %v", rows, err)
+	}
+	if n, err := queries.UpdateDependentLeaderboardVisibility(ctx, dbgen.UpdateDependentLeaderboardVisibilityParams{DependentUserID: dependentID, GuardianUserID: &guardianID, LeaderboardVisible: false}); err != nil || n != 1 {
+		t.Fatalf("guardian privacy rows = %d, err = %v", n, err)
+	}
+	wrongGuardian := uuid.New()
+	if n, err := queries.UpdateDependentLeaderboardVisibility(ctx, dbgen.UpdateDependentLeaderboardVisibilityParams{DependentUserID: dependentID, GuardianUserID: &wrongGuardian, LeaderboardVisible: true}); err != nil || n != 0 {
+		t.Fatalf("foreign guardian rows = %d, err = %v", n, err)
+	}
+}
+
+func int32PtrDB(value int32) *int32 { return &value }

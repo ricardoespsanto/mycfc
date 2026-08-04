@@ -1,5 +1,6 @@
 package pages
 
+import "fmt"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type TodayEvent struct { ID, Title, When string }
@@ -7,6 +8,8 @@ type TodayAnnouncement struct { ID, Title, PublishedAt string; Unread bool }
 type TodayDependent struct { Name string; HasAccess bool }
 type TodayOperation struct { Label, Detail string }
 type TodayShortcut struct { Label, Detail, Path string }
+type TodayLeaderboardRow struct { Position int64; Name, Distance string }
+type TodayLeaderboard struct { Period string; Rows []TodayLeaderboardRow; Current *TodayLeaderboardRow; IsAthlete, Visible bool }
 type TodayPage struct {
 	Meta components.PageMeta
 	Name string
@@ -16,6 +19,9 @@ type TodayPage struct {
 	Dependents []TodayDependent
 	Operations []TodayOperation
 	Shortcuts []TodayShortcut
+	Leaderboard TodayLeaderboard
+	Success string
+	ShowShortcuts bool
 }
 
 templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
@@ -27,8 +33,9 @@ templ todayContent(page TodayPage) {
 		} else {
 			<div class="today-next today-next--empty"><span>A seguir</span><strong>Dia tranquilo</strong><small>Sem atividades pendentes para hoje.</small></div>
 		}
-	</section>
-	<div class="today-grid">
+		</section>
+		@components.StatusMessage(page.Success, "success")
+		<div class="today-grid">
 	<section class="today-module today-module--agenda"><header><div><p class="eyebrow">Agora</p><h2>Agenda de hoje</h2></div><a href="/events">Ver agenda</a></header>
 		if len(page.Events) == 0 {
 			<p class="today-empty">Não existem eventos para hoje. Consulte a agenda para preparar os próximos dias.</p>
@@ -40,7 +47,7 @@ templ todayContent(page TodayPage) {
 				}
 			</ul>
 		}
-	</section>
+		</section>
 	<section class="today-module"><header><div><p class="eyebrow">Para si</p><h2>Avisos recentes</h2></div><a href="/announcements">Ver todos</a></header>
 		if len(page.Announcements) == 0 {
 			<p class="today-empty">Não há avisos recentes. As novas comunicações do clube aparecerão aqui.</p>
@@ -57,6 +64,32 @@ templ todayContent(page TodayPage) {
 			</ul>
 		}
 	</section>
+		<section id="leaderboard" class="today-module today-module--leaderboard"><header><div><p class="eyebrow">Distância</p><h2>Classificação do clube</h2></div></header>
+			<nav class="leaderboard-tabs" aria-label="Período da classificação">
+				@leaderboardTab("week", "Semana", page.Leaderboard.Period)
+				@leaderboardTab("month", "Mês", page.Leaderboard.Period)
+				@leaderboardTab("year", "Ano", page.Leaderboard.Period)
+				@leaderboardTab("all", "Todo o tempo", page.Leaderboard.Period)
+			</nav>
+			if len(page.Leaderboard.Rows) == 0 {
+				<p class="today-empty">Ainda não existem quilómetros registados neste período.</p>
+			} else {
+				<ol class="leaderboard-list">
+					for _, row := range page.Leaderboard.Rows {
+						<li><span aria-label={ "Posição "+fmt.Sprint(row.Position) }>{ fmt.Sprint(row.Position) }</span><strong>{ row.Name }</strong><b>{ row.Distance }</b></li>
+					}
+				</ol>
+			}
+			if page.Leaderboard.Current != nil {
+				<div class="leaderboard-current"><span>A sua posição</span><strong>{ fmt.Sprint(page.Leaderboard.Current.Position) } · { page.Leaderboard.Current.Name }</strong><b>{ page.Leaderboard.Current.Distance }</b></div>
+			}
+			if page.Leaderboard.IsAthlete {
+				<form class="leaderboard-privacy" method="post" action="/leaderboard/privacy">@page.Meta.CSRFField<input type="hidden" name="leaderboard_period" value={ page.Leaderboard.Period }/><label><input name="leaderboard_visible" type="checkbox" checked?={ page.Leaderboard.Visible }/> Mostrar os meus quilómetros na classificação</label><button type="submit">Guardar privacidade</button></form>
+				if !page.Leaderboard.Visible {
+					<p class="today-empty">Os seus totais estão privados e não entram na classificação.</p>
+				}
+			}
+		</section>
 	if len(page.Dependents) > 0 {
 		<section class="today-module"><header><div><p class="eyebrow">Família</p><h2>Menores a cargo</h2></div><a href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
 			for _, dependent := range page.Dependents {
@@ -77,12 +110,22 @@ templ todayContent(page TodayPage) {
 			}
 		</ul></section>
 	}
-	<section class="today-module today-module--shortcuts"><header><div><p class="eyebrow">Atalhos</p><h2>Continuar no MyCFC</h2></div></header><div class="today-shortcuts">
-		for _, item := range page.Shortcuts {
-			<a href={ item.Path }><strong>{ item.Label }</strong><span>{ item.Detail }</span></a>
+		if page.ShowShortcuts {
+			<section class="today-module today-module--shortcuts"><header><div><p class="eyebrow">Atalhos</p><h2>Continuar no MyCFC</h2></div></header><div class="today-shortcuts">
+				for _, item := range page.Shortcuts {
+					<a href={ item.Path }><strong>{ item.Label }</strong><span>{ item.Detail }</span></a>
+				}
+			</div></section>
 		}
-	</div></section>
 	</div>
 }
 
 func firstName(name string) string { for i, r := range name { if r == ' ' { return name[:i] } }; return name }
+
+templ leaderboardTab(period, label, selected string) {
+	if period == selected {
+		<a href={ templ.SafeURL("/today?leaderboard_period="+period+"#leaderboard") } aria-current="page">{ label }</a>
+	} else {
+		<a href={ templ.SafeURL("/today?leaderboard_period="+period+"#leaderboard") }>{ label }</a>
+	}
+}

@@ -153,6 +153,8 @@ async function expectTodayComposition(page, persona) {
   await expect(page.getByRole('heading', { name: /^Olá,/ })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Agenda de hoje' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Avisos recentes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Classificação do clube' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Período da classificação' }).getByRole('link', { name: 'Semana' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('heading', { name: 'Continuar no MyCFC' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Eventos Agenda e respostas/ })).toBeVisible();
   if (persona.key === 'tutor') {
@@ -160,6 +162,7 @@ async function expectTodayComposition(page, persona) {
   }
   if (persona.programmeShortcut) {
     await expect(page.getByRole('link', { name: `${persona.programmeShortcut} Abrir o meu espaço` })).toBeVisible();
+    await expect(page.getByLabel('Mostrar os meus quilómetros na classificação')).toBeChecked();
   }
   if (persona.key === 'admin') {
     await expect(page.getByRole('heading', { name: 'Requer atenção' })).toBeVisible();
@@ -217,7 +220,7 @@ test('captures River Clubhouse authentication states', async ({ browser }) => {
 
 for (const persona of personas) {
   test(`captures ${persona.key} desktop and mobile journeys`, async ({ browser }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     for (const viewport of viewports) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       const page = await context.newPage();

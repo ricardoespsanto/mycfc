@@ -218,6 +218,7 @@ test.describe('authentication', () => {
   });
 
   test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
+    test.setTimeout(120000);
     const athleteName = `Atleta E2E ${Date.now()}`;
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
@@ -248,6 +249,29 @@ test.describe('authentication', () => {
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await expect(membershipForm.getByLabel('Competição')).toBeChecked();
 
+    const planTitle = `Plano classificação E2E ${Date.now()}`;
+    const sessionTitle = `Sessão classificação E2E ${Date.now()}`;
+    await page.goto('/treinos');
+    await page.locator('summary').filter({ hasText: 'Gerir treinos' }).click();
+    await page.locator('summary').filter({ hasText: 'Criar plano' }).click();
+    const planForm = page.locator('form[action="/treinos/planos"]');
+    await planForm.getByLabel('Título').fill(planTitle);
+    await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
+    await planForm.getByRole('button', { name: 'Criar plano' }).click();
+    await expect(page.getByRole('status')).toHaveText('Plano criado.');
+
+    await page.locator('summary').filter({ hasText: 'Gerir treinos' }).click();
+    await page.locator('summary').filter({ hasText: 'Criar sessão' }).click();
+    const sessionForm = page.locator('form[action="/treinos/sessoes"]');
+    const sessionStart = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const sessionEnd = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    await sessionForm.getByLabel('Plano').selectOption({ label: planTitle });
+    await sessionForm.getByLabel('Título').fill(sessionTitle);
+    await sessionForm.getByLabel('Início').fill(sessionStart.toISOString().slice(0, 16));
+    await sessionForm.getByLabel('Fim').fill(sessionEnd.toISOString().slice(0, 16));
+    await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
+    await expect(page.getByRole('status')).toHaveText('Sessão criada.');
+
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await expect(page).toHaveURL('/login');
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
@@ -257,6 +281,24 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Competição', exact: true }).click();
     await expect(page).toHaveURL('/dashboard/competition');
     await expect(page.getByRole('heading', { name: 'Competição', exact: true })).toBeVisible();
+
+    await page.goto('/treinos');
+    const athleteSession = page.locator('li', { hasText: sessionTitle });
+    await athleteSession.locator('summary').filter({ hasText: 'Marcar concluída' }).click();
+    await athleteSession.getByLabel('Distância (km)').fill('12.34');
+    await athleteSession.getByRole('button', { name: 'Concluir sessão' }).click();
+    await expect(page.getByRole('status')).toHaveText('Resultado registado.');
+    await expect(page.locator('li', { hasText: sessionTitle })).toContainText('12,34 km');
+
+    await page.goto('/today?leaderboard_period=all');
+    const leaderboard = page.locator('#leaderboard');
+    await expect(leaderboard).toContainText(athleteName);
+    await expect(leaderboard).toContainText('12,34 km');
+    await page.getByLabel('Mostrar os meus quilómetros na classificação').uncheck();
+    await page.getByRole('button', { name: 'Guardar privacidade' }).click();
+    await expect(page.getByRole('status')).toHaveText('Privacidade da classificação atualizada.');
+    await expect(leaderboard).toContainText('Os seus totais estão privados');
+    await expect(leaderboard).not.toContainText(athleteName);
   });
 
   test('administrator manages event capacity, waitlist confirmation, and check-in', async ({ page }) => {
