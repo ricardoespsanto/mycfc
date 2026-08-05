@@ -60,6 +60,28 @@ ORDER BY rr.date_reported ASC, rr.id ASC
 LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
 
+-- name: ListRepairRequestsForMembers :many
+SELECT
+    rr.id,
+    rr.equipment_id,
+    e.asset_tag,
+    e.name AS equipment_name,
+    rr.issue_description,
+    rr.status,
+    rr.date_reported,
+    rr.updated_at,
+    rr.resolved_at,
+    COALESCE(rr.reported_by_id = sqlc.arg(user_id)::uuid, false)::boolean AS reported_by_user
+FROM repair_requests rr
+JOIN equipment e ON e.id = rr.equipment_id
+WHERE rr.status IN ('Pendente', 'Em_Analise')
+   OR (rr.status = 'Resolvido' AND rr.resolved_at >= sqlc.arg(resolved_since))
+ORDER BY
+    CASE WHEN rr.status = 'Resolvido' THEN 1 ELSE 0 END,
+    CASE WHEN rr.status = 'Resolvido' THEN rr.resolved_at ELSE rr.date_reported END DESC,
+    rr.id DESC
+LIMIT sqlc.arg(row_limit);
+
 -- name: UpdateRepairStatus :one
 UPDATE repair_requests
 SET status = sqlc.arg(status),

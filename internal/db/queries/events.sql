@@ -2,9 +2,9 @@
 SELECT id, code, name_pt, created_at FROM programmes ORDER BY name_pt;
 
 -- name: CreateEvent :one
-INSERT INTO events (title, description, starts_at, ends_at, response_deadline, capacity, created_by_id)
-VALUES (sqlc.arg(title), sqlc.arg(description), sqlc.arg(starts_at), sqlc.arg(ends_at), sqlc.narg(response_deadline), sqlc.narg(capacity), sqlc.arg(created_by_id))
-RETURNING id, title, description, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at;
+INSERT INTO events (title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id)
+VALUES (sqlc.arg(title), sqlc.arg(description), sqlc.arg(event_type), sqlc.arg(starts_at), sqlc.arg(ends_at), sqlc.narg(response_deadline), sqlc.narg(capacity), sqlc.arg(created_by_id))
+RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at;
 
 -- name: AddEventAudience :exec
 INSERT INTO event_audiences (event_id, programme_id) VALUES (sqlc.arg(event_id), sqlc.arg(programme_id));
@@ -16,7 +16,7 @@ INSERT INTO event_team_audiences (event_id, team_id) VALUES (sqlc.arg(event_id),
 SELECT id, programme_id, name FROM teams ORDER BY name, id;
 
 -- name: ListEventsForMember :many
-SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
@@ -91,7 +91,7 @@ WHERE e.starts_at < sqlc.arg(day_ends_at)
 ORDER BY e.starts_at, e.id;
 
 -- name: ListEventsForAdmin :many
-SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 ORDER BY e.starts_at DESC, e.id
@@ -99,7 +99,7 @@ LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
 
 -- name: ListEventsForCoach :many
-SELECT e.id, e.title, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 WHERE (EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id) OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id))
@@ -121,11 +121,11 @@ ORDER BY e.starts_at DESC, e.id
 LIMIT sqlc.arg(row_limit);
 
 -- name: GetEventForResponse :one
-SELECT id, title, description, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
+SELECT id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
 FROM events WHERE id = sqlc.arg(id) FOR UPDATE;
 
 -- name: GetRespondableEvent :one
-SELECT e.id, e.title, e.description, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.created_by_id, e.created_at, e.updated_at
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.created_by_id, e.created_at, e.updated_at
 FROM events e
 JOIN users subject ON subject.id = sqlc.arg(subject_user_id) AND subject.is_active
 WHERE e.id = sqlc.arg(event_id)
@@ -159,7 +159,7 @@ ON CONFLICT (event_id, user_id) DO UPDATE SET
     checked_in_at = NULL, checked_in_by_id = NULL;
 
 -- name: GetEventDetailForMember :one
-SELECT e.id, e.title, e.description, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
@@ -181,7 +181,7 @@ WHERE e.id = sqlc.arg(event_id)
   );
 
 -- name: GetEventDetailForAdmin :one
-SELECT id, title, description, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
+SELECT id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
 FROM events WHERE id = sqlc.arg(id);
 
 -- name: ListEventResponsesForAdmin :many

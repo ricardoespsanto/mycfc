@@ -21,6 +21,7 @@ type FleetPage struct {
 	MaintenanceNextURL     string
 	MaintenanceForm      FleetMaintenanceForm
 	EquipmentForm        EquipmentForm
+	RepairForm           components.RepairFormData
 	CalendarAPIKey       string
 	CalendarSources      string
 	Calendars            []CalendarLink
@@ -43,7 +44,7 @@ templ Fleet(page FleetPage) {
 
 templ fleetContent(page FleetPage) {
 	<div class="collection-page fleet-collection">
-	@components.PageHeader("Administração", "Frota", "Inventário, avarias e manutenção organizados por tarefa.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}})
+	@components.PageHeader("Administração", "Frota", "Inventário, avarias e manutenção organizados por tarefa.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}, {Label: "Reportar avaria", Href: "#repair-form", Variant: "quiet"}})
 	@components.StatusMessage(page.Success, "success")
 	<section class="fleet-overview" aria-labelledby="fleet-overview-title"><h2 id="fleet-overview-title" class="visually-hidden">Estado da frota</h2><ul aria-label="Totais atuais por estado operacional">
 		for _, count := range page.Counts {
@@ -105,6 +106,7 @@ templ fleetContent(page FleetPage) {
 	</section>
 	@EquipmentCreateForm(page.EquipmentForm)
 	@MaintenanceForm(page.MaintenanceForm)
+	@components.RepairForm(page.RepairForm)
 	</div>
 }
 

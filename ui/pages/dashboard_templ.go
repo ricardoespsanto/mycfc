@@ -20,7 +20,6 @@ type DashboardPage struct {
 	Calendars       []CalendarLink
 	Sections        []DashboardSection
 	Actions         []components.PageAction
-	RepairForm      components.RepairFormData
 }
 
 type CalendarLink struct {
@@ -85,10 +84,6 @@ func dashboardContent(page DashboardPage) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		templ_7745c5c3_Err = components.PageHeader("O meu programa", page.Heading, page.Intro, page.Actions).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = components.RepairForm(page.RepairForm).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -199,7 +194,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(apiKey)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 70, Col: 80}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 68, Col: 80}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 		if templ_7745c5c3_Err != nil {
@@ -212,7 +207,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(sources)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 70, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 68, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
 		if templ_7745c5c3_Err != nil {
@@ -230,7 +225,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 			var templ_7745c5c3_Var7 templ.SafeURL
 			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(calendar.URL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 73, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 71, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
@@ -243,7 +238,7 @@ func Calendar(apiKey, sources string, calendars []CalendarLink, intro string) te
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(calendar.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 73, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/dashboard.templ`, Line: 71, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {

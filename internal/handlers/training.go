@@ -64,24 +64,6 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 			}
 			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
 		}
-		documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
-		if err != nil {
-			h.System.InternalError(w, r)
-			return
-		}
-		for _, document := range documents {
-			context := ""
-			if document.EventTitle != nil {
-				context = *document.EventTitle
-			}
-			if document.ModalityName != nil {
-				if context != "" {
-					context += " · "
-				}
-				context += *document.ModalityName
-			}
-			page.Documents = append(page.Documents, pages.CompetitionDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006"), Context: context})
-		}
 	}
 	if page.Management {
 		h.authoring(ctx, user, &page, managedTrainingPlansPageNumber(r.URL.Query().Get("managed_page")))
@@ -242,64 +224,6 @@ func (h Training) UpdateDistance(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
-func (h Training) CreateDocument(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "document"})
-		return
-	}
-	user, _ := CurrentUserFromContext(r.Context())
-	title, rawURL, source := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("url")), strings.TrimSpace(r.PostForm.Get("source"))
-	form := pages.TrainingDocumentForm{Title: title, URL: rawURL, Source: source, ReviewedOn: r.PostForm.Get("reviewed_on"), EventID: r.PostForm.Get("event_id"), ModalityID: r.PostForm.Get("modality_id"), ProgrammeID: r.PostForm.Get("programme_id"), TeamID: r.PostForm.Get("team_id"), Errors: validation.FieldErrors{}}
-	eventID, e1 := optionalUUID(r.PostForm.Get("event_id"))
-	modalityID, e2 := optionalUUID(r.PostForm.Get("modality_id"))
-	programmeID, teamID, e3 := trainingScope(r)
-	reviewed, e4 := time.Parse("2006-01-02", r.PostForm.Get("reviewed_on"))
-	if !validTrainingText(title, 2, 180) {
-		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
-	}
-	if !validDocumentURL(rawURL) {
-		form.Errors.Add("url", "Indique uma ligação HTTPS válida.")
-	}
-	if !validTrainingText(source, 2, 180) {
-		form.Errors.Add("source", "A fonte deve ter entre 2 e 180 caracteres.")
-	}
-	if e4 != nil || reviewed.After(time.Now().UTC()) {
-		form.Errors.Add("reviewed_on", "Indique uma data válida, não futura.")
-	}
-	if e1 != nil || e2 != nil || e3 != nil || !validCompetitionDocumentInput(title, rawURL, source, reviewed, eventID, modalityID, programmeID, teamID) {
-		form.Errors.Add("scope", "Selecione um contexto válido para o documento.")
-	}
-	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "document", DocumentForm: form})
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
-	defer cancel()
-	if !user.IsAdmin {
-		if eventID != nil {
-			allowed, err := h.Store.CanCoachManageEvent(ctx, dbgen.CanCoachManageEventParams{EventID: *eventID, UserID: user.ID})
-			if err != nil {
-				h.System.InternalError(w, r)
-				return
-			}
-			if !allowed {
-				h.System.Forbidden(w, r)
-				return
-			}
-		}
-		if (eventID == nil || programmeID != nil || teamID != nil) && !h.canUseScope(user, programmeID, teamID) {
-			h.System.Forbidden(w, r)
-			return
-		}
-	}
-	if _, err := h.Store.CreateCompetitionDocument(ctx, dbgen.CreateCompetitionDocumentParams{Title: title, Url: rawURL, Source: source, ReviewedOn: pgtype.Date{Time: reviewed, Valid: true}, EventID: eventID, ModalityID: modalityID, ProgrammeID: programmeID, TeamID: teamID, AuthorID: user.ID}); err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	h.flash(r, "Documento publicado.")
-	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
-}
-
 func (h Training) flash(r *http.Request, message string) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "training_flash", message)
@@ -310,7 +234,6 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 	programmes, _ := h.Store.ListProgrammes(ctx)
 	teams, _ := h.Store.ListTeamsForEventAuthoring(ctx)
 	modalities, _ := h.Store.ListAnnouncementModalities(ctx)
-	events, _ := h.Store.ListAnnouncementEvents(ctx)
 	plans, _ := h.Store.ListTrainingPlansForCoach(ctx, dbgen.ListTrainingPlansForCoachParams{UserID: user.ID, RowLimit: 100})
 	managedPlans, _ := h.Store.ListTrainingPlansForAuthoring(ctx, dbgen.ListTrainingPlansForAuthoringParams{UserID: user.ID, IsAdmin: user.IsAdmin, PlanLimit: managedTrainingPlansPageSize + 1, PlanOffset: int32((pageNumber - 1) * managedTrainingPlansPageSize)})
 	page.ManagedPlans = managedTrainingPlans(managedPlans, h.location())
@@ -340,16 +263,6 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 	}
 	for _, x := range modalities {
 		page.Modalities = append(page.Modalities, pages.TrainingChoice{ID: x.ID.String(), Name: x.NamePt})
-	}
-	for _, x := range events {
-		if user.IsAdmin {
-			page.Events = append(page.Events, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})
-			continue
-		}
-		allowed, _ := h.Store.CanCoachManageEvent(ctx, dbgen.CanCoachManageEventParams{EventID: x.ID, UserID: user.ID})
-		if allowed {
-			page.Events = append(page.Events, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})
-		}
 	}
 	for _, x := range plans {
 		page.Plans = append(page.Plans, pages.TrainingChoice{ID: x.ID.String(), Name: x.Title})

@@ -596,6 +596,7 @@ type Event struct {
 	ID               uuid.UUID          `json:"id"`
 	Title            string             `json:"title"`
 	Description      string             `json:"description"`
+	EventType        string             `json:"event_type"`
 	StartsAt         pgtype.Timestamptz `json:"starts_at"`
 	EndsAt           pgtype.Timestamptz `json:"ends_at"`
 	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`

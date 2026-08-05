@@ -14,7 +14,6 @@ type GuardianPage struct {
 	ResponsibilityAccepted bool
 	Errors     validation.FieldErrors
 	Success    string
-	RepairForm components.RepairFormData
 }
 type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible bool }
 
@@ -40,7 +39,7 @@ templ GuardianContent(page GuardianPage) {
 				}
 			}
 		</section>
-		<details id="adicionar-menor" class="module disclosure" open?={ len(page.Dependents) == 0 || len(page.Errors) > 0 } aria-labelledby="add-dependent-title"><summary><span><strong id="add-dependent-title">Adicionar menor a cargo</strong><small>Associe um novo dependente à sua conta.</small></span></summary><div class="disclosure__content">
+		<details id="adicionar-menor" class="module disclosure create-panel" data-create-panel open?={ len(page.Errors) > 0 } aria-labelledby="add-dependent-title"><summary><span><strong id="add-dependent-title">Adicionar menor a cargo</strong><small>Associe um novo dependente à sua conta.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
 			@components.StatusMessage(page.Errors["form"], "error")
 			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"name", "date_of_birth", "accept_minor_responsibility"}))
 			<form class="form-layout" method="post" action="/guardian/add-dependent" hx-post="/guardian/add-dependent" hx-target="#guardian-content" hx-swap="outerHTML" hx-target-422="#guardian-content" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
@@ -52,6 +51,5 @@ templ GuardianContent(page GuardianPage) {
 				@components.FormActions("/dashboard/guardian") { <button type="submit">Adicionar menor</button> }
 			</form>
 		</div></details>
-		@components.RepairForm(page.RepairForm)
 	</div>
 }

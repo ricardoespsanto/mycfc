@@ -26,6 +26,27 @@ func TestValidateEventRejectsInvalidTimesAndCapacity(t *testing.T) {
 	}
 }
 
+func TestValidateCompetitionEventDocument(t *testing.T) {
+	events := Events{Location: time.UTC, Now: func() time.Time { return time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC) }}
+	request := httptest.NewRequest(http.MethodPost, "/admin/events", strings.NewReader("title=Prova+regional&event_type=COMPETITION&starts_at=2026-08-06T10%3A00&ends_at=2026-08-06T12%3A00&document_title=Caderno&document_url=https%3A%2F%2Fexample.test%2Fcaderno.pdf&document_source=FPC&document_reviewed_on=2026-08-05"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form := events.validateEvent(request)
+	if !form.Errors.Empty() || form.EventType != "COMPETITION" || form.DocumentTitle != "Caderno" {
+		t.Fatalf("form = %+v", form)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/admin/events", strings.NewReader("title=Convivio&event_type=GENERAL&starts_at=2026-08-06T10%3A00&ends_at=2026-08-06T12%3A00&document_title=Caderno"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_ = request.ParseForm()
+	form = events.validateEvent(request)
+	if form.Errors["document"] == "" {
+		t.Fatal("general event accepted a competition document")
+	}
+}
+
 func TestCanAuthorEventRespectsCoachScope(t *testing.T) {
 	programmeID, otherProgrammeID, teamID, otherTeamID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	user := CurrentUser{CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}, CoachTeamIDs: map[uuid.UUID]bool{teamID: true}}

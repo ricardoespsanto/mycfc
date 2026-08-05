@@ -1,10 +1,13 @@
 package components
 
-type RepairEquipment struct { ID, Label string }
+import "fmt"
+
+type RepairEquipment struct { ID, Label string; OpenRepairs int }
 
 type RepairFormData struct {
 	CSRFField      templ.Component
 	IdempotencyKey string
+	ReturnTo       string
 	Equipment      []RepairEquipment
 	EquipmentID    string
 	Description    string
@@ -13,8 +16,8 @@ type RepairFormData struct {
 }
 
 templ RepairForm(form RepairFormData) {
-	<details id="repair-form" class="module disclosure" open?={ len(form.Errors) > 0 || form.Success != "" }>
-		<summary><span><strong>Reportar avaria</strong><small>Comunique um problema num equipamento do clube.</small></span></summary>
+	<details id="repair-form" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="repair-form-title">
+		<summary><span><strong id="repair-form-title">Reportar avaria</strong><small>Comunique um problema num equipamento do clube.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
 		<div class="disclosure__content">
 		if form.Success != "" {
 			@StatusMessage(form.Success, "success")
@@ -24,12 +27,15 @@ templ RepairForm(form RepairFormData) {
 		<form class="form-layout" method="post" action="/repairs" enctype="multipart/form-data" hx-post="/repairs" hx-target="#repair-form" hx-swap="outerHTML" hx-target-422="#repair-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+			if form.ReturnTo != "" {
+				<input type="hidden" name="return_to" value={ form.ReturnTo }/>
+			}
 			@RequiredNote()
 			<div class="form-field">@FieldLabel("equipment_id", "Equipamento", true)<select id="equipment_id" name="equipment_id" required aria-invalid?={ form.Errors["equipment_id"] != "" } aria-describedby="equipment-help equipment_id-error"><option value="">Selecione</option>
 				for _, equipment := range form.Equipment {
-					<option value={ equipment.ID } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
+					<option value={ equipment.ID } data-open-repairs={ fmt.Sprint(equipment.OpenRepairs) } selected?={ form.EquipmentID == equipment.ID }>{ equipment.Label }</option>
 				}
-			</select>@FieldHelp("equipment-help", "Selecione o equipamento onde detetou o problema.")@FieldErrorMessage("equipment_id", form.Errors["equipment_id"])</div>
+			</select>@FieldHelp("equipment-help", "Selecione o equipamento onde detetou o problema.")<p class="field-help" data-repair-duplicate-warning hidden></p>@FieldErrorMessage("equipment_id", form.Errors["equipment_id"])</div>
 			<div class="form-field">@FieldLabel("issue_description", "Descrição da avaria", true)<textarea id="issue_description" name="issue_description" required minlength="10" maxlength="2000" aria-invalid?={ form.Errors["issue_description"] != "" } aria-describedby="issue-description-help issue_description-error">{ form.Description }</textarea>@FieldHelp("issue-description-help", "Indique onde está o problema e o que observou.")@FieldErrorMessage("issue_description", form.Errors["issue_description"])</div>
 			<div class="form-field">@FieldLabel("photo", "Fotografia (opcional)", false)<input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" aria-invalid?={ form.Errors["photo"] != "" } aria-describedby="photo-help photo-error"/>@FieldHelp("photo-help", "JPEG, PNG ou WebP; o ficheiro não é reposto após erro.")@FieldErrorMessage("photo", form.Errors["photo"])</div>
 			@FormActions("") { <button type="submit">Reportar avaria</button> }

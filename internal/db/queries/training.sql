@@ -110,17 +110,23 @@ LEFT JOIN events e ON e.id = d.event_id
 LEFT JOIN modalities mo ON mo.id = d.modality_id
 WHERE (
     d.event_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM user_memberships m
-        WHERE m.user_id = sqlc.arg(user_id) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id
+        WHERE (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id)) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND (NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id)
                OR EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id AND a.programme_id = m.programme_id)
                OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = d.event_id AND a.team_id = m.team_id))
     )
 ) OR (
     d.modality_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM user_memberships m JOIN membership_modalities mm ON mm.membership_id = m.id
-        WHERE m.user_id = sqlc.arg(user_id) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id JOIN membership_modalities mm ON mm.membership_id = m.id
+        WHERE (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id)) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND mm.modality_id = d.modality_id AND (d.programme_id IS NULL OR d.programme_id = m.programme_id) AND (d.team_id IS NULL OR d.team_id = m.team_id)
     )
 )
 ORDER BY d.published_at DESC, d.id DESC LIMIT sqlc.arg(row_limit);
+
+-- name: ListCompetitionDocumentsForEvent :many
+SELECT id, title, url, source, reviewed_on, published_at
+FROM competition_documents
+WHERE event_id = sqlc.arg(event_id)
+ORDER BY published_at DESC, id DESC;

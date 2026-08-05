@@ -225,6 +225,19 @@ func TestCreateRepairRequestEnforcesIdempotencyKeyDuringConcurrentRetries(t *tes
 	if repair.EquipmentID != equipmentID || repair.ReportedByID == nil || *repair.ReportedByID != userID || repair.IssueDescription != input.IssueDescription {
 		t.Fatalf("persisted repair = %#v", repair)
 	}
+	visible, err := queries.ListRepairRequestsForMembers(ctx, dbgen.ListRepairRequestsForMembersParams{UserID: userID, ResolvedSince: pgtype.Timestamptz{Time: time.Now().AddDate(0, 0, -30), Valid: true}, RowLimit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range visible {
+		if item.ID == repair.ID {
+			found = item.ReportedByUser && item.EquipmentID == equipmentID && item.Status == "Pendente"
+		}
+	}
+	if !found {
+		t.Fatalf("member repair was not visible as the user's own report: %#v", visible)
+	}
 }
 
 func TestMembershipsResolveActiveSportStructureAndRejectMismatches(t *testing.T) {
@@ -382,7 +395,7 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 		t.Fatal(err)
 	}
 	create := func(title string, hour time.Duration) dbgen.Event {
-		event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{Title: title, StartsAt: pgtype.Timestamptz{Time: today.Add(hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: today.Add(hour + time.Hour), Valid: true}, CreatedByID: authorID})
+		event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{Title: title, EventType: "GENERAL", StartsAt: pgtype.Timestamptz{Time: today.Add(hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: today.Add(hour + time.Hour), Valid: true}, CreatedByID: authorID})
 		if err != nil {
 			t.Fatal(err)
 		}

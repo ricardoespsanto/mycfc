@@ -62,13 +62,13 @@ templ newsContent(page NewsPage) {
 						<div class="record-item__copy"><h3>{ item.Title }</h3><p class="record-meta">{ item.PublishedAt }</p></div>
 						if item.Published {
 							@components.Badge("Publicada", "success")
-							<details class="inline-disclosure"><summary>Ações</summary><form method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField
-<button class="action action--secondary" type="submit">Expirar</button></form></details>
+							<div class="record-item__actions"><form method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField
+<button class="action action--secondary" type="submit">Expirar</button></form></div>
 						}
 						if !item.Published {
 							@components.Badge("Rascunho", "warning")
-							<details class="inline-disclosure"><summary>Ações</summary><form method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField
-<button class="action action--secondary" type="submit">Publicar</button></form></details>
+							<div class="record-item__actions"><form method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField
+<button class="action action--secondary" type="submit">Publicar</button></form></div>
 						}
 					</li>
 				}

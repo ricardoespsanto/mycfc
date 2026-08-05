@@ -119,8 +119,44 @@ document.addEventListener("keydown", (event) => {
 const initialCreatePanel = window.location.hash ? document.querySelector(window.location.hash) : null;
 if (initialCreatePanel?.matches?.("[data-create-panel]")) openCreatePanel(initialCreatePanel, null);
 
+for (const typeSelect of document.querySelectorAll("[data-event-type]")) {
+  const form = typeSelect.closest("form");
+  const documentFields = form?.querySelector("[data-competition-document]");
+  if (!(documentFields instanceof HTMLDetailsElement)) continue;
+  const syncCompetitionFields = () => {
+    const competition = typeSelect.value === "COMPETITION";
+    documentFields.hidden = !competition;
+    if (!competition) documentFields.open = false;
+  };
+  typeSelect.addEventListener("change", syncCompetitionFields);
+  syncCompetitionFields();
+}
+
+const initRepairDuplicateWarnings = (root = document) => {
+  for (const select of root.querySelectorAll?.("select[name='equipment_id']") || []) {
+    if (select.dataset.duplicateWarningReady === "true") continue;
+    const warning = select.parentElement?.querySelector("[data-repair-duplicate-warning]");
+    if (!(warning instanceof HTMLElement)) continue;
+    const syncWarning = () => {
+      const count = Number(select.selectedOptions[0]?.dataset.openRepairs || 0);
+      warning.hidden = count === 0;
+      warning.textContent = count === 1
+        ? "Já existe uma avaria aberta para este equipamento. Confirme se é o mesmo problema antes de continuar."
+        : count > 1
+          ? `Já existem ${count} avarias abertas para este equipamento. Confirme se o problema já foi reportado.`
+          : "";
+    };
+    select.dataset.duplicateWarningReady = "true";
+    select.addEventListener("change", syncWarning);
+    syncWarning();
+  }
+};
+
+initRepairDuplicateWarnings();
+
 document.addEventListener("htmx:afterSwap", (event) => {
-  focusReturnedFeedback(event.detail?.target || document);
+	focusReturnedFeedback(event.detail?.target || document);
+	initRepairDuplicateWarnings(event.detail?.target || document);
 });
 
 document.addEventListener("submit", (event) => {

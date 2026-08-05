@@ -12,7 +12,6 @@ type DashboardPage struct {
 	Calendars []CalendarLink
 	Sections []DashboardSection
 	Actions []components.PageAction
-	RepairForm components.RepairFormData
 }
 
 type CalendarLink struct {
@@ -29,7 +28,6 @@ templ Dashboard(page DashboardPage) {
 
 templ dashboardContent(page DashboardPage) {
 	@components.PageHeader("O meu programa", page.Heading, page.Intro, page.Actions)
-	@components.RepairForm(page.RepairForm)
 	for _, section := range page.Sections {
 		<section class="module">
 			@components.SectionHeading("Visão geral", section.Heading, dashboardSectionSummary(section.Heading))

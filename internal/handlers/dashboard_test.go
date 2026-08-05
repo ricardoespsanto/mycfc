@@ -30,11 +30,11 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		user    CurrentUser
 		handler http.HandlerFunc
 	}{
-		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos"}, []string{"Menores a cargo", "Os meus espaços", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
-		{"tutor", []string{"Membro", "Menores a cargo", "Hoje"}, []string{"Competição", "Treinador", "Moderador", "Frota"}, CurrentUser{}, dashboard.Guardian},
-		{"competition athlete", []string{"Competição"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador", "Frota"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
+		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos", "Frota"}, []string{"Menores a cargo", "Os meus espaços", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
+		{"tutor", []string{"Membro", "Menores a cargo", "Hoje", "Frota"}, []string{"Competição", "Treinador", "Moderador"}, CurrentUser{}, dashboard.Guardian},
+		{"competition athlete", []string{"Competição", "Frota"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
 		{"multiple memberships", []string{"Lazer", "Iniciação", "Competição", "Kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
-		{"active staff grants", []string{"Treinador", "Moderador"}, []string{"Frota"}, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
+		{"active staff grants", []string{"Treinador", "Moderador", "Frota"}, nil, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
 		{"admin", []string{"Frota", "Sistema"}, []string{"Treinador", "Moderador", "Componentes"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -497,7 +497,7 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Admin, uuid.New())
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet"`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
