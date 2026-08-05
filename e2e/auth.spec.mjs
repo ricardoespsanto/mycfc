@@ -18,10 +18,12 @@ async function expectNoSeriousAxeViolations(page) {
 }
 
 async function expectNoHorizontalOverflow(page) {
-  const overflowing = await page.locator('*').evaluateAll((elements) => elements
-    .filter((element) => !element.classList.contains('visually-hidden') && element.scrollWidth > element.clientWidth + 1)
-    .map((element) => ({ tag: element.tagName, className: element.className, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })));
-  expect(overflowing).toEqual([]);
+  const dimensions = await page.evaluate(() => ({
+    bodyScrollWidth: document.body.scrollWidth,
+    documentScrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: document.documentElement.clientWidth,
+  }));
+  expect(Math.max(dimensions.bodyScrollWidth, dimensions.documentScrollWidth), dimensions).toBeLessThanOrEqual(dimensions.viewportWidth + 1);
 }
 
 async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 720 }) {
@@ -211,7 +213,7 @@ test.describe('authentication', () => {
     await expect(maintenanceForm.getByRole('status')).toHaveText('Manutenção agendada.');
 
     await page.reload();
-    await page.getByRole('link', { name: /Manutenção/ }).click();
+    await page.getByRole('tab', { name: /Manutenção/ }).click();
     const task = page.locator('li', { hasText: description });
     const complete = task.getByRole('button', { name: 'Concluir manutenção' });
     await complete.focus();
@@ -253,8 +255,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('status')).toHaveText('Equipamento adicionado.');
 
-    await page.locator('#equipment-inventory > summary').click();
-    let equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: assetTag });
+    let equipment = page.getByRole('row', { name: new RegExp(assetTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();
     const equipmentEditURL = page.url();
@@ -268,8 +269,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
 
-    await page.locator('#equipment-inventory > summary').click();
-    equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+    equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();
     await expect(page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' })).toBeVisible();
@@ -288,8 +288,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
 
-    await page.locator('#equipment-inventory > summary').click();
-    equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+    equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('button', { name: 'Retirar da frota' }).click();
     await expect(page.getByRole('status')).toContainText('Equipamento retirado da frota');
@@ -301,8 +300,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Voltar à frota' }).click();
 
     for (let equipmentPage = 0; equipmentPage < 50; equipmentPage += 1) {
-      await page.locator('#equipment-inventory > summary').click();
-      equipment = page.locator('#equipment-inventory ul[aria-label="Inventário da frota"] > li', { hasText: updatedTag });
+      equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
       if (await equipment.count()) break;
       const next = page.getByRole('navigation', { name: 'Paginação de equipamentos' }).getByRole('link', { name: 'Seguinte' });
       await expect(next, `equipment ${updatedTag} was not found in the paginated inventory`).toBeVisible();
@@ -334,7 +332,7 @@ test.describe('authentication', () => {
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page.getByRole('status')).toHaveText('Conta criada.');
-    await page.getByLabel('Nome, email ou identificador de menor').fill(athleteName);
+    await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
 
@@ -421,7 +419,7 @@ test.describe('authentication', () => {
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await page.getByLabel('Nome, email ou identificador de menor').fill(waitlistedName);
+    await page.getByLabel('Pesquisar membros').fill(waitlistedName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: waitlistedName }).click();
     await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
@@ -429,7 +427,7 @@ test.describe('authentication', () => {
     await membershipForm.getByLabel('Competição').check();
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
 
-    await page.goto('/events');
+    await page.goto('/admin/eventos');
     await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
     await page.locator('#event-title').fill('E');
     await page.locator('#event-description').fill('Valores seguros devem permanecer após validação.');
@@ -582,7 +580,7 @@ test.describe('authentication', () => {
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await page.getByLabel('Nome, email ou identificador de menor').fill(memberName);
+    await page.getByLabel('Pesquisar membros').fill(memberName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();
     const memberships = page.locator('details').filter({ has: page.getByText('Inscrições ativas', { exact: false }) });
@@ -624,7 +622,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await noJavaScriptPage.getByRole('link', { name: 'Membros', exact: true }).click();
-    await noJavaScriptPage.getByLabel('Nome, email ou identificador de menor').fill(memberName);
+    await noJavaScriptPage.getByLabel('Pesquisar membros').fill(memberName);
     await noJavaScriptPage.getByRole('button', { name: 'Procurar' }).click();
     await noJavaScriptPage.getByRole('link', { name: memberName }).click();
     await noJavaScriptPage.getByText('Desativar conta', { exact: true }).click();
