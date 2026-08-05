@@ -425,7 +425,7 @@ test.describe('authentication', () => {
     await expect(leaderboard).toContainText('12,34 km');
     await page.getByLabel('Mostrar os meus quilómetros na classificação').uncheck();
     await page.getByRole('button', { name: 'Guardar privacidade' }).click();
-    await expect(page.getByRole('status')).toHaveText('Privacidade da classificação atualizada.');
+    await expect(page.getByText('Privacidade da classificação atualizada.', { exact: true })).toBeVisible();
     await expect(leaderboard).toContainText('Os seus totais estão privados');
     await expect(leaderboard).not.toContainText(athleteName);
   });
