@@ -288,6 +288,8 @@ button:hover {
 body:not(.public-body) { color: var(--c-text); background: var(--c-page); font-family: var(--font-sans); line-height: var(--leading-body); }
 body:not(.public-body) main { width: min(78rem, calc(100% - 2rem)); }
 body:not(.public-body) :focus-visible { outline: .2rem solid var(--c-focus); outline-offset: .2rem; }
+:where(body:not(.public-body) main a) { color: var(--c-river-700); text-decoration-color: #70a9a5; text-decoration-thickness: .08em; text-underline-offset: .2em; }
+:where(body:not(.public-body) main a:hover) { color: var(--c-brand-950); text-decoration-color: currentColor; }
 .visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .page-header { display: flex; justify-content: space-between; align-items: end; gap: var(--space-6); margin-block-end: 0; padding-block-end: var(--space-4); border-block-end: 1px solid var(--c-border); }
 .page-header__copy { max-inline-size: 52rem; }

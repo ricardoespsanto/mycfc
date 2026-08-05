@@ -104,6 +104,9 @@ func TestDashboardTodayOmitsNextEventSectionWhenDayIsEmpty(t *testing.T) {
 	dashboard := Dashboard{Store: &dashboardStoreFake{}, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Today, uuid.New())
 	body := response.Body.String()
+	if !strings.Contains(body, `class="action action--quiet" href="/events">Ver agenda</a>`) {
+		t.Errorf("empty Today page does not render the styled agenda action: %q", body)
+	}
 	for _, unwanted := range []string{"A seguir", "Dia tranquilo", "Sem atividades pendentes para hoje."} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("empty Today page unexpectedly contains %q", unwanted)
