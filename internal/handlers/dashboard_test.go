@@ -100,6 +100,17 @@ func TestDashboardTodayRendersVisibleEventsAndLocalDayBounds(t *testing.T) {
 	}
 }
 
+func TestDashboardTodayOmitsNextEventSectionWhenDayIsEmpty(t *testing.T) {
+	dashboard := Dashboard{Store: &dashboardStoreFake{}, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	response := dashboardResponse(t, dashboard.Today, uuid.New())
+	body := response.Body.String()
+	for _, unwanted := range []string{"A seguir", "Dia tranquilo", "Sem atividades pendentes para hoje."} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("empty Today page unexpectedly contains %q", unwanted)
+		}
+	}
+}
+
 func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
 	dependentLogin := "CFC-1234"

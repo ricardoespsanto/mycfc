@@ -26,11 +26,9 @@ type TodayPage struct {
 templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
 
 templ todayContent(page TodayPage) {
-	<section class="today-hero"><div><h1>Olá, { firstName(page.Name) }</h1><p>O que merece a sua atenção agora, reunido num só lugar.</p></div>
+	<section class={ todayHeroClass(page) }><div><h1>Olá, { firstName(page.Name) }</h1><p>O que merece a sua atenção agora, reunido num só lugar.</p></div>
 		if page.NextEvent != nil {
 			<a class="today-next" href={ todayEventPath(page, page.NextEvent.ID) }><span>A seguir</span><strong>{ page.NextEvent.Title }</strong><small>{ page.NextEvent.When }</small></a>
-		} else {
-			<div class="today-next today-next--empty"><span>A seguir</span><strong>Dia tranquilo</strong><small>Sem atividades pendentes para hoje.</small></div>
 		}
 		</section>
 		@components.StatusMessage(page.Success, "success")
@@ -104,6 +102,8 @@ templ todayContent(page TodayPage) {
 }
 
 func firstName(name string) string { for i, r := range name { if r == ' ' { return name[:i] } }; return name }
+
+func todayHeroClass(page TodayPage) string { if page.NextEvent != nil { return "today-hero today-hero--has-next" }; return "today-hero" }
 
 func todayEventsPath(page TodayPage) string { if page.EventBasePath != "" { return page.EventBasePath }; return "/events" }
 func todayEventPath(page TodayPage, id string) string { return todayEventsPath(page) + "/" + id }
