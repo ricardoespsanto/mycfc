@@ -33,7 +33,7 @@ templ todayContent(page TodayPage) {
 		</section>
 		@components.StatusMessage(page.Success, "success")
 		<div class="today-grid">
-	<section class="today-module today-module--agenda"><header><div><h2>Agenda de hoje</h2></div><a href={ todayEventsPath(page) }>Ver agenda</a></header>
+	<section class="today-module today-module--agenda"><header><div><h2>Agenda de hoje</h2></div><a class="action action--quiet" href={ todayEventsPath(page) }>Ver agenda</a></header>
 		if len(page.Events) == 0 {
 			<p class="today-empty">Não existem eventos para hoje. Consulte a agenda para preparar os próximos dias.</p>
 		}
