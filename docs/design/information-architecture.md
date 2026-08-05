@@ -15,7 +15,8 @@ staff personas do not yet exist; issue #62 owns those fixtures.
 The live walkthrough confirmed that:
 
 - Today is the post-login destination but is represented only by the MyCFC logo.
-- Events, Treinos and Avisos are always-visible task destinations.
+- Events, Treinos and Avisos were originally always-visible task destinations;
+  on 5 August 2026 reader-facing Avisos moved to the global bell.
 - every non-dependent adult receives the Tutor workspace, including athletes;
   programme and staff capabilities are additive rather than exclusive roles.
 - the administrator sees Membros, Notícias and Frota in both the main navigation
@@ -56,9 +57,10 @@ adult account, not an exclusive persisted role.
 | `POST /admin/events` | Administrator or coach | Create an event in `/events` within authorized scope | Keep route and contextual authoring |
 | `POST /admin/events/{id}/confirm` | Administrator or coach | Confirm a waitlisted participant from event detail | Keep as event child action |
 | `POST /admin/events/{id}/check-in` | Administrator or coach | Record attendance from event detail | Keep as event child action |
-| `GET /announcements` | Authenticated | Browse visible notices; conditionally author; Avisos | Keep canonical top-level task |
-| `GET /announcements/{id}` | Authenticated and announcement-visible | Read a notice or official document | Keep as Avisos detail; parent stays selected |
-| `POST /admin/announcements` | Administrator or coach | Create a scoped notice in `/announcements` | Keep route and contextual authoring |
+| `GET /announcements` | Authenticated | Browse visible notices | Keep as the no-JavaScript and bookmark fallback; omit from task navigation |
+| `GET /announcements/panel` | Authenticated | Load the unread count and six most recent visible notices | Global bell fragment; private and non-cacheable |
+| `GET /announcements/{id}` | Authenticated and announcement-visible | Read a notice or official document | Open from the bell and mark read on detail |
+| `POST /admin/announcements` | Administrator or coach | Create a scoped notice in `/admin/avisos` | Keep route and dedicated authoring workspace |
 | `POST /admin/announcements/{id}/publish` | Administrator or coach | Publish an authored notice | Keep as Avisos child action |
 | `POST /admin/announcements/{id}/expire` | Administrator or coach | Expire an authored notice | Keep as Avisos child action |
 | `GET /treinos` | Authenticated | View assigned sessions/documents; conditionally manage training | Keep canonical top-level task |
@@ -93,18 +95,19 @@ mode.
 
 ```text
 MyCFC
+├── Avisos                       global bell; `/announcements` without JavaScript
 ├── Hoje                         /today
 ├── Atividade
 │   ├── Eventos                  /events
-│   ├── Treinos                  /treinos
-│   └── Avisos                   /announcements
+│   └── Treinos                  /treinos
 ├── Os meus espaços             only when at least one item is available
 │   ├── Menores a cargo          /dashboard/guardian   (all adults)
 │   ├── Lazer                    /dashboard/leisure
 │   ├── Iniciação                /dashboard/initiation
 │   ├── Competição               /dashboard/competition
 │   └── Kayak polo               /dashboard/kayak-polo
-├── Administração               administrators only
+├── Administração               authorized staff only
+│   ├── Avisos                   /admin/avisos
 │   ├── Membros                  /admin/membros
 │   ├── Notícias                 /admin/noticias
 │   └── Frota                    /admin/fleet
@@ -118,8 +121,8 @@ MyCFC
 
 1. **Hoje is an explicit first-class item.** The brand may still link to it, but
    the logo is not its only affordance.
-2. **Atividade is available to every authenticated account.** Authoring controls
-   appear within Eventos, Treinos and Avisos only when the account is authorized.
+2. **Atividade is available to every authenticated account.** Avisos are consumed
+   through the global bell; authorized staff author them in Administração.
 3. **Os meus espaços is additive.** Use destination nouns—Lazer, Iniciação,
    Competição, Kayak polo and Menores a cargo—not labels that pretend the user
    has switched to one active role.
@@ -178,8 +181,8 @@ the signed-in identity and capabilities.
 
 - Top-level task and workspace pages do not need a breadcrumb merely repeating
   their heading.
-- Detail pages use a short breadcrumb whose first link is the owning collection:
-  `Eventos > {evento}`, `Avisos > {aviso}`, and
+- Detail pages use a short breadcrumb whose first link supplies useful return context:
+  `Eventos > {evento}`, `Hoje > {aviso}`, and
   `Administração > Membros > {membro}`.
 - “Administração” and “Os meus espaços” may be plain breadcrumb text until a real
   landing route exists; do not create non-functional links.
@@ -187,7 +190,7 @@ the signed-in identity and capabilities.
   It must not duplicate the global destinations. The current administration
   sub-navigation therefore retires when the new shell is implemented.
 - Parent selection rules are explicit:
-  `/events/{id}` → Eventos, `/announcements/{id}` → Avisos,
+  `/events/{id}` → Eventos, `/announcements/{id}` → no task-navigation selection,
   `/admin/membros/{id}` → Membros, and all action responses inherit the GET page
   they render or redirect to.
 - Page titles follow `{page} | MyCFC`; avoid generic “Painel de” and “Área de”
@@ -213,7 +216,9 @@ authorization on every target.
 | `/dashboard/coach` | Redirect to `/events` | Current page is only a pointer to the implemented event-management task; Treinos remains directly available |
 | `/dashboard/moderator` | Keep temporarily but remove from primary navigation | No moderation task exists yet; redirect target is deferred rather than invented |
 | `/events` and `/events/{id}` | Keep canonical | Shared attendee and staff task family |
-| `/announcements` and `/announcements/{id}` | Keep canonical | Shared reader and author task family |
+| `/announcements` | Keep as fallback, remove from navigation | Bell is the primary reader surface; the route preserves no-JavaScript access and bookmarks |
+| `/announcements/{id}` | Keep canonical | Stable notice and official-document detail route |
+| `/admin/avisos` | Keep canonical | Dedicated administrator/coach authoring workspace |
 | `/treinos` | Keep canonical | Shared athlete and staff task family |
 | `/admin/membros` and `/admin/membros/{id}` | Keep canonical | Administration member family |
 | `/admin/noticias` | Keep canonical | Administration news family |
@@ -239,8 +244,8 @@ authorization on every target.
 ### Decisions
 
 - Today is the explicit authenticated home.
-- Task/content navigation owns Eventos, Treinos and Avisos for both consumption
-  and authorized management.
+- Task/content navigation owns Eventos and Treinos. The global bell owns notice
+  consumption, while Administração owns authorized Avisos management.
 - Programme and tutor destinations sit under Os meus espaços and accumulate.
 - Staff and administrator grants are presented as capabilities, never an
   exclusive active role.

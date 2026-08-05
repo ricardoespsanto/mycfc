@@ -39,7 +39,6 @@ type DashboardStore interface {
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
 	ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error)
-	ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error)
 	ListDistanceLeaderboard(context.Context, dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error)
 	UpdateOwnLeaderboardVisibility(context.Context, dbgen.UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateDependentLeaderboardVisibility(context.Context, dbgen.UpdateDependentLeaderboardVisibilityParams) (int64, error)
@@ -178,11 +177,6 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	if len(events) > 4 {
 		events = events[:4]
 	}
-	announcements, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: 3})
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
 	leaders, err := h.Store.ListDistanceLeaderboard(ctx, dbgen.ListDistanceLeaderboardParams{
 		CurrentUserID: user.ID,
 		ActiveOn:      pgtype.Date{Time: dayStartsAt, Valid: true},
@@ -215,9 +209,6 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		if page.NextEvent == nil && event.EndsAt.Time.After(now) {
 			page.NextEvent = &page.Events[i]
 		}
-	}
-	for _, item := range announcements {
-		page.Announcements = append(page.Announcements, pages.TodayAnnouncement{ID: item.ID.String(), Title: item.Title, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01"), Unread: !item.ReadAt.Valid})
 	}
 	if !user.IsDependent {
 		dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 3})
@@ -359,7 +350,7 @@ func todayRepairStatus(status string) string {
 }
 
 func todayShortcuts(user CurrentUser) []pages.TodayShortcut {
-	items := []pages.TodayShortcut{{Label: "Eventos", Detail: "Agenda e respostas", Path: "/events"}, {Label: "Treinos", Detail: "Planos e sessões", Path: "/treinos"}, {Label: "Avisos", Detail: "Comunicações do clube", Path: "/announcements"}}
+	items := []pages.TodayShortcut{{Label: "Eventos", Detail: "Agenda e respostas", Path: "/events"}, {Label: "Treinos", Detail: "Planos e sessões", Path: "/treinos"}}
 	for _, group := range dashboardNavigation(user) {
 		if group.Label == "Os meus espaços" && len(group.Items) > 0 {
 			for _, item := range group.Items {
@@ -839,7 +830,7 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 
 func dashboardPageActions(path string) []components.PageAction {
 	if path == "/dashboard/leisure" {
-		return []components.PageAction{{Label: "Ver eventos", Href: "/events", Variant: "primary"}, {Label: "Ler avisos", Href: "/announcements", Variant: "secondary"}}
+		return []components.PageAction{{Label: "Ver eventos", Href: "/events", Variant: "primary"}}
 	}
 	if path == "/dashboard/member" || path == "/dashboard/coach" || path == "/dashboard/moderator" {
 		return nil
@@ -965,7 +956,7 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 // additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	today := []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
-	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}}
 	if !user.IsAdmin {
 		activity = append(activity, components.NavigationItem{Label: "Frota", Path: "/fleet"})
 	}

@@ -70,7 +70,7 @@ authorized. Every adult also has the tutor capability under the current rules.
 | `/today` | Hoje | Review today's relevant activity | V | V | V | V | V | V |
 | `/events`, `/events/{id}` | Atividade → Eventos | Browse/respond; staff manage scoped events | V | V | V | M | M | M |
 | `/treinos` | Atividade → Treinos | Athlete records work; staff author plans/sessions/docs | V | V | V | M | M | M |
-| `/announcements`, `/announcements/{id}` | Atividade → Avisos | Read notices; authorized staff author | V | V | V | M | M | M |
+| `/announcements`, `/announcements/{id}` | Global Avisos bell; collection is fallback | Read notices; authoring remains under `/admin/avisos` | V | V | V | V | V | V |
 | `/dashboard/guardian` | Os meus espaços → Menores a cargo | View and add dependants | V | V | V | V | V | V |
 | `/dashboard/leisure` | Os meus espaços → Lazer | Leisure news, groups and calendars | — | — | — | — | — | V |
 | `/dashboard/initiation` | Os meus espaços → Iniciação | Programme training/performance workspace | — | — | — | — | — | — |
@@ -90,7 +90,7 @@ redirect decisions remain normative in `docs/design/information-architecture.md`
 
 The harness captures representative current-state screens rather than every route:
 
-- member: Today, Eventos, Avisos;
+- member: Today, Eventos, and the Avisos bell/fallback;
 - tutor: Today, Menores a cargo;
 - athlete: Today, Competição, Treinos;
 - coach: Today, Eventos, Treinos;

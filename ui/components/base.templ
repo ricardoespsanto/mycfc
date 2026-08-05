@@ -102,7 +102,9 @@ templ Base(meta PageMeta, content templ.Component) {
 						}
 						<span>MyCFC</span>
 					</a>
-					<details class="mobile-app-menu"><summary>Menu</summary><div class="mobile-app-menu__content">
+					<div class="mobile-app-header__actions">
+						@announcementTrigger()
+						<details class="mobile-app-menu"><summary>Menu</summary><div class="mobile-app-menu__content">
 						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><span class="visually-hidden">Conta com responsabilidades cumulativas</span><div class="capability-list">
 							for _, label := range capabilityLabels(meta.Navigation) {
 								<span>{ label }</span>
@@ -115,18 +117,25 @@ templ Base(meta PageMeta, content templ.Component) {
 							}
 							<button class="logout-button" type="submit">Terminar sessão</button>
 						</form></div>
-					</div></details>
+						</div></details>
+					</div>
 				</header>
+				<section id="announcement-panel" class="announcement-panel" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title" data-announcement-panel hidden>
+					<p class="announcement-panel__loading" role="status">A carregar avisos…</p>
+				</section>
 				<div class="app-shell">
 					<aside class="app-rail" aria-label="Contexto e navegação MyCFC">
-						<a class="site-brand" href="/today">
-							if meta.BrandImageURL != "" {
-								<img src={ meta.BrandImageURL } alt=""/>
-							} else {
-								<span class="site-brand__mark" aria-hidden="true">≈</span>
-							}
-							<span>MyCFC</span>
-						</a>
+						<div class="app-rail__brand-row">
+							<a class="site-brand" href="/today">
+								if meta.BrandImageURL != "" {
+									<img src={ meta.BrandImageURL } alt=""/>
+								} else {
+									<span class="site-brand__mark" aria-hidden="true">≈</span>
+								}
+								<span>MyCFC</span>
+							</a>
+							@announcementTrigger()
+						</div>
 						@Navigation(meta.CurrentPath, meta.Navigation)
 						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><div class="capability-list">
 							for _, label := range capabilityLabels(meta.Navigation) {
@@ -162,6 +171,13 @@ templ Base(meta PageMeta, content templ.Component) {
 			}
 		</body>
 	</html>
+}
+
+templ announcementTrigger() {
+	<a class="announcement-trigger" href="/announcements" aria-label="Avisos" aria-controls="announcement-panel" aria-expanded="false" data-announcement-trigger>
+		<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+		<span class="announcement-trigger__count" data-announcement-badge hidden></span>
+	</a>
 }
 
 func capabilityLabels(groups []NavigationGroup) []string {

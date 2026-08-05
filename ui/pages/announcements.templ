@@ -1,6 +1,7 @@
 package pages
 
 import (
+    "fmt"
     "github.com/cfcoimbra/mycfc/internal/validation"
     "github.com/cfcoimbra/mycfc/ui/components"
 )
@@ -17,6 +18,34 @@ type AnnouncementForm struct {
 }
 type AnnouncementsPage struct { Meta components.PageMeta; Management, CanManage bool; VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL, Success string; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
 type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt, DocumentURL, DocumentSource, DocumentReviewedOn string }
+type AnnouncementPanelPage struct { UnreadCount int64; Items []AnnouncementItem }
+
+templ AnnouncementPanel(page AnnouncementPanelPage) {
+    <div class="announcement-panel__content" data-announcement-count={ fmt.Sprint(page.UnreadCount) }>
+        <header>
+            <div><span>Atividade</span><h2 id="announcement-panel-title">Avisos</h2></div>
+            <button type="button" data-announcement-close aria-label="Fechar avisos">Fechar</button>
+        </header>
+        if len(page.Items) == 0 {
+            <p class="announcement-panel__empty">Não há avisos ativos. As novas comunicações do clube aparecerão aqui.</p>
+        } else {
+            <ul class="announcement-panel__list">
+                for _, item := range page.Items {
+                    <li class={ templ.KV("announcement-panel__item--unread", item.Unread) }>
+                        <a href={ "/announcements/" + item.ID }>
+                            <strong>{ item.Title }</strong>
+                            <small>{ item.PublishedAt }
+                                if item.Unread {
+                                    <span>Por ler</span>
+                                }
+                            </small>
+                        </a>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+}
 
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
@@ -139,7 +168,7 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
 }
 templ AnnouncementDetail(page AnnouncementDetailPage) { @components.Base(page.Meta, announcementDetailContent(page)) }
 templ announcementDetailContent(page AnnouncementDetailPage) {
-    @components.PageHeader("Aviso · " + page.PublishedAt, page.Title, page.Body, []components.PageAction{{Label: "Voltar aos avisos", Href: "/announcements", Variant: "quiet"}})
+    @components.PageHeader("Aviso · " + page.PublishedAt, page.Title, page.Body, []components.PageAction{{Label: "Voltar ao início", Href: "/today", Variant: "quiet"}})
     if page.DocumentURL != "" {
         <section class="module">
             @components.SectionHeading("Referência", "Documento oficial", "Fonte: " + page.DocumentSource + " · Revisto em: " + page.DocumentReviewedOn) {

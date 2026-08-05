@@ -4,7 +4,6 @@ import "fmt"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type TodayEvent struct { ID, Title, When string }
-type TodayAnnouncement struct { ID, Title, PublishedAt string; Unread bool }
 type TodayDependent struct { Name string; HasAccess bool }
 type TodayOperation struct { Label, Detail string }
 type TodayShortcut struct { Label, Detail, Path string }
@@ -16,7 +15,6 @@ type TodayPage struct {
 	EventBasePath string
 	NextEvent *TodayEvent
 	Events []TodayEvent
-	Announcements []TodayAnnouncement
 	Dependents []TodayDependent
 	Operations []TodayOperation
 	Shortcuts []TodayShortcut
@@ -49,22 +47,6 @@ templ todayContent(page TodayPage) {
 			</ul>
 		}
 		</section>
-	<section class="today-module"><header><div><h2>Avisos recentes</h2></div><a href="/announcements">Ver todos</a></header>
-		if len(page.Announcements) == 0 {
-			<p class="today-empty">Não há avisos recentes. As novas comunicações do clube aparecerão aqui.</p>
-		}
-		if len(page.Announcements) > 0 {
-			<ul class="today-list">
-				for _, item := range page.Announcements {
-					<li><span>{ item.PublishedAt }</span><a href={ "/announcements/" + item.ID }>{ item.Title }</a>
-						if item.Unread {
-							<small class="today-unread">Novo</small>
-						}
-					</li>
-				}
-			</ul>
-		}
-	</section>
 		<section id="leaderboard" class="today-module today-module--leaderboard"><header><div><h2>Classificação do clube</h2></div></header>
 			<nav class="leaderboard-tabs" aria-label="Período da classificação">
 				@leaderboardTab("week", "Semana", page.Leaderboard.Period)

@@ -79,6 +79,9 @@ func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 			if item.Label == "Treinador" || item.Label == "Moderador" {
 				t.Errorf("staff capability exposed as destination: %+v", item)
 			}
+			if item.Path == "/announcements" {
+				t.Errorf("reader-facing announcements exposed as a navigation destination: %+v", item)
+			}
 		}
 	}
 }
@@ -105,8 +108,7 @@ func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 			{ID: uuid.New(), Title: "Treino da manhã", StartsAt: pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(2 * time.Hour), Valid: true}},
 			{ID: uuid.New(), Title: "Treino da tarde", StartsAt: pgtype.Timestamptz{Time: now.Add(5 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(6 * time.Hour), Valid: true}},
 		},
-		announcements: []dbgen.ListVisibleAnnouncementsRow{{ID: uuid.New(), Title: "Alteração de cais", PublishedAt: pgtype.Timestamptz{Time: now, Valid: true}}},
-		dependents:    []dbgen.ListDependentsByGuardianRow{{Name: "Rita Silva", MinorLoginID: &dependentLogin}},
+		dependents: []dbgen.ListDependentsByGuardianRow{{Name: "Rita Silva", MinorLoginID: &dependentLogin}},
 	}
 	dashboard := Dashboard{Store: store, Location: time.UTC, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	request := httptest.NewRequest(http.MethodGet, "/today", nil)
@@ -114,13 +116,13 @@ func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 	response := httptest.NewRecorder()
 	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
 	body := response.Body.String()
-	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Avisos recentes", "Alteração de cais", "Novo", "Rita Silva", "Acesso ativo", "Competição"} {
+	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Rita Silva", "Acesso ativo", "Competição"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Today does not contain %q", want)
 		}
 	}
-	if store.announcementParams.RowLimit != 3 {
-		t.Fatalf("announcement limit = %d", store.announcementParams.RowLimit)
+	if strings.Contains(body, "Avisos recentes") {
+		t.Error("Today still renders the former announcements list module")
 	}
 }
 
@@ -324,8 +326,6 @@ type dashboardStoreFake struct {
 	maintenanceParams         dbgen.ListUpcomingMaintenanceParams
 	todayEvents               []dbgen.ListEventsForTodayRow
 	todayParams               dbgen.ListEventsForTodayParams
-	announcements             []dbgen.ListVisibleAnnouncementsRow
-	announcementParams        dbgen.ListVisibleAnnouncementsParams
 	leaders                   []dbgen.ListDistanceLeaderboardRow
 	leaderboardParams         dbgen.ListDistanceLeaderboardParams
 	leaderboardErr            error
@@ -618,11 +618,6 @@ func (f *dashboardStoreFake) ListOperationalEquipment(_ context.Context, _ int32
 func (f *dashboardStoreFake) ListEventsForToday(_ context.Context, params dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {
 	f.todayParams = params
 	return f.todayEvents, nil
-}
-
-func (f *dashboardStoreFake) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
-	f.announcementParams = params
-	return f.announcements, nil
 }
 
 func (f *dashboardStoreFake) ListDistanceLeaderboard(_ context.Context, params dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error) {

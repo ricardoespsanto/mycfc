@@ -26,6 +26,7 @@ import (
 
 const announcementQueryTimeout = 5 * time.Second
 const announcementPageSize = 6
+const announcementPanelSize = 6
 
 // Delivery is recorded when an announcement appears in a recipient's list;
 // only opening its detail page marks it read.
@@ -39,6 +40,7 @@ type AnnouncementStore interface {
 	ListAnnouncementEvents(context.Context) ([]dbgen.ListAnnouncementEventsRow, error)
 	ListAnnouncementsForAuthor(context.Context, dbgen.ListAnnouncementsForAuthorParams) ([]dbgen.ListAnnouncementsForAuthorRow, error)
 	ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error)
+	CountUnreadVisibleAnnouncements(context.Context, uuid.UUID) (int64, error)
 	GetVisibleAnnouncement(context.Context, dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error)
 	GetAnnouncementAuthor(context.Context, uuid.UUID) (uuid.UUID, error)
 	CanCoachManageEvent(context.Context, dbgen.CanCoachManageEventParams) (bool, error)
@@ -67,6 +69,28 @@ type officialDocument struct{ URL, Source, ReviewedOn string }
 
 func (h Announcements) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, announcementForm{Targets: map[dbgen.AnnouncementTargetType][]uuid.UUID{}, Errors: validation.FieldErrors{}})
+}
+func (h Announcements) Panel(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
+	defer cancel()
+	unreadCount, err := h.Store.CountUnreadVisibleAnnouncements(ctx, user.ID)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	visible, err := h.Store.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: user.ID, RowLimit: announcementPanelSize})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.AnnouncementPanelPage{UnreadCount: unreadCount}
+	for _, item := range visible {
+		page.Items = append(page.Items, pages.AnnouncementItem{ID: item.ID.String(), Title: item.Title, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Unread: !item.ReadAt.Valid})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	_ = pages.AnnouncementPanel(page).Render(r.Context(), w)
 }
 func (h Announcements) Create(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -202,7 +226,7 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = item.Title
 	page.Meta.Title = item.Title + " | MyCFC"
-	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Avisos", Path: "/announcements"}}
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
 	if document != nil {
 		page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
 	}
