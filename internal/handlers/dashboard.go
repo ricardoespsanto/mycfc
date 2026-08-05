@@ -583,9 +583,11 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
 	page.EquipmentForm.CSRFField = page.Meta.CSRFField
+	page.RepairForm.CSRFField = page.Meta.CSRFField
 	if h.Sessions != nil {
 		page.MaintenanceForm.Success = h.Sessions.PopString(r.Context(), "fleet_flash")
 		page.Success = h.Sessions.PopString(r.Context(), "equipment_flash")
+		page.RepairForm.Success = h.Sessions.PopString(r.Context(), "repair_flash")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -666,6 +668,7 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 		return pages.FleetPage{}, err
 	}
 	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
+	page.RepairForm = components.RepairFormData{IdempotencyKey: uuid.NewString(), ReturnTo: "/admin/fleet", Equipment: repairChoices(nonRetired)}
 	return page, nil
 }
 
@@ -787,15 +790,6 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	choices := make([]components.RepairEquipment, len(equipment))
-	for i, item := range equipment {
-		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
-	}
 	view := DashboardVM{Meta: meta, Heading: heading, Intro: intro, EmptyText: emptyText, Calendars: calendars, Sections: sections}
 	links := make([]pages.CalendarLink, len(view.Calendars))
 	for i, calendar := range view.Calendars {
@@ -809,11 +803,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 		}
 		pageSections[i] = pages.DashboardSection{Heading: section.Heading, Empty: section.Empty, Items: items}
 	}
-	repairSuccess := ""
-	if h.Sessions != nil {
-		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
-	}
-	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, Actions: dashboardPageActions(path), RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess}}).Render(r.Context(), w)
+	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, Actions: dashboardPageActions(path)}).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
@@ -834,22 +824,9 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	if success == "" && h.Sessions != nil {
 		success = h.Sessions.PopString(r.Context(), "guardian_flash")
 	}
-	repairSuccess := ""
-	if h.Sessions != nil {
-		repairSuccess = h.Sessions.PopString(r.Context(), "repair_flash")
-	}
-	equipment, err := h.Store.ListOperationalEquipment(r.Context(), 500)
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	choices := make([]components.RepairEquipment, len(equipment))
-	for i, item := range equipment {
-		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
-	}
 	page := pages.GuardianPage{
 		Meta: meta, Dependents: pageItems,
-		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, Errors: form.Errors, Success: success, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: repairSuccess},
+		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, Errors: form.Errors, Success: success,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -989,6 +966,9 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	today := []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
 	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Avisos", Path: "/announcements"}}
+	if !user.IsAdmin {
+		activity = append(activity, components.NavigationItem{Label: "Frota", Path: "/fleet"})
+	}
 
 	var programme []components.NavigationItem
 	if !user.IsDependent {

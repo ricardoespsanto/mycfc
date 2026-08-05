@@ -102,8 +102,8 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Menores a cargo' }).click();
-    await expect(page).toHaveURL('/dashboard/guardian');
+    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+    await expect(page).toHaveURL('/fleet');
 
     await page.locator('#repair-form > summary').click();
     const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
@@ -111,18 +111,18 @@ test.describe('authentication', () => {
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'avaria.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Menores a cargo' }).click();
+    await expect(page).toHaveURL('/fleet');
     const success = page.getByText(/Avaria reportada\. Referência:/);
     await expect(success).toBeVisible();
+    await expect(page.getByText('Avaria de teste com fotografia.').first()).toBeVisible();
+    await expect(page.getByText('Reportada por si').first()).toBeVisible();
     const firstReference = await success.textContent();
 
     await page.locator('input[name="idempotency_key"]').evaluate((input, value) => { input.value = value; }, idempotencyKey);
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
     await page.getByRole('button', { name: 'Reportar avaria' }).click();
-    await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Menores a cargo' }).click();
+    await expect(page).toHaveURL('/fleet');
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
   });
@@ -149,6 +149,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
+    await noJavaScriptPage.locator('#adicionar-menor > summary').click();
 
     await noJavaScriptPage.getByLabel('Nome').fill('X');
     await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
@@ -349,14 +350,16 @@ test.describe('authentication', () => {
     const planTitle = `Plano classificação E2E ${Date.now()}`;
     const sessionTitle = `Sessão classificação E2E ${Date.now()}`;
     await page.goto('/admin/treinos');
-    await page.locator('summary').filter({ hasText: 'Criar plano' }).click();
+    await expect(page.getByRole('link', { name: 'Publicar documento de competição', exact: true })).toHaveCount(0);
+    await expect(page.locator('#criar-plano')).not.toHaveAttribute('open', '');
+    await page.getByRole('link', { name: 'Criar plano', exact: true }).click();
     const planForm = page.locator('form[action="/admin/treinos/planos"]');
     await planForm.getByLabel('Título').fill(planTitle);
     await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await planForm.getByRole('button', { name: 'Criar plano' }).click();
     await expect(page.getByRole('status')).toHaveText('Plano criado.');
 
-    await page.locator('summary').filter({ hasText: 'Criar sessão' }).click();
+    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
     const sessionForm = page.locator('form[action="/admin/treinos/sessoes"]');
     const sessionStart = new Date(Date.now() - 6 * 60 * 60 * 1000);
     const sessionEnd = new Date(Date.now() - 5 * 60 * 60 * 1000);
@@ -431,6 +434,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
     await page.locator('#event-title').fill('E');
     await page.locator('#event-description').fill('Valores seguros devem permanecer após validação.');
+    await page.locator('#event-type').selectOption('COMPETITION');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(futureEnd));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(futureStart));
     await page.getByText('Destinatários (opcional)', { exact: true }).click();
@@ -443,9 +447,15 @@ test.describe('authentication', () => {
 
     await page.locator('#event-title').fill(futureTitle);
     await page.locator('#event-description').fill('Evento de teste para confirmar lotação e lista de espera.');
+    await page.locator('#event-type').selectOption('COMPETITION');
     await page.locator('#event-starts-at').fill(asDateTimeLocal(futureStart));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(futureEnd));
     await page.locator('#event-capacity').fill('1');
+    await page.getByText('Documento de competição (opcional)', { exact: true }).click();
+    await page.locator('#event-document-title').fill('Caderno de prova E2E');
+    await page.locator('#event-document-url').fill('https://example.test/caderno-e2e.pdf');
+    await page.locator('#event-document-source').fill('Federação Portuguesa de Canoagem');
+    await page.locator('#event-document-reviewed-on').fill(new Date().toISOString().slice(0, 10));
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await expect(page.getByRole('status')).toHaveText('Evento criado.');
     await page.getByRole('link', { name: futureTitle }).click();
@@ -456,7 +466,9 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/events');
+    await expect(page.getByRole('heading', { name: 'Cadernos de prova e documentos oficiais' })).toBeVisible();
     await page.getByRole('link', { name: futureTitle }).click();
+    await expect(page.getByRole('link', { name: 'Caderno de prova E2E' })).toBeVisible();
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
     await expect(page.getByText('Estado: Vou')).toBeVisible();
 
@@ -597,7 +609,6 @@ test.describe('authentication', () => {
     await page.locator('#news-published-at').fill(publishedAt);
     await page.getByRole('button', { name: 'Guardar rascunho' }).click();
     const item = page.locator('li', { hasText: title });
-    await item.getByText('Ações', { exact: true }).click();
     await item.getByRole('button', { name: 'Publicar' }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
@@ -612,7 +623,6 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Notícias' }).click();
-    await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
 
     const context = await browser.newContext({ baseURL, javaScriptEnabled: false });

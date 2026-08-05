@@ -1,0 +1,63 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type FleetReportPage struct {
+	Meta       components.PageMeta
+	RepairForm components.RepairFormData
+	OpenRepairs []FleetRepairSummary
+	ResolvedRepairs []FleetRepairSummary
+}
+
+type FleetRepairSummary struct {
+	ID, EquipmentID, Equipment, Description, Status, ReportedAt, ResolvedAt string
+	ReportedByUser bool
+}
+
+templ FleetReport(page FleetReportPage) {
+	@components.Base(page.Meta, fleetReportContent(page))
+}
+
+templ fleetReportContent(page FleetReportPage) {
+	<div class="collection-page">
+		@components.PageHeader("Atividade", "Frota", "Consulte as avarias conhecidas e comunique novos problemas no equipamento do clube.", []components.PageAction{{Label: "Reportar avaria", Href: "#repair-form", Variant: "primary"}})
+		<section class="collection-view">
+			@components.SectionHeading("Em acompanhamento", "Avarias abertas", "Consulte os problemas já reportados antes de comunicar uma nova avaria.") {
+				<span class="collection-count">{ len(page.OpenRepairs) } abertas</span>
+			}
+			if len(page.OpenRepairs) == 0 {
+				@components.EmptyState("Sem avarias abertas", "Não existem problemas pendentes ou em análise.")
+			} else {
+				@fleetRepairSummaries(page.OpenRepairs, "Avarias abertas")
+			}
+		</section>
+		<section class="collection-view">
+			@components.SectionHeading("Últimos 30 dias", "Avarias resolvidas recentemente", "Problemas concluídos que podem ajudar a confirmar o estado do equipamento.")
+			if len(page.ResolvedRepairs) == 0 {
+				@components.EmptyState("Sem resoluções recentes", "As avarias resolvidas nos últimos 30 dias aparecem aqui.")
+			} else {
+				@fleetRepairSummaries(page.ResolvedRepairs, "Avarias resolvidas recentemente")
+			}
+		</section>
+		@components.RepairForm(page.RepairForm)
+	</div>
+}
+
+templ fleetRepairSummaries(repairs []FleetRepairSummary, label string) {
+	<ul class="record-list collection-list" aria-label={ label }>
+		for _, repair := range repairs {
+			<li class="record-item record-item--stacked" data-open-repair-equipment?={ repair.Status != "Resolvido" } data-equipment-id={ repair.EquipmentID }>
+				<div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">
+						if repair.ReportedByUser {
+							<strong>Reportada por si</strong> <span aria-hidden="true">·</span>
+						}
+						<span>Reportada em { repair.ReportedAt }</span>
+						if repair.ResolvedAt != "" {
+							<span aria-hidden="true">·</span> <span>Resolvida em { repair.ResolvedAt }</span>
+						}
+				</p></div>
+				@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))
+			</li>
+		}
+	</ul>
+}

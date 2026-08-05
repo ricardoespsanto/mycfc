@@ -19,8 +19,10 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const repairQueryTimeout = 5 * time.Second
@@ -31,6 +33,7 @@ type RepairStore interface {
 	GetEquipmentByID(context.Context, uuid.UUID) (dbgen.Equipment, error)
 	CreateRepairRequest(context.Context, dbgen.CreateRepairRequestParams) (dbgen.RepairRequest, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
+	ListRepairRequestsForMembers(context.Context, dbgen.ListRepairRequestsForMembersParams) ([]dbgen.ListRepairRequestsForMembersRow, error)
 }
 
 type Repair struct {
@@ -41,6 +44,60 @@ type Repair struct {
 	MaxPhotoBytes   int64
 	Location        *time.Location
 	Now             func() time.Time
+	PageMeta        components.PageMeta
+	System          System
+}
+
+func (h Repair) Index(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), repairQueryTimeout)
+	defer cancel()
+	equipment, err := h.Store.ListOperationalEquipment(ctx, 500)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	repairs, err := h.Store.ListRepairRequestsForMembers(ctx, dbgen.ListRepairRequestsForMembersParams{UserID: user.ID, ResolvedSince: pgtype.Timestamptz{Time: h.now().AddDate(0, 0, -30), Valid: true}, RowLimit: 100})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	openRepairs, resolvedRepairs, openCounts := h.memberRepairSummaries(repairs)
+	choices := repairChoices(equipment)
+	for i := range choices {
+		choices[i].OpenRepairs = openCounts[choices[i].ID]
+	}
+	meta := h.PageMeta
+	meta.Title = "Frota | MyCFC"
+	meta.CurrentPath = "/fleet"
+	meta.CurrentUserName = user.Name
+	meta.Navigation = dashboardNavigation(user)
+	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	success := ""
+	if h.Sessions != nil {
+		success = h.Sessions.PopString(r.Context(), "repair_flash")
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pages.FleetReport(pages.FleetReportPage{Meta: meta, OpenRepairs: openRepairs, ResolvedRepairs: resolvedRepairs, RepairForm: components.RepairFormData{CSRFField: meta.CSRFField, IdempotencyKey: uuid.NewString(), Equipment: choices, Success: success}}).Render(r.Context(), w)
+}
+
+func (h Repair) memberRepairSummaries(items []dbgen.ListRepairRequestsForMembersRow) ([]pages.FleetRepairSummary, []pages.FleetRepairSummary, map[string]int) {
+	open := make([]pages.FleetRepairSummary, 0, len(items))
+	resolved := make([]pages.FleetRepairSummary, 0, len(items))
+	counts := make(map[string]int)
+	for _, item := range items {
+		summary := pages.FleetRepairSummary{ID: item.ID.String(), EquipmentID: item.EquipmentID.String(), Equipment: item.AssetTag + " - " + item.EquipmentName, Description: item.IssueDescription, Status: item.Status, ReportedAt: item.DateReported.Time.In(h.location()).Format("02/01/2006"), ReportedByUser: item.ReportedByUser}
+		if item.Status == "Resolvido" {
+			if item.ResolvedAt.Valid {
+				summary.ResolvedAt = item.ResolvedAt.Time.In(h.location()).Format("02/01/2006")
+			}
+			resolved = append(resolved, summary)
+			continue
+		}
+		counts[summary.EquipmentID]++
+		open = append(open, summary)
+	}
+	return open, resolved, counts
 }
 
 func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +146,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	existing, err := h.Store.GetRepairByIdempotencyKey(ctx, key)
 	if err == nil {
-		h.existing(w, r, user, existing)
+		h.existing(w, r, user, existing, form.ReturnTo)
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -138,23 +195,23 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		if isUniqueViolation(err) {
 			existing, lookupErr := h.Store.GetRepairByIdempotencyKey(ctx, key)
 			if lookupErr == nil {
-				h.existing(w, r, user, existing)
+				h.existing(w, r, user, existing, form.ReturnTo)
 				return
 			}
 		}
 		h.internal(w, r, err)
 		return
 	}
-	h.success(w, r, repair)
+	h.success(w, r, repair, form.ReturnTo)
 }
 
 type repairForm struct {
-	IdempotencyKey, EquipmentID, Description string
-	Errors                                   map[string]string
+	IdempotencyKey, EquipmentID, Description, ReturnTo string
+	Errors                                             map[string]string
 }
 
 func repairRequestForm(form *multipart.Form) (repairForm, *multipart.FileHeader, error) {
-	allowed := map[string]bool{"idempotency_key": true, "equipment_id": true, "issue_description": true, "gorilla.csrf.Token": true, "photo": true}
+	allowed := map[string]bool{"idempotency_key": true, "equipment_id": true, "issue_description": true, "return_to": true, "gorilla.csrf.Token": true, "photo": true}
 	for field, values := range form.Value {
 		if !allowed[field] || len(values) != 1 {
 			return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
@@ -174,30 +231,37 @@ func repairRequestForm(form *multipart.Form) (repairForm, *multipart.FileHeader,
 	if _, ok := form.Value["issue_description"]; !ok {
 		return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
 	}
-	f := repairForm{IdempotencyKey: form.Value["idempotency_key"][0], EquipmentID: form.Value["equipment_id"][0], Description: form.Value["issue_description"][0], Errors: map[string]string{}}
+	returnTo := ""
+	if values := form.Value["return_to"]; len(values) == 1 && values[0] == "/admin/fleet" {
+		returnTo = values[0]
+	}
+	f := repairForm{IdempotencyKey: form.Value["idempotency_key"][0], EquipmentID: form.Value["equipment_id"][0], Description: form.Value["issue_description"][0], ReturnTo: returnTo, Errors: map[string]string{}}
 	if files := form.File["photo"]; len(files) == 1 && files[0].Filename != "" {
 		return f, files[0], nil
 	}
 	return f, nil, nil
 }
 
-func (h Repair) existing(w http.ResponseWriter, r *http.Request, user CurrentUser, repair dbgen.RepairRequest) {
+func (h Repair) existing(w http.ResponseWriter, r *http.Request, user CurrentUser, repair dbgen.RepairRequest, returnTo string) {
 	if repair.ReportedByID == nil || *repair.ReportedByID != user.ID {
 		slog.Warn("repair idempotency key belongs to another user", "request_id", httpx.RequestID(r.Context()))
 		h.error(w, r, http.StatusConflict, "Não foi possível concluir o pedido.")
 		return
 	}
-	h.success(w, r, repair)
+	h.success(w, r, repair, returnTo)
 }
-func (h Repair) success(w http.ResponseWriter, r *http.Request, repair dbgen.RepairRequest) {
+func (h Repair) success(w http.ResponseWriter, r *http.Request, repair dbgen.RepairRequest, returnTo string) {
 	if httpx.IsHTMX(r) {
-		h.renderForm(w, r, http.StatusOK, repairForm{IdempotencyKey: uuid.NewString()}, "Avaria reportada. Referência: "+repair.ID.String()[:8])
+		h.renderForm(w, r, http.StatusOK, repairForm{IdempotencyKey: uuid.NewString(), ReturnTo: returnTo}, "Avaria reportada. Referência: "+repair.ID.String()[:8])
 		return
 	}
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "repair_flash", "Avaria reportada. Referência: "+repair.ID.String()[:8])
 	}
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	if returnTo != "/admin/fleet" {
+		returnTo = "/fleet"
+	}
+	http.Redirect(w, r, returnTo, http.StatusSeeOther)
 }
 func (h Repair) validation(w http.ResponseWriter, r *http.Request, form repairForm) {
 	h.renderForm(w, r, http.StatusUnprocessableEntity, form, "")
@@ -208,13 +272,17 @@ func (h Repair) renderForm(w http.ResponseWriter, r *http.Request, status int, f
 		h.internal(w, r, err)
 		return
 	}
+	choices := repairChoices(equipment)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = components.RepairForm(components.RepairFormData{CSRFField: templ.Raw(string(csrf.TemplateField(r))), IdempotencyKey: form.IdempotencyKey, ReturnTo: form.ReturnTo, Equipment: choices, EquipmentID: form.EquipmentID, Description: form.Description, Errors: form.Errors, Success: success}).Render(r.Context(), w)
+}
+func repairChoices(equipment []dbgen.Equipment) []components.RepairEquipment {
 	choices := make([]components.RepairEquipment, len(equipment))
 	for i, item := range equipment {
 		choices[i] = components.RepairEquipment{ID: item.ID.String(), Label: item.AssetTag + " - " + item.Name}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = components.RepairForm(components.RepairFormData{CSRFField: templ.Raw(string(csrf.TemplateField(r))), IdempotencyKey: form.IdempotencyKey, Equipment: choices, EquipmentID: form.EquipmentID, Description: form.Description, Errors: form.Errors, Success: success}).Render(r.Context(), w)
+	return choices
 }
 func (h Repair) error(w http.ResponseWriter, _ *http.Request, status int, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

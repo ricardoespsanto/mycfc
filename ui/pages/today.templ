@@ -92,7 +92,7 @@ templ todayContent(page TodayPage) {
 			}
 		</section>
 	if len(page.Dependents) > 0 {
-		<section class="today-module"><header><div><h2>Menores a cargo</h2></div><a href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
+		<section class="today-module"><header><div><h2>Menores a cargo</h2></div><a class="action action--quiet" href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
 			for _, dependent := range page.Dependents {
 				<li><strong>{ dependent.Name }</strong>
 						if dependent.HasAccess {
@@ -105,7 +105,7 @@ templ todayContent(page TodayPage) {
 		</ul></section>
 	}
 	if len(page.Operations) > 0 {
-		<section class="today-module today-module--attention"><header><div><h2>Requer atenção</h2></div><a href="/admin/fleet">Abrir frota</a></header><ul class="today-list">
+		<section class="today-module today-module--attention"><header><div><h2>Requer atenção</h2></div><a class="action action--quiet" href="/admin/fleet">Abrir frota</a></header><ul class="today-list">
 			for _, item := range page.Operations {
 				<li><strong>{ item.Label }</strong><span>{ item.Detail }</span></li>
 			}

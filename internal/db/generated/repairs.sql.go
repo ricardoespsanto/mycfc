@@ -217,6 +217,79 @@ func (q *Queries) ListPendingRepairRequests(ctx context.Context, arg ListPending
 	return items, nil
 }
 
+const listRepairRequestsForMembers = `-- name: ListRepairRequestsForMembers :many
+SELECT
+    rr.id,
+    rr.equipment_id,
+    e.asset_tag,
+    e.name AS equipment_name,
+    rr.issue_description,
+    rr.status,
+    rr.date_reported,
+    rr.updated_at,
+    rr.resolved_at,
+    COALESCE(rr.reported_by_id = $1::uuid, false)::boolean AS reported_by_user
+FROM repair_requests rr
+JOIN equipment e ON e.id = rr.equipment_id
+WHERE rr.status IN ('Pendente', 'Em_Analise')
+   OR (rr.status = 'Resolvido' AND rr.resolved_at >= $2)
+ORDER BY
+    CASE WHEN rr.status = 'Resolvido' THEN 1 ELSE 0 END,
+    CASE WHEN rr.status = 'Resolvido' THEN rr.resolved_at ELSE rr.date_reported END DESC,
+    rr.id DESC
+LIMIT $3
+`
+
+type ListRepairRequestsForMembersParams struct {
+	UserID        uuid.UUID          `json:"user_id"`
+	ResolvedSince pgtype.Timestamptz `json:"resolved_since"`
+	RowLimit      int32              `json:"row_limit"`
+}
+
+type ListRepairRequestsForMembersRow struct {
+	ID               uuid.UUID          `json:"id"`
+	EquipmentID      uuid.UUID          `json:"equipment_id"`
+	AssetTag         string             `json:"asset_tag"`
+	EquipmentName    string             `json:"equipment_name"`
+	IssueDescription string             `json:"issue_description"`
+	Status           string             `json:"status"`
+	DateReported     pgtype.Timestamptz `json:"date_reported"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
+	ReportedByUser   bool               `json:"reported_by_user"`
+}
+
+func (q *Queries) ListRepairRequestsForMembers(ctx context.Context, arg ListRepairRequestsForMembersParams) ([]ListRepairRequestsForMembersRow, error) {
+	rows, err := q.db.Query(ctx, listRepairRequestsForMembers, arg.UserID, arg.ResolvedSince, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRepairRequestsForMembersRow{}
+	for rows.Next() {
+		var i ListRepairRequestsForMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EquipmentID,
+			&i.AssetTag,
+			&i.EquipmentName,
+			&i.IssueDescription,
+			&i.Status,
+			&i.DateReported,
+			&i.UpdatedAt,
+			&i.ResolvedAt,
+			&i.ReportedByUser,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateRepairStatus = `-- name: UpdateRepairStatus :one
 UPDATE repair_requests
 SET status = $1,

@@ -15,19 +15,47 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestRepairIndexRendersAuthenticatedFleetReportPage(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, AssetTag: "K-01", Name: "Kayak", Status: "Operational"}, memberRepairs: []dbgen.ListRepairRequestsForMembersRow{
+		{ID: uuid.New(), EquipmentID: equipmentID, AssetTag: "K-01", EquipmentName: "Kayak", IssueDescription: "Leme preso durante a utilização", Status: "Pendente", DateReported: pgtype.Timestamptz{Time: now, Valid: true}, ReportedByUser: true},
+		{ID: uuid.New(), EquipmentID: equipmentID, AssetTag: "K-01", EquipmentName: "Kayak", IssueDescription: "Banco reparado", Status: "Resolvido", DateReported: pgtype.Timestamptz{Time: now.AddDate(0, 0, -5), Valid: true}, ResolvedAt: pgtype.Timestamptz{Time: now.AddDate(0, 0, -2), Valid: true}},
+	}}
+	handler := Repair{Store: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	request := httptest.NewRequest(http.MethodGet, "/fleet", nil)
+	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Membro"})
+	response := httptest.NewRecorder()
+	handler.Index(response, request.WithContext(ctx))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Reportar avaria") || !strings.Contains(response.Body.String(), "Leme preso durante a utilização") || !strings.Contains(response.Body.String(), "Reportada por si") || !strings.Contains(response.Body.String(), "Banco reparado") || !strings.Contains(response.Body.String(), `data-open-repairs="1"`) || strings.Contains(response.Body.String(), "reported_by_name") {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+}
 
 func TestRepairPostNoPhotoCreatesAndRedirects(t *testing.T) {
 	userID, equipmentID := uuid.New(), uuid.New()
 	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
 	response := repairResponse(t, Repair{Store: store}, userID, equipmentID, nil, false)
-	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/dashboard" {
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/fleet" {
 		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
 	}
 	if store.created.ImageObjectKey != nil || store.created.IssueDescription != "Uma descrição válida" || store.creates != 1 {
 		t.Fatalf("created = %#v, creates = %d", store.created, store.creates)
+	}
+}
+
+func TestRepairPostFromAdminFleetRedirectsBackToAdminFleet(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
+	response := repairResponseTo(t, Repair{Store: store}, userID, equipmentID, nil, false, "/admin/fleet")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet" {
+		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
 	}
 }
 
@@ -102,12 +130,19 @@ func TestRepairPostHTMXSuccessReplacesForm(t *testing.T) {
 }
 
 func repairResponse(t *testing.T, handler Repair, userID, equipmentID uuid.UUID, photo []byte, htmx bool) *httptest.ResponseRecorder {
+	return repairResponseTo(t, handler, userID, equipmentID, photo, htmx, "")
+}
+
+func repairResponseTo(t *testing.T, handler Repair, userID, equipmentID uuid.UUID, photo []byte, htmx bool, returnTo string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("idempotency_key", uuid.NewString())
 	_ = writer.WriteField("equipment_id", equipmentID.String())
 	_ = writer.WriteField("issue_description", "Uma descrição válida")
+	if returnTo != "" {
+		_ = writer.WriteField("return_to", returnTo)
+	}
 	if photo != nil {
 		part, err := writer.CreateFormFile("photo", "upload.png")
 		if err != nil {
@@ -141,11 +176,12 @@ func pngPhoto(t *testing.T) []byte {
 }
 
 type repairStoreFake struct {
-	existing  *dbgen.RepairRequest
-	equipment dbgen.Equipment
-	createErr error
-	created   dbgen.CreateRepairRequestParams
-	creates   int
+	existing      *dbgen.RepairRequest
+	equipment     dbgen.Equipment
+	memberRepairs []dbgen.ListRepairRequestsForMembersRow
+	createErr     error
+	created       dbgen.CreateRepairRequestParams
+	creates       int
 }
 
 func (s *repairStoreFake) GetRepairByIdempotencyKey(context.Context, uuid.UUID) (dbgen.RepairRequest, error) {
@@ -167,6 +203,9 @@ func (s *repairStoreFake) CreateRepairRequest(_ context.Context, input dbgen.Cre
 }
 func (s *repairStoreFake) ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error) {
 	return []dbgen.Equipment{s.equipment}, nil
+}
+func (s *repairStoreFake) ListRepairRequestsForMembers(context.Context, dbgen.ListRepairRequestsForMembersParams) ([]dbgen.ListRepairRequestsForMembersRow, error) {
+	return s.memberRepairs, nil
 }
 
 type repairObjectStoreFake struct{ puts, deletes int }

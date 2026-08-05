@@ -68,6 +68,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/noticias/{id}/publicar", auth.RequireAdmin(http.HandlerFunc(news.Publish)))
 	mux.Handle("POST /admin/noticias/{id}/expirar", auth.RequireAdmin(http.HandlerFunc(news.Expire)))
 	mux.Handle("POST /repairs", auth.RequireAuthenticated(http.HandlerFunc(repair.Post)))
+	mux.Handle("GET /fleet", auth.RequireAuthenticated(http.HandlerFunc(repair.Index)))
 	mux.Handle("POST /guardian/add-dependent", auth.RequireGuardian(http.HandlerFunc(dashboard.AddDependent)))
 	mux.Handle("POST /dashboard/guardian/dependents/{id}/leaderboard-privacy", auth.RequireGuardian(http.HandlerFunc(dashboard.DependentLeaderboardPrivacy)))
 	mux.Handle("POST /leaderboard/privacy", auth.RequireAuthenticated(http.HandlerFunc(dashboard.LeaderboardPrivacy)))
@@ -91,7 +92,6 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/treinos/sessoes", auth.RequireEventStaff(http.HandlerFunc(training.CreateSession)))
 	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/sessoes/distancia", auth.RequireAuthenticated(http.HandlerFunc(training.UpdateDistance)))
-	mux.Handle("POST /admin/treinos/documentos", auth.RequireEventStaff(http.HandlerFunc(training.CreateDocument)))
 
 	return customNotFound(mux, system.NotFound)
 }

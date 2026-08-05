@@ -38,10 +38,11 @@ type Events struct {
 }
 
 type eventForm struct {
-	Title, Description, StartsAt, EndsAt, Deadline, Capacity string
-	ProgrammeIDs                                             []uuid.UUID
-	TeamIDs                                                  []uuid.UUID
-	Errors                                                   validation.FieldErrors
+	Title, Description, EventType, StartsAt, EndsAt, Deadline, Capacity string
+	DocumentTitle, DocumentURL, DocumentSource, DocumentReviewedOn      string
+	ProgrammeIDs                                                        []uuid.UUID
+	TeamIDs                                                             []uuid.UUID
+	Errors                                                              validation.FieldErrors
 }
 
 func (h Events) Index(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +113,7 @@ func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	err = db.WithinTx(ctx, h.DB, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		queries := dbgen.New(tx)
-		event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{Title: form.Title, Description: form.Description, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: endsAt, Valid: true}, ResponseDeadline: deadline, Capacity: capacity, CreatedByID: user.ID})
+		event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{Title: form.Title, Description: form.Description, EventType: form.EventType, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: endsAt, Valid: true}, ResponseDeadline: deadline, Capacity: capacity, CreatedByID: user.ID})
 		if err != nil {
 			return err
 		}
@@ -123,6 +124,12 @@ func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, teamID := range form.TeamIDs {
 			if err := queries.AddEventTeamAudience(ctx, dbgen.AddEventTeamAudienceParams{EventID: event.ID, TeamID: teamID}); err != nil {
+				return err
+			}
+		}
+		if form.DocumentTitle != "" {
+			reviewed, _ := time.Parse("2006-01-02", form.DocumentReviewedOn)
+			if _, err := queries.CreateCompetitionDocument(ctx, dbgen.CreateCompetitionDocumentParams{Title: form.DocumentTitle, Url: form.DocumentURL, Source: form.DocumentSource, ReviewedOn: pgtype.Date{Time: reviewed, Valid: true}, EventID: &event.ID, AuthorID: user.ID}); err != nil {
 				return err
 			}
 		}
@@ -197,6 +204,14 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		page = h.memberDetailPage(event, dependents)
+	}
+	documents, err := h.Store.ListCompetitionDocumentsForEvent(ctx, &eventID)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	for _, document := range documents {
+		page.Documents = append(page.Documents, pages.EventDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006")})
 	}
 	basePath, pageLabel := "/events", "Evento"
 	if management {
@@ -386,7 +401,14 @@ var (
 )
 
 func (h Events) validateEvent(r *http.Request) eventForm {
-	form := eventForm{Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: strings.TrimSpace(r.PostForm.Get("starts_at")), EndsAt: strings.TrimSpace(r.PostForm.Get("ends_at")), Deadline: strings.TrimSpace(r.PostForm.Get("response_deadline")), Capacity: strings.TrimSpace(r.PostForm.Get("capacity")), Errors: validation.FieldErrors{}}
+	eventType := strings.TrimSpace(r.PostForm.Get("event_type"))
+	if eventType == "" {
+		eventType = "GENERAL"
+	}
+	form := eventForm{Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), EventType: eventType, StartsAt: strings.TrimSpace(r.PostForm.Get("starts_at")), EndsAt: strings.TrimSpace(r.PostForm.Get("ends_at")), Deadline: strings.TrimSpace(r.PostForm.Get("response_deadline")), Capacity: strings.TrimSpace(r.PostForm.Get("capacity")), DocumentTitle: strings.TrimSpace(r.PostForm.Get("document_title")), DocumentURL: strings.TrimSpace(r.PostForm.Get("document_url")), DocumentSource: strings.TrimSpace(r.PostForm.Get("document_source")), DocumentReviewedOn: strings.TrimSpace(r.PostForm.Get("document_reviewed_on")), Errors: validation.FieldErrors{}}
+	if form.EventType != "GENERAL" && form.EventType != "COMPETITION" {
+		form.Errors.Add("event_type", "Selecione um tipo de evento válido.")
+	}
 	if n := utf8.RuneCountInString(form.Title); n < 2 || n > 180 {
 		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
 	}
@@ -413,6 +435,25 @@ func (h Events) validateEvent(r *http.Request) eventForm {
 		value, err := strconv.ParseInt(form.Capacity, 10, 32)
 		if err != nil || value < 1 {
 			form.Errors.Add("capacity", "A lotação deve ser um número inteiro positivo.")
+		}
+	}
+	documentRequested := form.DocumentTitle != "" || form.DocumentURL != "" || form.DocumentSource != "" || form.DocumentReviewedOn != ""
+	if documentRequested {
+		if form.EventType != "COMPETITION" {
+			form.Errors.Add("document", "Os documentos oficiais só podem ser publicados em eventos de competição.")
+		}
+		if !validTrainingText(form.DocumentTitle, 2, 180) {
+			form.Errors.Add("document_title", "O título deve ter entre 2 e 180 caracteres.")
+		}
+		if !validDocumentURL(form.DocumentURL) {
+			form.Errors.Add("document_url", "Introduza uma ligação HTTPS válida.")
+		}
+		if !validTrainingText(form.DocumentSource, 2, 180) {
+			form.Errors.Add("document_source", "A fonte deve ter entre 2 e 180 caracteres.")
+		}
+		reviewed, err := time.Parse("2006-01-02", form.DocumentReviewedOn)
+		if err != nil || reviewed.After(h.now().In(h.location())) {
+			form.Errors.Add("document_reviewed_on", "Introduza uma data de revisão válida.")
 		}
 	}
 	seen := map[uuid.UUID]bool{}
@@ -463,7 +504,10 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
 	defer cancel()
 	management := strings.HasPrefix(r.URL.Path, "/admin/")
-	page := pages.EventsPage{Management: management, CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	page := pages.EventsPage{Management: management, CanManageEvents: user.IsAdmin || user.CanManageEvents, Form: pages.EventForm{Title: form.Title, Description: form.Description, EventType: form.EventType, StartsAt: form.StartsAt, EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity, DocumentTitle: form.DocumentTitle, DocumentURL: form.DocumentURL, DocumentSource: form.DocumentSource, DocumentReviewedOn: form.DocumentReviewedOn, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}}
+	if page.Form.EventType == "" {
+		page.Form.EventType = "GENERAL"
+	}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
 	}
@@ -483,7 +527,7 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 				items = items[:eventsPageSize]
 			}
 			for _, item := range items {
-				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
+				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
 			}
 		} else {
 			items, err := h.Store.ListEventsForCoach(ctx, dbgen.ListEventsForCoachParams{UserID: user.ID, RowLimit: 100})
@@ -492,7 +536,7 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 				return
 			}
 			for _, item := range items {
-				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
+				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
 			}
 		}
 		programmes, err := h.Store.ListProgrammes(ctx)
@@ -530,7 +574,25 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 			return
 		}
 		for _, item := range items {
-			page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: eventStatus(item.ResponseStatus), Capacity: h.capacity(item.Capacity)})
+			page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: eventStatus(item.ResponseStatus), Capacity: h.capacity(item.Capacity)})
+		}
+		documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		for _, document := range documents {
+			context := ""
+			if document.EventTitle != nil {
+				context = *document.EventTitle
+			}
+			if document.ModalityName != nil {
+				if context != "" {
+					context += " · "
+				}
+				context += *document.ModalityName
+			}
+			page.Documents = append(page.Documents, pages.EventDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006"), Context: context})
 		}
 	}
 	currentPath, area := "/events", "Eventos"
@@ -563,7 +625,7 @@ func managedEventResponsesPageURL(eventID uuid.UUID, page int) string {
 }
 
 func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, dependents []dbgen.ListDependentsByGuardianRow) pages.EventDetailPage {
-	page := pages.EventDetailPage{ID: event.ID.String(), Title: event.Title, Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity), Status: eventStatus(event.ResponseStatus)}
+	page := pages.EventDetailPage{ID: event.ID.String(), Title: event.Title, Type: eventTypeLabel(event.EventType), Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity), Status: eventStatus(event.ResponseStatus)}
 	if event.ResponseDeadline.Valid && h.now().After(event.ResponseDeadline.Time) {
 		page.Status = "Fora do prazo"
 	}
@@ -573,7 +635,7 @@ func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, depende
 	return page
 }
 func (h Events) adminDetailPage(event dbgen.Event, responses []dbgen.ListEventResponsesForAdminRow, responsePage int) pages.EventDetailPage {
-	page := pages.EventDetailPage{CanManageEvents: true, ID: event.ID.String(), Title: event.Title, Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity)}
+	page := pages.EventDetailPage{CanManageEvents: true, ID: event.ID.String(), Title: event.Title, Type: eventTypeLabel(event.EventType), Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity)}
 	if responsePage > 1 {
 		page.ResponsesPreviousURL = managedEventResponsesPageURL(event.ID, responsePage-1)
 	}
@@ -647,4 +709,11 @@ func eventStatusText(status string) string {
 	default:
 		return "Pendente"
 	}
+}
+
+func eventTypeLabel(eventType string) string {
+	if eventType == "COMPETITION" {
+		return "Competição"
+	}
+	return "Geral"
 }

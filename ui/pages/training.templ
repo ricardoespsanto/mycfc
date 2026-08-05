@@ -12,7 +12,6 @@ type ManagedTrainingPlan struct {
 	ID, Title, Description string
 	Sessions               []ManagedTrainingSession
 }
-type CompetitionDocument struct{ Title, URL, Source, ReviewedOn, Context string }
 type TrainingPlanForm struct {
 	Title, Description, ProgrammeID, TeamID string
 	Errors                                  validation.FieldErrors
@@ -21,23 +20,17 @@ type TrainingSessionForm struct {
 	PlanID, Title, Description, StartsAt, EndsAt, ModalityID string
 	Errors                                                   validation.FieldErrors
 }
-type TrainingDocumentForm struct {
-	Title, URL, Source, ReviewedOn, EventID, ModalityID, ProgrammeID, TeamID string
-	Errors                                                                   validation.FieldErrors
-}
 type TrainingPage struct {
 	Meta                                         components.PageMeta
 	CSRFField                                    templ.Component
 	Management, CanManage                        bool
 	Success, Error, OpenForm                     string
 	Sessions                                     []TrainingSession
-	Documents                                    []CompetitionDocument
 	ManagedPlans                                 []ManagedTrainingPlan
 	ManagedPlansPreviousURL, ManagedPlansNextURL string
-	Programmes, Teams, Modalities, Events, Plans []TrainingChoice
+	Programmes, Teams, Modalities, Plans         []TrainingChoice
 	PlanForm                                     TrainingPlanForm
 	SessionForm                                  TrainingSessionForm
-	DocumentForm                                 TrainingDocumentForm
 }
 
 templ Training(page TrainingPage) {
@@ -46,9 +39,9 @@ templ Training(page TrainingPage) {
 
 templ trainingContent(page TrainingPage) {
 	if page.Management {
-		@components.PageHeader("Administração", "Treinos", "Organize planos, sessões e documentos oficiais para os grupos sob a sua responsabilidade.", trainingPageActions(page))
+		@components.PageHeader("Administração", "Treinos", "Organize planos e sessões para os grupos sob a sua responsabilidade.", trainingPageActions(page))
 	} else {
-		@components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo, registe resultados e encontre os documentos oficiais aplicáveis.", nil)
+		@components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo e registe os respetivos resultados.", nil)
 	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Error, "error")
@@ -117,19 +110,6 @@ templ trainingContent(page TrainingPage) {
 			}
 		}
 	</section>
-	<section class="module">
-		@components.SectionHeading("Referências", "Cadernos de prova e documentos oficiais", "Ligações verificadas para a sua atividade competitiva.")
-		if len(page.Documents) == 0 {
-			@components.EmptyState("Sem documentos aplicáveis", "Os documentos oficiais relevantes para o seu contexto aparecem aqui.")
-		}
-		if len(page.Documents) > 0 {
-			@components.RecordList("Documentos oficiais") {
-				for _, document := range page.Documents {
-					<li class="record-item"><a class="record-item__copy" href={ templ.SafeURL(document.URL) } target="_blank" rel="noreferrer"><h3>{ document.Title }</h3><p class="record-meta">{ document.Context } · Fonte: { document.Source } · Revisto em: { document.ReviewedOn }</p></a><span class="record-meta">Documento externo</span></li>
-				}
-			}
-		}
-	</section>
 	}
 	if page.Management {
 		@trainingAuthoring(page)
@@ -183,12 +163,11 @@ templ trainingAuthoring(page TrainingPage) {
 			</section>
 			@trainingPlanForm(page)
 			@trainingSessionForm(page)
-			@trainingDocumentForm(page)
 	</section>
 }
 
 templ trainingPlanForm(page TrainingPage) {
-	<details id="criar-plano" class="inline-disclosure" open?={ page.OpenForm == "plan" }><summary>Criar plano</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
+	<details id="criar-plano" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "plan" } aria-labelledby="training-plan-authoring-title"><summary><span><strong id="training-plan-authoring-title">Criar plano</strong><small>Defina o plano e o respetivo âmbito.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
 <form class="form-layout" method="post" action="/admin/treinos/planos">@page.CSRFField
 @components.RequiredNote()
 @components.FieldLabel("training-plan-title", "Título", true)
@@ -200,12 +179,12 @@ templ trainingPlanForm(page TrainingPage) {
 @components.FormActions("/admin/treinos") {
 	<button type="submit">Criar plano</button>
 }
-</form></details>
+</form></div></details>
 }
 
 templ trainingSessionForm(page TrainingPage) {
-	<details id="criar-sessao" class="inline-disclosure" open?={ page.OpenForm == "session" }>
-		<summary>Criar sessão</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
+	<details id="criar-sessao" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "session" } aria-labelledby="training-session-authoring-title">
+		<summary><span><strong id="training-session-authoring-title">Criar sessão</strong><small>Associe uma sessão a um plano existente.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
 		<form class="form-layout" method="post" action="/admin/treinos/sessoes">
 			@page.CSRFField
 			@components.RequiredNote()
@@ -234,43 +213,7 @@ templ trainingSessionForm(page TrainingPage) {
 			@components.FormActions("/admin/treinos") {
 				<button type="submit">Criar sessão</button>
 			}
-		</form>
-	</details>
-}
-
-templ trainingDocumentForm(page TrainingPage) {
-	<details id="publicar-documento" class="inline-disclosure" open?={ page.OpenForm == "document" }>
-		<summary>Publicar documento de competição</summary>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.DocumentForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-document-title"}, {Key: "url", Field: "training-document-url"}, {Key: "source", Field: "training-document-source"}, {Key: "reviewed_on", Field: "training-document-reviewed"}, {Key: "scope", Field: "training-document-scope"}}))
-		<form class="form-layout" method="post" action="/admin/treinos/documentos">
-			@page.CSRFField
-			@components.RequiredNote()
-			@components.FieldLabel("training-document-title", "Título", true)
-			<input id="training-document-title" name="title" value={ page.DocumentForm.Title } required/>@components.FieldErrorMessage("title", page.DocumentForm.Errors["title"])
-			@components.FieldLabel("training-document-url", "Ligação HTTPS", true)
-			<input id="training-document-url" name="url" type="url" value={ page.DocumentForm.URL } required/>@components.FieldErrorMessage("url", page.DocumentForm.Errors["url"])
-			@components.FieldLabel("training-document-source", "Fonte oficial", true)
-			<input id="training-document-source" name="source" value={ page.DocumentForm.Source } required/>@components.FieldErrorMessage("source", page.DocumentForm.Errors["source"])
-			@components.FieldLabel("training-document-reviewed", "Revisto em", true)
-			<input id="training-document-reviewed" name="reviewed_on" type="date" value={ page.DocumentForm.ReviewedOn } required/>@components.FieldErrorMessage("reviewed_on", page.DocumentForm.Errors["reviewed_on"])
-			@components.FieldLabel("training-document-event", "Evento (opcional)", false)
-			<select id="training-document-event" name="event_id">
-				<option value="">Sem evento</option>
-				for _, item := range page.Events {
-					<option value={ item.ID } selected?={ item.ID == page.DocumentForm.EventID }>{ item.Name }</option>
-				}
-			</select>@components.FieldLabel("training-document-modality", "Modalidade (opcional)", false)
-			<select id="training-document-modality" name="modality_id">
-				<option value="">Sem modalidade</option>
-				for _, item := range page.Modalities {
-					<option value={ item.ID } selected?={ item.ID == page.DocumentForm.ModalityID }>{ item.Name }</option>
-				}
-			</select>
-			<fieldset id="training-document-scope"><legend>Âmbito</legend><p>Selecione pelo menos um contexto. A modalidade exige programa ou equipa; um documento só de evento usa o público desse evento.</p>@trainingScopeChoices(page, "training-document", page.DocumentForm.ProgrammeID, page.DocumentForm.TeamID)
-</fieldset>@components.FieldErrorMessage("scope", page.DocumentForm.Errors["scope"])
-			@components.FormActions("/admin/treinos") {
-				<button type="submit">Publicar documento</button>
-			}
-		</form>
+		</form></div>
 	</details>
 }
 

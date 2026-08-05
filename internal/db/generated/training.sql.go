@@ -161,16 +161,16 @@ LEFT JOIN events e ON e.id = d.event_id
 LEFT JOIN modalities mo ON mo.id = d.modality_id
 WHERE (
     d.event_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM user_memberships m
-        WHERE m.user_id = $1 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id
+        WHERE (subject.id = $1 OR subject.guardian_id = $1) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND (NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id)
                OR EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id AND a.programme_id = m.programme_id)
                OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = d.event_id AND a.team_id = m.team_id))
     )
 ) OR (
     d.modality_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM user_memberships m JOIN membership_modalities mm ON mm.membership_id = m.id
-        WHERE m.user_id = $1 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id JOIN membership_modalities mm ON mm.membership_id = m.id
+        WHERE (subject.id = $1 OR subject.guardian_id = $1) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND mm.modality_id = d.modality_id AND (d.programme_id IS NULL OR d.programme_id = m.programme_id) AND (d.team_id IS NULL OR d.team_id = m.team_id)
     )
 )
@@ -211,6 +211,49 @@ func (q *Queries) ListCompetitionDocumentsForAthlete(ctx context.Context, arg Li
 			&i.PublishedAt,
 			&i.EventTitle,
 			&i.ModalityName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompetitionDocumentsForEvent = `-- name: ListCompetitionDocumentsForEvent :many
+SELECT id, title, url, source, reviewed_on, published_at
+FROM competition_documents
+WHERE event_id = $1
+ORDER BY published_at DESC, id DESC
+`
+
+type ListCompetitionDocumentsForEventRow struct {
+	ID          uuid.UUID          `json:"id"`
+	Title       string             `json:"title"`
+	Url         string             `json:"url"`
+	Source      string             `json:"source"`
+	ReviewedOn  pgtype.Date        `json:"reviewed_on"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) ListCompetitionDocumentsForEvent(ctx context.Context, eventID *uuid.UUID) ([]ListCompetitionDocumentsForEventRow, error) {
+	rows, err := q.db.Query(ctx, listCompetitionDocumentsForEvent, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompetitionDocumentsForEventRow{}
+	for rows.Next() {
+		var i ListCompetitionDocumentsForEventRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Url,
+			&i.Source,
+			&i.ReviewedOn,
+			&i.PublishedAt,
 		); err != nil {
 			return nil, err
 		}

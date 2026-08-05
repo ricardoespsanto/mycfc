@@ -399,6 +399,7 @@ func (h Dashboard) renderFleetEquipment(w http.ResponseWriter, r *http.Request, 
 	page.EquipmentForm = equipmentPageForm(form)
 	page.EquipmentForm.CSRFField = page.Meta.CSRFField
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
+	page.RepairForm.CSRFField = page.Meta.CSRFField
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Fleet(page).Render(r.Context(), w)

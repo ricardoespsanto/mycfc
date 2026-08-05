@@ -515,7 +515,7 @@ func todayContent(page TodayPage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if len(page.Dependents) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<section class=\"today-module\"><header><div><h2>Menores a cargo</h2></div><a href=\"/dashboard/guardian\">Gerir</a></header><ul class=\"today-list\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<section class=\"today-module\"><header><div><h2>Menores a cargo</h2></div><a class=\"action action--quiet\" href=\"/dashboard/guardian\">Gerir</a></header><ul class=\"today-list\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -559,7 +559,7 @@ func todayContent(page TodayPage) templ.Component {
 			}
 		}
 		if len(page.Operations) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<section class=\"today-module today-module--attention\"><header><div><h2>Requer atenção</h2></div><a href=\"/admin/fleet\">Abrir frota</a></header><ul class=\"today-list\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<section class=\"today-module today-module--attention\"><header><div><h2>Requer atenção</h2></div><a class=\"action action--quiet\" href=\"/admin/fleet\">Abrir frota</a></header><ul class=\"today-list\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
