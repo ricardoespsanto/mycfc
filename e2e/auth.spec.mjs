@@ -102,6 +102,9 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
+    await page.getByRole('link', { name: 'Avisos', exact: true }).click();
+    await expect(page).toHaveURL('/announcements');
+    await page.goto('/today');
     await page.getByRole('link', { name: 'Frota', exact: true }).click();
     await expect(page).toHaveURL('/fleet');
 
@@ -551,14 +554,24 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/announcements');
-    const announcement = page.locator('li', { hasText: title });
-    await expect(announcement).toContainText('Não lido');
+    const bell = page.getByRole('link', { name: /^Avisos, \d+ avisos? por ler$/ });
+    await expect(bell).toBeVisible();
+    await bell.click();
+    await expect(bell).toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(bell).toBeFocused();
+    await expect(bell).toHaveAttribute('aria-expanded', 'false');
+    await bell.click();
+    const announcement = page.getByRole('dialog', { name: 'Avisos' }).locator('li', { hasText: title });
+    await expect(announcement).toContainText('Por ler');
     await announcement.getByRole('link', { name: title }).click();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
-    await page.goto('/announcements');
-    await expect(page.locator('li', { hasText: title })).not.toContainText('Não lido');
+    await page.goto('/today');
+    await page.getByRole('link', { name: /^Avisos/ }).click();
+    const readPanel = page.getByRole('dialog', { name: 'Avisos' });
+    await expect(readPanel.locator('li', { hasText: title })).not.toContainText('Por ler');
+    await readPanel.getByRole('button', { name: 'Fechar avisos' }).click();
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
@@ -571,8 +584,8 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto('/announcements');
-    await expect(page.getByRole('link', { name: title })).toHaveCount(0);
+    await page.getByRole('link', { name: /^Avisos/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Avisos' }).getByRole('link', { name: title })).toHaveCount(0);
   });
 
   test('administrator publishes news and confirms member deactivation without JavaScript', async ({ page, browser }) => {

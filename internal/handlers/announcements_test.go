@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type announcementStoreFake struct{}
@@ -66,6 +67,9 @@ func (announcementStoreFake) ListAnnouncementsForAuthor(context.Context, dbgen.L
 }
 func (announcementStoreFake) ListVisibleAnnouncements(context.Context, dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	return nil, nil
+}
+func (announcementStoreFake) CountUnreadVisibleAnnouncements(context.Context, uuid.UUID) (int64, error) {
+	return 0, nil
 }
 func (announcementStoreFake) GetVisibleAnnouncement(context.Context, dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error) {
 	return dbgen.GetVisibleAnnouncementRow{}, nil
@@ -134,11 +138,45 @@ func TestAnnouncementDetailLooksUpVisibleIDDirectly(t *testing.T) {
 	}
 }
 
+func TestAnnouncementPanelRendersUnreadCountAndRecentItems(t *testing.T) {
+	userID, announcementID := uuid.New(), uuid.New()
+	store := &paginatedAnnouncementStore{
+		unreadCount: 3,
+		visible: []dbgen.ListVisibleAnnouncementsRow{{
+			ID: announcementID, Title: "Alteração de cais",
+			PublishedAt: pgtype.Timestamptz{Time: time.Date(2026, 8, 5, 9, 30, 0, 0, time.UTC), Valid: true},
+		}},
+	}
+	h := Announcements{Store: store, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/announcements/panel", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	w := httptest.NewRecorder()
+
+	h.Panel(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	for _, want := range []string{`data-announcement-count="3"`, "Alteração de cais", `href="/announcements/` + announcementID.String() + `"`, "Por ler"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("panel does not contain %q: %q", want, w.Body.String())
+		}
+	}
+	if store.countUserID != userID || store.visibleParams.UserID != userID || store.visibleParams.RowLimit != announcementPanelSize {
+		t.Fatalf("panel query parameters = count user %s, visible %+v", store.countUserID, store.visibleParams)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+}
+
 type paginatedAnnouncementStore struct {
 	announcementStoreFake
 	visibleParams  dbgen.ListVisibleAnnouncementsParams
 	authoredParams dbgen.ListAnnouncementsForAuthorParams
 	detailParams   dbgen.GetVisibleAnnouncementParams
+	countUserID    uuid.UUID
+	unreadCount    int64
 	visible        []dbgen.ListVisibleAnnouncementsRow
 	authored       []dbgen.ListAnnouncementsForAuthorRow
 	detailErr      error
@@ -147,6 +185,11 @@ type paginatedAnnouncementStore struct {
 func (s *paginatedAnnouncementStore) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	s.visibleParams = params
 	return s.visible, nil
+}
+
+func (s *paginatedAnnouncementStore) CountUnreadVisibleAnnouncements(_ context.Context, userID uuid.UUID) (int64, error) {
+	s.countUserID = userID
+	return s.unreadCount, nil
 }
 
 type announcementDBFake struct{}

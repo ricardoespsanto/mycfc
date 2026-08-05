@@ -7,12 +7,14 @@ Issue #57 establishes `/today` as the quality bar for the authenticated MyCFC ro
 Today renders no more than five modules in this order:
 
 1. the next still-relevant item and up to four events intersecting today;
-2. up to three visible announcements;
+2. the club distance leaderboard;
 3. up to three named dependants when the signed-in adult has any;
 4. up to three pending repair items for administrators;
 5. up to five canonical shortcuts, including at most one programme workspace.
 
-The same page is composed from cumulative capabilities. There are no exclusive role variants, speculative actions, or duplicated management workflows. Empty agenda and announcement modules explain what happens next and link to their owning destinations.
+The same page is composed from cumulative capabilities. There are no exclusive role variants, speculative actions, or duplicated management workflows. The empty agenda explains what happens next and links to its owning destination.
+Reader-facing notices no longer form a Today module: the global bell exposes the
+unread count and recent notices from every authenticated page.
 
 ## Review evidence
 

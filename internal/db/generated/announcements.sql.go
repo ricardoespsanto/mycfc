@@ -28,6 +28,45 @@ func (q *Queries) AddAnnouncementTarget(ctx context.Context, arg AddAnnouncement
 	return err
 }
 
+const countUnreadVisibleAnnouncements = `-- name: CountUnreadVisibleAnnouncements :one
+SELECT count(DISTINCT a.id)
+FROM announcements a
+LEFT JOIN announcement_deliveries d ON d.announcement_id = a.id AND d.user_id = $1
+WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
+  AND d.read_at IS NULL
+  AND (
+    NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
+    OR EXISTS (
+      SELECT 1 FROM announcement_targets t
+      JOIN users subject ON subject.is_active AND (subject.id = $1 OR subject.guardian_id = $1)
+      LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+      LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
+      WHERE t.announcement_id = a.id
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR subject.guardian_id = $1)
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
+        (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
+        OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
+        OR (t.target_type = 'CATEGORY' AND m.competition_category_id = t.target_id)
+        OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
+        OR (t.target_type = 'EVENT' AND EXISTS (
+          SELECT 1 FROM events e WHERE e.id = t.target_id AND (
+            NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+            OR EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id AND ea.programme_id = m.programme_id)
+            OR EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id AND eta.team_id = m.team_id)
+          )
+        ))
+        ))
+    )
+  )
+`
+
+func (q *Queries) CountUnreadVisibleAnnouncements(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreadVisibleAnnouncements, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAnnouncement = `-- name: CreateAnnouncement :one
 INSERT INTO announcements (title, body, author_id, expires_at)
 VALUES ($1, $2, $3, $4)

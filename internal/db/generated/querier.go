@@ -24,6 +24,7 @@ type Querier interface {
 	CountDependentsByGuardian(ctx context.Context, guardianID *uuid.UUID) (int64, error)
 	CountEquipmentByStatus(ctx context.Context) ([]CountEquipmentByStatusRow, error)
 	CountGoingEventResponses(ctx context.Context, eventID uuid.UUID) (int64, error)
+	CountUnreadVisibleAnnouncements(ctx context.Context, userID uuid.UUID) (int64, error)
 	CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (CreateAdultUserRow, error)
 	CreateAnnouncement(ctx context.Context, arg CreateAnnouncementParams) (CreateAnnouncementRow, error)
 	CreateCompetitionCategory(ctx context.Context, arg CreateCompetitionCategoryParams) (CompetitionCategory, error)

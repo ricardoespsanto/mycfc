@@ -53,6 +53,10 @@ func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 	body := output.String()
 	for _, expected := range []string{
 		`class="app-shell"`,
+		`data-announcement-trigger`,
+		`href="/announcements"`,
+		`id="announcement-panel"`,
+		`aria-label="Avisos"`,
 		`aria-label="Conta atual"`,
 		`Beatriz Administradora`,
 		`Conta com responsabilidades cumulativas`,
@@ -66,6 +70,9 @@ func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 	}
 	if strings.Contains(body, `class="admin-subnav"`) {
 		t.Error("admin destinations must not be duplicated in local navigation")
+	}
+	if got := strings.Count(body, `data-announcement-trigger`); got != 2 {
+		t.Errorf("authenticated shell renders %d notification triggers, want desktop and mobile triggers", got)
 	}
 	if !strings.Contains(body, `href="/admin/membros" aria-current="page"`) {
 		t.Error("global navigation should mark the current administration section")

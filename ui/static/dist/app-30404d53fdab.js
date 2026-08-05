@@ -10,6 +10,110 @@ function focusReturnedFeedback(root = document) {
 
 focusReturnedFeedback();
 
+const announcementPanel = document.querySelector("[data-announcement-panel]");
+const announcementTriggers = [...document.querySelectorAll("[data-announcement-trigger]")];
+let announcementPanelRequest = null;
+let announcementPanelOpener = null;
+
+function updateAnnouncementBadges(count) {
+  const unread = Number.isFinite(count) ? Math.max(0, count) : 0;
+  const label = unread === 0 ? "Avisos, sem avisos por ler" : unread === 1 ? "Avisos, 1 aviso por ler" : `Avisos, ${unread} avisos por ler`;
+  for (const trigger of announcementTriggers) {
+    trigger.setAttribute("aria-label", label);
+    const badge = trigger.querySelector("[data-announcement-badge]");
+    if (!(badge instanceof HTMLElement)) continue;
+    badge.hidden = unread === 0;
+    badge.textContent = unread > 99 ? "99+" : String(unread);
+  }
+}
+
+function loadAnnouncementPanel() {
+  if (!(announcementPanel instanceof HTMLElement)) return Promise.reject(new Error("announcement panel unavailable"));
+  if (announcementPanel.dataset.loaded === "true") return Promise.resolve();
+  if (announcementPanelRequest) return announcementPanelRequest;
+  announcementPanelRequest = fetch("/announcements/panel", { headers: { "X-Requested-With": "announcement-panel" } })
+    .then((response) => {
+      if (!response.ok) throw new Error(`announcement panel returned ${response.status}`);
+      return response.text();
+    })
+    .then((markup) => {
+      announcementPanel.innerHTML = markup;
+      announcementPanel.dataset.loaded = "true";
+      const content = announcementPanel.querySelector("[data-announcement-count]");
+      updateAnnouncementBadges(Number(content?.dataset.announcementCount || 0));
+    })
+    .catch((error) => {
+      announcementPanelRequest = null;
+      throw error;
+    });
+  return announcementPanelRequest;
+}
+
+function openAnnouncementPanel(trigger) {
+  if (!(announcementPanel instanceof HTMLElement)) return;
+  announcementPanelOpener = trigger instanceof HTMLElement ? trigger : null;
+  document.querySelector(".mobile-app-menu[open]")?.removeAttribute("open");
+  announcementPanel.hidden = false;
+  document.body.classList.add("announcement-panel-open");
+  for (const candidate of announcementTriggers) candidate.setAttribute("aria-expanded", "true");
+  announcementPanel.querySelector("[data-announcement-close]")?.focus();
+}
+
+function closeAnnouncementPanel(restoreFocus = true) {
+  if (!(announcementPanel instanceof HTMLElement) || announcementPanel.hidden) return;
+  announcementPanel.hidden = true;
+  document.body.classList.remove("announcement-panel-open");
+  for (const trigger of announcementTriggers) trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) announcementPanelOpener?.focus();
+  announcementPanelOpener = null;
+}
+
+if (announcementPanel && announcementTriggers.length > 0) {
+  loadAnnouncementPanel().catch(() => {});
+  document.addEventListener("click", async (event) => {
+    const trigger = event.target.closest?.("[data-announcement-trigger]");
+    if (trigger instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      if (!announcementPanel.hidden) {
+        closeAnnouncementPanel();
+        return;
+      }
+      try {
+        await loadAnnouncementPanel();
+        openAnnouncementPanel(trigger);
+      } catch {
+        window.location.assign(trigger.href);
+      }
+      return;
+    }
+    if (event.target.closest?.("[data-announcement-close]")) {
+      closeAnnouncementPanel();
+      return;
+    }
+    if (!announcementPanel.hidden && !announcementPanel.contains(event.target)) closeAnnouncementPanel(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (announcementPanel.hidden) return;
+    if (event.key === "Escape") {
+      closeAnnouncementPanel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...announcementPanel.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((element) => element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
 let createPanelOpener = null;
 
 function openCreatePanel(panel, opener) {

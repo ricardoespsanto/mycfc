@@ -217,7 +217,7 @@ async function login(page, email) {
 async function expectTodayComposition(page, persona) {
   await expect(page.getByRole('heading', { name: /^Olá,/ })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Agenda de hoje' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Avisos recentes' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /^Avisos/ })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Classificação do clube' })).toBeVisible();
   const moduleWidths = await page.locator('.today-grid > .today-module').evaluateAll((modules) => modules
     .filter((module) => module.getClientRects().length > 0)
