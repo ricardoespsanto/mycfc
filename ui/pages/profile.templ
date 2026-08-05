@@ -1,0 +1,170 @@
+package pages
+
+import (
+	"strings"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type ProfileForm struct {
+	Name, Email, DateOfBirth string
+	Phone, AddressLine1, AddressLine2, Postcode, Locality string
+	CountryCode, NationalityCode, ClubMemberNumber, FederationLicenceNumber string
+	EmergencyName, EmergencyRelationship, EmergencyPhone, EmergencyAlternatePhone string
+	MedicalDeclaration, Allergies, MedicalConditions, Medication, ActivityRestrictions, MedicalNotes string
+	ProfileUpdatedAt, IdentityUpdatedAt string
+	Errors validation.FieldErrors
+}
+
+type ProfilePage struct {
+	Meta components.PageMeta
+	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ImageConsentURL string
+	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible bool
+	Form ProfileForm
+	Success, Conflict string
+}
+
+templ Profile(page ProfilePage) { @components.Base(page.Meta, profileContent(page)) }
+
+templ profileContent(page ProfilePage) {
+	<div class="profile-page">
+		@components.PageHeader("Conta", "Perfil", "Mantenha os contactos e a informação relevante para uma participação segura no clube.", profileActions(page))
+		@components.StatusMessage(page.Success, "success")
+		@components.StatusMessage(page.Conflict, "error")
+		if !page.Complete {
+			@components.StatusMessage("Complete o contacto de emergência e a declaração médica. Este aviso não bloqueia as restantes áreas.", "warning")
+		}
+		<section class="module profile-identity" aria-labelledby="profile-identity-title">
+			<div class="profile-portrait">
+				if page.PhotoVisible {
+					<img src={ page.PhotoURL } alt={ "Fotografia de " + page.Name }/>
+				} else {
+					<span class="profile-initials" aria-label={ "Sem fotografia de " + page.Name }>{ profileInitials(page.Name) }</span>
+				}
+			</div>
+			<div><p class="eyebrow">Identidade</p><h2 id="profile-identity-title">{ page.Name }</h2><p class="record-meta">
+				if page.Dependent {
+					Menor a cargo
+				} else {
+					Adulto
+				}
+				if !page.Active {
+					<span> · Conta desativada</span>
+				}
+			</p></div>
+		</section>
+		if page.Editable {
+			@profileEditForm(page)
+		} else {
+			@profileReadOnly(page)
+		}
+		if page.Editable {
+			@profilePhoto(page)
+		}
+	</div>
+}
+
+func profileActions(page ProfilePage) []components.PageAction {
+	if page.Admin { return []components.PageAction{{Label: "Voltar ao membro", Href: "/admin/membros/"+page.SubjectID, Variant: "secondary"}} }
+	if !page.Self { return []components.PageAction{{Label: "Voltar aos menores", Href: "/dashboard/guardian", Variant: "secondary"}} }
+	return nil
+}
+
+templ profileEditForm(page ProfilePage) {
+	<form class="form-layout profile-form" method="post" action={ page.BasePath }>
+		@page.Meta.CSRFField
+		<input type="hidden" name="profile_updated_at" value={ page.Form.ProfileUpdatedAt }/>
+		<input type="hidden" name="identity_updated_at" value={ page.Form.IdentityUpdatedAt }/>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), profileErrorFields()))
+		if page.Admin {
+			<fieldset><legend>Identidade administrada pelo clube</legend>
+				<div class="form-field">@components.FieldLabel("profile-name", "Nome", true)<input id="profile-name" name="name" value={ page.Form.Name } required aria-invalid?={ page.Form.Errors["name"] != "" }/>@components.FieldErrorMessage("name", page.Form.Errors["name"])</div>
+				<div class="form-field">@components.FieldLabel("profile-birth", "Data de nascimento", true)<input id="profile-birth" type="date" name="date_of_birth" value={ page.Form.DateOfBirth } required aria-invalid?={ page.Form.Errors["date_of_birth"] != "" }/>@components.FieldErrorMessage("date_of_birth", page.Form.Errors["date_of_birth"])</div>
+				<div class="form-field">@components.FieldLabel("profile-email", "Email de acesso", !page.Dependent)<input id="profile-email" type="email" name="email" value={ page.Form.Email } disabled?={ page.Dependent } required?={ !page.Dependent } aria-invalid?={ page.Form.Errors["email"] != "" }/>@components.FieldErrorMessage("email", page.Form.Errors["email"])</div>
+				<div class="form-field">@components.FieldLabel("profile-club-number", "Número de sócio", false)<input id="profile-club-number" name="club_member_number" value={ page.Form.ClubMemberNumber } maxlength="60"/></div>
+				<div class="form-field">@components.FieldLabel("profile-federation-number", "Licença federativa", false)<input id="profile-federation-number" name="federation_licence_number" value={ page.Form.FederationLicenceNumber } maxlength="60"/></div>
+				@components.FieldErrorMessage("official_identifiers", page.Form.Errors["official_identifiers"])
+			</fieldset>
+		} else {
+			<input type="hidden" name="name" value={ page.Form.Name }/><input type="hidden" name="email" value={ page.Form.Email }/><input type="hidden" name="date_of_birth" value={ page.Form.DateOfBirth }/>
+			<input type="hidden" name="club_member_number" value={ page.Form.ClubMemberNumber }/><input type="hidden" name="federation_licence_number" value={ page.Form.FederationLicenceNumber }/>
+			<section class="module"><h2>Identificadores do clube</h2><dl class="profile-summary"><div><dt>Número de sócio</dt><dd>{ displayValue(page.Form.ClubMemberNumber) }</dd></div><div><dt>Licença federativa</dt><dd>{ displayValue(page.Form.FederationLicenceNumber) }</dd></div></dl></section>
+		}
+		<fieldset><legend>Contacto pessoal</legend>
+			<div class="form-field">@components.FieldLabel("profile-phone", "Telefone", false)<input id="profile-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" value={ page.Form.Phone } maxlength="32" pattern="[+]?[0-9][0-9 ().-]*[0-9]" title="Introduza entre 7 e 15 algarismos, com indicativo opcional." aria-describedby="profile-phone-hint" aria-invalid?={ page.Form.Errors["phone"] != "" }/><p id="profile-phone-hint" class="field-hint">Formato nacional ou internacional, por exemplo +351 912 626 410.</p>@components.FieldErrorMessage("phone", page.Form.Errors["phone"])</div>
+		</fieldset>
+		<fieldset><legend>Morada</legend>
+			<div class="form-field">@components.FieldLabel("profile-address-1", "Morada", false)<input id="profile-address-1" name="address_line1" autocomplete="address-line1" value={ page.Form.AddressLine1 } maxlength="200"/></div>
+			<div class="form-field">@components.FieldLabel("profile-address-2", "Complemento", false)<input id="profile-address-2" name="address_line2" autocomplete="address-line2" value={ page.Form.AddressLine2 } maxlength="200"/></div>
+			<div class="form-field">@components.FieldLabel("profile-postcode", "Código postal", false)<input id="profile-postcode" name="postcode" autocomplete="postal-code" value={ page.Form.Postcode } maxlength="20"/></div>
+			<div class="form-field">@components.FieldLabel("profile-locality", "Localidade", false)<input id="profile-locality" name="locality" autocomplete="address-level2" value={ page.Form.Locality } maxlength="120"/></div>
+			<div class="form-field">@components.FieldLabel("profile-country", "País", false)@countrySelect("profile-country", "country_code", page.Form.CountryCode)</div>
+			<div class="form-field">@components.FieldLabel("profile-nationality", "Nacionalidade", false)@countrySelect("profile-nationality", "nationality_code", page.Form.NationalityCode)</div>
+		</fieldset>
+		<fieldset><legend>Contacto de emergência</legend><p>Deixe todos os campos vazios ou preencha, pelo menos, nome, relação e telefone principal.</p>
+			@components.FieldErrorMessage("emergency_contact", page.Form.Errors["emergency_contact"])
+			<div class="form-field">@components.FieldLabel("profile-emergency-name", "Nome", false)<input id="profile-emergency-name" name="emergency_contact_name" value={ page.Form.EmergencyName } maxlength="120"/></div>
+			<div class="form-field">@components.FieldLabel("profile-emergency-relationship", "Relação", false)<input id="profile-emergency-relationship" name="emergency_contact_relationship" value={ page.Form.EmergencyRelationship } maxlength="80"/></div>
+			<div class="form-field">@components.FieldLabel("profile-emergency-phone", "Telefone principal", false)<input id="profile-emergency-phone" name="emergency_contact_phone" type="tel" inputmode="tel" value={ page.Form.EmergencyPhone } maxlength="32" pattern="[+]?[0-9][0-9 ().-]*[0-9]" title="Introduza entre 7 e 15 algarismos, com indicativo opcional." aria-describedby="profile-emergency-phone-hint" aria-invalid?={ page.Form.Errors["emergency_contact_phone"] != "" }/><p id="profile-emergency-phone-hint" class="field-hint">Formato nacional ou internacional.</p>@components.FieldErrorMessage("emergency_contact_phone", page.Form.Errors["emergency_contact_phone"])</div>
+			<div class="form-field">@components.FieldLabel("profile-emergency-alt", "Telefone alternativo", false)<input id="profile-emergency-alt" name="emergency_contact_alternate_phone" type="tel" inputmode="tel" value={ page.Form.EmergencyAlternatePhone } maxlength="32" pattern="[+]?[0-9][0-9 ().-]*[0-9]" title="Introduza entre 7 e 15 algarismos, com indicativo opcional." aria-describedby="profile-emergency-alt-hint" aria-invalid?={ page.Form.Errors["emergency_contact_alternate_phone"] != "" }/><p id="profile-emergency-alt-hint" class="field-hint">Formato nacional ou internacional.</p>@components.FieldErrorMessage("emergency_contact_alternate_phone", page.Form.Errors["emergency_contact_alternate_phone"])</div>
+		</fieldset>
+		<fieldset><legend>Informação médica relevante</legend><p>Registe apenas informação necessária à participação segura nas atividades.</p>
+			<div class="form-field">@components.FieldLabel("profile-medical-declaration", "Declaração", true)<select id="profile-medical-declaration" name="medical_declaration" required aria-invalid?={ page.Form.Errors["medical_declaration"] != "" }><option value="UNKNOWN" selected?={ page.Form.MedicalDeclaration == "UNKNOWN" }>Ainda não indicada</option><option value="NONE_KNOWN" selected?={ page.Form.MedicalDeclaration == "NONE_KNOWN" }>Sem informação médica conhecida</option><option value="PROVIDED" selected?={ page.Form.MedicalDeclaration == "PROVIDED" }>Existe informação relevante</option></select>@components.FieldErrorMessage("medical_declaration", page.Form.Errors["medical_declaration"])</div>
+			@profileTextarea("profile-allergies", "allergies", "Alergias", page.Form.Allergies)
+			@profileTextarea("profile-conditions", "medical_conditions", "Condições médicas", page.Form.MedicalConditions)
+			@profileTextarea("profile-medication", "medication", "Medicação", page.Form.Medication)
+			@profileTextarea("profile-restrictions", "activity_restrictions", "Restrições ou adaptações", page.Form.ActivityRestrictions)
+			@profileTextarea("profile-medical-notes", "medical_notes", "Outras notas relevantes", page.Form.MedicalNotes)
+		</fieldset>
+		@components.FormActions(page.BasePath) { <button type="submit">Guardar perfil</button> }
+	</form>
+}
+
+templ profileReadOnly(page ProfilePage) {
+	<section class="module"><h2>Dados do perfil</h2><p>Este perfil é apenas de leitura. O tutor ou um administrador pode alterá-lo.</p><dl class="profile-summary">
+		<div><dt>Telefone</dt><dd>{ displayValue(page.Form.Phone) }</dd></div><div><dt>Morada</dt><dd>{ displayValue(profileAddress(page.Form)) }</dd></div>
+		<div><dt>Contacto de emergência</dt><dd>{ displayValue(profileEmergency(page.Form)) }</dd></div><div><dt>Declaração médica</dt><dd>{ medicalLabel(page.Form.MedicalDeclaration) }</dd></div>
+		<div><dt>Alergias</dt><dd>{ displayValue(page.Form.Allergies) }</dd></div><div><dt>Condições médicas</dt><dd>{ displayValue(page.Form.MedicalConditions) }</dd></div><div><dt>Medicação</dt><dd>{ displayValue(page.Form.Medication) }</dd></div><div><dt>Restrições ou adaptações</dt><dd>{ displayValue(page.Form.ActivityRestrictions) }</dd></div><div><dt>Outras notas</dt><dd>{ displayValue(page.Form.MedicalNotes) }</dd></div>
+		<div><dt>Número de sócio</dt><dd>{ displayValue(page.Form.ClubMemberNumber) }</dd></div><div><dt>Licença federativa</dt><dd>{ displayValue(page.Form.FederationLicenceNumber) }</dd></div>
+	</dl></section>
+}
+
+templ profilePhoto(page ProfilePage) {
+	<section class="module"><h2>Fotografia de perfil</h2><p>A fotografia é privada e só fica visível com o consentimento de uso de imagem atual.</p>
+		@components.FieldErrorMessage("photo", page.Form.Errors["photo"])
+		<form class="form-layout" method="post" action={ page.BasePath + "/fotografia" } enctype="multipart/form-data">@page.Meta.CSRFField
+			@components.FieldLabel("profile-photo", "Fotografia JPEG, PNG ou WebP", true)<input id="profile-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-invalid?={ page.Form.Errors["photo"] != "" }/>
+			if !page.Admin {
+				<label class="consent-field"><input name="accept_image_use" type="checkbox" value="yes"/> Confirmo o <a href={ templ.SafeURL(page.ImageConsentURL) } target="_blank" rel="noopener">consentimento de uso de imagem</a> atual para esta pessoa.</label>
+			} else {
+				<p>Um administrador só pode carregar a fotografia quando o próprio adulto ou tutor já tiver aceite o consentimento atual.</p>
+			}
+			<button type="submit">{ photoButtonLabel(page.HasPhoto) }</button>
+		</form>
+		if page.HasPhoto {
+			<form method="post" action={ page.BasePath + "/fotografia/remover" }>@page.Meta.CSRFField<button class="action action--danger" type="submit">Remover fotografia</button></form>
+		}
+	</section>
+}
+
+templ profileTextarea(id, name, label, value string) { <div class="form-field">@components.FieldLabel(id, label, false)<textarea id={ id } name={ name } maxlength="2000" rows="3">{ value }</textarea></div> }
+
+templ countrySelect(id, name, selected string) {
+	<select id={ id } name={ name }><option value="">Não indicado</option>
+		for _, option := range profileCountries() {
+			<option value={ option.Code } selected?={ option.Code == selected }>{ option.Label }</option>
+		}
+		if selected != "" && !profileCountryListed(selected) {
+			<option value={ selected } selected>{ selected }</option>
+		}
+	</select>
+}
+
+func profileCountryListed(code string) bool { for _, country := range profileCountries() { if country.Code == code { return true } }; return false }
+func profileInitials(name string) string { words:=strings.Fields(name); if len(words)==0{return "?"}; first:=[]rune(words[0]); if len(words)==1{return strings.ToUpper(string(first[0]))}; last:=[]rune(words[len(words)-1]); return strings.ToUpper(string(first[0])+string(last[0])) }
+func displayValue(value string) string { if value=="" { return "Não indicado" }; return value }
+func medicalLabel(value string) string { if value=="NONE_KNOWN" {return "Sem informação médica conhecida"}; if value=="PROVIDED" {return "Existe informação relevante"}; return "Ainda não indicada" }
+func profileAddress(form ProfileForm) string { return strings.Trim(strings.Join([]string{form.AddressLine1,form.AddressLine2,form.Postcode,form.Locality,form.CountryCode},", "),", ") }
+func profileEmergency(form ProfileForm) string { if form.EmergencyName=="" {return ""}; return form.EmergencyName+" · "+form.EmergencyRelationship+" · "+form.EmergencyPhone }
+func photoButtonLabel(hasPhoto bool) string { if hasPhoto {return "Substituir fotografia"}; return "Carregar fotografia" }
+func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"}} }

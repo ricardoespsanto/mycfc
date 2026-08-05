@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -19,6 +20,7 @@ type Querier interface {
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)
 	CancelMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CheckInEventResponse(ctx context.Context, arg CheckInEventResponseParams) (int64, error)
+	ClearMemberProfilePhoto(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	CompleteMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	ConfirmWaitlistedResponse(ctx context.Context, arg ConfirmWaitlistedResponseParams) (int64, error)
 	CountDependentsByGuardian(ctx context.Context, guardianID *uuid.UUID) (int64, error)
@@ -34,6 +36,7 @@ type Querier interface {
 	CreateEquipmentWithAudit(ctx context.Context, arg CreateEquipmentWithAuditParams) (CreateEquipmentWithAuditRow, error)
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	CreateMaintenanceTask(ctx context.Context, arg CreateMaintenanceTaskParams) (MaintenanceTask, error)
+	CreateMemberProfileAudit(ctx context.Context, arg CreateMemberProfileAuditParams) (uuid.UUID, error)
 	CreateNews(ctx context.Context, arg CreateNewsParams) (NewsItem, error)
 	CreateRepairRequest(ctx context.Context, arg CreateRepairRequestParams) (RepairRequest, error)
 	CreateSeason(ctx context.Context, arg CreateSeasonParams) (Season, error)
@@ -43,6 +46,7 @@ type Querier interface {
 	CreateUserMembership(ctx context.Context, arg CreateUserMembershipParams) (UserMembership, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error
 	EndCurrentSeasonMembership(ctx context.Context, arg EndCurrentSeasonMembershipParams) (int64, error)
+	EnsureMemberProfile(ctx context.Context, userID uuid.UUID) error
 	ExpireAnnouncement(ctx context.Context, arg ExpireAnnouncementParams) (int64, error)
 	ExpireNews(ctx context.Context, id uuid.UUID) (int64, error)
 	GetAccountByEmail(ctx context.Context, email *string) (GetAccountByEmailRow, error)
@@ -50,13 +54,16 @@ type Querier interface {
 	GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (GetActiveDependentByLoginIDRow, error)
 	GetActiveUserByEmail(ctx context.Context, email *string) (GetActiveUserByEmailRow, error)
 	GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	GetCurrentImageConsent(ctx context.Context, arg GetCurrentImageConsentParams) (uuid.UUID, error)
 	GetCurrentSeason(ctx context.Context) (Season, error)
 	GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment, error)
 	GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Event, error)
 	GetEventDetailForMember(ctx context.Context, arg GetEventDetailForMemberParams) (GetEventDetailForMemberRow, error)
 	GetEventForResponse(ctx context.Context, id uuid.UUID) (Event, error)
 	GetEventResponse(ctx context.Context, arg GetEventResponseParams) (GetEventResponseRow, error)
+	GetMemberAvatar(ctx context.Context, arg GetMemberAvatarParams) (GetMemberAvatarRow, error)
 	GetMemberForAdmin(ctx context.Context, id uuid.UUID) (GetMemberForAdminRow, error)
+	GetMemberProfile(ctx context.Context, userID uuid.UUID) (GetMemberProfileRow, error)
 	GetModalityByCode(ctx context.Context, code string) (Modality, error)
 	GetProgrammeByCode(ctx context.Context, code string) (Programme, error)
 	GetRepairByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (RepairRequest, error)
@@ -83,6 +90,7 @@ type Querier interface {
 	ListCompetitionDocumentsForAthlete(ctx context.Context, arg ListCompetitionDocumentsForAthleteParams) ([]ListCompetitionDocumentsForAthleteRow, error)
 	ListCompetitionDocumentsForEvent(ctx context.Context, eventID *uuid.UUID) ([]ListCompetitionDocumentsForEventRow, error)
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)
+	ListDependentProfileCompleteness(ctx context.Context, guardianID *uuid.UUID) ([]ListDependentProfileCompletenessRow, error)
 	ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error)
 	ListDistanceLeaderboard(ctx context.Context, arg ListDistanceLeaderboardParams) ([]ListDistanceLeaderboardRow, error)
 	ListEquipmentAuditEvents(ctx context.Context, arg ListEquipmentAuditEventsParams) ([]ListEquipmentAuditEventsRow, error)
@@ -125,6 +133,9 @@ type Querier interface {
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error)
 	UpdateEquipmentWithAudit(ctx context.Context, arg UpdateEquipmentWithAuditParams) (UpdateEquipmentWithAuditRow, error)
+	UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIdentityParams) (pgtype.Timestamptz, error)
+	UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfileParams) (MemberProfile, error)
+	UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMemberProfilePhotoParams) (pgtype.Timestamptz, error)
 	UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error)
 	UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)

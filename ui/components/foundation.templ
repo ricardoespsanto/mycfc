@@ -71,4 +71,12 @@ templ Icon(label string, decorative bool) {
 
 templ DataRegion(label string, content templ.Component) { <div class="data-region" role="region" aria-label={ label } tabindex="0">@content</div> }
 
+templ Avatar(userID, name string) {
+	if userID != "" {
+		<img class="person-avatar" src={ "/membros/"+userID+"/foto" } alt="" width="36" height="36"/>
+	}
+}
+
+templ PersonName(userID, name string) { <span class="person-name">@Avatar(userID, name)<span>{ name }</span></span> }
+
 func calloutRole(tone string) string { if tone == "error" { return "alert" }; return "status" }

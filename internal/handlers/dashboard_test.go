@@ -76,6 +76,9 @@ func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 	}
 	for _, group := range dashboardNavigation(user) {
 		for _, item := range group.Items {
+			if item.Path == "/perfil" {
+				t.Errorf("profile exposed as a literal navigation destination: %+v", item)
+			}
 			if item.Label == "Treinador" || item.Label == "Moderador" {
 				t.Errorf("staff capability exposed as destination: %+v", item)
 			}
@@ -130,7 +133,7 @@ func TestDashboardTodayComposesBoundedCapabilityModules(t *testing.T) {
 	response := httptest.NewRecorder()
 	dashboard.Today(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user)))
 	body := response.Body.String()
-	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Rita Silva", "Acesso ativo", "Competição"} {
+	for _, want := range []string{"Olá, Maria", "A seguir", "Treino da manhã", "Rita Silva", "Acesso ativo", "Competição", `href="/perfil"`, "Abrir perfil de Maria Silva"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Today does not contain %q", want)
 		}
@@ -615,7 +618,7 @@ func (f releaseCheckerFake) Snapshot(context.Context) release.Snapshot {
 	return f.snapshot
 }
 
-func (f *presignStoreFake) PutRepairPhoto(context.Context, string, string, int64, io.Reader) error {
+func (f *presignStoreFake) PutObject(context.Context, string, string, int64, io.Reader) error {
 	return nil
 }
 func (f *presignStoreFake) DeleteObject(context.Context, string) error { return nil }

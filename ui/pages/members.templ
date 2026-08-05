@@ -43,7 +43,7 @@ templ membersContent(page MembersPage) {
 templ memberTable(members []MemberListItem) {
     <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col" aria-label="Ação"></th></tr></thead><tbody>
     for _, member := range members {
-        <tr><th scope="row"><a href={ "/admin/membros/" + member.ID }>{ member.Name }</a></th><td>
+		<tr><th scope="row"><a href={ "/admin/membros/" + member.ID }>@components.PersonName(member.ID, member.Name)</a></th><td>
             if member.Dependent {
                 Menor a cargo
             } else {
@@ -87,7 +87,7 @@ templ MemberCreate(form MemberCreateForm) {
 }
 templ MemberDetailView(page MemberDetailPage) { @components.Base(page.Meta, memberDetailContent(page)) }
 templ memberDetailContent(page MemberDetailPage) {
-    @components.PageHeader("Administração · Membros", page.Member.Name, "Consulte a identidade, o acesso e as inscrições desta pessoa.", []components.PageAction{{Label: "Voltar aos membros", Href: "/admin/membros", Variant: "secondary"}})
+	@components.PageHeader("Administração · Membros", page.Member.Name, "Consulte a identidade, o acesso e as inscrições desta pessoa.", []components.PageAction{{Label: "Abrir perfil", Href: "/admin/membros/"+page.Member.ID+"/perfil", Variant: "primary"}, {Label: "Voltar aos membros", Href: "/admin/membros", Variant: "secondary"}})
     @components.StatusMessage(page.Success, "success")
     <section class="module">
         @components.SectionHeading("Conta", "Identidade e acesso", "Confirme a pessoa e o estado da conta antes de fazer alterações.")

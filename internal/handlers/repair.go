@@ -71,6 +71,7 @@ func (h Repair) Index(w http.ResponseWriter, r *http.Request) {
 	meta.Title = "Frota | MyCFC"
 	meta.CurrentPath = "/fleet"
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	success := ""
@@ -181,7 +182,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		}
 		objectKey = fmt.Sprintf("repairs/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), validated.Extension)
 		uploadCtx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
-		if err := h.Objects.PutRepairPhoto(uploadCtx, objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
+		if err := h.Objects.PutObject(uploadCtx, objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
 			h.internal(w, r, err)
 			return
 		}

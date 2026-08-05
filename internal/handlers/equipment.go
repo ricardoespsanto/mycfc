@@ -326,7 +326,7 @@ func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, photo
 	}
 	key := fmt.Sprintf("equipment/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), photo.Extension)
 	ctx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
-	if err := h.Objects.PutRepairPhoto(ctx, key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
+	if err := h.Objects.PutObject(ctx, key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
 		return nil, nil, nil, false
 	}
 	return &key, &photo.ContentType, &photo.Size, true
@@ -430,6 +430,7 @@ func (h Dashboard) equipmentMeta(r *http.Request) components.PageMeta {
 	meta.Title = "Equipamento | MyCFC"
 	meta.CurrentPath = "/admin/fleet"
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta

@@ -15,7 +15,7 @@ type GuardianPage struct {
 	Errors     validation.FieldErrors
 	Success    string
 }
-type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible bool }
+type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible, ProfileIncomplete bool }
 
 templ Guardian(page GuardianPage) {
 	@components.Base(page.Meta, GuardianContent(page))
@@ -34,7 +34,11 @@ templ GuardianContent(page GuardianPage) {
 				if len(page.Dependents) > 0 {
 					@components.RecordList("Dependentes associados") {
 						for _, dependent := range page.Dependents {
-							<li class="record-item"><div class="record-item__copy"><h3>{ dependent.Name }</h3><p class="record-meta">{ dependent.Detail }</p></div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
+							<li class="record-item"><div class="record-item__copy"><h3><a href={ "/perfil/dependentes/"+dependent.ID }>@components.PersonName(dependent.ID, dependent.Name)</a></h3><p class="record-meta">{ dependent.Detail }</p>
+								if dependent.ProfileIncomplete {
+									<p class="record-meta">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>
+								}
+							</div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
 						}
 				}
 			}

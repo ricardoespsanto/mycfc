@@ -58,13 +58,16 @@ WHERE email = sqlc.arg(email)
   AND is_dependent = false;
 
 -- name: ListDependentsByGuardian :many
-SELECT id, name, guardian_id, is_dependent,
-       date_of_birth, is_active, leaderboard_visible, created_at, updated_at, minor_login_id
-FROM users
-WHERE guardian_id = sqlc.arg(guardian_id)
-  AND is_dependent = true
-  AND is_active = true
-ORDER BY lower(name), id
+SELECT u.id, u.name, u.guardian_id, u.is_dependent,
+       u.date_of_birth, u.is_active, u.leaderboard_visible, u.created_at, u.updated_at, u.minor_login_id,
+       COALESCE(p.emergency_contact_name <> '' AND p.emergency_contact_relationship <> '' AND p.emergency_contact_phone <> '' AND p.medical_declaration <> 'UNKNOWN', false)::boolean AS profile_complete,
+       COALESCE(p.photo_object_key IS NOT NULL, false)::boolean AS has_profile_photo
+FROM users u
+LEFT JOIN member_profiles p ON p.user_id = u.id
+WHERE u.guardian_id = sqlc.arg(guardian_id)
+  AND u.is_dependent = true
+  AND u.is_active = true
+ORDER BY lower(u.name), u.id
 LIMIT sqlc.arg(row_limit);
 
 -- name: CountDependentsByGuardian :one
@@ -131,8 +134,10 @@ SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
            FROM user_platform_roles assignment
            JOIN platform_roles role ON role.id = assignment.role_id
            WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
-       ) AS is_admin
+       ) AS is_admin,
+       COALESCE(p.emergency_contact_name <> '' AND p.emergency_contact_relationship <> '' AND p.emergency_contact_phone <> '' AND p.medical_declaration <> 'UNKNOWN', false)::boolean AS profile_complete
 FROM users u
+LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = sqlc.arg(id);
 
 -- name: UpdateOwnLeaderboardVisibility :execrows

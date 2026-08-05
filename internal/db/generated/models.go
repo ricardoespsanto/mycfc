@@ -318,6 +318,49 @@ func (ns NullMaintenanceStatus) Value() (driver.Value, error) {
 	return string(ns.MaintenanceStatus), nil
 }
 
+type MedicalDeclaration string
+
+const (
+	MedicalDeclarationUNKNOWN   MedicalDeclaration = "UNKNOWN"
+	MedicalDeclarationNONEKNOWN MedicalDeclaration = "NONE_KNOWN"
+	MedicalDeclarationPROVIDED  MedicalDeclaration = "PROVIDED"
+)
+
+func (e *MedicalDeclaration) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MedicalDeclaration(s)
+	case string:
+		*e = MedicalDeclaration(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MedicalDeclaration: %T", src)
+	}
+	return nil
+}
+
+type NullMedicalDeclaration struct {
+	MedicalDeclaration MedicalDeclaration `json:"medical_declaration"`
+	Valid              bool               `json:"valid"` // Valid is true if MedicalDeclaration is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMedicalDeclaration) Scan(value interface{}) error {
+	if value == nil {
+		ns.MedicalDeclaration, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MedicalDeclaration.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMedicalDeclaration) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MedicalDeclaration), nil
+}
+
 type MetricType string
 
 const (
@@ -636,6 +679,44 @@ type MaintenanceTask struct {
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MemberProfile struct {
+	UserID                         uuid.UUID          `json:"user_id"`
+	Phone                          string             `json:"phone"`
+	AddressLine1                   string             `json:"address_line1"`
+	AddressLine2                   string             `json:"address_line2"`
+	Postcode                       string             `json:"postcode"`
+	Locality                       string             `json:"locality"`
+	CountryCode                    string             `json:"country_code"`
+	NationalityCode                string             `json:"nationality_code"`
+	ClubMemberNumber               *string            `json:"club_member_number"`
+	FederationLicenceNumber        *string            `json:"federation_licence_number"`
+	EmergencyContactName           string             `json:"emergency_contact_name"`
+	EmergencyContactRelationship   string             `json:"emergency_contact_relationship"`
+	EmergencyContactPhone          string             `json:"emergency_contact_phone"`
+	EmergencyContactAlternatePhone string             `json:"emergency_contact_alternate_phone"`
+	MedicalDeclaration             string             `json:"medical_declaration"`
+	Allergies                      string             `json:"allergies"`
+	MedicalConditions              string             `json:"medical_conditions"`
+	Medication                     string             `json:"medication"`
+	ActivityRestrictions           string             `json:"activity_restrictions"`
+	MedicalNotes                   string             `json:"medical_notes"`
+	PhotoObjectKey                 *string            `json:"photo_object_key"`
+	PhotoContentType               *string            `json:"photo_content_type"`
+	PhotoSizeBytes                 *int64             `json:"photo_size_bytes"`
+	PhotoConsentFormID             *uuid.UUID         `json:"photo_consent_form_id"`
+	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MemberProfileAuditEvent struct {
+	ID            uuid.UUID          `json:"id"`
+	ActorUserID   uuid.UUID          `json:"actor_user_id"`
+	SubjectUserID uuid.UUID          `json:"subject_user_id"`
+	Action        string             `json:"action"`
+	ChangedFields []string           `json:"changed_fields"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type MembershipModality struct {

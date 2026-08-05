@@ -192,10 +192,10 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	if user.IsAdmin {
 		eventBasePath = "/admin/eventos"
 	}
-	page := pages.TodayPage{Name: user.Name, EventBasePath: eventBasePath, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user), ShowShortcuts: true}
+	page := pages.TodayPage{Name: user.Name, EventBasePath: eventBasePath, Events: make([]pages.TodayEvent, len(events)), Shortcuts: todayShortcuts(user), ShowShortcuts: true, ProfileIncomplete: !user.ProfileComplete}
 	page.Leaderboard = pages.TodayLeaderboard{Period: string(period), IsAthlete: len(user.Programmes) > 0, Visible: user.LeaderboardVisible}
 	for _, leader := range leaders {
-		row := pages.TodayLeaderboardRow{Position: leader.Position, Name: leader.Name, Distance: formatKilometres(leader.TotalMetres)}
+		row := pages.TodayLeaderboardRow{Position: leader.Position, UserID: leader.UserID.String(), Name: leader.Name, Distance: formatKilometres(leader.TotalMetres)}
 		if leader.UserID == user.ID && leader.Position > 10 {
 			page.Leaderboard.Current = &row
 			continue
@@ -217,7 +217,7 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, dependent := range dependents {
-			page.Dependents = append(page.Dependents, pages.TodayDependent{Name: dependent.Name, HasAccess: dependent.MinorLoginID != nil})
+			page.Dependents = append(page.Dependents, pages.TodayDependent{ID: dependent.ID.String(), Name: dependent.Name, HasAccess: dependent.MinorLoginID != nil})
 		}
 	}
 	if user.IsAdmin && h.Fleet != nil {
@@ -240,6 +240,7 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	page.Meta.Title = "Hoje | MyCFC"
 	page.Meta.CurrentPath = "/today"
 	page.Meta.CurrentUserName = user.Name
+	page.Meta.CurrentUserID = user.ID.String()
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -393,6 +394,7 @@ func (h Dashboard) ReleasesPage(w http.ResponseWriter, r *http.Request) {
 	page.Meta.Title = "Sistema | MyCFC"
 	page.Meta.CurrentPath = "/admin/sistema"
 	page.Meta.CurrentUserName = user.Name
+	page.Meta.CurrentUserID = user.ID.String()
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -570,6 +572,7 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.Title = "Frota | MyCFC"
 	page.Meta.CurrentPath = "/admin/fleet"
 	page.Meta.CurrentUserName = user.Name
+	page.Meta.CurrentUserID = user.ID.String()
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
@@ -600,6 +603,7 @@ func (h Dashboard) renderMaintenanceForm(w http.ResponseWriter, r *http.Request,
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -778,6 +782,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.Title = heading + " | MyCFC"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -804,12 +809,13 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	meta.PageLabel = "Menores a cargo"
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	items := guardianDependentItems(dependents, h.now(), h.location())
 	pageItems := make([]pages.GuardianDependent, len(items))
 	for i, item := range items {
-		pageItems[i] = pages.GuardianDependent{ID: dependents[i].ID.String(), Name: item.Title, Detail: item.Detail, LeaderboardVisible: dependents[i].LeaderboardVisible}
+		pageItems[i] = pages.GuardianDependent{ID: dependents[i].ID.String(), Name: item.Title, Detail: item.Detail, LeaderboardVisible: dependents[i].LeaderboardVisible, ProfileIncomplete: !dependents[i].ProfileComplete}
 	}
 	success := form.Success
 	if success == "" && h.Sessions != nil {

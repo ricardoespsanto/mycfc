@@ -4,10 +4,10 @@ import "fmt"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type TodayEvent struct { ID, Title, When string }
-type TodayDependent struct { Name string; HasAccess bool }
+type TodayDependent struct { ID, Name string; HasAccess bool }
 type TodayOperation struct { Label, Detail string }
 type TodayShortcut struct { Label, Detail, Path string }
-type TodayLeaderboardRow struct { Position int64; Name, Distance string }
+type TodayLeaderboardRow struct { Position int64; UserID, Name, Distance string }
 type TodayLeaderboard struct { Period string; Rows []TodayLeaderboardRow; Current *TodayLeaderboardRow; IsAthlete, Visible bool }
 type TodayPage struct {
 	Meta components.PageMeta
@@ -21,6 +21,7 @@ type TodayPage struct {
 	Leaderboard TodayLeaderboard
 	Success string
 	ShowShortcuts bool
+	ProfileIncomplete bool
 }
 
 templ Today(page TodayPage) { @components.Base(page.Meta, todayContent(page)) }
@@ -32,6 +33,9 @@ templ todayContent(page TodayPage) {
 		}
 		</section>
 		@components.StatusMessage(page.Success, "success")
+		if page.ProfileIncomplete {
+			<div class="callout callout--warning" role="status"><strong>Complete o seu perfil</strong><p>Falta indicar o contacto de emergência ou a declaração médica.</p><a href="/perfil">Abrir perfil</a></div>
+		}
 		<div class="today-grid">
 	<section class="today-module today-module--agenda"><header><div><h2>Agenda de hoje</h2></div><a class="action action--quiet" href={ todayEventsPath(page) }>Ver agenda</a></header>
 		if len(page.Events) == 0 {
@@ -57,7 +61,7 @@ templ todayContent(page TodayPage) {
 			} else {
 				<ol class="leaderboard-list">
 					for _, row := range page.Leaderboard.Rows {
-						<li><span aria-label={ "Posição "+fmt.Sprint(row.Position) }>{ fmt.Sprint(row.Position) }</span><strong>{ row.Name }</strong><b>{ row.Distance }</b></li>
+						<li><span aria-label={ "Posição "+fmt.Sprint(row.Position) }>{ fmt.Sprint(row.Position) }</span><strong>@components.PersonName(row.UserID, row.Name)</strong><b>{ row.Distance }</b></li>
 					}
 				</ol>
 			}
@@ -74,7 +78,7 @@ templ todayContent(page TodayPage) {
 	if len(page.Dependents) > 0 {
 		<section class="today-module"><header><div><h2>Menores a cargo</h2></div><a class="action action--quiet" href="/dashboard/guardian">Gerir</a></header><ul class="today-list">
 			for _, dependent := range page.Dependents {
-				<li><strong>{ dependent.Name }</strong>
+				<li><strong>@components.PersonName(dependent.ID, dependent.Name)</strong>
 						if dependent.HasAccess {
 							<span>Acesso ativo</span>
 						} else {

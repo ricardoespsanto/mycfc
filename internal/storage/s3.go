@@ -25,7 +25,7 @@ func NewS3Store(client *s3.Client, bucket string) *S3Store {
 	}
 }
 
-func (s *S3Store) PutRepairPhoto(ctx context.Context, key, contentType string, size int64, body io.Reader) error {
+func (s *S3Store) PutObject(ctx context.Context, key, contentType string, size int64, body io.Reader) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 

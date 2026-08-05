@@ -42,6 +42,7 @@ func (h System) render(w http.ResponseWriter, r *http.Request, status int, eyebr
 	meta.PageLabel = title
 	if user, ok := CurrentUserFromContext(r.Context()); ok {
 		meta.CurrentUserName = user.Name
+		meta.CurrentUserID = user.ID.String()
 		meta.Navigation = dashboardNavigation(user)
 		meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	}

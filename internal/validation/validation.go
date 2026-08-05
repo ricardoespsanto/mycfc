@@ -110,6 +110,7 @@ func ValidatePassword(password string) error {
 var allowedNextPaths = map[string]struct{}{
 	"/dashboard":             {},
 	"/today":                 {},
+	"/perfil":                {},
 	"/dashboard/competitor":  {},
 	"/dashboard/initiation":  {},
 	"/dashboard/competition": {},

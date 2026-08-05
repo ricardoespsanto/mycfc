@@ -78,6 +78,24 @@ test.describe('authentication', () => {
     await expect(page.getByRole('heading', { name: 'Olá, Pessoa', exact: true })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
+	await page.getByRole('link', { name: 'Abrir perfil de Pessoa de teste', exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
+	await expect(page.getByText(/Complete o contacto de emergência/)).toBeVisible();
+	await page.getByLabel('Telefone', { exact: true }).fill('+351 910 000 000');
+	await page.locator('#profile-emergency-name').fill('Contacto E2E');
+	await page.locator('#profile-emergency-relationship').fill('Família');
+	await page.locator('#profile-emergency-phone').fill('+351 920 000 000');
+	await page.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
+	await page.getByRole('button', { name: 'Guardar perfil' }).click();
+	await expect(page).toHaveURL('/perfil');
+	await expect(page.getByText('Perfil atualizado.')).toBeVisible();
+	await expect(page.getByText(/Complete o contacto de emergência/)).toHaveCount(0);
+	await page.getByLabel('Fotografia JPEG, PNG ou WebP').setInputFiles({ name: 'perfil.png', mimeType: 'image/png', buffer: validPNG });
+	await page.getByRole('button', { name: 'Carregar fotografia' }).click();
+	await expect(page.getByText('Fotografia atualizada.')).toBeVisible();
+	await expect(page.getByAltText('Fotografia de Pessoa de teste')).toBeVisible();
+	await expectNoSeriousAxeViolations(page);
+
     await page.goto('/dashboard/member?from=legacy');
     await expect(page).toHaveURL('/today?from=legacy');
 
@@ -168,7 +186,17 @@ test.describe('authentication', () => {
 
     await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
     await expect(noJavaScriptPage.getByText('Menor a cargo adicionado.')).toBeVisible();
-    await expect(noJavaScriptPage.getByText('Menor de teste')).toBeVisible();
+	const dependentLink = noJavaScriptPage.getByRole('link', { name: 'Menor de teste' });
+	await expect(dependentLink).toBeVisible();
+	await dependentLink.click();
+	await noJavaScriptPage.locator('#profile-emergency-name').fill('Guardião de teste');
+	await noJavaScriptPage.locator('#profile-emergency-relationship').fill('Tutor');
+	await noJavaScriptPage.locator('#profile-emergency-phone').fill('+351 930 000 000');
+	await noJavaScriptPage.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
+	await noJavaScriptPage.getByRole('button', { name: 'Guardar perfil' }).click();
+	await expect(noJavaScriptPage.getByText('Perfil atualizado.')).toBeVisible();
+	await noJavaScriptPage.getByRole('link', { name: 'Voltar aos menores' }).click();
+	await expect(noJavaScriptPage.getByText(/Perfil incompleto/)).toHaveCount(0);
     await noJavaScriptPage.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(noJavaScriptPage);
     await context.close();

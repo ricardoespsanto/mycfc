@@ -9,6 +9,7 @@ type PageMeta struct {
 	BrandImageURL   string
 	CurrentPath     string
 	CurrentUserName string
+	CurrentUserID   string
 	Navigation      []NavigationGroup
 	CSRFField       templ.Component
 	AreaLabel       string
@@ -105,7 +106,7 @@ templ Base(meta PageMeta, content templ.Component) {
 					<div class="mobile-app-header__actions">
 						@announcementTrigger()
 						<details class="mobile-app-menu"><summary>Menu</summary><div class="mobile-app-menu__content">
-						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><span class="visually-hidden">Conta com responsabilidades cumulativas</span><div class="capability-list">
+						<section class="account-context" aria-label="Conta atual"><a class="account-profile-link person-name" href="/perfil" aria-label={ "Abrir perfil de " + meta.CurrentUserName }>@Avatar(meta.CurrentUserID, meta.CurrentUserName)<strong>{ meta.CurrentUserName }</strong></a><span class="visually-hidden">Conta com responsabilidades cumulativas</span><div class="capability-list">
 							for _, label := range capabilityLabels(meta.Navigation) {
 								<span>{ label }</span>
 							}
@@ -137,7 +138,7 @@ templ Base(meta PageMeta, content templ.Component) {
 							@announcementTrigger()
 						</div>
 						@Navigation(meta.CurrentPath, meta.Navigation)
-						<section class="account-context" aria-label="Conta atual"><strong>{ meta.CurrentUserName }</strong><div class="capability-list">
+						<section class="account-context" aria-label="Conta atual"><a class="account-profile-link person-name" href="/perfil" aria-label={ "Abrir perfil de " + meta.CurrentUserName }>@Avatar(meta.CurrentUserID, meta.CurrentUserName)<strong>{ meta.CurrentUserName }</strong></a><div class="capability-list">
 							for _, label := range capabilityLabels(meta.Navigation) {
 								<span>{ label }</span>
 							}

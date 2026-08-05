@@ -27,7 +27,7 @@ func TestS3StoreStoresAndDeletesRepairPhoto(t *testing.T) {
 	store := NewS3Store(client, os.Getenv("S3_BUCKET_NAME"))
 	key := "repairs/integration/" + t.Name() + ".png"
 	body := []byte("a validated image fixture")
-	if err := store.PutRepairPhoto(WithUploadMetadata(ctx, UploadMetadata{RequestID: "integration", UserID: "user"}), key, "image/png", int64(len(body)), bytes.NewReader(body)); err != nil {
+	if err := store.PutObject(WithUploadMetadata(ctx, UploadMetadata{RequestID: "integration", UserID: "user"}), key, "image/png", int64(len(body)), bytes.NewReader(body)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.DeleteObject(context.Background(), key) })

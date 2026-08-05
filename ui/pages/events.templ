@@ -155,24 +155,24 @@ templ eventDetailContent(page EventDetailPage) {
             }
             if len(page.Responses) > 0 {
                 @components.RecordList("Respostas ao evento") {
-                    for _, response := range page.Responses {
-                        @components.RecordItem(response.Name, "", response.RespondedAt) {
-                            @components.Badge(response.Status, eventStatusTone(response.Status))
-                            if (response.Status == "Em lista de espera") || (response.Status == "Vou" && response.CheckedInAt == "") {
-                                <details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions">
-                                if response.Status == "Em lista de espera" {
-                                    <form method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Confirmar vaga</button></form>
-                                }
-                                if response.Status == "Vou" && response.CheckedInAt == "" {
-                                    <form method="post" action={ "/admin/events/" + page.ID + "/check-in" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Registar presença</button></form>
-                                }
-                                </div></details>
-                            }
-                            if response.CheckedInAt != "" {
-                                <span class="record-meta">Presença: { response.CheckedInAt }</span>
-                            }
-                        }
-                    }
+					for _, response := range page.Responses {
+						<li class="record-item"><div class="record-item__copy"><h3>@components.PersonName(response.UserID, response.Name)</h3><p class="record-meta">{ response.RespondedAt }</p></div>
+							@components.Badge(response.Status, eventStatusTone(response.Status))
+							if (response.Status == "Em lista de espera") || (response.Status == "Vou" && response.CheckedInAt == "") {
+								<details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions">
+									if response.Status == "Em lista de espera" {
+										<form method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Confirmar vaga</button></form>
+									}
+									if response.Status == "Vou" && response.CheckedInAt == "" {
+										<form method="post" action={ "/admin/events/" + page.ID + "/check-in" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Registar presença</button></form>
+									}
+								</div></details>
+							}
+							if response.CheckedInAt != "" {
+								<span class="record-meta">Presença: { response.CheckedInAt }</span>
+							}
+						</li>
+					}
                 }
             }
             if page.ResponsesPreviousURL != "" || page.ResponsesNextURL != "" {

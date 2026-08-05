@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, news handlers.News, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, foundation handlers.Foundation) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{PageMeta: foundation.PageMeta}
@@ -36,6 +36,15 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /registo", auth.AnonymousOnly(http.HandlerFunc(registration.Get)))
 	mux.Handle("POST /registo", auth.AnonymousOnly(http.HandlerFunc(registration.Post)))
 	mux.Handle("POST /logout", auth.RequireAuthenticated(http.HandlerFunc(auth.Logout)))
+	mux.Handle("GET /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Get)))
+	mux.Handle("POST /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Post)))
+	mux.Handle("POST /perfil/fotografia", auth.RequireAuthenticated(http.HandlerFunc(profile.UploadPhoto)))
+	mux.Handle("POST /perfil/fotografia/remover", auth.RequireAuthenticated(http.HandlerFunc(profile.RemovePhoto)))
+	mux.Handle("GET /perfil/dependentes/{id}", auth.RequireGuardian(http.HandlerFunc(profile.Get)))
+	mux.Handle("POST /perfil/dependentes/{id}", auth.RequireGuardian(http.HandlerFunc(profile.Post)))
+	mux.Handle("POST /perfil/dependentes/{id}/fotografia", auth.RequireGuardian(http.HandlerFunc(profile.UploadPhoto)))
+	mux.Handle("POST /perfil/dependentes/{id}/fotografia/remover", auth.RequireGuardian(http.HandlerFunc(profile.RemovePhoto)))
+	mux.Handle("GET /membros/{id}/foto", auth.RequireAuthenticated(http.HandlerFunc(profile.Avatar)))
 	mux.Handle("GET /dashboard", auth.RequireAuthenticated(http.HandlerFunc(auth.Dashboard)))
 	mux.Handle("GET /today", auth.RequireAuthenticated(http.HandlerFunc(dashboard.Today)))
 	mux.Handle("GET /dashboard/member", auth.RequireAuthenticated(compatibilityRedirect("/today")))
@@ -60,6 +69,10 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Index)))
 	mux.Handle("POST /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Create)))
 	mux.Handle("GET /admin/membros/{id}", auth.RequireAdmin(http.HandlerFunc(members.Detail)))
+	mux.Handle("GET /admin/membros/{id}/perfil", auth.RequireAdmin(http.HandlerFunc(profile.Get)))
+	mux.Handle("POST /admin/membros/{id}/perfil", auth.RequireAdmin(http.HandlerFunc(profile.Post)))
+	mux.Handle("POST /admin/membros/{id}/perfil/fotografia", auth.RequireAdmin(http.HandlerFunc(profile.UploadPhoto)))
+	mux.Handle("POST /admin/membros/{id}/perfil/fotografia/remover", auth.RequireAdmin(http.HandlerFunc(profile.RemovePhoto)))
 	mux.Handle("POST /admin/membros/{id}/inscricao", auth.RequireAdmin(http.HandlerFunc(members.Membership)))
 	mux.Handle("POST /admin/membros/{id}/desativar", auth.RequireAdmin(http.HandlerFunc(members.Deactivate)))
 	mux.Handle("POST /admin/membros/{id}/credencial-menor", auth.RequireAdmin(http.HandlerFunc(members.IssueMinorCredential)))

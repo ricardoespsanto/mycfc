@@ -7,7 +7,7 @@ import (
 )
 
 type ObjectStore interface {
-	PutRepairPhoto(ctx context.Context, key, contentType string, size int64, body io.Reader) error
+	PutObject(ctx context.Context, key, contentType string, size int64, body io.Reader) error
 	DeleteObject(ctx context.Context, key string) error
 	PresignGet(ctx context.Context, key string, lifetime time.Duration) (string, error)
 }

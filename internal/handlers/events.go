@@ -657,6 +657,7 @@ func (h Events) meta(r *http.Request, user CurrentUser, path, title string) comp
 	meta.Title = title + " | MyCFC"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta

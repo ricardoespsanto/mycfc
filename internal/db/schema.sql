@@ -7,6 +7,7 @@ CREATE TYPE equipment_type AS ENUM ('Boat', 'Paddle', 'Vehicle');
 CREATE TYPE equipment_status AS ENUM ('Operational', 'Maintenance', 'Retired');
 CREATE TYPE maintenance_status AS ENUM ('Scheduled', 'In_Progress', 'Completed', 'Cancelled');
 CREATE TYPE metric_type AS ENUM ('Distance_Metres', 'Duration_Seconds', 'Sessions', 'Custom');
+CREATE TYPE medical_declaration AS ENUM ('UNKNOWN', 'NONE_KNOWN', 'PROVIDED');
 
 CREATE TABLE users (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, email citext NULL, minor_login_id citext NULL, password_hash text NULL, guardian_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, is_dependent boolean NOT NULL DEFAULT false, date_of_birth date NOT NULL, is_active boolean NOT NULL DEFAULT true, leaderboard_visible boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
@@ -33,6 +34,36 @@ CREATE TABLE repair_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), ide
 CREATE INDEX repair_status_date_idx ON repair_requests (status, date_reported DESC); CREATE INDEX repair_equipment_id_idx ON repair_requests (equipment_id); CREATE INDEX repair_reported_by_id_idx ON repair_requests (reported_by_id);
 CREATE TABLE consent_forms (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, granted_by_user_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, consent_type consent_type NOT NULL, document_version varchar(40) NOT NULL, document_sha256 char(64) NOT NULL, is_accepted boolean NOT NULL, date_signed timestamptz NOT NULL DEFAULT now(), ip_address inet NULL, user_agent varchar(512) NOT NULL DEFAULT '', CONSTRAINT consent_version_valid CHECK (document_version = btrim(document_version) AND char_length(document_version) BETWEEN 1 AND 40), CONSTRAINT consent_sha256_valid CHECK (document_sha256 ~ '^[0-9a-f]{64}$'), CONSTRAINT consent_accepted_true CHECK (is_accepted), CONSTRAINT consent_user_agent_valid CHECK (char_length(user_agent) <= 512), CONSTRAINT consent_version_unique UNIQUE (user_id, consent_type, document_version));
 CREATE INDEX consent_user_type_date_idx ON consent_forms (user_id, consent_type, date_signed DESC);
+CREATE TABLE member_profiles (
+ user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ phone varchar(32) NOT NULL DEFAULT '', address_line1 varchar(200) NOT NULL DEFAULT '', address_line2 varchar(200) NOT NULL DEFAULT '', postcode varchar(20) NOT NULL DEFAULT '', locality varchar(120) NOT NULL DEFAULT '', country_code varchar(2) NOT NULL DEFAULT '', nationality_code varchar(2) NOT NULL DEFAULT '',
+ club_member_number varchar(60) NULL, federation_licence_number varchar(60) NULL,
+ emergency_contact_name varchar(120) NOT NULL DEFAULT '', emergency_contact_relationship varchar(80) NOT NULL DEFAULT '', emergency_contact_phone varchar(32) NOT NULL DEFAULT '', emergency_contact_alternate_phone varchar(32) NOT NULL DEFAULT '',
+ medical_declaration medical_declaration NOT NULL DEFAULT 'UNKNOWN', allergies varchar(2000) NOT NULL DEFAULT '', medical_conditions varchar(2000) NOT NULL DEFAULT '', medication varchar(2000) NOT NULL DEFAULT '', activity_restrictions varchar(2000) NOT NULL DEFAULT '', medical_notes varchar(2000) NOT NULL DEFAULT '',
+ photo_object_key varchar(512) NULL, photo_content_type varchar(100) NULL, photo_size_bytes bigint NULL, photo_consent_form_id uuid NULL REFERENCES consent_forms(id) ON DELETE RESTRICT,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT member_profiles_phone_valid CHECK (phone = '' OR (phone ~ '^[+]?[0-9][0-9 ().-]*[0-9]$' AND char_length(regexp_replace(phone, '[^0-9]', '', 'g')) BETWEEN 7 AND 15)),
+ CONSTRAINT member_profiles_emergency_phone_valid CHECK (emergency_contact_phone = '' OR (emergency_contact_phone ~ '^[+]?[0-9][0-9 ().-]*[0-9]$' AND char_length(regexp_replace(emergency_contact_phone, '[^0-9]', '', 'g')) BETWEEN 7 AND 15)),
+ CONSTRAINT member_profiles_emergency_alternate_phone_valid CHECK (emergency_contact_alternate_phone = '' OR (emergency_contact_alternate_phone ~ '^[+]?[0-9][0-9 ().-]*[0-9]$' AND char_length(regexp_replace(emergency_contact_alternate_phone, '[^0-9]', '', 'g')) BETWEEN 7 AND 15)),
+ CONSTRAINT member_profiles_address_valid CHECK (char_length(address_line1) <= 200 AND char_length(address_line2) <= 200 AND char_length(postcode) <= 20 AND char_length(locality) <= 120),
+ CONSTRAINT member_profiles_country_valid CHECK (country_code = '' OR country_code ~ '^[A-Z]{2}$'),
+ CONSTRAINT member_profiles_nationality_valid CHECK (nationality_code = '' OR nationality_code ~ '^[A-Z]{2}$'),
+ CONSTRAINT member_profiles_emergency_complete CHECK ((emergency_contact_name = '' AND emergency_contact_relationship = '' AND emergency_contact_phone = '' AND emergency_contact_alternate_phone = '') OR (emergency_contact_name <> '' AND emergency_contact_relationship <> '' AND emergency_contact_phone <> '')),
+ CONSTRAINT member_profiles_medical_complete CHECK (medical_declaration <> 'PROVIDED' OR allergies <> '' OR medical_conditions <> '' OR medication <> '' OR activity_restrictions <> '' OR medical_notes <> ''),
+ CONSTRAINT member_profiles_photo_complete CHECK ((photo_object_key IS NULL AND photo_content_type IS NULL AND photo_size_bytes IS NULL AND photo_consent_form_id IS NULL) OR (photo_object_key IS NOT NULL AND photo_content_type IS NOT NULL AND photo_size_bytes IS NOT NULL AND photo_consent_form_id IS NOT NULL)),
+ CONSTRAINT member_profiles_photo_size_valid CHECK (photo_size_bytes IS NULL OR photo_size_bytes BETWEEN 1 AND 10485760)
+);
+CREATE UNIQUE INDEX member_profiles_club_number_uidx ON member_profiles (club_member_number) WHERE club_member_number IS NOT NULL;
+CREATE UNIQUE INDEX member_profiles_federation_number_uidx ON member_profiles (federation_licence_number) WHERE federation_licence_number IS NOT NULL;
+CREATE TABLE member_profile_audit_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, subject_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ action varchar(40) NOT NULL CHECK (action IN ('SENSITIVE_VIEW', 'PROFILE_UPDATED', 'IDENTITY_UPDATED', 'PHOTO_UPLOADED', 'PHOTO_REPLACED', 'PHOTO_REMOVED')),
+ changed_fields text[] NOT NULL DEFAULT '{}', occurred_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT member_profile_audit_changed_fields_valid CHECK (array_position(changed_fields, NULL) IS NULL)
+);
+CREATE INDEX member_profile_audit_subject_occurred_idx ON member_profile_audit_events (subject_user_id, occurred_at DESC, id DESC);
+CREATE FUNCTION prevent_member_profile_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'member profile audit events are append-only'; END; $$;
+CREATE TRIGGER member_profile_audit_events_immutable_trigger BEFORE UPDATE OR DELETE ON member_profile_audit_events FOR EACH ROW EXECUTE FUNCTION prevent_member_profile_audit_mutation();
 CREATE TABLE whatsapp_groups (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, discipline varchar(80) NOT NULL, programme_id uuid NULL, url text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT whatsapp_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT whatsapp_discipline_valid CHECK (discipline = btrim(discipline) AND char_length(discipline) BETWEEN 2 AND 80), CONSTRAINT whatsapp_url_valid CHECK (url LIKE 'https://chat.whatsapp.com/%'), CONSTRAINT whatsapp_group_unique UNIQUE NULLS NOT DISTINCT (name, programme_id));
 CREATE INDEX whatsapp_programme_active_idx ON whatsapp_groups (programme_id, is_active);
 CREATE TABLE training_logs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, occurred_at timestamptz NOT NULL, duration_seconds integer NOT NULL, distance_metres integer NOT NULL, notes varchar(2000) NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT training_duration_valid CHECK (duration_seconds BETWEEN 60 AND 86400), CONSTRAINT training_distance_valid CHECK (distance_metres BETWEEN 0 AND 200000), CONSTRAINT training_notes_valid CHECK (char_length(notes) <= 2000));

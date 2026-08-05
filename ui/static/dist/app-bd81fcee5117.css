@@ -402,6 +402,31 @@ html.js .create-panel[open] .disclosure__content { padding: var(--space-5) var(-
 .consent-field > label { display: grid; grid-template-columns: auto minmax(0,1fr); gap: var(--space-2); align-items: start; min-block-size: 2.75rem; }
 .consent-field > label > span { min-inline-size: 0; }
 .consent-field input { inline-size: 1.25rem; min-block-size: 1.25rem; margin: .2rem 0 0; accent-color: var(--c-river-600); }
+
+.profile-page { display: grid; gap: var(--space-4); }
+.profile-identity { display: flex; align-items: center; gap: var(--space-4); }
+.profile-portrait { flex: 0 0 auto; inline-size: 6rem; block-size: 6rem; border-radius: 50%; overflow: hidden; background: var(--c-river-100); color: var(--c-river-800); display: grid; place-items: center; }
+.profile-portrait img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.profile-initials { font-size: 1.75rem; font-weight: 800; letter-spacing: .04em; }
+.person-name { display: inline-flex; align-items: center; gap: var(--space-2); min-inline-size: 0; }
+.account-profile-link { color: inherit; border-radius: var(--radius-sm); text-decoration: none; }
+.account-profile-link:hover strong,.account-profile-link:focus-visible strong { text-decoration: underline; text-underline-offset: .18em; }
+.account-profile-link:focus-visible { outline: 3px solid var(--c-river-200); outline-offset: 3px; }
+.person-avatar { inline-size: 2.25rem; block-size: 2.25rem; flex: 0 0 auto; border-radius: 50%; object-fit: cover; background: var(--c-river-100); }
+.profile-form { display: grid; gap: var(--space-4); }
+.profile-form fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.profile-form fieldset > legend,
+.profile-form fieldset > p,
+.profile-form fieldset > .field-error { grid-column: 1 / -1; }
+.profile-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; }
+.profile-summary > div { padding: var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+.profile-summary dt { font-weight: 700; }
+.profile-summary dd { margin: var(--space-1) 0 0; white-space: pre-wrap; }
+@media (max-width: 42rem) {
+  .profile-form fieldset, .profile-summary { grid-template-columns: 1fr; }
+  .profile-identity { align-items: flex-start; }
+  .profile-portrait { inline-size: 4.5rem; block-size: 4.5rem; }
+}
 .auth-alternate { margin: var(--space-6) 0 0; padding-block-start: var(--space-4); border-block-start: 1px solid var(--c-border); color: var(--c-muted); text-align: center; }
 .auth-alternate a { color: var(--c-river-700); font-weight: 750; }
 .auth-footer { min-block-size: 4.5rem; display: grid; place-items: center; padding: var(--space-3) max(1rem,calc((100% - 78rem) / 2)); color: #dce6e0; background: #061f32; font-size: var(--text-sm); text-align: center; }

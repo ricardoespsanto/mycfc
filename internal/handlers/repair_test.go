@@ -210,7 +210,7 @@ func (s *repairStoreFake) ListRepairRequestsForMembers(context.Context, dbgen.Li
 
 type repairObjectStoreFake struct{ puts, deletes int }
 
-func (s *repairObjectStoreFake) PutRepairPhoto(_ context.Context, _ string, _ string, _ int64, body io.Reader) error {
+func (s *repairObjectStoreFake) PutObject(_ context.Context, _ string, _ string, _ int64, body io.Reader) error {
 	s.puts++
 	_, _ = io.Copy(io.Discard, body)
 	return nil

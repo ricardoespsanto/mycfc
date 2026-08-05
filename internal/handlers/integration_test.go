@@ -177,6 +177,65 @@ func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	}
 }
 
+func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	guardianID, dependentID, unrelatedID := uuid.New(), uuid.New(), uuid.New()
+	for id, email := range map[uuid.UUID]string{guardianID: "guardian-" + uuid.NewString() + "@example.test", unrelatedID: "unrelated-" + uuid.NewString() + "@example.test"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Adulto perfil', $2, 'hash', '1990-01-01')`, id, email); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Menor perfil', $2, true, '2014-01-01')`, dependentID, guardianID); err != nil {
+		t.Fatal(err)
+	}
+	store := PostgresProfileStore{Pool: pool}
+	profile, err := store.View(ctx, guardianID, dependentID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.View(ctx, unrelatedID, dependentID, false); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("unrelated view error = %v", err)
+	}
+	params := dbgen.UpdateMemberProfileParams{EmergencyContactName: "Responsável", EmergencyContactRelationship: "Tutor", EmergencyContactPhone: "+351 910 000 000", MedicalDeclaration: "NONE_KNOWN", ExpectedUpdatedAt: profile.UpdatedAt}
+	if err := store.Update(ctx, ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: params, ChangedFields: []string{"emergency_contact_name", "emergency_contact_relationship", "emergency_contact_phone", "medical_declaration"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(ctx, ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: params}); !errors.Is(err, ErrProfileConflict) {
+		t.Fatalf("stale update error = %v", err)
+	}
+	consentVersion, consentSHA := "profile-v1", strings.Repeat("c", 64)
+	key := "profiles/integration/photo.png"
+	if _, err := store.SavePhoto(ctx, ProfilePhotoUpdate{ActorID: guardianID, SubjectID: dependentID, ObjectKey: key, ContentType: "image/png", Size: 128, ConsentVersion: consentVersion, ConsentSHA256: consentSHA, AcceptConsent: true, UserAgent: "integration-test"}); err != nil {
+		t.Fatal(err)
+	}
+	avatar, err := store.Avatar(ctx, dbgen.GetMemberAvatarParams{UserID: dependentID, DocumentVersion: consentVersion, DocumentSha256: consentSHA})
+	if err != nil || avatar.PhotoObjectKey == nil || *avatar.PhotoObjectKey != key || !avatar.ConsentCurrent {
+		t.Fatalf("avatar = %#v, err = %v", avatar, err)
+	}
+	if _, err := store.RemovePhoto(ctx, guardianID, dependentID, false); err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	rows, err := pool.Query(ctx, `SELECT action FROM member_profile_audit_events WHERE subject_user_id = $1 ORDER BY occurred_at, id`, dependentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var action string
+		if err := rows.Scan(&action); err != nil {
+			t.Fatal(err)
+		}
+		actions = append(actions, action)
+	}
+	joined := strings.Join(actions, ",")
+	for _, action := range []string{"SENSITIVE_VIEW", "PROFILE_UPDATED", "PHOTO_UPLOADED", "PHOTO_REMOVED"} {
+		if !strings.Contains(joined, action) {
+			t.Fatalf("audit actions = %v, missing %s", actions, action)
+		}
+	}
+}
+
 func integrationPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()

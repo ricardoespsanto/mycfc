@@ -31,6 +31,9 @@ sql:
           - db_type: "metric_type"
             go_type:
               type: "string"
+          - db_type: "medical_declaration"
+            go_type:
+              type: "string"
           - db_type: "uuid"
             go_type:
               import: "github.com/google/uuid"

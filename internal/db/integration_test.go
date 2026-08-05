@@ -554,3 +554,53 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 }
 
 func int32PtrDB(value int32) *int32 { return &value }
+
+func TestMemberProfileOptimisticUpdateAndImmutableAudit(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+
+	userID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Perfil integração', $2, 'hash', '1990-01-01')`, userID, "profile-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	queries := dbgen.New(pool)
+	if err := queries.EnsureMemberProfile(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := queries.GetMemberProfile(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := dbgen.UpdateMemberProfileParams{
+		Phone: "+351 910 000 000", CountryCode: "PT", NationalityCode: "PT",
+		EmergencyContactName: "Contacto", EmergencyContactRelationship: "Família", EmergencyContactPhone: "+351 920 000 000",
+		MedicalDeclaration: "NONE_KNOWN", UserID: userID, ExpectedUpdatedAt: profile.UpdatedAt,
+	}
+	updated, err := queries.UpdateMemberProfile(ctx, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Phone != params.Phone || updated.MedicalDeclaration != "NONE_KNOWN" {
+		t.Fatalf("updated profile = %#v", updated)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE member_profiles SET phone = '+++' WHERE user_id = $1`, userID); err == nil {
+		t.Fatal("invalid profile phone unexpectedly satisfied database constraint")
+	}
+	if _, err := queries.UpdateMemberProfile(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale profile update error = %v", err)
+	}
+	auditID, err := queries.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: userID, SubjectUserID: userID, Action: "PROFILE_UPDATED", ChangedFields: []string{"phone", "medical_declaration"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE member_profile_audit_events SET changed_fields = '{}' WHERE id = $1`, auditID); err == nil {
+		t.Fatal("member profile audit update unexpectedly succeeded")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM member_profile_audit_events WHERE id = $1`, auditID); err == nil {
+		t.Fatal("member profile audit delete unexpectedly succeeded")
+	}
+}

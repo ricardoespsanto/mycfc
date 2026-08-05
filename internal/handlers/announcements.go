@@ -455,6 +455,7 @@ func (h Announcements) meta(r *http.Request, u CurrentUser, path, title string) 
 	m.Title = title + " | MyCFC"
 	m.CurrentPath = path
 	m.CurrentUserName = u.Name
+	m.CurrentUserID = u.ID.String()
 	m.Navigation = dashboardNavigation(u)
 	m.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return m
