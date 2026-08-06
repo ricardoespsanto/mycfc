@@ -36,3 +36,24 @@ func TestMigrationVersion(t *testing.T) {
 		t.Fatalf("version = %q", version)
 	}
 }
+
+func TestActivityFoundationExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608060001_activity_integration_foundation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"activity_connections", "activity_sync_jobs", "synced_activities", "training_session_activity_matches"} {
+		statement := "CREATE TABLE " + table
+		if !strings.Contains(baselineSchema, statement) {
+			t.Errorf("baseline does not contain %q", statement)
+		}
+		if !strings.Contains(string(migration), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Errorf("forward migration does not contain %q", table)
+		}
+	}
+	for _, destructive := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM users", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(destructive)) {
+			t.Errorf("forward migration contains destructive statement %q", destructive)
+		}
+	}
+}
