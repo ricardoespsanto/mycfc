@@ -140,6 +140,17 @@ FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = sqlc.arg(id);
 
+-- name: GetActiveAccountByIDWithoutProfile :one
+SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+       EXISTS (
+           SELECT 1
+           FROM user_platform_roles assignment
+           JOIN platform_roles role ON role.id = assignment.role_id
+           WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
+       ) AS is_admin
+FROM users u
+WHERE u.id = sqlc.arg(id);
+
 -- name: UpdateOwnLeaderboardVisibility :execrows
 UPDATE users
 SET leaderboard_visible = sqlc.arg(leaderboard_visible), updated_at = now()

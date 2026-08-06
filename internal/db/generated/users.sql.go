@@ -232,6 +232,41 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 	return i, err
 }
 
+const getActiveAccountByIDWithoutProfile = `-- name: GetActiveAccountByIDWithoutProfile :one
+SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+       EXISTS (
+           SELECT 1
+           FROM user_platform_roles assignment
+           JOIN platform_roles role ON role.id = assignment.role_id
+           WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
+       ) AS is_admin
+FROM users u
+WHERE u.id = $1
+`
+
+type GetActiveAccountByIDWithoutProfileRow struct {
+	ID                 uuid.UUID `json:"id"`
+	Name               string    `json:"name"`
+	IsDependent        bool      `json:"is_dependent"`
+	IsActive           bool      `json:"is_active"`
+	LeaderboardVisible bool      `json:"leaderboard_visible"`
+	IsAdmin            bool      `json:"is_admin"`
+}
+
+func (q *Queries) GetActiveAccountByIDWithoutProfile(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDWithoutProfileRow, error) {
+	row := q.db.QueryRow(ctx, getActiveAccountByIDWithoutProfile, id)
+	var i GetActiveAccountByIDWithoutProfileRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsDependent,
+		&i.IsActive,
+		&i.LeaderboardVisible,
+		&i.IsAdmin,
+	)
+	return i, err
+}
+
 const getActiveDependentByLoginID = `-- name: GetActiveDependentByLoginID :one
 SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
        u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -11,10 +12,12 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type CurrentUserLookup interface {
 	GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error)
+	GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error)
 	ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error)
 	ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error)
 }
@@ -55,6 +58,18 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			return
 		}
 		user, err := a.Users.GetActiveAccountByID(r.Context(), id)
+		if profileSchemaUnavailable(err) {
+			fallback, fallbackErr := a.Users.GetActiveAccountByIDWithoutProfile(r.Context(), id)
+			if fallbackErr == nil {
+				slog.Warn("profile schema unavailable; loading account without profile status", "request_id", httpx.RequestID(r.Context()))
+				user = dbgen.GetActiveAccountByIDRow{
+					ID: fallback.ID, Name: fallback.Name, IsDependent: fallback.IsDependent,
+					IsActive: fallback.IsActive, LeaderboardVisible: fallback.LeaderboardVisible,
+					IsAdmin: fallback.IsAdmin,
+				}
+			}
+			err = fallbackErr
+		}
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !user.IsActive) {
 			a.destroy(r.Context())
 			next.ServeHTTP(w, r)
@@ -99,6 +114,11 @@ func (a Auth) Load(next http.Handler) http.Handler {
 		ctx = httpx.WithUserID(ctx, current.ID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func profileSchemaUnavailable(err error) bool {
+	var postgresErr *pgconn.PgError
+	return errors.As(err, &postgresErr) && (postgresErr.Code == "42P01" || postgresErr.Code == "42501")
 }
 
 func (a Auth) RequireGuardian(next http.Handler) http.Handler {

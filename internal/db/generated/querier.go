@@ -51,6 +51,7 @@ type Querier interface {
 	ExpireNews(ctx context.Context, id uuid.UUID) (int64, error)
 	GetAccountByEmail(ctx context.Context, email *string) (GetAccountByEmailRow, error)
 	GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDRow, error)
+	GetActiveAccountByIDWithoutProfile(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDWithoutProfileRow, error)
 	GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (GetActiveDependentByLoginIDRow, error)
 	GetActiveUserByEmail(ctx context.Context, email *string) (GetActiveUserByEmailRow, error)
 	GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid.UUID, error)

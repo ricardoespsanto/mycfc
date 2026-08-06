@@ -11,22 +11,37 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type currentUserLookup struct {
-	account    dbgen.GetActiveAccountByIDRow
-	programmes []string
-	grants     []dbgen.ListActiveStaffGrantsForUserRow
-	err        error
+	account         dbgen.GetActiveAccountByIDRow
+	programmes      []string
+	grants          []dbgen.ListActiveStaffGrantsForUserRow
+	err             error
+	profileFallback bool
 }
 
 func (l currentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error) {
 	return l.account, l.err
 }
+func (l currentUserLookup) GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error) {
+	return dbgen.GetActiveAccountByIDWithoutProfileRow{
+		ID: l.account.ID, Name: l.account.Name, IsDependent: l.account.IsDependent,
+		IsActive: l.account.IsActive, LeaderboardVisible: l.account.LeaderboardVisible,
+		IsAdmin: l.account.IsAdmin,
+	}, nil
+}
 func (l currentUserLookup) ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error) {
+	if l.profileFallback {
+		return l.programmes, nil
+	}
 	return l.programmes, l.err
 }
 func (l currentUserLookup) ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error) {
+	if l.profileFallback {
+		return l.grants, nil
+	}
 	return l.grants, l.err
 }
 
@@ -136,6 +151,25 @@ func TestAuthDashboardSelection(t *testing.T) {
 func TestAuthReturnsInternalErrorForLookupFailure(t *testing.T) {
 	auth := Auth{Users: currentUserLookup{err: errors.New("database unavailable")}, Sessions: scs.New()}
 	if response := authenticatedRequest(t, auth.Sessions, uuid.NewString(), auth.Load(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))); response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestAuthFallsBackWhenProfileSchemaIsUnavailable(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{Users: currentUserLookup{
+		account:         dbgen.GetActiveAccountByIDRow{ID: id, Name: "Athlete", IsActive: true},
+		err:             &pgconn.PgError{Code: "42P01"},
+		profileFallback: true,
+	}, Sessions: scs.New()}
+	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := currentUser(r.Context())
+		if !ok || user.ID != id || user.ProfileComplete {
+			t.Fatalf("current user = %#v, ok = %v", user, ok)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", response.Code)
 	}
 }
