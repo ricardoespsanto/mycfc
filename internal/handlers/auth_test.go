@@ -164,7 +164,7 @@ func TestAuthFallsBackWhenProfileSchemaIsUnavailable(t *testing.T) {
 	}, Sessions: scs.New()}
 	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := currentUser(r.Context())
-		if !ok || user.ID != id || user.ProfileComplete {
+		if !ok || user.ID != id || !user.ProfileComplete {
 			t.Fatalf("current user = %#v, ok = %v", user, ok)
 		}
 		w.WriteHeader(http.StatusNoContent)

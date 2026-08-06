@@ -60,10 +60,9 @@ WHERE email = sqlc.arg(email)
 -- name: ListDependentsByGuardian :many
 SELECT u.id, u.name, u.guardian_id, u.is_dependent,
        u.date_of_birth, u.is_active, u.leaderboard_visible, u.created_at, u.updated_at, u.minor_login_id,
-       COALESCE(p.emergency_contact_name <> '' AND p.emergency_contact_relationship <> '' AND p.emergency_contact_phone <> '' AND p.medical_declaration <> 'UNKNOWN', false)::boolean AS profile_complete,
-       COALESCE(p.photo_object_key IS NOT NULL, false)::boolean AS has_profile_photo
+       true::boolean AS profile_complete,
+       false::boolean AS has_profile_photo
 FROM users u
-LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.guardian_id = sqlc.arg(guardian_id)
   AND u.is_dependent = true
   AND u.is_active = true

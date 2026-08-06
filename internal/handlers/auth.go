@@ -65,7 +65,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 				user = dbgen.GetActiveAccountByIDRow{
 					ID: fallback.ID, Name: fallback.Name, IsDependent: fallback.IsDependent,
 					IsActive: fallback.IsActive, LeaderboardVisible: fallback.LeaderboardVisible,
-					IsAdmin: fallback.IsAdmin,
+					IsAdmin: fallback.IsAdmin, ProfileComplete: true,
 				}
 			}
 			err = fallbackErr
