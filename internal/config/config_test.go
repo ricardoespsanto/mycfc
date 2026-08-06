@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	urlpkg "net/url"
 	"strings"
 	"testing"
 	"time"
@@ -72,13 +73,22 @@ func TestValidateAcceptsProductionDatabaseComponents(t *testing.T) {
 	cfg.DBPort = 5432
 	cfg.DBName = "mycfc"
 	cfg.DBUser = "mycfc_app"
-	cfg.DBPassword = Secret("database-password")
+	cfg.DBPassword = Secret("database:/?# password")
+	cfg.DBSSLMode = "disable"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	url, err := cfg.ResolvedDatabaseURL()
-	if err != nil || !strings.Contains(url, "database.internal:5432") || !strings.Contains(url, "sslmode=require") {
+	if err != nil || !strings.Contains(url, "database.internal:5432") || !strings.Contains(url, "sslmode=disable") {
 		t.Fatalf("ResolvedDatabaseURL() = %q, %v", url, err)
+	}
+	parsed, err := urlpkg.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := parsed.User.Password()
+	if password != "database:/?# password" {
+		t.Fatalf("database password = %q", password)
 	}
 }
 

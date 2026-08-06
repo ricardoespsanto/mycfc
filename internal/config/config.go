@@ -48,6 +48,7 @@ type Config struct {
 	DBName         string `env:"DB_NAME"`
 	DBUser         string `env:"DB_USER"`
 	DBPassword     Secret `env:"DB_PASSWORD"`
+	DBSSLMode      string `env:"DB_SSLMODE" envDefault:"require"`
 	CSRFAuthKeyB64 Secret `env:"CSRF_AUTH_KEY_B64,required"`
 
 	AWSRegion        string `env:"AWS_REGION,required"`
@@ -121,7 +122,7 @@ func (c Config) ResolvedDatabaseURL() (string, error) {
 		Path:   c.DBName,
 	}
 	query := u.Query()
-	query.Set("sslmode", "require")
+	query.Set("sslmode", c.DBSSLMode)
 	u.RawQuery = query.Encode()
 	return u.String(), nil
 }
@@ -190,6 +191,9 @@ func (c Config) Validate() error {
 	}
 	if !usingURL && (!usingComponents || c.DBPort < 1 || c.DBPort > 65535 || slices.ContainsFunc(components, func(value string) bool { return strings.TrimSpace(value) == "" })) {
 		problems.Add("DATABASE_URL", "or complete DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD configuration is required")
+	}
+	if usingComponents && !slices.Contains([]string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}, c.DBSSLMode) {
+		problems.Add("DB_SSLMODE", "must be a supported PostgreSQL SSL mode")
 	}
 	if usingURL {
 		if err := validateDatabaseURL(c.DatabaseURL.Value()); err != nil {

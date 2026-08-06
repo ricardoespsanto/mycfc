@@ -11,6 +11,7 @@ func TestDatabaseURLFromEnvironmentEscapesCredentials(t *testing.T) {
 	t.Setenv("DB_NAME", "mycfc")
 	t.Setenv("DB_USER", "master")
 	t.Setenv("DB_PASSWORD", "password:/?#")
+	t.Setenv("DB_SSLMODE", "disable")
 	t.Setenv("DATABASE_URL", "")
 
 	raw, err := databaseURLFromEnvironment()
@@ -22,7 +23,7 @@ func TestDatabaseURLFromEnvironmentEscapesCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	password, _ := parsed.User.Password()
-	if parsed.User.Username() != "master" || password != "password:/?#" || parsed.Query().Get("sslmode") != "require" {
+	if parsed.User.Username() != "master" || password != "password:/?#" || parsed.Query().Get("sslmode") != "disable" {
 		t.Fatalf("database URL = %q", raw)
 	}
 }

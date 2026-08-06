@@ -73,7 +73,11 @@ func databaseURLFromEnvironment() (string, error) {
 	}
 	u := &url.URL{Scheme: "postgres", User: url.UserPassword(os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD")), Host: net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")), Path: os.Getenv("DB_NAME")}
 	query := u.Query()
-	query.Set("sslmode", "require")
+	sslmode := os.Getenv("DB_SSLMODE")
+	if sslmode == "" {
+		sslmode = "require"
+	}
+	query.Set("sslmode", sslmode)
 	u.RawQuery = query.Encode()
 	return u.String(), nil
 }

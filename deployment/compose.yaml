@@ -32,7 +32,12 @@ services:
       RELEASE_REPOSITORY: ${RELEASE_REPOSITORY:-ricardoespsanto/mycfc}
       PORT: "8080"
       BASE_URL: ${BASE_URL:?set BASE_URL in /etc/mycfc/mycfc.env}
-      DATABASE_URL: postgres://${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
+      DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      DB_SSLMODE: disable
       CSRF_AUTH_KEY_B64: ${CSRF_AUTH_KEY_B64:?set CSRF_AUTH_KEY_B64 in /etc/mycfc/mycfc.env}
       AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
@@ -68,8 +73,12 @@ services:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     command: ["bootstrap-db"]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      DB_HOST: postgres
+      DB_PORT: "5432"
       DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
+      DB_USER: ${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}
+      DB_SSLMODE: disable
       APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
       MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
@@ -84,7 +93,12 @@ services:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     command: ["migrate"]
     environment:
-      DATABASE_URL: postgres://${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}:${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}?sslmode=disable
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
+      DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
+      DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      DB_SSLMODE: disable
     depends_on:
       postgres:
         condition: service_healthy
