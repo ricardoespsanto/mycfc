@@ -533,6 +533,43 @@ func (ns NullTrainingOutcomeStatus) Value() (driver.Value, error) {
 	return string(ns.TrainingOutcomeStatus), nil
 }
 
+type ActivityConnection struct {
+	ID                    uuid.UUID          `json:"id"`
+	UserID                uuid.UUID          `json:"user_id"`
+	Provider              string             `json:"provider"`
+	ProviderUserID        string             `json:"provider_user_id"`
+	Status                string             `json:"status"`
+	CredentialsCiphertext []byte             `json:"credentials_ciphertext"`
+	CredentialKeyID       *string            `json:"credential_key_id"`
+	CredentialExpiresAt   pgtype.Timestamptz `json:"credential_expires_at"`
+	CredentialVersion     int64              `json:"credential_version"`
+	Scopes                []string           `json:"scopes"`
+	SyncCursor            *string            `json:"sync_cursor"`
+	LastSuccessfulSyncAt  pgtype.Timestamptz `json:"last_successful_sync_at"`
+	LastErrorCode         *string            `json:"last_error_code"`
+	LastErrorMessage      *string            `json:"last_error_message"`
+	LastErrorAt           pgtype.Timestamptz `json:"last_error_at"`
+	DisconnectedAt        pgtype.Timestamptz `json:"disconnected_at"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ActivitySyncJob struct {
+	ID               uuid.UUID          `json:"id"`
+	IdempotencyKey   uuid.UUID          `json:"idempotency_key"`
+	ConnectionID     uuid.UUID          `json:"connection_id"`
+	Reason           string             `json:"reason"`
+	Status           string             `json:"status"`
+	Attempts         int32              `json:"attempts"`
+	Checkpoint       *string            `json:"checkpoint"`
+	LastErrorCode    *string            `json:"last_error_code"`
+	LastErrorMessage *string            `json:"last_error_message"`
+	RequestedAt      pgtype.Timestamptz `json:"requested_at"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Announcement struct {
 	ID            uuid.UUID          `json:"id"`
 	Title         string             `json:"title"`
@@ -830,6 +867,31 @@ type StaffGrantAuditEvent struct {
 	Reason       *string            `json:"reason"`
 }
 
+type SyncedActivity struct {
+	ID                    uuid.UUID          `json:"id"`
+	ConnectionID          uuid.UUID          `json:"connection_id"`
+	UserID                uuid.UUID          `json:"user_id"`
+	Provider              string             `json:"provider"`
+	ProviderActivityID    string             `json:"provider_activity_id"`
+	ProviderUpdatedAt     pgtype.Timestamptz `json:"provider_updated_at"`
+	StartsAt              pgtype.Timestamptz `json:"starts_at"`
+	EndsAt                pgtype.Timestamptz `json:"ends_at"`
+	Sport                 string             `json:"sport"`
+	NormalizedSport       string             `json:"normalized_sport"`
+	DurationSeconds       int32              `json:"duration_seconds"`
+	MovingDurationSeconds *int32             `json:"moving_duration_seconds"`
+	DistanceMetres        *float64           `json:"distance_metres"`
+	AverageHeartRate      *int16             `json:"average_heart_rate"`
+	MaximumHeartRate      *int16             `json:"maximum_heart_rate"`
+	ProviderMetrics       []byte             `json:"provider_metrics"`
+	RawSummary            []byte             `json:"raw_summary"`
+	PayloadSha256         []byte             `json:"payload_sha256"`
+	NormalizationVersion  int32              `json:"normalization_version"`
+	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
+	IngestedAt            pgtype.Timestamptz `json:"ingested_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Team struct {
 	ID          uuid.UUID          `json:"id"`
 	SeasonID    uuid.UUID          `json:"season_id"`
@@ -871,6 +933,20 @@ type TrainingSession struct {
 	CreatedByID uuid.UUID          `json:"created_by_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingSessionActivityMatch struct {
+	ID              uuid.UUID          `json:"id"`
+	SessionID       uuid.UUID          `json:"session_id"`
+	ActivityID      uuid.UUID          `json:"activity_id"`
+	UserID          uuid.UUID          `json:"user_id"`
+	Status          string             `json:"status"`
+	Confidence      int16              `json:"confidence"`
+	MatchBasis      []byte             `json:"match_basis"`
+	DecidedByUserID *uuid.UUID         `json:"decided_by_user_id"`
+	DecidedAt       pgtype.Timestamptz `json:"decided_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TrainingSessionOutcome struct {
