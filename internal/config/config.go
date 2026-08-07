@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,9 +12,13 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/caarlos0/env/v11"
 )
 
@@ -21,6 +27,74 @@ var (
 	lowerHex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	bucketName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
 )
+
+const productionParameterPrefix = "/mycfc/production"
+const productionSecretID = "/mycfc/production/app-secrets"
+
+var productionParameterNames = map[string]string{
+	"BASE_URL":                 productionParameterPrefix + "/base-url",
+	"DB_HOST":                  productionParameterPrefix + "/db/host",
+	"DB_PORT":                  productionParameterPrefix + "/db/port",
+	"DB_NAME":                  productionParameterPrefix + "/db/name",
+	"DB_USER":                  productionParameterPrefix + "/db/user",
+	"POSTGRES_USER":            productionParameterPrefix + "/db/bootstrap-user",
+	"MIGRATION_DB_USER":        productionParameterPrefix + "/db/migration-user",
+	"DB_SSLMODE":               productionParameterPrefix + "/db/sslmode",
+	"SMTP_HOST":                productionParameterPrefix + "/smtp/host",
+	"SMTP_PORT":                productionParameterPrefix + "/smtp/port",
+	"SMTP_FROM_ADDRESS":        productionParameterPrefix + "/smtp/from-address",
+	"SMTP_FROM_NAME":           productionParameterPrefix + "/smtp/from-name",
+	"SMTP_TLS_MODE":            productionParameterPrefix + "/smtp/tls-mode",
+	"SMTP_TIMEOUT":             productionParameterPrefix + "/smtp/timeout",
+	"TURNSTILE_SITE_KEY":       productionParameterPrefix + "/turnstile/site-key",
+	"S3_BUCKET_NAME":           productionParameterPrefix + "/s3/bucket-name",
+	"S3_FORCE_PATH_STYLE":      productionParameterPrefix + "/s3/force-path-style",
+	"CALENDAR_COMPETITION_ID":  productionParameterPrefix + "/calendar/competition-id",
+	"CALENDAR_TRAINING_ID":     productionParameterPrefix + "/calendar/training-id",
+	"CALENDAR_SOCIAL_ID":       productionParameterPrefix + "/calendar/social-id",
+	"CALENDAR_CLEANUPS_ID":     productionParameterPrefix + "/calendar/cleanups-id",
+	"GALLERY_URL":              productionParameterPrefix + "/gallery-url",
+	"CONSENT_TERMS_VERSION":    productionParameterPrefix + "/consent/terms/version",
+	"CONSENT_TERMS_SHA256":     productionParameterPrefix + "/consent/terms/sha256",
+	"CONSENT_TERMS_URL":        productionParameterPrefix + "/consent/terms/url",
+	"CONSENT_IMAGE_VERSION":    productionParameterPrefix + "/consent/image/version",
+	"CONSENT_IMAGE_SHA256":     productionParameterPrefix + "/consent/image/sha256",
+	"CONSENT_IMAGE_URL":        productionParameterPrefix + "/consent/image/url",
+	"CONSENT_MINOR_VERSION":    productionParameterPrefix + "/consent/minor/version",
+	"CONSENT_MINOR_SHA256":     productionParameterPrefix + "/consent/minor/sha256",
+	"CONSENT_MINOR_URL":        productionParameterPrefix + "/consent/minor/url",
+	"LOG_LEVEL":                productionParameterPrefix + "/log-level",
+	"TRUSTED_PROXY_CIDRS":      productionParameterPrefix + "/trusted-proxy-cidrs",
+	"RELEASE_REPOSITORY":       productionParameterPrefix + "/release/repository",
+	"DB_MAX_CONNS":             productionParameterPrefix + "/db/max-conns",
+	"DB_MIN_CONNS":             productionParameterPrefix + "/db/min-conns",
+	"DB_MAX_CONN_LIFETIME":     productionParameterPrefix + "/db/max-conn-lifetime",
+	"DB_MAX_CONN_IDLE_TIME":    productionParameterPrefix + "/db/max-conn-idle-time",
+	"DB_HEALTH_CHECK_PERIOD":   productionParameterPrefix + "/db/health-check-period",
+	"SESSION_LIFETIME":         productionParameterPrefix + "/session/lifetime",
+	"SESSION_IDLE_TIMEOUT":     productionParameterPrefix + "/session/idle-timeout",
+	"MAX_REQUEST_BYTES":        productionParameterPrefix + "/http/max-request-bytes",
+	"MAX_PHOTO_BYTES":          productionParameterPrefix + "/http/max-photo-bytes",
+	"HTTP_READ_HEADER_TIMEOUT": productionParameterPrefix + "/http/read-header-timeout",
+	"HTTP_READ_TIMEOUT":        productionParameterPrefix + "/http/read-timeout",
+	"HTTP_WRITE_TIMEOUT":       productionParameterPrefix + "/http/write-timeout",
+	"HTTP_IDLE_TIMEOUT":        productionParameterPrefix + "/http/idle-timeout",
+	"SHUTDOWN_TIMEOUT":         productionParameterPrefix + "/http/shutdown-timeout",
+	"RELEASE_CHECK_TIMEOUT":    productionParameterPrefix + "/release/check-timeout",
+	"RELEASE_CHECK_CACHE_TTL":  productionParameterPrefix + "/release/check-cache-ttl",
+}
+
+var productionSecretFields = []string{
+	"POSTGRES_PASSWORD",
+	"APP_DB_PASSWORD",
+	"MIGRATION_DB_PASSWORD",
+	"CSRF_AUTH_KEY_B64",
+	"EMAIL_VERIFICATION_HMAC_KEY_B64",
+	"TURNSTILE_SECRET_KEY",
+	"SMTP_USERNAME",
+	"SMTP_PASSWORD",
+	"GOOGLE_CALENDAR_API_KEY",
+}
 
 // Secret redacts sensitive configuration from fmt output.
 type Secret string
@@ -41,7 +115,7 @@ type Config struct {
 	AppReleasedAt     string `env:"APP_RELEASED_AT"`
 	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
 	Port              int    `env:"PORT" envDefault:"8080"`
-	BaseURL           string `env:"BASE_URL,required"`
+	BaseURL           string `env:"BASE_URL"`
 
 	DatabaseURL                 Secret `env:"DATABASE_URL"`
 	DBHost                      string `env:"DB_HOST"`
@@ -49,8 +123,12 @@ type Config struct {
 	DBName                      string `env:"DB_NAME"`
 	DBUser                      string `env:"DB_USER"`
 	DBPassword                  Secret `env:"DB_PASSWORD"`
+	PostgresUser                string `env:"POSTGRES_USER"`
+	PostgresPassword            Secret `env:"POSTGRES_PASSWORD"`
+	MigrationDBUser             string `env:"MIGRATION_DB_USER"`
+	MigrationDBPassword         Secret `env:"MIGRATION_DB_PASSWORD"`
 	DBSSLMode                   string `env:"DB_SSLMODE" envDefault:"require"`
-	CSRFAuthKeyB64              Secret `env:"CSRF_AUTH_KEY_B64,required"`
+	CSRFAuthKeyB64              Secret `env:"CSRF_AUTH_KEY_B64"`
 	EmailVerificationHMACKeyB64 Secret `env:"EMAIL_VERIFICATION_HMAC_KEY_B64"`
 	TurnstileSiteKey            string `env:"TURNSTILE_SITE_KEY"`
 	TurnstileSecretKey          Secret `env:"TURNSTILE_SECRET_KEY"`
@@ -64,27 +142,27 @@ type Config struct {
 	SMTPTLSMode     string        `env:"SMTP_TLS_MODE" envDefault:"starttls"`
 	SMTPTimeout     time.Duration `env:"SMTP_TIMEOUT" envDefault:"10s"`
 
-	AWSRegion        string `env:"AWS_REGION,required"`
-	S3BucketName     string `env:"S3_BUCKET_NAME,required"`
+	AWSRegion        string `env:"AWS_REGION" envDefault:"eu-west-1"`
+	S3BucketName     string `env:"S3_BUCKET_NAME"`
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	GoogleCalendarAPIKey  string `env:"GOOGLE_CALENDAR_API_KEY,required"`
-	CalendarCompetitionID string `env:"CALENDAR_COMPETITION_ID,required"`
-	CalendarTrainingID    string `env:"CALENDAR_TRAINING_ID,required"`
-	CalendarSocialID      string `env:"CALENDAR_SOCIAL_ID,required"`
-	CalendarCleanupsID    string `env:"CALENDAR_CLEANUPS_ID,required"`
-	GalleryURL            string `env:"GALLERY_URL,required"`
+	GoogleCalendarAPIKey  string `env:"GOOGLE_CALENDAR_API_KEY"`
+	CalendarCompetitionID string `env:"CALENDAR_COMPETITION_ID"`
+	CalendarTrainingID    string `env:"CALENDAR_TRAINING_ID"`
+	CalendarSocialID      string `env:"CALENDAR_SOCIAL_ID"`
+	CalendarCleanupsID    string `env:"CALENDAR_CLEANUPS_ID"`
+	GalleryURL            string `env:"GALLERY_URL"`
 
-	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION,required"`
-	ConsentTermsSHA256  string `env:"CONSENT_TERMS_SHA256,required"`
-	ConsentTermsURL     string `env:"CONSENT_TERMS_URL,required"`
-	ConsentImageVersion string `env:"CONSENT_IMAGE_VERSION,required"`
-	ConsentImageSHA256  string `env:"CONSENT_IMAGE_SHA256,required"`
-	ConsentImageURL     string `env:"CONSENT_IMAGE_URL,required"`
-	ConsentMinorVersion string `env:"CONSENT_MINOR_VERSION,required"`
-	ConsentMinorSHA256  string `env:"CONSENT_MINOR_SHA256,required"`
-	ConsentMinorURL     string `env:"CONSENT_MINOR_URL,required"`
+	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION"`
+	ConsentTermsSHA256  string `env:"CONSENT_TERMS_SHA256"`
+	ConsentTermsURL     string `env:"CONSENT_TERMS_URL"`
+	ConsentImageVersion string `env:"CONSENT_IMAGE_VERSION"`
+	ConsentImageSHA256  string `env:"CONSENT_IMAGE_SHA256"`
+	ConsentImageURL     string `env:"CONSENT_IMAGE_URL"`
+	ConsentMinorVersion string `env:"CONSENT_MINOR_VERSION"`
+	ConsentMinorSHA256  string `env:"CONSENT_MINOR_SHA256"`
+	ConsentMinorURL     string `env:"CONSENT_MINOR_URL"`
 
 	LogLevel string `env:"LOG_LEVEL" envDefault:"INFO"`
 
@@ -108,16 +186,220 @@ type Config struct {
 	TrustedProxyCIDRValues []string      `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
 }
 
-func Load() (Config, error) {
+func Load(ctx context.Context) (Config, error) {
 	cfg, err := env.ParseAs[Config]()
 	if err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
 	cfg.applyNonProductionEmailDefaults()
+	if cfg.IsProduction() {
+		if err := cfg.loadProductionParameters(ctx); err != nil {
+			return Config{}, err
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func (c *Config) loadProductionParameters(ctx context.Context) error {
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(c.AWSRegion))
+	if err != nil {
+		return fmt.Errorf("load AWS configuration for SSM: %w", err)
+	}
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	parameters := make(map[string]string, len(productionParameterNames))
+	for field, name := range productionParameterNames {
+		result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{Name: &name})
+		if err != nil {
+			return fmt.Errorf("load production parameter %s from SSM %s: %w", field, name, err)
+		}
+		if result.Parameter == nil || result.Parameter.Value == nil {
+			return fmt.Errorf("load production parameter %s from SSM %s: empty response", field, name)
+		}
+		parameters[field] = *result.Parameter.Value
+	}
+	secrets, err := loadProductionSecrets(ctx, secretsmanager.NewFromConfig(awsCfg))
+	if err != nil {
+		return err
+	}
+	return c.applyProductionRemoteConfig(parameters, secrets)
+}
+
+type secretGetter interface {
+	GetSecretValue(context.Context, *secretsmanager.GetSecretValueInput, ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+}
+
+func loadProductionSecrets(ctx context.Context, client secretGetter) (map[string]string, error) {
+	result, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: awsString(productionSecretID)})
+	if err != nil {
+		return nil, fmt.Errorf("load production secret %s: %w", productionSecretID, err)
+	}
+	if result.SecretString == nil {
+		return nil, fmt.Errorf("load production secret %s: empty SecretString", productionSecretID)
+	}
+	var secrets map[string]string
+	if err := json.Unmarshal([]byte(*result.SecretString), &secrets); err != nil {
+		return nil, fmt.Errorf("parse production secret %s JSON: %w", productionSecretID, err)
+	}
+	return secrets, nil
+}
+
+func awsString(value string) *string { return &value }
+
+func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]string) error {
+	var problems Problems
+	required := make([]string, 0, len(productionParameterNames))
+	for field := range productionParameterNames {
+		required = append(required, field)
+	}
+	slices.Sort(required)
+	for _, field := range required {
+		if strings.TrimSpace(parameters[field]) == "" {
+			problems.Add(field, "production SSM parameter must not be empty")
+		}
+	}
+	for _, field := range productionSecretFields {
+		if strings.TrimSpace(secrets[field]) == "" {
+			problems.Add(field, "production Secrets Manager value must not be empty")
+		}
+	}
+	if err := problems.Err(); err != nil {
+		return err
+	}
+
+	c.DatabaseURL = ""
+	c.BaseURL = parameters["BASE_URL"]
+	c.DBHost = parameters["DB_HOST"]
+	c.DBName = parameters["DB_NAME"]
+	c.DBUser = parameters["DB_USER"]
+	c.DBPassword = Secret(secrets["APP_DB_PASSWORD"])
+	c.PostgresUser = parameters["POSTGRES_USER"]
+	c.PostgresPassword = Secret(secrets["POSTGRES_PASSWORD"])
+	c.MigrationDBUser = parameters["MIGRATION_DB_USER"]
+	c.MigrationDBPassword = Secret(secrets["MIGRATION_DB_PASSWORD"])
+	c.DBSSLMode = parameters["DB_SSLMODE"]
+	c.CSRFAuthKeyB64 = Secret(secrets["CSRF_AUTH_KEY_B64"])
+	c.EmailVerificationHMACKeyB64 = Secret(secrets["EMAIL_VERIFICATION_HMAC_KEY_B64"])
+	c.TurnstileSiteKey = parameters["TURNSTILE_SITE_KEY"]
+	c.TurnstileSecretKey = Secret(secrets["TURNSTILE_SECRET_KEY"])
+	c.SMTPHost = parameters["SMTP_HOST"]
+	c.SMTPUsername = secrets["SMTP_USERNAME"]
+	c.SMTPPassword = Secret(secrets["SMTP_PASSWORD"])
+	c.SMTPFromAddress = parameters["SMTP_FROM_ADDRESS"]
+	c.SMTPFromName = parameters["SMTP_FROM_NAME"]
+	c.SMTPTLSMode = parameters["SMTP_TLS_MODE"]
+	c.S3BucketName = parameters["S3_BUCKET_NAME"]
+	c.S3Endpoint = ""
+	c.GoogleCalendarAPIKey = secrets["GOOGLE_CALENDAR_API_KEY"]
+	c.CalendarCompetitionID = parameters["CALENDAR_COMPETITION_ID"]
+	c.CalendarTrainingID = parameters["CALENDAR_TRAINING_ID"]
+	c.CalendarSocialID = parameters["CALENDAR_SOCIAL_ID"]
+	c.CalendarCleanupsID = parameters["CALENDAR_CLEANUPS_ID"]
+	c.GalleryURL = parameters["GALLERY_URL"]
+	c.ConsentTermsVersion = parameters["CONSENT_TERMS_VERSION"]
+	c.ConsentTermsSHA256 = parameters["CONSENT_TERMS_SHA256"]
+	c.ConsentTermsURL = parameters["CONSENT_TERMS_URL"]
+	c.ConsentImageVersion = parameters["CONSENT_IMAGE_VERSION"]
+	c.ConsentImageSHA256 = parameters["CONSENT_IMAGE_SHA256"]
+	c.ConsentImageURL = parameters["CONSENT_IMAGE_URL"]
+	c.ConsentMinorVersion = parameters["CONSENT_MINOR_VERSION"]
+	c.ConsentMinorSHA256 = parameters["CONSENT_MINOR_SHA256"]
+	c.ConsentMinorURL = parameters["CONSENT_MINOR_URL"]
+	c.LogLevel = parameters["LOG_LEVEL"]
+	c.ReleaseRepository = parameters["RELEASE_REPOSITORY"]
+	c.CookieDomain = ""
+	c.TrustedProxyCIDRValues = splitCSV(parameters["TRUSTED_PROXY_CIDRS"])
+
+	assignInt := func(field string, target *int) {
+		value, err := parsePositiveInt(parameters[field])
+		if err != nil {
+			problems.Add(field, err.Error())
+			return
+		}
+		*target = value
+	}
+	assignInt32 := func(field string, target *int32) {
+		value, err := parsePositiveInt(parameters[field])
+		if err != nil {
+			problems.Add(field, err.Error())
+			return
+		}
+		if value > int(^uint32(0)>>1) {
+			problems.Add(field, "production SSM parameter is too large")
+			return
+		}
+		*target = int32(value)
+	}
+	assignInt64 := func(field string, target *int64) {
+		value, err := parsePositiveInt(parameters[field])
+		if err != nil {
+			problems.Add(field, err.Error())
+			return
+		}
+		*target = int64(value)
+	}
+	assignDuration := func(field string, target *time.Duration) {
+		value, err := time.ParseDuration(parameters[field])
+		if err != nil {
+			problems.Add(field, "production SSM parameter must be a valid duration")
+			return
+		}
+		*target = value
+	}
+	assignBool := func(field string, target *bool) {
+		value, err := strconv.ParseBool(parameters[field])
+		if err != nil {
+			problems.Add(field, "production SSM parameter must be a boolean")
+			return
+		}
+		*target = value
+	}
+	assignInt("DB_PORT", &c.DBPort)
+	assignInt("SMTP_PORT", &c.SMTPPort)
+	assignDuration("SMTP_TIMEOUT", &c.SMTPTimeout)
+	assignBool("S3_FORCE_PATH_STYLE", &c.S3ForcePathStyle)
+	assignInt32("DB_MAX_CONNS", &c.DBMaxConns)
+	assignInt32("DB_MIN_CONNS", &c.DBMinConns)
+	assignDuration("DB_MAX_CONN_LIFETIME", &c.DBMaxConnLifetime)
+	assignDuration("DB_MAX_CONN_IDLE_TIME", &c.DBMaxConnIdleTime)
+	assignDuration("DB_HEALTH_CHECK_PERIOD", &c.DBHealthCheckPeriod)
+	assignDuration("SESSION_LIFETIME", &c.SessionLifetime)
+	assignDuration("SESSION_IDLE_TIMEOUT", &c.SessionIdleTimeout)
+	assignInt64("MAX_REQUEST_BYTES", &c.MaxRequestBytes)
+	assignInt64("MAX_PHOTO_BYTES", &c.MaxPhotoBytes)
+	assignDuration("HTTP_READ_HEADER_TIMEOUT", &c.HTTPReadHeaderTimeout)
+	assignDuration("HTTP_READ_TIMEOUT", &c.HTTPReadTimeout)
+	assignDuration("HTTP_WRITE_TIMEOUT", &c.HTTPWriteTimeout)
+	assignDuration("HTTP_IDLE_TIMEOUT", &c.HTTPIdleTimeout)
+	assignDuration("SHUTDOWN_TIMEOUT", &c.ShutdownTimeout)
+	assignDuration("RELEASE_CHECK_TIMEOUT", &c.ReleaseCheckTimeout)
+	assignDuration("RELEASE_CHECK_CACHE_TTL", &c.ReleaseCheckCacheTTL)
+	return problems.Err()
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			values = append(values, part)
+		}
+	}
+	return values
+}
+
+func parsePositiveInt(raw string) (int, error) {
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("production SSM parameter must be an integer")
+	}
+	if value < 1 {
+		return 0, fmt.Errorf("production SSM parameter must be positive")
+	}
+	return value, nil
 }
 
 func (c *Config) applyNonProductionEmailDefaults() {
@@ -146,9 +428,21 @@ func (c Config) ResolvedDatabaseURL() (string, error) {
 	if c.DatabaseURL.Value() != "" {
 		return c.DatabaseURL.Value(), nil
 	}
+	return c.resolvedDatabaseURL(c.DBUser, c.DBPassword)
+}
+
+func (c Config) BootstrapDatabaseURL() (string, error) {
+	return c.resolvedDatabaseURL(c.PostgresUser, c.PostgresPassword)
+}
+
+func (c Config) MigrationDatabaseURL() (string, error) {
+	return c.resolvedDatabaseURL(c.MigrationDBUser, c.MigrationDBPassword)
+}
+
+func (c Config) resolvedDatabaseURL(username string, password Secret) (string, error) {
 	u := &url.URL{
 		Scheme: "postgres",
-		User:   url.UserPassword(c.DBUser, c.DBPassword.Value()),
+		User:   url.UserPassword(username, password.Value()),
 		Host:   net.JoinHostPort(c.DBHost, fmt.Sprintf("%d", c.DBPort)),
 		Path:   c.DBName,
 	}

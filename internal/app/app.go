@@ -41,7 +41,7 @@ type Application struct {
 }
 
 func New(ctx context.Context) (*Application, error) {
-	cfg, err := config.Load()
+	cfg, err := config.Load(ctx)
 	if err != nil {
 		return nil, err
 	}

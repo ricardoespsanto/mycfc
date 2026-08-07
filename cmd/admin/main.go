@@ -36,7 +36,7 @@ type adminStore interface {
 }
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.Load(context.Background())
 	if err != nil {
 		fail(err)
 	}
