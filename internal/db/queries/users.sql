@@ -1,4 +1,5 @@
 -- name: CreateAdultUser :one
+WITH account AS (
 INSERT INTO users (
     name,
     email,
@@ -15,7 +16,18 @@ INSERT INTO users (
     sqlc.arg(date_of_birth)
 )
 RETURNING id, name, email, password_hash, guardian_id,
-          is_dependent, date_of_birth, is_active, created_at, updated_at;
+          is_dependent, date_of_birth, is_active, created_at, updated_at
+), token AS (
+    INSERT INTO email_verification_tokens (user_id, email, expires_at)
+    SELECT id, email, now() + interval '24 hours' FROM account
+    RETURNING id
+), queued AS (
+    INSERT INTO email_outbox (verification_token_id)
+    SELECT id FROM token
+)
+SELECT id, name, email, password_hash, guardian_id,
+       is_dependent, date_of_birth, is_active, created_at, updated_at
+FROM account;
 
 -- name: CreateDependentUser :one
 INSERT INTO users (
@@ -127,7 +139,7 @@ WITH issued AS (
 SELECT minor_user_id FROM audited;
 
 -- name: GetActiveAccountByID :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -140,7 +152,7 @@ LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = sqlc.arg(id);
 
 -- name: GetActiveAccountByIDWithoutProfile :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment

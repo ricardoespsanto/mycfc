@@ -72,6 +72,7 @@ func (h Repair) Index(w http.ResponseWriter, r *http.Request) {
 	meta.CurrentPath = "/fleet"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	success := ""

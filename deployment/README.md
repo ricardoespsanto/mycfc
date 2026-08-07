@@ -26,6 +26,14 @@ MYCFC_DOMAIN=example.com
 APP_VERSION=<release-version>
 GIT_SHA=<40-lowercase-hex-commit>
 BASE_URL=https://example.com
+EMAIL_VERIFICATION_HMAC_KEY_B64=<32 random bytes encoded as base64>
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=<smtp username>
+SMTP_PASSWORD=<smtp password>
+SMTP_FROM_ADDRESS=mycfc@example.com
+SMTP_FROM_NAME=MyCFC
+SMTP_TLS_MODE=starttls
 
 POSTGRES_DB=<database-name>
 POSTGRES_USER=<bootstrap-superuser>

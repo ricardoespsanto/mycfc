@@ -11,51 +11,58 @@ import (
 
 func validConfig() Config {
 	return Config{
-		AppEnv:                 "local",
-		AppVersion:             "dev",
-		GITSHA:                 strings.Repeat("0", 40),
-		ReleaseRepository:      "ricardoespsanto/mycfc",
-		Port:                   8080,
-		BaseURL:                "http://localhost:8080",
-		DatabaseURL:            Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"),
-		CSRFAuthKeyB64:         Secret(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))),
-		AWSRegion:              "eu-west-1",
-		S3BucketName:           "mycfc-local",
-		S3Endpoint:             "http://localhost:9000",
-		S3ForcePathStyle:       true,
-		GoogleCalendarAPIKey:   "local-browser-key",
-		CalendarCompetitionID:  "competition@example.test",
-		CalendarTrainingID:     "training@example.test",
-		CalendarSocialID:       "social@example.test",
-		CalendarCleanupsID:     "cleanups@example.test",
-		GalleryURL:             "https://example.invalid/gallery",
-		ConsentTermsVersion:    "dev-v1",
-		ConsentTermsSHA256:     strings.Repeat("0", 64),
-		ConsentTermsURL:        "http://localhost:8080/legal/termos-gerais",
-		ConsentImageVersion:    "dev-v1",
-		ConsentImageSHA256:     strings.Repeat("0", 64),
-		ConsentImageURL:        "http://localhost:8080/legal/uso-imagem",
-		ConsentMinorVersion:    "dev-v1",
-		ConsentMinorSHA256:     strings.Repeat("0", 64),
-		ConsentMinorURL:        "http://localhost:8080/legal/responsabilidade-menor",
-		LogLevel:               "INFO",
-		DBMaxConns:             8,
-		DBMinConns:             1,
-		DBMaxConnLifetime:      30 * time.Minute,
-		DBMaxConnIdleTime:      5 * time.Minute,
-		DBHealthCheckPeriod:    30 * time.Second,
-		SessionLifetime:        12 * time.Hour,
-		SessionIdleTimeout:     30 * time.Minute,
-		MaxRequestBytes:        12_582_912,
-		MaxPhotoBytes:          10_485_760,
-		HTTPReadHeaderTimeout:  5 * time.Second,
-		HTTPReadTimeout:        15 * time.Second,
-		HTTPWriteTimeout:       30 * time.Second,
-		HTTPIdleTimeout:        60 * time.Second,
-		ShutdownTimeout:        20 * time.Second,
-		ReleaseCheckTimeout:    3 * time.Second,
-		ReleaseCheckCacheTTL:   15 * time.Minute,
-		TrustedProxyCIDRValues: nil,
+		AppEnv:                      "local",
+		AppVersion:                  "dev",
+		GITSHA:                      strings.Repeat("0", 40),
+		ReleaseRepository:           "ricardoespsanto/mycfc",
+		Port:                        8080,
+		BaseURL:                     "http://localhost:8080",
+		DatabaseURL:                 Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"),
+		CSRFAuthKeyB64:              Secret(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))),
+		EmailVerificationHMACKeyB64: Secret(base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789"))),
+		SMTPHost:                    "localhost",
+		SMTPPort:                    1025,
+		SMTPFromAddress:             "mycfc@example.test",
+		SMTPFromName:                "MyCFC",
+		SMTPTLSMode:                 "none",
+		SMTPTimeout:                 10 * time.Second,
+		AWSRegion:                   "eu-west-1",
+		S3BucketName:                "mycfc-local",
+		S3Endpoint:                  "http://localhost:9000",
+		S3ForcePathStyle:            true,
+		GoogleCalendarAPIKey:        "local-browser-key",
+		CalendarCompetitionID:       "competition@example.test",
+		CalendarTrainingID:          "training@example.test",
+		CalendarSocialID:            "social@example.test",
+		CalendarCleanupsID:          "cleanups@example.test",
+		GalleryURL:                  "https://example.invalid/gallery",
+		ConsentTermsVersion:         "dev-v1",
+		ConsentTermsSHA256:          strings.Repeat("0", 64),
+		ConsentTermsURL:             "http://localhost:8080/legal/termos-gerais",
+		ConsentImageVersion:         "dev-v1",
+		ConsentImageSHA256:          strings.Repeat("0", 64),
+		ConsentImageURL:             "http://localhost:8080/legal/uso-imagem",
+		ConsentMinorVersion:         "dev-v1",
+		ConsentMinorSHA256:          strings.Repeat("0", 64),
+		ConsentMinorURL:             "http://localhost:8080/legal/responsabilidade-menor",
+		LogLevel:                    "INFO",
+		DBMaxConns:                  8,
+		DBMinConns:                  1,
+		DBMaxConnLifetime:           30 * time.Minute,
+		DBMaxConnIdleTime:           5 * time.Minute,
+		DBHealthCheckPeriod:         30 * time.Second,
+		SessionLifetime:             12 * time.Hour,
+		SessionIdleTimeout:          30 * time.Minute,
+		MaxRequestBytes:             12_582_912,
+		MaxPhotoBytes:               10_485_760,
+		HTTPReadHeaderTimeout:       5 * time.Second,
+		HTTPReadTimeout:             15 * time.Second,
+		HTTPWriteTimeout:            30 * time.Second,
+		HTTPIdleTimeout:             60 * time.Second,
+		ShutdownTimeout:             20 * time.Second,
+		ReleaseCheckTimeout:         3 * time.Second,
+		ReleaseCheckCacheTTL:        15 * time.Minute,
+		TrustedProxyCIDRValues:      nil,
 	}
 }
 
@@ -63,6 +70,53 @@ func TestValidateAcceptsLocalConfiguration(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestNonProductionEmailDefaultsSupportExistingLocalEnvironment(t *testing.T) {
+	cfg := validConfig()
+	cfg.EmailVerificationHMACKeyB64 = ""
+	cfg.SMTPHost = ""
+	cfg.SMTPPort = 587
+	cfg.SMTPFromAddress = ""
+	cfg.SMTPTLSMode = "starttls"
+
+	cfg.applyNonProductionEmailDefaults()
+
+	if cfg.SMTPHost != "localhost" || cfg.SMTPPort != 1025 || cfg.SMTPTLSMode != "none" {
+		t.Fatalf("local SMTP defaults = %s:%d (%s)", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLSMode)
+	}
+	if cfg.SMTPFromAddress != "mycfc@example.test" {
+		t.Fatalf("SMTPFromAddress = %q", cfg.SMTPFromAddress)
+	}
+	if _, err := cfg.EmailVerificationHMACKey(); err != nil {
+		t.Fatalf("EmailVerificationHMACKey() error = %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestProductionEmailConfigurationHasNoDefaults(t *testing.T) {
+	cfg := validConfig()
+	cfg.AppEnv = "production"
+	cfg.EmailVerificationHMACKeyB64 = ""
+	cfg.SMTPHost = ""
+	cfg.SMTPFromAddress = ""
+
+	cfg.applyNonProductionEmailDefaults()
+
+	if cfg.EmailVerificationHMACKeyB64.Value() != "" || cfg.SMTPHost != "" || cfg.SMTPFromAddress != "" {
+		t.Fatal("production email configuration received local defaults")
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() returned nil")
+	}
+	for _, expected := range []string{"EMAIL_VERIFICATION_HMAC_KEY_B64", "SMTP_FROM_ADDRESS", "SMTP_HOST"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("error %q does not include %s", err, expected)
+		}
 	}
 }
 

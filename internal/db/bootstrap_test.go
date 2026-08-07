@@ -57,3 +57,41 @@ func TestActivityFoundationExistsInBaselineAndForwardMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestEmailVerificationExistsInBaselineAndTrustsExistingAdults(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608060002_email_verification.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"email_verified_at", "CREATE TABLE IF NOT EXISTS email_verification_tokens", "CREATE TABLE IF NOT EXISTS email_outbox", "CREATE OR REPLACE FUNCTION issue_email_verification", "UPDATE users SET email_verified_at = now()"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration does not contain %q", expected)
+		}
+		if !strings.Contains(baselineSchema, strings.TrimPrefix(expected, "IF NOT EXISTS ")) && expected == "email_verified_at" {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, destructive := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM users"} {
+		if strings.Contains(strings.ToUpper(string(migration)), destructive) {
+			t.Errorf("forward migration contains destructive statement %q", destructive)
+		}
+	}
+}
+
+func TestLegacyAdultsWithoutVerificationHistoryBecomeUnverified(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608060003_require_legacy_email_verification.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := string(migration)
+	for _, expected := range []string{"SET email_verified_at = NULL", "account.is_dependent = false", "NOT EXISTS", "email_verification_tokens"} {
+		if !strings.Contains(statement, expected) {
+			t.Errorf("forward migration does not contain %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"INSERT INTO email_outbox", "DELETE FROM users", "TRUNCATE", "DROP TABLE"} {
+		if strings.Contains(strings.ToUpper(statement), strings.ToUpper(prohibited)) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

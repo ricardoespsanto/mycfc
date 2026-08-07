@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
+	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +51,10 @@ type ProfilePhotoUpdate struct {
 	UserAgent          string
 }
 
-type PostgresProfileStore struct{ Pool *pgxpool.Pool }
+type PostgresProfileStore struct {
+	Pool *pgxpool.Pool
+	Now  func() time.Time
+}
 
 func (s PostgresProfileStore) View(ctx context.Context, actorID, subjectID uuid.UUID, isAdmin bool) (result dbgen.GetMemberProfileRow, err error) {
 	err = db.WithinTx(ctx, s.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -89,6 +95,7 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 			input.Identity = nil
 		}
 		if input.Identity != nil {
+			emailChanged := input.Identity.Email != nil && (current.Email == nil || !strings.EqualFold(*current.Email, *input.Identity.Email))
 			input.Identity.UserID = input.SubjectID
 			if _, err := q.UpdateMemberIdentity(ctx, *input.Identity); errors.Is(err, pgx.ErrNoRows) {
 				return ErrProfileConflict
@@ -97,6 +104,11 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 			}
 			if _, err := q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: input.ActorID, SubjectUserID: input.SubjectID, Action: "IDENTITY_UPDATED", ChangedFields: input.IdentityFields}); err != nil {
 				return err
+			}
+			if emailChanged {
+				if _, err := (emailverification.Service{Store: q, Now: s.Now}).Issue(ctx, input.SubjectID, *input.Identity.Email, false); err != nil {
+					return err
+				}
 			}
 		}
 		if _, err := q.UpdateMemberProfile(ctx, input.Profile); errors.Is(err, pgx.ErrNoRows) {

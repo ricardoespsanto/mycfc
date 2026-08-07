@@ -431,6 +431,7 @@ func (h Dashboard) equipmentMeta(r *http.Request) components.PageMeta {
 	meta.CurrentPath = "/admin/fleet"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta

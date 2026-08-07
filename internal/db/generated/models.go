@@ -647,6 +647,28 @@ type ConsentForm struct {
 	UserAgent       string             `json:"user_agent"`
 }
 
+type EmailOutbox struct {
+	ID                  uuid.UUID          `json:"id"`
+	VerificationTokenID uuid.UUID          `json:"verification_token_id"`
+	Status              string             `json:"status"`
+	Attempts            int32              `json:"attempts"`
+	NextAttemptAt       pgtype.Timestamptz `json:"next_attempt_at"`
+	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
+	SentAt              pgtype.Timestamptz `json:"sent_at"`
+	LastError           *string            `json:"last_error"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EmailVerificationToken struct {
+	ID         uuid.UUID          `json:"id"`
+	UserID     uuid.UUID          `json:"user_id"`
+	Email      string             `json:"email"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Equipment struct {
 	ID               uuid.UUID          `json:"id"`
 	AssetTag         string             `json:"asset_tag"`
@@ -964,6 +986,7 @@ type User struct {
 	ID                 uuid.UUID          `json:"id"`
 	Name               string             `json:"name"`
 	Email              *string            `json:"email"`
+	EmailVerifiedAt    pgtype.Timestamptz `json:"email_verified_at"`
 	MinorLoginID       *string            `json:"minor_login_id"`
 	PasswordHash       *string            `json:"password_hash"`
 	GuardianID         *uuid.UUID         `json:"guardian_id"`

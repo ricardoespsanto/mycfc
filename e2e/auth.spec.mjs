@@ -8,7 +8,7 @@ const athleteEmail = `e2e-athlete-${Date.now()}@example.test`;
 const waitlistedEmail = `e2e-waitlisted-${Date.now()}@example.test`;
 const adminEmail = 'e2e-admin@example.test';
 const password = 'correct horse 7';
-const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080';
+const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:18080';
 const validPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2h38AAAAASUVORK5CYII=', 'base64');
 
 async function expectNoSeriousAxeViolations(page) {
@@ -28,6 +28,28 @@ async function expectNoHorizontalOverflow(page) {
 
 async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 720 }) {
   await page.setViewportSize({ width: viewport.width / zoom, height: viewport.height / zoom });
+}
+
+async function verificationLinkFor(recipient) {
+  const apiBase = process.env.MAILPIT_API_BASE || 'http://127.0.0.1:8025';
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const listing = await fetch(`${apiBase}/api/v1/messages`).then((response) => response.json());
+    const summary = listing.messages.find((message) => message.To.some(({ Address }) => Address === recipient));
+    if (summary) {
+      const message = await fetch(`${apiBase}/api/v1/message/${summary.ID}`).then((response) => response.json());
+      const match = message.Text.match(/https?:\/\/[^\s]+\/verificar-email\?[^\s]+/);
+      if (match) {
+        const delivered = new URL(match[0]);
+        const testOrigin = new URL(baseURL);
+        delivered.protocol = testOrigin.protocol;
+        delivered.host = testOrigin.host;
+        return delivered.toString();
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`verification email for ${recipient} was not delivered`);
 }
 
 test.describe('authentication', () => {
@@ -56,6 +78,7 @@ test.describe('authentication', () => {
   });
 
   test('registers a member, reaches the today view, and has no serious accessibility violations', async ({ page }) => {
+    test.setTimeout(90_000);
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);
     const name = page.getByLabel('Nome');
@@ -76,25 +99,29 @@ test.describe('authentication', () => {
 
     await expect(page).toHaveURL('/today');
     await expect(page.getByRole('heading', { name: 'Olá, Pessoa', exact: true })).toBeVisible();
+    await expect(page.locator('.app-rail .email-verification-cue')).toHaveText('Email por verificar');
     await expectNoSeriousAxeViolations(page);
 
-	await page.getByRole('link', { name: 'Abrir perfil de Pessoa de teste', exact: true }).click();
-	await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
-	await expect(page.getByText(/Complete o contacto de emergência/)).toBeVisible();
-	await page.getByLabel('Telefone', { exact: true }).fill('+351 910 000 000');
-	await page.locator('#profile-emergency-name').fill('Contacto E2E');
-	await page.locator('#profile-emergency-relationship').fill('Família');
-	await page.locator('#profile-emergency-phone').fill('+351 920 000 000');
-	await page.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
-	await page.getByRole('button', { name: 'Guardar perfil' }).click();
-	await expect(page).toHaveURL('/perfil');
-	await expect(page.getByText('Perfil atualizado.')).toBeVisible();
-	await expect(page.getByText(/Complete o contacto de emergência/)).toHaveCount(0);
-	await page.getByLabel('Fotografia JPEG, PNG ou WebP').setInputFiles({ name: 'perfil.png', mimeType: 'image/png', buffer: validPNG });
-	await page.getByRole('button', { name: 'Carregar fotografia' }).click();
-	await expect(page.getByText('Fotografia atualizada.')).toBeVisible();
-	await expect(page.getByAltText('Fotografia de Pessoa de teste')).toBeVisible();
-	await expectNoSeriousAxeViolations(page);
+    await page.goto(await verificationLinkFor(email));
+    await expect(page).toHaveURL('/perfil');
+    await expect(page.getByText('Email confirmado.')).toBeVisible();
+    await expect(page.locator('.email-verification-cue')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Perfil', exact: true })).toBeVisible();
+    await expect(page.getByText(/Complete o contacto de emergência/)).toBeVisible();
+    await page.getByLabel('Telefone', { exact: true }).fill('+351 910 000 000');
+    await page.locator('#profile-emergency-name').fill('Contacto E2E');
+    await page.locator('#profile-emergency-relationship').fill('Família');
+    await page.locator('#profile-emergency-phone').fill('+351 920 000 000');
+    await page.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
+    await page.getByRole('button', { name: 'Guardar perfil' }).click();
+    await expect(page).toHaveURL('/perfil');
+    await expect(page.getByText('Perfil atualizado.')).toBeVisible();
+    await expect(page.getByText(/Complete o contacto de emergência/)).toHaveCount(0);
+    await page.getByLabel('Fotografia JPEG, PNG ou WebP').setInputFiles({ name: 'perfil.png', mimeType: 'image/png', buffer: validPNG });
+    await page.getByRole('button', { name: 'Carregar fotografia' }).click();
+    await expect(page.getByText('Fotografia atualizada.')).toBeVisible();
+    await expect(page.getByAltText('Fotografia de Pessoa de teste')).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
 
     await page.goto('/dashboard/member?from=legacy');
     await expect(page).toHaveURL('/today?from=legacy');

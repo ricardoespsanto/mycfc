@@ -33,6 +33,8 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/admin/componentes", http.StatusNotFound, "", ""},
 		{http.MethodGet, "/login", http.StatusOK, "", ""},
 		{http.MethodGet, "/registo", http.StatusOK, "", ""},
+		{http.MethodGet, "/verificar-email", http.StatusUnprocessableEntity, "", ""},
+		{http.MethodPost, "/perfil/email-verificacao/reenviar", http.StatusSeeOther, "", "/login?next=%2Fperfil%2Femail-verificacao%2Freenviar"},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
 		{http.MethodGet, "/perfil", http.StatusSeeOther, "", "/login?next=%2Fperfil"},
 		{http.MethodGet, "/fleet", http.StatusSeeOther, "", "/login?next=%2Ffleet"},
@@ -95,7 +97,7 @@ func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
-	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
 	response := httptest.NewRecorder()
@@ -121,5 +123,5 @@ func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})))
 }

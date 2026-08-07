@@ -297,6 +297,7 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	meta.CurrentPath = base
 	meta.CurrentUserName = actor.Name
 	meta.CurrentUserID = actor.ID.String()
+	meta.EmailVerificationPending = !actor.IsDependent && !actor.EmailVerified
 	meta.Navigation = dashboardNavigation(actor)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	meta.PageLabel = "Perfil"
@@ -305,7 +306,7 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	}
 	avatar, avatarErr := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: record.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
 	visible := avatarErr == nil && avatar.PhotoObjectKey != nil && avatar.ConsentCurrent
-	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ImageConsentURL: h.ImageURL, Form: form, Conflict: conflict}
+	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ImageConsentURL: h.ImageURL, Form: form, Conflict: conflict}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "profile_flash")
 	}

@@ -431,6 +431,7 @@ func (h Training) meta(r *http.Request, user CurrentUser, management bool) compo
 	}
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta

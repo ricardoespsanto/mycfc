@@ -133,7 +133,7 @@ func (q *Queries) GetMemberAvatar(ctx context.Context, arg GetMemberAvatarParams
 }
 
 const getMemberProfile = `-- name: GetMemberProfile :one
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, u.is_dependent,
+SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_id, u.is_dependent,
        u.date_of_birth, u.is_active, u.updated_at AS identity_updated_at,
        p.phone, p.address_line1, p.address_line2, p.postcode, p.locality,
        p.country_code, p.nationality_code, p.club_member_number,
@@ -153,6 +153,7 @@ type GetMemberProfileRow struct {
 	ID                             uuid.UUID          `json:"id"`
 	Name                           string             `json:"name"`
 	Email                          *string            `json:"email"`
+	EmailVerifiedAt                pgtype.Timestamptz `json:"email_verified_at"`
 	MinorLoginID                   *string            `json:"minor_login_id"`
 	GuardianID                     *uuid.UUID         `json:"guardian_id"`
 	IsDependent                    bool               `json:"is_dependent"`
@@ -193,6 +194,7 @@ func (q *Queries) GetMemberProfile(ctx context.Context, userID uuid.UUID) (GetMe
 		&i.ID,
 		&i.Name,
 		&i.Email,
+		&i.EmailVerifiedAt,
 		&i.MinorLoginID,
 		&i.GuardianID,
 		&i.IsDependent,
@@ -266,6 +268,7 @@ func (q *Queries) ListDependentProfileCompleteness(ctx context.Context, guardian
 
 const updateMemberIdentity = `-- name: UpdateMemberIdentity :one
 UPDATE users SET name = $1, email = $2,
+    email_verified_at = CASE WHEN email IS DISTINCT FROM $2 THEN NULL ELSE email_verified_at END,
     date_of_birth = $3, updated_at = clock_timestamp()
 WHERE id = $4 AND updated_at = $5
 RETURNING updated_at

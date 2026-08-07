@@ -177,6 +177,7 @@ func (h News) meta(r *http.Request) components.PageMeta {
 	meta.CurrentPath = "/admin/noticias"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta

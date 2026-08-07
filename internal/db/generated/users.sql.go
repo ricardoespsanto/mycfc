@@ -28,6 +28,7 @@ func (q *Queries) CountDependentsByGuardian(ctx context.Context, guardianID *uui
 }
 
 const createAdultUser = `-- name: CreateAdultUser :one
+WITH account AS (
 INSERT INTO users (
     name,
     email,
@@ -45,6 +46,17 @@ INSERT INTO users (
 )
 RETURNING id, name, email, password_hash, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
+), token AS (
+    INSERT INTO email_verification_tokens (user_id, email, expires_at)
+    SELECT id, email, now() + interval '24 hours' FROM account
+    RETURNING id
+), queued AS (
+    INSERT INTO email_outbox (verification_token_id)
+    SELECT id FROM token
+)
+SELECT id, name, email, password_hash, guardian_id,
+       is_dependent, date_of_birth, is_active, created_at, updated_at
+FROM account
 `
 
 type CreateAdultUserParams struct {
@@ -194,7 +206,7 @@ func (q *Queries) GetAccountByEmail(ctx context.Context, email *string) (GetAcco
 }
 
 const getActiveAccountByID = `-- name: GetActiveAccountByID :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -210,9 +222,11 @@ WHERE u.id = $1
 type GetActiveAccountByIDRow struct {
 	ID                 uuid.UUID `json:"id"`
 	Name               string    `json:"name"`
+	Email              *string   `json:"email"`
 	IsDependent        bool      `json:"is_dependent"`
 	IsActive           bool      `json:"is_active"`
 	LeaderboardVisible bool      `json:"leaderboard_visible"`
+	EmailVerified      bool      `json:"email_verified"`
 	IsAdmin            bool      `json:"is_admin"`
 	ProfileComplete    bool      `json:"profile_complete"`
 }
@@ -223,9 +237,11 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Email,
 		&i.IsDependent,
 		&i.IsActive,
 		&i.LeaderboardVisible,
+		&i.EmailVerified,
 		&i.IsAdmin,
 		&i.ProfileComplete,
 	)
@@ -233,7 +249,7 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 }
 
 const getActiveAccountByIDWithoutProfile = `-- name: GetActiveAccountByIDWithoutProfile :one
-SELECT u.id, u.name, u.is_dependent, u.is_active, u.leaderboard_visible,
+SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -247,9 +263,11 @@ WHERE u.id = $1
 type GetActiveAccountByIDWithoutProfileRow struct {
 	ID                 uuid.UUID `json:"id"`
 	Name               string    `json:"name"`
+	Email              *string   `json:"email"`
 	IsDependent        bool      `json:"is_dependent"`
 	IsActive           bool      `json:"is_active"`
 	LeaderboardVisible bool      `json:"leaderboard_visible"`
+	EmailVerified      bool      `json:"email_verified"`
 	IsAdmin            bool      `json:"is_admin"`
 }
 
@@ -259,9 +277,11 @@ func (q *Queries) GetActiveAccountByIDWithoutProfile(ctx context.Context, id uui
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Email,
 		&i.IsDependent,
 		&i.IsActive,
 		&i.LeaderboardVisible,
+		&i.EmailVerified,
 		&i.IsAdmin,
 	)
 	return i, err

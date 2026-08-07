@@ -25,6 +25,8 @@ type CurrentUserLookup interface {
 type CurrentUser struct {
 	ID                 uuid.UUID
 	Name               string
+	Email              string
+	EmailVerified      bool
 	IsDependent        bool
 	IsAdmin            bool
 	LeaderboardVisible bool
@@ -63,9 +65,9 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			if fallbackErr == nil {
 				slog.Warn("profile schema unavailable; loading account without profile status", "request_id", httpx.RequestID(r.Context()))
 				user = dbgen.GetActiveAccountByIDRow{
-					ID: fallback.ID, Name: fallback.Name, IsDependent: fallback.IsDependent,
+					ID: fallback.ID, Name: fallback.Name, Email: fallback.Email, IsDependent: fallback.IsDependent,
 					IsActive: fallback.IsActive, LeaderboardVisible: fallback.LeaderboardVisible,
-					IsAdmin: fallback.IsAdmin, ProfileComplete: true,
+					EmailVerified: fallback.EmailVerified, IsAdmin: fallback.IsAdmin, ProfileComplete: true,
 				}
 			}
 			err = fallbackErr
@@ -84,7 +86,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
+		current := CurrentUser{ID: user.ID, Name: user.Name, Email: stringValue(user.Email), EmailVerified: user.EmailVerified, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
 		}
