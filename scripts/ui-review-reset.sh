@@ -13,7 +13,7 @@ set +a
 
 review_database=mycfc_ui_review
 
-docker compose up -d --wait postgres minio
+docker compose up -d --wait postgres minio mailpit
 docker compose run --rm minio-init
 docker compose exec -T postgres dropdb -U "$POSTGRES_USER" --if-exists "$review_database"
 docker compose exec -T postgres createdb -U "$POSTGRES_USER" "$review_database"

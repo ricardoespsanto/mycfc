@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "= 6.56.0"
     }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "= 5.22.0"
+    }
     random = {
       source  = "hashicorp/random"
       version = "= 3.9.0"
@@ -26,3 +30,5 @@ provider "aws" {
     tags = local.tags
   }
 }
+
+provider "cloudflare" {}

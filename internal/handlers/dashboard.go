@@ -241,6 +241,7 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 	page.Meta.CurrentPath = "/today"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()
+	page.Meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -395,6 +396,7 @@ func (h Dashboard) ReleasesPage(w http.ResponseWriter, r *http.Request) {
 	page.Meta.CurrentPath = "/admin/sistema"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()
+	page.Meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -573,6 +575,7 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	page.Meta.CurrentPath = "/admin/fleet"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()
+	page.Meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	page.Meta.Navigation = dashboardNavigation(user)
 	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
@@ -604,6 +607,7 @@ func (h Dashboard) renderMaintenanceForm(w http.ResponseWriter, r *http.Request,
 	meta := h.PageMeta
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -783,6 +787,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -810,6 +815,7 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	items := guardianDependentItems(dependents, h.now(), h.location())

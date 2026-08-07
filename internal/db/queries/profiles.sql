@@ -4,7 +4,7 @@ SELECT id FROM users WHERE id = sqlc.arg(user_id)
 ON CONFLICT (user_id) DO NOTHING;
 
 -- name: GetMemberProfile :one
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, u.is_dependent,
+SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_id, u.is_dependent,
        u.date_of_birth, u.is_active, u.updated_at AS identity_updated_at,
        p.phone, p.address_line1, p.address_line2, p.postcode, p.locality,
        p.country_code, p.nationality_code, p.club_member_number,
@@ -46,6 +46,7 @@ RETURNING user_id, phone, address_line1, address_line2, postcode, locality,
 
 -- name: UpdateMemberIdentity :one
 UPDATE users SET name = sqlc.arg(name), email = sqlc.narg(email),
+    email_verified_at = CASE WHEN email IS DISTINCT FROM sqlc.narg(email) THEN NULL ELSE email_verified_at END,
     date_of_birth = sqlc.arg(date_of_birth), updated_at = clock_timestamp()
 WHERE id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at)
 RETURNING updated_at;

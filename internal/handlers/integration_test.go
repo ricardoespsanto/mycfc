@@ -8,10 +8,12 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -57,6 +59,26 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 			t.Fatalf("consent = %#v", consent)
 		}
 	}
+	var tokenID uuid.UUID
+	var outboxStatus string
+	var verifiedAt pgtype.Timestamptz
+	if err := pool.QueryRow(ctx, `SELECT token.id, outbox.status, account.email_verified_at
+		FROM email_verification_tokens token
+		JOIN email_outbox outbox ON outbox.verification_token_id = token.id
+		JOIN users account ON account.id = token.user_id
+		WHERE token.user_id = $1`, user.ID).Scan(&tokenID, &outboxStatus, &verifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if outboxStatus != "PENDING" || verifiedAt.Valid {
+		t.Fatalf("verification state = status %q, verified %#v", outboxStatus, verifiedAt)
+	}
+	verification := emailverification.Service{Store: queries, BaseURL: "https://mycfc.example", Key: []byte("0123456789abcdef0123456789abcdef")}
+	if verifiedID, err := verification.Verify(ctx, tokenID.String(), verification.Signature(tokenID)); err != nil || verifiedID != user.ID {
+		t.Fatalf("verify = %s, %v", verifiedID, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT email_verified_at FROM users WHERE id = $1`, user.ID).Scan(&verifiedAt); err != nil || !verifiedAt.Valid {
+		t.Fatalf("verified timestamp = %#v, %v", verifiedAt, err)
+	}
 
 	rollbackEmail := "registration-rollback-" + uuid.NewString() + "@example.test"
 	t.Cleanup(func() {
@@ -73,6 +95,98 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("rolled back user count = %d, want 0", count)
+	}
+}
+
+func TestPostgresProfileStoreEmailChangeInvalidatesVerificationAtomically(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	email := "profile-verification-" + uuid.NewString() + "@example.test"
+	account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Pessoa verificada", Email: &email, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, account.ID) })
+	if _, err := pool.Exec(ctx, `UPDATE users SET email_verified_at = now() WHERE id = $1`, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.EnsureMemberProfile(ctx, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := queries.GetMemberProfile(ctx, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEmail := "profile-verification-new-" + uuid.NewString() + "@example.test"
+	store := PostgresProfileStore{Pool: pool, Now: func() time.Time { return time.Now().UTC().Add(time.Minute) }}
+	err = store.Update(ctx, ProfileUpdate{
+		ActorID: account.ID, SubjectID: account.ID, IsAdmin: true,
+		Profile:        dbgen.UpdateMemberProfileParams{UserID: account.ID, MedicalDeclaration: "UNKNOWN", ExpectedUpdatedAt: profile.UpdatedAt},
+		Identity:       &dbgen.UpdateMemberIdentityParams{Name: profile.Name, Email: &newEmail, DateOfBirth: profile.DateOfBirth, ExpectedUpdatedAt: profile.IdentityUpdatedAt},
+		IdentityFields: []string{"email"},
+		ChangedFields:  []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activeEmail string
+	var verifiedAt pgtype.Timestamptz
+	var activeTokens, cancelledOutbox int
+	if err := pool.QueryRow(ctx, `SELECT email, email_verified_at FROM users WHERE id = $1`, account.ID).Scan(&activeEmail, &verifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_verification_tokens WHERE user_id = $1 AND consumed_at IS NULL`, account.ID).Scan(&activeTokens); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_outbox outbox JOIN email_verification_tokens token ON token.id = outbox.verification_token_id WHERE token.user_id = $1 AND outbox.status = 'CANCELLED'`, account.ID).Scan(&cancelledOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if activeEmail != newEmail || verifiedAt.Valid || activeTokens != 1 || cancelledOutbox != 1 {
+		t.Fatalf("email=%q verified=%v active_tokens=%d cancelled=%d", activeEmail, verifiedAt.Valid, activeTokens, cancelledOutbox)
+	}
+}
+
+func TestEmailVerificationResendThrottleSerializesConcurrentRequests(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	userID := uuid.New()
+	email := "verification-throttle-" + uuid.NewString() + "@example.test"
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, email_verified_at, password_hash, date_of_birth) VALUES ($1, 'Pessoa concorrente', $2, now(), 'hash', '1990-01-01')`, userID, email); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID) })
+	service := emailverification.Service{Store: dbgen.New(pool)}
+	start := make(chan struct{})
+	errorsSeen := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, err := service.Issue(context.Background(), userID, email, true)
+			errorsSeen <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsSeen)
+	var succeeded, throttled int
+	for err := range errorsSeen {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, emailverification.ErrTooSoon):
+			throttled++
+		default:
+			t.Fatalf("unexpected issue error: %v", err)
+		}
+	}
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_verification_tokens WHERE user_id = $1 AND consumed_at IS NULL`, userID).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if succeeded != 1 || throttled != 1 || active != 1 {
+		t.Fatalf("succeeded=%d throttled=%d active=%d", succeeded, throttled, active)
 	}
 }
 

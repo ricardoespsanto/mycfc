@@ -49,6 +49,11 @@ main {
 	border-inline-start: 0.35rem solid #17653c;
 	background: #edfff3;
 }
+.email-verification-cue { display: inline-flex; align-items: center; width: fit-content; margin-top: .35rem; color: #ffe2a0; font-size: .78rem; font-weight: 700; text-decoration: underline; text-underline-offset: .18em; }
+.email-verification-status { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--c-focus); border-radius: var(--radius-lg); background: var(--c-warning-bg); }
+.email-verification-status h2 { margin-block: .2rem .35rem; font-size: 1.05rem; }
+.email-verification-status p { margin: 0; }
+@media (max-width: 40rem) { .email-verification-status { align-items: flex-start; flex-direction: column; } }
 
 .auth-card {
 	width: min(100%, 30rem);
@@ -394,10 +399,12 @@ html.js .create-panel[open] .disclosure__content { padding: var(--space-5) var(-
 .auth-card .eyebrow { margin: 0; color: var(--c-river-700); font-size: var(--text-xs); letter-spacing: .12em; }
 .auth-card .form-layout { gap: var(--space-3); }
 .auth-card--registration .form-layout { grid-template-columns: repeat(2,minmax(0,1fr)); column-gap: var(--space-4); }
-.auth-card--registration .form-layout > :is(.error-summary,.form-required-note,.consent-field,.form-actions) { grid-column: 1 / -1; }
+.auth-card--registration .form-layout > :is(.error-summary,.form-required-note,.consent-field,.form-actions,.turnstile-field) { grid-column: 1 / -1; }
 .auth-card .form-field { margin: 0; }
 .auth-card .form-actions { margin-block-start: var(--space-1); }
 .auth-card .form-actions .action { inline-size: 100%; }
+.registration-trap { position: absolute; inset-inline-start: -100vw; inline-size: 1px; block-size: 1px; overflow: hidden; }
+.turnstile-field { min-block-size: 4.25rem; }
 .consent-field { display: grid; gap: var(--space-1); }
 .consent-field > label { display: grid; grid-template-columns: auto minmax(0,1fr); gap: var(--space-2); align-items: start; min-block-size: 2.75rem; }
 .consent-field > label > span { min-inline-size: 0; }

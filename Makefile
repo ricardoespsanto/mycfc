@@ -20,8 +20,8 @@ tools: ## Install pinned Go development tools into ./bin
 	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@v1.67.1
 
-dev-infra: ## Start local PostgreSQL and MinIO
-	docker compose up -d --wait postgres minio
+dev-infra: ## Start local PostgreSQL, MinIO, and Mailpit
+	docker compose up -d --wait postgres minio mailpit
 	docker compose run --rm minio-init
 
 dev-infra-down: ## Stop local services without deleting data

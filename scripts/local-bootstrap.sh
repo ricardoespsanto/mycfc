@@ -22,7 +22,7 @@ for consent_url in \
   fi
 done
 
-docker compose up -d --wait postgres minio
+docker compose up -d --wait postgres minio mailpit
 docker compose run --rm minio-init
 if ! docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT to_regclass('public.users') IS NOT NULL" | grep -qx t; then
   docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" < internal/db/schema.sql

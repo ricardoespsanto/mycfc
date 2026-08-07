@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -42,14 +43,26 @@ type Config struct {
 	Port              int    `env:"PORT" envDefault:"8080"`
 	BaseURL           string `env:"BASE_URL,required"`
 
-	DatabaseURL    Secret `env:"DATABASE_URL"`
-	DBHost         string `env:"DB_HOST"`
-	DBPort         int    `env:"DB_PORT"`
-	DBName         string `env:"DB_NAME"`
-	DBUser         string `env:"DB_USER"`
-	DBPassword     Secret `env:"DB_PASSWORD"`
-	DBSSLMode      string `env:"DB_SSLMODE" envDefault:"require"`
-	CSRFAuthKeyB64 Secret `env:"CSRF_AUTH_KEY_B64,required"`
+	DatabaseURL                 Secret `env:"DATABASE_URL"`
+	DBHost                      string `env:"DB_HOST"`
+	DBPort                      int    `env:"DB_PORT"`
+	DBName                      string `env:"DB_NAME"`
+	DBUser                      string `env:"DB_USER"`
+	DBPassword                  Secret `env:"DB_PASSWORD"`
+	DBSSLMode                   string `env:"DB_SSLMODE" envDefault:"require"`
+	CSRFAuthKeyB64              Secret `env:"CSRF_AUTH_KEY_B64,required"`
+	EmailVerificationHMACKeyB64 Secret `env:"EMAIL_VERIFICATION_HMAC_KEY_B64"`
+	TurnstileSiteKey            string `env:"TURNSTILE_SITE_KEY"`
+	TurnstileSecretKey          Secret `env:"TURNSTILE_SECRET_KEY"`
+
+	SMTPHost        string        `env:"SMTP_HOST"`
+	SMTPPort        int           `env:"SMTP_PORT" envDefault:"587"`
+	SMTPUsername    string        `env:"SMTP_USERNAME"`
+	SMTPPassword    Secret        `env:"SMTP_PASSWORD"`
+	SMTPFromAddress string        `env:"SMTP_FROM_ADDRESS"`
+	SMTPFromName    string        `env:"SMTP_FROM_NAME" envDefault:"MyCFC"`
+	SMTPTLSMode     string        `env:"SMTP_TLS_MODE" envDefault:"starttls"`
+	SMTPTimeout     time.Duration `env:"SMTP_TIMEOUT" envDefault:"10s"`
 
 	AWSRegion        string `env:"AWS_REGION,required"`
 	S3BucketName     string `env:"S3_BUCKET_NAME,required"`
@@ -100,10 +113,28 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
+	cfg.applyNonProductionEmailDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func (c *Config) applyNonProductionEmailDefaults() {
+	if c.IsProduction() {
+		return
+	}
+	if c.EmailVerificationHMACKeyB64.Value() == "" {
+		c.EmailVerificationHMACKeyB64 = Secret("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	}
+	if strings.TrimSpace(c.SMTPHost) == "" {
+		c.SMTPHost = "localhost"
+		c.SMTPPort = 1025
+		c.SMTPTLSMode = "none"
+	}
+	if strings.TrimSpace(c.SMTPFromAddress) == "" {
+		c.SMTPFromAddress = "mycfc@example.test"
+	}
 }
 
 func (c Config) IsProduction() bool { return c.AppEnv == "production" }
@@ -134,6 +165,17 @@ func (c Config) CSRFAuthKey() ([]byte, error) {
 	}
 	if len(decoded) != 32 {
 		return nil, errors.New("CSRF_AUTH_KEY_B64 must decode to exactly 32 bytes")
+	}
+	return decoded, nil
+}
+
+func (c Config) EmailVerificationHMACKey() ([]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(c.EmailVerificationHMACKeyB64.Value())
+	if err != nil {
+		return nil, errors.New("EMAIL_VERIFICATION_HMAC_KEY_B64 is not valid base64")
+	}
+	if len(decoded) != 32 {
+		return nil, errors.New("EMAIL_VERIFICATION_HMAC_KEY_B64 must decode to exactly 32 bytes")
 	}
 	return decoded, nil
 }
@@ -202,6 +244,38 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.CSRFAuthKey(); err != nil {
 		problems.Add("CSRF_AUTH_KEY_B64", err.Error())
+	}
+	if _, err := c.EmailVerificationHMACKey(); err != nil {
+		problems.Add("EMAIL_VERIFICATION_HMAC_KEY_B64", err.Error())
+	}
+	if (strings.TrimSpace(c.TurnstileSiteKey) == "") != (strings.TrimSpace(c.TurnstileSecretKey.Value()) == "") {
+		problems.Add("TURNSTILE_SITE_KEY", "and TURNSTILE_SECRET_KEY must either both be set or both be empty")
+	}
+	if c.IsProduction() && strings.TrimSpace(c.TurnstileSiteKey) == "" {
+		problems.Add("TURNSTILE_SITE_KEY", "and TURNSTILE_SECRET_KEY are required in production")
+	}
+	if strings.TrimSpace(c.SMTPHost) == "" {
+		problems.Add("SMTP_HOST", "must not be empty")
+	}
+	if c.SMTPPort < 1 || c.SMTPPort > 65535 {
+		problems.Add("SMTP_PORT", "must be between 1 and 65535")
+	}
+	if (c.SMTPUsername == "") != (c.SMTPPassword.Value() == "") {
+		problems.Add("SMTP_USERNAME", "and SMTP_PASSWORD must either both be set or both be empty")
+	}
+	if address, err := mail.ParseAddress(c.SMTPFromAddress); err != nil || address.Address != c.SMTPFromAddress {
+		problems.Add("SMTP_FROM_ADDRESS", "must be a plain valid email address")
+	}
+	if strings.TrimSpace(c.SMTPFromName) == "" {
+		problems.Add("SMTP_FROM_NAME", "must not be empty")
+	}
+	if !slices.Contains([]string{"starttls", "implicit", "none"}, c.SMTPTLSMode) {
+		problems.Add("SMTP_TLS_MODE", "must be starttls, implicit or none")
+	} else if c.IsProduction() && c.SMTPTLSMode == "none" {
+		problems.Add("SMTP_TLS_MODE", "must use TLS in production")
+	}
+	if c.SMTPTimeout <= 0 {
+		problems.Add("SMTP_TIMEOUT", "must be greater than zero")
 	}
 	if strings.TrimSpace(c.AWSRegion) == "" {
 		problems.Add("AWS_REGION", "must not be empty")

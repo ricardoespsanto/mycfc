@@ -79,6 +79,17 @@ func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 	}
 }
 
+func TestBaseMarksUnverifiedEmailInDesktopAndMobileAccountContext(t *testing.T) {
+	var output strings.Builder
+	err := Base(PageMeta{Title: "Hoje | MyCFC", CurrentUserName: "Maria Silva", CurrentUserID: "member-1", EmailVerificationPending: true, Navigation: []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}}}, Flash("")).Render(context.Background(), &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(output.String(), `class="email-verification-cue" href="/perfil">Email por verificar</a>`); got != 2 {
+		t.Fatalf("verification cue count = %d, want desktop and mobile cues", got)
+	}
+}
+
 func TestBaseRendersSubjectContext(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{

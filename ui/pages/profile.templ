@@ -19,7 +19,7 @@ type ProfileForm struct {
 type ProfilePage struct {
 	Meta components.PageMeta
 	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ImageConsentURL string
-	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible bool
+	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified bool
 	Form ProfileForm
 	Success, Conflict string
 }
@@ -33,6 +33,12 @@ templ profileContent(page ProfilePage) {
 		@components.StatusMessage(page.Conflict, "error")
 		if !page.Complete {
 			@components.StatusMessage("Complete o contacto de emergência e a declaração médica. Este aviso não bloqueia as restantes áreas.", "warning")
+		}
+		if page.Self && !page.Dependent && !page.EmailVerified {
+			<section class="email-verification-status" aria-labelledby="email-verification-status-title">
+				<div><p class="eyebrow">Email por verificar</p><h2 id="email-verification-status-title">Confirme { page.Email }</h2><p>Enviámos um link de confirmação válido durante 24 horas. Pode continuar a usar todas as áreas do MyCFC.</p></div>
+				<form method="post" action="/perfil/email-verificacao/reenviar">@page.Meta.CSRFField<button class="action action--secondary" type="submit">Reenviar link</button></form>
+			</section>
 		}
 		<section class="module profile-identity" aria-labelledby="profile-identity-title">
 			<div class="profile-portrait">

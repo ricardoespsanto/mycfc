@@ -1,0 +1,29 @@
+package pages
+
+import (
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type EmailVerificationPage struct {
+	Meta components.PageMeta
+	Success bool
+}
+
+templ EmailVerification(page EmailVerificationPage) {
+	@components.AuthBase(page.Meta, emailVerificationContent(page))
+}
+
+templ emailVerificationContent(page EmailVerificationPage) {
+	<section class="auth-card" aria-labelledby="email-verification-title">
+		<p class="eyebrow">Conta MyCFC</p>
+		if page.Success {
+			<h1 id="email-verification-title">Email confirmado</h1>
+			<p>O endereço de email foi confirmado com sucesso.</p>
+			<p><a class="action" href="/login">Iniciar sessão</a></p>
+		} else {
+			<h1 id="email-verification-title">Não foi possível confirmar o email</h1>
+			<p>O link é inválido, já foi utilizado ou expirou. Inicie sessão para pedir um novo link no seu perfil.</p>
+			<p><a class="action" href="/login">Iniciar sessão</a></p>
+		}
+	</section>
+}

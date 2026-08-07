@@ -26,6 +26,15 @@ MYCFC_DOMAIN=example.com
 APP_VERSION=<release-version>
 GIT_SHA=<40-lowercase-hex-commit>
 BASE_URL=https://example.com
+EMAIL_VERIFICATION_HMAC_KEY_B64=<email_verification_hmac_key_b64 Terraform output>
+SMTP_HOST=email-smtp.eu-west-1.amazonaws.com
+SMTP_PORT=587
+SMTP_USERNAME=<ses_smtp_username Terraform output>
+SMTP_PASSWORD=<ses_smtp_password Terraform output>
+SMTP_FROM_ADDRESS=no-reply@mycfcoimbra.com
+SMTP_FROM_NAME=MyCFC
+SMTP_TLS_MODE=starttls
+SMTP_TIMEOUT=10s
 
 POSTGRES_DB=<database-name>
 POSTGRES_USER=<bootstrap-superuser>
@@ -35,6 +44,8 @@ APP_DB_PASSWORD=<restricted-application-password>
 MIGRATION_DB_USER=<schema-migration-user>
 MIGRATION_DB_PASSWORD=<schema-migration-password>
 CSRF_AUTH_KEY_B64=<base64-encoded-32-byte-key>
+TURNSTILE_SITE_KEY=<cloudflare-turnstile-site-key>
+TURNSTILE_SECRET_KEY=<cloudflare-turnstile-secret-key>
 
 AWS_REGION=<aws-region>
 AWS_ACCESS_KEY_ID=<aws-access-key-id>
@@ -64,7 +75,9 @@ CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
 CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
-The long-running application receives only the restricted `APP_DB_*` credential. The release agent uses the bootstrap credential in a one-off role-provisioning container and then uses only the `MIGRATION_DB_*` credential for the one-off migration container. Neither privileged credential is present in the application container. Database URLs use `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+The long-running application receives only the restricted `APP_DB_*` credential. The release agent uses the bootstrap credential in a one-off role-provisioning container and then uses only the `MIGRATION_DB_*` credential for the one-off migration container. Neither privileged credential is present in the application container. Database URLs use `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. Registration uses Cloudflare Turnstile in production; create the widget for the production domain and keep the secret key only in the root-owned environment file. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+
+The retained AWS Terraform stack provisions the SES identity, authoritative Cloudflare DKIM and MAIL FROM records, least-privilege SMTP credentials, and the email-verification HMAC key. Install its sensitive outputs in this environment file before releasing, confirm SES production access, and run `sudo ./deployment/verify-ses.sh`. The smoke test sends only to the AWS SES mailbox simulator.
 
 The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 

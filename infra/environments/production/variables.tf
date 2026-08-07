@@ -17,6 +17,26 @@ variable "domain_name" {
   type    = string
   default = "mycfc.pt"
 }
+variable "ses_from_local_part" {
+  type        = string
+  default     = "no-reply"
+  description = "Local part of the only address the application SMTP identity may send from."
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$", var.ses_from_local_part))
+    error_message = "ses_from_local_part must be a valid lowercase email local part."
+  }
+}
+variable "ses_mail_from_subdomain" {
+  type        = string
+  default     = "mail"
+  description = "Subdomain used as the custom SES MAIL FROM domain."
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", var.ses_mail_from_subdomain))
+    error_message = "ses_mail_from_subdomain must be a valid DNS label."
+  }
+}
 variable "route53_zone_id" { type = string }
 variable "github_org" { type = string }
 variable "github_repo" { type = string }

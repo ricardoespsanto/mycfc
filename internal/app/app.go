@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/release"
@@ -35,6 +36,7 @@ type Application struct {
 	Sessions     *scs.SessionManager
 	SessionStore *pgxstore.PostgresStore
 	ObjectStore  storage.ObjectStore
+	EmailWorker  *emailverification.Worker
 	Server       *http.Server
 }
 
@@ -109,6 +111,22 @@ func New(ctx context.Context) (*Application, error) {
 		pool.Close()
 		return nil, err
 	}
+	verificationKey, err := cfg.EmailVerificationHMACKey()
+	if err != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, err
+	}
+	smtpSender, err := emailverification.NewSMTPSender(emailverification.SMTPConfig{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword.Value(), FromAddress: cfg.SMTPFromAddress,
+		FromName: cfg.SMTPFromName, TLSMode: cfg.SMTPTLSMode, Timeout: cfg.SMTPTimeout,
+	})
+	if err != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, fmt.Errorf("configure SMTP client: %w", err)
+	}
 
 	assets, err := loadAssetManifest()
 	if err != nil {
@@ -134,7 +152,12 @@ func New(ctx context.Context) (*Application, error) {
 		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
 		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
 		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
-		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+		AntiBotKey: csrfKey,
+		PageMeta:   components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+	}
+	if cfg.TurnstileSiteKey != "" {
+		registration.TurnstileSiteKey = cfg.TurnstileSiteKey
+		registration.TurnstileVerifier = handlers.CloudflareTurnstileVerifier{Secret: cfg.TurnstileSecretKey.Value(), Client: &http.Client{Timeout: 5 * time.Second}}
 	}
 	pageMeta := components.PageMeta{
 		StylesheetURL: assets["app.css"],
@@ -142,6 +165,9 @@ func New(ctx context.Context) (*Application, error) {
 		BrandImageURL: assets["images/cfc-logo.png"],
 	}
 	system := handlers.System{PageMeta: pageMeta}
+	verificationService := emailverification.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
+	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, Logger: logger}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
 		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)
@@ -175,7 +201,7 @@ func New(ctx context.Context) (*Application, error) {
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256, ImageURL: cfg.ConsentImageURL}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, auth, dashboard, repair, events, announcements, training, members, profile, news, foundation))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, auth, dashboard, repair, events, announcements, training, members, profile, news, foundation))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()
@@ -213,6 +239,7 @@ func New(ctx context.Context) (*Application, error) {
 		Sessions:     sessions,
 		SessionStore: sessionStore,
 		ObjectStore:  objectStore,
+		EmailWorker:  emailWorker,
 		Server:       server,
 	}, nil
 }
@@ -246,6 +273,9 @@ func (a *Application) Run(ctx context.Context) error {
 
 	signalContext, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if a.EmailWorker != nil {
+		go a.EmailWorker.Run(signalContext)
+	}
 
 	select {
 	case err := <-serverErrors:

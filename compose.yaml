@@ -61,6 +61,18 @@ services:
     networks: [mycfc]
     restart: "no"
 
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    networks: [mycfc]
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   e2e-app:
     image: golang:1.26.5-bookworm
     profiles: [e2e]
@@ -72,6 +84,11 @@ services:
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_TLS_MODE: none
+      SMTP_FROM_ADDRESS: mycfc@example.test
+      EMAIL_VERIFICATION_HMAC_KEY_B64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       CONSENT_TERMS_URL: http://e2e-app:8080/legal/termos-gerais
       CONSENT_IMAGE_URL: http://e2e-app:8080/legal/uso-imagem
       CONSENT_MINOR_URL: http://e2e-app:8080/legal/responsabilidade-menor
@@ -80,6 +97,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     volumes:
       - .:/workspace
@@ -113,6 +132,7 @@ services:
     working_dir: /workspace
     environment:
       E2E_BASE_URL: http://e2e-app:8080
+      MAILPIT_API_BASE: http://mailpit:8025
       CI: "true"
     command:
       - /bin/sh
@@ -143,6 +163,11 @@ services:
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_TLS_MODE: none
+      SMTP_FROM_ADDRESS: mycfc@example.test
+      EMAIL_VERIFICATION_HMAC_KEY_B64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       CONSENT_TERMS_URL: http://ui-review-app:8080/legal/termos-gerais
       CONSENT_IMAGE_URL: http://ui-review-app:8080/legal/uso-imagem
       CONSENT_MINOR_URL: http://ui-review-app:8080/legal/responsabilidade-menor
@@ -151,6 +176,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     volumes:
       - .:/workspace
