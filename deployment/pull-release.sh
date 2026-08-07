@@ -116,6 +116,7 @@ release_updated=true
 
 log "deploying SHA $sha with digest $digest"
 docker compose --env-file "$env_file" -f "$compose_file" pull
+docker compose --env-file "$env_file" -f "$compose_file" build caddy
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate

@@ -152,7 +152,12 @@ func New(ctx context.Context) (*Application, error) {
 		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
 		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
 		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
-		PageMeta: components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+		AntiBotKey: csrfKey,
+		PageMeta:   components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+	}
+	if cfg.TurnstileSiteKey != "" {
+		registration.TurnstileSiteKey = cfg.TurnstileSiteKey
+		registration.TurnstileVerifier = handlers.CloudflareTurnstileVerifier{Secret: cfg.TurnstileSecretKey.Value(), Client: &http.Client{Timeout: 5 * time.Second}}
 	}
 	pageMeta := components.PageMeta{
 		StylesheetURL: assets["app.css"],

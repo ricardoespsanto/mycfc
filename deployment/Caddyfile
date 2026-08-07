@@ -10,6 +10,18 @@
 http://{$MYCFC_DOMAIN} {
 	encode zstd gzip
 
+	rate_limit {
+		zone registration_create {
+			match {
+				method POST
+				path /registo
+			}
+			key {client_ip}
+			events 5
+			window 5m
+		}
+	}
+
 	reverse_proxy app:8080 {
 		health_uri /health/live
 		health_interval 10s

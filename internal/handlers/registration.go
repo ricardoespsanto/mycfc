@@ -2,9 +2,17 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +30,10 @@ import (
 )
 
 const duplicateEmailMessage = "Já existe uma conta com este endereço de correio eletrónico."
+const registrationBotMessage = "Não foi possível confirmar que este pedido foi feito por uma pessoa. Tente novamente."
+const registrationRenderTokenMaxAge = 30 * time.Minute
+const registrationRenderTokenMinAge = 2 * time.Second
+const turnstileVerifyEndpoint = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
 type RegistrationInput struct {
 	Name, Email, PasswordHash string
@@ -40,6 +52,10 @@ type RegistrationStore interface {
 	RegisterAdult(context.Context, RegistrationInput) (RegistrationResult, error)
 }
 
+type TurnstileVerifier interface {
+	Verify(context.Context, string, *netip.Addr) error
+}
+
 type Registration struct {
 	Store        RegistrationStore
 	Sessions     *scs.SessionManager
@@ -52,6 +68,10 @@ type Registration struct {
 	ImageVersion string
 	ImageSHA256  string
 	ImageURL     string
+	AntiBotKey   []byte
+
+	TurnstileSiteKey  string
+	TurnstileVerifier TurnstileVerifier
 }
 
 func (h Registration) Get(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +84,7 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := h.validate(r)
+	h.validateBotChecks(r, &form)
 	if !form.Errors.Empty() {
 		h.render(w, r, http.StatusUnprocessableEntity, form)
 		return
@@ -148,6 +169,28 @@ func (h Registration) validate(r *http.Request) registrationForm {
 	return form
 }
 
+func (h Registration) validateBotChecks(r *http.Request, form *registrationForm) {
+	if strings.TrimSpace(r.PostForm.Get("company")) != "" {
+		form.Errors.Add("registration_check", registrationBotMessage)
+		return
+	}
+	if err := h.validateRenderToken(r.PostForm.Get("registration_token")); err != nil {
+		form.Errors.Add("registration_check", registrationBotMessage)
+		return
+	}
+	if h.TurnstileVerifier == nil {
+		return
+	}
+	token := strings.TrimSpace(r.PostForm.Get("cf-turnstile-response"))
+	var ip *netip.Addr
+	if value, ok := httpx.RemoteIP(r.Context()); ok {
+		ip = &value
+	}
+	if err := h.TurnstileVerifier.Verify(r.Context(), token, ip); err != nil {
+		form.Errors.Add("registration_check", registrationBotMessage)
+	}
+}
+
 func (h Registration) render(w http.ResponseWriter, r *http.Request, status int, form registrationForm) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -157,7 +200,12 @@ func (h Registration) render(w http.ResponseWriter, r *http.Request, status int,
 	if dateOfBirth == "" && !form.DateOfBirth.IsZero() {
 		dateOfBirth = form.DateOfBirth.Format("2006-01-02")
 	}
-	_ = pages.Registration(pages.RegistrationPage{Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth, TermsURL: h.TermsURL, ImageURL: h.ImageURL, TermsAccepted: form.TermsAccepted, ImageAccepted: form.ImageAccepted, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
+	_ = pages.Registration(pages.RegistrationPage{
+		Meta: meta, Name: form.Name, Email: form.Email, DateOfBirth: dateOfBirth,
+		TermsURL: h.TermsURL, ImageURL: h.ImageURL, TermsAccepted: form.TermsAccepted, ImageAccepted: form.ImageAccepted,
+		Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r))), RegistrationToken: h.registrationRenderToken(h.now()),
+		TurnstileSiteKey: h.TurnstileSiteKey,
+	}).Render(r.Context(), w)
 }
 
 func (h Registration) now() time.Time {
@@ -177,4 +225,101 @@ func truncateRunes(value string, max int) string {
 		return value
 	}
 	return string([]rune(value)[:max])
+}
+
+func (h Registration) registrationRenderToken(renderedAt time.Time) string {
+	if len(h.AntiBotKey) == 0 {
+		return ""
+	}
+	var payload [8]byte
+	binary.BigEndian.PutUint64(payload[:], uint64(renderedAt.UTC().UnixNano()))
+	signature := h.signRegistrationToken(payload[:])
+	token := make([]byte, 0, len(payload)+len(signature))
+	token = append(token, payload[:]...)
+	token = append(token, signature...)
+	return base64.RawURLEncoding.EncodeToString(token)
+}
+
+func (h Registration) validateRenderToken(raw string) error {
+	if len(h.AntiBotKey) == 0 {
+		return errors.New("registration anti-bot key is not configured")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(decoded) != 8+sha256.Size {
+		return errors.New("registration token is invalid")
+	}
+	payload, gotSignature := decoded[:8], decoded[8:]
+	wantSignature := h.signRegistrationToken(payload)
+	if !hmac.Equal(gotSignature, wantSignature) {
+		return errors.New("registration token signature is invalid")
+	}
+	renderedAt := time.Unix(0, int64(binary.BigEndian.Uint64(payload))).UTC()
+	age := h.now().UTC().Sub(renderedAt)
+	if age < registrationRenderTokenMinAge {
+		return errors.New("registration token is too new")
+	}
+	if age > registrationRenderTokenMaxAge {
+		return errors.New("registration token expired")
+	}
+	return nil
+}
+
+func (h Registration) signRegistrationToken(payload []byte) []byte {
+	mac := hmac.New(sha256.New, h.AntiBotKey)
+	mac.Write([]byte("mycfc registration render token v1"))
+	mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+type CloudflareTurnstileVerifier struct {
+	Secret   string
+	Endpoint string
+	Client   *http.Client
+}
+
+func (v CloudflareTurnstileVerifier) Verify(ctx context.Context, token string, remoteIP *netip.Addr) error {
+	if strings.TrimSpace(token) == "" {
+		return errors.New("turnstile response is empty")
+	}
+	endpoint := v.Endpoint
+	if endpoint == "" {
+		endpoint = turnstileVerifyEndpoint
+	}
+	client := v.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	values := url.Values{}
+	values.Set("secret", v.Secret)
+	values.Set("response", token)
+	if remoteIP != nil {
+		values.Set("remoteip", remoteIP.String())
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return fmt.Errorf("build turnstile request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("verify turnstile: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read turnstile response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("turnstile status %d", response.StatusCode)
+	}
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("decode turnstile response: %w", err)
+	}
+	if !result.Success {
+		return errors.New("turnstile verification failed")
+	}
+	return nil
 }

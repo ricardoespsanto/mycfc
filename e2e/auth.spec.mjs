@@ -95,6 +95,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await page.waitForTimeout(2100);
     await page.getByRole('button', { name: 'Criar conta' }).click();
 
     await expect(page).toHaveURL('/today');
@@ -184,6 +185,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
     await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await page.waitForTimeout(2100);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page).toHaveURL('/today');
     await expectNoSeriousAxeViolations(page);

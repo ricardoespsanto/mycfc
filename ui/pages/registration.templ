@@ -10,6 +10,8 @@ type RegistrationPage struct {
 	TermsAccepted, ImageAccepted       bool
 	Errors                       validation.FieldErrors
 	CSRFField                    templ.Component
+	RegistrationToken           string
+	TurnstileSiteKey            string
 }
 
 templ Registration(page RegistrationPage) {
@@ -23,7 +25,15 @@ templ registrationContent(page RegistrationPage) {
 		<p>Crie o seu acesso pessoal ao MyCFC. Os campos assinalados são obrigatórios.</p>
 		<form class="form-layout" method="post" action="/registo">
 			@page.CSRFField
-			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"name", "email", "date_of_birth", "password", "password_confirmation", "accept_terms", "accept_image_use"}))
+			<input type="hidden" name="registration_token" value={ page.RegistrationToken }/>
+			<div class="registration-trap" aria-hidden="true">
+				<label for="company">Empresa</label>
+				<input id="company" name="company" autocomplete="off" tabindex="-1"/>
+			</div>
+			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"registration_check", "name", "email", "date_of_birth", "password", "password_confirmation", "accept_terms", "accept_image_use"}))
+			if page.Errors["registration_check"] != "" {
+				<p id="registration_check" class="field-error">{ page.Errors["registration_check"] }</p>
+			}
 			@components.RequiredNote()
 			<div class="form-field">@components.FieldLabel("name", "Nome", true)<input id="name" name="name" autocomplete="name" value={ page.Name } required aria-invalid={ ariaBoolean(page.Errors["name"] != "") } aria-describedby="name-help name-error"/>@components.FieldHelp("name-help", "Use o seu nome completo.")@components.FieldErrorMessage("name", page.Errors["name"])</div>
 			<div class="form-field">@components.FieldLabel("email", "Correio eletrónico", true)<input id="email" name="email" type="email" autocomplete="email" value={ page.Email } required aria-invalid={ ariaBoolean(page.Errors["email"] != "") } aria-describedby="email-help email-error"/>@components.FieldHelp("email-help", "Este endereço será o seu identificador principal de acesso.")@components.FieldErrorMessage("email", page.Errors["email"])</div>
@@ -32,6 +42,12 @@ templ registrationContent(page RegistrationPage) {
 			<div class="form-field">@components.FieldLabel("password_confirmation", "Confirmar palavra-passe", true)<input id="password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required aria-invalid={ ariaBoolean(page.Errors["password_confirmation"] != "") } aria-describedby="password-confirmation-help password_confirmation-error"/>@components.FieldHelp("password-confirmation-help", "Introduza novamente a mesma palavra-passe.")@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])</div>
 			<div class="consent-field"><label for="accept_terms"><input id="accept_terms" name="accept_terms" type="checkbox" required checked?={ page.TermsAccepted } aria-invalid={ ariaBoolean(page.Errors["accept_terms"] != "") } aria-describedby="accept_terms-error"/><span>Aceito os <a href={ templ.SafeURL(page.TermsURL) } target="_blank" rel="noopener">termos gerais</a>. <span class="required-mark" aria-hidden="true">*</span></span></label>@components.FieldErrorMessage("accept_terms", page.Errors["accept_terms"])</div>
 			<div class="consent-field"><label for="accept_image_use"><input id="accept_image_use" name="accept_image_use" type="checkbox" required checked?={ page.ImageAccepted } aria-invalid={ ariaBoolean(page.Errors["accept_image_use"] != "") } aria-describedby="accept_image_use-error"/><span>Aceito a <a href={ templ.SafeURL(page.ImageURL) } target="_blank" rel="noopener">autorização de uso de imagem</a>. <span class="required-mark" aria-hidden="true">*</span></span></label>@components.FieldErrorMessage("accept_image_use", page.Errors["accept_image_use"])</div>
+			if page.TurnstileSiteKey != "" {
+				<div class="turnstile-field">
+					<div class="cf-turnstile" data-sitekey={ page.TurnstileSiteKey }></div>
+				</div>
+				<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+			}
 			@components.FormActions("") { <button class="action action--primary" type="submit">Criar conta</button> }
 		</form>
 		<p class="auth-alternate">Já tem conta? <a href="/login">Iniciar sessão</a></p>

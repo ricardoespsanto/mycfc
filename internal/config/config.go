@@ -52,6 +52,8 @@ type Config struct {
 	DBSSLMode                   string `env:"DB_SSLMODE" envDefault:"require"`
 	CSRFAuthKeyB64              Secret `env:"CSRF_AUTH_KEY_B64,required"`
 	EmailVerificationHMACKeyB64 Secret `env:"EMAIL_VERIFICATION_HMAC_KEY_B64"`
+	TurnstileSiteKey            string `env:"TURNSTILE_SITE_KEY"`
+	TurnstileSecretKey          Secret `env:"TURNSTILE_SECRET_KEY"`
 
 	SMTPHost        string        `env:"SMTP_HOST"`
 	SMTPPort        int           `env:"SMTP_PORT" envDefault:"587"`
@@ -245,6 +247,12 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.EmailVerificationHMACKey(); err != nil {
 		problems.Add("EMAIL_VERIFICATION_HMAC_KEY_B64", err.Error())
+	}
+	if (strings.TrimSpace(c.TurnstileSiteKey) == "") != (strings.TrimSpace(c.TurnstileSecretKey.Value()) == "") {
+		problems.Add("TURNSTILE_SITE_KEY", "and TURNSTILE_SECRET_KEY must either both be set or both be empty")
+	}
+	if c.IsProduction() && strings.TrimSpace(c.TurnstileSiteKey) == "" {
+		problems.Add("TURNSTILE_SITE_KEY", "and TURNSTILE_SECRET_KEY are required in production")
 	}
 	if strings.TrimSpace(c.SMTPHost) == "" {
 		problems.Add("SMTP_HOST", "must not be empty")

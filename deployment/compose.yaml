@@ -40,6 +40,8 @@ services:
       DB_SSLMODE: disable
       CSRF_AUTH_KEY_B64: ${CSRF_AUTH_KEY_B64:?set CSRF_AUTH_KEY_B64 in /etc/mycfc/mycfc.env}
       EMAIL_VERIFICATION_HMAC_KEY_B64: ${EMAIL_VERIFICATION_HMAC_KEY_B64:?set EMAIL_VERIFICATION_HMAC_KEY_B64 in /etc/mycfc/mycfc.env}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?set TURNSTILE_SITE_KEY in /etc/mycfc/mycfc.env}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?set TURNSTILE_SECRET_KEY in /etc/mycfc/mycfc.env}
       SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in /etc/mycfc/mycfc.env}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -115,7 +117,10 @@ services:
     profiles: [release]
 
   caddy:
-    image: caddy:2.10.2-alpine
+    image: mycfc-caddy-ratelimit:2.10.2-v0.1.0
+    build:
+      context: ..
+      dockerfile: deployment/caddy.Dockerfile
     environment:
       MYCFC_DOMAIN: ${MYCFC_DOMAIN:?set MYCFC_DOMAIN in /etc/mycfc/mycfc.env}
     volumes:

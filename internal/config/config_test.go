@@ -120,6 +120,48 @@ func TestProductionEmailConfigurationHasNoDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresTurnstilePair(t *testing.T) {
+	cfg := validConfig()
+	cfg.TurnstileSiteKey = "site-key"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TURNSTILE_SITE_KEY") {
+		t.Fatalf("missing turnstile secret error = %v", err)
+	}
+
+	cfg.TurnstileSiteKey = ""
+	cfg.TurnstileSecretKey = Secret("secret-key")
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TURNSTILE_SITE_KEY") {
+		t.Fatalf("missing turnstile site key error = %v", err)
+	}
+}
+
+func TestValidateRequiresTurnstileInProduction(t *testing.T) {
+	cfg := validConfig()
+	cfg.AppEnv = "production"
+	cfg.GITSHA = strings.Repeat("a", 40)
+	cfg.BaseURL = "https://mycfc.pt"
+	cfg.GalleryURL = "https://mycfc.pt/gallery"
+	cfg.ConsentTermsURL = "https://mycfc.pt/legal/termos-gerais"
+	cfg.ConsentImageURL = "https://mycfc.pt/legal/uso-imagem"
+	cfg.ConsentMinorURL = "https://mycfc.pt/legal/responsabilidade-menor"
+	cfg.ConsentTermsSHA256 = strings.Repeat("a", 64)
+	cfg.ConsentImageSHA256 = strings.Repeat("b", 64)
+	cfg.ConsentMinorSHA256 = strings.Repeat("c", 64)
+	cfg.SMTPTLSMode = "starttls"
+	cfg.S3Endpoint = ""
+	cfg.S3ForcePathStyle = false
+	cfg.TrustedProxyCIDRValues = []string{"172.30.0.0/24"}
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TURNSTILE_SITE_KEY") {
+		t.Fatalf("missing production turnstile error = %v", err)
+	}
+
+	cfg.TurnstileSiteKey = "site-key"
+	cfg.TurnstileSecretKey = Secret("secret-key")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("production turnstile configuration rejected: %v", err)
+	}
+}
+
 func TestValidateAcceptsProductionDatabaseComponents(t *testing.T) {
 	cfg := validConfig()
 	cfg.DatabaseURL = ""
