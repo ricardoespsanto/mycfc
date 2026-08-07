@@ -111,6 +111,7 @@ fi
 sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
 chmod 600 "$next_file"
 chown root:root "$next_file"
+"$deployment_dir/resolve-runtime-secrets.sh" "$next_file"
 mv "$next_file" "$env_file"
 release_updated=true
 

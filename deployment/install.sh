@@ -19,6 +19,12 @@ if [ "$(stat -c '%u:%a' "$env_file")" != '0:600' ]; then
 	exit 1
 fi
 
+if ! command -v aws >/dev/null 2>&1; then
+	printf '%s\n' 'Missing required command: aws' >&2
+	exit 1
+fi
+
+"$deployment_dir/resolve-runtime-secrets.sh" "$env_file"
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" config -q
 
 set -a
