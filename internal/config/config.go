@@ -143,7 +143,7 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	GalleryURL string `env:"GALLERY_URL,required"`
+	GalleryURL string `env:"GALLERY_URL"`
 
 	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION"`
 	ConsentTermsSHA256  string `env:"CONSENT_TERMS_SHA256"`

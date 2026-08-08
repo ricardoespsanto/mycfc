@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/caarlos0/env/v11"
 )
 
 type recordingParameterGetter struct {
@@ -53,6 +54,17 @@ func TestLoadProductionParameterValuesBatchesRequests(t *testing.T) {
 		if len(batch) == 0 || len(batch) > 10 {
 			t.Errorf("batch size = %d", len(batch))
 		}
+	}
+}
+
+func TestProductionEnvironmentParseAllowsSSMSourcedGalleryURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_VERSION", "release-test")
+	t.Setenv("GIT_SHA", strings.Repeat("a", 40))
+	t.Setenv("GALLERY_URL", "")
+
+	if _, err := env.ParseAs[Config](); err != nil {
+		t.Fatalf("parse production bootstrap environment: %v", err)
 	}
 }
 
