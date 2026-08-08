@@ -1,6 +1,6 @@
 # Retained AWS and runtime-config Terraform
 
-The ECS/RDS/ALB runtime was retired. This module manages the private repair-photo bucket, immutable ECR repository, Amazon SES transactional-email identity, production runtime configuration in SSM Parameter Store and Secrets Manager, and the AWS IAM user used by the Hetzner host. PostgreSQL backup storage and the Hetzner server resource are managed by `../hetzner`.
+The ECS/RDS/ALB runtime was retired. This module manages the private repair-photo bucket, immutable ECR repository, Amazon SES transactional-email identity, production runtime configuration in SSM Parameter Store and Secrets Manager, a 30-day CloudWatch deployment log group, and the AWS IAM user used by the Hetzner host. PostgreSQL backup storage and the Hetzner server resource are managed by `../hetzner`.
 
 Use the existing remote backend and run `terraform plan` before applying a retained-resource change. Do not restore retired runtime resources from this module.
 
@@ -31,7 +31,7 @@ runtime_parameter_prefix = /mycfc/production
 runtime_secret_arn       = arn:aws:secretsmanager:...
 ```
 
-The host only needs the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` installed once in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. That IAM user can pull ECR releases, read the production SSM parameters, read the production Secrets Manager secret, and use the repair-photo bucket.
+The host only needs the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` installed once in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. That IAM user can pull ECR releases, read the production SSM parameters, read the production Secrets Manager secret, use the repair-photo bucket, and write only to the dedicated deployment log group.
 
 Easy DKIM verification can take several minutes after DNS publication. Confirm both the identity and account before releasing:
 

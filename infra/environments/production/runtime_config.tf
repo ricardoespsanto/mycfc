@@ -150,6 +150,16 @@ data "aws_iam_policy_document" "host_runtime" {
   }
 
   statement {
+    sid    = "WriteDeploymentLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["${aws_cloudwatch_log_group.deployment.arn}:*"]
+  }
+
+  statement {
     sid       = "UseRepairPhotoBucket"
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]

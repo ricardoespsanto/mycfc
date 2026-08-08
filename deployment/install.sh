@@ -38,13 +38,14 @@ if [ ! -f /etc/mycfc/backup-aws/credentials ] || [ "$(stat -c '%u:%a' /etc/mycfc
 	exit 1
 fi
 
-for command in aws base64 curl docker flock jq logger od openssl shasum; do
+for command in aws base64 curl docker flock hostname jq logger od openssl shasum; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf '%s\n' "Missing required command: $command" >&2
 		exit 1
 	fi
 done
 
+chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service

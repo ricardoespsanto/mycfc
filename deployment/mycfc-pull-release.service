@@ -6,7 +6,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/mycfc/deployment/pull-release.sh
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/pull-release.sh
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

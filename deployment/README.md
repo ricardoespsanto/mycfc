@@ -12,7 +12,7 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
 5. Run `sudo sh deployment/install.sh` from this checkout.
 
-The installer validates the Compose configuration, installs and enables the pull-release systemd timer, then starts an immediate release check. It refuses an environment file that is not `root:root` mode `0600`.
+The installer validates the Compose configuration, installs and enables the pull-release systemd timer, then starts an immediate release check. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
 
 ## Required host environment
 
@@ -147,6 +147,7 @@ sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml l
 sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml up -d --pull always
 sudo systemctl status mycfc-pull-release.timer
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
+aws logs tail /mycfc/production/deployment --region eu-west-1 --since 1h
 ```
 
 Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before replacing the application container, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before the application is replaced.
