@@ -136,7 +136,7 @@ data "aws_iam_policy_document" "host_runtime" {
   statement {
     sid     = "ReadRuntimeParameters"
     effect  = "Allow"
-    actions = ["ssm:GetParameter"]
+    actions = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = [
       "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.runtime_parameter_prefix}/*",
     ]
