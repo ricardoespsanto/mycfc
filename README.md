@@ -6,7 +6,6 @@ MyCFC is the server-rendered Clube Fluvial de Coimbra member and fleet applicati
 
 ```bash
 cp .env.example .env
-# fill Google Calendar development values
 make tools
 make dev-bootstrap
 make dev

@@ -2,18 +2,12 @@ package handlers
 
 import "github.com/cfcoimbra/mycfc/ui/components"
 
-type CalendarVM struct {
-	Label string
-	URL   string
-	ID    string
-}
-
 type DashboardVM struct {
 	Meta      components.PageMeta
 	Heading   string
 	Intro     string
 	EmptyText string
-	Calendars []CalendarVM
+	Agenda    []DashboardAgendaItemVM
 	Sections  []DashboardSectionVM
 }
 
@@ -22,3 +16,4 @@ type DashboardSectionVM struct {
 	Items          []DashboardItemVM
 }
 type DashboardItemVM struct{ Title, Detail, URL string }
+type DashboardAgendaItemVM struct{ Title, Detail, URL, Kind string }

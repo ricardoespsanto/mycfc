@@ -41,9 +41,8 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 
 ## Calendar fallback
 
-- Disable JavaScript and confirm public-calendar links and explanatory text remain available.
-- Confirm calendar controls have natural pt-PT labels and can be operated by keyboard.
-- Confirm source failures produce an accessible inline warning.
+- Disable JavaScript and confirm internal agenda items remain available from server-rendered events and training data.
+- Confirm agenda links and labels use natural pt-PT text and can be operated by keyboard.
 
 ## Language
 

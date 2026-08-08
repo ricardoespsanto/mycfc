@@ -494,6 +494,66 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 	return items, nil
 }
 
+const listUpcomingTrainingSessionsForDashboard = `-- name: ListUpcomingTrainingSessionsForDashboard :many
+SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name
+FROM training_sessions s
+JOIN training_plans p ON p.id = s.plan_id
+LEFT JOIN modalities m ON m.id = s.modality_id
+WHERE s.ends_at >= $1
+  AND EXISTS (
+      SELECT 1 FROM user_memberships membership
+      JOIN users subject ON subject.id = membership.user_id
+      WHERE (subject.id = $2 OR subject.guardian_id = $2)
+        AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+        AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
+        AND (p.team_id IS NULL OR p.team_id = membership.team_id)
+  )
+ORDER BY s.starts_at, s.id
+LIMIT $3
+`
+
+type ListUpcomingTrainingSessionsForDashboardParams struct {
+	FromTime pgtype.Timestamptz `json:"from_time"`
+	UserID   uuid.UUID          `json:"user_id"`
+	RowLimit int32              `json:"row_limit"`
+}
+
+type ListUpcomingTrainingSessionsForDashboardRow struct {
+	ID           uuid.UUID          `json:"id"`
+	PlanTitle    string             `json:"plan_title"`
+	Title        string             `json:"title"`
+	StartsAt     pgtype.Timestamptz `json:"starts_at"`
+	EndsAt       pgtype.Timestamptz `json:"ends_at"`
+	ModalityName *string            `json:"modality_name"`
+}
+
+func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, arg ListUpcomingTrainingSessionsForDashboardParams) ([]ListUpcomingTrainingSessionsForDashboardRow, error) {
+	rows, err := q.db.Query(ctx, listUpcomingTrainingSessionsForDashboard, arg.FromTime, arg.UserID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUpcomingTrainingSessionsForDashboardRow{}
+	for rows.Next() {
+		var i ListUpcomingTrainingSessionsForDashboardRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PlanTitle,
+			&i.Title,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.ModalityName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const saveTrainingSessionOutcome = `-- name: SaveTrainingSessionOutcome :execrows
 INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)
 SELECT $1, $2, $3::training_outcome_status,

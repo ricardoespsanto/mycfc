@@ -40,6 +40,21 @@ func TestSnapshotReportsAvailableWithoutLeakingTechnicalVersion(t *testing.T) {
 	}
 }
 
+func TestSnapshotReportsAvailableWithoutLeakingInternalReleaseTag(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	currentReleasedAt := time.Date(2026, 7, 20, 9, 30, 0, 0, time.UTC)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return jsonResponse(`{"name":"v1.3.0","tag_name":"v1.3.0","published_at":"2026-08-01T10:00:00Z"}`), nil
+	})}
+	checker := NewChecker(client, "cfcoimbra/mycfc", "release-20260803120000-"+revision, "", currentReleasedAt, time.Minute, time.Now)
+
+	snapshot := checker.Snapshot(context.Background())
+
+	if snapshot.Status != StatusAvailable || snapshot.Current.Label != "Versão instalada" {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+}
+
 func TestSnapshotCachesReleaseChecks(t *testing.T) {
 	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

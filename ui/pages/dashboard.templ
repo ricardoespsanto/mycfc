@@ -7,18 +7,13 @@ type DashboardPage struct {
 	Heading   string
 	Intro     string
 	EmptyText string
-	CalendarAPIKey string
-	CalendarSources string
-	Calendars []CalendarLink
+	Agenda    []CalendarItem
+	ShowAgenda bool
 	Sections []DashboardSection
 	Actions []components.PageAction
 }
 
-type CalendarLink struct {
-	Label string
-	URL   string
-	ID    string
-}
+type CalendarItem struct { Title, Detail, URL, Kind string }
 type DashboardSection struct { Heading, Empty string; Items []DashboardItem }
 type DashboardItem struct { Title, Detail, URL string }
 
@@ -43,8 +38,8 @@ templ dashboardContent(page DashboardPage) {
 			}
 		</section>
 	}
-	if len(page.Calendars) > 0 {
-		@Calendar(page.CalendarAPIKey, page.CalendarSources, page.Calendars, "Consulte os calendários públicos relevantes para o seu perfil.")
+	if page.ShowAgenda {
+		@Calendar(page.Agenda, "Eventos e treinos relevantes para o seu perfil.")
 	}
 }
 
@@ -63,13 +58,17 @@ func dashboardSectionSummary(heading string) string {
 	}
 }
 
-templ Calendar(apiKey, sources string, calendars []CalendarLink, intro string) {
+templ Calendar(items []CalendarItem, intro string) {
 	<section class="module">@components.SectionHeading("Calendários", "Agenda", intro)
-		<div class="interactive-calendar" data-calendar data-calendar-api-key={ apiKey } data-calendar-sources={ sources } data-calendar-time-zone="Europe/Lisbon" aria-live="polite"><p>A carregar agenda...</p></div>
-		<p>Consulte os calendários públicos:</p><ul class="calendar-links record-list">
-			for _, calendar := range calendars {
-				<li><a href={ calendar.URL }>{ calendar.Label }</a></li>
+		if len(items) == 0 {
+			@components.EmptyState("Agenda sem itens", "Ainda não existem eventos ou treinos futuros para apresentar.")
+		}
+		if len(items) > 0 {
+		<ul class="calendar-events record-list" aria-label="Próximos itens da agenda">
+			for _, item := range items {
+				<li class="record-item"><div class="record-item__copy"><h3><a href={ templ.SafeURL(item.URL) }>{ item.Title }</a></h3><p class="record-meta">{ item.Detail }</p></div>@components.Badge(item.Kind, "info")</li>
 			}
 		</ul>
+		}
 	</section>
 }

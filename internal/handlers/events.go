@@ -526,18 +526,24 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 				page.NextURL = managedEventsPageURL(pageNumber + 1)
 				items = items[:eventsPageSize]
 			}
+			calendarEntries := make([]calendarEntry, 0, len(items))
 			for _, item := range items {
 				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
+				calendarEntries = append(calendarEntries, calendarEntry{Title: item.Title, URL: "/admin/eventos/" + item.ID.String(), Kind: eventTypeLabel(item.EventType), StartsAt: item.StartsAt.Time})
 			}
+			page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 		} else {
 			items, err := h.Store.ListEventsForCoach(ctx, dbgen.ListEventsForCoachParams{UserID: user.ID, RowLimit: 100})
 			if err != nil {
 				h.System.InternalError(w, r)
 				return
 			}
+			calendarEntries := make([]calendarEntry, 0, len(items))
 			for _, item := range items {
 				page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: "Confirmados: " + strconv.FormatInt(item.GoingCount, 10), Capacity: h.capacity(item.Capacity)})
+				calendarEntries = append(calendarEntries, calendarEntry{Title: item.Title, URL: "/admin/eventos/" + item.ID.String(), Kind: eventTypeLabel(item.EventType), StartsAt: item.StartsAt.Time})
 			}
+			page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 		}
 		programmes, err := h.Store.ListProgrammes(ctx)
 		if err != nil {
@@ -573,9 +579,12 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 			h.System.InternalError(w, r)
 			return
 		}
+		calendarEntries := make([]calendarEntry, 0, len(items))
 		for _, item := range items {
 			page.Events = append(page.Events, pages.EventItem{ID: item.ID.String(), Title: item.Title, Type: eventTypeLabel(item.EventType), When: h.dateRange(item.StartsAt.Time, item.EndsAt.Time), Status: eventStatus(item.ResponseStatus), Capacity: h.capacity(item.Capacity)})
+			calendarEntries = append(calendarEntries, calendarEntry{Title: item.Title, URL: "/events/" + item.ID.String(), Kind: eventTypeLabel(item.EventType), StartsAt: item.StartsAt.Time})
 		}
+		page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 		documents, err := h.Store.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: user.ID, RowLimit: 100})
 		if err != nil {
 			h.System.InternalError(w, r)

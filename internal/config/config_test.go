@@ -77,11 +77,6 @@ func validConfig() Config {
 		S3BucketName:                "mycfc-local",
 		S3Endpoint:                  "http://localhost:9000",
 		S3ForcePathStyle:            true,
-		GoogleCalendarAPIKey:        "local-browser-key",
-		CalendarCompetitionID:       "competition@example.test",
-		CalendarTrainingID:          "training@example.test",
-		CalendarSocialID:            "social@example.test",
-		CalendarCleanupsID:          "cleanups@example.test",
 		GalleryURL:                  "https://example.invalid/gallery",
 		ConsentTermsVersion:         "dev-v1",
 		ConsentTermsSHA256:          strings.Repeat("0", 64),
@@ -291,10 +286,6 @@ func validProductionParameters() map[string]string {
 		"TURNSTILE_SITE_KEY":       "site-key",
 		"S3_BUCKET_NAME":           "mycfc-production-repairs",
 		"S3_FORCE_PATH_STYLE":      "false",
-		"CALENDAR_COMPETITION_ID":  "competition@example.test",
-		"CALENDAR_TRAINING_ID":     "training@example.test",
-		"CALENDAR_SOCIAL_ID":       "social@example.test",
-		"CALENDAR_CLEANUPS_ID":     "cleanups@example.test",
 		"GALLERY_URL":              "https://mycfcoimbra.com/gallery",
 		"CONSENT_TERMS_VERSION":    "0.0.1",
 		"CONSENT_TERMS_SHA256":     strings.Repeat("a", 64),
@@ -337,7 +328,6 @@ func validProductionSecrets() map[string]string {
 		"TURNSTILE_SECRET_KEY":            "secret-key",
 		"SMTP_USERNAME":                   "smtp-user",
 		"SMTP_PASSWORD":                   "smtp-pass",
-		"GOOGLE_CALENDAR_API_KEY":         "calendar-key",
 	}
 }
 

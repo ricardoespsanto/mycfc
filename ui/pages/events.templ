@@ -19,7 +19,15 @@ type EventForm struct {
     Teams []EventTeam
     Errors validation.FieldErrors
 }
-type EventsPage struct { Meta components.PageMeta; Management, CanManageEvents bool; PreviousURL, NextURL, Success string; Events []EventItem; Documents []EventDocument; Form EventForm }
+type EventsPage struct {
+    Meta components.PageMeta
+    Management, CanManageEvents bool
+    PreviousURL, NextURL, Success string
+    Events []EventItem
+    Calendar BasicCalendarMonth
+    Documents []EventDocument
+    Form EventForm
+}
 type EventDetailPage struct {
     Meta components.PageMeta
     CanManageEvents bool
@@ -40,6 +48,7 @@ templ eventsContent(page EventsPage) {
         @components.PageHeader("Atividade", "Eventos", "Consulte a agenda e responda às atividades relevantes para si.", nil)
     }
     @components.StatusMessage(page.Success, "success")
+    @BasicCalendar(page.Calendar, "Calendário de eventos", "Vista mensal dos eventos carregados nesta página.")
     <section class="collection-view">
         @components.SectionHeading("Agenda", "Próximos eventos", "Datas, estado da sua resposta e disponibilidade num só lugar.") {
             <span class="collection-count">{ len(page.Events) } eventos</span>

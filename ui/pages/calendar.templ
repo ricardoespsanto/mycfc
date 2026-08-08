@@ -1,0 +1,61 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type BasicCalendarMonth struct {
+	Label string
+	Days  []BasicCalendarDay
+}
+
+type BasicCalendarDay struct {
+	Number  string
+	Muted   bool
+	Today   bool
+	Entries []BasicCalendarEntry
+}
+
+type BasicCalendarEntry struct {
+	Title string
+	URL   string
+	Kind  string
+}
+
+templ BasicCalendar(month BasicCalendarMonth, label, intro string) {
+	<section class="module calendar-month">
+		@components.SectionHeading("Calendário", label, intro) {
+			<span class="collection-count">{ month.Label }</span>
+		}
+		<div class="calendar-month__grid" role="grid" aria-label={ label + " - " + month.Label }>
+			<div class="calendar-month__weekday" role="columnheader">Seg</div>
+			<div class="calendar-month__weekday" role="columnheader">Ter</div>
+			<div class="calendar-month__weekday" role="columnheader">Qua</div>
+			<div class="calendar-month__weekday" role="columnheader">Qui</div>
+			<div class="calendar-month__weekday" role="columnheader">Sex</div>
+			<div class="calendar-month__weekday" role="columnheader">Sáb</div>
+			<div class="calendar-month__weekday" role="columnheader">Dom</div>
+			for _, day := range month.Days {
+				<div class={ calendarDayClass(day) } role="gridcell">
+					<span class="calendar-month__day-number">{ day.Number }</span>
+					if len(day.Entries) > 0 {
+						<ul class="calendar-month__entries" aria-label={ "Itens de " + day.Number }>
+							for _, entry := range day.Entries {
+								<li><a href={ templ.SafeURL(entry.URL) }><span>{ entry.Kind }</span>{ entry.Title }</a></li>
+							}
+						</ul>
+					}
+				</div>
+			}
+		</div>
+	</section>
+}
+
+func calendarDayClass(day BasicCalendarDay) string {
+	class := "calendar-month__day"
+	if day.Muted {
+		class += " calendar-month__day--muted"
+	}
+	if day.Today {
+		class += " calendar-month__day--today"
+	}
+	return class
+}

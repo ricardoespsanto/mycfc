@@ -44,6 +44,18 @@ AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
 # Root-only backup identity, stored separately from these application credentials.
 BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
+
+GALLERY_URL=https://example.com/gallery
+
+CONSENT_TERMS_VERSION=<version>
+CONSENT_TERMS_SHA256=<64-lowercase-hex-sha256>
+CONSENT_TERMS_URL=https://example.com/legal/termos-gerais
+CONSENT_IMAGE_VERSION=<version>
+CONSENT_IMAGE_SHA256=<64-lowercase-hex-sha256>
+CONSENT_IMAGE_URL=https://example.com/legal/uso-imagem
+CONSENT_MINOR_VERSION=<version>
+CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
+CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
 `POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead.
@@ -116,8 +128,7 @@ Terraform also creates one Secrets Manager secret named `/mycfc/production/app-s
   "EMAIL_VERIFICATION_HMAC_KEY_B64": "<base64-encoded-32-byte-key>",
   "TURNSTILE_SECRET_KEY": "<cloudflare-turnstile-secret-key>",
   "SMTP_USERNAME": "<ses-smtp-username>",
-  "SMTP_PASSWORD": "<ses-smtp-password>",
-  "GOOGLE_CALENDAR_API_KEY": "<google-api-key>"
+  "SMTP_PASSWORD": "<ses-smtp-password>"
 }
 ```
 

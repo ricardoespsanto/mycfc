@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-var lowerHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var (
+	lowerHex40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	internalReleaseID = regexp.MustCompile(`^release-\d{14}-[0-9a-f]{40}$`)
+)
 
 type Checker struct {
 	client     *http.Client
@@ -205,5 +208,6 @@ func displayLabel(value string) string {
 }
 
 func technicalVersion(value string) bool {
-	return lowerHex40.MatchString(strings.ToLower(strings.TrimSpace(value)))
+	value = strings.ToLower(strings.TrimSpace(value))
+	return lowerHex40.MatchString(value) || internalReleaseID.MatchString(value)
 }

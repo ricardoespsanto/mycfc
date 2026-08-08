@@ -50,10 +50,6 @@ var productionParameterNames = map[string]string{
 	"TURNSTILE_SITE_KEY":       productionParameterPrefix + "/turnstile/site-key",
 	"S3_BUCKET_NAME":           productionParameterPrefix + "/s3/bucket-name",
 	"S3_FORCE_PATH_STYLE":      productionParameterPrefix + "/s3/force-path-style",
-	"CALENDAR_COMPETITION_ID":  productionParameterPrefix + "/calendar/competition-id",
-	"CALENDAR_TRAINING_ID":     productionParameterPrefix + "/calendar/training-id",
-	"CALENDAR_SOCIAL_ID":       productionParameterPrefix + "/calendar/social-id",
-	"CALENDAR_CLEANUPS_ID":     productionParameterPrefix + "/calendar/cleanups-id",
 	"GALLERY_URL":              productionParameterPrefix + "/gallery-url",
 	"CONSENT_TERMS_VERSION":    productionParameterPrefix + "/consent/terms/version",
 	"CONSENT_TERMS_SHA256":     productionParameterPrefix + "/consent/terms/sha256",
@@ -94,7 +90,6 @@ var productionSecretFields = []string{
 	"TURNSTILE_SECRET_KEY",
 	"SMTP_USERNAME",
 	"SMTP_PASSWORD",
-	"GOOGLE_CALENDAR_API_KEY",
 }
 
 // Secret redacts sensitive configuration from fmt output.
@@ -148,12 +143,7 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	GoogleCalendarAPIKey  string `env:"GOOGLE_CALENDAR_API_KEY"`
-	CalendarCompetitionID string `env:"CALENDAR_COMPETITION_ID"`
-	CalendarTrainingID    string `env:"CALENDAR_TRAINING_ID"`
-	CalendarSocialID      string `env:"CALENDAR_SOCIAL_ID"`
-	CalendarCleanupsID    string `env:"CALENDAR_CLEANUPS_ID"`
-	GalleryURL            string `env:"GALLERY_URL"`
+	GalleryURL string `env:"GALLERY_URL,required"`
 
 	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION"`
 	ConsentTermsSHA256  string `env:"CONSENT_TERMS_SHA256"`
@@ -357,11 +347,6 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	c.SMTPTLSMode = parameters["SMTP_TLS_MODE"]
 	c.S3BucketName = parameters["S3_BUCKET_NAME"]
 	c.S3Endpoint = ""
-	c.GoogleCalendarAPIKey = secrets["GOOGLE_CALENDAR_API_KEY"]
-	c.CalendarCompetitionID = parameters["CALENDAR_COMPETITION_ID"]
-	c.CalendarTrainingID = parameters["CALENDAR_TRAINING_ID"]
-	c.CalendarSocialID = parameters["CALENDAR_SOCIAL_ID"]
-	c.CalendarCleanupsID = parameters["CALENDAR_CLEANUPS_ID"]
 	c.GalleryURL = parameters["GALLERY_URL"]
 	c.ConsentTermsVersion = parameters["CONSENT_TERMS_VERSION"]
 	c.ConsentTermsSHA256 = parameters["CONSENT_TERMS_SHA256"]
@@ -652,18 +637,6 @@ func (c Config) Validate() error {
 	} else if c.S3Endpoint != "" {
 		if _, err := validateAbsoluteURL(c.S3Endpoint, false, false); err != nil {
 			problems.Add("S3_ENDPOINT", err.Error())
-		}
-	}
-
-	for field, value := range map[string]string{
-		"GOOGLE_CALENDAR_API_KEY": c.GoogleCalendarAPIKey,
-		"CALENDAR_COMPETITION_ID": c.CalendarCompetitionID,
-		"CALENDAR_TRAINING_ID":    c.CalendarTrainingID,
-		"CALENDAR_SOCIAL_ID":      c.CalendarSocialID,
-		"CALENDAR_CLEANUPS_ID":    c.CalendarCleanupsID,
-	} {
-		if strings.TrimSpace(value) == "" {
-			problems.Add(field, "must not be empty")
 		}
 	}
 

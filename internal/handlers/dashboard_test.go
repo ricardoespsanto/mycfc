@@ -14,7 +14,6 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/ui/components"
-	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -22,7 +21,7 @@ import (
 
 func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	store := &dashboardStoreFake{}
-	dashboard := Dashboard{Store: store, Fleet: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}, CompetitionID: "competition", TrainingID: "training", SocialID: "social", CleanupsID: "cleanups"}
+	dashboard := Dashboard{Store: store, Fleet: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	for _, tc := range []struct {
 		name    string
 		present []string
@@ -245,18 +244,24 @@ func TestDependentLeaderboardPrivacyUsesGuardianRelationship(t *testing.T) {
 func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	memberID := uuid.New()
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	eventID := uuid.New()
 	store := &dashboardStoreFake{
-		metrics: []dbgen.PerformanceMetric{{LabelPt: "Peso", Value: pgtype.Numeric{Int: big.NewInt(725), Exp: -1, Valid: true}, UnitPt: "kg", MeasuredAt: pgtype.Timestamptz{Time: now, Valid: true}}},
-		logs:    []dbgen.TrainingLog{{DurationSeconds: 5400, DistanceMetres: 12500, Notes: "Série longa", OccurredAt: pgtype.Timestamptz{Time: now, Valid: true}}},
-		groups:  []dbgen.WhatsappGroup{{Name: "Seniores", Discipline: "Remo", Url: "https://chat.whatsapp.com/seniores"}},
+		metrics:          []dbgen.PerformanceMetric{{LabelPt: "Peso", Value: pgtype.Numeric{Int: big.NewInt(725), Exp: -1, Valid: true}, UnitPt: "kg", MeasuredAt: pgtype.Timestamptz{Time: now, Valid: true}}},
+		logs:             []dbgen.TrainingLog{{DurationSeconds: 5400, DistanceMetres: 12500, Notes: "Série longa", OccurredAt: pgtype.Timestamptz{Time: now, Valid: true}}},
+		groups:           []dbgen.WhatsappGroup{{Name: "Seniores", Discipline: "Remo", Url: "https://chat.whatsapp.com/seniores"}},
+		upcomingEvents:   []dbgen.ListEventsForMemberRow{{ID: eventID, Title: "Prova regional", EventType: "COMPETITION", StartsAt: pgtype.Timestamptz{Time: now.Add(48 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(50 * time.Hour), Valid: true}}},
+		upcomingTraining: []dbgen.ListUpcomingTrainingSessionsForDashboardRow{{ID: uuid.New(), PlanTitle: "Plano senior", Title: "Sessão técnica", StartsAt: pgtype.Timestamptz{Time: now.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(26 * time.Hour), Valid: true}}},
 	}
-	dashboard := Dashboard{Store: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	dashboard := Dashboard{Store: store, Now: func() time.Time { return now }, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Competitor, memberID)
 	body := response.Body.String()
-	for _, want := range []string{"Peso", "72.5 kg", "Treinos recentes", "Série longa", `href="https://chat.whatsapp.com/seniores"`, `class="page-header"`, `href="/treinos"`} {
+	for _, want := range []string{"Peso", "72.5 kg", "Treinos recentes", "Série longa", `href="https://chat.whatsapp.com/seniores"`, `class="page-header"`, `href="/treinos"`, "Agenda", "Sessão técnica", "Prova regional", `href="/events/` + eventID.String()} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q: %q", want, body)
 		}
+	}
+	if strings.Contains(body, "calendar.google.com") || strings.Contains(body, "data-calendar") {
+		t.Fatalf("dashboard still renders Google calendar integration: %q", body)
 	}
 	if !store.deadlineSeen || store.metricsParams.UserID != memberID || store.metricsParams.RowLimit != 6 || store.logsParams.RowLimit != 10 {
 		t.Fatalf("unexpected competitor queries: %+v", store)
@@ -338,6 +343,8 @@ type dashboardStoreFake struct {
 	adminEquipment            []dbgen.Equipment
 	repairs                   []dbgen.ListPendingRepairRequestsRow
 	maintenance               []dbgen.ListUpcomingMaintenanceRow
+	upcomingEvents            []dbgen.ListEventsForMemberRow
+	upcomingTraining          []dbgen.ListUpcomingTrainingSessionsForDashboardRow
 	adminParams               dbgen.ListEquipmentForAdminParams
 	pendingRepairParams       dbgen.ListPendingRepairRequestsParams
 	maintenanceParams         dbgen.ListUpcomingMaintenanceParams
@@ -597,13 +604,6 @@ func TestAdminFleetPaginatesSectionsIndependently(t *testing.T) {
 	}
 }
 
-func TestCalendarSourceIDsPreservesPublicSourceIDs(t *testing.T) {
-	sources := calendarSourceIDs([]pages.CalendarLink{{ID: "training@example.test"}, {ID: "calendar with spaces@example.test"}})
-	if sources != `["training@example.test","calendar with spaces@example.test"]` {
-		t.Fatalf("calendar sources = %q", sources)
-	}
-}
-
 type presignStoreFake struct {
 	calls    int
 	lifetime time.Duration
@@ -630,6 +630,14 @@ func (f *presignStoreFake) PresignGet(_ context.Context, _ string, lifetime time
 
 func (f *dashboardStoreFake) ListOperationalEquipment(_ context.Context, _ int32) ([]dbgen.Equipment, error) {
 	return nil, nil
+}
+
+func (f *dashboardStoreFake) ListEventsForMember(_ context.Context, _ dbgen.ListEventsForMemberParams) ([]dbgen.ListEventsForMemberRow, error) {
+	return f.upcomingEvents, nil
+}
+
+func (f *dashboardStoreFake) ListUpcomingTrainingSessionsForDashboard(_ context.Context, _ dbgen.ListUpcomingTrainingSessionsForDashboardParams) ([]dbgen.ListUpcomingTrainingSessionsForDashboardRow, error) {
+	return f.upcomingTraining, nil
 }
 
 func (f *dashboardStoreFake) ListEventsForToday(_ context.Context, params dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {

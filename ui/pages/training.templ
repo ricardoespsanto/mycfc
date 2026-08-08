@@ -26,6 +26,7 @@ type TrainingPage struct {
 	Management, CanManage                        bool
 	Success, Error, OpenForm                     string
 	Sessions                                     []TrainingSession
+	Calendar                                     BasicCalendarMonth
 	ManagedPlans                                 []ManagedTrainingPlan
 	ManagedPlansPreviousURL, ManagedPlansNextURL string
 	Programmes, Teams, Modalities, Plans         []TrainingChoice
@@ -46,6 +47,7 @@ templ trainingContent(page TrainingPage) {
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Error, "error")
 	if !page.Management {
+	@BasicCalendar(page.Calendar, "Calendário de treinos", "Vista mensal das sessões carregadas nesta página.")
 	<section class="module">
 		@components.SectionHeading("Agenda", "As minhas sessões", "O trabalho previsto para o seu grupo e o respetivo estado.")
 		if len(page.Sessions) == 0 {

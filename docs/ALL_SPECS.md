@@ -501,11 +501,6 @@ Create `internal/config/config.go`. Parse with `caarlos0/env/v11`, then run expl
 | `S3_BUCKET_NAME` | DNS-compatible bucket name |
 | `S3_ENDPOINT` | empty in production; absolute URL locally |
 | `S3_FORCE_PATH_STYLE` | true locally, false in production |
-| `GOOGLE_CALENDAR_API_KEY` | non-empty browser key |
-| `CALENDAR_COMPETITION_ID` | non-empty public calendar ID |
-| `CALENDAR_TRAINING_ID` | non-empty public calendar ID |
-| `CALENDAR_SOCIAL_ID` | non-empty public calendar ID |
-| `CALENDAR_CLEANUPS_ID` | non-empty public calendar ID |
 | `GALLERY_URL` | absolute HTTPS URL, local HTTP allowed in local env |
 | `CONSENT_TERMS_VERSION` / `_SHA256` | version non-empty; lowercase 64-char hex |
 | `CONSENT_IMAGE_VERSION` / `_SHA256` | same |
@@ -1638,11 +1633,6 @@ AWS_SECRET_ACCESS_KEY=mycfc_local_password_change_not_prod
 S3_BUCKET_NAME=mycfc-local
 S3_ENDPOINT=http://localhost:9000
 S3_FORCE_PATH_STYLE=true
-GOOGLE_CALENDAR_API_KEY=replace-with-restricted-local-browser-key
-CALENDAR_COMPETITION_ID=replace-with-public-calendar-id
-CALENDAR_TRAINING_ID=replace-with-public-calendar-id
-CALENDAR_SOCIAL_ID=replace-with-public-calendar-id
-CALENDAR_CLEANUPS_ID=replace-with-public-calendar-id
 GALLERY_URL=https://example.invalid/gallery
 CONSENT_TERMS_VERSION=dev-v1
 CONSENT_TERMS_SHA256=<64 lowercase zeroes allowed only in local env>
