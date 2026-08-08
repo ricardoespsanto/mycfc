@@ -128,7 +128,15 @@ for path in /health/ready /login "$asset_path"; do
 	# Caddy is private behind cloudflared. Validate the exact virtual host locally;
 	# Cloudflare can reject a request sourced from the host itself, so the public
 	# edge is checked by an external monitor rather than the release transaction.
-	if ! docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
+	check_passed=false
+	for attempt in $(seq 1 30); do
+		if docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
+			check_passed=true
+			break
+		fi
+		sleep 2
+	done
+	if [ "$check_passed" != true ]; then
 		log "release check failed for $path"
 		exit 1
 	fi

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -208,23 +209,80 @@ func (c *Config) loadProductionParameters(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load AWS configuration for SSM: %w", err)
 	}
-	ssmClient := ssm.NewFromConfig(awsCfg)
-	parameters := make(map[string]string, len(productionParameterNames))
+
+	type secretResult struct {
+		values map[string]string
+		err    error
+	}
+	secretResults := make(chan secretResult, 1)
+	go func() {
+		values, loadErr := loadProductionSecrets(ctx, secretsmanager.NewFromConfig(awsCfg))
+		secretResults <- secretResult{values: values, err: loadErr}
+	}()
+
+	parameters, parameterErr := loadProductionParameterValues(ctx, ssm.NewFromConfig(awsCfg))
+	secrets := <-secretResults
+	if parameterErr != nil {
+		return parameterErr
+	}
+	if secrets.err != nil {
+		return secrets.err
+	}
+	return c.applyProductionRemoteConfig(parameters, secrets.values)
+}
+
+type parameterGetter interface {
+	GetParameters(context.Context, *ssm.GetParametersInput, ...func(*ssm.Options)) (*ssm.GetParametersOutput, error)
+}
+
+func loadProductionParameterValues(ctx context.Context, client parameterGetter) (map[string]string, error) {
+	fieldByName := make(map[string]string, len(productionParameterNames))
+	names := make([]string, 0, len(productionParameterNames))
 	for field, name := range productionParameterNames {
-		result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{Name: &name})
-		if err != nil {
-			return fmt.Errorf("load production parameter %s from SSM %s: %w", field, name, err)
-		}
-		if result.Parameter == nil || result.Parameter.Value == nil {
-			return fmt.Errorf("load production parameter %s from SSM %s: empty response", field, name)
-		}
-		parameters[field] = *result.Parameter.Value
+		fieldByName[name] = field
+		names = append(names, name)
 	}
-	secrets, err := loadProductionSecrets(ctx, secretsmanager.NewFromConfig(awsCfg))
-	if err != nil {
-		return err
+	sort.Strings(names)
+
+	type batchResult struct {
+		output *ssm.GetParametersOutput
+		names  []string
+		err    error
 	}
-	return c.applyProductionRemoteConfig(parameters, secrets)
+	const batchSize = 10
+	batchCount := (len(names) + batchSize - 1) / batchSize
+	results := make(chan batchResult, batchCount)
+	for start := 0; start < len(names); start += batchSize {
+		end := min(start+batchSize, len(names))
+		batch := slices.Clone(names[start:end])
+		go func() {
+			output, loadErr := client.GetParameters(ctx, &ssm.GetParametersInput{Names: batch})
+			results <- batchResult{output: output, names: batch, err: loadErr}
+		}()
+	}
+
+	parameters := make(map[string]string, len(productionParameterNames))
+	for range batchCount {
+		result := <-results
+		if result.err != nil {
+			return nil, fmt.Errorf("load production parameters from SSM: %w", result.err)
+		}
+		if len(result.output.InvalidParameters) > 0 {
+			return nil, fmt.Errorf("load production parameters from SSM: parameters not found: %s", strings.Join(result.output.InvalidParameters, ", "))
+		}
+		for _, parameter := range result.output.Parameters {
+			name := awsStringValue(parameter.Name)
+			field, ok := fieldByName[name]
+			if !ok || parameter.Value == nil {
+				return nil, fmt.Errorf("load production parameters from SSM: invalid response for %s", name)
+			}
+			parameters[field] = *parameter.Value
+		}
+	}
+	if len(parameters) != len(productionParameterNames) {
+		return nil, fmt.Errorf("load production parameters from SSM: received %d of %d values", len(parameters), len(productionParameterNames))
+	}
+	return parameters, nil
 }
 
 type secretGetter interface {
@@ -247,6 +305,13 @@ func loadProductionSecrets(ctx context.Context, client secretGetter) (map[string
 }
 
 func awsString(value string) *string { return &value }
+
+func awsStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
 
 func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]string) error {
 	var problems Problems

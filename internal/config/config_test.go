@@ -1,13 +1,60 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	urlpkg "net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+type recordingParameterGetter struct {
+	mu      sync.Mutex
+	batches [][]string
+}
+
+func (g *recordingParameterGetter) GetParameters(_ context.Context, input *ssm.GetParametersInput, _ ...func(*ssm.Options)) (*ssm.GetParametersOutput, error) {
+	g.mu.Lock()
+	g.batches = append(g.batches, append([]string(nil), input.Names...))
+	g.mu.Unlock()
+
+	output := &ssm.GetParametersOutput{Parameters: make([]types.Parameter, 0, len(input.Names))}
+	for _, name := range input.Names {
+		name, value := name, "value-for-"+name
+		output.Parameters = append(output.Parameters, types.Parameter{Name: &name, Value: &value})
+	}
+	return output, nil
+}
+
+func TestLoadProductionParameterValuesBatchesRequests(t *testing.T) {
+	client := &recordingParameterGetter{}
+	parameters, err := loadProductionParameterValues(t.Context(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, name := range productionParameterNames {
+		if parameters[field] != "value-for-"+name {
+			t.Errorf("parameter %s = %q", field, parameters[field])
+		}
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	wantBatches := (len(productionParameterNames) + 9) / 10
+	if len(client.batches) != wantBatches {
+		t.Fatalf("GetParameters calls = %d, want %d", len(client.batches), wantBatches)
+	}
+	for _, batch := range client.batches {
+		if len(batch) == 0 || len(batch) > 10 {
+			t.Errorf("batch size = %d", len(batch))
+		}
+	}
+}
 
 func validConfig() Config {
 	return Config{
