@@ -114,6 +114,10 @@ sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$re
 chmod 600 "$next_file"
 chown root:root "$next_file"
 mv "$next_file" "$env_file"
+export MYCFC_IMAGE="$image"
+export APP_VERSION="$release_tag"
+export APP_RELEASED_AT="$released_at"
+export GIT_SHA="$sha"
 release_updated=true
 
 log "deploying SHA $sha with digest $digest"
