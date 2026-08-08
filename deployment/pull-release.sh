@@ -17,6 +17,7 @@ rollback() {
 	status=$?
 	if [ "$release_updated" = true ]; then
 		log "deployment failed; restoring the previous release"
+		docker logs --tail 100 mycfc-production-app-1 >&2 2>/dev/null || true
 		cp "$backup_file" "$env_file"
 		docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app || log "rollback compose update failed"
 	fi
@@ -112,17 +113,32 @@ fi
 sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
 chmod 600 "$next_file"
 chown root:root "$next_file"
-"$deployment_dir/resolve-runtime-secrets.sh" "$next_file"
 mv "$next_file" "$env_file"
 release_updated=true
 
 log "deploying SHA $sha with digest $digest"
-docker compose --env-file "$env_file" -f "$compose_file" pull
+docker compose --env-file "$env_file" -f "$compose_file" pull app postgres cloudflared
 docker compose --env-file "$env_file" -f "$compose_file" build caddy
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
-docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app
+docker compose --env-file "$env_file" -f "$compose_file" up -d --force-recreate app
+
+app_ready=false
+for attempt in $(seq 1 30); do
+	app_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mycfc-production-app-1 2>/dev/null || true)
+	if [ -n "$app_ip" ] && curl -fsS -o /dev/null "http://$app_ip:8080/health/ready"; then
+		app_ready=true
+		break
+	fi
+	sleep 2
+done
+if [ "$app_ready" != true ]; then
+	log "new app failed its readiness check"
+	exit 1
+fi
+
+docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate caddy cloudflared
 
 asset_path=$(jq -r '."app.js"' "$deployment_dir/../ui/static/dist/manifest.json")
 for path in /health/ready /login "$asset_path"; do
