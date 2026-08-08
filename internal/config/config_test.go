@@ -120,6 +120,97 @@ func TestProductionEmailConfigurationHasNoDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyProductionRemoteConfigOverwritesEnvironmentValues(t *testing.T) {
+	cfg := validConfig()
+	cfg.AppEnv = "production"
+	cfg.EmailVerificationHMACKeyB64 = Secret("from-env")
+	cfg.TurnstileSiteKey = "from-env"
+	cfg.TurnstileSecretKey = Secret("from-env")
+	cfg.SMTPHost = "from-env"
+	cfg.SMTPPort = 25
+	cfg.SMTPUsername = "from-env"
+	cfg.SMTPPassword = Secret("from-env")
+	cfg.SMTPFromAddress = "from-env@example.test"
+	cfg.SMTPFromName = "from-env"
+	cfg.SMTPTLSMode = "none"
+	cfg.SMTPTimeout = time.Second
+	cfg.S3Endpoint = "http://minio:9000"
+	cfg.S3ForcePathStyle = true
+
+	parameters := validProductionParameters()
+	secrets := validProductionSecrets()
+	if err := cfg.applyProductionRemoteConfig(parameters, secrets); err != nil {
+		t.Fatalf("applyProductionRemoteConfig() error = %v", err)
+	}
+
+	if cfg.BaseURL != parameters["BASE_URL"] || cfg.DBHost != parameters["DB_HOST"] || cfg.DBPassword.Value() != secrets["APP_DB_PASSWORD"] {
+		t.Fatal("database/base config was not loaded from AWS values")
+	}
+	if cfg.PostgresUser != parameters["POSTGRES_USER"] || cfg.PostgresPassword.Value() != secrets["POSTGRES_PASSWORD"] {
+		t.Fatal("bootstrap database config was not loaded from AWS values")
+	}
+	if cfg.MigrationDBUser != parameters["MIGRATION_DB_USER"] || cfg.MigrationDBPassword.Value() != secrets["MIGRATION_DB_PASSWORD"] {
+		t.Fatal("migration database config was not loaded from AWS values")
+	}
+	if cfg.CSRFAuthKeyB64.Value() != secrets["CSRF_AUTH_KEY_B64"] || cfg.EmailVerificationHMACKeyB64.Value() != secrets["EMAIL_VERIFICATION_HMAC_KEY_B64"] {
+		t.Fatal("signing keys were not loaded from Secrets Manager values")
+	}
+	if cfg.TurnstileSiteKey != "site-key" || cfg.TurnstileSecretKey.Value() != "secret-key" {
+		t.Fatal("Turnstile values were not loaded from AWS values")
+	}
+	if cfg.SMTPHost != "email-smtp.eu-west-1.amazonaws.com" || cfg.SMTPPort != 587 || cfg.SMTPTimeout != 10*time.Second {
+		t.Fatalf("SMTP values were not loaded from AWS values: host=%q port=%d timeout=%s", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTimeout)
+	}
+	if cfg.SMTPUsername != "smtp-user" || cfg.SMTPPassword.Value() != "smtp-pass" || cfg.SMTPFromAddress != "no-reply@mycfcoimbra.com" {
+		t.Fatal("SMTP credentials/sender were not loaded from SSM values")
+	}
+	if cfg.S3Endpoint != "" || cfg.S3ForcePathStyle {
+		t.Fatalf("production S3 local settings were not cleared: endpoint=%q pathStyle=%t", cfg.S3Endpoint, cfg.S3ForcePathStyle)
+	}
+	if cfg.TrustedProxyCIDRValues[0] != "172.30.0.0/24" || cfg.MaxRequestBytes != 12582912 {
+		t.Fatal("operational settings were not loaded from SSM values")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() after remote config error = %v", err)
+	}
+}
+
+func TestApplyProductionRemoteConfigRequiresEveryParameterAndSecret(t *testing.T) {
+	parameters := validProductionParameters()
+	secrets := validProductionSecrets()
+	delete(parameters, "SMTP_HOST")
+	delete(secrets, "TURNSTILE_SECRET_KEY")
+
+	cfg := validConfig()
+	err := cfg.applyProductionRemoteConfig(parameters, secrets)
+	if err == nil {
+		t.Fatal("applyProductionRemoteConfig() returned nil")
+	}
+	for _, expected := range []string{"SMTP_HOST", "TURNSTILE_SECRET_KEY"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("error %q does not include %s", err, expected)
+		}
+	}
+}
+
+func TestApplyProductionRemoteConfigRejectsInvalidNumbersDurationsAndBooleans(t *testing.T) {
+	parameters := validProductionParameters()
+	parameters["SMTP_PORT"] = "587abc"
+	parameters["SMTP_TIMEOUT"] = "soon"
+	parameters["S3_FORCE_PATH_STYLE"] = "definitely"
+
+	cfg := validConfig()
+	err := cfg.applyProductionRemoteConfig(parameters, validProductionSecrets())
+	if err == nil {
+		t.Fatal("applyProductionRemoteConfig() returned nil")
+	}
+	for _, expected := range []string{"S3_FORCE_PATH_STYLE", "SMTP_PORT", "SMTP_TIMEOUT"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("error %q does not include %s", err, expected)
+		}
+	}
+}
+
 func TestValidateRequiresTurnstilePair(t *testing.T) {
 	cfg := validConfig()
 	cfg.TurnstileSiteKey = "site-key"
@@ -131,6 +222,75 @@ func TestValidateRequiresTurnstilePair(t *testing.T) {
 	cfg.TurnstileSecretKey = Secret("secret-key")
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TURNSTILE_SITE_KEY") {
 		t.Fatalf("missing turnstile site key error = %v", err)
+	}
+}
+
+func validProductionParameters() map[string]string {
+	return map[string]string{
+		"BASE_URL":                 "https://mycfcoimbra.com",
+		"DB_HOST":                  "postgres",
+		"DB_PORT":                  "5432",
+		"DB_NAME":                  "mycfc",
+		"DB_USER":                  "mycfc_app",
+		"POSTGRES_USER":            "mycfc",
+		"MIGRATION_DB_USER":        "mycfc_migrator",
+		"DB_SSLMODE":               "disable",
+		"SMTP_HOST":                "email-smtp.eu-west-1.amazonaws.com",
+		"SMTP_PORT":                "587",
+		"SMTP_FROM_ADDRESS":        "no-reply@mycfcoimbra.com",
+		"SMTP_FROM_NAME":           "MyCFC",
+		"SMTP_TLS_MODE":            "starttls",
+		"SMTP_TIMEOUT":             "10s",
+		"TURNSTILE_SITE_KEY":       "site-key",
+		"S3_BUCKET_NAME":           "mycfc-production-repairs",
+		"S3_FORCE_PATH_STYLE":      "false",
+		"CALENDAR_COMPETITION_ID":  "competition@example.test",
+		"CALENDAR_TRAINING_ID":     "training@example.test",
+		"CALENDAR_SOCIAL_ID":       "social@example.test",
+		"CALENDAR_CLEANUPS_ID":     "cleanups@example.test",
+		"GALLERY_URL":              "https://mycfcoimbra.com/gallery",
+		"CONSENT_TERMS_VERSION":    "0.0.1",
+		"CONSENT_TERMS_SHA256":     strings.Repeat("a", 64),
+		"CONSENT_TERMS_URL":        "https://mycfcoimbra.com/legal/termos-gerais",
+		"CONSENT_IMAGE_VERSION":    "0.0.1",
+		"CONSENT_IMAGE_SHA256":     strings.Repeat("b", 64),
+		"CONSENT_IMAGE_URL":        "https://mycfcoimbra.com/legal/uso-imagem",
+		"CONSENT_MINOR_VERSION":    "0.0.1",
+		"CONSENT_MINOR_SHA256":     strings.Repeat("c", 64),
+		"CONSENT_MINOR_URL":        "https://mycfcoimbra.com/legal/responsabilidade-menor",
+		"LOG_LEVEL":                "INFO",
+		"TRUSTED_PROXY_CIDRS":      "172.30.0.0/24",
+		"RELEASE_REPOSITORY":       "ricardoespsanto/mycfc",
+		"DB_MAX_CONNS":             "8",
+		"DB_MIN_CONNS":             "1",
+		"DB_MAX_CONN_LIFETIME":     "30m",
+		"DB_MAX_CONN_IDLE_TIME":    "5m",
+		"DB_HEALTH_CHECK_PERIOD":   "30s",
+		"SESSION_LIFETIME":         "12h",
+		"SESSION_IDLE_TIMEOUT":     "30m",
+		"MAX_REQUEST_BYTES":        "12582912",
+		"MAX_PHOTO_BYTES":          "10485760",
+		"HTTP_READ_HEADER_TIMEOUT": "5s",
+		"HTTP_READ_TIMEOUT":        "15s",
+		"HTTP_WRITE_TIMEOUT":       "30s",
+		"HTTP_IDLE_TIMEOUT":        "60s",
+		"SHUTDOWN_TIMEOUT":         "20s",
+		"RELEASE_CHECK_TIMEOUT":    "3s",
+		"RELEASE_CHECK_CACHE_TTL":  "15m",
+	}
+}
+
+func validProductionSecrets() map[string]string {
+	return map[string]string{
+		"POSTGRES_PASSWORD":               "postgres-pass",
+		"APP_DB_PASSWORD":                 "app-db-pass",
+		"MIGRATION_DB_PASSWORD":           "migration-db-pass",
+		"CSRF_AUTH_KEY_B64":               base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		"EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
+		"TURNSTILE_SECRET_KEY":            "secret-key",
+		"SMTP_USERNAME":                   "smtp-user",
+		"SMTP_PASSWORD":                   "smtp-pass",
+		"GOOGLE_CALENDAR_API_KEY":         "calendar-key",
 	}
 }
 

@@ -14,9 +14,11 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 
 The installer validates the Compose configuration, installs and enables the pull-release systemd timer, then starts an immediate release check. It refuses an environment file that is not `root:root` mode `0600`.
 
-## Required environment
+## Required host environment
 
-`/etc/mycfc/mycfc.env` must define the following values. Use real production values, not the local `.env.example` values.
+`/etc/mycfc/mycfc.env` is now only the host bootstrap file. The long-running application loads production runtime configuration from AWS Systems Manager Parameter Store and AWS Secrets Manager when `APP_ENV=production`; values left in this file for those settings are ignored by the app.
+
+Use real production values, not the local `.env.example` values.
 
 ```text
 MYCFC_IMAGE=<account>.dkr.ecr.<region>.amazonaws.com/mycfc-app@sha256:<immutable-digest>
@@ -25,16 +27,6 @@ CLOUDFLARE_TUNNEL_TOKEN=<Cloudflare remotely-managed tunnel token>
 MYCFC_DOMAIN=example.com
 APP_VERSION=<release-version>
 GIT_SHA=<40-lowercase-hex-commit>
-BASE_URL=https://example.com
-EMAIL_VERIFICATION_HMAC_KEY_B64=<email_verification_hmac_key_b64 Terraform output>
-SMTP_HOST=email-smtp.eu-west-1.amazonaws.com
-SMTP_PORT=587
-SMTP_USERNAME=<ses_smtp_username Terraform output>
-SMTP_PASSWORD=<ses_smtp_password Terraform output>
-SMTP_FROM_ADDRESS=no-reply@mycfcoimbra.com
-SMTP_FROM_NAME=MyCFC
-SMTP_TLS_MODE=starttls
-SMTP_TIMEOUT=10s
 
 POSTGRES_DB=<database-name>
 POSTGRES_USER=<bootstrap-superuser>
@@ -43,43 +35,95 @@ APP_DB_USER=<restricted-application-user>
 APP_DB_PASSWORD=<restricted-application-password>
 MIGRATION_DB_USER=<schema-migration-user>
 MIGRATION_DB_PASSWORD=<schema-migration-password>
-CSRF_AUTH_KEY_B64=<base64-encoded-32-byte-key>
-TURNSTILE_SITE_KEY_PARAMETER_NAME=<ssm-parameter-name-for-turnstile-site-key>
-TURNSTILE_SECRET_KEY_PARAMETER_NAME=<ssm-securestring-parameter-name-for-turnstile-secret-key>
-# TURNSTILE_SITE_KEY=<cloudflare-turnstile-site-key>
-# TURNSTILE_SECRET_KEY=<cloudflare-turnstile-secret-key>
 
 AWS_REGION=<aws-region>
 AWS_ACCESS_KEY_ID=<aws-access-key-id>
 AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
 # AWS_SESSION_TOKEN=<optional-session-token>
-S3_BUCKET_NAME=<private-s3-bucket>
 
 # Root-only backup identity, stored separately from these application credentials.
 BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
-
-GOOGLE_CALENDAR_API_KEY=<google-api-key>
-CALENDAR_COMPETITION_ID=<calendar-id>
-CALENDAR_TRAINING_ID=<calendar-id>
-CALENDAR_SOCIAL_ID=<calendar-id>
-CALENDAR_CLEANUPS_ID=<calendar-id>
-GALLERY_URL=https://example.com/gallery
-
-CONSENT_TERMS_VERSION=<version>
-CONSENT_TERMS_SHA256=<64-lowercase-hex-sha256>
-CONSENT_TERMS_URL=https://example.com/legal/termos-gerais
-CONSENT_IMAGE_VERSION=<version>
-CONSENT_IMAGE_SHA256=<64-lowercase-hex-sha256>
-CONSENT_IMAGE_URL=https://example.com/legal/uso-imagem
-CONSENT_MINOR_VERSION=<version>
-CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
-CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
 ```
 
-The long-running application receives only the restricted `APP_DB_*` credential. The release agent uses the bootstrap credential in a one-off role-provisioning container and then uses only the `MIGRATION_DB_*` credential for the one-off migration container. Neither privileged credential is present in the application container. Database URLs use `sslmode=disable` because PostgreSQL traffic never leaves the private Docker network. Registration uses Cloudflare Turnstile in production; create the widget for the production domain and store the site key as an AWS Systems Manager Parameter Store `String` and the secret key as a `SecureString`. Put only `TURNSTILE_SITE_KEY_PARAMETER_NAME` and `TURNSTILE_SECRET_KEY_PARAMETER_NAME` in `/etc/mycfc/mycfc.env`; the release agent resolves them into the protected root-owned env file immediately before Compose validation and rollout. The host AWS identity therefore needs `ssm:GetParameter` on those two parameters, plus `kms:Decrypt` if a customer-managed KMS key protects the `SecureString`, in addition to its ECR permissions. Raw `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` remain supported for emergency/manual fallback only. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+`POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead.
 
-The retained AWS Terraform stack provisions the SES identity, authoritative Cloudflare DKIM and MAIL FROM records, least-privilege SMTP credentials, and the email-verification HMAC key. Install its sensitive outputs in this environment file before releasing, confirm SES production access, and run `sudo ./deployment/verify-ses.sh`. The smoke test sends only to the AWS SES mailbox simulator.
+## Required AWS configuration
+
+Apply `infra/environments/production` before releasing an app image that loads production config from AWS. Terraform creates these SSM `String` parameters under `/mycfc/production`:
+
+```text
+/mycfc/production/base-url
+/mycfc/production/db/host
+/mycfc/production/db/port
+/mycfc/production/db/name
+/mycfc/production/db/user
+/mycfc/production/db/bootstrap-user
+/mycfc/production/db/migration-user
+/mycfc/production/db/sslmode
+/mycfc/production/smtp/host
+/mycfc/production/smtp/port
+/mycfc/production/smtp/from-address
+/mycfc/production/smtp/from-name
+/mycfc/production/smtp/tls-mode
+/mycfc/production/smtp/timeout
+/mycfc/production/turnstile/site-key
+/mycfc/production/s3/bucket-name
+/mycfc/production/s3/force-path-style
+/mycfc/production/calendar/competition-id
+/mycfc/production/calendar/training-id
+/mycfc/production/calendar/social-id
+/mycfc/production/calendar/cleanups-id
+/mycfc/production/gallery-url
+/mycfc/production/consent/terms/version
+/mycfc/production/consent/terms/sha256
+/mycfc/production/consent/terms/url
+/mycfc/production/consent/image/version
+/mycfc/production/consent/image/sha256
+/mycfc/production/consent/image/url
+/mycfc/production/consent/minor/version
+/mycfc/production/consent/minor/sha256
+/mycfc/production/consent/minor/url
+/mycfc/production/log-level
+/mycfc/production/trusted-proxy-cidrs
+/mycfc/production/release/repository
+/mycfc/production/db/max-conns
+/mycfc/production/db/min-conns
+/mycfc/production/db/max-conn-lifetime
+/mycfc/production/db/max-conn-idle-time
+/mycfc/production/db/health-check-period
+/mycfc/production/session/lifetime
+/mycfc/production/session/idle-timeout
+/mycfc/production/http/max-request-bytes
+/mycfc/production/http/max-photo-bytes
+/mycfc/production/http/read-header-timeout
+/mycfc/production/http/read-timeout
+/mycfc/production/http/write-timeout
+/mycfc/production/http/idle-timeout
+/mycfc/production/http/shutdown-timeout
+/mycfc/production/release/check-timeout
+/mycfc/production/release/check-cache-ttl
+```
+
+Terraform also creates one Secrets Manager secret named `/mycfc/production/app-secrets` with this JSON shape:
+
+```json
+{
+  "POSTGRES_PASSWORD": "<bootstrap-superuser-password>",
+  "APP_DB_PASSWORD": "<restricted-application-password>",
+  "MIGRATION_DB_PASSWORD": "<schema-migration-password>",
+  "CSRF_AUTH_KEY_B64": "<base64-encoded-32-byte-key>",
+  "EMAIL_VERIFICATION_HMAC_KEY_B64": "<base64-encoded-32-byte-key>",
+  "TURNSTILE_SECRET_KEY": "<cloudflare-turnstile-secret-key>",
+  "SMTP_USERNAME": "<ses-smtp-username>",
+  "SMTP_PASSWORD": "<ses-smtp-password>",
+  "GOOGLE_CALENDAR_API_KEY": "<google-api-key>"
+}
+```
+
+Terraform creates the host AWS identity and grants it `ssm:GetParameter` on `/mycfc/production/*`, `secretsmanager:GetSecretValue` on `/mycfc/production/app-secrets`, ECR pull/read access, and repair-photo S3 object access. Install the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` in `/etc/mycfc/mycfc.env` as the host `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+
+The retained AWS Terraform stack provisions the SES identity, authoritative Cloudflare DKIM and MAIL FROM records, least-privilege SMTP credentials, CSRF and email-verification HMAC keys, SSM parameters, and Secrets Manager secret. Confirm SES production access and run `sudo ./deployment/verify-ses.sh`. The smoke test sends only to the AWS SES mailbox simulator.
 
 The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
 

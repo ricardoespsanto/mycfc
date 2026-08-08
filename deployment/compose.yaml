@@ -29,50 +29,11 @@ services:
       APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
       GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
       APP_RELEASED_AT: ${APP_RELEASED_AT:-}
-      RELEASE_REPOSITORY: ${RELEASE_REPOSITORY:-ricardoespsanto/mycfc}
       PORT: "8080"
-      BASE_URL: ${BASE_URL:?set BASE_URL in /etc/mycfc/mycfc.env}
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
-      DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
-      DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      DB_SSLMODE: disable
-      CSRF_AUTH_KEY_B64: ${CSRF_AUTH_KEY_B64:?set CSRF_AUTH_KEY_B64 in /etc/mycfc/mycfc.env}
-      EMAIL_VERIFICATION_HMAC_KEY_B64: ${EMAIL_VERIFICATION_HMAC_KEY_B64:?set EMAIL_VERIFICATION_HMAC_KEY_B64 in /etc/mycfc/mycfc.env}
-      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
-      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
-      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in /etc/mycfc/mycfc.env}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:?set SMTP_FROM_ADDRESS in /etc/mycfc/mycfc.env}
-      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-MyCFC}
-      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-starttls}
-      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10s}
       AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:?set S3_BUCKET_NAME in /etc/mycfc/mycfc.env}
-      GOOGLE_CALENDAR_API_KEY: ${GOOGLE_CALENDAR_API_KEY:?set GOOGLE_CALENDAR_API_KEY in /etc/mycfc/mycfc.env}
-      CALENDAR_COMPETITION_ID: ${CALENDAR_COMPETITION_ID:?set CALENDAR_COMPETITION_ID in /etc/mycfc/mycfc.env}
-      CALENDAR_TRAINING_ID: ${CALENDAR_TRAINING_ID:?set CALENDAR_TRAINING_ID in /etc/mycfc/mycfc.env}
-      CALENDAR_SOCIAL_ID: ${CALENDAR_SOCIAL_ID:?set CALENDAR_SOCIAL_ID in /etc/mycfc/mycfc.env}
-      CALENDAR_CLEANUPS_ID: ${CALENDAR_CLEANUPS_ID:?set CALENDAR_CLEANUPS_ID in /etc/mycfc/mycfc.env}
-      GALLERY_URL: ${GALLERY_URL:?set GALLERY_URL in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:?set CONSENT_TERMS_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_SHA256: ${CONSENT_TERMS_SHA256:?set CONSENT_TERMS_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_URL: ${CONSENT_TERMS_URL:?set CONSENT_TERMS_URL in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_VERSION: ${CONSENT_IMAGE_VERSION:?set CONSENT_IMAGE_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_SHA256: ${CONSENT_IMAGE_SHA256:?set CONSENT_IMAGE_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_URL: ${CONSENT_IMAGE_URL:?set CONSENT_IMAGE_URL in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_VERSION: ${CONSENT_MINOR_VERSION:?set CONSENT_MINOR_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_SHA256: ${CONSENT_MINOR_SHA256:?set CONSENT_MINOR_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_URL: ${CONSENT_MINOR_URL:?set CONSENT_MINOR_URL in /etc/mycfc/mycfc.env}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
-      TRUSTED_PROXY_CIDRS: 172.30.0.0/24
     depends_on:
       postgres:
         condition: service_healthy

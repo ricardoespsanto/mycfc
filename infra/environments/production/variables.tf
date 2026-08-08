@@ -76,11 +76,132 @@ variable "consent_terms_url" { type = string }
 variable "consent_image_url" { type = string }
 variable "consent_minor_url" { type = string }
 variable "image_git_sha" { type = string }
+variable "database_host" {
+  type    = string
+  default = "postgres"
+}
+variable "database_port" {
+  type    = number
+  default = 5432
+}
+variable "database_sslmode" {
+  type    = string
+  default = "disable"
+}
+variable "postgres_username" {
+  type    = string
+  default = "mycfc"
+}
+variable "postgres_password" {
+  type      = string
+  sensitive = true
+}
 variable "app_db_username" { type = string }
+variable "app_db_password" {
+  type      = string
+  sensitive = true
+}
 variable "migration_db_username" { type = string }
+variable "migration_db_password" {
+  type      = string
+  sensitive = true
+}
 variable "database_name" {
   type    = string
   default = "mycfc"
+}
+variable "turnstile_site_key" { type = string }
+variable "turnstile_secret_key" {
+  type      = string
+  sensitive = true
+}
+variable "smtp_port" {
+  type    = number
+  default = 587
+}
+variable "smtp_from_name" {
+  type    = string
+  default = "MyCFC"
+}
+variable "smtp_tls_mode" {
+  type    = string
+  default = "starttls"
+}
+variable "smtp_timeout" {
+  type    = string
+  default = "10s"
+}
+variable "log_level" {
+  type    = string
+  default = "INFO"
+}
+variable "trusted_proxy_cidrs" {
+  type    = list(string)
+  default = ["172.30.0.0/24"]
+}
+variable "db_max_conns" {
+  type    = number
+  default = 8
+}
+variable "db_min_conns" {
+  type    = number
+  default = 1
+}
+variable "db_max_conn_lifetime" {
+  type    = string
+  default = "30m"
+}
+variable "db_max_conn_idle_time" {
+  type    = string
+  default = "5m"
+}
+variable "db_health_check_period" {
+  type    = string
+  default = "30s"
+}
+variable "session_lifetime" {
+  type    = string
+  default = "12h"
+}
+variable "session_idle_timeout" {
+  type    = string
+  default = "30m"
+}
+variable "max_request_bytes" {
+  type    = number
+  default = 12582912
+}
+variable "max_photo_bytes" {
+  type    = number
+  default = 10485760
+}
+variable "http_read_header_timeout" {
+  type    = string
+  default = "5s"
+}
+variable "http_read_timeout" {
+  type    = string
+  default = "15s"
+}
+variable "http_write_timeout" {
+  type    = string
+  default = "30s"
+}
+variable "http_idle_timeout" {
+  type    = string
+  default = "60s"
+}
+variable "shutdown_timeout" {
+  type    = string
+  default = "20s"
+}
+variable "release_check_timeout" {
+  type    = string
+  default = "3s"
+}
+variable "release_check_cache_ttl" {
+  type    = string
+  default = "15m"
 }
 variable "alb_log_retention_days" {
   type    = number
@@ -152,6 +273,22 @@ check "production_input_validation" {
   assert {
     condition     = can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.app_db_username)) && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.migration_db_username)) && var.app_db_username != var.migration_db_username && can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.database_name))
     error_message = "App and migration database users must be distinct PostgreSQL identifiers, as must the database name."
+  }
+  assert {
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.postgres_username)) && trimspace(var.postgres_password) != "" && trimspace(var.app_db_password) != "" && trimspace(var.migration_db_password) != "" && !contains([var.app_db_username, var.migration_db_username], var.postgres_username)
+    error_message = "Bootstrap, app, and migration database credentials must be non-empty and use distinct PostgreSQL role names."
+  }
+  assert {
+    condition     = trimspace(var.database_host) != "" && var.database_port >= 1 && var.database_port <= 65535 && contains(["disable", "allow", "prefer", "require", "verify-ca", "verify-full"], var.database_sslmode)
+    error_message = "Database host, port, or sslmode is invalid."
+  }
+  assert {
+    condition     = trimspace(var.turnstile_site_key) != "" && trimspace(var.turnstile_secret_key) != "" && var.smtp_port >= 1 && var.smtp_port <= 65535 && contains(["starttls", "implicit"], var.smtp_tls_mode) && contains(["DEBUG", "INFO", "WARN", "ERROR"], upper(var.log_level))
+    error_message = "Turnstile, SMTP, or log-level runtime configuration is invalid."
+  }
+  assert {
+    condition     = alltrue([for value in var.trusted_proxy_cidrs : can(cidrnetmask(value))]) && var.db_max_conns >= 1 && var.db_min_conns >= 0 && var.db_min_conns <= var.db_max_conns && var.max_photo_bytes > 0 && var.max_request_bytes > var.max_photo_bytes
+    error_message = "Runtime CIDRs, database pool sizing, or upload/request byte limits are invalid."
   }
   assert {
     condition     = var.alb_log_retention_days >= 30 && var.waf_login_rate_limit >= 10 && var.waf_general_rate_limit >= var.waf_login_rate_limit && var.alb_requests_per_target > 0

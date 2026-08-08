@@ -10,6 +10,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/cfcoimbra/mycfc/internal/app"
+	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/jackc/pgx/v5"
 )
@@ -37,7 +38,42 @@ func main() {
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
-	databaseURL, err := databaseURLFromEnvironment()
+	if databaseURL, ok, err := databaseURLFromEnvironment(); err != nil {
+		return err
+	} else if ok {
+		conn, err := pgx.Connect(ctx, databaseURL)
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer conn.Close(ctx)
+		switch command {
+		case "bootstrap-db":
+			return db.BootstrapRoles(ctx, conn, os.Getenv("DB_NAME"), db.RoleCredentials{
+				AppUsername:       os.Getenv("APP_DB_USER"),
+				AppPassword:       os.Getenv("APP_DB_PASSWORD"),
+				MigrationUsername: os.Getenv("MIGRATION_DB_USER"),
+				MigrationPassword: os.Getenv("MIGRATION_DB_PASSWORD"),
+			})
+		case "migrate":
+			return db.ApplyBaseline(ctx, conn)
+		default:
+			return fmt.Errorf("unknown command %q", command)
+		}
+	}
+
+	cfg, err := config.Load(ctx)
+	if err != nil {
+		return err
+	}
+	var databaseURL string
+	switch command {
+	case "bootstrap-db":
+		databaseURL, err = cfg.BootstrapDatabaseURL()
+	case "migrate":
+		databaseURL, err = cfg.MigrationDatabaseURL()
+	default:
+		return fmt.Errorf("unknown command %q", command)
+	}
 	if err != nil {
 		return err
 	}
@@ -47,28 +83,24 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	defer conn.Close(ctx)
 
-	switch command {
-	case "bootstrap-db":
-		return db.BootstrapRoles(ctx, conn, os.Getenv("DB_NAME"), db.RoleCredentials{
-			AppUsername:       os.Getenv("APP_DB_USER"),
-			AppPassword:       os.Getenv("APP_DB_PASSWORD"),
-			MigrationUsername: os.Getenv("MIGRATION_DB_USER"),
-			MigrationPassword: os.Getenv("MIGRATION_DB_PASSWORD"),
+	if command == "bootstrap-db" {
+		return db.BootstrapRoles(ctx, conn, cfg.DBName, db.RoleCredentials{
+			AppUsername:       cfg.DBUser,
+			AppPassword:       cfg.DBPassword.Value(),
+			MigrationUsername: cfg.MigrationDBUser,
+			MigrationPassword: cfg.MigrationDBPassword.Value(),
 		})
-	case "migrate":
-		return db.ApplyBaseline(ctx, conn)
-	default:
-		return fmt.Errorf("unknown command %q", command)
 	}
+	return db.ApplyBaseline(ctx, conn)
 }
 
-func databaseURLFromEnvironment() (string, error) {
+func databaseURLFromEnvironment() (string, bool, error) {
 	if raw := os.Getenv("DATABASE_URL"); raw != "" {
-		return raw, nil
+		return raw, true, nil
 	}
 	for _, name := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
 		if os.Getenv(name) == "" {
-			return "", fmt.Errorf("%s is required", name)
+			return "", false, nil
 		}
 	}
 	u := &url.URL{Scheme: "postgres", User: url.UserPassword(os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD")), Host: net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")), Path: os.Getenv("DB_NAME")}
@@ -79,5 +111,5 @@ func databaseURLFromEnvironment() (string, error) {
 	}
 	query.Set("sslmode", sslmode)
 	u.RawQuery = query.Encode()
-	return u.String(), nil
+	return u.String(), true, nil
 }
