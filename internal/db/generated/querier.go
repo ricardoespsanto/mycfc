@@ -137,6 +137,7 @@ type Querier interface {
 	ListTrainingPlansForCoach(ctx context.Context, arg ListTrainingPlansForCoachParams) ([]ListTrainingPlansForCoachRow, error)
 	ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error)
 	ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error)
+	ListUpcomingTrainingSessionsForDashboard(ctx context.Context, arg ListUpcomingTrainingSessionsForDashboardParams) ([]ListUpcomingTrainingSessionsForDashboardRow, error)
 	ListVisibleAnnouncements(ctx context.Context, arg ListVisibleAnnouncementsParams) ([]ListVisibleAnnouncementsRow, error)
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)

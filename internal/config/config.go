@@ -67,11 +67,6 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	GoogleCalendarAPIKey  string `env:"GOOGLE_CALENDAR_API_KEY,required"`
-	CalendarCompetitionID string `env:"CALENDAR_COMPETITION_ID,required"`
-	CalendarTrainingID    string `env:"CALENDAR_TRAINING_ID,required"`
-	CalendarSocialID      string `env:"CALENDAR_SOCIAL_ID,required"`
-	CalendarCleanupsID    string `env:"CALENDAR_CLEANUPS_ID,required"`
 	GalleryURL            string `env:"GALLERY_URL,required"`
 
 	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION,required"`
@@ -285,18 +280,6 @@ func (c Config) Validate() error {
 	} else if c.S3Endpoint != "" {
 		if _, err := validateAbsoluteURL(c.S3Endpoint, false, false); err != nil {
 			problems.Add("S3_ENDPOINT", err.Error())
-		}
-	}
-
-	for field, value := range map[string]string{
-		"GOOGLE_CALENDAR_API_KEY": c.GoogleCalendarAPIKey,
-		"CALENDAR_COMPETITION_ID": c.CalendarCompetitionID,
-		"CALENDAR_TRAINING_ID":    c.CalendarTrainingID,
-		"CALENDAR_SOCIAL_ID":      c.CalendarSocialID,
-		"CALENDAR_CLEANUPS_ID":    c.CalendarCleanupsID,
-	} {
-		if strings.TrimSpace(value) == "" {
-			problems.Add(field, "must not be empty")
 		}
 	}
 

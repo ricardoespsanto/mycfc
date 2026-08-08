@@ -106,8 +106,7 @@ func TestAddDependentReportsMaximumAndSupportsHTMX(t *testing.T) {
 func guardianDashboard(store DashboardStore, dependents GuardianDependentStore) Dashboard {
 	return Dashboard{
 		Store: store, Dependents: dependents, Location: time.UTC, Now: func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) },
-		PageMeta:      components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"},
-		CompetitionID: "competition", TrainingID: "training", SocialID: "social", CleanupsID: "cleanups",
+		PageMeta:              components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"},
 		ResponsibilityVersion: "1.0", ResponsibilitySHA256: strings.Repeat("c", 64), ResponsibilityURL: "https://example.test/responsabilidade",
 	}
 }
@@ -166,6 +165,12 @@ func (s *guardianDashboardStore) ListDependentsByGuardian(context.Context, dbgen
 }
 func (s *guardianDashboardStore) ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error) {
 	return nil, nil
+}
+func (s *guardianDashboardStore) ListEventsForMember(context.Context, dbgen.ListEventsForMemberParams) ([]dbgen.ListEventsForMemberRow, error) {
+	return nil, errors.New("not used")
+}
+func (s *guardianDashboardStore) ListUpcomingTrainingSessionsForDashboard(context.Context, dbgen.ListUpcomingTrainingSessionsForDashboardParams) ([]dbgen.ListUpcomingTrainingSessionsForDashboardRow, error) {
+	return nil, errors.New("not used")
 }
 func (s *guardianDashboardStore) ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error) {
 	return nil, errors.New("not used")

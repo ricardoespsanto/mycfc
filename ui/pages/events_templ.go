@@ -38,6 +38,7 @@ type EventsPage struct {
 	Management, CanManageEvents   bool
 	PreviousURL, NextURL, Success string
 	Events                        []EventItem
+	Calendar                      BasicCalendarMonth
 	Documents                     []EventDocument
 	Form                          EventForm
 }
@@ -121,6 +122,10 @@ func eventsContent(page EventsPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
+		templ_7745c5c3_Err = BasicCalendar(page.Calendar, "Calendário de eventos", "Vista mensal dos eventos carregados nesta página.").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<section class=\"collection-view\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -144,7 +149,7 @@ func eventsContent(page EventsPage) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(len(page.Events))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 45, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 54, Col: 61}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -179,7 +184,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var5 templ.SafeURL
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(eventPageURL(page, event.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 117}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 117}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -192,7 +197,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var6 string
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(event.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 133}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 133}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -205,7 +210,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(event.Type)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 179}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 179}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -218,7 +223,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var8 string
 				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(event.When)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 197}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 197}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 				if templ_7745c5c3_Err != nil {
@@ -227,7 +232,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(event.Capacity)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 215}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 215}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
@@ -248,7 +253,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var10 templ.SafeURL
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(eventPageURL(page, event.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 53, Col: 372}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 62, Col: 372}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 				if templ_7745c5c3_Err != nil {
@@ -277,7 +282,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var11 templ.SafeURL
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.PreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 60, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 69, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
@@ -296,7 +301,7 @@ func eventsContent(page EventsPage) templ.Component {
 				var templ_7745c5c3_Var12 templ.SafeURL
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.NextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 63, Col: 57}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 72, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 				if templ_7745c5c3_Err != nil {
@@ -398,7 +403,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var14 string
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.Title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 82, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 91, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 		if templ_7745c5c3_Err != nil {
@@ -447,7 +452,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var15 string
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(form.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 84, Col: 246}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 93, Col: 246}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
@@ -504,7 +509,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.StartsAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 88, Col: 158}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 97, Col: 158}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 		if templ_7745c5c3_Err != nil {
@@ -539,7 +544,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.EndsAt)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 90, Col: 146}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 99, Col: 146}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
 		if templ_7745c5c3_Err != nil {
@@ -574,7 +579,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var18 string
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.Deadline)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 92, Col: 187}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 101, Col: 187}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var18)
 		if templ_7745c5c3_Err != nil {
@@ -609,7 +614,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var19 string
 		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.Capacity)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 94, Col: 169}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 103, Col: 169}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var19)
 		if templ_7745c5c3_Err != nil {
@@ -658,7 +663,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentTitle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 97, Col: 161}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 106, Col: 161}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 		if templ_7745c5c3_Err != nil {
@@ -693,7 +698,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentURL)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 98, Col: 172}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 107, Col: 172}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 		if templ_7745c5c3_Err != nil {
@@ -728,7 +733,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentSource)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 99, Col: 171}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 108, Col: 171}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 		if templ_7745c5c3_Err != nil {
@@ -763,7 +768,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(form.DocumentReviewedOn)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 100, Col: 199}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 109, Col: 199}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {
@@ -807,7 +812,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 			var templ_7745c5c3_Var24 string
 			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue(programme.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 104, Col: 90}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 113, Col: 90}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 			if templ_7745c5c3_Err != nil {
@@ -830,7 +835,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(programme.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 104, Col: 143}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 113, Col: 143}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -849,7 +854,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue(team.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 107, Col: 80}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 116, Col: 80}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 			if templ_7745c5c3_Err != nil {
@@ -872,7 +877,7 @@ func EventAuthoringForm(form EventForm) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(team.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 107, Col: 123}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 116, Col: 123}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -998,7 +1003,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(page.When)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 120, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 129, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 		if templ_7745c5c3_Err != nil {
@@ -1016,7 +1021,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(page.Deadline)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 122, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 131, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 			if templ_7745c5c3_Err != nil {
@@ -1035,7 +1040,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 			var templ_7745c5c3_Var33 string
 			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(page.Capacity)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 125, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 134, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 			if templ_7745c5c3_Err != nil {
@@ -1078,7 +1083,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 				var templ_7745c5c3_Var35 string
 				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(page.Status)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 132, Col: 98}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 141, Col: 98}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 				if templ_7745c5c3_Err != nil {
@@ -1110,7 +1115,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 				var templ_7745c5c3_Var36 templ.SafeURL
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinURLErrs("/events/" + page.ID + "/responses")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 135, Col: 100}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 144, Col: 100}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
@@ -1140,7 +1145,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 					var templ_7745c5c3_Var37 string
 					templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue(dependent.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 139, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 148, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 					if templ_7745c5c3_Err != nil {
@@ -1153,7 +1158,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 					var templ_7745c5c3_Var38 string
 					templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(dependent.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 139, Col: 75}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 148, Col: 75}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 					if templ_7745c5c3_Err != nil {
@@ -1244,7 +1249,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 						var templ_7745c5c3_Var41 string
 						templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(response.RespondedAt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 159, Col: 169}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 168, Col: 169}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 						if templ_7745c5c3_Err != nil {
@@ -1271,7 +1276,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 								var templ_7745c5c3_Var42 templ.SafeURL
 								templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/events/" + page.ID + "/confirm")
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 164, Col: 78}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 173, Col: 78}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 								if templ_7745c5c3_Err != nil {
@@ -1292,7 +1297,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 								var templ_7745c5c3_Var43 string
 								templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.ResolveAttributeValue(response.UserID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 164, Col: 155}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 173, Col: 155}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var43)
 								if templ_7745c5c3_Err != nil {
@@ -1311,7 +1316,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 								var templ_7745c5c3_Var44 templ.SafeURL
 								templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinURLErrs("/admin/events/" + page.ID + "/check-in")
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 167, Col: 79}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 176, Col: 79}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 								if templ_7745c5c3_Err != nil {
@@ -1332,7 +1337,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 								var templ_7745c5c3_Var45 string
 								templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.ResolveAttributeValue(response.UserID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 167, Col: 156}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 176, Col: 156}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var45)
 								if templ_7745c5c3_Err != nil {
@@ -1356,7 +1361,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 							var templ_7745c5c3_Var46 string
 							templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(response.CheckedInAt)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 172, Col: 67}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 181, Col: 67}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 							if templ_7745c5c3_Err != nil {
@@ -1392,7 +1397,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 					var templ_7745c5c3_Var47 templ.SafeURL
 					templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ResponsesPreviousURL))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 181, Col: 74}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 190, Col: 74}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 					if templ_7745c5c3_Err != nil {
@@ -1411,7 +1416,7 @@ func eventDetailContent(page EventDetailPage) templ.Component {
 					var templ_7745c5c3_Var48 templ.SafeURL
 					templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ResponsesNextURL))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 184, Col: 70}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 193, Col: 70}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 					if templ_7745c5c3_Err != nil {
@@ -1492,7 +1497,7 @@ func eventDocumentsSection(documents []EventDocument) templ.Component {
 					var templ_7745c5c3_Var51 templ.SafeURL
 					templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(document.URL))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 201, Col: 116}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 210, Col: 116}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 					if templ_7745c5c3_Err != nil {
@@ -1505,7 +1510,7 @@ func eventDocumentsSection(documents []EventDocument) templ.Component {
 					var templ_7745c5c3_Var52 string
 					templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(document.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 201, Col: 135}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 210, Col: 135}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 					if templ_7745c5c3_Err != nil {
@@ -1518,7 +1523,7 @@ func eventDocumentsSection(documents []EventDocument) templ.Component {
 					var templ_7745c5c3_Var53 string
 					templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(document.Source)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 201, Col: 186}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 210, Col: 186}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 					if templ_7745c5c3_Err != nil {
@@ -1531,7 +1536,7 @@ func eventDocumentsSection(documents []EventDocument) templ.Component {
 					var templ_7745c5c3_Var54 string
 					templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(document.ReviewedOn)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 201, Col: 224}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 210, Col: 224}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 					if templ_7745c5c3_Err != nil {
@@ -1549,7 +1554,7 @@ func eventDocumentsSection(documents []EventDocument) templ.Component {
 						var templ_7745c5c3_Var55 string
 						templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(document.Context)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 203, Col: 56}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/events.templ`, Line: 212, Col: 56}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 						if templ_7745c5c3_Err != nil {

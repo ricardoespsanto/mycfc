@@ -2,12 +2,12 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +38,9 @@ type DashboardStore interface {
 	ListWhatsAppGroupsForUserProgramme(context.Context, dbgen.ListWhatsAppGroupsForUserProgrammeParams) ([]dbgen.WhatsappGroup, error)
 	ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error)
 	ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error)
+	ListEventsForMember(context.Context, dbgen.ListEventsForMemberParams) ([]dbgen.ListEventsForMemberRow, error)
 	ListEventsForToday(context.Context, dbgen.ListEventsForTodayParams) ([]dbgen.ListEventsForTodayRow, error)
+	ListUpcomingTrainingSessionsForDashboard(context.Context, dbgen.ListUpcomingTrainingSessionsForDashboardParams) ([]dbgen.ListUpcomingTrainingSessionsForDashboardRow, error)
 	ListDistanceLeaderboard(context.Context, dbgen.ListDistanceLeaderboardParams) ([]dbgen.ListDistanceLeaderboardRow, error)
 	UpdateOwnLeaderboardVisibility(context.Context, dbgen.UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateDependentLeaderboardVisibility(context.Context, dbgen.UpdateDependentLeaderboardVisibilityParams) (int64, error)
@@ -74,11 +76,6 @@ type Dashboard struct {
 	Releases              ReleaseChecker
 	System                System
 	PageMeta              components.PageMeta
-	CompetitionID         string
-	TrainingID            string
-	SocialID              string
-	CleanupsID            string
-	CalendarAPIKey        string
 	Location              *time.Location
 	Dependents            GuardianDependentStore
 	Now                   func() time.Time
@@ -127,7 +124,12 @@ func (h Dashboard) athlete(w http.ResponseWriter, r *http.Request, heading, path
 		h.System.InternalError(w, r)
 		return
 	}
-	h.render(w, r, heading, "Acompanhe os seus treinos, desempenho e agenda.", "Ainda não existem treinos ou métricas para apresentar.", path, []CalendarVM{h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID)}, []DashboardSectionVM{
+	agenda, err := h.programmeAgenda(ctx, user.ID, true)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.render(w, r, heading, "Acompanhe os seus treinos, desempenho e agenda.", "Ainda não existem treinos ou métricas para apresentar.", path, agenda, []DashboardSectionVM{
 		{Heading: "Desempenho", Empty: "Ainda não existem métricas recentes.", Items: performanceMetricItems(metrics)},
 		{Heading: "Treinos recentes", Empty: "Ainda não existem treinos recentes.", Items: trainingLogItems(logs)},
 		{Heading: "Grupos WhatsApp", Empty: "Ainda não existem grupos WhatsApp ativos.", Items: whatsappGroupItems(groups)},
@@ -147,7 +149,12 @@ func (h Dashboard) Leisure(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.render(w, r, "Lazer", "Consulte as notícias e a agenda do clube.", "Ainda não existem notícias publicadas.", "/dashboard/leisure", []CalendarVM{h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID)}, []DashboardSectionVM{
+	agenda, err := h.programmeAgenda(ctx, user.ID, false)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.render(w, r, "Lazer", "Consulte as notícias e a agenda do clube.", "Ainda não existem notícias publicadas.", "/dashboard/leisure", agenda, []DashboardSectionVM{
 		{Heading: "Notícias", Empty: "Ainda não existem notícias publicadas.", Items: newsItems(news)},
 		{Heading: "Grupos WhatsApp", Empty: "Ainda não existem grupos WhatsApp ativos.", Items: whatsappGroupItems(groups)},
 	})
@@ -639,11 +646,7 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	calendars := guardianCalendarLinks([]CalendarVM{
-		h.calendar("Treinos", h.TrainingID), h.calendar("Competições", h.CompetitionID),
-		h.calendar("Eventos sociais", h.SocialID), h.calendar("Ações de limpeza", h.CleanupsID),
-	})
-	page := pages.FleetPage{Counts: fleetStatusCounts(counts), CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(calendars), Calendars: calendars, EquipmentForm: pages.EquipmentForm{Type: "Boat", Status: "Operational", Errors: validation.FieldErrors{}}, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentForm: pages.EquipmentForm{Type: "Boat", Status: "Operational", Errors: validation.FieldErrors{}}, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
 	page.EquipmentPreviousURL, page.EquipmentNextURL, equipment = fleetPaginationURLs(r.URL.Query(), "equipment_page", equipmentPage, equipment)
 	page.RepairsPreviousURL, page.RepairsNextURL, repairs = fleetPaginationURLs(r.URL.Query(), "repairs_page", repairsPage, repairs)
 	page.MaintenancePreviousURL, page.MaintenanceNextURL, maintenance = fleetPaginationURLs(r.URL.Query(), "maintenance_page", maintenancePage, maintenance)
@@ -780,7 +783,7 @@ func validRepairImageContentType(contentType string) bool {
 	return contentType == "image/jpeg" || contentType == "image/png" || contentType == "image/webp"
 }
 
-func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro, emptyText, path string, calendars []CalendarVM, sections []DashboardSectionVM) {
+func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro, emptyText, path string, agenda []DashboardAgendaItemVM, sections []DashboardSectionVM) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
 	meta.Title = heading + " | MyCFC"
@@ -791,10 +794,10 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	view := DashboardVM{Meta: meta, Heading: heading, Intro: intro, EmptyText: emptyText, Calendars: calendars, Sections: sections}
-	links := make([]pages.CalendarLink, len(view.Calendars))
-	for i, calendar := range view.Calendars {
-		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL, ID: calendar.ID}
+	view := DashboardVM{Meta: meta, Heading: heading, Intro: intro, EmptyText: emptyText, Agenda: agenda, Sections: sections}
+	pageAgenda := make([]pages.CalendarItem, len(view.Agenda))
+	for i, item := range view.Agenda {
+		pageAgenda[i] = pages.CalendarItem{Title: item.Title, Detail: item.Detail, URL: item.URL, Kind: item.Kind}
 	}
 	pageSections := make([]pages.DashboardSection, len(view.Sections))
 	for i, section := range view.Sections {
@@ -804,7 +807,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 		}
 		pageSections[i] = pages.DashboardSection{Heading: section.Heading, Empty: section.Empty, Items: items}
 	}
-	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, CalendarAPIKey: h.CalendarAPIKey, CalendarSources: calendarSourceIDs(links), Calendars: links, Sections: pageSections, Actions: dashboardPageActions(path)}).Render(r.Context(), w)
+	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Agenda: pageAgenda, ShowAgenda: agenda != nil, Sections: pageSections, Actions: dashboardPageActions(path)}).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
@@ -862,23 +865,6 @@ func (h Dashboard) location() *time.Location {
 		return h.Location
 	}
 	return time.UTC
-}
-
-func guardianCalendarLinks(calendars []CalendarVM) []pages.CalendarLink {
-	links := make([]pages.CalendarLink, len(calendars))
-	for i, calendar := range calendars {
-		links[i] = pages.CalendarLink{Label: calendar.Label, URL: calendar.URL, ID: calendar.ID}
-	}
-	return links
-}
-
-func calendarSourceIDs(calendars []pages.CalendarLink) string {
-	ids := make([]string, len(calendars))
-	for i, calendar := range calendars {
-		ids[i] = calendar.ID
-	}
-	encoded, _ := json.Marshal(ids)
-	return string(encoded)
 }
 
 func (h Dashboard) groups(ctx context.Context, userID uuid.UUID, programmes ...string) ([]dbgen.WhatsappGroup, error) {
@@ -947,8 +933,58 @@ func numericString(value pgtype.Numeric) string {
 	return fmt.Sprint(v)
 }
 
-func (h Dashboard) calendar(label, id string) CalendarVM {
-	return CalendarVM{Label: label, URL: "https://calendar.google.com/calendar/u/0?cid=" + url.QueryEscape(id), ID: id}
+func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includeTraining bool) ([]DashboardAgendaItemVM, error) {
+	type agendaItem struct {
+		vm       DashboardAgendaItemVM
+		startsAt time.Time
+	}
+	events, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 6})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agendaItem, 0, len(events)+6)
+	for _, event := range events {
+		items = append(items, agendaItem{
+			startsAt: event.StartsAt.Time,
+			vm: DashboardAgendaItemVM{
+				Title:  event.Title,
+				Detail: h.formatAgendaRange(event.StartsAt.Time, event.EndsAt.Time),
+				URL:    "/events/" + event.ID.String(),
+				Kind:   eventTypeLabel(event.EventType),
+			},
+		})
+	}
+	if includeTraining {
+		sessions, err := h.Store.ListUpcomingTrainingSessionsForDashboard(ctx, dbgen.ListUpcomingTrainingSessionsForDashboardParams{UserID: userID, FromTime: pgtype.Timestamptz{Time: h.now(), Valid: true}, RowLimit: 6})
+		if err != nil {
+			return nil, err
+		}
+		for _, session := range sessions {
+			detail := h.formatAgendaRange(session.StartsAt.Time, session.EndsAt.Time)
+			if session.ModalityName != nil && *session.ModalityName != "" {
+				detail += " · " + *session.ModalityName
+			}
+			items = append(items, agendaItem{
+				startsAt: session.StartsAt.Time,
+				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: "/treinos", Kind: "Treino"},
+			})
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].startsAt.Before(items[j].startsAt) })
+	if len(items) > 8 {
+		items = items[:8]
+	}
+	agenda := make([]DashboardAgendaItemVM, len(items))
+	for i, item := range items {
+		agenda[i] = item.vm
+	}
+	return agenda, nil
+}
+
+func (h Dashboard) formatAgendaRange(startsAt, endsAt time.Time) string {
+	start := startsAt.In(h.location())
+	end := endsAt.In(h.location())
+	return start.Format("02/01/2006 15:04") + " - " + end.Format("15:04")
 }
 
 func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now time.Time, location *time.Location) []DashboardItemVM {

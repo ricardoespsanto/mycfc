@@ -55,11 +55,6 @@ S3_BUCKET_NAME=<private-s3-bucket>
 BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
 
-GOOGLE_CALENDAR_API_KEY=<google-api-key>
-CALENDAR_COMPETITION_ID=<calendar-id>
-CALENDAR_TRAINING_ID=<calendar-id>
-CALENDAR_SOCIAL_ID=<calendar-id>
-CALENDAR_CLEANUPS_ID=<calendar-id>
 GALLERY_URL=https://example.com/gallery
 
 CONSENT_TERMS_VERSION=<version>

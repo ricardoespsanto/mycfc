@@ -33,6 +33,7 @@ type Training struct {
 	PageMeta components.PageMeta
 	Location *time.Location
 	Sessions *scs.SessionManager
+	Now      func() time.Time
 }
 
 func (h Training) Index(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +52,7 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 			h.System.InternalError(w, r)
 			return
 		}
+		calendarEntries := make([]calendarEntry, 0, len(sessions))
 		for _, session := range sessions {
 			modality := ""
 			if session.ModalityName != nil {
@@ -63,7 +65,9 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 				distanceInput = kilometreInput(*session.DistanceMetres)
 			}
 			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
+			calendarEntries = append(calendarEntries, calendarEntry{Title: session.Title, URL: "/treinos", Kind: "Treino", StartsAt: session.StartsAt.Time})
 		}
+		page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 	}
 	if page.Management {
 		h.authoring(ctx, user, &page, managedTrainingPlansPageNumber(r.URL.Query().Get("managed_page")))
@@ -228,6 +232,13 @@ func (h Training) flash(r *http.Request, message string) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "training_flash", message)
 	}
+}
+
+func (h Training) now() time.Time {
+	if h.Now != nil {
+		return h.Now()
+	}
+	return time.Now()
 }
 
 func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.TrainingPage, pageNumber int) {

@@ -14,9 +14,6 @@ import "github.com/cfcoimbra/mycfc/ui/components"
 type GuardianPage struct {
 	Meta                   components.PageMeta
 	Dependents             []GuardianDependent
-	Calendars              []CalendarLink
-	CalendarAPIKey         string
-	CalendarSources        string
 	ResponsibilityURL      string
 	Name, DateOfBirth      string
 	ResponsibilityAccepted bool
@@ -127,7 +124,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 					var templ_7745c5c3_Var4 templ.SafeURL
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs("/perfil/dependentes/" + dependent.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 37, Col: 111}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 34, Col: 111}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -148,7 +145,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(dependent.Detail)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 37, Col: 216}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 34, Col: 216}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -171,7 +168,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 					var templ_7745c5c3_Var6 templ.SafeURL
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/dashboard/guardian/dependents/" + dependent.ID + "/leaderboard-privacy"))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 41, Col: 147}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 38, Col: 147}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -256,7 +253,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 52, Col: 138}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 49, Col: 138}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 		if templ_7745c5c3_Err != nil {
@@ -299,7 +296,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.DateOfBirth)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 53, Col: 178}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 50, Col: 178}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -350,7 +347,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 		var templ_7745c5c3_Var9 templ.SafeURL
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ResponsibilityURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 54, Col: 364}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 51, Col: 364}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {

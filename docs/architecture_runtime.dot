@@ -42,9 +42,6 @@ digraph MyCFCRuntime {
     margin=18;
 
     users [label="Members and administrators\nWeb browser", fillcolor="#f5f7fa"];
-    google_calendar [label="Google Calendar API\nPublic calendar feeds", fillcolor="#f5f7fa"];
-    { rank=same; users; google_calendar; }
-    users -> google_calendar [label="public calendar fetch\nrestricted browser API key", style=dashed, color="#7c8794"];
   }
 
   subgraph cluster_aws {

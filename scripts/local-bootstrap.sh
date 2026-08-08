@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
-  echo "Created .env from .env.example. Review the Google Calendar values." >&2
+  echo "Created .env from .env.example. Review the local development values." >&2
 fi
 
 set -a

@@ -56,6 +56,23 @@ WHERE EXISTS (
 )
 ORDER BY s.starts_at DESC, s.id DESC LIMIT sqlc.arg(row_limit);
 
+-- name: ListUpcomingTrainingSessionsForDashboard :many
+SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name
+FROM training_sessions s
+JOIN training_plans p ON p.id = s.plan_id
+LEFT JOIN modalities m ON m.id = s.modality_id
+WHERE s.ends_at >= sqlc.arg(from_time)
+  AND EXISTS (
+      SELECT 1 FROM user_memberships membership
+      JOIN users subject ON subject.id = membership.user_id
+      WHERE (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+        AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+        AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
+        AND (p.team_id IS NULL OR p.team_id = membership.team_id)
+  )
+ORDER BY s.starts_at, s.id
+LIMIT sqlc.arg(row_limit);
+
 -- name: UpdateOwnCompletedSessionDistance :execrows
 UPDATE training_session_outcomes
 SET distance_metres = sqlc.narg(distance_metres), updated_at = now()

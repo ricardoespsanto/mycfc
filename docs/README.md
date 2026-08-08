@@ -24,7 +24,7 @@ The agent MUST process the documents in numeric order and treat earlier global d
 
 The implementation agent MUST NOT ask the operator to choose architecture, packages, route behaviour, database constraints, error semantics, deployment order, or test strategy. Those decisions are fixed here.
 
-The operator still has to supply external account-specific values that cannot safely be invented: AWS account/region, Route 53 hosted-zone ID, GitHub organisation and repository, production domain, public Google Calendar IDs, browser API key, gallery URL, and current legal-document versions/hashes. Terraform variables and environment validation MUST fail clearly when one is absent.
+The operator still has to supply external account-specific values that cannot safely be invented: AWS account/region, Route 53 hosted-zone ID, GitHub organisation and repository, production domain, gallery URL, and current legal-document versions/hashes. Terraform variables and environment validation MUST fail clearly when one is absent.
 
 ## Deliberate architecture correction
 
