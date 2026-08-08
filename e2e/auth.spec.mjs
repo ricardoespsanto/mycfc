@@ -518,7 +518,7 @@ test.describe('authentication', () => {
     await page.locator('#event-document-reviewed-on').fill(new Date().toISOString().slice(0, 10));
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await expect(page.getByRole('status')).toHaveText('Evento criado.');
-    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/admin/eventos');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
@@ -527,7 +527,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/events');
     await expect(page.getByRole('heading', { name: 'Cadernos de prova e documentos oficiais' })).toBeVisible();
-    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await expect(page.getByRole('link', { name: 'Caderno de prova E2E' })).toBeVisible();
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
     await expect(page.getByText('Estado: Vou')).toBeVisible();
@@ -537,7 +537,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/events');
-    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
     await expect(page.getByText('Estado: Em lista de espera')).toBeVisible();
 
@@ -546,7 +546,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/events');
-    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Não vou' }).click();
     await expect(page.getByText('Estado: Não vou')).toBeVisible();
 
@@ -555,7 +555,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/eventos');
-    await page.getByRole('link', { name: futureTitle }).click();
+    await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Confirmar vaga' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Vou');
@@ -567,10 +567,10 @@ test.describe('authentication', () => {
     await page.locator('#event-starts-at').fill(asDateTimeLocal(pastStart));
     await page.locator('#event-ends-at').fill(asDateTimeLocal(pastEnd));
     await page.getByRole('button', { name: 'Criar evento' }).click();
-    while (await page.getByRole('link', { name: pastTitle }).count() === 0) {
+    while (await page.getByRole('link', { name: pastTitle, exact: true }).count() === 0) {
       await page.getByRole('link', { name: 'Seguinte' }).click();
     }
-    const pastAdminEventURL = await page.getByRole('link', { name: pastTitle }).getAttribute('href');
+    const pastAdminEventURL = await page.getByRole('link', { name: pastTitle, exact: true }).getAttribute('href');
     expect(pastAdminEventURL).not.toBeNull();
     const pastMemberEventURL = pastAdminEventURL?.replace('/admin/eventos/', '/events/');
 
