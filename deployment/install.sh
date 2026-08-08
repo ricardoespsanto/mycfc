@@ -24,7 +24,6 @@ if ! command -v aws >/dev/null 2>&1; then
 	exit 1
 fi
 
-"$deployment_dir/resolve-runtime-secrets.sh" "$env_file"
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" config -q
 
 set -a
