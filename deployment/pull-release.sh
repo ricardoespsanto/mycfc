@@ -9,6 +9,7 @@ backup_file=
 release_updated=false
 
 log() {
+	printf '%s\n' "$*"
 	logger -t mycfc-pull-release -- "$*"
 }
 
