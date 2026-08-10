@@ -48,6 +48,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/admin/sistema", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fsistema"},
 		{http.MethodGet, "/admin/membros", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros"},
 		{http.MethodGet, "/admin/noticias", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fnoticias"},
+		{http.MethodGet, "/admin/eventos/00000000-0000-0000-0000-000000000000/editar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Feventos%2F00000000-0000-0000-0000-000000000000%2Feditar"},
+		{http.MethodPost, "/admin/events/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fevents%2F00000000-0000-0000-0000-000000000000"},
+		{http.MethodPost, "/admin/events/00000000-0000-0000-0000-000000000000/cancel", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fevents%2F00000000-0000-0000-0000-000000000000%2Fcancel"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()

@@ -5,7 +5,7 @@ import (
     "github.com/cfcoimbra/mycfc/ui/components"
 )
 
-type EventItem struct { ID, Title, Type, When, Status, Capacity string }
+type EventItem struct { ID, Title, Type, When, Status, Capacity, CancellationReason string; Cancelled bool }
 type EventDocument struct { Title, URL, Source, ReviewedOn, Context string }
 type EventResponse struct { UserID, Name, Status, RespondedAt, CheckedInAt string }
 type EventDependent struct { ID, Name string }
@@ -13,11 +13,19 @@ type EventProgramme struct { ID, Name string; Selected bool }
 type EventTeam struct { ID, Name string; Selected bool }
 type EventForm struct {
     CSRFField templ.Component
-    Title, Description, EventType, StartsAt, EndsAt, Deadline, Capacity string
+    ID, Title, Description, EventType, StartsAt, EndsAt, Deadline, Capacity string
     DocumentTitle, DocumentURL, DocumentSource, DocumentReviewedOn string
+	ExpectedUpdatedAt string
+	Editing, AudienceLocked, HasDocument bool
     Programmes []EventProgramme
     Teams []EventTeam
     Errors validation.FieldErrors
+}
+type EventEditPage struct {
+	Meta components.PageMeta
+	EventID, Conflict, CancellationReason string
+	Form EventForm
+	CancellationErrors validation.FieldErrors
 }
 type EventsPage struct {
     Meta components.PageMeta
@@ -32,6 +40,8 @@ type EventDetailPage struct {
     Meta components.PageMeta
     CanManageEvents bool
     ID, Title, Type, Description, When, Deadline, Capacity, Status string
+	CancellationReason, CancelledAt, CancelledBy string
+	Cancelled, Editable bool
     Documents []EventDocument
     Responses []EventResponse
     ResponsesPreviousURL, ResponsesNextURL string
@@ -59,7 +69,11 @@ templ eventsContent(page EventsPage) {
         if len(page.Events) > 0 {
             <ul class="record-list collection-list" aria-label="Próximos eventos">
                 for _, event := range page.Events {
-                    <li class="record-item"><div class="record-item__copy"><h3><a href={ eventPageURL(page, event.ID) }>{ event.Title }</a></h3><p class="record-meta">{ event.Type } · { event.When }{ event.Capacity }</p></div>@components.Badge(event.Status, eventStatusTone(event.Status))<a class="action action--quiet collection-open" href={ eventPageURL(page, event.ID) }>Abrir</a></li>
+                    <li class="record-item"><div class="record-item__copy"><h3><a href={ eventPageURL(page, event.ID) }>{ event.Title }</a></h3><p class="record-meta">{ event.Type } · { event.When }{ event.Capacity }</p>
+					if event.Cancelled && event.CancellationReason != "" {
+						<p>{ event.CancellationReason }</p>
+					}
+					</div>@components.Badge(event.Status, eventStatusTone(event.Status))<a class="action action--quiet collection-open" href={ eventPageURL(page, event.ID) }>Abrir</a></li>
                 }
             </ul>
         }
@@ -84,9 +98,12 @@ templ eventsContent(page EventsPage) {
 }
 
 templ EventAuthoringForm(form EventForm) {
-    <details id="criar-evento" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">Criar evento</strong><small>Defina data, lotação e participantes.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
-        @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "title", Field: "event-title"}, {Key: "description", Field: "event-description"}, {Key: "event_type", Field: "event-type"}, {Key: "starts_at", Field: "event-starts-at"}, {Key: "ends_at", Field: "event-ends-at"}, {Key: "response_deadline", Field: "event-deadline"}, {Key: "capacity", Field: "event-capacity"}, {Key: "document", Field: "event-document"}, {Key: "document_title", Field: "event-document-title"}, {Key: "document_url", Field: "event-document-url"}, {Key: "document_source", Field: "event-document-source"}, {Key: "document_reviewed_on", Field: "event-document-reviewed-on"}, {Key: "programme_id", Field: "event-audience"}, {Key: "team_id", Field: "event-audience"}, {Key: "audience", Field: "event-audience"}}))
-        <form class="form-layout" method="post" action="/admin/events">@form.CSRFField
+    <details id={ eventFormDisclosureID(form) } class="module disclosure create-panel" data-create-panel open?={ form.Editing || len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">{ eventFormTitle(form) }</strong><small>{ eventFormSummary(form) }</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
+        @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "state", Field: "event-title"}, {Key: "title", Field: "event-title"}, {Key: "description", Field: "event-description"}, {Key: "event_type", Field: "event-type"}, {Key: "starts_at", Field: "event-starts-at"}, {Key: "ends_at", Field: "event-ends-at"}, {Key: "response_deadline", Field: "event-deadline"}, {Key: "capacity", Field: "event-capacity"}, {Key: "document", Field: "event-document"}, {Key: "document_title", Field: "event-document-title"}, {Key: "document_url", Field: "event-document-url"}, {Key: "document_source", Field: "event-document-source"}, {Key: "document_reviewed_on", Field: "event-document-reviewed-on"}, {Key: "programme_id", Field: "event-audience"}, {Key: "team_id", Field: "event-audience"}, {Key: "audience", Field: "event-audience"}}))
+        <form class="form-layout" method="post" action={ templ.SafeURL(eventFormAction(form)) }>@form.CSRFField
+			if form.Editing {
+				<input type="hidden" name="expected_updated_at" value={ form.ExpectedUpdatedAt }/>
+			}
             @components.RequiredNote()
             @components.FieldLabel("event-title", "Título", true)<input id="event-title" name="title" value={ form.Title } required aria-invalid?={ form.Errors["title"] != "" } aria-describedby="event-title-help title-error"/>@components.FieldHelp("event-title-help", "Dê ao evento um nome curto e reconhecível.")
             @components.FieldErrorMessage("title", form.Errors["title"])
@@ -102,30 +119,74 @@ templ EventAuthoringForm(form EventForm) {
             @components.FieldErrorMessage("response_deadline", form.Errors["response_deadline"])
             @components.FieldLabel("event-capacity", "Lotação (opcional)", false)<input id="event-capacity" name="capacity" type="number" min="1" value={ form.Capacity } aria-invalid?={ form.Errors["capacity"] != "" } aria-describedby="capacity-error"/>
             @components.FieldErrorMessage("capacity", form.Errors["capacity"])
+            if !form.Editing {
             <details id="event-document" data-competition-document open?={ form.EventType == "COMPETITION" && (form.DocumentTitle != "" || form.Errors["document"] != "") }><summary>Documento de competição (opcional)</summary><fieldset><legend>Documento de competição</legend><p>Publique o caderno de prova ou outro documento oficial juntamente com este evento.</p>
                 @components.FieldLabel("event-document-title", "Título", false)<input id="event-document-title" name="document_title" value={ form.DocumentTitle } aria-invalid?={ form.Errors["document_title"] != "" }/>@components.FieldErrorMessage("document_title", form.Errors["document_title"])
                 @components.FieldLabel("event-document-url", "Ligação HTTPS", false)<input id="event-document-url" name="document_url" type="url" value={ form.DocumentURL } aria-invalid?={ form.Errors["document_url"] != "" }/>@components.FieldErrorMessage("document_url", form.Errors["document_url"])
                 @components.FieldLabel("event-document-source", "Fonte oficial", false)<input id="event-document-source" name="document_source" value={ form.DocumentSource } aria-invalid?={ form.Errors["document_source"] != "" }/>@components.FieldErrorMessage("document_source", form.Errors["document_source"])
                 @components.FieldLabel("event-document-reviewed-on", "Revisto em", false)<input id="event-document-reviewed-on" name="document_reviewed_on" type="date" value={ form.DocumentReviewedOn } aria-invalid?={ form.Errors["document_reviewed_on"] != "" }/>@components.FieldErrorMessage("document_reviewed_on", form.Errors["document_reviewed_on"])
             </fieldset>@components.FieldErrorMessage("document", form.Errors["document"])</details>
+			} else if form.HasDocument {
+				<div class="callout"><strong>Documento oficial preservado</strong><p>O documento publicado não é alterado por este formulário; o evento tem de continuar marcado como competição.</p></div>
+			}
             <details id="event-audience"><summary>Destinatários (opcional)</summary><fieldset><legend>Destinatários</legend><p>Os administradores podem deixar esta lista vazia para todos os membros.</p>
+				if form.AudienceLocked {
+					<p class="callout">Os destinatários estão bloqueados porque o evento já recebeu respostas.</p>
+				}
                 for _, programme := range form.Programmes {
-                    <label><input name="programme_id" type="checkbox" value={ programme.ID } checked?={ programme.Selected }/> { programme.Name }</label>
+					if form.AudienceLocked && programme.Selected {
+						<input type="hidden" name="programme_id" value={ programme.ID }/>
+					}
+                    <label><input name="programme_id" type="checkbox" value={ programme.ID } checked?={ programme.Selected } disabled?={ form.AudienceLocked }/> { programme.Name }</label>
                 }
                 for _, team := range form.Teams {
-                    <label><input name="team_id" type="checkbox" value={ team.ID } checked?={ team.Selected }/> { team.Name }</label>
+					if form.AudienceLocked && team.Selected {
+						<input type="hidden" name="team_id" value={ team.ID }/>
+					}
+                    <label><input name="team_id" type="checkbox" value={ team.ID } checked?={ team.Selected } disabled?={ form.AudienceLocked }/> { team.Name }</label>
                 }
             </fieldset></details>@components.FieldErrorMessage("programme_id", form.Errors["programme_id"])@components.FieldErrorMessage("team_id", form.Errors["team_id"])@components.FieldErrorMessage("audience", form.Errors["audience"])
-            @components.FormActions("/admin/eventos") { <button type="submit">Criar evento</button> }
+            @components.FormActions(eventFormCancelURL(form)) { <button type="submit">{ eventFormSubmitLabel(form) }</button> }
         </form>
     </div></details>
 }
 
+templ EventEdit(page EventEditPage) {
+	@components.Base(page.Meta, eventEditContent(page))
+}
+
+templ eventEditContent(page EventEditPage) {
+	@components.PageHeader("Administração · Eventos", "Editar evento", page.Form.Title, []components.PageAction{{Label: "Voltar ao evento", Href: "/admin/eventos/" + page.EventID, Variant: "quiet"}})
+	@components.StatusMessage(page.Conflict, "error")
+	@EventAuthoringForm(page.Form)
+	<section class="module destructive-region" aria-labelledby="cancel-event-title">
+		<h2 id="cancel-event-title">Cancelar evento</h2>
+		<p>O evento continua visível como cancelado e todas as respostas, presenças e documentação são preservadas. Esta ação não pode ser anulada.</p>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CancellationErrors), []components.FieldErrorRef{{Key: "state", Field: "cancel-event-title"}, {Key: "cancellation_reason", Field: "event-cancellation-reason"}, {Key: "confirm_cancellation", Field: "confirm-event-cancellation"}}))
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/events/" + page.EventID + "/cancel") }>
+			@page.Form.CSRFField<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
+			@components.FieldLabel("event-cancellation-reason", "Motivo", true)<textarea id="event-cancellation-reason" name="cancellation_reason" minlength="2" maxlength="500" required aria-invalid?={ page.CancellationErrors["cancellation_reason"] != "" }>{ page.CancellationReason }</textarea>@components.FieldErrorMessage("cancellation_reason", page.CancellationErrors["cancellation_reason"])
+			<label for="confirm-event-cancellation"><input id="confirm-event-cancellation" type="checkbox" name="confirm_cancellation" value="yes" required/> Confirmo que pretendo cancelar este evento definitivamente.</label>@components.FieldErrorMessage("confirm_cancellation", page.CancellationErrors["confirm_cancellation"])
+			@components.FormActions("/admin/eventos/" + page.EventID) { <button class="action action--danger" type="submit">Cancelar evento</button> }
+		</form>
+	</section>
+}
+
+func eventFormDisclosureID(form EventForm) string { if form.Editing { return "editar-evento" }; return "criar-evento" }
+func eventFormTitle(form EventForm) string { if form.Editing { return "Dados do evento" }; return "Criar evento" }
+func eventFormSummary(form EventForm) string { if form.Editing { return "Atualize data, lotação e participantes." }; return "Defina data, lotação e participantes." }
+func eventFormAction(form EventForm) string { if form.Editing { return "/admin/events/" + form.ID }; return "/admin/events" }
+func eventFormCancelURL(form EventForm) string { if form.Editing { return "/admin/eventos/" + form.ID }; return "/admin/eventos" }
+func eventFormSubmitLabel(form EventForm) string { if form.Editing { return "Guardar alterações" }; return "Criar evento" }
+
 templ EventDetail(page EventDetailPage) { @components.Base(page.Meta, eventDetailContent(page)) }
 templ eventDetailContent(page EventDetailPage) {
-	@components.PageHeader(eventDetailArea(page), page.Title, page.Description, []components.PageAction{{Label: "Voltar aos eventos", Href: eventDetailBackURL(page), Variant: "quiet"}})
+	@components.PageHeader(eventDetailArea(page), page.Title, page.Description, eventDetailActions(page))
     <section class="module event-summary" aria-label="Informação do evento">
         <p>@components.Badge(page.Type, eventTypeTone(page.Type))</p>
+		if page.Cancelled {
+			<p>@components.Badge("Cancelado", "error")</p>
+		}
         <p class="record-meta">{ page.When }</p>
         if page.Deadline != "" {
             <p>{ page.Deadline }</p>
@@ -134,8 +195,15 @@ templ eventDetailContent(page EventDetailPage) {
             <p>{ page.Capacity }</p>
         }
     </section>
+	if page.Cancelled {
+		<div class="callout callout--warning" role="status"><strong>Evento cancelado</strong><p>{ page.CancellationReason }</p>
+			if page.CanManageEvents && page.CancelledAt != "" {
+				<small>Cancelado em { page.CancelledAt } por { page.CancelledBy }.</small>
+			}
+		</div>
+	}
     @eventDocumentsSection(page.Documents)
-    if !page.CanManageEvents {
+    if !page.CanManageEvents && !page.Cancelled {
         <section class="module">
             @components.SectionHeading("Participação", "A sua resposta", "Confirme a participação da pessoa certa.") {
                 <span class="record-item__actions"><span class="record-meta">Estado: { page.Status }</span>@components.Badge(page.Status, eventStatusTone(page.Status))</span>
@@ -167,7 +235,7 @@ templ eventDetailContent(page EventDetailPage) {
 					for _, response := range page.Responses {
 						<li class="record-item"><div class="record-item__copy"><h3>@components.PersonName(response.UserID, response.Name)</h3><p class="record-meta">{ response.RespondedAt }</p></div>
 							@components.Badge(response.Status, eventStatusTone(response.Status))
-							if (response.Status == "Em lista de espera") || (response.Status == "Vou" && response.CheckedInAt == "") {
+							if !page.Cancelled && ((response.Status == "Em lista de espera") || (response.Status == "Vou" && response.CheckedInAt == "")) {
 								<details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions">
 									if response.Status == "Em lista de espera" {
 										<form method="post" action={ "/admin/events/" + page.ID + "/confirm" }>@page.CSRFField<input type="hidden" name="user_id" value={ response.UserID }/><button class="action action--secondary" type="submit">Confirmar vaga</button></form>
@@ -228,6 +296,11 @@ func eventPageActions(page EventsPage) []components.PageAction {
 func eventPageURL(page EventsPage, id string) string { if page.Management { return "/admin/eventos/" + id }; return "/events/" + id }
 func eventDetailArea(page EventDetailPage) string { if page.CanManageEvents { return "Administração · Eventos" }; return "Evento" }
 func eventDetailBackURL(page EventDetailPage) string { if page.CanManageEvents { return "/admin/eventos" }; return "/events" }
+func eventDetailActions(page EventDetailPage) []components.PageAction {
+	actions := []components.PageAction{{Label: "Voltar aos eventos", Href: eventDetailBackURL(page), Variant: "quiet"}}
+	if page.CanManageEvents && page.Editable { actions = append([]components.PageAction{{Label: "Editar evento", Href: "/admin/eventos/" + page.ID + "/editar", Variant: "primary"}}, actions...) }
+	return actions
+}
 
 func eventStatusTone(status string) string {
     switch status {
@@ -235,7 +308,7 @@ func eventStatusTone(status string) string {
         return "success"
     case "Em lista de espera", "Pendente":
         return "warning"
-    case "Não vou", "Fora do prazo":
+    case "Não vou", "Fora do prazo", "Cancelado":
         return "error"
     default:
         return "selected"
