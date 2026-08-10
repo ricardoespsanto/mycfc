@@ -95,3 +95,30 @@ func TestLegacyAdultsWithoutVerificationHistoryBecomeUnverified(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordResetExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608100001_password_reset_tokens.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"CREATE TABLE IF NOT EXISTS password_reset_tokens", "token_digest bytea NOT NULL UNIQUE", "message_type", "password_reset_token_id", "sealed_payload", "CREATE OR REPLACE FUNCTION issue_password_reset", "password_reset_too_soon", "password_reset_limit_exceeded"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration does not contain %q", expected)
+		}
+		baselineExpected := strings.TrimPrefix(expected, "CREATE TABLE IF NOT EXISTS ")
+		if expected == "CREATE TABLE IF NOT EXISTS password_reset_tokens" {
+			baselineExpected = "CREATE TABLE password_reset_tokens"
+		}
+		if expected == "CREATE OR REPLACE FUNCTION issue_password_reset" {
+			baselineExpected = "CREATE FUNCTION issue_password_reset"
+		}
+		if !strings.Contains(baselineSchema, baselineExpected) {
+			t.Errorf("baseline does not contain %q", baselineExpected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM users"} {
+		if strings.Contains(strings.ToUpper(string(migration)), prohibited) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

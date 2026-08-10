@@ -22,6 +22,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -166,8 +167,9 @@ func New(ctx context.Context) (*Application, error) {
 	}
 	system := handlers.System{PageMeta: pageMeta}
 	verificationService := emailverification.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
+	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
-	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, Logger: logger}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, Logger: logger}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
 		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)

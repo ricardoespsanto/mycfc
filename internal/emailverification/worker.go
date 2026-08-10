@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -20,6 +21,7 @@ const (
 
 type Sender interface {
 	SendVerification(context.Context, string, string, time.Time) error
+	SendPasswordReset(context.Context, string, string, time.Time) error
 }
 
 type DeliveryStore interface {
@@ -31,11 +33,12 @@ type DeliveryStore interface {
 }
 
 type Worker struct {
-	Store   DeliveryStore
-	Sender  Sender
-	Service Service
-	Logger  *slog.Logger
-	Now     func() time.Time
+	Store         DeliveryStore
+	Sender        Sender
+	Service       Service
+	PasswordReset passwordreset.Service
+	Logger        *slog.Logger
+	Now           func() time.Time
 }
 
 func (w Worker) Run(ctx context.Context) {
@@ -71,7 +74,28 @@ func (w Worker) drain(ctx context.Context) {
 
 func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 	now := w.now()
-	err := w.Sender.SendVerification(ctx, item.Email, w.Service.Link(item.VerificationTokenID), item.ExpiresAt.Time)
+	var err error
+	invalidPayload := false
+	switch item.MessageType {
+	case "EMAIL_VERIFICATION":
+		if item.VerificationTokenID == nil {
+			err = errors.New("missing verification token reference")
+			invalidPayload = true
+		} else {
+			err = w.Sender.SendVerification(ctx, item.Email, w.Service.Link(*item.VerificationTokenID), item.ExpiresAt.Time)
+		}
+	case "PASSWORD_RESET":
+		link, openErr := w.PasswordReset.OpenDeliveryLink(item.SealedPayload, item.Email)
+		if openErr != nil {
+			err = openErr
+			invalidPayload = true
+		} else {
+			err = w.Sender.SendPasswordReset(ctx, item.Email, link, item.ExpiresAt.Time)
+		}
+	default:
+		err = errors.New("unsupported email outbox message type")
+		invalidPayload = true
+	}
 	if err == nil {
 		_, updateErr := w.Store.CompleteEmailOutbox(ctx, dbgen.CompleteEmailOutboxParams{ID: item.ID, CompletedAt: timestamp(now)})
 		if updateErr != nil {
@@ -79,7 +103,7 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		}
 		return
 	}
-	permanent := IsPermanent(err)
+	permanent := invalidPayload || IsPermanent(err)
 	if permanent || item.Attempts >= MaxAttempts || !item.ExpiresAt.Time.After(now.Add(retryDelay(item.Attempts))) {
 		reason := "SMTP delivery failed permanently"
 		_, updateErr := w.Store.FailEmailOutbox(ctx, dbgen.FailEmailOutboxParams{ID: item.ID, FailedAt: timestamp(now), LastError: &reason})
