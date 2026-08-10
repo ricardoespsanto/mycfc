@@ -437,6 +437,9 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 	page.Meta.Title = page.Title + " | MyCFC"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: basePath}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	if h.Sessions != nil {
+		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.EventDetail(page).Render(r.Context(), w)
 }

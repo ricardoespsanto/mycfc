@@ -39,7 +39,7 @@ type EventsPage struct {
 type EventDetailPage struct {
     Meta components.PageMeta
     CanManageEvents bool
-    ID, Title, Type, Description, When, Deadline, Capacity, Status string
+    ID, Title, Type, Description, When, Deadline, Capacity, Status, Success string
 	CancellationReason, CancelledAt, CancelledBy string
 	Cancelled, Editable bool
     Documents []EventDocument
@@ -182,6 +182,7 @@ func eventFormSubmitLabel(form EventForm) string { if form.Editing { return "Gua
 templ EventDetail(page EventDetailPage) { @components.Base(page.Meta, eventDetailContent(page)) }
 templ eventDetailContent(page EventDetailPage) {
 	@components.PageHeader(eventDetailArea(page), page.Title, page.Description, eventDetailActions(page))
+	@components.StatusMessage(page.Success, "success")
     <section class="module event-summary" aria-label="Informação do evento">
         <p>@components.Badge(page.Type, eventTypeTone(page.Type))</p>
 		if page.Cancelled {
