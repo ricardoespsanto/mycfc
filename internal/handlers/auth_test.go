@@ -23,13 +23,17 @@ type currentUserLookup struct {
 }
 
 func (l currentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error) {
-	return l.account, l.err
+	account := l.account
+	if account.CredentialVersion == 0 {
+		account.CredentialVersion = 1
+	}
+	return account, l.err
 }
 func (l currentUserLookup) GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error) {
 	return dbgen.GetActiveAccountByIDWithoutProfileRow{
 		ID: l.account.ID, Name: l.account.Name, IsDependent: l.account.IsDependent,
 		IsActive: l.account.IsActive, LeaderboardVisible: l.account.LeaderboardVisible,
-		IsAdmin: l.account.IsAdmin,
+		IsAdmin: l.account.IsAdmin, CredentialVersion: max(l.account.CredentialVersion, 1),
 	}, nil
 }
 func (l currentUserLookup) ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error) {
@@ -61,6 +65,34 @@ func TestAuthRejectsInvalidAndInactiveAccounts(t *testing.T) {
 		if response := authenticatedRequest(t, auth.Sessions, uuid.NewString(), handler); response.Code != http.StatusSeeOther {
 			t.Fatalf("status = %d", response.Code)
 		}
+	}
+}
+
+func TestAuthRejectsSessionsFromOlderCredentialVersions(t *testing.T) {
+	id := uuid.New()
+	sessions := scs.New()
+	auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, CredentialVersion: 2}}, Sessions: sessions}
+	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("revoked session reached protected handler")
+	})))
+
+	for _, version := range []int64{0, 1} {
+		response := authenticatedRequestVersion(t, sessions, id.String(), version, handler)
+		if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login?next=%2Fprotected" {
+			t.Fatalf("version %d response = %d %q", version, response.Code, response.Header().Get("Location"))
+		}
+	}
+}
+
+func TestAuthAllowsSessionFromCurrentCredentialVersion(t *testing.T) {
+	id := uuid.New()
+	sessions := scs.New()
+	auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, CredentialVersion: 2}}, Sessions: sessions}
+	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	if response := authenticatedRequestVersion(t, sessions, id.String(), 2, handler); response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
 	}
 }
 
@@ -175,8 +207,17 @@ func TestAuthFallsBackWhenProfileSchemaIsUnavailable(t *testing.T) {
 }
 
 func authenticatedRequest(t *testing.T, sessions *scs.SessionManager, userID string, handler http.Handler) *httptest.ResponseRecorder {
+	return authenticatedRequestVersion(t, sessions, userID, 1, handler)
+}
+
+func authenticatedRequestVersion(t *testing.T, sessions *scs.SessionManager, userID string, version int64, handler http.Handler) *httptest.ResponseRecorder {
 	t.Helper()
-	setSession := sessions.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sessions.Put(r.Context(), "user_id", userID) }))
+	setSession := sessions.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessions.Put(r.Context(), "user_id", userID)
+		if version > 0 {
+			sessions.Put(r.Context(), "credential_version", version)
+		}
+	}))
 	setupResponse := httptest.NewRecorder()
 	setSession.ServeHTTP(setupResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	response := httptest.NewRecorder()

@@ -88,7 +88,7 @@ func passwordRecoveryRequestContent(page PasswordRecoveryRequestPage) templ.Comp
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<input id=\"recovery-identifier\" name=\"identifier\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" required aria-describedby=\"recovery-identifier-help\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<input id=\"recovery-identifier\" name=\"identifier\" type=\"text\" inputmode=\"email\" autocomplete=\"email\" required aria-describedby=\"recovery-identifier-help\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

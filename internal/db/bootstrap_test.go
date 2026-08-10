@@ -122,3 +122,28 @@ func TestPasswordResetExistsInBaselineAndForwardMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestCredentialVersionExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608100002_credential_session_revocation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"credential_version bigint NOT NULL DEFAULT 1", "users_credential_version_valid", "credential_version > 0"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"ADD COLUMN IF NOT EXISTS credential_version", "FROM pg_constraint", "conrelid = 'users'::regclass"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM users"} {
+		if strings.Contains(strings.ToUpper(string(migration)), prohibited) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

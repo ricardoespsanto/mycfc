@@ -10,8 +10,9 @@ CREATE TYPE metric_type AS ENUM ('Distance_Metres', 'Duration_Seconds', 'Session
 CREATE TYPE medical_declaration AS ENUM ('UNKNOWN', 'NONE_KNOWN', 'PROVIDED');
 
 CREATE TABLE users (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, email citext NULL, email_verified_at timestamptz NULL, minor_login_id citext NULL, password_hash text NULL, guardian_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, is_dependent boolean NOT NULL DEFAULT false, date_of_birth date NOT NULL, is_active boolean NOT NULL DEFAULT true, leaderboard_visible boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(120) NOT NULL, email citext NULL, email_verified_at timestamptz NULL, minor_login_id citext NULL, password_hash text NULL, credential_version bigint NOT NULL DEFAULT 1, guardian_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, is_dependent boolean NOT NULL DEFAULT false, date_of_birth date NOT NULL, is_active boolean NOT NULL DEFAULT true, leaderboard_visible boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
  CONSTRAINT users_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT users_guardian_not_self CHECK (guardian_id IS NULL OR guardian_id <> id),
+ CONSTRAINT users_credential_version_valid CHECK (credential_version > 0),
  CONSTRAINT users_identity_shape CHECK ((is_dependent AND guardian_id IS NOT NULL AND email IS NULL AND ((minor_login_id IS NULL AND password_hash IS NULL) OR (minor_login_id IS NOT NULL AND password_hash IS NOT NULL))) OR (NOT is_dependent AND guardian_id IS NULL AND email IS NOT NULL AND password_hash IS NOT NULL AND minor_login_id IS NULL))
 );
 CREATE UNIQUE INDEX users_email_uidx ON users (email) WHERE email IS NOT NULL;

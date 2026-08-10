@@ -100,6 +100,8 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		_, updateErr := w.Store.CompleteEmailOutbox(ctx, dbgen.CompleteEmailOutboxParams{ID: item.ID, CompletedAt: timestamp(now)})
 		if updateErr != nil {
 			w.log("email outbox completion failed", item.ID, "database")
+		} else if item.MessageType == "PASSWORD_RESET" {
+			w.passwordResetEvent("password_recovery_delivered", "success")
 		}
 		return
 	}
@@ -111,6 +113,9 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 			w.log("email outbox failure update failed", item.ID, "database")
 		} else {
 			w.log("email delivery stopped", item.ID, "permanent")
+			if item.MessageType == "PASSWORD_RESET" {
+				w.passwordResetEvent("password_recovery_delivery_failed", "permanent")
+			}
 		}
 		return
 	}
@@ -120,6 +125,15 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		w.log("email outbox retry update failed", item.ID, "database")
 	} else {
 		w.log("email delivery scheduled for retry", item.ID, "temporary")
+		if item.MessageType == "PASSWORD_RESET" {
+			w.passwordResetEvent("password_recovery_delivery_failed", "retry_scheduled")
+		}
+	}
+}
+
+func (w Worker) passwordResetEvent(event, outcome string) {
+	if w.Logger != nil {
+		w.Logger.Info("password recovery event", "event", event, "outcome", outcome)
 	}
 }
 

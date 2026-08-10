@@ -63,12 +63,13 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := uuid.Nil
+	credentialVersion := int64(0)
 	var passwordHash *string
 	var err error
 	if strings.HasPrefix(strings.ToUpper(identifier), "CFC-") {
 		loginID := strings.ToUpper(identifier)
 		user, lookupErr := h.Users.GetActiveDependentByLoginID(r.Context(), &loginID)
-		err, userID, passwordHash = lookupErr, user.ID, user.PasswordHash
+		err, userID, passwordHash, credentialVersion = lookupErr, user.ID, user.PasswordHash, user.CredentialVersion
 	} else {
 		email, emailErr := validation.NormalizeEmail(identifier)
 		if emailErr != nil {
@@ -77,7 +78,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user, lookupErr := h.Users.GetActiveUserByEmail(r.Context(), &email)
-		err, userID, passwordHash = lookupErr, user.ID, user.PasswordHash
+		err, userID, passwordHash, credentialVersion = lookupErr, user.ID, user.PasswordHash, user.CredentialVersion
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		h.render(w, r, http.StatusInternalServerError, "", "", "")
@@ -99,6 +100,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Sessions.Put(r.Context(), "user_id", userID.String())
+	h.Sessions.Put(r.Context(), "credential_version", credentialVersion)
 	h.Sessions.Put(r.Context(), "last_seen_at", time.Now().UTC().Format(time.RFC3339Nano))
 	if next == "" {
 		next = "/dashboard"

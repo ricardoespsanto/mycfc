@@ -9,6 +9,8 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 - Complete login, registration, Today navigation, dependent creation, repair
   reporting, event response, training authoring and the administrator member,
   news and fleet workflows without a pointing device.
+- Complete password-recovery request, email-link reset, validation correction,
+  successful login and used-link handling without JavaScript or a pointing device.
 - Confirm the skip link is the first focusable control and becomes visible on focus.
 - Confirm focus order follows the visual and semantic order.
 - Confirm every focus indicator remains clearly visible at 200% zoom.
@@ -21,6 +23,8 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 - Confirm page titles and the single H1 identify each page.
 - Confirm landmarks and navigation labels are useful and non-duplicative.
 - Confirm required state, help text and field errors are announced with each control.
+- Confirm both new-password fields expose the expected password-manager purpose,
+  remain empty after validation errors, and move focus to the error summary.
 - Confirm status messages are announced once and validation errors are urgent without being repeated.
 - Confirm repair-image alternative text describes context rather than filenames.
 - Confirm member, tutor and administrator journeys in the named
@@ -29,6 +33,7 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 ## Responsive and visual
 
 - Test at 320 CSS pixels with no page-level horizontal overflow.
+- Confirm request, reset, confirmation and unavailable-link recovery states at 320 CSS pixels.
 - Test browser zoom at 200%.
 - Test applicable authenticated pages at 400% zoom (320 effective CSS pixels
   from the agreed 1280-pixel baseline).

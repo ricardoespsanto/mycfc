@@ -38,7 +38,7 @@ WITH consumed AS (
   RETURNING outbox.id
 )
 UPDATE users account
-SET password_hash = sqlc.arg(password_hash), updated_at = sqlc.arg(consumed_at)
+SET password_hash = sqlc.arg(password_hash), credential_version = credential_version + 1, updated_at = sqlc.arg(consumed_at)
 FROM consumed
 WHERE account.id = consumed.user_id
 RETURNING account.id;

@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -147,13 +149,48 @@ func TestPasswordRecoveryLimiterUsesClientWindow(t *testing.T) {
 	}
 }
 
+func TestPasswordRecoveryObservabilityContainsOutcomesWithoutSensitiveValues(t *testing.T) {
+	var logs bytes.Buffer
+	service := &passwordRecoveryServiceFake{}
+	handler := passwordRecoveryTestHandler(service)
+	handler.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	handler.Limiter = &recoveryLimiterFake{allowed: true}
+	identifier := "private-member@example.test"
+	remote := netip.MustParseAddr("203.0.113.99")
+	form := url.Values{"identifier": {identifier}}
+	request := httptest.NewRequest(http.MethodPost, "/recuperar-palavra-passe", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request = request.WithContext(httpx.WithRemoteIP(request.Context(), remote))
+	handler.RequestPost(httptest.NewRecorder(), request)
+	handler.Limiter = &recoveryLimiterFake{allowed: false}
+	limitedRequest := httptest.NewRequest(http.MethodPost, "/recuperar-palavra-passe", strings.NewReader(form.Encode()))
+	limitedRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	limitedRequest = limitedRequest.WithContext(httpx.WithRemoteIP(limitedRequest.Context(), remote))
+	handler.RequestPost(httptest.NewRecorder(), limitedRequest)
+
+	token := "private-reset-token"
+	service.resolveErr = passwordreset.ErrInvalidToken
+	handler.ResetGet(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/recuperar-palavra-passe/repor?token="+token, nil))
+	output := logs.String()
+	for _, event := range []string{"password_recovery_requested", "password_recovery_queued", "password_recovery_throttled", "password_recovery_link_rejected"} {
+		if !strings.Contains(output, event) {
+			t.Errorf("logs do not contain %q: %s", event, output)
+		}
+	}
+	for _, forbidden := range []string{identifier, remote.String(), token, "identifier", "token="} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("sensitive value %q leaked into logs: %s", forbidden, output)
+		}
+	}
+}
+
 func TestPasswordRecoveryResetRendersTokenFormAndSafeInvalidState(t *testing.T) {
 	token := "opaque-token-that-must-not-enter-the-title"
 	service := &passwordRecoveryServiceFake{}
 	handler := passwordRecoveryTestHandler(service)
 	response := httptest.NewRecorder()
 	handler.ResetGet(response, httptest.NewRequest(http.MethodGet, "/recuperar-palavra-passe/repor?token="+token, nil))
-	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Referrer-Policy") != "no-referrer" {
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Referrer-Policy") != "same-origin" {
 		t.Fatalf("response = %d, cache %q, referrer %q", response.Code, response.Header().Get("Cache-Control"), response.Header().Get("Referrer-Policy"))
 	}
 	for _, expected := range []string{`name="token" value="` + token + `"`, `autocomplete="new-password"`, `id="password_confirmation"`} {
@@ -172,6 +209,9 @@ func TestPasswordRecoveryResetRendersTokenFormAndSafeInvalidState(t *testing.T) 
 		handler.ResetGet(response, httptest.NewRequest(http.MethodGet, "/recuperar-palavra-passe/repor?token="+raw, nil))
 		if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "Este link já não está disponível") || strings.Contains(response.Body.String(), raw) && raw != "" {
 			t.Fatalf("invalid response = %d %q", response.Code, response.Body.String())
+		}
+		if response.Header().Get("Referrer-Policy") != "no-referrer" {
+			t.Fatalf("invalid referrer policy = %q", response.Header().Get("Referrer-Policy"))
 		}
 		if invalidBody == "" {
 			invalidBody = response.Body.String()

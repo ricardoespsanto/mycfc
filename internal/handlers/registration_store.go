@@ -37,7 +37,7 @@ func (s PostgresRegistrationStore) RegisterAdult(ctx context.Context, input Regi
 				return err
 			}
 		}
-		result = RegistrationResult{UserID: user.ID}
+		result = RegistrationResult{UserID: user.ID, CredentialVersion: user.CredentialVersion}
 		return nil
 	})
 	return result, err
