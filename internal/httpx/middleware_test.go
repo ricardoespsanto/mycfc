@@ -105,6 +105,44 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersProtectPasswordRecoveryResponses(t *testing.T) {
+	handler := SecurityHeadersMiddleware(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, tc := range []struct {
+		path, referrer string
+	}{
+		{path: "/recuperar-palavra-passe", referrer: "strict-origin-when-cross-origin"},
+		{path: "/recuperar-palavra-passe/repor?token=secret", referrer: "no-referrer"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if got := response.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s Cache-Control = %q", tc.path, got)
+		}
+		if got := response.Header().Get("Referrer-Policy"); got != tc.referrer {
+			t.Errorf("%s Referrer-Policy = %q", tc.path, got)
+		}
+	}
+}
+
+func TestAccessLogDoesNotRecordPasswordRecoveryToken(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	handler := AccessLogMiddleware(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/recuperar-palavra-passe/repor?token=never-log-this", nil))
+
+	if !strings.Contains(logs.String(), `"path":"/recuperar-palavra-passe/repor"`) {
+		t.Fatalf("log does not contain safe path: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "never-log-this") || strings.Contains(logs.String(), "token=") {
+		t.Fatalf("recovery token leaked into access log: %s", logs.String())
+	}
+}
+
 func TestRecoveryMiddleware(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))

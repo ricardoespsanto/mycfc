@@ -40,12 +40,16 @@ type Login struct {
 }
 
 func (h Login) Get(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, http.StatusOK, "", r.URL.Query().Get("next"))
+	success := ""
+	if h.Sessions != nil {
+		success = h.Sessions.PopString(r.Context(), "login_flash")
+	}
+	h.render(w, r, http.StatusOK, "", r.URL.Query().Get("next"), success)
 }
 
 func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.render(w, r, http.StatusBadRequest, "", "")
+		h.render(w, r, http.StatusBadRequest, "", "", "")
 		return
 	}
 
@@ -54,7 +58,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	next := validation.SafeNext(r.PostForm.Get("next"))
 	if identifier == "" || password == "" {
 		h.wait(r.Context())
-		h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
+		h.render(w, r, http.StatusUnprocessableEntity, identifier, next, "")
 		return
 	}
 
@@ -69,14 +73,14 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		email, emailErr := validation.NormalizeEmail(identifier)
 		if emailErr != nil {
 			h.wait(r.Context())
-			h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
+			h.render(w, r, http.StatusUnprocessableEntity, identifier, next, "")
 			return
 		}
 		user, lookupErr := h.Users.GetActiveUserByEmail(r.Context(), &email)
 		err, userID, passwordHash = lookupErr, user.ID, user.PasswordHash
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		h.render(w, r, http.StatusInternalServerError, "", "")
+		h.render(w, r, http.StatusInternalServerError, "", "", "")
 		return
 	}
 
@@ -86,12 +90,12 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		h.wait(r.Context())
-		h.render(w, r, http.StatusUnprocessableEntity, identifier, next)
+		h.render(w, r, http.StatusUnprocessableEntity, identifier, next, "")
 		return
 	}
 
 	if err := h.Sessions.RenewToken(r.Context()); err != nil {
-		h.render(w, r, http.StatusInternalServerError, "", "")
+		h.render(w, r, http.StatusInternalServerError, "", "", "")
 		return
 	}
 	h.Sessions.Put(r.Context(), "user_id", userID.String())
@@ -102,7 +106,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, next, http.StatusSeeOther)
 }
 
-func (h Login) render(w http.ResponseWriter, r *http.Request, status int, email, next string) {
+func (h Login) render(w http.ResponseWriter, r *http.Request, status int, email, next, success string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	meta := h.PageMeta
@@ -113,6 +117,7 @@ func (h Login) render(w http.ResponseWriter, r *http.Request, status int, email,
 		Next:      validation.SafeNext(next),
 		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
 		Error:     loginError(status),
+		Success:   success,
 	}).Render(r.Context(), w)
 }
 

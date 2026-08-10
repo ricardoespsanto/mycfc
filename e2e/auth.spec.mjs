@@ -77,6 +77,44 @@ test.describe('authentication', () => {
     await context.close();
   });
 
+  test('requests password recovery and handles invalid reset links accessibly', async ({ page, browser }) => {
+    await page.goto('/login');
+    const recoveryLink = page.getByRole('link', { name: 'Recuperar palavra-passe' });
+    await expect(recoveryLink).toHaveAttribute('href', '/recuperar-palavra-passe');
+    await recoveryLink.click();
+
+    await expect(page.getByRole('heading', { name: 'Recuperar palavra-passe' })).toBeVisible();
+    const identifier = page.getByLabel('Correio eletrónico');
+    await identifier.focus();
+    await expect(identifier).toBeFocused();
+    await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+    await identifier.fill('unknown-recovery@example.test');
+    await page.getByRole('button', { name: 'Enviar instruções' }).click();
+    await expect(page.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
+    await expect(page.getByText(/Se os dados corresponderem a uma conta adulta elegível/)).toBeVisible();
+    await expect(page.getByText('unknown-recovery@example.test')).toHaveCount(0);
+    await expectNoSeriousAxeViolations(page);
+
+    const invalidResponse = await page.goto('/recuperar-palavra-passe/repor?token=e2e-invalid-token');
+    expect(invalidResponse?.status()).toBe(422);
+    expect(invalidResponse?.headers()['cache-control']).toContain('no-store');
+    expect(invalidResponse?.headers()['referrer-policy']).toBe('no-referrer');
+    await expect(page.getByRole('heading', { name: 'Este link já não está disponível' })).toBeVisible();
+    await expect(page.getByText('e2e-invalid-token')).toHaveCount(0);
+    await expect(page.locator('a[href^="http"]')).toHaveCount(0);
+    await expectNoSeriousAxeViolations(page);
+
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const noJavaScriptPage = await context.newPage();
+    await noJavaScriptPage.goto('/recuperar-palavra-passe');
+    await noJavaScriptPage.getByLabel('Correio eletrónico').fill('another-unknown@example.test');
+    await noJavaScriptPage.getByRole('button', { name: 'Enviar instruções' }).click();
+    await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
+    await context.close();
+  });
+
   test('registers a member, reaches the today view, and has no serious accessibility violations', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto('/registo');
