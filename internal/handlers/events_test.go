@@ -71,6 +71,30 @@ func TestCanAuthorEventRespectsCoachScope(t *testing.T) {
 	}
 }
 
+func TestSameUUIDSetIgnoresOrderAndRejectsDifferences(t *testing.T) {
+	one, two, three := uuid.New(), uuid.New(), uuid.New()
+	if !sameUUIDSet([]uuid.UUID{one, two}, []uuid.UUID{two, one}) {
+		t.Fatal("equal audience sets with different order were rejected")
+	}
+	if sameUUIDSet([]uuid.UUID{one, two}, []uuid.UUID{one, three}) || sameUUIDSet([]uuid.UUID{one}, []uuid.UUID{one, two}) {
+		t.Fatal("different audience sets were accepted")
+	}
+}
+
+func TestEventCapacityParsesOptionalPositiveInteger(t *testing.T) {
+	if value, ok := eventCapacity(""); !ok || value != nil {
+		t.Fatalf("empty capacity = %v, %t", value, ok)
+	}
+	if value, ok := eventCapacity("12"); !ok || value == nil || *value != 12 {
+		t.Fatalf("capacity = %v, %t", value, ok)
+	}
+	for _, value := range []string{"0", "-1", "1.5", "invalid"} {
+		if _, ok := eventCapacity(value); ok {
+			t.Errorf("eventCapacity(%q) accepted", value)
+		}
+	}
+}
+
 func TestEventStatusText(t *testing.T) {
 	for input, want := range map[string]string{"Going": "Vou", "NotGoing": "Não vou", "Waitlisted": "Em lista de espera", "anything": "Pendente"} {
 		if got := eventStatusText(input); got != want {
@@ -97,7 +121,7 @@ func TestEventResponsesPageURL(t *testing.T) {
 func TestAdminDetailPagePaginatesResponses(t *testing.T) {
 	eventID := uuid.MustParse("018f3d5e-8f1d-7f5b-b308-e5391f03e7de")
 	responses := make([]dbgen.ListEventResponsesForAdminRow, eventResponsesPageSize+1)
-	page := (Events{Location: time.UTC}).adminDetailPage(dbgen.Event{ID: eventID}, responses, 1)
+	page := (Events{Location: time.UTC}).adminDetailPage(dbgen.GetEventDetailForAdminRow{ID: eventID}, responses, 1)
 	if got, want := len(page.Responses), eventResponsesPageSize; got != want {
 		t.Errorf("response count = %d, want %d", got, want)
 	}
@@ -108,7 +132,7 @@ func TestAdminDetailPagePaginatesResponses(t *testing.T) {
 		t.Errorf("previous URL = %q, want empty", page.ResponsesPreviousURL)
 	}
 
-	page = (Events{Location: time.UTC}).adminDetailPage(dbgen.Event{ID: eventID}, responses[:1], 2)
+	page = (Events{Location: time.UTC}).adminDetailPage(dbgen.GetEventDetailForAdminRow{ID: eventID}, responses[:1], 2)
 	if got, want := page.ResponsesPreviousURL, "/admin/eventos/018f3d5e-8f1d-7f5b-b308-e5391f03e7de?response_page=1"; got != want {
 		t.Errorf("previous URL = %q, want %q", got, want)
 	}

@@ -3,7 +3,7 @@ package pages
 import "fmt"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
-type TodayEvent struct { ID, Title, When string }
+type TodayEvent struct { ID, Title, When, CancellationReason string; Cancelled bool }
 type TodayDependent struct { ID, Name string; HasAccess bool }
 type TodayOperation struct { Label, Detail string }
 type TodayShortcut struct { Label, Detail, Path string }
@@ -44,7 +44,14 @@ templ todayContent(page TodayPage) {
 		if len(page.Events) > 0 {
 			<ul class="today-list">
 				for _, event := range page.Events {
-					<li><span>{ event.When }</span><a href={ todayEventPath(page, event.ID) }>{ event.Title }</a></li>
+					<li><span>{ event.When }</span><a href={ todayEventPath(page, event.ID) }>{ event.Title }</a>
+						if event.Cancelled {
+							@components.Badge("Cancelado", "error")
+						}
+						if event.CancellationReason != "" {
+							<small>{ event.CancellationReason }</small>
+						}
+					</li>
 				}
 			</ul>
 		}

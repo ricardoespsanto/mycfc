@@ -212,8 +212,8 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for i, event := range events {
-		page.Events[i] = pages.TodayEvent{ID: event.ID.String(), Title: event.Title, When: event.StartsAt.Time.In(h.location()).Format("15:04") + " - " + event.EndsAt.Time.In(h.location()).Format("15:04")}
-		if page.NextEvent == nil && event.EndsAt.Time.After(now) {
+		page.Events[i] = pages.TodayEvent{ID: event.ID.String(), Title: event.Title, When: event.StartsAt.Time.In(h.location()).Format("15:04") + " - " + event.EndsAt.Time.In(h.location()).Format("15:04"), Cancelled: event.Status == "CANCELLED", CancellationReason: stringValue(event.CancellationReason)}
+		if page.NextEvent == nil && event.Status != "CANCELLED" && event.EndsAt.Time.After(now) {
 			page.NextEvent = &page.Events[i]
 		}
 	}
@@ -944,13 +944,21 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 	}
 	items := make([]agendaItem, 0, len(events)+6)
 	for _, event := range events {
+		detail := h.formatAgendaRange(event.StartsAt.Time, event.EndsAt.Time)
+		kind := eventTypeLabel(event.EventType)
+		if event.Status == "CANCELLED" {
+			kind = "Cancelado"
+			if event.CancellationReason != nil {
+				detail += " · " + *event.CancellationReason
+			}
+		}
 		items = append(items, agendaItem{
 			startsAt: event.StartsAt.Time,
 			vm: DashboardAgendaItemVM{
 				Title:  event.Title,
-				Detail: h.formatAgendaRange(event.StartsAt.Time, event.EndsAt.Time),
+				Detail: detail,
 				URL:    "/events/" + event.ID.String(),
-				Kind:   eventTypeLabel(event.EventType),
+				Kind:   kind,
 			},
 		})
 	}

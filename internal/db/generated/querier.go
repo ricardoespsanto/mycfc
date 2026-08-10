@@ -18,6 +18,7 @@ type Querier interface {
 	AddMembershipModality(ctx context.Context, arg AddMembershipModalityParams) error
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)
+	CancelEvent(ctx context.Context, arg CancelEventParams) (Event, error)
 	CancelMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CancelUndeliverableEmailOutbox(ctx context.Context, cancelledAt pgtype.Timestamptz) (int64, error)
 	CheckInEventResponse(ctx context.Context, arg CheckInEventResponseParams) (int64, error)
@@ -56,6 +57,8 @@ type Querier interface {
 	CreateUserMembership(ctx context.Context, arg CreateUserMembershipParams) (UserMembership, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error
 	DecideActivityMatch(ctx context.Context, arg DecideActivityMatchParams) (TrainingSessionActivityMatch, error)
+	DeleteEventProgrammeAudiences(ctx context.Context, eventID uuid.UUID) error
+	DeleteEventTeamAudiences(ctx context.Context, eventID uuid.UUID) error
 	DisconnectActivityConnection(ctx context.Context, arg DisconnectActivityConnectionParams) (DisconnectActivityConnectionRow, error)
 	EndCurrentSeasonMembership(ctx context.Context, arg EndCurrentSeasonMembershipParams) (int64, error)
 	EnsureMemberProfile(ctx context.Context, userID uuid.UUID) error
@@ -77,8 +80,9 @@ type Querier interface {
 	GetCurrentSeason(ctx context.Context) (Season, error)
 	GetEmailVerificationToken(ctx context.Context, id uuid.UUID) (EmailVerificationToken, error)
 	GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment, error)
-	GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Event, error)
+	GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (GetEventDetailForAdminRow, error)
 	GetEventDetailForMember(ctx context.Context, arg GetEventDetailForMemberParams) (GetEventDetailForMemberRow, error)
+	GetEventForEdit(ctx context.Context, id uuid.UUID) (GetEventForEditRow, error)
 	GetEventForResponse(ctx context.Context, id uuid.UUID) (Event, error)
 	GetEventResponse(ctx context.Context, arg GetEventResponseParams) (GetEventResponseRow, error)
 	GetMemberAvatar(ctx context.Context, arg GetMemberAvatarParams) (GetMemberAvatarRow, error)
@@ -116,7 +120,9 @@ type Querier interface {
 	ListDistanceLeaderboard(ctx context.Context, arg ListDistanceLeaderboardParams) ([]ListDistanceLeaderboardRow, error)
 	ListEquipmentAuditEvents(ctx context.Context, arg ListEquipmentAuditEventsParams) ([]ListEquipmentAuditEventsRow, error)
 	ListEquipmentForAdmin(ctx context.Context, arg ListEquipmentForAdminParams) ([]Equipment, error)
+	ListEventProgrammeAudienceIDs(ctx context.Context, eventID uuid.UUID) ([]uuid.UUID, error)
 	ListEventResponsesForAdmin(ctx context.Context, arg ListEventResponsesForAdminParams) ([]ListEventResponsesForAdminRow, error)
+	ListEventTeamAudienceIDs(ctx context.Context, eventID uuid.UUID) ([]uuid.UUID, error)
 	ListEventsForAdmin(ctx context.Context, arg ListEventsForAdminParams) ([]ListEventsForAdminRow, error)
 	ListEventsForCoach(ctx context.Context, arg ListEventsForCoachParams) ([]ListEventsForCoachRow, error)
 	ListEventsForMember(ctx context.Context, arg ListEventsForMemberParams) ([]ListEventsForMemberRow, error)
@@ -163,6 +169,7 @@ type Querier interface {
 	UpdateActivityConnectionCredentials(ctx context.Context, arg UpdateActivityConnectionCredentialsParams) (ActivityConnection, error)
 	UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error)
 	UpdateEquipmentWithAudit(ctx context.Context, arg UpdateEquipmentWithAuditParams) (UpdateEquipmentWithAuditRow, error)
+	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
 	UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIdentityParams) (pgtype.Timestamptz, error)
 	UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfileParams) (MemberProfile, error)
 	UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMemberProfilePhotoParams) (pgtype.Timestamptz, error)

@@ -40,9 +40,58 @@ func (q *Queries) AddEventTeamAudience(ctx context.Context, arg AddEventTeamAudi
 	return err
 }
 
+const cancelEvent = `-- name: CancelEvent :one
+UPDATE events
+SET status = 'CANCELLED', cancelled_at = $1, cancelled_by_id = $2,
+    cancellation_reason = $3, updated_at = clock_timestamp()
+WHERE id = $4
+  AND status = 'ACTIVE'
+  AND starts_at > $1
+  AND updated_at = $5
+RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+`
+
+type CancelEventParams struct {
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	ID                 uuid.UUID          `json:"id"`
+	ExpectedUpdatedAt  pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+func (q *Queries) CancelEvent(ctx context.Context, arg CancelEventParams) (Event, error) {
+	row := q.db.QueryRow(ctx, cancelEvent,
+		arg.CancelledAt,
+		arg.CancelledByID,
+		arg.CancellationReason,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i Event
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.EventType,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ResponseDeadline,
+		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const checkInEventResponse = `-- name: CheckInEventResponse :execrows
-UPDATE event_responses SET checked_in_at = now(), checked_in_by_id = $1
-WHERE event_id = $2 AND user_id = $3 AND status = 'Going' AND checked_in_at IS NULL
+UPDATE event_responses r SET checked_in_at = now(), checked_in_by_id = $1
+WHERE r.event_id = $2 AND r.user_id = $3 AND r.status = 'Going' AND r.checked_in_at IS NULL
+  AND EXISTS (SELECT 1 FROM events e WHERE e.id = r.event_id AND e.status = 'ACTIVE')
 `
 
 type CheckInEventResponseParams struct {
@@ -60,8 +109,9 @@ func (q *Queries) CheckInEventResponse(ctx context.Context, arg CheckInEventResp
 }
 
 const confirmWaitlistedResponse = `-- name: ConfirmWaitlistedResponse :execrows
-UPDATE event_responses SET status = 'Going', responded_at = now(), responded_by_id = $1
-WHERE event_id = $2 AND user_id = $3 AND status = 'Waitlisted'
+UPDATE event_responses r SET status = 'Going', responded_at = now(), responded_by_id = $1
+WHERE r.event_id = $2 AND r.user_id = $3 AND r.status = 'Waitlisted'
+  AND EXISTS (SELECT 1 FROM events e WHERE e.id = r.event_id AND e.status = 'ACTIVE')
 `
 
 type ConfirmWaitlistedResponseParams struct {
@@ -92,7 +142,7 @@ func (q *Queries) CountGoingEventResponses(ctx context.Context, eventID uuid.UUI
 const createEvent = `-- name: CreateEvent :one
 INSERT INTO events (title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
+RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
 `
 
 type CreateEventParams struct {
@@ -127,6 +177,10 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.EndsAt,
 		&i.ResponseDeadline,
 		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -134,14 +188,55 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 	return i, err
 }
 
-const getEventDetailForAdmin = `-- name: GetEventDetailForAdmin :one
-SELECT id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
-FROM events WHERE id = $1
+const deleteEventProgrammeAudiences = `-- name: DeleteEventProgrammeAudiences :exec
+DELETE FROM event_audiences WHERE event_id = $1
 `
 
-func (q *Queries) GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Event, error) {
+func (q *Queries) DeleteEventProgrammeAudiences(ctx context.Context, eventID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteEventProgrammeAudiences, eventID)
+	return err
+}
+
+const deleteEventTeamAudiences = `-- name: DeleteEventTeamAudiences :exec
+DELETE FROM event_team_audiences WHERE event_id = $1
+`
+
+func (q *Queries) DeleteEventTeamAudiences(ctx context.Context, eventID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteEventTeamAudiences, eventID)
+	return err
+}
+
+const getEventDetailForAdmin = `-- name: GetEventDetailForAdmin :one
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+       e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, canceller.name AS cancelled_by_name,
+       e.created_by_id, e.created_at, e.updated_at
+FROM events e
+LEFT JOIN users canceller ON canceller.id = e.cancelled_by_id
+WHERE e.id = $1
+`
+
+type GetEventDetailForAdminRow struct {
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CancelledByName    *string            `json:"cancelled_by_name"`
+	CreatedByID        uuid.UUID          `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (GetEventDetailForAdminRow, error) {
 	row := q.db.QueryRow(ctx, getEventDetailForAdmin, id)
-	var i Event
+	var i GetEventDetailForAdminRow
 	err := row.Scan(
 		&i.ID,
 		&i.Title,
@@ -151,6 +246,11 @@ func (q *Queries) GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Eve
 		&i.EndsAt,
 		&i.ResponseDeadline,
 		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CancelledByName,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -159,7 +259,7 @@ func (q *Queries) GetEventDetailForAdmin(ctx context.Context, id uuid.UUID) (Eve
 }
 
 const getEventDetailForMember = `-- name: GetEventDetailForMember :one
-SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = $1
@@ -187,15 +287,19 @@ type GetEventDetailForMemberParams struct {
 }
 
 type GetEventDetailForMemberRow struct {
-	ID               uuid.UUID          `json:"id"`
-	Title            string             `json:"title"`
-	Description      string             `json:"description"`
-	EventType        string             `json:"event_type"`
-	StartsAt         pgtype.Timestamptz `json:"starts_at"`
-	EndsAt           pgtype.Timestamptz `json:"ends_at"`
-	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
-	Capacity         *int32             `json:"capacity"`
-	ResponseStatus   interface{}        `json:"response_status"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	ResponseStatus     interface{}        `json:"response_status"`
 }
 
 func (q *Queries) GetEventDetailForMember(ctx context.Context, arg GetEventDetailForMemberParams) (GetEventDetailForMemberRow, error) {
@@ -210,14 +314,75 @@ func (q *Queries) GetEventDetailForMember(ctx context.Context, arg GetEventDetai
 		&i.EndsAt,
 		&i.ResponseDeadline,
 		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
 		&i.ResponseStatus,
 	)
 	return i, err
 }
 
+const getEventForEdit = `-- name: GetEventForEdit :one
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+       e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, e.created_by_id, e.created_at, e.updated_at,
+       EXISTS (SELECT 1 FROM event_responses r WHERE r.event_id = e.id) AS has_responses,
+       EXISTS (SELECT 1 FROM competition_documents d WHERE d.event_id = e.id) AS has_document,
+       (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
+FROM events e
+WHERE e.id = $1
+`
+
+type GetEventForEditRow struct {
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CreatedByID        uuid.UUID          `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	HasResponses       bool               `json:"has_responses"`
+	HasDocument        bool               `json:"has_document"`
+	GoingCount         int64              `json:"going_count"`
+}
+
+func (q *Queries) GetEventForEdit(ctx context.Context, id uuid.UUID) (GetEventForEditRow, error) {
+	row := q.db.QueryRow(ctx, getEventForEdit, id)
+	var i GetEventForEditRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.EventType,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ResponseDeadline,
+		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HasResponses,
+		&i.HasDocument,
+		&i.GoingCount,
+	)
+	return i, err
+}
+
 const getEventForResponse = `-- name: GetEventForResponse :one
-SELECT id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, created_by_id, created_at, updated_at
-FROM events WHERE id = $1 FOR UPDATE
+SELECT id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+FROM events WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE
 `
 
 func (q *Queries) GetEventForResponse(ctx context.Context, id uuid.UUID) (Event, error) {
@@ -232,6 +397,10 @@ func (q *Queries) GetEventForResponse(ctx context.Context, id uuid.UUID) (Event,
 		&i.EndsAt,
 		&i.ResponseDeadline,
 		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -275,7 +444,7 @@ func (q *Queries) GetEventResponse(ctx context.Context, arg GetEventResponsePara
 }
 
 const getRespondableEvent = `-- name: GetRespondableEvent :one
-SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.created_by_id, e.created_at, e.updated_at
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, e.created_by_id, e.created_at, e.updated_at
 FROM events e
 JOIN users subject ON subject.id = $1 AND subject.is_active
 WHERE e.id = $2
@@ -313,11 +482,39 @@ func (q *Queries) GetRespondableEvent(ctx context.Context, arg GetRespondableEve
 		&i.EndsAt,
 		&i.ResponseDeadline,
 		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listEventProgrammeAudienceIDs = `-- name: ListEventProgrammeAudienceIDs :many
+SELECT programme_id FROM event_audiences WHERE event_id = $1 ORDER BY programme_id
+`
+
+func (q *Queries) ListEventProgrammeAudienceIDs(ctx context.Context, eventID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listEventProgrammeAudienceIDs, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var programme_id uuid.UUID
+		if err := rows.Scan(&programme_id); err != nil {
+			return nil, err
+		}
+		items = append(items, programme_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEventResponsesForAdmin = `-- name: ListEventResponsesForAdmin :many
@@ -371,8 +568,32 @@ func (q *Queries) ListEventResponsesForAdmin(ctx context.Context, arg ListEventR
 	return items, nil
 }
 
+const listEventTeamAudienceIDs = `-- name: ListEventTeamAudienceIDs :many
+SELECT team_id FROM event_team_audiences WHERE event_id = $1 ORDER BY team_id
+`
+
+func (q *Queries) ListEventTeamAudienceIDs(ctx context.Context, eventID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listEventTeamAudienceIDs, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var team_id uuid.UUID
+		if err := rows.Scan(&team_id); err != nil {
+			return nil, err
+		}
+		items = append(items, team_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEventsForAdmin = `-- name: ListEventsForAdmin :many
-SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancellation_reason,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 ORDER BY e.starts_at DESC, e.id
@@ -386,14 +607,16 @@ type ListEventsForAdminParams struct {
 }
 
 type ListEventsForAdminRow struct {
-	ID               uuid.UUID          `json:"id"`
-	Title            string             `json:"title"`
-	EventType        string             `json:"event_type"`
-	StartsAt         pgtype.Timestamptz `json:"starts_at"`
-	EndsAt           pgtype.Timestamptz `json:"ends_at"`
-	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
-	Capacity         *int32             `json:"capacity"`
-	GoingCount       int64              `json:"going_count"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	GoingCount         int64              `json:"going_count"`
 }
 
 func (q *Queries) ListEventsForAdmin(ctx context.Context, arg ListEventsForAdminParams) ([]ListEventsForAdminRow, error) {
@@ -413,6 +636,8 @@ func (q *Queries) ListEventsForAdmin(ctx context.Context, arg ListEventsForAdmin
 			&i.EndsAt,
 			&i.ResponseDeadline,
 			&i.Capacity,
+			&i.Status,
+			&i.CancellationReason,
 			&i.GoingCount,
 		); err != nil {
 			return nil, err
@@ -426,7 +651,7 @@ func (q *Queries) ListEventsForAdmin(ctx context.Context, arg ListEventsForAdmin
 }
 
 const listEventsForCoach = `-- name: ListEventsForCoach :many
-SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancellation_reason,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 WHERE (EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id) OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id))
@@ -454,14 +679,16 @@ type ListEventsForCoachParams struct {
 }
 
 type ListEventsForCoachRow struct {
-	ID               uuid.UUID          `json:"id"`
-	Title            string             `json:"title"`
-	EventType        string             `json:"event_type"`
-	StartsAt         pgtype.Timestamptz `json:"starts_at"`
-	EndsAt           pgtype.Timestamptz `json:"ends_at"`
-	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
-	Capacity         *int32             `json:"capacity"`
-	GoingCount       int64              `json:"going_count"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	GoingCount         int64              `json:"going_count"`
 }
 
 func (q *Queries) ListEventsForCoach(ctx context.Context, arg ListEventsForCoachParams) ([]ListEventsForCoachRow, error) {
@@ -481,6 +708,8 @@ func (q *Queries) ListEventsForCoach(ctx context.Context, arg ListEventsForCoach
 			&i.EndsAt,
 			&i.ResponseDeadline,
 			&i.Capacity,
+			&i.Status,
+			&i.CancellationReason,
 			&i.GoingCount,
 		); err != nil {
 			return nil, err
@@ -494,7 +723,7 @@ func (q *Queries) ListEventsForCoach(ctx context.Context, arg ListEventsForCoach
 }
 
 const listEventsForMember = `-- name: ListEventsForMember :many
-SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancellation_reason,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = $1
@@ -526,14 +755,16 @@ type ListEventsForMemberParams struct {
 }
 
 type ListEventsForMemberRow struct {
-	ID               uuid.UUID          `json:"id"`
-	Title            string             `json:"title"`
-	EventType        string             `json:"event_type"`
-	StartsAt         pgtype.Timestamptz `json:"starts_at"`
-	EndsAt           pgtype.Timestamptz `json:"ends_at"`
-	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
-	Capacity         *int32             `json:"capacity"`
-	ResponseStatus   interface{}        `json:"response_status"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	ResponseStatus     interface{}        `json:"response_status"`
 }
 
 func (q *Queries) ListEventsForMember(ctx context.Context, arg ListEventsForMemberParams) ([]ListEventsForMemberRow, error) {
@@ -553,6 +784,8 @@ func (q *Queries) ListEventsForMember(ctx context.Context, arg ListEventsForMemb
 			&i.EndsAt,
 			&i.ResponseDeadline,
 			&i.Capacity,
+			&i.Status,
+			&i.CancellationReason,
 			&i.ResponseStatus,
 		); err != nil {
 			return nil, err
@@ -566,7 +799,7 @@ func (q *Queries) ListEventsForMember(ctx context.Context, arg ListEventsForMemb
 }
 
 const listEventsForToday = `-- name: ListEventsForToday :many
-SELECT e.id, e.title, e.starts_at, e.ends_at
+SELECT e.id, e.title, e.starts_at, e.ends_at, e.status, e.cancellation_reason
 FROM events e
 WHERE e.starts_at < $1
   AND e.ends_at >= $2
@@ -623,10 +856,12 @@ type ListEventsForTodayParams struct {
 }
 
 type ListEventsForTodayRow struct {
-	ID       uuid.UUID          `json:"id"`
-	Title    string             `json:"title"`
-	StartsAt pgtype.Timestamptz `json:"starts_at"`
-	EndsAt   pgtype.Timestamptz `json:"ends_at"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
 }
 
 func (q *Queries) ListEventsForToday(ctx context.Context, arg ListEventsForTodayParams) ([]ListEventsForTodayRow, error) {
@@ -648,6 +883,8 @@ func (q *Queries) ListEventsForToday(ctx context.Context, arg ListEventsForToday
 			&i.Title,
 			&i.StartsAt,
 			&i.EndsAt,
+			&i.Status,
+			&i.CancellationReason,
 		); err != nil {
 			return nil, err
 		}
@@ -741,4 +978,68 @@ func (q *Queries) SaveEventResponse(ctx context.Context, arg SaveEventResponsePa
 		arg.RespondedByID,
 	)
 	return err
+}
+
+const updateEvent = `-- name: UpdateEvent :one
+UPDATE events e
+SET title = $1, description = $2, event_type = $3,
+    starts_at = $4, ends_at = $5, response_deadline = $6,
+    capacity = $7, updated_at = clock_timestamp()
+WHERE e.id = $8
+  AND e.status = 'ACTIVE'
+  AND e.starts_at > $9
+  AND e.updated_at = $10
+  AND ($7::integer IS NULL OR $7::integer >= (SELECT count(*) FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going'))
+  AND ($3::text = 'COMPETITION' OR NOT EXISTS (SELECT 1 FROM competition_documents d WHERE d.event_id = e.id))
+  AND (NOT $11::boolean OR NOT EXISTS (SELECT 1 FROM event_responses r WHERE r.event_id = e.id))
+RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+`
+
+type UpdateEventParams struct {
+	Title             string             `json:"title"`
+	Description       string             `json:"description"`
+	EventType         string             `json:"event_type"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline  pgtype.Timestamptz `json:"response_deadline"`
+	Capacity          *int32             `json:"capacity"`
+	ID                uuid.UUID          `json:"id"`
+	AsOf              pgtype.Timestamptz `json:"as_of"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+	AudienceChanged   bool               `json:"audience_changed"`
+}
+
+func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error) {
+	row := q.db.QueryRow(ctx, updateEvent,
+		arg.Title,
+		arg.Description,
+		arg.EventType,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.ResponseDeadline,
+		arg.Capacity,
+		arg.ID,
+		arg.AsOf,
+		arg.ExpectedUpdatedAt,
+		arg.AudienceChanged,
+	)
+	var i Event
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.EventType,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ResponseDeadline,
+		&i.Capacity,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

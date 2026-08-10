@@ -606,6 +606,8 @@ test.describe('authentication', () => {
     test.setTimeout(240000);
     const waitlistedName = `Lista de espera E2E ${Date.now()}`;
     const futureTitle = `Evento com lotação E2E ${Date.now()}`;
+    const editedDescription = 'Evento editado antes das respostas, mantendo o documento oficial.';
+    const cancellationReason = 'Cancelado pelo teste de ciclo de vida E2E.';
     const pastTitle = `Evento com presença E2E ${Date.now()}`;
     const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const futureEnd = new Date(futureStart.getTime() + 2 * 60 * 60 * 1000);
@@ -663,6 +665,13 @@ test.describe('authentication', () => {
     await expect(page.getByRole('status')).toHaveText('Evento criado.');
     await page.getByRole('link', { name: futureTitle, exact: true }).click();
     await expect(page.getByRole('navigation', { name: 'Localização atual' }).getByRole('link', { name: 'Eventos' })).toHaveAttribute('href', '/admin/eventos');
+    const futureAdminEventURL = page.url();
+    const futureMemberEventURL = futureAdminEventURL.replace('/admin/eventos/', '/events/');
+    await page.getByRole('link', { name: 'Editar evento', exact: true }).click();
+    await page.locator('#event-description').fill(editedDescription);
+    await page.getByRole('button', { name: 'Guardar alterações' }).click();
+    await expect(page.getByRole('status')).toHaveText('Evento atualizado.');
+    await expect(page.getByText(editedDescription)).toBeVisible();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
@@ -702,6 +711,13 @@ test.describe('authentication', () => {
     await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Confirmar vaga' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Vou');
+    await page.getByRole('link', { name: 'Editar evento', exact: true }).click();
+    await page.locator('#event-cancellation-reason').fill(cancellationReason);
+    await page.locator('#confirm-event-cancellation').check();
+    await page.getByRole('button', { name: 'Cancelar evento' }).click();
+    await expect(page.locator('.status-message')).toHaveText('Evento cancelado.');
+    await expect(page.getByText('Cancelado', { exact: true })).toBeVisible();
+    await expect(page.getByText(cancellationReason)).toBeVisible();
 
     await page.goto('/admin/eventos');
     await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
@@ -721,6 +737,10 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(waitlistedEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto(futureMemberEventURL);
+    await expect(page.getByText('Cancelado', { exact: true })).toBeVisible();
+    await expect(page.getByText(cancellationReason)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Vou', exact: true })).toHaveCount(0);
     await page.goto(pastMemberEventURL ?? '/events');
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
 

@@ -604,3 +604,82 @@ func TestMemberProfileOptimisticUpdateAndImmutableAudit(t *testing.T) {
 		t.Fatal("member profile audit delete unexpectedly succeeded")
 	}
 }
+
+func TestEventEditAndCancellationPreserveResponsesAndRejectStaleWrites(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+
+	staffID, memberID, eventID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES
+		($1, 'Gestora de eventos', $2, 'hash', '1980-01-01'),
+		($3, 'Membro de eventos', $4, 'hash', '1990-01-01')`, staffID, "event-staff-"+uuid.NewString()+"@example.test", memberID, "event-member-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM events WHERE id = $1`, eventID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{staffID, memberID})
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, `INSERT INTO events (id, title, description, starts_at, ends_at, capacity, created_by_id) VALUES ($1, 'Evento original', '', $2, $3, 2, $4)`, eventID, now.Add(24*time.Hour), now.Add(26*time.Hour), staffID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO event_responses (event_id, user_id, status, responded_by_id) VALUES ($1, $2, 'Going', $2)`, eventID, memberID); err != nil {
+		t.Fatal(err)
+	}
+
+	queries := dbgen.New(pool)
+	current, err := queries.GetEventForEdit(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := queries.UpdateEvent(ctx, dbgen.UpdateEventParams{
+		Title: "Evento atualizado", Description: "Novo detalhe", EventType: "GENERAL",
+		StartsAt: pgtype.Timestamptz{Time: now.Add(25 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: now.Add(27 * time.Hour), Valid: true},
+		Capacity: int32PtrDB(1), ID: eventID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: current.UpdatedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Evento atualizado" || updated.Capacity == nil || *updated.Capacity != 1 {
+		t.Fatalf("updated event = %#v", updated)
+	}
+	if _, err := queries.UpdateEvent(ctx, dbgen.UpdateEventParams{Title: "Stale", Description: "", EventType: "GENERAL", StartsAt: updated.StartsAt, EndsAt: updated.EndsAt, Capacity: int32PtrDB(1), ID: eventID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: current.UpdatedAt}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale event update error = %v", err)
+	}
+	if _, err := queries.UpdateEvent(ctx, dbgen.UpdateEventParams{Title: "Lotação inválida", Description: "", EventType: "GENERAL", StartsAt: updated.StartsAt, EndsAt: updated.EndsAt, Capacity: int32PtrDB(0), ID: eventID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: updated.UpdatedAt}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("below-attendance capacity error = %v", err)
+	}
+
+	reason := "Condições meteorológicas adversas"
+	cancelled, err := queries.CancelEvent(ctx, dbgen.CancelEventParams{CancelledAt: pgtype.Timestamptz{Time: now, Valid: true}, CancelledByID: &staffID, CancellationReason: &reason, ID: eventID, ExpectedUpdatedAt: updated.UpdatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "CANCELLED" || cancelled.CancellationReason == nil || *cancelled.CancellationReason != reason {
+		t.Fatalf("cancelled event = %#v", cancelled)
+	}
+	if _, err := queries.GetEventForResponse(ctx, eventID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("cancelled event response lock error = %v", err)
+	}
+	response, err := queries.GetEventResponse(ctx, dbgen.GetEventResponseParams{EventID: eventID, UserID: memberID})
+	if err != nil || response.Status != "Going" {
+		t.Fatalf("preserved response = %#v, err = %v", response, err)
+	}
+	visible, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: memberID, RowLimit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range visible {
+		if event.ID == eventID {
+			found = event.Status == "CANCELLED" && event.CancellationReason != nil && *event.CancellationReason == reason
+		}
+	}
+	if !found {
+		t.Fatalf("cancelled event missing from member list: %#v", visible)
+	}
+}

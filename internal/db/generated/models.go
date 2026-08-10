@@ -698,17 +698,21 @@ type EquipmentAuditEvent struct {
 }
 
 type Event struct {
-	ID               uuid.UUID          `json:"id"`
-	Title            string             `json:"title"`
-	Description      string             `json:"description"`
-	EventType        string             `json:"event_type"`
-	StartsAt         pgtype.Timestamptz `json:"starts_at"`
-	EndsAt           pgtype.Timestamptz `json:"ends_at"`
-	ResponseDeadline pgtype.Timestamptz `json:"response_deadline"`
-	Capacity         *int32             `json:"capacity"`
-	CreatedByID      uuid.UUID          `json:"created_by_id"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	EventType          string             `json:"event_type"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ResponseDeadline   pgtype.Timestamptz `json:"response_deadline"`
+	Capacity           *int32             `json:"capacity"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CreatedByID        uuid.UUID          `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type EventAudience struct {
