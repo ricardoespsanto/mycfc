@@ -169,6 +169,7 @@ func New(ctx context.Context) (*Application, error) {
 	verificationService := emailverification.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
+	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter()}
 	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, Logger: logger}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
@@ -200,7 +201,7 @@ func New(ctx context.Context) (*Application, error) {
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256, ImageURL: cfg.ConsentImageURL}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, auth, dashboard, repair, events, announcements, training, members, profile, news, foundation))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, members, profile, news, foundation))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

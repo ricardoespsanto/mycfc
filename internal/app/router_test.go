@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/google/uuid"
 )
 
 type routerPinger struct{ err error }
@@ -33,6 +36,8 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/admin/componentes", http.StatusNotFound, "", ""},
 		{http.MethodGet, "/login", http.StatusOK, "", ""},
 		{http.MethodGet, "/registo", http.StatusOK, "", ""},
+		{http.MethodGet, "/recuperar-palavra-passe", http.StatusOK, "", ""},
+		{http.MethodGet, "/recuperar-palavra-passe/repor", http.StatusUnprocessableEntity, "", ""},
 		{http.MethodGet, "/verificar-email", http.StatusUnprocessableEntity, "", ""},
 		{http.MethodPost, "/perfil/email-verificacao/reenviar", http.StatusSeeOther, "", "/login?next=%2Fperfil%2Femail-verificacao%2Freenviar"},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
@@ -57,6 +62,68 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 				t.Fatalf("Location = %q, want %q", response.Header().Get("Location"), tc.location)
 			}
 		})
+	}
+}
+
+func TestPasswordRecoveryRoutesRenderCSRFAndRejectCrossSitePosts(t *testing.T) {
+	sessions := scs.New()
+	auth := handlers.Auth{Sessions: sessions}
+	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
+	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})
+	handler := httpx.SecurityHeadersMiddleware(false)(csrfProtection(make([]byte, 32), handlers.System{})(router))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/recuperar-palavra-passe", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `name="gorilla.csrf.Token"`) {
+		t.Fatalf("GET response = %d %q", response.Code, response.Body.String())
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "https://mycfc.example/recuperar-palavra-passe", strings.NewReader("identifier=member%40example.test"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("POST response = %d, cache %q", response.Code, response.Header().Get("Cache-Control"))
+	}
+}
+
+type routerCurrentUserLookup struct{ id uuid.UUID }
+
+func (l routerCurrentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error) {
+	return dbgen.GetActiveAccountByIDRow{ID: l.id, IsActive: true}, nil
+}
+func (l routerCurrentUserLookup) GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error) {
+	return dbgen.GetActiveAccountByIDWithoutProfileRow{ID: l.id, IsActive: true}, nil
+}
+func (routerCurrentUserLookup) ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error) {
+	return nil, nil
+}
+func (routerCurrentUserLookup) ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error) {
+	return nil, nil
+}
+
+func TestPasswordRecoveryRoutesRedirectAuthenticatedAccounts(t *testing.T) {
+	sessions := scs.New()
+	id := uuid.New()
+	auth := handlers.Auth{Sessions: sessions, Users: routerCurrentUserLookup{id: id}}
+	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
+	router := sessions.LoadAndSave(auth.Load(newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})))
+
+	seed := httptest.NewRecorder()
+	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		sessions.Put(r.Context(), "user_id", id.String())
+	})).ServeHTTP(seed, httptest.NewRequest(http.MethodGet, "/", nil))
+	cookie := seed.Result().Cookies()[0]
+
+	for _, path := range []string{"/recuperar-palavra-passe", "/recuperar-palavra-passe/repor?token=opaque"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/dashboard" {
+			t.Fatalf("%s response = %d %q", path, response.Code, response.Header().Get("Location"))
+		}
 	}
 }
 
@@ -97,7 +164,7 @@ func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
-	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
 	response := httptest.NewRecorder()
@@ -123,5 +190,5 @@ func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Foundation{})))
 }

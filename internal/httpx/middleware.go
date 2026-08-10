@@ -150,6 +150,12 @@ func SecurityHeadersMiddleware(production bool) Middleware {
 			if !strings.HasPrefix(r.URL.Path, "/health/") {
 				w.Header().Set("X-Content-Type-Options", "nosniff")
 				w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+				if strings.HasPrefix(r.URL.Path, "/recuperar-palavra-passe") {
+					w.Header().Set("Cache-Control", "no-store")
+				}
+				if strings.HasPrefix(r.URL.Path, "/recuperar-palavra-passe/repor") {
+					w.Header().Set("Referrer-Policy", "no-referrer")
+				}
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")

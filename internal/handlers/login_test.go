@@ -41,7 +41,7 @@ func TestLoginGetRendersForm(t *testing.T) {
 		PageMeta: loginTestPageMeta(),
 	}
 	response := httptest.NewRecorder()
-	handler.Get(response, httptest.NewRequest(http.MethodGet, "/login?next=%2Fdashboard%2Fleisure", nil))
+	sessions.LoadAndSave(http.HandlerFunc(handler.Get)).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/login?next=%2Fdashboard%2Fleisure", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -54,6 +54,7 @@ func TestLoginGetRendersForm(t *testing.T) {
 		`name="next" value="/dashboard/leisure"`,
 		`autocomplete="username"`,
 		`autocomplete="current-password"`,
+		`href="/recuperar-palavra-passe">Recuperar palavra-passe</a>`,
 		`href="/registo">Criar conta MyCFC</a>`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
@@ -64,6 +65,41 @@ func TestLoginGetRendersForm(t *testing.T) {
 		if strings.Contains(response.Body.String(), forbidden) {
 			t.Errorf("authentication shell unexpectedly contains %q", forbidden)
 		}
+	}
+}
+
+func TestLoginShowsPasswordResetConfirmationOnce(t *testing.T) {
+	sessions := scs.New()
+	seedResponse := httptest.NewRecorder()
+	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		sessions.Put(r.Context(), "login_flash", "A palavra-passe foi alterada. Já pode iniciar sessão.")
+	})).ServeHTTP(seedResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+	seedCookies := seedResponse.Result().Cookies()
+	if len(seedCookies) == 0 {
+		t.Fatal("session cookie was not created")
+	}
+
+	handler := Login{Sessions: sessions, PageMeta: loginTestPageMeta()}
+	firstRequest := httptest.NewRequest(http.MethodGet, "/login", nil)
+	firstRequest.AddCookie(seedCookies[0])
+	firstResponse := httptest.NewRecorder()
+	sessions.LoadAndSave(http.HandlerFunc(handler.Get)).ServeHTTP(firstResponse, firstRequest)
+	if !strings.Contains(firstResponse.Body.String(), "A palavra-passe foi alterada. Já pode iniciar sessão.") {
+		t.Fatalf("first response = %q", firstResponse.Body.String())
+	}
+
+	secondRequest := httptest.NewRequest(http.MethodGet, "/login", nil)
+	flashCookie := seedCookies[0]
+	for _, cookie := range firstResponse.Result().Cookies() {
+		if cookie.Name == flashCookie.Name {
+			flashCookie = cookie
+		}
+	}
+	secondRequest.AddCookie(flashCookie)
+	secondResponse := httptest.NewRecorder()
+	sessions.LoadAndSave(http.HandlerFunc(handler.Get)).ServeHTTP(secondResponse, secondRequest)
+	if strings.Contains(secondResponse.Body.String(), "A palavra-passe foi alterada") {
+		t.Fatalf("flash was rendered more than once: %q", secondResponse.Body.String())
 	}
 }
 
