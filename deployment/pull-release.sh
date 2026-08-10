@@ -1,11 +1,22 @@
 #!/bin/sh
 set -eu
 
-env_file=/etc/mycfc/mycfc.env
+env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 compose_file="$deployment_dir/compose.yaml"
-lock_file=/run/mycfc-pull-release.lock
+state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
+runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+active_slot_file="$state_dir/active-slot"
+failed_digest_file="$state_dir/failed-release-digest"
+upstream_file="$state_dir/caddy-upstream.caddy"
+lock_file="$runtime_dir/mycfc-pull-release.lock"
 backup_file=
+route_backup=
+release_digest=
+candidate_slot=
+candidate_service=
+candidate_started=false
+route_switched=false
 release_updated=false
 
 log() {
@@ -13,30 +24,97 @@ log() {
 	logger -t mycfc-pull-release -- "$*"
 }
 
+write_state_value() {
+	target=$1
+	value=$2
+	temporary=$(mktemp "$state_dir/.state.XXXXXX")
+	printf '%s\n' "$value" >"$temporary"
+	chmod 0644 "$temporary"
+	mv "$temporary" "$target"
+}
+
+write_upstream() {
+	slot=$1
+	case "$slot" in
+		blue|green) target="app-$slot:8080" ;;
+		legacy) target='app:8080' ;;
+		*) log "invalid application slot: $slot"; return 1 ;;
+	esac
+	temporary=$(mktemp "$state_dir/.upstream.XXXXXX")
+	cat >"$temporary" <<EOF
+reverse_proxy $target {
+	health_uri /health/live
+	health_interval 10s
+	health_timeout 2s
+}
+EOF
+	chmod 0644 "$temporary"
+	mv "$temporary" "$upstream_file"
+}
+
+reload_caddy() {
+	docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy \
+		caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+check_caddy_path() {
+	path=$1
+	for attempt in $(seq 1 15); do
+		if docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy \
+			wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
+}
+
 rollback() {
 	status=$?
-	if [ "$release_updated" = true ]; then
-		log "deployment failed; restoring the previous release"
-		docker logs --tail 100 mycfc-production-app-1 >&2 2>/dev/null || true
-		cp "$backup_file" "$env_file"
-		docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate app || log "rollback compose update failed"
+	trap - EXIT HUP INT TERM
+	if [ "$route_switched" = true ] && [ -n "$route_backup" ] && [ -f "$route_backup" ]; then
+		log 'candidate failed after traffic switch; restoring the previous Caddy upstream'
+		temporary=$(mktemp "$state_dir/.upstream.XXXXXX")
+		cp "$route_backup" "$temporary"
+		chmod 0644 "$temporary"
+		mv "$temporary" "$upstream_file"
+		reload_caddy || log 'Caddy upstream rollback failed'
 	fi
+	if [ "$candidate_started" = true ] && [ -n "$candidate_slot" ]; then
+		docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
+			stop "app-$candidate_slot" >/dev/null 2>&1 || log 'candidate stop failed'
+	fi
+	if [ "$release_updated" = true ]; then
+		log 'deployment failed; restoring the previous release configuration'
+		if [ -n "$candidate_slot" ]; then
+			docker logs --tail 100 "mycfc-production-app-$candidate_slot-1" >&2 2>/dev/null || true
+		fi
+		cp "$backup_file" "$env_file"
+		if [ -n "$release_digest" ]; then
+			write_state_value "$failed_digest_file" "$release_digest"
+			log "quarantined failed release digest $release_digest"
+		fi
+	fi
+	rm -f "$route_backup"
 	exit "$status"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
-	log "must run as root"
+	log 'must run as root'
 	exit 1
 fi
 
 if [ ! -f "$env_file" ] || [ "$(stat -c '%u:%a' "$env_file")" != '0:600' ]; then
-	log "missing or insecure environment file"
+	log 'missing or insecure environment file'
 	exit 1
 fi
 
+mkdir -p "$state_dir"
+chmod 0755 "$state_dir"
+
 exec 9>"$lock_file"
 if ! flock -n 9; then
-	log "another release check is already running"
+	log 'another release check is already running'
 	exit 0
 fi
 
@@ -48,11 +126,25 @@ set +a
 : "${ECR_REPOSITORY_URL:?}"
 : "${MYCFC_DOMAIN:?}"
 
+if [ -f "$active_slot_file" ]; then
+	active_slot=$(cat "$active_slot_file")
+else
+	active_slot=legacy
+	write_state_value "$active_slot_file" "$active_slot"
+fi
+case "$active_slot" in
+	blue|green|legacy) ;;
+	*) log "invalid active application slot: $active_slot"; exit 1 ;;
+esac
+if [ ! -f "$upstream_file" ]; then
+	write_upstream "$active_slot"
+fi
+
 registry=${ECR_REPOSITORY_URL%%/*}
 repository_name=${ECR_REPOSITORY_URL#*/}
 # The systemd unit makes home directories inaccessible, so keep the temporary
 # ECR credential helper state under its writable runtime directory.
-export DOCKER_CONFIG=/run/mycfc-pull-release-docker
+export DOCKER_CONFIG="$runtime_dir/mycfc-pull-release-docker"
 mkdir -p "$DOCKER_CONFIG"
 ecr_password=$(aws ecr get-login-password --region "$AWS_REGION")
 printf '%s' "$ecr_password" | docker login --username AWS --password-stdin "$registry"
@@ -62,37 +154,51 @@ release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-/')
 release_tag=$(printf '%s\n' "$release_tags" | sort | tail -n 1)
 case "$release_tag" in
 	release-??????????????-????????????????????????????????????????) ;;
-	*) log "ECR has no valid release tag"; exit 1 ;;
+	*) log 'ECR has no valid release tag'; exit 1 ;;
 esac
+
+release_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
+case "$release_digest" in
+	sha256:*) ;;
+	*) log 'release has no valid digest'; exit 1 ;;
+esac
+if [ -f "$failed_digest_file" ] && [ "$(cat "$failed_digest_file")" = "$release_digest" ]; then
+	log "release $release_digest previously failed validation; waiting for a replacement release"
+	exit 0
+fi
 
 docker pull "$ECR_REPOSITORY_URL:$release_tag"
-
 image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ECR_REPOSITORY_URL:$release_tag")
-digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
-case "$digest" in
-	sha256:*) ;;
-	*) log "pulled production image has no digest"; exit 1 ;;
-esac
-
 case "$image" in
-	*"@$digest") ;;
-	*) log "pulled image digest does not match ECR release metadata"; exit 1 ;;
+	*"@$release_digest") ;;
+	*) log 'pulled image digest does not match ECR release metadata'; exit 1 ;;
 esac
 
-running_image=$(docker inspect --format '{{.Config.Image}}' mycfc-production-app-1 2>/dev/null || true)
-if [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
-	log "release $digest is already deployed"
+case "$active_slot" in
+	blue|green) active_container="mycfc-production-app-$active_slot-1" ;;
+	legacy) active_container='mycfc-production-app-1' ;;
+esac
+running_image=$(docker inspect --format '{{.Config.Image}}' "$active_container" 2>/dev/null || true)
+if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
+	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
 fi
 
 sha=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECR_REPOSITORY_URL:$release_tag")
 case "$sha" in
 	????????????????????????????????????????) ;;
-	*) log "release $digest has no valid git SHA label"; exit 1 ;;
+	*) log 'release has no valid git SHA label'; exit 1 ;;
 esac
 stamp=${release_tag#release-}
 stamp=${stamp%%-*}
 released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
+
+case "$active_slot" in
+	blue) candidate_slot=green ;;
+	green|legacy) candidate_slot=blue ;;
+esac
+candidate_service="app-$candidate_slot"
+candidate_container="mycfc-production-$candidate_service-1"
 
 backup_file="${env_file}.previous"
 cp "$env_file" "$backup_file"
@@ -103,14 +209,18 @@ trap rollback EXIT HUP INT TERM
 next_file=$(mktemp "${env_file}.next.XXXXXX")
 cp "$env_file" "$next_file"
 if ! grep -q '^APP_RELEASED_AT=' "$next_file"; then
-	printf '\nAPP_RELEASED_AT=\n' >> "$next_file"
+	printf '\nAPP_RELEASED_AT=\n' >>"$next_file"
 fi
 if ! grep -q '^RELEASE_REPOSITORY=' "$next_file"; then
-	printf 'RELEASE_REPOSITORY=ricardoespsanto/mycfc\n' >> "$next_file"
+	printf 'RELEASE_REPOSITORY=ricardoespsanto/mycfc\n' >>"$next_file"
 elif grep -q '^RELEASE_REPOSITORY=cfcoimbra/mycfc$' "$next_file"; then
-	sed -i 's|^RELEASE_REPOSITORY=cfcoimbra/mycfc$|RELEASE_REPOSITORY=ricardoespsanto/mycfc|' "$next_file"
+	updated_file=$(mktemp "${env_file}.updated.XXXXXX")
+	sed 's|^RELEASE_REPOSITORY=cfcoimbra/mycfc$|RELEASE_REPOSITORY=ricardoespsanto/mycfc|' "$next_file" >"$updated_file"
+	mv "$updated_file" "$next_file"
 fi
-sed -i "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file"
+updated_file=$(mktemp "${env_file}.updated.XXXXXX")
+sed "s|^MYCFC_IMAGE=.*|MYCFC_IMAGE=$image|; s|^APP_VERSION=.*|APP_VERSION=$release_tag|; s|^APP_RELEASED_AT=.*|APP_RELEASED_AT=$released_at|; s|^GIT_SHA=.*|GIT_SHA=$sha|" "$next_file" >"$updated_file"
+mv "$updated_file" "$next_file"
 chmod 600 "$next_file"
 chown root:root "$next_file"
 mv "$next_file" "$env_file"
@@ -120,49 +230,67 @@ export APP_RELEASED_AT="$released_at"
 export GIT_SHA="$sha"
 release_updated=true
 
-log "deploying SHA $sha with digest $digest"
-docker compose --env-file "$env_file" -f "$compose_file" pull app postgres cloudflared
-docker compose --env-file "$env_file" -f "$compose_file" build caddy
+log "preparing SHA $sha with digest $release_digest in the $candidate_slot slot"
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
-docker compose --env-file "$env_file" -f "$compose_file" up -d --force-recreate app
+docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
+	up -d --no-deps --force-recreate "$candidate_service"
+candidate_started=true
 
-app_ready=false
+candidate_ready=false
 for attempt in $(seq 1 30); do
-	app_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mycfc-production-app-1 2>/dev/null || true)
-	if [ -n "$app_ip" ] && curl -fsS -o /dev/null "http://$app_ip:8080/health/ready"; then
-		app_ready=true
+	candidate_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$candidate_container" 2>/dev/null || true)
+	if [ -n "$candidate_ip" ] && curl -fsS -o /dev/null "http://$candidate_ip:8080/health/ready"; then
+		candidate_ready=true
 		break
 	fi
 	sleep 2
 done
-if [ "$app_ready" != true ]; then
-	log "new app failed its readiness check"
+if [ "$candidate_ready" != true ]; then
+	log 'candidate failed its readiness check'
 	exit 1
 fi
 
-docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --force-recreate caddy cloudflared
+for path in /health/live /health/ready; do
+	if ! curl -fsS -o /dev/null "http://$candidate_ip:8080$path"; then
+		log "candidate check failed for $path"
+		exit 1
+	fi
+done
+login_html=$(curl -fsS "http://$candidate_ip:8080/login")
+asset_path=$(printf '%s\n' "$login_html" | sed -n 's#.*src="\(/assets/app-[0-9a-f]\{12\}\.js\)".*#\1#p')
+if [ -z "$asset_path" ]; then
+	log 'candidate login page did not reference a fingerprinted JavaScript asset'
+	exit 1
+fi
+if ! curl -fsS -o /dev/null "http://$candidate_ip:8080$asset_path"; then
+	log "candidate check failed for $asset_path"
+	exit 1
+fi
 
-asset_path=$(jq -r '."app.js"' "$deployment_dir/../ui/static/dist/manifest.json")
-for path in /health/ready /login "$asset_path"; do
-	# Caddy is private behind cloudflared. Validate the exact virtual host locally;
-	# Cloudflare can reject a request sourced from the host itself, so the public
-	# edge is checked by an external monitor rather than the release transaction.
-	check_passed=false
-	for attempt in $(seq 1 30); do
-		if docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
-			check_passed=true
-			break
-		fi
-		sleep 2
-	done
-	if [ "$check_passed" != true ]; then
-		log "release check failed for $path"
+route_backup=$(mktemp "$runtime_dir/mycfc-caddy-upstream.XXXXXX")
+cp "$upstream_file" "$route_backup"
+caddy_running=$(docker inspect --format '{{.State.Running}}' mycfc-production-caddy-1 2>/dev/null || true)
+write_upstream "$candidate_slot"
+route_switched=true
+if [ "$caddy_running" = true ]; then
+	reload_caddy
+else
+	docker compose --env-file "$env_file" -f "$compose_file" up -d --no-deps caddy
+fi
+
+for path in /health/live /health/ready /login "$asset_path"; do
+	if ! check_caddy_path "$path"; then
+		log "post-switch Caddy check failed for $path"
 		exit 1
 	fi
 done
 
+write_state_value "$active_slot_file" "$candidate_slot"
+rm -f "$failed_digest_file" "$route_backup"
+route_backup=
+route_switched=false
 release_updated=false
 trap - EXIT HUP INT TERM
-log "deployed SHA $sha with digest $digest"
+log "deployed SHA $sha with digest $release_digest in the $candidate_slot slot"

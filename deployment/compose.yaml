@@ -1,5 +1,38 @@
 name: mycfc-production
 
+x-app: &app
+  image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+  environment:
+    APP_ENV: production
+    APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
+    GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
+    APP_RELEASED_AT: ${APP_RELEASED_AT:-}
+    PORT: "8080"
+    AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
+    AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    S3_BUCKET_NAME: ${S3_BUCKET_NAME:?set S3_BUCKET_NAME in /etc/mycfc/mycfc.env}
+    GALLERY_URL: ${GALLERY_URL:?set GALLERY_URL in /etc/mycfc/mycfc.env}
+    CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:?set CONSENT_TERMS_VERSION in /etc/mycfc/mycfc.env}
+    CONSENT_TERMS_SHA256: ${CONSENT_TERMS_SHA256:?set CONSENT_TERMS_SHA256 in /etc/mycfc/mycfc.env}
+    CONSENT_TERMS_URL: ${CONSENT_TERMS_URL:?set CONSENT_TERMS_URL in /etc/mycfc/mycfc.env}
+    CONSENT_IMAGE_VERSION: ${CONSENT_IMAGE_VERSION:?set CONSENT_IMAGE_VERSION in /etc/mycfc/mycfc.env}
+    CONSENT_IMAGE_SHA256: ${CONSENT_IMAGE_SHA256:?set CONSENT_IMAGE_SHA256 in /etc/mycfc/mycfc.env}
+    CONSENT_IMAGE_URL: ${CONSENT_IMAGE_URL:?set CONSENT_IMAGE_URL in /etc/mycfc/mycfc.env}
+    CONSENT_MINOR_VERSION: ${CONSENT_MINOR_VERSION:?set CONSENT_MINOR_VERSION in /etc/mycfc/mycfc.env}
+    CONSENT_MINOR_SHA256: ${CONSENT_MINOR_SHA256:?set CONSENT_MINOR_SHA256 in /etc/mycfc/mycfc.env}
+    CONSENT_MINOR_URL: ${CONSENT_MINOR_URL:?set CONSENT_MINOR_URL in /etc/mycfc/mycfc.env}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+    TRUSTED_PROXY_CIDRS: 172.30.0.0/24
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks: [mycfc]
+  restart: unless-stopped
+  stop_grace_period: 30s
+
 services:
   postgres:
     image: postgres:16.9-alpine3.21
@@ -22,38 +55,13 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
-  app:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    environment:
-      APP_ENV: production
-      APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
-      GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
-      APP_RELEASED_AT: ${APP_RELEASED_AT:-}
-      PORT: "8080"
-      AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:?set S3_BUCKET_NAME in /etc/mycfc/mycfc.env}
-      GALLERY_URL: ${GALLERY_URL:?set GALLERY_URL in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:?set CONSENT_TERMS_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_SHA256: ${CONSENT_TERMS_SHA256:?set CONSENT_TERMS_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_TERMS_URL: ${CONSENT_TERMS_URL:?set CONSENT_TERMS_URL in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_VERSION: ${CONSENT_IMAGE_VERSION:?set CONSENT_IMAGE_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_SHA256: ${CONSENT_IMAGE_SHA256:?set CONSENT_IMAGE_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_IMAGE_URL: ${CONSENT_IMAGE_URL:?set CONSENT_IMAGE_URL in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_VERSION: ${CONSENT_MINOR_VERSION:?set CONSENT_MINOR_VERSION in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_SHA256: ${CONSENT_MINOR_SHA256:?set CONSENT_MINOR_SHA256 in /etc/mycfc/mycfc.env}
-      CONSENT_MINOR_URL: ${CONSENT_MINOR_URL:?set CONSENT_MINOR_URL in /etc/mycfc/mycfc.env}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
-      TRUSTED_PROXY_CIDRS: 172.30.0.0/24
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [mycfc]
-    restart: unless-stopped
-    stop_grace_period: 30s
+  app-blue:
+    <<: *app
+    profiles: [blue]
+
+  app-green:
+    <<: *app
+    profiles: [green]
 
   db-bootstrap:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
@@ -100,14 +108,12 @@ services:
       MYCFC_DOMAIN: ${MYCFC_DOMAIN:?set MYCFC_DOMAIN in /etc/mycfc/mycfc.env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/mycfc/deployment:/etc/mycfc/deployment:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      app:
-        condition: service_started
     networks: [mycfc]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://app:8080/health/ready"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header=Host:$${MYCFC_DOMAIN} http://127.0.0.1/health/ready"]
       interval: 10s
       timeout: 3s
       retries: 6

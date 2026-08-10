@@ -22,9 +22,7 @@ http://{$MYCFC_DOMAIN} {
 		}
 	}
 
-	reverse_proxy app:8080 {
-		health_uri /health/live
-		health_interval 10s
-		health_timeout 2s
-	}
+	# The release agent updates this single upstream and reloads Caddy only after
+	# the inactive application slot has passed its direct candidate checks.
+	import /etc/mycfc/deployment/caddy-upstream.caddy
 }
