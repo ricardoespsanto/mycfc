@@ -94,6 +94,15 @@ func TestSecurityHeaders(t *testing.T) {
 	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "upgrade-insecure-requests") {
 		t.Error("production CSP does not upgrade insecure requests")
 	}
+	csp := response.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"script-src 'self' https://challenges.cloudflare.com",
+		"frame-src https://challenges.cloudflare.com",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("production CSP does not allow Turnstile: missing %q", directive)
+		}
+	}
 }
 
 func TestRecoveryMiddleware(t *testing.T) {

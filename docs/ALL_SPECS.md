@@ -590,10 +590,10 @@ Referrer-Policy: strict-origin-when-cross-origin
 X-Frame-Options: DENY
 Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 Cross-Origin-Opener-Policy: same-origin
-Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self' https://www.googleapis.com; font-src 'self'; upgrade-insecure-requests
+Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'; upgrade-insecure-requests
 ```
 
-Local CSP omits `upgrade-insecure-requests`. No inline script or style is permitted; all JavaScript and CSS must be bundled files.
+Local CSP omits `upgrade-insecure-requests`. No inline script or style is permitted; all first-party JavaScript and CSS must be bundled files. Registration additionally permits Cloudflare Turnstile's script and challenge frame from `https://challenges.cloudflare.com`.
 
 ## 7. Session and CSRF behaviour
 
