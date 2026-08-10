@@ -6,8 +6,8 @@ import (
 )
 
 type TrainingChoice struct{ ID, Name string }
-type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM string }
-type ManagedTrainingSession struct{ Title, Description, When, Modality string }
+type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string; Cancelled bool }
+type ManagedTrainingSession struct{ ID, Title, Description, When, Modality, CancellationReason, CancelledAt, CancelledBy string; Cancelled, Editable bool }
 type ManagedTrainingPlan struct {
 	ID, Title, Description string
 	Sessions               []ManagedTrainingSession
@@ -17,8 +17,17 @@ type TrainingPlanForm struct {
 	Errors                                  validation.FieldErrors
 }
 type TrainingSessionForm struct {
-	PlanID, Title, Description, StartsAt, EndsAt, ModalityID string
+	ID, PlanID, Title, Description, StartsAt, EndsAt, ModalityID, ExpectedUpdatedAt string
+	Editing, PlanLocked bool
 	Errors                                                   validation.FieldErrors
+}
+type TrainingSessionEditPage struct {
+	Meta components.PageMeta
+	CSRFField templ.Component
+	SessionID, Conflict, CancellationReason string
+	CancellationErrors validation.FieldErrors
+	Form TrainingSessionForm
+	Plans, Modalities []TrainingChoice
 }
 type TrainingPage struct {
 	Meta                                         components.PageMeta
@@ -66,8 +75,13 @@ templ trainingContent(page TrainingPage) {
 								}
 							</p>
 							<p>{ session.Detail }</p>
+							if session.Cancelled {
+								<div class="callout callout--warning" role="status"><strong>Sessão cancelada</strong><p>{ session.CancellationReason }</p></div>
+							}
 						</div>
-						if session.Outcome != "" {
+						if session.Cancelled {
+							<div class="record-item__actions">@components.Badge("Cancelada", "error")</div>
+						} else if session.Outcome != "" {
 							<div class="record-item__actions">
 								@components.Badge(trainingOutcomeLabel(session.Outcome), trainingOutcomeTone(session.Outcome))
 								if session.Outcome == "COMPLETED" {
@@ -96,7 +110,7 @@ templ trainingContent(page TrainingPage) {
 									<select id={ "replacement-session-" + session.ID } name="replacement_session_id" required>
 										<option value="">Selecione</option>
 										for _, replacement := range page.Sessions {
-											if replacement.ID != session.ID {
+										if replacement.ID != session.ID && !replacement.Cancelled {
 												<option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
 											}
 										}
@@ -145,6 +159,15 @@ templ trainingAuthoring(page TrainingPage) {
 												}
 											</p>
 											<p>{ session.Description }</p>
+											if session.Cancelled {
+												<div class="callout callout--warning" role="status"><strong>Sessão cancelada</strong><p>{ session.CancellationReason }</p>
+													if session.CancelledAt != "" {
+														<small>Cancelada em { session.CancelledAt } por { session.CancelledBy }.</small>
+													}
+												</div>
+											} else if session.Editable {
+												<p><a class="action action--secondary" href={ templ.SafeURL("/admin/treinos/sessoes/" + session.ID + "/editar") }>Editar sessão</a></p>
+											}
 										</div>
 									}
 								</div>
@@ -217,6 +240,51 @@ templ trainingSessionForm(page TrainingPage) {
 			}
 		</form></div>
 	</details>
+}
+
+templ TrainingSessionEdit(page TrainingSessionEditPage) {
+	@components.Base(page.Meta, trainingSessionEditContent(page))
+}
+
+templ trainingSessionEditContent(page TrainingSessionEditPage) {
+	@components.PageHeader("Administração · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}})
+	@components.StatusMessage(page.Conflict, "error")
+	<section class="module">
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "state", Field: "training-session-edit-title"}, {Key: "plan_id", Field: "training-session-edit-plan"}, {Key: "title", Field: "training-session-edit-title"}, {Key: "description", Field: "training-session-edit-description"}, {Key: "starts_at", Field: "training-session-edit-start"}, {Key: "ends_at", Field: "training-session-edit-end"}, {Key: "modality_id", Field: "training-session-edit-modality"}}))
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID) }>@page.CSRFField
+			<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
+			@components.RequiredNote()
+			@components.FieldLabel("training-session-edit-plan", "Plano", true)
+			<select id="training-session-edit-plan" name="plan_id" required disabled?={ page.Form.PlanLocked }>
+				for _, item := range page.Plans {
+					<option value={ item.ID } selected?={ item.ID == page.Form.PlanID }>{ item.Name }</option>
+				}
+			</select>
+			if page.Form.PlanLocked {
+				<input type="hidden" name="plan_id" value={ page.Form.PlanID }/><p class="field-help">O plano não pode ser alterado depois do primeiro resultado.</p>
+			}
+			@components.FieldErrorMessage("plan_id", page.Form.Errors["plan_id"])
+			@components.FieldLabel("training-session-edit-title", "Título", true)<input id="training-session-edit-title" name="title" value={ page.Form.Title } required/>@components.FieldErrorMessage("title", page.Form.Errors["title"])
+			@components.FieldLabel("training-session-edit-description", "Descrição (opcional)", false)<textarea id="training-session-edit-description" name="description">{ page.Form.Description }</textarea>@components.FieldErrorMessage("description", page.Form.Errors["description"])
+			@components.FieldLabel("training-session-edit-start", "Início", true)<input id="training-session-edit-start" name="starts_at" type="datetime-local" value={ page.Form.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.Form.Errors["starts_at"])
+			@components.FieldLabel("training-session-edit-end", "Fim", true)<input id="training-session-edit-end" name="ends_at" type="datetime-local" value={ page.Form.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.Form.Errors["ends_at"])
+			@components.FieldLabel("training-session-edit-modality", "Modalidade (opcional)", false)<select id="training-session-edit-modality" name="modality_id"><option value="">Sem modalidade</option>
+				for _, item := range page.Modalities {
+					<option value={ item.ID } selected?={ item.ID == page.Form.ModalityID }>{ item.Name }</option>
+				}
+			</select>@components.FieldErrorMessage("modality_id", page.Form.Errors["modality_id"])
+			@components.FormActions("/admin/treinos") { <button type="submit">Guardar alterações</button> }
+		</form>
+	</section>
+	<section class="module destructive-region" aria-labelledby="cancel-training-session-title">
+		<h2 id="cancel-training-session-title">Cancelar sessão</h2><p>A sessão e os resultados existentes continuam visíveis. Esta ação não pode ser anulada.</p>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CancellationErrors), []components.FieldErrorRef{{Key: "state", Field: "cancel-training-session-title"}, {Key: "cancellation_reason", Field: "training-session-cancellation-reason"}, {Key: "confirm_cancellation", Field: "confirm-training-session-cancellation"}}))
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID + "/cancelar") }>@page.CSRFField<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
+			@components.FieldLabel("training-session-cancellation-reason", "Motivo", true)<textarea id="training-session-cancellation-reason" name="cancellation_reason" minlength="2" maxlength="500" required>{ page.CancellationReason }</textarea>@components.FieldErrorMessage("cancellation_reason", page.CancellationErrors["cancellation_reason"])
+			<label for="confirm-training-session-cancellation"><input id="confirm-training-session-cancellation" type="checkbox" name="confirm_cancellation" value="yes" required/> Confirmo que pretendo cancelar esta sessão definitivamente.</label>@components.FieldErrorMessage("confirm_cancellation", page.CancellationErrors["confirm_cancellation"])
+			@components.FormActions("/admin/treinos") { <button class="action action--danger" type="submit">Cancelar sessão</button> }
+		</form>
+	</section>
 }
 
 templ trainingScopeChoices(page TrainingPage, prefix, programmeID, teamID string) {

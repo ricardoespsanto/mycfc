@@ -972,9 +972,16 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 			if session.ModalityName != nil && *session.ModalityName != "" {
 				detail += " · " + *session.ModalityName
 			}
+			kind := "Treino"
+			if session.Status == "CANCELLED" {
+				kind = "Cancelado"
+				if session.CancellationReason != nil {
+					detail += " · " + *session.CancellationReason
+				}
+			}
 			items = append(items, agendaItem{
 				startsAt: session.StartsAt.Time,
-				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: "/treinos", Kind: "Treino"},
+				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: "/treinos", Kind: kind},
 			})
 		}
 	}

@@ -962,16 +962,20 @@ type TrainingPlan struct {
 }
 
 type TrainingSession struct {
-	ID          uuid.UUID          `json:"id"`
-	PlanID      uuid.UUID          `json:"plan_id"`
-	Title       string             `json:"title"`
-	Description string             `json:"description"`
-	StartsAt    pgtype.Timestamptz `json:"starts_at"`
-	EndsAt      pgtype.Timestamptz `json:"ends_at"`
-	ModalityID  *uuid.UUID         `json:"modality_id"`
-	CreatedByID uuid.UUID          `json:"created_by_id"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	PlanID             uuid.UUID          `json:"plan_id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ModalityID         *uuid.UUID         `json:"modality_id"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CreatedByID        uuid.UUID          `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TrainingSessionActivityMatch struct {

@@ -113,6 +113,9 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /admin/treinos", auth.RequireEventStaff(http.HandlerFunc(training.Index)))
 	mux.Handle("POST /admin/treinos/planos", auth.RequireEventStaff(http.HandlerFunc(training.CreatePlan)))
 	mux.Handle("POST /admin/treinos/sessoes", auth.RequireEventStaff(http.HandlerFunc(training.CreateSession)))
+	mux.Handle("GET /admin/treinos/sessoes/{id}/editar", auth.RequireEventStaff(http.HandlerFunc(training.EditSession)))
+	mux.Handle("POST /admin/treinos/sessoes/{id}", auth.RequireEventStaff(http.HandlerFunc(training.UpdateSession)))
+	mux.Handle("POST /admin/treinos/sessoes/{id}/cancelar", auth.RequireEventStaff(http.HandlerFunc(training.CancelSession)))
 	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/sessoes/distancia", auth.RequireAuthenticated(http.HandlerFunc(training.UpdateDistance)))
 

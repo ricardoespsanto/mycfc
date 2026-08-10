@@ -555,6 +555,107 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 
 func int32PtrDB(value int32) *int32 { return &value }
 
+func TestTrainingSessionEditingAndCancellationLifecycle(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+	queries := dbgen.New(pool)
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actorID, athleteID, seasonID := uuid.New(), uuid.New(), uuid.New()
+	planA, planB, sessionID, sourceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE id = ANY($1)`, []uuid.UUID{planA, planB})
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{actorID, athleteID})
+	})
+	for id, name := range map[uuid.UUID]string{actorID: "Treinador lifecycle", athleteID: "Atleta lifecycle"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '2000-01-01')`, id, name, "training-"+uuid.NewString()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época lifecycle', $3, $4)`, seasonID, "IT_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4)`, athleteID, seasonID, programme.ID, today.AddDate(0, 0, -1)); err != nil {
+		t.Fatal(err)
+	}
+	for id, title := range map[uuid.UUID]string{planA: "Plano lifecycle A", planB: "Plano lifecycle B"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO training_plans (id, title, programme_id, created_by_id) VALUES ($1, $2, $3, $4)`, id, title, programme.ID, actorID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	starts := now.Add(48 * time.Hour)
+	for id, title := range map[uuid.UUID]string{sessionID: "Sessão lifecycle", sourceID: "Origem lifecycle"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO training_sessions (id, plan_id, title, starts_at, ends_at, created_by_id) VALUES ($1, $2, $3, $4, $5, $6)`, id, planA, title, starts, starts.Add(time.Hour), actorID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current, err := queries.GetTrainingSessionForEdit(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := queries.UpdateTrainingSession(ctx, dbgen.UpdateTrainingSessionParams{PlanID: planB, Title: "Sessão editada", Description: "Descrição editada", StartsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(2 * time.Hour), Valid: true}, ID: sessionID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: current.UpdatedAt})
+	if err != nil || updated.PlanID != planB {
+		t.Fatalf("update = %#v, err = %v", updated, err)
+	}
+	if _, err := queries.UpdateTrainingSession(ctx, dbgen.UpdateTrainingSessionParams{PlanID: planB, Title: "Stale", StartsAt: updated.StartsAt, EndsAt: updated.EndsAt, ID: sessionID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: current.UpdatedAt}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale update err = %v", err)
+	}
+	if n, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusCOMPLETED, DistanceMetres: int32PtrDB(5000)}); err != nil || n != 1 {
+		t.Fatalf("save outcome rows = %d, err = %v", n, err)
+	}
+	if _, err := queries.UpdateTrainingSession(ctx, dbgen.UpdateTrainingSessionParams{PlanID: planA, Title: updated.Title, Description: updated.Description, StartsAt: updated.StartsAt, EndsAt: updated.EndsAt, ID: sessionID, AsOf: pgtype.Timestamptz{Time: now, Valid: true}, ExpectedUpdatedAt: updated.UpdatedAt}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("move after outcome err = %v", err)
+	}
+	reason := "Alteração definitiva do plano de treino"
+	cancelled, err := queries.CancelTrainingSession(ctx, dbgen.CancelTrainingSessionParams{CancelledAt: pgtype.Timestamptz{Time: now, Valid: true}, CancelledByID: &actorID, CancellationReason: &reason, ID: sessionID, ExpectedUpdatedAt: updated.UpdatedAt})
+	if err != nil || cancelled.Status != "CANCELLED" || cancelled.CancellationReason == nil || *cancelled.CancellationReason != reason {
+		t.Fatalf("cancelled = %#v, err = %v", cancelled, err)
+	}
+	if n, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusMISSED}); err != nil || n != 0 {
+		t.Fatalf("cancelled outcome rows = %d, err = %v", n, err)
+	}
+	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: athleteID, DistanceMetres: int32PtrDB(6000)}); err != nil || n != 0 {
+		t.Fatalf("cancelled distance rows = %d, err = %v", n, err)
+	}
+	if n, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sourceID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusREPLACED, ReplacementSessionID: &sessionID, ReplacementReason: stringPtrDB("Sessão cancelada")}); err != nil || n != 0 {
+		t.Fatalf("cancelled replacement rows = %d, err = %v", n, err)
+	}
+	var outcomes int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_session_outcomes WHERE session_id = $1`, sessionID).Scan(&outcomes); err != nil || outcomes != 1 {
+		t.Fatalf("preserved outcomes = %d, err = %v", outcomes, err)
+	}
+	leaders, err := queries.ListDistanceLeaderboard(ctx, dbgen.ListDistanceLeaderboardParams{CurrentUserID: athleteID, ActiveOn: pgtype.Date{Time: today, Valid: true}, AsOf: pgtype.Timestamptz{Time: now.Add(7 * 24 * time.Hour), Valid: true}})
+	if err != nil || len(leaders) != 0 {
+		t.Fatalf("cancelled leaderboard rows = %#v, err = %v", leaders, err)
+	}
+	sessions, err := queries.ListTrainingSessionsForAthlete(ctx, dbgen.ListTrainingSessionsForAthleteParams{UserID: athleteID, RowLimit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, session := range sessions {
+		if session.ID == sessionID {
+			found = session.Status == "CANCELLED" && session.CancellationReason != nil
+		}
+	}
+	if !found {
+		t.Fatal("cancelled session was not retained in athlete visibility")
+	}
+}
+
+func stringPtrDB(value string) *string { return &value }
+
 func TestMemberProfileOptimisticUpdateAndImmutableAudit(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
