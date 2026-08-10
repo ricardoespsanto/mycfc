@@ -60,6 +60,28 @@ func (s *SMTPSender) SendVerification(ctx context.Context, recipient, link strin
 	return s.Client.DialAndSendWithContext(ctx, message)
 }
 
+func (s *SMTPSender) SendPasswordReset(ctx context.Context, recipient, link string, _ time.Time) error {
+	message := mail.NewMsg()
+	if err := message.FromFormat(s.FromName, s.FromAddress); err != nil {
+		return err
+	}
+	if err := message.To(recipient); err != nil {
+		return err
+	}
+	subject, plain, rich := passwordResetMessage(link)
+	message.Subject(subject)
+	message.SetBodyString(mail.TypeTextPlain, plain)
+	message.SetBodyString(mail.TypeTextHTML, rich)
+	return s.Client.DialAndSendWithContext(ctx, message)
+}
+
+func passwordResetMessage(link string) (string, string, string) {
+	subject := "Recupere a sua palavra-passe no MyCFC"
+	plain := "Recebemos um pedido para alterar a palavra-passe da sua conta MyCFC:\n\n" + link + "\n\nEste link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.\n"
+	rich := "<p>Recebemos um pedido para alterar a palavra-passe da sua conta MyCFC.</p><p><a href=\"" + html.EscapeString(link) + "\">Alterar palavra-passe</a></p><p>Este link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.</p>"
+	return subject, plain, rich
+}
+
 func IsPermanent(err error) bool {
 	var sendErr *mail.SendError
 	if errors.As(err, &sendErr) {

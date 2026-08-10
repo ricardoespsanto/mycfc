@@ -648,16 +648,19 @@ type ConsentForm struct {
 }
 
 type EmailOutbox struct {
-	ID                  uuid.UUID          `json:"id"`
-	VerificationTokenID uuid.UUID          `json:"verification_token_id"`
-	Status              string             `json:"status"`
-	Attempts            int32              `json:"attempts"`
-	NextAttemptAt       pgtype.Timestamptz `json:"next_attempt_at"`
-	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
-	SentAt              pgtype.Timestamptz `json:"sent_at"`
-	LastError           *string            `json:"last_error"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ID                   uuid.UUID          `json:"id"`
+	MessageType          string             `json:"message_type"`
+	VerificationTokenID  *uuid.UUID         `json:"verification_token_id"`
+	PasswordResetTokenID *uuid.UUID         `json:"password_reset_token_id"`
+	SealedPayload        []byte             `json:"sealed_payload"`
+	Status               string             `json:"status"`
+	Attempts             int32              `json:"attempts"`
+	NextAttemptAt        pgtype.Timestamptz `json:"next_attempt_at"`
+	ClaimedAt            pgtype.Timestamptz `json:"claimed_at"`
+	SentAt               pgtype.Timestamptz `json:"sent_at"`
+	LastError            *string            `json:"last_error"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
 type EmailVerificationToken struct {
@@ -810,6 +813,16 @@ type NewsItem struct {
 	IsPublished bool               `json:"is_published"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PasswordResetToken struct {
+	ID          uuid.UUID          `json:"id"`
+	UserID      uuid.UUID          `json:"user_id"`
+	Email       string             `json:"email"`
+	TokenDigest []byte             `json:"token_digest"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type PerformanceMetric struct {

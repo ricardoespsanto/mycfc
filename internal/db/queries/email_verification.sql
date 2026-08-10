@@ -28,21 +28,28 @@ FROM email_verification_tokens WHERE id = sqlc.arg(id);
 WITH candidate AS (
   SELECT outbox.id
   FROM email_outbox outbox
-  JOIN email_verification_tokens token ON token.id = outbox.verification_token_id
-  JOIN users account ON account.id = token.user_id
+  LEFT JOIN email_verification_tokens verification ON verification.id = outbox.verification_token_id
+  LEFT JOIN password_reset_tokens reset ON reset.id = outbox.password_reset_token_id
+  JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= sqlc.arg(claimed_at))
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < sqlc.arg(stale_before)))
-    AND token.consumed_at IS NULL AND token.expires_at > sqlc.arg(claimed_at)
-    AND account.is_active = true AND account.is_dependent = false AND account.email = token.email
+    AND COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
+    AND COALESCE(verification.expires_at, reset.expires_at) > sqlc.arg(claimed_at)
+    AND account.is_active = true AND account.is_dependent = false
+    AND account.email = COALESCE(verification.email, reset.email)
   ORDER BY outbox.next_attempt_at, outbox.created_at, outbox.id
   FOR UPDATE OF outbox SKIP LOCKED
   LIMIT 1
 )
 UPDATE email_outbox outbox
 SET status = 'SENDING', attempts = attempts + 1, claimed_at = sqlc.arg(claimed_at), updated_at = sqlc.arg(claimed_at)
-FROM candidate, email_verification_tokens token
-WHERE outbox.id = candidate.id AND token.id = outbox.verification_token_id
-RETURNING outbox.id, outbox.verification_token_id, outbox.attempts, token.user_id, token.email, token.expires_at;
+FROM candidate
+LEFT JOIN email_verification_tokens verification ON verification.id = (SELECT verification_token_id FROM email_outbox WHERE id = candidate.id)
+LEFT JOIN password_reset_tokens reset ON reset.id = (SELECT password_reset_token_id FROM email_outbox WHERE id = candidate.id)
+WHERE outbox.id = candidate.id
+RETURNING outbox.id, outbox.message_type, outbox.verification_token_id, outbox.password_reset_token_id,
+  outbox.sealed_payload, outbox.attempts, COALESCE(verification.user_id, reset.user_id) AS user_id,
+  COALESCE(verification.email, reset.email)::text AS email, COALESCE(verification.expires_at, reset.expires_at) AS expires_at;
 
 -- name: CompleteEmailOutbox :execrows
 UPDATE email_outbox SET status = 'SENT', claimed_at = NULL, sent_at = sqlc.arg(completed_at), last_error = NULL, updated_at = sqlc.arg(completed_at)
@@ -58,7 +65,19 @@ WHERE id = sqlc.arg(id) AND status = 'SENDING';
 
 -- name: CancelUndeliverableEmailOutbox :execrows
 UPDATE email_outbox outbox SET status = 'CANCELLED', claimed_at = NULL, updated_at = sqlc.arg(cancelled_at)
-FROM email_verification_tokens token, users account
-WHERE outbox.verification_token_id = token.id AND token.user_id = account.id
-  AND outbox.status IN ('PENDING', 'SENDING')
-  AND (token.consumed_at IS NOT NULL OR token.expires_at <= sqlc.arg(cancelled_at) OR account.is_active = false OR account.is_dependent = true OR account.email <> token.email);
+WHERE outbox.status IN ('PENDING', 'SENDING')
+  AND (
+    (outbox.message_type = 'EMAIL_VERIFICATION' AND EXISTS (
+      SELECT 1 FROM email_verification_tokens token JOIN users account ON account.id = token.user_id
+      WHERE token.id = outbox.verification_token_id
+        AND (token.consumed_at IS NOT NULL OR token.expires_at <= sqlc.arg(cancelled_at)
+          OR account.is_active = false OR account.is_dependent = true OR account.email <> token.email)
+    ))
+    OR
+    (outbox.message_type = 'PASSWORD_RESET' AND EXISTS (
+      SELECT 1 FROM password_reset_tokens token JOIN users account ON account.id = token.user_id
+      WHERE token.id = outbox.password_reset_token_id
+        AND (token.consumed_at IS NOT NULL OR token.expires_at <= sqlc.arg(cancelled_at)
+          OR account.is_active = false OR account.is_dependent = true OR account.email <> token.email)
+    ))
+  );
