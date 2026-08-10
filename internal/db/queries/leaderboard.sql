@@ -8,6 +8,7 @@ WITH params AS (
     JOIN training_sessions s ON s.id = o.session_id
     JOIN users u ON u.id = o.user_id
     WHERE o.status = 'COMPLETED'
+      AND s.status = 'ACTIVE'
       AND o.distance_metres IS NOT NULL
       AND u.is_active = true
       AND u.leaderboard_visible = true

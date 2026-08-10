@@ -19,6 +19,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -64,8 +65,13 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 				distance = formatKilometres(int64(*session.DistanceMetres))
 				distanceInput = kilometreInput(*session.DistanceMetres)
 			}
-			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput})
-			calendarEntries = append(calendarEntries, calendarEntry{Title: session.Title, URL: "/treinos", Kind: "Treino", StartsAt: session.StartsAt.Time})
+			cancelled := session.Status == "CANCELLED"
+			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput, Cancelled: cancelled, CancellationReason: stringValue(session.CancellationReason)})
+			calendarTitle, calendarKind := session.Title, "Treino"
+			if cancelled {
+				calendarTitle, calendarKind = "Cancelada: "+session.Title, "Cancelada"
+			}
+			calendarEntries = append(calendarEntries, calendarEntry{Title: calendarTitle, URL: "/treinos", Kind: calendarKind, StartsAt: session.StartsAt.Time})
 		}
 		page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 	}
@@ -171,6 +177,167 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
 }
 
+func (h Training) EditSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, ok := h.trainingSessionID(w, r)
+	if !ok {
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	session, err := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageTrainingPlan(ctx, user, session.PlanID, w, r) {
+		return
+	}
+	form := h.trainingSessionFormFromRecord(session)
+	if session.Status != "ACTIVE" || !session.StartsAt.Time.After(h.now()) {
+		form.Errors.Add("state", "Apenas sessões ativas que ainda não começaram podem ser alteradas.")
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, form, "A sessão já não pode ser alterada.", "", validation.FieldErrors{})
+		return
+	}
+	h.renderSessionEdit(w, r, http.StatusOK, sessionID, form, "", "", validation.FieldErrors{})
+}
+
+func (h Training) UpdateSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, ok := h.trainingSessionID(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	current, err := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageTrainingPlan(ctx, user, current.PlanID, w, r) {
+		return
+	}
+	form, starts, ends, modalityID, expected := h.validateTrainingSessionEdit(r)
+	form.ID, form.Editing, form.PlanLocked = sessionID.String(), true, current.HasOutcomes
+	planID, planErr := uuid.Parse(form.PlanID)
+	if planErr == nil {
+		exists, getErr := h.Store.TrainingPlanExists(ctx, planID)
+		if getErr != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		if !exists {
+			form.Errors.Add("plan_id", "Selecione um plano válido.")
+		}
+		if exists && !user.IsAdmin {
+			allowed, getErr := h.Store.CanCoachManageTrainingPlan(ctx, dbgen.CanCoachManageTrainingPlanParams{PlanID: planID, UserID: user.ID})
+			if getErr != nil {
+				h.System.InternalError(w, r)
+				return
+			}
+			if !allowed {
+				h.System.Forbidden(w, r)
+				return
+			}
+		}
+		if current.HasOutcomes && planID != current.PlanID {
+			form.Errors.Add("plan_id", "O plano não pode ser alterado depois do primeiro resultado.")
+		}
+	}
+	if !form.Errors.Empty() {
+		h.renderSessionEdit(w, r, http.StatusUnprocessableEntity, sessionID, form, "", "", validation.FieldErrors{})
+		return
+	}
+	_, err = h.Store.UpdateTrainingSession(ctx, dbgen.UpdateTrainingSessionParams{PlanID: planID, Title: form.Title, Description: form.Description, StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: ends, Valid: true}, ModalityID: modalityID, ID: sessionID, AsOf: pgtype.Timestamptz{Time: h.now(), Valid: true}, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}})
+	if errors.Is(err, pgx.ErrNoRows) {
+		latest, getErr := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+		if getErr != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, h.trainingSessionFormFromRecord(latest), "A sessão foi alterada entretanto, já começou ou já foi cancelada.", "", validation.FieldErrors{})
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Sessão atualizada.")
+	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
+}
+
+func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
+	sessionID, ok := h.trainingSessionID(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	current, err := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageTrainingPlan(ctx, user, current.PlanID, w, r) {
+		return
+	}
+	reason := strings.TrimSpace(r.PostForm.Get("cancellation_reason"))
+	errs := validation.FieldErrors{}
+	if !validTrainingText(reason, 2, 500) {
+		errs.Add("cancellation_reason", "O motivo deve ter entre 2 e 500 caracteres.")
+	}
+	if r.PostForm.Get("confirm_cancellation") != "yes" {
+		errs.Add("confirm_cancellation", "Confirme que pretende cancelar a sessão.")
+	}
+	expected, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(r.PostForm.Get("expected_updated_at")))
+	if parseErr != nil {
+		errs.Add("state", "O formulário deixou de ser válido. Atualize a página.")
+	}
+	if !errs.Empty() {
+		h.renderSessionEdit(w, r, http.StatusUnprocessableEntity, sessionID, h.trainingSessionFormFromRecord(current), "", reason, errs)
+		return
+	}
+	now := h.now()
+	_, err = h.Store.CancelTrainingSession(ctx, dbgen.CancelTrainingSessionParams{CancelledAt: pgtype.Timestamptz{Time: now, Valid: true}, CancelledByID: &user.ID, CancellationReason: &reason, ID: sessionID, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}})
+	if errors.Is(err, pgx.ErrNoRows) {
+		latest, getErr := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+		if getErr != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, h.trainingSessionFormFromRecord(latest), "A sessão foi alterada entretanto, já começou ou já foi cancelada.", reason, validation.FieldErrors{})
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Sessão cancelada.")
+	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
+}
+
 func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
@@ -234,6 +401,111 @@ func (h Training) flash(r *http.Request, message string) {
 	}
 }
 
+func (h Training) trainingSessionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (h Training) canManageTrainingPlan(ctx context.Context, user CurrentUser, planID uuid.UUID, w http.ResponseWriter, r *http.Request) bool {
+	if user.IsAdmin {
+		return true
+	}
+	allowed, err := h.Store.CanCoachManageTrainingPlan(ctx, dbgen.CanCoachManageTrainingPlanParams{PlanID: planID, UserID: user.ID})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return false
+	}
+	if !allowed {
+		h.System.Forbidden(w, r)
+		return false
+	}
+	return true
+}
+
+func (h Training) validateTrainingSessionEdit(r *http.Request) (pages.TrainingSessionForm, time.Time, time.Time, *uuid.UUID, time.Time) {
+	form := pages.TrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), ModalityID: r.PostForm.Get("modality_id"), ExpectedUpdatedAt: strings.TrimSpace(r.PostForm.Get("expected_updated_at")), Editing: true, Errors: validation.FieldErrors{}}
+	_, planErr := uuid.Parse(form.PlanID)
+	starts, startErr := time.ParseInLocation("2006-01-02T15:04", form.StartsAt, h.location())
+	ends, endErr := time.ParseInLocation("2006-01-02T15:04", form.EndsAt, h.location())
+	modalityID, modalityErr := optionalUUID(form.ModalityID)
+	expected, expectedErr := time.Parse(time.RFC3339Nano, form.ExpectedUpdatedAt)
+	if planErr != nil {
+		form.Errors.Add("plan_id", "Selecione um plano válido.")
+	}
+	if modalityErr != nil {
+		form.Errors.Add("modality_id", "Selecione uma modalidade válida.")
+	}
+	if !validTrainingText(form.Title, 2, 180) {
+		form.Errors.Add("title", "O título deve ter entre 2 e 180 caracteres.")
+	}
+	if utf8.RuneCountInString(form.Description) > 4000 {
+		form.Errors.Add("description", "A descrição não pode exceder 4000 caracteres.")
+	}
+	if startErr != nil {
+		form.Errors.Add("starts_at", "Introduza uma data e hora de início válidas.")
+	}
+	if endErr != nil {
+		form.Errors.Add("ends_at", "Introduza uma data e hora de fim válidas.")
+	} else if startErr == nil && !ends.After(starts) {
+		form.Errors.Add("ends_at", "O fim tem de ser posterior ao início.")
+	}
+	if expectedErr != nil {
+		form.Errors.Add("state", "O formulário deixou de ser válido. Atualize a página.")
+	}
+	return form, starts, ends, modalityID, expected
+}
+
+func (h Training) trainingSessionFormFromRecord(session dbgen.GetTrainingSessionForEditRow) pages.TrainingSessionForm {
+	modalityID := ""
+	if session.ModalityID != nil {
+		modalityID = session.ModalityID.String()
+	}
+	return pages.TrainingSessionForm{ID: session.ID.String(), PlanID: session.PlanID.String(), Title: session.Title, Description: session.Description, StartsAt: session.StartsAt.Time.In(h.location()).Format("2006-01-02T15:04"), EndsAt: session.EndsAt.Time.In(h.location()).Format("2006-01-02T15:04"), ModalityID: modalityID, ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano), Editing: true, PlanLocked: session.HasOutcomes, Errors: validation.FieldErrors{}}
+}
+
+func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, status int, sessionID uuid.UUID, form pages.TrainingSessionForm, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	plans, err := h.Store.ListTrainingPlansForCoach(ctx, dbgen.ListTrainingPlansForCoachParams{UserID: user.ID, RowLimit: 100})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if user.IsAdmin {
+		adminPlans, getErr := h.Store.ListTrainingPlansForAdmin(ctx, 100)
+		if getErr != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		plans = make([]dbgen.ListTrainingPlansForCoachRow, len(adminPlans))
+		for i, plan := range adminPlans {
+			plans[i] = dbgen.ListTrainingPlansForCoachRow{ID: plan.ID, Title: plan.Title}
+		}
+	}
+	modalities, err := h.Store.ListAnnouncementModalities(ctx)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.TrainingSessionEditPage{SessionID: sessionID.String(), Form: form, Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
+	for _, plan := range plans {
+		page.Plans = append(page.Plans, pages.TrainingChoice{ID: plan.ID.String(), Name: plan.Title})
+	}
+	for _, modality := range modalities {
+		page.Modalities = append(page.Modalities, pages.TrainingChoice{ID: modality.ID.String(), Name: modality.NamePt})
+	}
+	page.Meta = h.meta(r, user, true)
+	page.Meta.Title = "Editar sessão | MyCFC"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.TrainingSessionEdit(page).Render(r.Context(), w)
+}
+
 func (h Training) now() time.Time {
 	if h.Now != nil {
 		return h.Now()
@@ -247,7 +519,7 @@ func (h Training) authoring(ctx context.Context, user CurrentUser, page *pages.T
 	modalities, _ := h.Store.ListAnnouncementModalities(ctx)
 	plans, _ := h.Store.ListTrainingPlansForCoach(ctx, dbgen.ListTrainingPlansForCoachParams{UserID: user.ID, RowLimit: 100})
 	managedPlans, _ := h.Store.ListTrainingPlansForAuthoring(ctx, dbgen.ListTrainingPlansForAuthoringParams{UserID: user.ID, IsAdmin: user.IsAdmin, PlanLimit: managedTrainingPlansPageSize + 1, PlanOffset: int32((pageNumber - 1) * managedTrainingPlansPageSize)})
-	page.ManagedPlans = managedTrainingPlans(managedPlans, h.location())
+	page.ManagedPlans = managedTrainingPlansAt(managedPlans, h.location(), h.now())
 	if len(page.ManagedPlans) > managedTrainingPlansPageSize {
 		page.ManagedPlans = page.ManagedPlans[:managedTrainingPlansPageSize]
 		page.ManagedPlansNextURL = managedTrainingPlansPageURL(pageNumber + 1)
@@ -293,6 +565,10 @@ func managedTrainingPlansPageURL(page int) string {
 }
 
 func managedTrainingPlans(rows []dbgen.ListTrainingPlansForAuthoringRow, location *time.Location) []pages.ManagedTrainingPlan {
+	return managedTrainingPlansAt(rows, location, time.Now())
+}
+
+func managedTrainingPlansAt(rows []dbgen.ListTrainingPlansForAuthoringRow, location *time.Location, now time.Time) []pages.ManagedTrainingPlan {
 	plans := make([]pages.ManagedTrainingPlan, 0, len(rows))
 	for _, row := range rows {
 		if len(plans) == 0 || plans[len(plans)-1].ID != row.PlanID.String() {
@@ -306,11 +582,19 @@ func managedTrainingPlans(rows []dbgen.ListTrainingPlansForAuthoringRow, locatio
 			modality = *row.ModalityName
 		}
 		plans[len(plans)-1].Sessions = append(plans[len(plans)-1].Sessions, pages.ManagedTrainingSession{
-			Title:       *row.SessionTitle,
-			Description: *row.SessionDescription,
-			When:        row.StartsAt.Time.In(location).Format("02/01/2006 15:04") + " - " + row.EndsAt.Time.In(location).Format("15:04"),
-			Modality:    modality,
+			ID:                 row.SessionID.String(),
+			Title:              *row.SessionTitle,
+			Description:        *row.SessionDescription,
+			When:               row.StartsAt.Time.In(location).Format("02/01/2006 15:04") + " - " + row.EndsAt.Time.In(location).Format("15:04"),
+			Modality:           modality,
+			Cancelled:          row.Status != nil && *row.Status == "CANCELLED",
+			CancellationReason: stringValue(row.CancellationReason),
+			Editable:           row.Status != nil && *row.Status == "ACTIVE" && row.StartsAt.Time.After(now),
 		})
+		if row.CancelledAt.Valid {
+			plans[len(plans)-1].Sessions[len(plans[len(plans)-1].Sessions)-1].CancelledAt = row.CancelledAt.Time.In(location).Format("02/01/2006 15:04")
+		}
+		plans[len(plans)-1].Sessions[len(plans[len(plans)-1].Sessions)-1].CancelledBy = stringValue(row.CancelledByName)
 	}
 	return plans
 }

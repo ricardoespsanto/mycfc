@@ -28,6 +28,53 @@ func (q *Queries) CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachMa
 	return exists, err
 }
 
+const cancelTrainingSession = `-- name: CancelTrainingSession :one
+UPDATE training_sessions
+SET status = 'CANCELLED', cancelled_at = $1, cancelled_by_id = $2,
+    cancellation_reason = $3, updated_at = clock_timestamp()
+WHERE id = $4
+  AND status = 'ACTIVE'
+  AND starts_at > $1
+  AND updated_at = $5
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+`
+
+type CancelTrainingSessionParams struct {
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	ID                 uuid.UUID          `json:"id"`
+	ExpectedUpdatedAt  pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+func (q *Queries) CancelTrainingSession(ctx context.Context, arg CancelTrainingSessionParams) (TrainingSession, error) {
+	row := q.db.QueryRow(ctx, cancelTrainingSession,
+		arg.CancelledAt,
+		arg.CancelledByID,
+		arg.CancellationReason,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i TrainingSession
+	err := row.Scan(
+		&i.ID,
+		&i.PlanID,
+		&i.Title,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ModalityID,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createCompetitionDocument = `-- name: CreateCompetitionDocument :one
 INSERT INTO competition_documents (title, url, source, reviewed_on, event_id, modality_id, programme_id, team_id, author_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -115,7 +162,7 @@ func (q *Queries) CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlan
 const createTrainingSession = `-- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
 `
 
 type CreateTrainingSessionParams struct {
@@ -147,9 +194,66 @@ func (q *Queries) CreateTrainingSession(ctx context.Context, arg CreateTrainingS
 		&i.StartsAt,
 		&i.EndsAt,
 		&i.ModalityID,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTrainingSessionForEdit = `-- name: GetTrainingSessionForEdit :one
+SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at, s.modality_id,
+       s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
+       canceller.name AS cancelled_by_name, s.created_by_id, s.created_at, s.updated_at,
+       EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id) AS has_outcomes
+FROM training_sessions s
+LEFT JOIN users canceller ON canceller.id = s.cancelled_by_id
+WHERE s.id = $1
+`
+
+type GetTrainingSessionForEditRow struct {
+	ID                 uuid.UUID          `json:"id"`
+	PlanID             uuid.UUID          `json:"plan_id"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ModalityID         *uuid.UUID         `json:"modality_id"`
+	Status             string             `json:"status"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CancelledByName    *string            `json:"cancelled_by_name"`
+	CreatedByID        uuid.UUID          `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	HasOutcomes        bool               `json:"has_outcomes"`
+}
+
+func (q *Queries) GetTrainingSessionForEdit(ctx context.Context, id uuid.UUID) (GetTrainingSessionForEditRow, error) {
+	row := q.db.QueryRow(ctx, getTrainingSessionForEdit, id)
+	var i GetTrainingSessionForEditRow
+	err := row.Scan(
+		&i.ID,
+		&i.PlanID,
+		&i.Title,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ModalityID,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CancelledByName,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HasOutcomes,
 	)
 	return i, err
 }
@@ -322,10 +426,12 @@ WITH scoped_plans AS (
 )
 SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
        s.id AS session_id, s.title AS session_title, s.description AS session_description,
-       s.starts_at, s.ends_at, m.name_pt AS modality_name
+       s.starts_at, s.ends_at, m.name_pt AS modality_name, s.status, s.cancellation_reason,
+       s.cancelled_at, canceller.name AS cancelled_by_name, s.updated_at
 FROM scoped_plans p
 LEFT JOIN training_sessions s ON s.plan_id = p.id
 LEFT JOIN modalities m ON m.id = s.modality_id
+LEFT JOIN users canceller ON canceller.id = s.cancelled_by_id
 ORDER BY p.created_at DESC, p.id DESC, s.starts_at ASC, s.id ASC
 `
 
@@ -346,6 +452,11 @@ type ListTrainingPlansForAuthoringRow struct {
 	StartsAt           pgtype.Timestamptz `json:"starts_at"`
 	EndsAt             pgtype.Timestamptz `json:"ends_at"`
 	ModalityName       *string            `json:"modality_name"`
+	Status             *string            `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledByName    *string            `json:"cancelled_by_name"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListTrainingPlansForAuthoring(ctx context.Context, arg ListTrainingPlansForAuthoringParams) ([]ListTrainingPlansForAuthoringRow, error) {
@@ -372,6 +483,11 @@ func (q *Queries) ListTrainingPlansForAuthoring(ctx context.Context, arg ListTra
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.ModalityName,
+			&i.Status,
+			&i.CancellationReason,
+			&i.CancelledAt,
+			&i.CancelledByName,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -433,7 +549,7 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
+       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -453,15 +569,17 @@ type ListTrainingSessionsForAthleteParams struct {
 }
 
 type ListTrainingSessionsForAthleteRow struct {
-	ID             uuid.UUID          `json:"id"`
-	PlanTitle      string             `json:"plan_title"`
-	Title          string             `json:"title"`
-	Description    string             `json:"description"`
-	StartsAt       pgtype.Timestamptz `json:"starts_at"`
-	EndsAt         pgtype.Timestamptz `json:"ends_at"`
-	ModalityName   *string            `json:"modality_name"`
-	OutcomeStatus  interface{}        `json:"outcome_status"`
-	DistanceMetres *int32             `json:"distance_metres"`
+	ID                 uuid.UUID          `json:"id"`
+	PlanTitle          string             `json:"plan_title"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ModalityName       *string            `json:"modality_name"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
+	OutcomeStatus      interface{}        `json:"outcome_status"`
+	DistanceMetres     *int32             `json:"distance_metres"`
 }
 
 func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error) {
@@ -481,6 +599,8 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.ModalityName,
+			&i.Status,
+			&i.CancellationReason,
 			&i.OutcomeStatus,
 			&i.DistanceMetres,
 		); err != nil {
@@ -495,7 +615,8 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 }
 
 const listUpcomingTrainingSessionsForDashboard = `-- name: ListUpcomingTrainingSessionsForDashboard :many
-SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name
+SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+       s.status, s.cancellation_reason
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -519,12 +640,14 @@ type ListUpcomingTrainingSessionsForDashboardParams struct {
 }
 
 type ListUpcomingTrainingSessionsForDashboardRow struct {
-	ID           uuid.UUID          `json:"id"`
-	PlanTitle    string             `json:"plan_title"`
-	Title        string             `json:"title"`
-	StartsAt     pgtype.Timestamptz `json:"starts_at"`
-	EndsAt       pgtype.Timestamptz `json:"ends_at"`
-	ModalityName *string            `json:"modality_name"`
+	ID                 uuid.UUID          `json:"id"`
+	PlanTitle          string             `json:"plan_title"`
+	Title              string             `json:"title"`
+	StartsAt           pgtype.Timestamptz `json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	ModalityName       *string            `json:"modality_name"`
+	Status             string             `json:"status"`
+	CancellationReason *string            `json:"cancellation_reason"`
 }
 
 func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, arg ListUpcomingTrainingSessionsForDashboardParams) ([]ListUpcomingTrainingSessionsForDashboardRow, error) {
@@ -543,6 +666,8 @@ func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.ModalityName,
+			&i.Status,
+			&i.CancellationReason,
 		); err != nil {
 			return nil, err
 		}
@@ -561,6 +686,7 @@ SELECT $1, $2, $3::training_outcome_status,
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 WHERE s.id = $1
+  AND s.status = 'ACTIVE'
   AND EXISTS (
       SELECT 1 FROM user_memberships m
       WHERE m.user_id = $2 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
@@ -575,6 +701,7 @@ WHERE s.id = $1
           JOIN user_memberships m ON m.user_id = $2
               AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           WHERE replacement_session.id = $4
+            AND replacement_session.status = 'ACTIVE'
             AND replacement_session.id <> s.id
             AND (replacement_plan.programme_id IS NULL OR replacement_plan.programme_id = m.programme_id)
             AND (replacement_plan.team_id IS NULL OR replacement_plan.team_id = m.team_id)
@@ -612,12 +739,24 @@ func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTraini
 	return result.RowsAffected(), nil
 }
 
+const trainingPlanExists = `-- name: TrainingPlanExists :one
+SELECT EXISTS (SELECT 1 FROM training_plans WHERE id = $1)
+`
+
+func (q *Queries) TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, trainingPlanExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const updateOwnCompletedSessionDistance = `-- name: UpdateOwnCompletedSessionDistance :execrows
 UPDATE training_session_outcomes
 SET distance_metres = $1, updated_at = now()
 WHERE session_id = $2
   AND user_id = $3
   AND status = 'COMPLETED'
+  AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE')
 `
 
 type UpdateOwnCompletedSessionDistanceParams struct {
@@ -632,4 +771,61 @@ func (q *Queries) UpdateOwnCompletedSessionDistance(ctx context.Context, arg Upd
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateTrainingSession = `-- name: UpdateTrainingSession :one
+UPDATE training_sessions s
+SET plan_id = $1, title = $2, description = $3,
+    starts_at = $4, ends_at = $5, modality_id = $6,
+    updated_at = clock_timestamp()
+WHERE s.id = $7
+  AND s.status = 'ACTIVE'
+  AND s.starts_at > $8
+  AND s.updated_at = $9
+  AND (s.plan_id = $1 OR NOT EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id))
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+`
+
+type UpdateTrainingSessionParams struct {
+	PlanID            uuid.UUID          `json:"plan_id"`
+	Title             string             `json:"title"`
+	Description       string             `json:"description"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	ModalityID        *uuid.UUID         `json:"modality_id"`
+	ID                uuid.UUID          `json:"id"`
+	AsOf              pgtype.Timestamptz `json:"as_of"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+func (q *Queries) UpdateTrainingSession(ctx context.Context, arg UpdateTrainingSessionParams) (TrainingSession, error) {
+	row := q.db.QueryRow(ctx, updateTrainingSession,
+		arg.PlanID,
+		arg.Title,
+		arg.Description,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.ModalityID,
+		arg.ID,
+		arg.AsOf,
+		arg.ExpectedUpdatedAt,
+	)
+	var i TrainingSession
+	err := row.Scan(
+		&i.ID,
+		&i.PlanID,
+		&i.Title,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.ModalityID,
+		&i.Status,
+		&i.CancelledAt,
+		&i.CancelledByID,
+		&i.CancellationReason,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

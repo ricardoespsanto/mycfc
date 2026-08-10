@@ -535,7 +535,7 @@ test.describe('authentication', () => {
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page.getByRole('status')).toHaveText('Conta criada.');
+    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
@@ -552,6 +552,9 @@ test.describe('authentication', () => {
 
     const planTitle = `Plano classificação E2E ${Date.now()}`;
     const sessionTitle = `Sessão classificação E2E ${Date.now()}`;
+    const cancelledSessionTitle = `Sessão cancelada E2E ${Date.now()}`;
+    const editedCancelledSessionTitle = `${cancelledSessionTitle} editada`;
+    const cancellationReason = 'Alteração do calendário de treinos E2E.';
     await page.goto('/admin/treinos');
     await expect(page.getByRole('link', { name: 'Publicar documento de competição', exact: true })).toHaveCount(0);
     await expect(page.locator('#criar-plano')).not.toHaveAttribute('open', '');
@@ -560,7 +563,7 @@ test.describe('authentication', () => {
     await planForm.getByLabel('Título').fill(planTitle);
     await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await planForm.getByRole('button', { name: 'Criar plano' }).click();
-    await expect(page.getByRole('status')).toHaveText('Plano criado.');
+    await expect(page.getByText('Plano criado.', { exact: true })).toBeVisible();
 
     await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
     const sessionForm = page.locator('form[action="/admin/treinos/sessoes"]');
@@ -571,7 +574,30 @@ test.describe('authentication', () => {
     await sessionForm.getByLabel('Início').fill(sessionStart.toISOString().slice(0, 16));
     await sessionForm.getByLabel('Fim').fill(sessionEnd.toISOString().slice(0, 16));
     await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
-    await expect(page.getByRole('status')).toHaveText('Sessão criada.');
+    await expect(page.getByText('Sessão criada.', { exact: true })).toBeVisible();
+
+    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
+    const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const futureEnd = new Date(futureStart.getTime() + 90 * 60 * 1000);
+    await sessionForm.getByLabel('Plano').selectOption({ label: planTitle });
+    await sessionForm.getByLabel('Título').fill(cancelledSessionTitle);
+    await sessionForm.getByLabel('Início').fill(futureStart.toISOString().slice(0, 16));
+    await sessionForm.getByLabel('Fim').fill(futureEnd.toISOString().slice(0, 16));
+    await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
+    const managedFutureSession = page.getByRole('heading', { name: cancelledSessionTitle }).locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    await managedFutureSession.getByRole('link', { name: 'Editar sessão' }).click();
+    await expectNoSeriousFormAxeViolations(page);
+    await page.getByLabel('Título').fill(editedCancelledSessionTitle);
+    await page.getByRole('button', { name: 'Guardar alterações' }).click();
+    await expect(page.getByText('Sessão atualizada.', { exact: true })).toBeVisible();
+    await page.getByRole('heading', { name: editedCancelledSessionTitle }).locator('xpath=ancestor::div[contains(@class,"nested-record")][1]').getByRole('link', { name: 'Editar sessão' }).click();
+    await page.getByLabel('Motivo').fill(cancellationReason);
+    await page.getByLabel('Confirmo que pretendo cancelar esta sessão definitivamente.').check();
+    await page.getByRole('button', { name: 'Cancelar sessão' }).click();
+    await expect(page.getByText('Sessão cancelada.', { exact: true })).toBeVisible();
+    const cancelledManagedSession = page.getByRole('heading', { name: editedCancelledSessionTitle }).locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    await expect(cancelledManagedSession).toContainText('Sessão cancelada');
+    await expect(cancelledManagedSession).toContainText(cancellationReason);
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await expect(page).toHaveURL('/login');
@@ -584,11 +610,15 @@ test.describe('authentication', () => {
     await expect(page.getByRole('heading', { name: 'Competição', exact: true })).toBeVisible();
 
     await page.goto('/treinos');
+    const cancelledAthleteSession = page.getByRole('heading', { name: new RegExp(`${editedCancelledSessionTitle}$`) }).locator('xpath=ancestor::li[1]');
+    await expect(cancelledAthleteSession).toContainText('Cancelada');
+    await expect(cancelledAthleteSession).toContainText(cancellationReason);
+    await expect(cancelledAthleteSession.getByRole('button')).toHaveCount(0);
     const athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
     await athleteSession.locator('summary').filter({ hasText: 'Marcar concluída' }).click();
     await athleteSession.getByLabel('Distância (km)').fill('12.34');
     await athleteSession.getByRole('button', { name: 'Concluir sessão' }).click();
-    await expect(page.getByRole('status')).toHaveText('Resultado registado.');
+    await expect(page.getByText('Resultado registado.', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]')).toContainText('12,34 km');
 
     await page.goto('/today?leaderboard_period=all');

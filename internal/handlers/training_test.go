@@ -86,6 +86,44 @@ func TestManagedTrainingPlansGroupsSessionsAndKeepsEmptyPlans(t *testing.T) {
 	}
 }
 
+func TestManagedTrainingPlansExposeCancellationMetadataWithoutEditControl(t *testing.T) {
+	planID, sessionID := uuid.New(), uuid.New()
+	status, reason, actor := "CANCELLED", "Cheia prevista", "Treinadora"
+	starts := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	rows := []dbgen.ListTrainingPlansForAuthoringRow{{PlanID: planID, PlanTitle: "Plano", SessionID: &sessionID, SessionTitle: stringPtr("Sessão"), SessionDescription: stringPtr(""), StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: &status, CancellationReason: &reason, CancelledAt: pgtype.Timestamptz{Time: starts.Add(-24 * time.Hour), Valid: true}, CancelledByName: &actor}}
+	plans := managedTrainingPlansAt(rows, time.UTC, starts.Add(-48*time.Hour))
+	session := plans[0].Sessions[0]
+	if !session.Cancelled || session.Editable || session.CancellationReason != reason || session.CancelledBy != actor || session.CancelledAt == "" {
+		t.Fatalf("cancelled session = %#v", session)
+	}
+}
+
+func TestValidateTrainingSessionEditRequiresFreshWellFormedInput(t *testing.T) {
+	planID := uuid.New()
+	expected := time.Date(2026, 8, 10, 10, 0, 0, 123, time.UTC)
+	request := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/id", strings.NewReader("plan_id="+planID.String()+"&title=Sessao+tecnica&starts_at=2026-08-20T09%3A00&ends_at=2026-08-20T10%3A00&expected_updated_at="+expected.Format(time.RFC3339Nano)))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form, starts, ends, _, gotExpected := (Training{Location: time.UTC}).validateTrainingSessionEdit(request)
+	if !form.Errors.Empty() || !ends.After(starts) || !gotExpected.Equal(expected) {
+		t.Fatalf("form = %#v, starts = %v, ends = %v, expected = %v", form, starts, ends, gotExpected)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/id", strings.NewReader("plan_id=invalid&title=x&starts_at=bad&ends_at=bad&expected_updated_at=stale"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form, _, _, _, _ = (Training{Location: time.UTC}).validateTrainingSessionEdit(request)
+	for _, key := range []string{"plan_id", "title", "starts_at", "ends_at", "state"} {
+		if form.Errors[key] == "" {
+			t.Errorf("missing %s error: %#v", key, form.Errors)
+		}
+	}
+}
+
 func TestManagedTrainingPlansPageNumber(t *testing.T) {
 	for _, test := range []struct {
 		input string
