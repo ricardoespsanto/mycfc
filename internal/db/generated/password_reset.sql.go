@@ -33,7 +33,7 @@ WITH consumed AS (
   RETURNING outbox.id
 )
 UPDATE users account
-SET password_hash = $1, updated_at = $2
+SET password_hash = $1, credential_version = credential_version + 1, updated_at = $2
 FROM consumed
 WHERE account.id = consumed.user_id
 RETURNING account.id

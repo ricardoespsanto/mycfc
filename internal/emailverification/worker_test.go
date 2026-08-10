@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/textproto"
 	"strings"
 	"testing"
@@ -124,15 +125,27 @@ func TestWorkerDeliversPasswordResetAndFailsInvalidPayload(t *testing.T) {
 	resetID := uuid.New()
 	store := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: issuance.created.SealedPayload, Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}}
 	sender := &senderFake{}
-	worker := Worker{Store: store, Sender: sender, PasswordReset: resetService, Now: func() time.Time { return now }}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	worker := Worker{Store: store, Sender: sender, PasswordReset: resetService, Logger: logger, Now: func() time.Time { return now }}
 	worker.drain(context.Background())
 	if !store.cancelled || !store.completed || !strings.HasPrefix(sender.link, "https://mycfc.example/recuperar-palavra-passe/repor?token=") {
 		t.Fatalf("reset delivery = cancelled:%v completed:%v link:%q", store.cancelled, store.completed, sender.link)
 	}
 
 	invalid := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: []byte("invalid"), Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}}
-	Worker{Store: invalid, Sender: &senderFake{}, PasswordReset: resetService, Now: func() time.Time { return now }}.drain(context.Background())
+	Worker{Store: invalid, Sender: &senderFake{}, PasswordReset: resetService, Logger: logger, Now: func() time.Time { return now }}.drain(context.Background())
 	if !invalid.failed || invalid.retried || invalid.completed {
 		t.Fatalf("invalid payload state = failed:%v retried:%v completed:%v", invalid.failed, invalid.retried, invalid.completed)
+	}
+	for _, event := range []string{"password_recovery_delivered", "password_recovery_delivery_failed"} {
+		if !strings.Contains(logs.String(), event) {
+			t.Errorf("logs do not contain %q: %s", event, logs.String())
+		}
+	}
+	for _, forbidden := range []string{"member@example.test", sender.link, "token="} {
+		if strings.Contains(logs.String(), forbidden) {
+			t.Fatalf("sensitive value %q leaked into logs: %s", forbidden, logs.String())
+		}
 	}
 }

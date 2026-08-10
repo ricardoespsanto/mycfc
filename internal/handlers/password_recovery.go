@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/netip"
@@ -45,6 +46,7 @@ type PasswordRecovery struct {
 	PageMeta     components.PageMeta
 	System       System
 	Limiter      RecoveryClientLimiter
+	Logger       *slog.Logger
 	Now          func() time.Time
 	ResponseWait func(context.Context, time.Time)
 }
@@ -55,7 +57,9 @@ func (h PasswordRecovery) RequestGet(w http.ResponseWriter, r *http.Request) {
 
 func (h PasswordRecovery) RequestPost(w http.ResponseWriter, r *http.Request) {
 	started := h.now()
+	h.observe("password_recovery_requested", "received")
 	if err := r.ParseForm(); err != nil {
+		h.observe("password_recovery_not_queued", "invalid_request")
 		h.wait(r.Context(), started)
 		h.renderRequest(w, r, http.StatusBadRequest)
 		return
@@ -63,11 +67,26 @@ func (h PasswordRecovery) RequestPost(w http.ResponseWriter, r *http.Request) {
 	address, _ := httpx.RemoteIP(r.Context())
 	allowed := h.Limiter == nil || h.Limiter.Allow(address, started)
 	email, normalizeErr := validation.NormalizeEmail(r.PostForm.Get("identifier"))
-	if allowed && normalizeErr == nil && h.Service != nil {
+	switch {
+	case !allowed:
+		h.observe("password_recovery_throttled", "client")
+	case normalizeErr != nil || h.Service == nil:
+		h.observe("password_recovery_not_queued", "ineligible_identifier")
+	default:
 		// Account eligibility and per-account limits are deliberately not exposed
 		// through the response. Unexpected delivery errors are also hidden here;
 		// operational diagnosis is handled out of band without identifiers.
-		_, _ = h.Service.Issue(r.Context(), email, true)
+		_, err := h.Service.Issue(r.Context(), email, true)
+		switch {
+		case err == nil:
+			h.observe("password_recovery_queued", "queued")
+		case errors.Is(err, passwordreset.ErrTooSoon), errors.Is(err, passwordreset.ErrRateLimited):
+			h.observe("password_recovery_throttled", "account")
+		case errors.Is(err, passwordreset.ErrIneligible):
+			h.observe("password_recovery_not_queued", "ineligible_account")
+		default:
+			h.observe("password_recovery_queue_failed", "internal")
+		}
 	}
 	h.wait(r.Context(), started)
 	h.renderConfirmation(w, r)
@@ -106,6 +125,7 @@ func (h PasswordRecovery) ResetPost(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := h.Service.Consume(r.Context(), token, password)
 	if errors.Is(err, passwordreset.ErrInvalidToken) {
+		h.observe("password_recovery_link_rejected", "expired_invalid_or_replayed")
 		h.renderInvalidLink(w, r)
 		return
 	}
@@ -113,6 +133,7 @@ func (h PasswordRecovery) ResetPost(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
+	h.observe("password_recovery_consumed", "success")
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "login_flash", "A palavra-passe foi alterada. Já pode iniciar sessão.")
 	}
@@ -121,11 +142,13 @@ func (h PasswordRecovery) ResetPost(w http.ResponseWriter, r *http.Request) {
 
 func (h PasswordRecovery) tokenIsActive(ctx context.Context, token string, w http.ResponseWriter, r *http.Request) bool {
 	if token == "" || h.Service == nil {
+		h.observe("password_recovery_link_rejected", "expired_invalid_or_replayed")
 		h.renderInvalidLink(w, r)
 		return false
 	}
 	_, err := h.Service.Resolve(ctx, token)
 	if errors.Is(err, passwordreset.ErrInvalidToken) {
+		h.observe("password_recovery_link_rejected", "expired_invalid_or_replayed")
 		h.renderInvalidLink(w, r)
 		return false
 	}
@@ -134,6 +157,12 @@ func (h PasswordRecovery) tokenIsActive(ctx context.Context, token string, w htt
 		return false
 	}
 	return true
+}
+
+func (h PasswordRecovery) observe(event, outcome string) {
+	if h.Logger != nil {
+		h.Logger.Info("password recovery event", "event", event, "outcome", outcome)
+	}
 }
 
 func (h PasswordRecovery) renderRequest(w http.ResponseWriter, r *http.Request, status int) {
@@ -155,7 +184,8 @@ func (h PasswordRecovery) renderConfirmation(w http.ResponseWriter, r *http.Requ
 }
 
 func (h PasswordRecovery) renderReset(w http.ResponseWriter, r *http.Request, status int, token string, errorsByField validation.FieldErrors) {
-	h.recoveryHeaders(w, true)
+	h.recoveryHeaders(w, false)
+	w.Header().Set("Referrer-Policy", "same-origin")
 	meta := h.PageMeta
 	meta.Title = "Definir nova palavra-passe | MyCFC"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

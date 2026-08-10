@@ -1002,6 +1002,7 @@ type User struct {
 	EmailVerifiedAt    pgtype.Timestamptz `json:"email_verified_at"`
 	MinorLoginID       *string            `json:"minor_login_id"`
 	PasswordHash       *string            `json:"password_hash"`
+	CredentialVersion  int64              `json:"credential_version"`
 	GuardianID         *uuid.UUID         `json:"guardian_id"`
 	IsDependent        bool               `json:"is_dependent"`
 	DateOfBirth        pgtype.Date        `json:"date_of_birth"`

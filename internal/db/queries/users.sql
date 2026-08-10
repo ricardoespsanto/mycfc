@@ -15,7 +15,7 @@ INSERT INTO users (
     false,
     sqlc.arg(date_of_birth)
 )
-RETURNING id, name, email, password_hash, guardian_id,
+RETURNING id, name, email, password_hash, credential_version, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
 ), token AS (
     INSERT INTO email_verification_tokens (user_id, email, expires_at)
@@ -25,7 +25,7 @@ RETURNING id, name, email, password_hash, guardian_id,
     INSERT INTO email_outbox (verification_token_id)
     SELECT id FROM token
 )
-SELECT id, name, email, password_hash, guardian_id,
+SELECT id, name, email, password_hash, credential_version, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM account;
 
@@ -50,13 +50,13 @@ RETURNING id, name, email, password_hash, guardian_id,
 
 -- name: GetUserByID :one
 SELECT id, name, email, password_hash, guardian_id,
-       is_dependent, date_of_birth, is_active, created_at, updated_at
+       is_dependent, date_of_birth, is_active, created_at, updated_at, credential_version
 FROM users
 WHERE id = sqlc.arg(id);
 
 -- name: GetActiveUserByEmail :one
 SELECT id, name, email, password_hash, guardian_id,
-       is_dependent, date_of_birth, is_active, created_at, updated_at
+       is_dependent, date_of_birth, is_active, created_at, updated_at, credential_version
 FROM users
 WHERE email = sqlc.arg(email)
   AND is_active = true
@@ -99,13 +99,14 @@ FOR UPDATE;
 -- name: SetUserPasswordHash :exec
 UPDATE users
 SET password_hash = sqlc.arg(password_hash),
+    credential_version = credential_version + 1,
     updated_at = now()
 WHERE id = sqlc.arg(id)
    AND is_dependent = false;
 
 -- name: GetActiveDependentByLoginID :one
 SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
-       u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at
+       u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at, u.credential_version
 FROM users u
 JOIN users guardian ON guardian.id = u.guardian_id AND guardian.is_active = true AND guardian.is_dependent = false
 WHERE u.minor_login_id = sqlc.arg(minor_login_id)
@@ -115,7 +116,8 @@ WHERE u.minor_login_id = sqlc.arg(minor_login_id)
 -- name: IssueMinorCredential :one
 WITH issued AS (
     UPDATE users minor
-    SET minor_login_id = sqlc.arg(minor_login_id), password_hash = sqlc.arg(password_hash), updated_at = now()
+    SET minor_login_id = sqlc.arg(minor_login_id), password_hash = sqlc.arg(password_hash),
+        credential_version = minor.credential_version + 1, updated_at = now()
     FROM users guardian
     WHERE minor.id = sqlc.arg(minor_user_id)
       AND minor.is_dependent = true
@@ -140,6 +142,7 @@ SELECT minor_user_id FROM audited;
 
 -- name: GetActiveAccountByID :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
+       u.credential_version,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -153,6 +156,7 @@ WHERE u.id = sqlc.arg(id);
 
 -- name: GetActiveAccountByIDWithoutProfile :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
+       u.credential_version,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment

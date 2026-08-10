@@ -84,12 +84,22 @@ func TestPasswordResetConsumptionIsAtomicAndPreservesVerification(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := queries.ClaimEmailOutbox(ctx, dbgen.ClaimEmailOutboxParams{ClaimedAt: resetTimestamp(now.Add(time.Second)), StaleBefore: resetTimestamp(now.Add(-time.Hour))})
-	if err != nil {
+	var outboxMessageType, outboxEmail, outboxStatus string
+	var outboxTokenID uuid.UUID
+	var outboxPayload []byte
+	if err := pool.QueryRow(ctx, `SELECT outbox.message_type, outbox.password_reset_token_id, token.email, outbox.sealed_payload, outbox.status
+		FROM email_outbox outbox
+		JOIN password_reset_tokens token ON token.id = outbox.password_reset_token_id
+		WHERE outbox.password_reset_token_id = $1`, resetTokenID).
+		Scan(&outboxMessageType, &outboxTokenID, &outboxEmail, &outboxPayload, &outboxStatus); err != nil {
 		t.Fatal(err)
 	}
-	if claimed.MessageType != "PASSWORD_RESET" || claimed.PasswordResetTokenID == nil || *claimed.PasswordResetTokenID != resetTokenID || claimed.Email != email || string(claimed.SealedPayload) != "sealed" {
-		t.Fatalf("claimed password reset delivery = %#v", claimed)
+	if outboxMessageType != "PASSWORD_RESET" || outboxTokenID != resetTokenID || outboxEmail != email || string(outboxPayload) != "sealed" || outboxStatus != "PENDING" {
+		t.Fatalf("password reset outbox = type %q, token %s, email %q, payload %q, status %q", outboxMessageType, outboxTokenID, outboxEmail, outboxPayload, outboxStatus)
+	}
+	var versionBefore int64
+	if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id = $1`, userID).Scan(&versionBefore); err != nil || versionBefore != 1 {
+		t.Fatalf("version after request = %d, err = %v", versionBefore, err)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("nova palavra 7"), bcrypt.MinCost)
 	if err != nil {
@@ -126,19 +136,59 @@ func TestPasswordResetConsumptionIsAtomicAndPreservesVerification(t *testing.T) 
 		t.Fatalf("consume results = %d success, %d missing", successes, missing)
 	}
 	var storedHash string
+	var credentialVersion int64
 	var verifiedAt pgtype.Timestamptz
-	if err := pool.QueryRow(ctx, `SELECT password_hash, email_verified_at FROM users WHERE id = $1`, userID).Scan(&storedHash, &verifiedAt); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT password_hash, email_verified_at, credential_version FROM users WHERE id = $1`, userID).Scan(&storedHash, &verifiedAt, &credentialVersion); err != nil {
 		t.Fatal(err)
 	}
-	if storedHash != hashString || !verifiedAt.Valid {
-		t.Fatalf("password/verification = %q, %#v", storedHash, verifiedAt)
+	if storedHash != hashString || !verifiedAt.Valid || credentialVersion != 2 {
+		t.Fatalf("password/verification/version = %q, %#v, %d", storedHash, verifiedAt, credentialVersion)
 	}
-	var outboxStatus string
-	if err := pool.QueryRow(ctx, `SELECT status FROM email_outbox outbox JOIN password_reset_tokens token ON token.id = outbox.password_reset_token_id WHERE token.user_id = $1`, userID).Scan(&outboxStatus); err != nil {
+	var consumedOutboxStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM email_outbox outbox JOIN password_reset_tokens token ON token.id = outbox.password_reset_token_id WHERE token.user_id = $1`, userID).Scan(&consumedOutboxStatus); err != nil {
 		t.Fatal(err)
 	}
-	if outboxStatus != "CANCELLED" {
-		t.Fatalf("consumed token outbox status = %q", outboxStatus)
+	if consumedOutboxStatus != "CANCELLED" {
+		t.Fatalf("consumed token outbox status = %q", consumedOutboxStatus)
+	}
+}
+
+func TestPasswordResetExpiryAndSupersessionRejectWithoutSleeping(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	userID, email := insertPasswordResetUser(t, ctx, pool)
+	queries := dbgen.New(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	firstDigest := sha256.Sum256([]byte("superseded-" + uuid.NewString()))
+	secondDigest := sha256.Sum256([]byte("expired-" + uuid.NewString()))
+	for index, digest := range [][sha256.Size]byte{firstDigest, secondDigest} {
+		createdAt := now.Add(time.Duration(index) * time.Minute)
+		if _, err := queries.CreatePasswordReset(ctx, dbgen.CreatePasswordResetParams{
+			UserID: userID, Email: email, TokenDigest: digest[:], SealedPayload: []byte("sealed"),
+			CreatedAt: resetTimestamp(createdAt), ExpiresAt: resetTimestamp(createdAt.Add(time.Hour)), Throttle: false,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := queries.ResolvePasswordResetToken(ctx, dbgen.ResolvePasswordResetTokenParams{
+		TokenDigest: firstDigest[:], ResolvedAt: resetTimestamp(now.Add(2 * time.Minute)),
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("superseded token resolve error = %v", err)
+	}
+	if _, err := queries.ResolvePasswordResetToken(ctx, dbgen.ResolvePasswordResetTokenParams{
+		TokenDigest: secondDigest[:], ResolvedAt: resetTimestamp(now.Add(2 * time.Hour)),
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expired token resolve error = %v", err)
+	}
+	var credentialVersion int64
+	if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id = $1`, userID).Scan(&credentialVersion); err != nil || credentialVersion != 1 {
+		t.Fatalf("credential version after rejected links = %d, err = %v", credentialVersion, err)
 	}
 }
 

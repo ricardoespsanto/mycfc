@@ -3,8 +3,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"strings"
@@ -12,12 +16,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
+	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
@@ -285,9 +292,115 @@ func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	if _, err := queries.GetActiveDependentByLoginID(ctx, &loginID); err != nil {
 		t.Fatalf("issued minor cannot log in: %v", err)
 	}
+	var credentialVersion int64
+	if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id = $1`, minor.ID).Scan(&credentialVersion); err != nil || credentialVersion != 2 {
+		t.Fatalf("issued credential version = %d, err = %v", credentialVersion, err)
+	}
+	recoveredHash := "recovered-hash"
+	if _, err := queries.IssueMinorCredential(ctx, dbgen.IssueMinorCredentialParams{MinorLoginID: &loginID, PasswordHash: &recoveredHash, MinorUserID: minor.ID, GuardianUserID: guardian.ID, ActorUserID: actor.ID, Action: "RECOVERED"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id = $1`, minor.ID).Scan(&credentialVersion); err != nil || credentialVersion != 3 {
+		t.Fatalf("recovered credential version = %d, err = %v", credentialVersion, err)
+	}
 	var auditCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM minor_credential_audit WHERE minor_user_id = $1 AND action = 'ISSUED'`, minor.ID).Scan(&auditCount); err != nil || auditCount != 1 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM minor_credential_audit WHERE minor_user_id = $1`, minor.ID).Scan(&auditCount); err != nil || auditCount != 2 {
 		t.Fatalf("audit count = %d, err = %v", auditCount, err)
+	}
+}
+
+func TestAdministratorPasswordReplacementRevokesOlderSessions(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	email := "credential-admin-reset-" + uuid.NewString() + "@example.test"
+	account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Administrador direto", Email: &email, PasswordHash: integrationStringPtr("old-hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, account.ID) })
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: account.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	newHash := "new-hash"
+	if err := queries.SetUserPasswordHash(ctx, dbgen.SetUserPasswordHashParams{ID: account.ID, PasswordHash: &newHash}); err != nil {
+		t.Fatal(err)
+	}
+	var storedHash string
+	var credentialVersion int64
+	if err := pool.QueryRow(ctx, `SELECT password_hash, credential_version FROM users WHERE id = $1`, account.ID).Scan(&storedHash, &credentialVersion); err != nil {
+		t.Fatal(err)
+	}
+	if storedHash != newHash || credentialVersion != 2 {
+		t.Fatalf("administrator credential = %q, version %d", storedHash, credentialVersion)
+	}
+}
+
+func TestPasswordResetFlowRejectsPreResetSession(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	email := "session-reset-" + uuid.NewString() + "@example.test"
+	oldPassword, newPassword := "old password 7", "new password 8"
+	oldHash, err := bcrypt.GenerateFromPassword([]byte(oldPassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Sessão anterior", Email: &email, PasswordHash: integrationStringPtr(string(oldHash)), DateOfBirth: pgtype.Date{Time: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, account.ID) })
+
+	sessions := scs.New()
+	auth := Auth{Users: queries, Sessions: sessions}
+	protected := sessions.LoadAndSave(auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))))
+	seed := httptest.NewRecorder()
+	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		sessions.Put(r.Context(), "user_id", account.ID.String())
+		sessions.Put(r.Context(), "credential_version", account.CredentialVersion)
+	})).ServeHTTP(seed, httptest.NewRequest(http.MethodGet, "/", nil))
+	cookie := seed.Result().Cookies()[0]
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	protected.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("pre-reset session status = %d", response.Code)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	rawToken := bytes.Repeat([]byte{0x42}, passwordreset.TokenBytes)
+	service := passwordreset.Service{
+		Store: queries, BaseURL: "https://mycfc.example", Key: []byte("0123456789abcdef0123456789abcdef"),
+		Rand: bytes.NewReader(append(append([]byte{}, rawToken...), bytes.Repeat([]byte{0x24}, 12)...)), Now: func() time.Time { return now },
+	}
+	if _, err := service.Issue(ctx, email, false); err != nil {
+		t.Fatal(err)
+	}
+	var outboxStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM email_outbox outbox JOIN password_reset_tokens token ON token.id = outbox.password_reset_token_id WHERE token.user_id = $1`, account.ID).Scan(&outboxStatus); err != nil || outboxStatus != "PENDING" {
+		t.Fatalf("outbox status = %q, err = %v", outboxStatus, err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	if _, err := service.Consume(ctx, token, newPassword); err != nil {
+		t.Fatal(err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	protected.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login?next=%2Fprotected" {
+		t.Fatalf("post-reset session response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+	var storedHash string
+	var credentialVersion int64
+	if err := pool.QueryRow(ctx, `SELECT password_hash, credential_version FROM users WHERE id = $1`, account.ID).Scan(&storedHash, &credentialVersion); err != nil {
+		t.Fatal(err)
+	}
+	if credentialVersion != account.CredentialVersion+1 || bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(newPassword)) != nil || bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(oldPassword)) == nil {
+		t.Fatalf("password reset did not replace credential at version %d", credentialVersion)
 	}
 }
 

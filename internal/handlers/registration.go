@@ -45,7 +45,8 @@ type RegistrationInput struct {
 }
 
 type RegistrationResult struct {
-	UserID uuid.UUID
+	UserID            uuid.UUID
+	CredentialVersion int64
 }
 
 type RegistrationStore interface {
@@ -117,6 +118,7 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Sessions.Put(r.Context(), "user_id", result.UserID.String())
+	h.Sessions.Put(r.Context(), "credential_version", result.CredentialVersion)
 	h.Sessions.Put(r.Context(), "last_seen_at", h.now().UTC().Format(time.RFC3339Nano))
 	httpx.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }

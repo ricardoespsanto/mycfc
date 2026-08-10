@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const email = `e2e-${Date.now()}@example.test`;
+const recoveryEmail = `e2e-recovery-${Date.now()}@example.test`;
 const guardianEmail = `e2e-guardian-${Date.now()}@example.test`;
 const leisureEmail = `e2e-leisure-${Date.now()}@example.test`;
 const athleteEmail = `e2e-athlete-${Date.now()}@example.test`;
@@ -13,6 +14,15 @@ const validPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0
 
 async function expectNoSeriousAxeViolations(page) {
   const results = await new AxeBuilder({ page }).analyze();
+  const serious = results.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical');
+  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+}
+
+async function expectNoSeriousFormAxeViolations(page) {
+  const results = await new AxeBuilder({ page })
+    .include('main')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze();
   const serious = results.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical');
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }
@@ -52,6 +62,27 @@ async function verificationLinkFor(recipient) {
   throw new Error(`verification email for ${recipient} was not delivered`);
 }
 
+async function recoveryLinkFor(recipient) {
+  const apiBase = process.env.MAILPIT_API_BASE || 'http://127.0.0.1:8025';
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const listing = await fetch(`${apiBase}/api/v1/messages`).then((response) => response.json());
+    for (const summary of listing.messages.filter((message) => message.To.some(({ Address }) => Address === recipient))) {
+      const message = await fetch(`${apiBase}/api/v1/message/${summary.ID}`).then((response) => response.json());
+      const match = message.Text.match(/https?:\/\/[^\s]+\/recuperar-palavra-passe\/repor\?token=[^\s]+/);
+      if (match) {
+        const delivered = new URL(match[0]);
+        const testOrigin = new URL(baseURL);
+        delivered.protocol = testOrigin.protocol;
+        delivered.host = testOrigin.host;
+        return delivered.toString();
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`password recovery email for ${recipient} was not delivered`);
+}
+
 test.describe('authentication', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -78,6 +109,7 @@ test.describe('authentication', () => {
   });
 
   test('requests password recovery and handles invalid reset links accessibly', async ({ page, browser }) => {
+    test.setTimeout(120_000);
     await page.goto('/login');
     const recoveryLink = page.getByRole('link', { name: 'Recuperar palavra-passe' });
     await expect(recoveryLink).toHaveAttribute('href', '/recuperar-palavra-passe');
@@ -110,6 +142,10 @@ test.describe('authentication', () => {
     const noJavaScriptPage = await context.newPage();
     await noJavaScriptPage.goto('/recuperar-palavra-passe');
     await noJavaScriptPage.getByLabel('Correio eletrónico').fill('another-unknown@example.test');
+    await noJavaScriptPage.getByRole('button', { name: 'Enviar instruções' }).click();
+    await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
+    await noJavaScriptPage.goto('/recuperar-palavra-passe');
+    await noJavaScriptPage.getByLabel('Correio eletrónico').fill('CFC-AB12CD34');
     await noJavaScriptPage.getByRole('button', { name: 'Enviar instruções' }).click();
     await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
     await context.close();
@@ -212,6 +248,75 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/fleet');
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
+  });
+
+  test('resets a password from Mailpit and revokes every older session', async ({ browser }) => {
+    test.setTimeout(300_000);
+    const newPassword = 'updated password 8';
+
+    const oldSessionContext = await browser.newContext({ baseURL });
+    const oldSessionPage = await oldSessionContext.newPage();
+    await oldSessionPage.goto('/registo');
+    await oldSessionPage.getByLabel('Nome').fill('Pessoa de recuperação');
+    await oldSessionPage.getByLabel('Correio eletrónico').fill(recoveryEmail);
+    await oldSessionPage.getByLabel('Data de nascimento').fill('1990-01-01');
+    await oldSessionPage.locator('#password').fill(password);
+    await oldSessionPage.getByLabel('Confirmar palavra-passe').fill(password);
+    await oldSessionPage.getByLabel(/Aceito os termos gerais/).check();
+    await oldSessionPage.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await oldSessionPage.waitForTimeout(2100);
+    await oldSessionPage.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(oldSessionPage).toHaveURL('/today');
+
+    const requestContext = await browser.newContext({ baseURL, viewport: { width: 320, height: 720 } });
+    const requestPage = await requestContext.newPage();
+    await requestPage.goto('/login');
+    await requestPage.getByRole('link', { name: 'Recuperar palavra-passe' }).click();
+    await requestPage.getByLabel('Correio eletrónico').fill(recoveryEmail);
+    await requestPage.getByRole('button', { name: 'Enviar instruções' }).click();
+    await expect(requestPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
+
+    const recoveryLink = await recoveryLinkFor(recoveryEmail);
+    const resetPage = await requestContext.newPage();
+    await resetPage.route('**/assets/*.js', (route) => route.abort());
+    await resetPage.goto(recoveryLink);
+    await expect(resetPage.getByRole('heading', { name: 'Definir nova palavra-passe' })).toBeVisible();
+    await expectNoSeriousFormAxeViolations(resetPage);
+    await resetPage.locator('#password').fill('short');
+    await resetPage.getByLabel('Confirmar nova palavra-passe').fill('different password 9');
+    await resetPage.getByRole('button', { name: 'Alterar palavra-passe' }).click();
+    await expect(resetPage.locator('.error-summary')).toBeFocused();
+    await expect(resetPage.locator('#password')).toHaveValue('');
+    await expect(resetPage.getByLabel('Confirmar nova palavra-passe')).toHaveValue('');
+    await resetPage.locator('#password').fill(newPassword);
+    await resetPage.getByLabel('Confirmar nova palavra-passe').fill(newPassword);
+    await resetPage.getByRole('button', { name: 'Alterar palavra-passe' }).click();
+    await expect(resetPage).toHaveURL('/login');
+    await expect(resetPage.getByRole('status')).toHaveText('A palavra-passe foi alterada. Já pode iniciar sessão.');
+
+    await oldSessionPage.goto('/today');
+    await expect(oldSessionPage).toHaveURL(/\/login\?next=%2Ftoday$/);
+
+    await resetPage.getByLabel('Correio eletrónico').fill(recoveryEmail);
+    await resetPage.getByLabel('Palavra-passe').fill(newPassword);
+    await resetPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await expect(resetPage).toHaveURL('/today');
+
+    const rejectedContext = await browser.newContext({ baseURL });
+    const rejectedPage = await rejectedContext.newPage();
+    await rejectedPage.goto('/login');
+    await rejectedPage.getByLabel('Correio eletrónico').fill(recoveryEmail);
+    await rejectedPage.getByLabel('Palavra-passe').fill(password);
+    await rejectedPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await expect(rejectedPage).toHaveURL('/login');
+    await expect(rejectedPage.locator('.error-summary')).toBeFocused();
+    const replayResponse = await rejectedPage.goto(recoveryLink);
+    expect(replayResponse?.status()).toBe(422);
+    await expect(rejectedPage.getByRole('heading', { name: 'Este link já não está disponível' })).toBeVisible();
+
+    await rejectedContext.close();
+    await requestContext.close();
+    await oldSessionContext.close();
   });
 
   test('creates a dependent with JavaScript disabled', async ({ page, browser }) => {

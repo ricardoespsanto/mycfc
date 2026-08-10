@@ -68,6 +68,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 					ID: fallback.ID, Name: fallback.Name, Email: fallback.Email, IsDependent: fallback.IsDependent,
 					IsActive: fallback.IsActive, LeaderboardVisible: fallback.LeaderboardVisible,
 					EmailVerified: fallback.EmailVerified, IsAdmin: fallback.IsAdmin, ProfileComplete: true,
+					CredentialVersion: fallback.CredentialVersion,
 				}
 			}
 			err = fallbackErr
@@ -79,6 +80,11 @@ func (a Auth) Load(next http.Handler) http.Handler {
 		}
 		if err != nil {
 			a.System.InternalError(w, r)
+			return
+		}
+		if sessionVersion := a.Sessions.GetInt64(r.Context(), "credential_version"); sessionVersion <= 0 || sessionVersion != user.CredentialVersion {
+			a.destroy(r.Context())
+			next.ServeHTTP(w, r)
 			return
 		}
 		programmes, err := a.Users.ListActiveMembershipProgrammeCodesForUser(r.Context(), id)

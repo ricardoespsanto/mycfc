@@ -28,10 +28,18 @@ func (l *loginLookup) GetActiveUserByEmail(_ context.Context, email *string) (db
 	if email != nil {
 		l.email = *email
 	}
-	return l.user, l.err
+	user := l.user
+	if user.CredentialVersion == 0 {
+		user.CredentialVersion = 1
+	}
+	return user, l.err
 }
 func (l *loginLookup) GetActiveDependentByLoginID(_ context.Context, _ *string) (dbgen.GetActiveDependentByLoginIDRow, error) {
-	return l.minor, l.err
+	minor := l.minor
+	if minor.CredentialVersion == 0 {
+		minor.CredentialVersion = 1
+	}
+	return minor, l.err
 }
 
 func TestLoginGetRendersForm(t *testing.T) {
@@ -167,6 +175,9 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 	}
 	if got := sessions.GetString(ctx, "user_id"); got != lookup.user.ID.String() {
 		t.Fatalf("session user_id = %q", got)
+	}
+	if got := sessions.GetInt64(ctx, "credential_version"); got != 1 {
+		t.Fatalf("session credential_version = %d", got)
 	}
 	if sessions.GetString(ctx, "last_seen_at") == "" {
 		t.Fatal("session last_seen_at is empty")

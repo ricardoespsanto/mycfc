@@ -44,7 +44,7 @@ INSERT INTO users (
     false,
     $4
 )
-RETURNING id, name, email, password_hash, guardian_id,
+RETURNING id, name, email, password_hash, credential_version, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
 ), token AS (
     INSERT INTO email_verification_tokens (user_id, email, expires_at)
@@ -54,7 +54,7 @@ RETURNING id, name, email, password_hash, guardian_id,
     INSERT INTO email_outbox (verification_token_id)
     SELECT id FROM token
 )
-SELECT id, name, email, password_hash, guardian_id,
+SELECT id, name, email, password_hash, credential_version, guardian_id,
        is_dependent, date_of_birth, is_active, created_at, updated_at
 FROM account
 `
@@ -67,16 +67,17 @@ type CreateAdultUserParams struct {
 }
 
 type CreateAdultUserRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                uuid.UUID          `json:"id"`
+	Name              string             `json:"name"`
+	Email             *string            `json:"email"`
+	PasswordHash      *string            `json:"password_hash"`
+	CredentialVersion int64              `json:"credential_version"`
+	GuardianID        *uuid.UUID         `json:"guardian_id"`
+	IsDependent       bool               `json:"is_dependent"`
+	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
+	IsActive          bool               `json:"is_active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams) (CreateAdultUserRow, error) {
@@ -92,6 +93,7 @@ func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams
 		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
+		&i.CredentialVersion,
 		&i.GuardianID,
 		&i.IsDependent,
 		&i.DateOfBirth,
@@ -207,6 +209,7 @@ func (q *Queries) GetAccountByEmail(ctx context.Context, email *string) (GetAcco
 
 const getActiveAccountByID = `-- name: GetActiveAccountByID :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
+       u.credential_version,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -227,6 +230,7 @@ type GetActiveAccountByIDRow struct {
 	IsActive           bool      `json:"is_active"`
 	LeaderboardVisible bool      `json:"leaderboard_visible"`
 	EmailVerified      bool      `json:"email_verified"`
+	CredentialVersion  int64     `json:"credential_version"`
 	IsAdmin            bool      `json:"is_admin"`
 	ProfileComplete    bool      `json:"profile_complete"`
 }
@@ -242,6 +246,7 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 		&i.IsActive,
 		&i.LeaderboardVisible,
 		&i.EmailVerified,
+		&i.CredentialVersion,
 		&i.IsAdmin,
 		&i.ProfileComplete,
 	)
@@ -250,6 +255,7 @@ func (q *Queries) GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetAc
 
 const getActiveAccountByIDWithoutProfile = `-- name: GetActiveAccountByIDWithoutProfile :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
+       u.credential_version,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -268,6 +274,7 @@ type GetActiveAccountByIDWithoutProfileRow struct {
 	IsActive           bool      `json:"is_active"`
 	LeaderboardVisible bool      `json:"leaderboard_visible"`
 	EmailVerified      bool      `json:"email_verified"`
+	CredentialVersion  int64     `json:"credential_version"`
 	IsAdmin            bool      `json:"is_admin"`
 }
 
@@ -282,6 +289,7 @@ func (q *Queries) GetActiveAccountByIDWithoutProfile(ctx context.Context, id uui
 		&i.IsActive,
 		&i.LeaderboardVisible,
 		&i.EmailVerified,
+		&i.CredentialVersion,
 		&i.IsAdmin,
 	)
 	return i, err
@@ -289,7 +297,7 @@ func (q *Queries) GetActiveAccountByIDWithoutProfile(ctx context.Context, id uui
 
 const getActiveDependentByLoginID = `-- name: GetActiveDependentByLoginID :one
 SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
-       u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at
+       u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at, u.credential_version
 FROM users u
 JOIN users guardian ON guardian.id = u.guardian_id AND guardian.is_active = true AND guardian.is_dependent = false
 WHERE u.minor_login_id = $1
@@ -298,16 +306,17 @@ WHERE u.minor_login_id = $1
 `
 
 type GetActiveDependentByLoginIDRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                uuid.UUID          `json:"id"`
+	Name              string             `json:"name"`
+	Email             *string            `json:"email"`
+	PasswordHash      *string            `json:"password_hash"`
+	GuardianID        *uuid.UUID         `json:"guardian_id"`
+	IsDependent       bool               `json:"is_dependent"`
+	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
+	IsActive          bool               `json:"is_active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CredentialVersion int64              `json:"credential_version"`
 }
 
 func (q *Queries) GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (GetActiveDependentByLoginIDRow, error) {
@@ -324,13 +333,14 @@ func (q *Queries) GetActiveDependentByLoginID(ctx context.Context, minorLoginID 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
 
 const getActiveUserByEmail = `-- name: GetActiveUserByEmail :one
 SELECT id, name, email, password_hash, guardian_id,
-       is_dependent, date_of_birth, is_active, created_at, updated_at
+       is_dependent, date_of_birth, is_active, created_at, updated_at, credential_version
 FROM users
 WHERE email = $1
   AND is_active = true
@@ -338,16 +348,17 @@ WHERE email = $1
 `
 
 type GetActiveUserByEmailRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                uuid.UUID          `json:"id"`
+	Name              string             `json:"name"`
+	Email             *string            `json:"email"`
+	PasswordHash      *string            `json:"password_hash"`
+	GuardianID        *uuid.UUID         `json:"guardian_id"`
+	IsDependent       bool               `json:"is_dependent"`
+	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
+	IsActive          bool               `json:"is_active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CredentialVersion int64              `json:"credential_version"`
 }
 
 func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (GetActiveUserByEmailRow, error) {
@@ -364,6 +375,7 @@ func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (GetA
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
@@ -448,22 +460,23 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email *string) (GetUserByE
 
 const getUserByID = `-- name: GetUserByID :one
 SELECT id, name, email, password_hash, guardian_id,
-       is_dependent, date_of_birth, is_active, created_at, updated_at
+       is_dependent, date_of_birth, is_active, created_at, updated_at, credential_version
 FROM users
 WHERE id = $1
 `
 
 type GetUserByIDRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Email        *string            `json:"email"`
-	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
-	IsDependent  bool               `json:"is_dependent"`
-	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                uuid.UUID          `json:"id"`
+	Name              string             `json:"name"`
+	Email             *string            `json:"email"`
+	PasswordHash      *string            `json:"password_hash"`
+	GuardianID        *uuid.UUID         `json:"guardian_id"`
+	IsDependent       bool               `json:"is_dependent"`
+	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
+	IsActive          bool               `json:"is_active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CredentialVersion int64              `json:"credential_version"`
 }
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error) {
@@ -480,6 +493,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
@@ -505,7 +519,8 @@ func (q *Queries) GrantPlatformRoleByCode(ctx context.Context, arg GrantPlatform
 const issueMinorCredential = `-- name: IssueMinorCredential :one
 WITH issued AS (
     UPDATE users minor
-    SET minor_login_id = $1, password_hash = $2, updated_at = now()
+    SET minor_login_id = $1, password_hash = $2,
+        credential_version = minor.credential_version + 1, updated_at = now()
     FROM users guardian
     WHERE minor.id = $3
       AND minor.is_dependent = true
@@ -732,6 +747,7 @@ func (q *Queries) LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID,
 const setUserPasswordHash = `-- name: SetUserPasswordHash :exec
 UPDATE users
 SET password_hash = $1,
+    credential_version = credential_version + 1,
     updated_at = now()
 WHERE id = $2
    AND is_dependent = false

@@ -91,10 +91,10 @@ func TestPasswordRecoveryRoutesRenderCSRFAndRejectCrossSitePosts(t *testing.T) {
 type routerCurrentUserLookup struct{ id uuid.UUID }
 
 func (l routerCurrentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error) {
-	return dbgen.GetActiveAccountByIDRow{ID: l.id, IsActive: true}, nil
+	return dbgen.GetActiveAccountByIDRow{ID: l.id, IsActive: true, CredentialVersion: 1}, nil
 }
 func (l routerCurrentUserLookup) GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error) {
-	return dbgen.GetActiveAccountByIDWithoutProfileRow{ID: l.id, IsActive: true}, nil
+	return dbgen.GetActiveAccountByIDWithoutProfileRow{ID: l.id, IsActive: true, CredentialVersion: 1}, nil
 }
 func (routerCurrentUserLookup) ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error) {
 	return nil, nil
@@ -113,6 +113,7 @@ func TestPasswordRecoveryRoutesRedirectAuthenticatedAccounts(t *testing.T) {
 	seed := httptest.NewRecorder()
 	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		sessions.Put(r.Context(), "user_id", id.String())
+		sessions.Put(r.Context(), "credential_version", int64(1))
 	})).ServeHTTP(seed, httptest.NewRequest(http.MethodGet, "/", nil))
 	cookie := seed.Result().Cookies()[0]
 

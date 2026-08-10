@@ -26,7 +26,7 @@ type registrationStore struct {
 func (s *registrationStore) RegisterAdult(_ context.Context, input RegistrationInput) (RegistrationResult, error) {
 	s.called = true
 	s.input = input
-	return RegistrationResult{UserID: uuid.MustParse("1b7b67c8-5072-4a4f-a7f3-7cc3934bb8b0")}, s.err
+	return RegistrationResult{UserID: uuid.MustParse("1b7b67c8-5072-4a4f-a7f3-7cc3934bb8b0"), CredentialVersion: 1}, s.err
 }
 
 type registrationTurnstileVerifier struct {
@@ -164,6 +164,13 @@ func TestRegistrationPostCreatesAccountAndSession(t *testing.T) {
 	}
 	if len(response.Result().Cookies()) == 0 {
 		t.Fatal("successful registration did not set a session cookie")
+	}
+	ctx, err := handler.Sessions.Load(context.Background(), response.Result().Cookies()[0].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := handler.Sessions.GetInt64(ctx, "credential_version"); got != 1 {
+		t.Fatalf("session credential_version = %d", got)
 	}
 }
 
