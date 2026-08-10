@@ -136,6 +136,11 @@ func TestCredentialVersionExistsInBaselineAndForwardMigration(t *testing.T) {
 			t.Errorf("forward migration does not contain %q", expected)
 		}
 	}
+	for _, expected := range []string{"ADD COLUMN IF NOT EXISTS credential_version", "FROM pg_constraint", "conrelid = 'users'::regclass"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration is not baseline-safe: missing %q", expected)
+		}
+	}
 	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM users"} {
 		if strings.Contains(strings.ToUpper(string(migration)), prohibited) {
 			t.Errorf("forward migration contains prohibited statement %q", prohibited)
