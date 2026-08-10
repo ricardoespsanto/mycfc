@@ -610,7 +610,7 @@ test.describe('authentication', () => {
     await page.locator('#event-cancellation-reason').fill(cancellationReason);
     await page.locator('#confirm-event-cancellation').check();
     await page.getByRole('button', { name: 'Cancelar evento' }).click();
-    await expect(page.getByRole('status')).toHaveText('Evento cancelado.');
+    await expect(page.locator('.status-message')).toHaveText('Evento cancelado.');
     await expect(page.getByText('Cancelado', { exact: true })).toBeVisible();
     await expect(page.getByText(cancellationReason)).toBeVisible();
 
