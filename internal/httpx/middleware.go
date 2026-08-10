@@ -153,7 +153,7 @@ func SecurityHeadersMiddleware(production bool) Middleware {
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
-				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self' https://www.googleapis.com; font-src 'self'"
+				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'"
 				if production {
 					w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 					csp += "; upgrade-insecure-requests"
