@@ -1,6 +1,6 @@
 # Single-host deployment
 
-This directory runs MyCFC on one Hetzner host: Cloudflare Tunnel is the public edge, Caddy and PostgreSQL have no host ports, and a systemd timer pulls approved immutable ECR releases.
+This directory runs MyCFC on one Hetzner host: Cloudflare Tunnel is the public edge, Caddy and PostgreSQL have no host ports, and a systemd timer promotes approved immutable ECR releases through blue-green application slots.
 
 Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the private Docker network. Caddy trusts client-IP headers only from private Docker ranges. Keep the Hetzner firewall closed to public web traffic.
 
@@ -12,7 +12,7 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
 5. Run `sudo sh deployment/install.sh` from this checkout.
 
-The installer validates the Compose configuration, installs and enables the pull-release systemd timer, then starts an immediate release check. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
+The installer validates the Compose configuration, prepares persistent routing state under `/etc/mycfc/deployment`, installs the pull-release systemd timer, and performs one release check before enabling periodic polling. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
 
 ## Required host environment
 
@@ -132,7 +132,16 @@ Terraform also creates one Secrets Manager secret named `/mycfc/production/app-s
 }
 ```
 
-Terraform creates the host AWS identity and grants it `ssm:GetParameter` on `/mycfc/production/*`, `secretsmanager:GetSecretValue` on `/mycfc/production/app-secrets`, ECR pull/read access, and repair-photo S3 object access. Install the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` in `/etc/mycfc/mycfc.env` as the host `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP. After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The timer selects the latest valid release tag through ECR's authenticated registry API, resolves its digest locally, then updates `MYCFC_IMAGE`, `APP_VERSION`, and `GIT_SHA` atomically. It checks readiness, login, and the fingerprinted JavaScript asset through private Caddy using the production virtual host; a failure restores the prior release. Public Cloudflare checks must originate outside the Hetzner host.
+Terraform creates the host AWS identity and grants it `ssm:GetParameter` on `/mycfc/production/*`, `secretsmanager:GetSecretValue` on `/mycfc/production/app-secrets`, ECR pull/read access, and repair-photo S3 object access. Install the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` in `/etc/mycfc/mycfc.env` as the host `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP.
+
+After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The release agent starts the inactive `app-blue` or `app-green` slot and validates that candidate directly: liveness, readiness, login, and the fingerprinted JavaScript asset referenced by the candidate's own HTML must all succeed. Only then does it update the persisted Caddy upstream and atomically reload Caddy. The prior slot remains available for rollback, while `cloudflared`, Caddy, and PostgreSQL remain running throughout an ordinary application release.
+
+If a candidate fails, the active Caddy route and current application remain unchanged, the prior environment file is restored, and the failed image digest is written to `/etc/mycfc/deployment/failed-release-digest`. Polling will not retry that exact digest; publishing a replacement release resumes promotion automatically. To retry the same digest after correcting an external dependency, remove the marker deliberately and start one release check:
+
+```sh
+sudo rm /etc/mycfc/deployment/failed-release-digest
+sudo systemctl start mycfc-pull-release.service
+```
 
 The retained AWS Terraform stack provisions the SES identity, authoritative Cloudflare DKIM and MAIL FROM records, least-privilege SMTP credentials, CSRF and email-verification HMAC keys, SSM parameters, and Secrets Manager secret. Confirm SES production access and run `sudo ./deployment/verify-ses.sh`. The smoke test sends only to the AWS SES mailbox simulator.
 
@@ -163,19 +172,24 @@ sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 aws logs tail /mycfc/production/deployment --region eu-west-1 --since 1h
 ```
 
-Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before replacing the application container, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before the application is replaced.
+Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before starting a candidate, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before a candidate receives traffic.
+
+The active application slot is recorded in `/etc/mycfc/deployment/active-slot`, and `/etc/mycfc/deployment/caddy-upstream.caddy` is generated from that state. Inspect both during an incident with:
+
+```sh
+sudo cat /etc/mycfc/deployment/active-slot
+sudo cat /etc/mycfc/deployment/caddy-upstream.caddy
+```
 
 ## Release rollback and incident access
 
-The release agent saves the last known-good environment as `/etc/mycfc/mycfc.env.previous` before every rollout. A failed rollout restores it automatically. To hold a manual rollback while investigating a bad release, stop the polling timer before restoring it:
+The release agent saves the last known-good environment as `/etc/mycfc/mycfc.env.previous` before every rollout. A failed candidate is quarantined and never receives traffic. A failure discovered after the Caddy reload restores the previous upstream automatically. To hold a manual rollback while investigating a release, stop the polling timer first:
 
 ```sh
 sudo systemctl stop mycfc-pull-release.timer
-sudo cp /etc/mycfc/mycfc.env.previous /etc/mycfc/mycfc.env
-sudo docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml up -d --wait --force-recreate app
 ```
 
-Check `/health/ready`, `/login`, and the fingerprinted browser asset through Cloudflare from an external network. Leave the timer stopped until a replacement release is available; restarting it immediately promotes the newest ECR release again. Restore normal polling with `sudo systemctl start mycfc-pull-release.timer`.
+Use the recorded inactive slot and retained previous environment for a deliberate manual rollback; update the Caddy fragment and reload only after confirming that slot is healthy. Check `/health/ready`, `/login`, and the fingerprinted browser asset through Cloudflare from an external network. Leave the timer stopped until a replacement release is available. Restore normal polling with `sudo systemctl start mycfc-pull-release.timer`.
 
 For a host incident, use the separate operator SSH key from an approved SSH CIDR. The deploy key is limited to deployment automation. Keep the Cloudflare Tunnel public hostname enabled during application rollback. Revert the public hostname to the retained AWS origin only during the approved rollback window, validate the same external checks, and do not retire AWS resources until that path and the PostgreSQL restore drill are accepted.
 

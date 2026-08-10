@@ -3,6 +3,7 @@ set -eu
 
 env_file=/etc/mycfc/mycfc.env
 deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+state_dir=/etc/mycfc/deployment
 
 if [ "$(id -u)" -ne 0 ]; then
 	printf '%s\n' 'Run this script as root so it can verify the protected environment file.' >&2
@@ -22,6 +23,22 @@ fi
 if ! command -v aws >/dev/null 2>&1; then
 	printf '%s\n' 'Missing required command: aws' >&2
 	exit 1
+fi
+
+install -d -m 0755 "$state_dir"
+if [ ! -f "$state_dir/active-slot" ]; then
+	printf '%s\n' legacy >"$state_dir/active-slot"
+	chmod 0644 "$state_dir/active-slot"
+fi
+if [ ! -f "$state_dir/caddy-upstream.caddy" ]; then
+	cat >"$state_dir/caddy-upstream.caddy" <<'EOF'
+reverse_proxy app:8080 {
+	health_uri /health/live
+	health_interval 10s
+	health_timeout 2s
+}
+EOF
+	chmod 0644 "$state_dir/caddy-upstream.caddy"
 fi
 
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" config -q
@@ -50,6 +67,10 @@ install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/m
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.timer" /etc/systemd/system/mycfc-postgres-backup.timer
 systemctl daemon-reload
-systemctl enable --now mycfc-pull-release.timer
+systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
+docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
+docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy
 systemctl start mycfc-pull-release.service
+docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps cloudflared
+systemctl start mycfc-pull-release.timer

@@ -9,7 +9,7 @@ AIR := $(BIN_DIR)/air
 TERRAFORM_VERSION := 1.15.8
 TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-deployment test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -66,6 +66,9 @@ ui-review-screenshots: ui-review-reset ## Capture deterministic desktop/mobile U
 test: ## Run unit tests
 	go test ./internal/... ./cmd/...
 
+test-deployment: ## Run production release orchestration tests
+	sh deployment/pull-release_test.sh
+
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
 	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -tags=integration ./internal/db/... ./internal/handlers/... ./internal/storage/...
 
@@ -83,7 +86,7 @@ terraform-check: terraform-fmt terraform-validate ## Run all containerized Terra
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }
 
-verify-foundation: fmt-check ## Run fast focused checks and build browser assets
+verify-foundation: fmt-check test-deployment ## Run fast focused checks and build browser assets
 	go vet ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	go test ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	npm ci
