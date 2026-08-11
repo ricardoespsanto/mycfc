@@ -1,7 +1,14 @@
-CREATE TYPE suggestion_category AS ENUM ('FACILITIES', 'EQUIPMENT', 'TRAINING', 'EVENTS', 'COMMUNICATION', 'OTHER');
-CREATE TYPE suggestion_status AS ENUM ('SUBMITTED', 'UNDER_REVIEW', 'PLANNED', 'DECLINED', 'COMPLETED');
+DO $$ BEGIN
+ CREATE TYPE suggestion_category AS ENUM ('FACILITIES', 'EQUIPMENT', 'TRAINING', 'EVENTS', 'COMMUNICATION', 'OTHER');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE suggestions (
+DO $$ BEGIN
+ CREATE TYPE suggestion_status AS ENUM ('SUBMITTED', 'UNDER_REVIEW', 'PLANNED', 'DECLINED', 'COMPLETED');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS suggestions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  requester_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  category suggestion_category NOT NULL,
@@ -20,5 +27,5 @@ CREATE TABLE suggestions (
  CONSTRAINT suggestions_terminal_response_valid CHECK (status NOT IN ('DECLINED', 'COMPLETED') OR staff_response IS NOT NULL)
 );
 
-CREATE INDEX suggestions_requester_created_idx ON suggestions (requester_id, created_at DESC, id DESC);
-CREATE INDEX suggestions_triage_idx ON suggestions (status, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS suggestions_requester_created_idx ON suggestions (requester_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS suggestions_triage_idx ON suggestions (status, updated_at DESC, id DESC);

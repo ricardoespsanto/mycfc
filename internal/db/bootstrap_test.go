@@ -147,3 +147,25 @@ func TestCredentialVersionExistsInBaselineAndForwardMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestMemberSuggestionsExistInBaselineAndUseBaselineSafeMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608110001_member_suggestions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"suggestion_category", "suggestion_status", "CREATE TABLE suggestions"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "CREATE TABLE IF NOT EXISTS suggestions", "CREATE INDEX IF NOT EXISTS suggestions_requester_created_idx", "CREATE INDEX IF NOT EXISTS suggestions_triage_idx"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM suggestions"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}
