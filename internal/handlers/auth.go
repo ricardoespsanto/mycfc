@@ -208,6 +208,17 @@ func (a Auth) RequireModerator(next http.Handler) http.Handler {
 	}))
 }
 
+func (a Auth) RequireSuggestionStaff(next http.Handler) http.Handler {
+	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := currentUser(r.Context())
+		if user.IsAdmin || user.CanModerateContent {
+			next.ServeHTTP(w, r)
+			return
+		}
+		a.System.Forbidden(w, r)
+	}))
+}
+
 func (a Auth) RequireProgramme(programmes ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

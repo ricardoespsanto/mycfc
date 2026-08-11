@@ -250,6 +250,67 @@ test.describe('authentication', () => {
     await context.close();
   });
 
+  test('member submits a private suggestion and receives the administrator response', async ({ page, browser }) => {
+    test.setTimeout(180_000);
+    const subject = `Ideia E2E ${Date.now()}`;
+    const suggestionMemberEmail = `e2e-suggestion-${Date.now()}@example.test`;
+    await page.goto('/registo');
+    await page.getByLabel('Nome').fill('Membro com sugestão');
+    await page.getByLabel('Correio eletrónico').fill(suggestionMemberEmail);
+    await page.getByLabel('Data de nascimento').fill('1990-01-01');
+    await page.locator('#password').fill(password);
+    await page.getByLabel('Confirmar palavra-passe').fill(password);
+    await page.getByLabel(/Aceito os termos gerais/).check();
+    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
+    await page.waitForTimeout(2100);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(page).toHaveURL('/today');
+    await page.goto('/sugestoes');
+    await expect(page.getByRole('heading', { name: 'Sugestões', exact: true })).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
+    await page.getByRole('link', { name: 'Nova sugestão' }).click();
+    await expect(page.locator('#nova-sugestao')).toHaveAttribute('open', '');
+    await page.getByLabel('Categoria').selectOption('FACILITIES');
+    await page.getByLabel('Assunto').fill(subject);
+    await page.locator('#suggestion-description').fill('Adicionar mais bancos junto à zona de embarque para apoiar atletas e famílias.');
+    await page.getByRole('button', { name: 'Enviar sugestão' }).click();
+    await expect(page).toHaveURL('/sugestoes');
+    await expect(page.getByText('Sugestão enviada. Pode acompanhar o estado nesta página.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: subject })).toBeVisible();
+    await page.locator('.app-rail form[action="/logout"] button').click();
+
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/admin/sugestoes');
+    const suggestion = page.locator('.record-item').filter({ has: page.getByRole('heading', { name: subject }) });
+    await expect(suggestion.getByText('Enviada por:')).toBeVisible();
+    await suggestion.getByLabel('Estado').selectOption('PLANNED');
+    await suggestion.getByLabel('Resposta ao membro').fill('A direção vai avaliar esta melhoria no próximo plano de instalações.');
+    await suggestion.getByRole('button', { name: 'Guardar triagem' }).click();
+    await expect(page.getByText('Sugestão atualizada.')).toBeVisible();
+    await page.locator('.app-rail form[action="/logout"] button').click();
+
+    await page.getByLabel('Correio eletrónico').fill(suggestionMemberEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/sugestoes');
+    const updated = page.locator('.record-item').filter({ has: page.getByRole('heading', { name: subject }) });
+    await expect(updated.getByText('Planeada')).toBeVisible();
+    await expect(updated.getByText('A direção vai avaliar esta melhoria no próximo plano de instalações.')).toBeVisible();
+
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const noJavaScriptPage = await context.newPage();
+    await noJavaScriptPage.goto('/login');
+    await noJavaScriptPage.getByLabel('Correio eletrónico').fill(suggestionMemberEmail);
+    await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
+    await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await noJavaScriptPage.goto('/sugestoes');
+    await noJavaScriptPage.getByText('Nova sugestão', { exact: true }).click();
+    await expect(noJavaScriptPage.getByRole('button', { name: 'Enviar sugestão' })).toBeVisible();
+    await context.close();
+  });
+
   test('resets a password from Mailpit and revokes every older session', async ({ browser }) => {
     test.setTimeout(300_000);
     const newPassword = 'updated password 8';
