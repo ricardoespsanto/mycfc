@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.8
 
-FROM node:24.18-alpine3.24 AS assets
+FROM node:24.19-alpine3.24 AS assets
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
