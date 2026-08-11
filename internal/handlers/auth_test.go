@@ -159,6 +159,29 @@ func TestAuthRequiresActiveDelegatedGrantForStaffWorkspaces(t *testing.T) {
 	}
 }
 
+func TestAuthLimitsSuggestionTriageToAdministratorsAndModerators(t *testing.T) {
+	id := uuid.New()
+	for _, tc := range []struct {
+		name   string
+		admin  bool
+		grants []dbgen.ListActiveStaffGrantsForUserRow
+		status int
+	}{
+		{name: "administrator", admin: true, status: http.StatusNoContent},
+		{name: "moderator", grants: []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "MODERATOR"}}, status: http.StatusNoContent},
+		{name: "coach", grants: []dbgen.ListActiveStaffGrantsForUserRow{{Capability: "COACH", ProgrammeID: ptr(uuid.New())}}, status: http.StatusForbidden},
+		{name: "member", status: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: tc.admin}, grants: tc.grants}, Sessions: scs.New()}
+			handler := auth.Load(auth.RequireSuggestionStaff(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
+			if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != tc.status {
+				t.Fatalf("status = %d, want %d", response.Code, tc.status)
+			}
+		})
+	}
+}
+
 func ptr(id uuid.UUID) *uuid.UUID { return &id }
 
 func TestAuthDashboardSelection(t *testing.T) {

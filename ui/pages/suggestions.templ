@@ -1,0 +1,215 @@
+package pages
+
+import (
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type SuggestionForm struct {
+	CSRFField                      templ.Component
+	Category, Subject, Description string
+	Errors                         validation.FieldErrors
+}
+
+type SuggestionItem struct {
+	ID, RequesterName, Category, Subject, Description, Status       string
+	StaffResponse, ResponderName, CreatedAt, RespondedAt, UpdatedAt string
+}
+
+type SuggestionsPage struct {
+	Meta                                            components.PageMeta
+	Management, CanTriage                           bool
+	Success, Conflict, StatusFilter, CategoryFilter string
+	PreviousURL, NextURL                            string
+	Form                                            SuggestionForm
+	TriageErrors                                    validation.FieldErrors
+	Items                                           []SuggestionItem
+}
+
+templ Suggestions(page SuggestionsPage) {
+	@components.Base(page.Meta, suggestionsContent(page))
+}
+
+templ suggestionsContent(page SuggestionsPage) {
+	if page.Management {
+		@components.PageHeader("Administração", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil)
+	} else {
+		@components.PageHeader("Atividade", "Sugestões", "Partilhe uma ideia para melhorar a vida do clube e acompanhe a resposta.", []components.PageAction{{Label: "Nova sugestão", Href: "#nova-sugestao", Variant: "primary"}})
+	}
+	@components.StatusMessage(page.Success, "success")
+	@components.StatusMessage(page.Conflict, "warning")
+	@components.StatusMessage(suggestionTriageError(page.TriageErrors), "error")
+	if !page.Management {
+		<details id="nova-sugestao" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="suggestion-authoring-title">
+			<summary><span><strong id="suggestion-authoring-title">Nova sugestão</strong><small>Partilhe uma ideia para melhorar a vida do clube.</small></span></summary>
+			<button class="create-panel__close" type="button">Fechar</button>
+			<div class="disclosure__content">
+				<p>A sugestão identifica a sua conta e fica visível apenas para si e para a equipa responsável.</p>
+				<form class="form-layout" method="post" action="/sugestoes">
+					@page.Form.CSRFField
+					@components.RequiredNote()
+					@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "category", Field: "suggestion-category"}, {Key: "subject", Field: "suggestion-subject"}, {Key: "description", Field: "suggestion-description"}}))
+					@components.FieldLabel("suggestion-category", "Categoria", true)
+					<select id="suggestion-category" name="category" required aria-invalid?={ page.Form.Errors["category"] != "" } aria-describedby="category-error">
+						<option value="">Selecione</option>
+						for _, option := range suggestionCategoryOptions() {
+							<option value={ option.Value } selected?={ page.Form.Category == option.Value }>{ option.Label }</option>
+						}
+					</select>@components.FieldErrorMessage("category", page.Form.Errors["category"])
+					@components.FieldLabel("suggestion-subject", "Assunto", true)
+					<input id="suggestion-subject" name="subject" maxlength="160" value={ page.Form.Subject } required aria-invalid?={ page.Form.Errors["subject"] != "" } aria-describedby="subject-error"/>@components.FieldErrorMessage("subject", page.Form.Errors["subject"])
+					@components.FieldLabel("suggestion-description", "Sugestão", true)
+					<textarea id="suggestion-description" name="description" maxlength="3000" required aria-invalid?={ page.Form.Errors["description"] != "" } aria-describedby="suggestion-description-help description-error">{ page.Form.Description }</textarea>
+					@components.FieldHelp("suggestion-description-help", "Descreva a ideia e o benefício esperado. Para uma avaria use a área Frota; para responder a um evento use a página desse evento.")
+					@components.FieldErrorMessage("description", page.Form.Errors["description"])
+					@components.FormActions("/sugestoes") {
+						<button type="submit">Enviar sugestão</button>
+					}
+				</form>
+			</div>
+		</details>
+	}
+	if page.Management {
+		<section class="module">
+			@components.SectionHeading("Triagem", "Fila de sugestões", "Filtre por estado ou categoria. As respostas ficam visíveis ao autor.")
+			<form class="filter-bar" method="get" action="/admin/sugestoes">
+				<label for="suggestion-status-filter">Estado</label>
+				<select id="suggestion-status-filter" name="status">
+					<option value="">Todos</option>
+					for _, value := range suggestionStatusValues() {
+						<option value={ value } selected?={ page.StatusFilter == value }>{ suggestionStatusLabel(value) }</option>
+					}
+				</select>
+				<label for="suggestion-category-filter">Categoria</label>
+				<select id="suggestion-category-filter" name="category">
+					<option value="">Todas</option>
+					for _, option := range suggestionCategoryOptions() {
+						<option value={ option.Value } selected?={ page.CategoryFilter == option.Value }>{ option.Label }</option>
+					}
+				</select>
+				<button class="action action--secondary" type="submit">Aplicar</button><a class="action action--quiet" href="/admin/sugestoes">Limpar</a>
+			</form>
+		</section>
+	}
+	<section class="module">
+		if !page.Management {
+			@components.SectionHeading("Acompanhamento", "As minhas sugestões", "Consulte o estado e as respostas da equipa.")
+		}
+		if len(page.Items) == 0 {
+			@components.EmptyState("Ainda sem sugestões", suggestionEmptyText(page.Management))
+		}
+		if len(page.Items) > 0 {
+			@components.RecordList("Sugestões") {
+				for _, item := range page.Items {
+					<li class="record-item record-item--stacked">
+						<div class="record-item__copy">
+							<h3>{ item.Subject }</h3>
+							<p class="record-meta">{ suggestionItemMeta(item) }</p>
+							if page.Management {
+								<p><strong>Enviada por:</strong> { item.RequesterName }</p>
+							}
+							<p>{ item.Description }</p>
+						</div>
+						@components.Badge(suggestionStatusLabel(item.Status), suggestionStatusTone(item.Status))
+						if item.StaffResponse != "" {
+							<div class="callout"><strong>Resposta da equipa</strong><p>{ item.StaffResponse }</p><p class="record-meta">{ suggestionResponseMeta(item) }</p></div>
+						}
+						if page.Management && page.CanTriage {
+							<form class="form-layout" method="post" action={ "/admin/sugestoes/" + item.ID }>
+								@page.Form.CSRFField
+								<input type="hidden" name="updated_at" value={ item.UpdatedAt }/>
+								@components.FieldLabel("suggestion-status-"+item.ID, "Estado", true)
+								<select id={ "suggestion-status-" + item.ID } name="status" required>
+									for _, value := range suggestionStatusValues() {
+										<option value={ value } selected?={ item.Status == value }>{ suggestionStatusLabel(value) }</option>
+									}
+								</select>
+								@components.FieldLabel("suggestion-response-"+item.ID, "Resposta ao membro", false)
+								<textarea id={ "suggestion-response-" + item.ID } name="staff_response" maxlength="2000" aria-describedby={ "suggestion-response-help-" + item.ID }>{ item.StaffResponse }</textarea>
+								@components.FieldHelp("suggestion-response-help-"+item.ID, "Obrigatória para concluir ou não avançar com a sugestão.")
+								<button type="submit">Guardar triagem</button>
+							</form>
+						}
+					</li>
+				}
+			}
+		}
+		if page.PreviousURL != "" || page.NextURL != "" {
+			<nav class="pagination" aria-label="Paginação de sugestões">
+				if page.PreviousURL != "" {
+					<a href={ templ.SafeURL(page.PreviousURL) }>Anterior</a>
+				}
+				if page.NextURL != "" {
+					<a href={ templ.SafeURL(page.NextURL) }>Seguinte</a>
+				}
+			</nav>
+		}
+	</section>
+}
+
+type suggestionOption struct{ Value, Label string }
+
+func suggestionCategoryOptions() []suggestionOption {
+	return []suggestionOption{{"FACILITIES", "Instalações"}, {"EQUIPMENT", "Equipamento"}, {"TRAINING", "Treinos"}, {"EVENTS", "Eventos"}, {"COMMUNICATION", "Comunicação"}, {"OTHER", "Outro"}}
+}
+func suggestionCategoryLabel(value string) string {
+	for _, option := range suggestionCategoryOptions() {
+		if option.Value == value {
+			return option.Label
+		}
+	}
+	return value
+}
+func suggestionStatusLabel(value string) string {
+	switch value {
+	case "SUBMITTED":
+		return "Recebida"
+	case "UNDER_REVIEW":
+		return "Em análise"
+	case "PLANNED":
+		return "Planeada"
+	case "DECLINED":
+		return "Não avançará"
+	case "COMPLETED":
+		return "Concluída"
+	}
+	return value
+}
+func suggestionStatusTone(value string) string {
+	switch value {
+	case "COMPLETED":
+		return "success"
+	case "DECLINED":
+		return "neutral"
+	case "PLANNED":
+		return "info"
+	default:
+		return "warning"
+	}
+}
+func suggestionStatusValues() []string {
+	return []string{"SUBMITTED", "UNDER_REVIEW", "PLANNED", "DECLINED", "COMPLETED"}
+}
+func suggestionEmptyText(management bool) string {
+	if management {
+		return "Não existem sugestões para os filtros selecionados."
+	}
+	return "Envie a primeira ideia quando encontrar algo que possa melhorar."
+}
+func suggestionItemMeta(item SuggestionItem) string {
+	return suggestionCategoryLabel(item.Category) + " · " + item.CreatedAt
+}
+func suggestionResponseMeta(item SuggestionItem) string {
+	if item.ResponderName != "" && item.RespondedAt != "" {
+		return item.ResponderName + " · " + item.RespondedAt
+	}
+	return item.RespondedAt
+}
+func suggestionTriageError(errors validation.FieldErrors) string {
+	for _, field := range []string{"status", "staff_response", "updated_at"} {
+		if errors[field] != "" {
+			return errors[field]
+		}
+	}
+	return ""
+}

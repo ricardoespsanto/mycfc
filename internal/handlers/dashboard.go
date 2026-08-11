@@ -1019,7 +1019,7 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 // additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	today := []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
-	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}}
+	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Sugestões", Path: "/sugestoes"}}
 	if !user.IsAdmin {
 		activity = append(activity, components.NavigationItem{Label: "Frota", Path: "/fleet"})
 	}
@@ -1047,6 +1047,9 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	}
 	if user.IsAdmin {
 		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
+	}
+	if user.IsAdmin || user.CanModerateContent {
+		admin = append(admin, components.NavigationItem{Label: "Sugestões", Path: "/admin/sugestoes"})
 	}
 
 	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}

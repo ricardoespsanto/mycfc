@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, foundation handlers.Foundation) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{PageMeta: foundation.PageMeta}
@@ -118,6 +118,10 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/treinos/sessoes/{id}/cancelar", auth.RequireEventStaff(http.HandlerFunc(training.CancelSession)))
 	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/sessoes/distancia", auth.RequireAuthenticated(http.HandlerFunc(training.UpdateDistance)))
+	mux.Handle("GET /sugestoes", auth.RequireAuthenticated(http.HandlerFunc(suggestions.Index)))
+	mux.Handle("POST /sugestoes", auth.RequireAuthenticated(http.HandlerFunc(suggestions.Create)))
+	mux.Handle("GET /admin/sugestoes", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Index)))
+	mux.Handle("POST /admin/sugestoes/{id}", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Update)))
 
 	return customNotFound(mux, system.NotFound)
 }

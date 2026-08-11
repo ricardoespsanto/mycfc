@@ -490,6 +490,97 @@ func (ns NullStaffCapability) Value() (driver.Value, error) {
 	return string(ns.StaffCapability), nil
 }
 
+type SuggestionCategory string
+
+const (
+	SuggestionCategoryFACILITIES    SuggestionCategory = "FACILITIES"
+	SuggestionCategoryEQUIPMENT     SuggestionCategory = "EQUIPMENT"
+	SuggestionCategoryTRAINING      SuggestionCategory = "TRAINING"
+	SuggestionCategoryEVENTS        SuggestionCategory = "EVENTS"
+	SuggestionCategoryCOMMUNICATION SuggestionCategory = "COMMUNICATION"
+	SuggestionCategoryOTHER         SuggestionCategory = "OTHER"
+)
+
+func (e *SuggestionCategory) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = SuggestionCategory(s)
+	case string:
+		*e = SuggestionCategory(s)
+	default:
+		return fmt.Errorf("unsupported scan type for SuggestionCategory: %T", src)
+	}
+	return nil
+}
+
+type NullSuggestionCategory struct {
+	SuggestionCategory SuggestionCategory `json:"suggestion_category"`
+	Valid              bool               `json:"valid"` // Valid is true if SuggestionCategory is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullSuggestionCategory) Scan(value interface{}) error {
+	if value == nil {
+		ns.SuggestionCategory, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.SuggestionCategory.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullSuggestionCategory) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.SuggestionCategory), nil
+}
+
+type SuggestionStatus string
+
+const (
+	SuggestionStatusSUBMITTED   SuggestionStatus = "SUBMITTED"
+	SuggestionStatusUNDERREVIEW SuggestionStatus = "UNDER_REVIEW"
+	SuggestionStatusPLANNED     SuggestionStatus = "PLANNED"
+	SuggestionStatusDECLINED    SuggestionStatus = "DECLINED"
+	SuggestionStatusCOMPLETED   SuggestionStatus = "COMPLETED"
+)
+
+func (e *SuggestionStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = SuggestionStatus(s)
+	case string:
+		*e = SuggestionStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for SuggestionStatus: %T", src)
+	}
+	return nil
+}
+
+type NullSuggestionStatus struct {
+	SuggestionStatus SuggestionStatus `json:"suggestion_status"`
+	Valid            bool             `json:"valid"` // Valid is true if SuggestionStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullSuggestionStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.SuggestionStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.SuggestionStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullSuggestionStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.SuggestionStatus), nil
+}
+
 type TrainingOutcomeStatus string
 
 const (
@@ -904,6 +995,20 @@ type StaffGrantAuditEvent struct {
 	ActorUserID  uuid.UUID          `json:"actor_user_id"`
 	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
 	Reason       *string            `json:"reason"`
+}
+
+type Suggestion struct {
+	ID            uuid.UUID          `json:"id"`
+	RequesterID   uuid.UUID          `json:"requester_id"`
+	Category      SuggestionCategory `json:"category"`
+	Subject       string             `json:"subject"`
+	Description   string             `json:"description"`
+	Status        SuggestionStatus   `json:"status"`
+	StaffResponse *string            `json:"staff_response"`
+	RespondedByID *uuid.UUID         `json:"responded_by_id"`
+	RespondedAt   pgtype.Timestamptz `json:"responded_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SyncedActivity struct {
