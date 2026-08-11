@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -185,10 +187,7 @@ func tokenDigest(token string) ([]byte, error) {
 }
 
 func (s Service) encryptionKey() []byte {
-	digest := sha256.New()
-	_, _ = digest.Write([]byte("mycfc/password-reset/outbox/v1\x00"))
-	_, _ = digest.Write(s.Key)
-	return digest.Sum(nil)
+	return pbkdf2.Key([]byte(s.Key), []byte("mycfc/password-reset/outbox/v1\x00"), 100000, 32, sha1.New)
 }
 
 func (s Service) random() io.Reader {
