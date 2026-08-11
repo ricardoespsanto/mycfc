@@ -611,6 +611,14 @@ test.describe('authentication', () => {
     await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await expect(membershipForm.getByLabel('Competição')).toBeChecked();
 
+    await page.getByRole('link', { name: 'Abrir perfil', exact: true }).click();
+    await page.getByLabel('Número de atleta FPC').fill('27044');
+    await page.getByRole('button', { name: 'Guardar perfil' }).click();
+    await expect(page.getByText('Perfil atualizado.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Ver histórico nacional na FPC' })).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistorico/27044/');
+    await expect(page.getByRole('link', { name: 'Ver histórico internacional na FPC' })).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistoricointernational/27044/');
+    await expectNoSeriousAxeViolations(page);
+
     const planTitle = `Plano classificação E2E ${Date.now()}`;
     const sessionTitle = `Sessão classificação E2E ${Date.now()}`;
     const cancelledSessionTitle = `Sessão cancelada E2E ${Date.now()}`;
@@ -669,6 +677,14 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Competição', exact: true }).click();
     await expect(page).toHaveURL('/dashboard/competition');
     await expect(page.getByRole('heading', { name: 'Competição', exact: true })).toBeVisible();
+
+    await page.goto('/perfil');
+    const nationalFPCLink = page.getByRole('link', { name: 'Ver histórico nacional na FPC' });
+    const internationalFPCLink = page.getByRole('link', { name: 'Ver histórico internacional na FPC' });
+    await expect(nationalFPCLink).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistorico/27044/');
+    await expect(internationalFPCLink).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistoricointernational/27044/');
+    await expect(nationalFPCLink).not.toHaveAttribute('target', '_blank');
+    await expect(internationalFPCLink).not.toHaveAttribute('target', '_blank');
 
     await page.goto('/treinos');
     const cancelledAthleteSession = page.getByRole('heading', { name: new RegExp(`${editedCancelledSessionTitle}$`) }).locator('xpath=ancestor::li[1]');

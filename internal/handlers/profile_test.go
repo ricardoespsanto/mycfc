@@ -97,6 +97,60 @@ func TestValidProfilePhone(t *testing.T) {
 	}
 }
 
+func TestFPCAthleteNumberAndHistoryURLs(t *testing.T) {
+	for _, number := range []string{"1", "12142", "27044", "12345678901234567890"} {
+		if !validFPCAthleteNumber(number) {
+			t.Errorf("validFPCAthleteNumber(%q) = false", number)
+		}
+	}
+	for _, number := range []string{"", " 27044 ", "Ricardo Santo", "27044/Ricardo", "123456789012345678901"} {
+		if validFPCAthleteNumber(number) {
+			t.Errorf("validFPCAthleteNumber(%q) = true", number)
+		}
+		if national, international := fpcHistoryURLs(number); national != "" || international != "" {
+			t.Errorf("fpcHistoryURLs(%q) = %q, %q", number, national, international)
+		}
+	}
+
+	national, international := fpcHistoryURLs("27044")
+	if national != "https://www.fpcanoagem.pt/resultados/verhistorico/27044/" {
+		t.Fatalf("national URL = %q", national)
+	}
+	if international != "https://www.fpcanoagem.pt/resultados/verhistoricointernational/27044/" {
+		t.Fatalf("international URL = %q", international)
+	}
+}
+
+func TestProfileValidationRejectsChangedMalformedFPCNumberButAllowsUnchangedLegacyValue(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	updated := now.Add(-time.Hour)
+	legacy := "FPC legacy"
+	record := dbgen.GetMemberProfileRow{ID: uuid.New(), Name: "Ana Silva", Email: stringPtr("ana@example.test"), DateOfBirth: pgtype.Date{Time: time.Date(1990, 1, 2, 0, 0, 0, 0, time.UTC), Valid: true}, IsActive: true, FederationLicenceNumber: &legacy, UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}, IdentityUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}
+	h := Profile{Location: time.UTC, Now: func() time.Time { return now }}
+	base := url.Values{
+		"name": {"Ana Silva"}, "email": {"ana@example.test"}, "date_of_birth": {"1990-01-02"},
+		"profile_updated_at": {updated.Format(time.RFC3339Nano)}, "identity_updated_at": {updated.Format(time.RFC3339Nano)},
+		"medical_declaration": {"NONE_KNOWN"}, "federation_licence_number": {legacy},
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/admin/membros/member/perfil", strings.NewReader(base.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_ = request.ParseForm()
+	form, _, _ := h.validateForm(request, record, true)
+	if form.Errors.Has("federation_licence_number") {
+		t.Fatalf("unchanged legacy identifier rejected: %#v", form.Errors)
+	}
+
+	base.Set("federation_licence_number", "27044/Ricardo")
+	request = httptest.NewRequest(http.MethodPost, "/admin/membros/member/perfil", strings.NewReader(base.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_ = request.ParseForm()
+	form, _, _ = h.validateForm(request, record, true)
+	if !form.Errors.Has("federation_licence_number") {
+		t.Fatalf("changed malformed identifier accepted: %#v", form.Errors)
+	}
+}
+
 func TestProfileAuditChangesContainFieldNamesOnly(t *testing.T) {
 	record := dbgen.GetMemberProfileRow{Phone: "+351 910 000 000", MedicalNotes: "private before"}
 	params := dbgen.UpdateMemberProfileParams{Phone: "+351 920 000 000", MedicalNotes: "private after"}

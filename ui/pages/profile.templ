@@ -19,6 +19,7 @@ type ProfileForm struct {
 type ProfilePage struct {
 	Meta components.PageMeta
 	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ImageConsentURL string
+	FPCNationalHistoryURL, FPCInternationalHistoryURL string
 	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified bool
 	Form ProfileForm
 	Success, Conflict string
@@ -59,6 +60,7 @@ templ profileContent(page ProfilePage) {
 				}
 			</p></div>
 		</section>
+		@fpcHistoryLinks(page)
 		if page.Editable {
 			@profileEditForm(page)
 		} else {
@@ -88,7 +90,7 @@ templ profileEditForm(page ProfilePage) {
 				<div class="form-field">@components.FieldLabel("profile-birth", "Data de nascimento", true)<input id="profile-birth" type="date" name="date_of_birth" value={ page.Form.DateOfBirth } required aria-invalid?={ page.Form.Errors["date_of_birth"] != "" }/>@components.FieldErrorMessage("date_of_birth", page.Form.Errors["date_of_birth"])</div>
 				<div class="form-field">@components.FieldLabel("profile-email", "Email de acesso", !page.Dependent)<input id="profile-email" type="email" name="email" value={ page.Form.Email } disabled?={ page.Dependent } required?={ !page.Dependent } aria-invalid?={ page.Form.Errors["email"] != "" }/>@components.FieldErrorMessage("email", page.Form.Errors["email"])</div>
 				<div class="form-field">@components.FieldLabel("profile-club-number", "Número de sócio", false)<input id="profile-club-number" name="club_member_number" value={ page.Form.ClubMemberNumber } maxlength="60"/></div>
-				<div class="form-field">@components.FieldLabel("profile-federation-number", "Licença federativa", false)<input id="profile-federation-number" name="federation_licence_number" value={ page.Form.FederationLicenceNumber } maxlength="60"/></div>
+				<div class="form-field">@components.FieldLabel("profile-federation-number", "Número de atleta FPC", false)<input id="profile-federation-number" name="federation_licence_number" value={ page.Form.FederationLicenceNumber } inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" aria-describedby="profile-federation-number-hint" aria-invalid?={ page.Form.Errors["federation_licence_number"] != "" }/><p id="profile-federation-number-hint" class="field-hint">Identificador numérico usado pela Federação Portuguesa de Canoagem.</p>@components.FieldErrorMessage("federation_licence_number", page.Form.Errors["federation_licence_number"])</div>
 				@components.FieldErrorMessage("official_identifiers", page.Form.Errors["official_identifiers"])
 			</fieldset>
 		} else {
@@ -124,6 +126,21 @@ templ profileEditForm(page ProfilePage) {
 		</fieldset>
 		@components.FormActions(page.BasePath) { <button type="submit">Guardar perfil</button> }
 	</form>
+}
+
+templ fpcHistoryLinks(page ProfilePage) {
+	<section class="module" aria-labelledby="fpc-history-title">
+		<h2 id="fpc-history-title">Histórico oficial FPC</h2>
+		if page.FPCNationalHistoryURL != "" && page.FPCInternationalHistoryURL != "" {
+			<p>Consulte os resultados publicados pela Federação Portuguesa de Canoagem. Estes links abrem um serviço externo da FPC.</p>
+			<div class="record-item__actions">
+				<a class="action action--secondary" href={ templ.SafeURL(page.FPCNationalHistoryURL) }>Ver histórico nacional na FPC</a>
+				<a class="action action--secondary" href={ templ.SafeURL(page.FPCInternationalHistoryURL) }>Ver histórico internacional na FPC</a>
+			</div>
+		} else {
+			<p>Ainda não existe um número de atleta FPC válido associado a este perfil.</p>
+		}
+	</section>
 }
 
 templ profileReadOnly(page ProfilePage) {
@@ -173,4 +190,4 @@ func medicalLabel(value string) string { if value=="NONE_KNOWN" {return "Sem inf
 func profileAddress(form ProfileForm) string { return strings.Trim(strings.Join([]string{form.AddressLine1,form.AddressLine2,form.Postcode,form.Locality,form.CountryCode},", "),", ") }
 func profileEmergency(form ProfileForm) string { if form.EmergencyName=="" {return ""}; return form.EmergencyName+" · "+form.EmergencyRelationship+" · "+form.EmergencyPhone }
 func photoButtonLabel(hasPhoto bool) string { if hasPhoto {return "Substituir fotografia"}; return "Carregar fotografia" }
-func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"}} }
+func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"federation_licence_number",Field:"profile-federation-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"}} }
