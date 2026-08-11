@@ -1,6 +1,6 @@
 # Retained AWS and runtime-config Terraform
 
-The ECS/RDS/ALB runtime was retired. This module manages the private repair-photo bucket, immutable ECR repository, Amazon SES transactional-email identity, production runtime configuration in SSM Parameter Store and Secrets Manager, a 30-day CloudWatch deployment log group, and the AWS IAM user used by the Hetzner host. PostgreSQL backup storage and the Hetzner server resource are managed by `../hetzner`.
+The ECS/RDS/ALB runtime was retired. This module manages the private repair-photo bucket, immutable ECR repository, Amazon SES transactional-email identity, production runtime configuration in SSM Parameter Store and Secrets Manager, deployment alerts and logs, and separate application-runtime and release-agent IAM users for the Hetzner host. PostgreSQL backup storage and the Hetzner server resource are managed by `../hetzner`.
 
 Use the existing remote backend and run `terraform plan` before applying a retained-resource change. Do not restore retired runtime resources from this module.
 
@@ -31,7 +31,11 @@ runtime_parameter_prefix = /mycfc/production
 runtime_secret_arn       = arn:aws:secretsmanager:...
 ```
 
-The host only needs the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` installed once in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. That IAM user can pull ECR releases, read the production SSM parameters, read the production Secrets Manager secret, use the repair-photo bucket, and write only to the dedicated deployment log group.
+Install the sensitive `host_runtime_access_key_id` and `host_runtime_secret_access_key` outputs in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. This application identity can read the production SSM parameters and application secret and use the repair-photo bucket; it cannot access ECR or deployment logs.
+
+Install `release_agent_access_key_id` and `release_agent_secret_access_key` as the `mycfc-release` profile in `/etc/mycfc/release-aws/credentials`. This release identity can only read the production ECR repository and write the deployment log group. Set `alarm_email` before applying Terraform and confirm the resulting SNS subscription email. The alarm enters ALARM after failures occur in at least two of three consecutive five-minute periods.
+
+Keep `release_agent_cutover_complete = false` during initial provisioning so the existing host identity retains ECR and deployment-log access. After installing the dedicated profile and updated scripts, run `release-status.sh` and one successful release check, then set the variable to `true` and apply again. This expand/contract sequence prevents a credential rollout from interrupting release polling.
 
 Easy DKIM verification can take several minutes after DNS publication. Confirm both the identity and account before releasing:
 

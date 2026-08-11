@@ -6,8 +6,13 @@ deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 compose_file="$deployment_dir/compose.yaml"
 state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+release_credentials_file=${MYCFC_RELEASE_AWS_CREDENTIALS_FILE:-/etc/mycfc/release-aws/credentials}
+release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
 active_slot_file="$state_dir/active-slot"
 failed_digest_file="$state_dir/failed-release-digest"
+last_attempt_digest_file="$state_dir/last-attempt-digest"
+last_attempt_result_file="$state_dir/last-attempt-result"
+last_attempt_at_file="$state_dir/last-attempt-at"
 upstream_file="$state_dir/caddy-upstream.caddy"
 lock_file="$runtime_dir/mycfc-pull-release.lock"
 backup_file=
@@ -31,6 +36,14 @@ write_state_value() {
 	printf '%s\n' "$value" >"$temporary"
 	chmod 0644 "$temporary"
 	mv "$temporary" "$target"
+}
+
+record_attempt() {
+	result=$1
+	[ -n "$release_digest" ] || return 0
+	write_state_value "$last_attempt_digest_file" "$release_digest"
+	write_state_value "$last_attempt_result_file" "$result"
+	write_state_value "$last_attempt_at_file" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 write_upstream() {
@@ -92,6 +105,7 @@ rollback() {
 		cp "$backup_file" "$env_file"
 		if [ -n "$release_digest" ]; then
 			write_state_value "$failed_digest_file" "$release_digest"
+			record_attempt failed
 			log "quarantined failed release digest $release_digest"
 		fi
 	fi
@@ -106,6 +120,11 @@ fi
 
 if [ ! -f "$env_file" ] || [ "$(stat -c '%u:%a' "$env_file")" != '0:600' ]; then
 	log 'missing or insecure environment file'
+	exit 1
+fi
+
+if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_credentials_file")" != '0:600' ]; then
+	log 'missing or insecure release-agent AWS credentials file'
 	exit 1
 fi
 
@@ -125,6 +144,12 @@ set +a
 : "${AWS_REGION:?}"
 : "${ECR_REPOSITORY_URL:?}"
 : "${MYCFC_DOMAIN:?}"
+
+# AWS environment credentials belong to the application runtime. All AWS CLI
+# calls made by the deployment agent must use its narrower, root-owned profile.
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+export AWS_SHARED_CREDENTIALS_FILE="$release_credentials_file"
+export AWS_PROFILE="$release_aws_profile"
 
 if [ -f "$active_slot_file" ]; then
 	active_slot=$(cat "$active_slot_file")
@@ -162,7 +187,9 @@ case "$release_digest" in
 	sha256:*) ;;
 	*) log 'release has no valid digest'; exit 1 ;;
 esac
+record_attempt checking
 if [ -f "$failed_digest_file" ] && [ "$(cat "$failed_digest_file")" = "$release_digest" ]; then
+	record_attempt quarantined
 	log "release $release_digest previously failed validation; waiting for a replacement release"
 	exit 0
 fi
@@ -180,6 +207,7 @@ case "$active_slot" in
 esac
 running_image=$(docker inspect --format '{{.Config.Image}}' "$active_container" 2>/dev/null || true)
 if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
+	record_attempt succeeded
 	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
 fi
@@ -293,4 +321,5 @@ route_backup=
 route_switched=false
 release_updated=false
 trap - EXIT HUP INT TERM
+record_attempt succeeded
 log "deployed SHA $sha with digest $release_digest in the $candidate_slot slot"

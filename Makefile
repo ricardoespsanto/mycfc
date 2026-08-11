@@ -68,6 +68,7 @@ test: ## Run unit tests
 
 test-deployment: ## Run production release orchestration tests
 	sh deployment/pull-release_test.sh
+	sh deployment/release-status_test.sh
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
 	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -tags=integration ./internal/db/... ./internal/handlers/... ./internal/storage/...

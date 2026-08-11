@@ -4,6 +4,7 @@ set -eu
 env_file=/etc/mycfc/mycfc.env
 deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 state_dir=/etc/mycfc/deployment
+release_credentials_file=/etc/mycfc/release-aws/credentials
 
 if [ "$(id -u)" -ne 0 ]; then
 	printf '%s\n' 'Run this script as root so it can verify the protected environment file.' >&2
@@ -17,6 +18,11 @@ fi
 
 if [ "$(stat -c '%u:%a' "$env_file")" != '0:600' ]; then
 	printf '%s\n' "$env_file must be owned by root and have mode 0600." >&2
+	exit 1
+fi
+
+if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_credentials_file")" != '0:600' ]; then
+	printf '%s\n' "$release_credentials_file must exist, be owned by root, and have mode 0600." >&2
 	exit 1
 fi
 
@@ -62,6 +68,7 @@ for command in aws base64 curl docker flock hostname jq logger od openssl shasum
 done
 
 chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
+chmod 0755 "$deployment_dir/release-status.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service

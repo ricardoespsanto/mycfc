@@ -2,6 +2,7 @@ locals {
   runtime_parameter_prefix = "/${var.project_name}/${var.environment}"
   runtime_secret_name      = "${local.runtime_parameter_prefix}/app-secrets"
   host_runtime_user_name   = "${local.name}-host-runtime"
+  release_agent_user_name  = "${local.name}-release-agent"
 
   runtime_parameters = {
     "base-url"                 = "https://${var.domain_name}"
@@ -114,6 +115,86 @@ resource "aws_iam_access_key" "host_runtime" {
 }
 
 data "aws_iam_policy_document" "host_runtime" {
+  dynamic "statement" {
+    for_each = var.release_agent_cutover_complete ? [] : [1]
+
+    content {
+      sid    = "PullProductionImagesDuringReleaseAgentCutover"
+      effect = "Allow"
+      actions = [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:DescribeImages",
+        "ecr:GetDownloadUrlForLayer",
+      ]
+      resources = [aws_ecr_repository.app.arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.release_agent_cutover_complete ? [] : [1]
+
+    content {
+      sid       = "AuthenticateToECRDuringReleaseAgentCutover"
+      effect    = "Allow"
+      actions   = ["ecr:GetAuthorizationToken"]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.release_agent_cutover_complete ? [] : [1]
+
+    content {
+      sid    = "WriteDeploymentLogsDuringReleaseAgentCutover"
+      effect = "Allow"
+      actions = [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+      ]
+      resources = ["${aws_cloudwatch_log_group.deployment.arn}:*"]
+    }
+  }
+  statement {
+    sid     = "ReadRuntimeParameters"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.runtime_parameter_prefix}/*",
+    ]
+  }
+
+  statement {
+    sid       = "ReadRuntimeSecret"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.runtime.arn]
+  }
+
+  statement {
+    sid       = "UseRepairPhotoBucket"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.repairs.arn}/*"]
+  }
+}
+
+resource "aws_iam_user_policy" "host_runtime" {
+  name   = "host-runtime"
+  user   = aws_iam_user.host_runtime.name
+  policy = data.aws_iam_policy_document.host_runtime.json
+}
+
+resource "aws_iam_user" "release_agent" {
+  name = local.release_agent_user_name
+  tags = local.tags
+}
+
+resource "aws_iam_access_key" "release_agent" {
+  user = aws_iam_user.release_agent.name
+}
+
+data "aws_iam_policy_document" "release_agent" {
   statement {
     sid    = "PullProductionImages"
     effect = "Allow"
@@ -134,22 +215,6 @@ data "aws_iam_policy_document" "host_runtime" {
   }
 
   statement {
-    sid     = "ReadRuntimeParameters"
-    effect  = "Allow"
-    actions = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [
-      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${local.runtime_parameter_prefix}/*",
-    ]
-  }
-
-  statement {
-    sid       = "ReadRuntimeSecret"
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.runtime.arn]
-  }
-
-  statement {
     sid    = "WriteDeploymentLogs"
     effect = "Allow"
     actions = [
@@ -158,19 +223,12 @@ data "aws_iam_policy_document" "host_runtime" {
     ]
     resources = ["${aws_cloudwatch_log_group.deployment.arn}:*"]
   }
-
-  statement {
-    sid       = "UseRepairPhotoBucket"
-    effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.repairs.arn}/*"]
-  }
 }
 
-resource "aws_iam_user_policy" "host_runtime" {
-  name   = "host-runtime"
-  user   = aws_iam_user.host_runtime.name
-  policy = data.aws_iam_policy_document.host_runtime.json
+resource "aws_iam_user_policy" "release_agent" {
+  name   = "release-agent"
+  user   = aws_iam_user.release_agent.name
+  policy = data.aws_iam_policy_document.release_agent.json
 }
 
 output "runtime_parameter_prefix" {
@@ -188,5 +246,15 @@ output "host_runtime_access_key_id" {
 
 output "host_runtime_secret_access_key" {
   value     = aws_iam_access_key.host_runtime.secret
+  sensitive = true
+}
+
+output "release_agent_access_key_id" {
+  value     = aws_iam_access_key.release_agent.id
+  sensitive = true
+}
+
+output "release_agent_secret_access_key" {
+  value     = aws_iam_access_key.release_agent.secret
   sensitive = true
 }
