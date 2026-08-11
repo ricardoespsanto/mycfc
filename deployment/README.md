@@ -8,9 +8,10 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 
 1. Clone this repository at `/opt/mycfc` on the host. The one-off migration container applies the embedded baseline when PostgreSQL is empty.
 2. Install Docker Engine with the Compose plugin. Do not permit inbound TCP 80 or 443.
-3. Install AWS CLI v2, `curl`, `jq`, and Docker Engine with the Compose plugin. Configure an AWS identity that can only read the production ECR repository.
+3. Install AWS CLI v2, `curl`, `jq`, and Docker Engine with the Compose plugin.
 4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
-5. Run `sudo sh deployment/install.sh` from this checkout.
+5. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` with the dedicated release-agent credentials described below.
+6. Run `sudo sh deployment/install.sh` from this checkout.
 
 The installer validates the Compose configuration, prepares persistent routing state under `/etc/mycfc/deployment`, installs the pull-release systemd timer, and performs one release check before enabling periodic polling. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
 
@@ -132,7 +133,7 @@ Terraform also creates one Secrets Manager secret named `/mycfc/production/app-s
 }
 ```
 
-Terraform creates the host AWS identity and grants it `ssm:GetParameter` on `/mycfc/production/*`, `secretsmanager:GetSecretValue` on `/mycfc/production/app-secrets`, ECR pull/read access, and repair-photo S3 object access. Install the sensitive Terraform outputs `host_runtime_access_key_id` and `host_runtime_secret_access_key` in `/etc/mycfc/mycfc.env` as the host `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP.
+Terraform creates separate application-runtime and release-agent AWS identities. The application identity can read `/mycfc/production/*`, `/mycfc/production/app-secrets`, and repair-photo S3 objects; it cannot access ECR or deployment logs. Install its sensitive `host_runtime_access_key_id` and `host_runtime_secret_access_key` outputs in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP.
 
 After CI, GitHub publishes an immutable `release-<UTC>-<SHA>` ECR tag. The release agent starts the inactive `app-blue` or `app-green` slot and validates that candidate directly: liveness, readiness, login, and the fingerprinted JavaScript asset referenced by the candidate's own HTML must all succeed. Only then does it update the persisted Caddy upstream and atomically reload Caddy. The prior slot remains available for rollback, while `cloudflared`, Caddy, and PostgreSQL remain running throughout an ordinary application release.
 
@@ -147,7 +148,15 @@ The retained AWS Terraform stack provisions the SES identity, authoritative Clou
 
 Use `docs/password-recovery-operations.md` for privacy-safe password-reset event, outbox, token-backlog, and SMTP diagnosis. Never print recipient addresses, sealed payloads, token digests, or reset URLs during an operational check.
 
-The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The host identity needs `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, and `ecr:GetDownloadUrlForLayer`; it must not have image push or delete permissions. The agent uses `ecr:DescribeImages` to select the release and verify its digest after pulling it. Use a separate read-only ECR credential from the application's S3 credential when the host's credential provisioning is updated.
+The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The dedicated release identity has `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, and write-only access to the deployment log group. It cannot read application configuration, use S3, or push/delete images. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` from the sensitive Terraform outputs:
+
+```text
+[mycfc-release]
+aws_access_key_id=<release-agent-access-key-id>
+aws_secret_access_key=<release-agent-secret-access-key>
+```
+
+The root-owned systemd service remains intentional. It must control Docker containers and atomically update protected environment and routing state. Giving a nominal service account membership in the Docker group would still grant root-equivalent host control without creating a meaningful privilege boundary. AWS permissions are independently constrained by the dedicated profile.
 
 Create `/etc/mycfc/backup-aws/credentials` as `root:root` mode `0600` before running the installer. It must contain the dedicated `mycfc-backup` profile used only for the backup bucket and KMS key:
 
@@ -170,7 +179,12 @@ sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml u
 sudo systemctl status mycfc-pull-release.timer
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
 aws logs tail /mycfc/production/deployment --region eu-west-1 --since 1h
+sudo /opt/mycfc/deployment/release-status.sh
 ```
+
+`release-status.sh` reports only operational identifiers: the latest eligible tag/SHA/digest, running SHA/digest, active slot, last agent result, persisted attempt digest/result/time, quarantine marker, release age, and one of `current`, `pending`, `delayed`, `failed`, or `quarantined`. Associating the persisted result with its digest prevents an older failed attempt from misclassifying a newer release. The command never prints either credential file. A release is `delayed` after five minutes: the timer normally starts it within 150 seconds, leaving the remainder for image pull, migration, candidate checks, and clock skew. Investigate any `failed`, `delayed`, or `quarantined` result using the journal and CloudWatch logs.
+
+Terraform creates a CloudWatch metric filter, alarm, and SNS email subscription for repeated non-zero agent results. Confirm the AWS subscription message sent to `alarm_email`; an unconfirmed subscription receives no alerts. The alarm fires when failures occur in at least two of three five-minute periods and sends a recovery notification when the metric returns to normal.
 
 Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before starting a candidate, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before a candidate receives traffic.
 

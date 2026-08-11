@@ -203,6 +203,11 @@ variable "release_check_cache_ttl" {
   type    = string
   default = "15m"
 }
+variable "release_agent_cutover_complete" {
+  type        = bool
+  default     = false
+  description = "Set true only after the dedicated release profile and updated scripts have been verified on the production host."
+}
 variable "alb_log_retention_days" {
   type    = number
   default = 90
@@ -243,6 +248,11 @@ variable "alarm_email" {
   type     = string
   default  = null
   nullable = true
+
+  validation {
+    condition     = var.alarm_email == null || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alarm_email))
+    error_message = "alarm_email must be null or a valid email address."
+  }
 }
 
 check "production_input_validation" {

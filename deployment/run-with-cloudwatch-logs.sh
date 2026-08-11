@@ -4,6 +4,8 @@ set -eu
 env_file=/etc/mycfc/mycfc.env
 log_group=${CLOUDWATCH_LOG_GROUP:-/mycfc/production/deployment}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+release_credentials_file=${MYCFC_RELEASE_AWS_CREDENTIALS_FILE:-/etc/mycfc/release-aws/credentials}
+release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
 log_file=$(mktemp "$runtime_dir/mycfc-cloudwatch.XXXXXX")
 upload_file=$(mktemp "$runtime_dir/mycfc-cloudwatch-upload.XXXXXX")
 payload_file=$(mktemp "$runtime_dir/mycfc-cloudwatch-payload.XXXXXX")
@@ -29,6 +31,15 @@ fi
 set -a
 . "$env_file"
 set +a
+
+if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_credentials_file")" != '0:600' ]; then
+	printf '%s\n' 'CloudWatch upload skipped: missing or insecure release-agent AWS credentials file' >&2
+	exit "$status"
+fi
+
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+export AWS_SHARED_CREDENTIALS_FILE="$release_credentials_file"
+export AWS_PROFILE="$release_aws_profile"
 
 stream=$(hostname | tr -d '\n' | tr -c 'A-Za-z0-9_.#-/' '-')
 timestamp=$(($(date +%s) * 1000))

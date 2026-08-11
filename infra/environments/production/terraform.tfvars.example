@@ -3,6 +3,8 @@ domain_name       = "mycfcoimbra.com"
 route53_zone_id   = "ZAAAAAAAAAAAAA"
 github_org        = "ricardoespsanto"
 github_repo       = "mycfc"
+alarm_email       = "operations@example.com"
+release_agent_cutover_complete = false
 
 calendar_competition_id = "competition@example.com"
 calendar_training_id    = "training@example.com"
