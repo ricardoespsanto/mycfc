@@ -306,7 +306,7 @@ test.describe('authentication', () => {
     await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
     await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await noJavaScriptPage.goto('/sugestoes');
-    await noJavaScriptPage.getByText('Nova sugestão', { exact: true }).click();
+    await noJavaScriptPage.locator('#nova-sugestao > summary').click();
     await expect(noJavaScriptPage.getByRole('button', { name: 'Enviar sugestão' })).toBeVisible();
     await context.close();
   });
