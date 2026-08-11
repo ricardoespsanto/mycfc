@@ -128,7 +128,7 @@ var allowedNextPaths = map[string]struct{}{
 }
 
 func SafeNext(raw string) string {
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") {
 		return ""
 	}
 	u, err := url.Parse(raw)
