@@ -31,7 +31,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-var profilePhonePattern = regexp.MustCompile(`^[+]?[0-9][0-9 ().-]*[0-9]$`)
+var (
+	profilePhonePattern     = regexp.MustCompile(`^[+]?[0-9][0-9 ().-]*[0-9]$`)
+	fpcAthleteNumberPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
+)
+
+const (
+	fpcNationalHistoryBase      = "https://www.fpcanoagem.pt/resultados/verhistorico/"
+	fpcInternationalHistoryBase = "https://www.fpcanoagem.pt/resultados/verhistoricointernational/"
+)
 
 type Profile struct {
 	Store           ProfileStore
@@ -306,7 +314,8 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	}
 	avatar, avatarErr := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: record.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
 	visible := avatarErr == nil && avatar.PhotoObjectKey != nil && avatar.ConsentCurrent
-	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ImageConsentURL: h.ImageURL, Form: form, Conflict: conflict}
+	nationalHistoryURL, internationalHistoryURL := fpcHistoryURLs(stringValue(record.FederationLicenceNumber))
+	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ImageConsentURL: h.ImageURL, FPCNationalHistoryURL: nationalHistoryURL, FPCInternationalHistoryURL: internationalHistoryURL, Form: form, Conflict: conflict}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "profile_flash")
 	}
@@ -355,6 +364,9 @@ func (h Profile) validateForm(r *http.Request, current dbgen.GetMemberProfileRow
 	params := dbgen.UpdateMemberProfileParams{Phone: form.Phone, AddressLine1: form.AddressLine1, AddressLine2: form.AddressLine2, Postcode: form.Postcode, Locality: form.Locality, CountryCode: form.CountryCode, NationalityCode: form.NationalityCode, ClubMemberNumber: profileOptionalString(form.ClubMemberNumber), FederationLicenceNumber: profileOptionalString(form.FederationLicenceNumber), EmergencyContactName: form.EmergencyName, EmergencyContactRelationship: form.EmergencyRelationship, EmergencyContactPhone: form.EmergencyPhone, EmergencyContactAlternatePhone: form.EmergencyAlternatePhone, MedicalDeclaration: form.MedicalDeclaration, Allergies: form.Allergies, MedicalConditions: form.MedicalConditions, Medication: form.Medication, ActivityRestrictions: form.ActivityRestrictions, MedicalNotes: form.MedicalNotes, ExpectedUpdatedAt: pgtype.Timestamptz{Time: profileTime, Valid: err == nil}}
 	if !isAdmin {
 		return form, params, nil
+	}
+	if form.FederationLicenceNumber != stringValue(current.FederationLicenceNumber) && form.FederationLicenceNumber != "" && !validFPCAthleteNumber(form.FederationLicenceNumber) {
+		form.Errors.Add("federation_licence_number", "Introduza um número de atleta FPC com 1 a 20 algarismos.")
 	}
 	name, nameErr := validation.NormalizeName(form.Name)
 	if nameErr != nil {
@@ -503,6 +515,17 @@ var isoCountryCodes = func() map[string]bool {
 }()
 
 func validCountryCode(code string) bool { return isoCountryCodes[code] }
+
+func validFPCAthleteNumber(number string) bool {
+	return fpcAthleteNumberPattern.MatchString(number)
+}
+
+func fpcHistoryURLs(number string) (string, string) {
+	if !validFPCAthleteNumber(number) {
+		return "", ""
+	}
+	return fpcNationalHistoryBase + number + "/", fpcInternationalHistoryBase + number + "/"
+}
 
 func validProfilePhone(phone string) bool {
 	if !profilePhonePattern.MatchString(phone) {
