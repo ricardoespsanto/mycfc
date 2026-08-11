@@ -75,8 +75,7 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      - run: make tools
-      - run: CI=true make test-e2e
+      - run: CI=true make test-e2e-ci
 
   summary:
     if: always()

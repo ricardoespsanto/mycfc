@@ -84,7 +84,7 @@ async function recoveryLinkFor(recipient) {
 }
 
 test.describe('authentication', () => {
-  test.describe.configure({ mode: 'serial' });
+  test.describe.configure({ mode: 'parallel' });
 
   test('renders an accessible public landing page with working calls to action', async ({ page, browser }) => {
     await page.goto('/');
@@ -150,6 +150,9 @@ test.describe('authentication', () => {
     await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
     await context.close();
   });
+
+  test.describe('member registration and repair journey', () => {
+    test.describe.configure({ mode: 'serial' });
 
   test('registers a member, reaches the today view, and has no serious accessibility violations', async ({ page }) => {
     test.setTimeout(90_000);
@@ -248,6 +251,8 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/fleet');
     await expect(page.getByText(/Avaria reportada\. Referência:/)).toHaveText(firstReference ?? '');
     await context.close();
+  });
+
   });
 
   test('member submits a private suggestion and receives the administrator response', async ({ page, browser }) => {
@@ -578,6 +583,9 @@ test.describe('authentication', () => {
     await expectNoHorizontalOverflow(page);
     await context.close();
   });
+
+  test.describe('athlete operations journey', () => {
+    test.describe.configure({ mode: 'serial' });
 
   test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
     test.setTimeout(240000);
@@ -913,6 +921,8 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: /^Avisos/ }).click();
     await expect(page.getByRole('dialog', { name: 'Avisos' }).getByRole('link', { name: title })).toHaveCount(0);
+  });
+
   });
 
   test('administrator publishes news and confirms member deactivation without JavaScript', async ({ page, browser }) => {

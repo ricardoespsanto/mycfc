@@ -9,7 +9,7 @@ AIR := $(BIN_DIR)/air
 TERRAFORM_VERSION := 1.15.8
 TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-deployment test-integration test-e2e terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-deployment test-integration test-e2e test-e2e-ci terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -75,6 +75,10 @@ test-integration: dev-infra db-provision-test ## Run integration tests against l
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
+
+test-e2e-ci: ## Run the lean CI browser and accessibility gate
+	./scripts/e2e-ci-bootstrap.sh
+	docker compose -f compose.yaml -f compose.e2e-ci.yaml --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
 
 terraform-fmt: ## Check Terraform formatting through the pinned container
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) fmt -check -recursive infra
