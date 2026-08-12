@@ -17,6 +17,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
@@ -74,6 +75,7 @@ type Dashboard struct {
 	Fleet                 FleetStore
 	Equipment             EquipmentStore
 	Releases              ReleaseChecker
+	Features              FeatureFlagStore
 	System                System
 	PageMeta              components.PageMeta
 	Location              *time.Location
@@ -396,18 +398,7 @@ func (h Dashboard) Admin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Dashboard) ReleasesPage(w http.ResponseWriter, r *http.Request) {
-	user, _ := CurrentUserFromContext(r.Context())
-	page := pages.ReleasesPage{Release: h.releaseStatus(r.Context())}
-	page.Meta = h.PageMeta
-	page.Meta.Title = "Sistema | MyCFC"
-	page.Meta.CurrentPath = "/admin/sistema"
-	page.Meta.CurrentUserName = user.Name
-	page.Meta.CurrentUserID = user.ID.String()
-	page.Meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
-	page.Meta.Navigation = dashboardNavigation(user)
-	page.Meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = pages.Releases(page).Render(r.Context(), w)
+	h.renderSystem(w, r, http.StatusOK, featureFlagForm{})
 }
 
 type fleetMaintenanceForm struct {
@@ -1019,7 +1010,10 @@ func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now 
 // additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	today := []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
-	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Álbuns", Path: "/albuns"}, {Label: "Sugestões", Path: "/sugestoes"}}
+	activity := []components.NavigationItem{{Label: "Eventos", Path: "/events"}, {Label: "Treinos", Path: "/treinos"}, {Label: "Álbuns", Path: "/albuns"}}
+	if featureflags.Available(user.FeatureModes, featureflags.Suggestions, user.IsAdmin) {
+		activity = append(activity, components.NavigationItem{Label: "Sugestões", Path: "/sugestoes"})
+	}
 	if !user.IsAdmin {
 		activity = append(activity, components.NavigationItem{Label: "Frota", Path: "/fleet"})
 	}
@@ -1049,7 +1043,10 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
 	}
 	if user.IsAdmin || user.CanModerateContent {
-		admin = append(admin, components.NavigationItem{Label: "Álbuns", Path: "/admin/albuns"}, components.NavigationItem{Label: "Sugestões", Path: "/admin/sugestoes"})
+		admin = append(admin, components.NavigationItem{Label: "Álbuns", Path: "/admin/albuns"})
+		if featureflags.Available(user.FeatureModes, featureflags.Suggestions, user.IsAdmin) {
+			admin = append(admin, components.NavigationItem{Label: "Sugestões", Path: "/admin/sugestoes"})
+		}
 	}
 
 	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}

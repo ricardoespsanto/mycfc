@@ -274,6 +274,49 @@ func (ns NullEventResponseStatus) Value() (driver.Value, error) {
 	return string(ns.EventResponseStatus), nil
 }
 
+type FeatureAvailabilityMode string
+
+const (
+	FeatureAvailabilityModeDISABLED  FeatureAvailabilityMode = "DISABLED"
+	FeatureAvailabilityModeADMINONLY FeatureAvailabilityMode = "ADMIN_ONLY"
+	FeatureAvailabilityModeENABLED   FeatureAvailabilityMode = "ENABLED"
+)
+
+func (e *FeatureAvailabilityMode) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = FeatureAvailabilityMode(s)
+	case string:
+		*e = FeatureAvailabilityMode(s)
+	default:
+		return fmt.Errorf("unsupported scan type for FeatureAvailabilityMode: %T", src)
+	}
+	return nil
+}
+
+type NullFeatureAvailabilityMode struct {
+	FeatureAvailabilityMode FeatureAvailabilityMode `json:"feature_availability_mode"`
+	Valid                   bool                    `json:"valid"` // Valid is true if FeatureAvailabilityMode is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullFeatureAvailabilityMode) Scan(value interface{}) error {
+	if value == nil {
+		ns.FeatureAvailabilityMode, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.FeatureAvailabilityMode.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullFeatureAvailabilityMode) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.FeatureAvailabilityMode), nil
+}
+
 type MaintenanceStatus string
 
 const (
@@ -866,6 +909,22 @@ type EventResponse struct {
 type EventTeamAudience struct {
 	EventID uuid.UUID `json:"event_id"`
 	TeamID  uuid.UUID `json:"team_id"`
+}
+
+type FeatureFlag struct {
+	FeatureKey  string                  `json:"feature_key"`
+	Mode        FeatureAvailabilityMode `json:"mode"`
+	UpdatedByID *uuid.UUID              `json:"updated_by_id"`
+	UpdatedAt   pgtype.Timestamptz      `json:"updated_at"`
+}
+
+type FeatureFlagEvent struct {
+	ID           uuid.UUID               `json:"id"`
+	FeatureKey   string                  `json:"feature_key"`
+	PreviousMode FeatureAvailabilityMode `json:"previous_mode"`
+	NewMode      FeatureAvailabilityMode `json:"new_mode"`
+	ActorUserID  uuid.UUID               `json:"actor_user_id"`
+	OccurredAt   pgtype.Timestamptz      `json:"occurred_at"`
 }
 
 type MaintenanceTask struct {

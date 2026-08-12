@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	staticassets "github.com/cfcoimbra/mycfc/ui/static"
@@ -69,6 +70,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/fleet/equipment/{id}/retire", auth.RequireAdmin(http.HandlerFunc(dashboard.RetireEquipment)))
 	mux.Handle("POST /admin/fleet/equipment/{id}/reactivate", auth.RequireAdmin(http.HandlerFunc(dashboard.ReactivateEquipment)))
 	mux.Handle("GET /admin/sistema", auth.RequireAdmin(http.HandlerFunc(dashboard.ReleasesPage)))
+	mux.Handle("POST /admin/sistema/funcionalidades/{key}", auth.RequireAdmin(http.HandlerFunc(dashboard.UpdateFeatureFlag)))
 	mux.Handle("POST /admin/maintenance", auth.RequireAdmin(http.HandlerFunc(dashboard.Maintenance)))
 	mux.Handle("POST /admin/repairs/status", auth.RequireAdmin(http.HandlerFunc(dashboard.RepairStatus)))
 	mux.Handle("POST /admin/maintenance/{id}/complete", auth.RequireAdmin(http.HandlerFunc(dashboard.CompleteMaintenance)))
@@ -118,10 +120,10 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/treinos/sessoes/{id}/cancelar", auth.RequireEventStaff(http.HandlerFunc(training.CancelSession)))
 	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/sessoes/distancia", auth.RequireAuthenticated(http.HandlerFunc(training.UpdateDistance)))
-	mux.Handle("GET /sugestoes", auth.RequireAuthenticated(http.HandlerFunc(suggestions.Index)))
-	mux.Handle("POST /sugestoes", auth.RequireAuthenticated(http.HandlerFunc(suggestions.Create)))
-	mux.Handle("GET /admin/sugestoes", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Index)))
-	mux.Handle("POST /admin/sugestoes/{id}", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Update)))
+	mux.Handle("GET /sugestoes", auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(suggestions.Index)))
+	mux.Handle("POST /sugestoes", auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(suggestions.Create)))
+	mux.Handle("GET /admin/sugestoes", auth.RequireFeature(featureflags.Suggestions, auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Index))))
+	mux.Handle("POST /admin/sugestoes/{id}", auth.RequireFeature(featureflags.Suggestions, auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Update))))
 	mux.Handle("GET /albuns", auth.RequireAuthenticated(http.HandlerFunc(photoAlbums.Index)))
 	mux.Handle("GET /albuns/{id}", auth.RequireAuthenticated(http.HandlerFunc(photoAlbums.Detail)))
 	mux.Handle("GET /admin/albuns", auth.RequireContentStaff(http.HandlerFunc(photoAlbums.Index)))

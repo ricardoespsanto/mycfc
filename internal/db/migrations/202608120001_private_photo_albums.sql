@@ -1,6 +1,9 @@
-CREATE TYPE photo_album_status AS ENUM ('OPEN', 'ARCHIVED');
+DO $$ BEGIN
+ CREATE TYPE photo_album_status AS ENUM ('OPEN', 'ARCHIVED');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE photo_albums (
+CREATE TABLE IF NOT EXISTS photo_albums (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  title varchar(180) NOT NULL,
  description varchar(2000) NOT NULL DEFAULT '',
@@ -17,23 +20,23 @@ CREATE TABLE photo_albums (
   OR (status = 'ARCHIVED' AND archived_by_id IS NOT NULL AND archived_at IS NOT NULL)
  )
 );
-CREATE INDEX photo_albums_status_created_idx ON photo_albums (status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS photo_albums_status_created_idx ON photo_albums (status, created_at DESC, id DESC);
 
-CREATE TABLE photo_album_programme_audiences (
+CREATE TABLE IF NOT EXISTS photo_album_programme_audiences (
  album_id uuid NOT NULL REFERENCES photo_albums(id) ON DELETE CASCADE,
  programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT,
  PRIMARY KEY (album_id, programme_id)
 );
-CREATE INDEX photo_album_programme_audiences_lookup_idx ON photo_album_programme_audiences (programme_id, album_id);
+CREATE INDEX IF NOT EXISTS photo_album_programme_audiences_lookup_idx ON photo_album_programme_audiences (programme_id, album_id);
 
-CREATE TABLE photo_album_team_audiences (
+CREATE TABLE IF NOT EXISTS photo_album_team_audiences (
  album_id uuid NOT NULL REFERENCES photo_albums(id) ON DELETE CASCADE,
  team_id uuid NOT NULL REFERENCES teams(id) ON DELETE RESTRICT,
  PRIMARY KEY (album_id, team_id)
 );
-CREATE INDEX photo_album_team_audiences_lookup_idx ON photo_album_team_audiences (team_id, album_id);
+CREATE INDEX IF NOT EXISTS photo_album_team_audiences_lookup_idx ON photo_album_team_audiences (team_id, album_id);
 
-CREATE FUNCTION ensure_photo_album_has_audience() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION ensure_photo_album_has_audience() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE target_album_id uuid;
 BEGIN
  IF TG_TABLE_NAME = 'photo_albums' THEN
@@ -52,26 +55,28 @@ BEGIN
  RETURN NEW;
 END;
 $$;
-CREATE CONSTRAINT TRIGGER photo_albums_audience_required_trigger
-AFTER INSERT OR UPDATE ON photo_albums DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
-CREATE CONSTRAINT TRIGGER photo_album_programme_audience_required_trigger
-AFTER DELETE ON photo_album_programme_audiences DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
-CREATE CONSTRAINT TRIGGER photo_album_team_audience_required_trigger
-AFTER DELETE ON photo_album_team_audiences DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'photo_albums_audience_required_trigger' AND tgrelid = 'photo_albums'::regclass) THEN
+  CREATE CONSTRAINT TRIGGER photo_albums_audience_required_trigger AFTER INSERT OR UPDATE ON photo_albums DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'photo_album_programme_audience_required_trigger' AND tgrelid = 'photo_album_programme_audiences'::regclass) THEN
+  CREATE CONSTRAINT TRIGGER photo_album_programme_audience_required_trigger AFTER DELETE ON photo_album_programme_audiences DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'photo_album_team_audience_required_trigger' AND tgrelid = 'photo_album_team_audiences'::regclass) THEN
+  CREATE CONSTRAINT TRIGGER photo_album_team_audience_required_trigger AFTER DELETE ON photo_album_team_audiences DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ensure_photo_album_has_audience();
+ END IF;
+END $$;
 
-CREATE TABLE photo_album_audit_events (
+CREATE TABLE IF NOT EXISTS photo_album_audit_events (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  album_id uuid NOT NULL REFERENCES photo_albums(id) ON DELETE RESTRICT,
  action varchar(20) NOT NULL CHECK (action IN ('CREATED', 'ARCHIVED')),
  actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  occurred_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX photo_album_audit_events_album_idx ON photo_album_audit_events (album_id, occurred_at, id);
+CREATE INDEX IF NOT EXISTS photo_album_audit_events_album_idx ON photo_album_audit_events (album_id, occurred_at, id);
 
-CREATE FUNCTION audit_photo_album_change() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION audit_photo_album_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF TG_OP = 'INSERT' THEN
   INSERT INTO photo_album_audit_events (album_id, action, actor_user_id, occurred_at)
@@ -86,15 +91,19 @@ BEGIN
  RAISE EXCEPTION 'photo album lifecycle transition is invalid';
 END;
 $$;
-CREATE TRIGGER photo_albums_audit_trigger
-AFTER INSERT OR UPDATE OF status ON photo_albums
-FOR EACH ROW EXECUTE FUNCTION audit_photo_album_change();
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'photo_albums_audit_trigger' AND tgrelid = 'photo_albums'::regclass) THEN
+  CREATE TRIGGER photo_albums_audit_trigger AFTER INSERT OR UPDATE OF status ON photo_albums FOR EACH ROW EXECUTE FUNCTION audit_photo_album_change();
+ END IF;
+END $$;
 
-CREATE FUNCTION prevent_photo_album_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION prevent_photo_album_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  RAISE EXCEPTION 'photo album audit events are append-only';
 END;
 $$;
-CREATE TRIGGER photo_album_audit_events_immutable_trigger
-BEFORE UPDATE OR DELETE ON photo_album_audit_events
-FOR EACH ROW EXECUTE FUNCTION prevent_photo_album_audit_mutation();
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'photo_album_audit_events_immutable_trigger' AND tgrelid = 'photo_album_audit_events'::regclass) THEN
+  CREATE TRIGGER photo_album_audit_events_immutable_trigger BEFORE UPDATE OR DELETE ON photo_album_audit_events FOR EACH ROW EXECUTE FUNCTION prevent_photo_album_audit_mutation();
+ END IF;
+END $$;

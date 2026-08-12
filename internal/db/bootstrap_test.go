@@ -169,3 +169,37 @@ func TestMemberSuggestionsExistInBaselineAndUseBaselineSafeMigration(t *testing.
 		}
 	}
 }
+
+func TestFeatureFlagsExistInBaselineAndUseBaselineSafeMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608120002_feature_flags.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"feature_availability_mode", "CREATE TABLE feature_flags", "CREATE TABLE feature_flag_events", "feature_flag_events_immutable_trigger"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "CREATE TABLE IF NOT EXISTS feature_flags", "CREATE TABLE IF NOT EXISTS feature_flag_events", "ON CONFLICT (feature_key) DO NOTHING", "CREATE OR REPLACE FUNCTION audit_feature_flag_change", "IF NOT EXISTS (SELECT 1 FROM pg_trigger"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM suggestions", "DELETE FROM feature_flag"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}
+
+func TestPrivatePhotoAlbumMigrationCanFollowCurrentBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608120001_private_photo_albums.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "CREATE TABLE IF NOT EXISTS photo_albums", "CREATE TABLE IF NOT EXISTS photo_album_programme_audiences", "CREATE TABLE IF NOT EXISTS photo_album_team_audiences", "CREATE TABLE IF NOT EXISTS photo_album_audit_events", "CREATE OR REPLACE FUNCTION", "IF NOT EXISTS (SELECT 1 FROM pg_trigger"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("photo-album migration is not baseline-safe: missing %q", expected)
+		}
+	}
+}
