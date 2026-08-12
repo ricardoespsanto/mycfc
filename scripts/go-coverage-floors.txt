@@ -1,0 +1,16 @@
+# Package minimum percentages. These floors ratchet the measured baseline and
+# should be raised with focused tests; do not lower them to accommodate a change.
+github.com/cfcoimbra/mycfc/internal/activity 75
+github.com/cfcoimbra/mycfc/internal/app 45
+github.com/cfcoimbra/mycfc/internal/config 75
+github.com/cfcoimbra/mycfc/internal/db 10
+github.com/cfcoimbra/mycfc/internal/emailverification 60
+github.com/cfcoimbra/mycfc/internal/handlers 45
+github.com/cfcoimbra/mycfc/internal/httpx 75
+github.com/cfcoimbra/mycfc/internal/locale 10
+github.com/cfcoimbra/mycfc/internal/passwordreset 80
+github.com/cfcoimbra/mycfc/internal/release 60
+github.com/cfcoimbra/mycfc/internal/storage 40
+github.com/cfcoimbra/mycfc/internal/validation 75
+github.com/cfcoimbra/mycfc/cmd/admin 65
+github.com/cfcoimbra/mycfc/cmd/server 20

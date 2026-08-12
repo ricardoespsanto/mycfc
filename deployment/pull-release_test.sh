@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 fake_bin="$work_dir/bin"

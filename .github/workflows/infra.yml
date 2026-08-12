@@ -2,10 +2,14 @@ name: Infrastructure
 
 on:
   pull_request:
-    paths: [infra/environments/hetzner/**]
+    paths:
+      - infra/**
+      - Makefile
   push:
     branches: [main]
-    paths: [infra/environments/hetzner/**]
+    paths:
+      - infra/**
+      - Makefile
   workflow_dispatch:
 
 permissions:
@@ -17,11 +21,5 @@ jobs:
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Check Hetzner Terraform formatting
-        run: docker run --rm -v "$PWD:/workspace" -w /workspace hashicorp/terraform:1.15.8 fmt -check infra/environments/hetzner
-      - name: Validate Hetzner Terraform
-        run: >-
-          docker run --rm -v "$PWD:/workspace" -w /workspace hashicorp/terraform:1.15.8
-          -chdir=infra/environments/hetzner init -backend=false
-          && docker run --rm -v "$PWD:/workspace" -w /workspace hashicorp/terraform:1.15.8
-          -chdir=infra/environments/hetzner validate
+      - name: Format, validate, and lint every Terraform root module
+        run: make terraform-check

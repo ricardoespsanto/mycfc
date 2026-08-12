@@ -1057,7 +1057,6 @@ func eventsPageNumber(value string) int {
 	return page
 }
 
-func eventsPageURL(page int) string        { return "/events?page=" + strconv.Itoa(page) }
 func managedEventsPageURL(page int) string { return "/admin/eventos?page=" + strconv.Itoa(page) }
 
 func eventResponsesPageURL(eventID uuid.UUID, page int) string {

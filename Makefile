@@ -6,10 +6,15 @@ BIN_DIR := $(CURDIR)/bin
 SQLC := $(BIN_DIR)/sqlc
 TEMPL := $(BIN_DIR)/templ
 AIR := $(BIN_DIR)/air
+STATICCHECK := $(BIN_DIR)/staticcheck
+ACTIONLINT := $(BIN_DIR)/actionlint
 TERRAFORM_VERSION := 1.15.8
 TERRAFORM_IMAGE := hashicorp/terraform:$(TERRAFORM_VERSION)
+SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b8c1ad7588c8bd1e04f4866b34ad3cac50335198552
+TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f
 
-.PHONY: help tools dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-deployment test-integration test-e2e test-e2e-ci terraform-fmt terraform-validate terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci terraform-fmt terraform-validate terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,6 +24,32 @@ tools: ## Install pinned Go development tools into ./bin
 	GOBIN=$(BIN_DIR) go install github.com/a-h/templ/cmd/templ@v0.3.1020
 	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@v1.67.1
+
+lint-tools: ## Install pinned static-analysis tools into ./bin
+	@mkdir -p $(BIN_DIR)
+	GOBIN=$(BIN_DIR) go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+	GOBIN=$(BIN_DIR) go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+lint: lint-tools ## Run source, workflow, shell, Dockerfile, and Terraform linters
+	npm ci
+	$(MAKE) lint-go lint-ui lint-shell lint-workflows lint-docker terraform-lint
+
+lint-go: ## Run Go static analysis
+	$(STATICCHECK) ./internal/... ./cmd/... ./ui/...
+
+lint-ui: ## Lint JavaScript, CSS, templ syntax, and HTMX usage
+	npm run lint
+
+lint-shell: ## Lint tracked shell scripts in a pinned ShellCheck container
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(SHELLCHECK_IMAGE) --exclude=SC1090,SC2016 $$(git ls-files '*.sh')
+
+lint-workflows: ## Lint GitHub Actions workflows
+	$(ACTIONLINT)
+
+lint-docker: ## Lint application and Caddy Dockerfiles
+	# Alpine patch packages follow the pinned base image repository; distroless supplies the named nonroot user.
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < Dockerfile
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < deployment/caddy.Dockerfile
 
 dev-infra: ## Start local PostgreSQL, MinIO, and Mailpit
 	docker compose up -d --wait postgres minio mailpit
@@ -64,7 +95,10 @@ ui-review-screenshots: ui-review-reset ## Capture deterministic desktop/mobile U
 	docker compose --profile ui-review up --force-recreate --abort-on-container-exit --exit-code-from ui-review-capture ui-review-app ui-review-capture
 
 test: ## Run unit tests
-	go test ./internal/... ./cmd/...
+	go test ./internal/... ./cmd/... ./ui/...
+
+test-coverage: ## Run unit tests and write text/HTML reports with a regression floor
+	./scripts/go-coverage.sh
 
 test-deployment: ## Run production release orchestration tests
 	sh deployment/pull-release_test.sh
@@ -84,9 +118,14 @@ terraform-fmt: ## Check Terraform formatting through the pinned container
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) fmt -check -recursive infra
 
 terraform-validate: ## Validate Terraform stacks through the pinned container without remote state
-	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap init -backend=false && TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap validate && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production validate'
+	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -w /workspace $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap init -backend=false && TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap validate && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner init -backend=false && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner validate && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production validate'
 
-terraform-check: terraform-fmt terraform-validate ## Run all containerized Terraform checks
+terraform-lint: ## Run built-in TFLint rules for every Terraform root module
+	docker run --rm -v "$(CURDIR):/workspace" -w /workspace $(TFLINT_IMAGE) --chdir=infra/bootstrap --format=compact
+	docker run --rm -v "$(CURDIR):/workspace" -w /workspace $(TFLINT_IMAGE) --chdir=infra/environments/hetzner --format=compact
+	docker run --rm -v "$(CURDIR):/workspace" -w /workspace $(TFLINT_IMAGE) --chdir=infra/environments/production --format=compact
+
+terraform-check: terraform-fmt terraform-validate terraform-lint ## Run all containerized Terraform checks
 
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }

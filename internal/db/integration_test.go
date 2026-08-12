@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestScheduleMaintenanceTaskUpdatesOnlyDueEquipment(t *testing.T) {
@@ -169,11 +170,11 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 
 func TestCreateRepairRequestEnforcesIdempotencyKeyDuringConcurrentRetries(t *testing.T) {
 	ctx := context.Background()
-	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pool.Close(ctx) })
+	t.Cleanup(pool.Close)
 
 	userID, equipmentID, key := uuid.New(), uuid.New(), uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Utilizador de teste', $2, 'hash', '1990-01-01')`, userID, "repair-"+uuid.NewString()+"@example.test"); err != nil {
