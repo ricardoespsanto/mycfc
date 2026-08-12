@@ -11,7 +11,7 @@ set -a
 set +a
 export AWS_SHARED_CREDENTIALS_FILE=/etc/mycfc/backup-aws/credentials
 export AWS_PROFILE=mycfc-backup
-export AWS_REGION=${AWS_REGION:-eu-west-1}
+export AWS_REGION="${AWS_REGION:-eu-west-1}"
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
 manifest_key=$(aws s3api list-objects-v2 --bucket "$BACKUP_S3_BUCKET" --prefix daily/ --query 'reverse(sort_by(Contents[?ends_with(Key, `.json`)], &LastModified))[0].Key' --output text)

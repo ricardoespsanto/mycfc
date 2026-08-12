@@ -48,3 +48,4 @@ go.work.sum
 /playwright-report
 /test-results
 /artifacts/ui-review
+/artifacts/coverage

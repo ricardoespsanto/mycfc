@@ -10,9 +10,6 @@ variable "environment" {
   type    = string
   default = "production"
 }
-variable "state_bucket_name" {
-  type = string
-}
 variable "domain_name" {
   type    = string
   default = "mycfc.pt"
@@ -235,10 +232,6 @@ variable "task_cpu" {
 variable "task_memory" {
   type    = number
   default = 1024
-}
-variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.micro"
 }
 variable "db_connection_budget" {
   type    = number

@@ -18,6 +18,8 @@ for consent_url in \
   key=${consent_url%%=*}
   if [[ -z ${!key:-} ]]; then
     printf '\n%s\n' "$consent_url" >> .env
+    # The variable contains a deliberate NAME=value assignment.
+    # shellcheck disable=SC2163
     export "$consent_url"
   fi
 done

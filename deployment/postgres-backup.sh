@@ -14,7 +14,7 @@ set +a
 
 export AWS_SHARED_CREDENTIALS_FILE=/etc/mycfc/backup-aws/credentials
 export AWS_PROFILE=mycfc-backup
-export AWS_REGION=${AWS_REGION:-eu-west-1}
+export AWS_REGION="${AWS_REGION:-eu-west-1}"
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
 stamp=$(date -u +%Y-%m-%dT%H-%M-%SZ)
@@ -32,10 +32,8 @@ sha256=$(shasum -a 256 "$encrypted" | cut -d ' ' -f 1)
 manifest="$work_dir/$stamp.json"
 jq -n --arg ciphertext "$(jq -r '.CiphertextBlob' "$key_json")" --arg iv "$iv" --arg sha256 "$sha256" --arg database "$POSTGRES_DB" --arg created_at "$stamp" '{ciphertext:$ciphertext,iv:$iv,sha256:$sha256,database:$database,created_at:$created_at}' >"$manifest"
 
-for prefix in daily; do
-  aws s3 cp "$encrypted" "s3://$BACKUP_S3_BUCKET/$prefix/$stamp.dump.enc"
-  aws s3 cp "$manifest" "s3://$BACKUP_S3_BUCKET/$prefix/$stamp.json"
-done
+aws s3 cp "$encrypted" "s3://$BACKUP_S3_BUCKET/daily/$stamp.dump.enc"
+aws s3 cp "$manifest" "s3://$BACKUP_S3_BUCKET/daily/$stamp.json"
 
 if [ "$(date -u +%d)" = 01 ]; then
   aws s3 cp "$encrypted" "s3://$BACKUP_S3_BUCKET/monthly/$stamp.dump.enc"

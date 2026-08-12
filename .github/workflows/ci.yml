@@ -47,7 +47,35 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: make verify-foundation
-      - run: make test
+
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-go v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.26.5
+          cache: true
+      # actions/setup-node v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Lint application, templates, workflows, containers, and Terraform
+        run: make lint
+      - name: Run unit coverage gate
+        run: make test-coverage
+      - name: Upload unit coverage report
+        if: always()
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unit-coverage-${{ github.sha }}
+          path: artifacts/coverage/
+          if-no-files-found: error
+          retention-days: 14
 
   integration:
     runs-on: ubuntu-24.04
@@ -79,10 +107,19 @@ jobs:
 
   summary:
     if: always()
-    needs: [generated-and-format, foundation, integration, e2e]
+    needs: [generated-and-format, foundation, quality, integration, e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: Require all CI gates
         env:
-          RESULTS: ${{ join(needs.*.result, ',') }}
-        run: test "$RESULTS" = success,success,success,success
+          GENERATED_RESULT: ${{ needs.generated-and-format.result }}
+          FOUNDATION_RESULT: ${{ needs.foundation.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          test "$GENERATED_RESULT" = success
+          test "$FOUNDATION_RESULT" = success
+          test "$QUALITY_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+          test "$E2E_RESULT" = success

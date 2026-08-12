@@ -412,9 +412,6 @@ func (h Members) memberID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bo
 	}
 	return id, true
 }
-func (h Members) memberForm(r *http.Request, form memberForm) pages.MemberCreateForm {
-	return h.memberFormFromAdults(r, form, nil)
-}
 func (h Members) memberFormFromAdults(r *http.Request, form memberForm, adults []dbgen.ListActiveAdultsForAdminRow) pages.MemberCreateForm {
 	f := pages.MemberCreateForm{Name: form.Name, Email: form.Email, DateOfBirth: form.DateOfBirth, GuardianID: form.GuardianID, Dependent: form.Dependent, Errors: form.Errors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
 	for _, adult := range adults {

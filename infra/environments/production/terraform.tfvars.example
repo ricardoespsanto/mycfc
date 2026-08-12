@@ -1,4 +1,3 @@
-state_bucket_name = "mycfc-terraform-state"
 domain_name       = "mycfcoimbra.com"
 route53_zone_id   = "ZAAAAAAAAAAAAA"
 github_org        = "ricardoespsanto"

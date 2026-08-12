@@ -6,11 +6,18 @@
   "scripts": {
     "build": "node scripts/build-assets.mjs",
     "dev": "node scripts/build-assets.mjs",
+    "lint:css": "stylelint \"ui/static/src/**/*.css\"",
+    "lint:htmx": "node scripts/lint-templ.mjs",
+    "lint:js": "eslint \"ui/static/src/**/*.js\" \"scripts/**/*.mjs\" \"e2e/**/*.mjs\" \"*.mjs\"",
+    "lint": "npm run lint:js && npm run lint:css && npm run lint:htmx",
     "test": "node --test",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
-    "@playwright/test": "1.62.1"
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
+    "eslint": "10.8.1",
+    "stylelint": "17.14.1"
   }
 }

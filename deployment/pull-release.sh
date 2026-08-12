@@ -2,7 +2,7 @@
 set -eu
 
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
-deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 compose_file="$deployment_dir/compose.yaml"
 state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
@@ -72,7 +72,7 @@ reload_caddy() {
 
 check_caddy_path() {
 	path=$1
-	for attempt in $(seq 1 15); do
+	for _ in $(seq 1 15); do
 		if docker compose --env-file "$env_file" -f "$compose_file" exec -T caddy \
 			wget -q -O /dev/null --header="Host: $MYCFC_DOMAIN" "http://127.0.0.1$path"; then
 			return 0
@@ -267,7 +267,7 @@ docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_s
 candidate_started=true
 
 candidate_ready=false
-for attempt in $(seq 1 30); do
+for _ in $(seq 1 30); do
 	candidate_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$candidate_container" 2>/dev/null || true)
 	if [ -n "$candidate_ip" ] && curl -fsS -o /dev/null "http://$candidate_ip:8080/health/ready"; then
 		candidate_ready=true

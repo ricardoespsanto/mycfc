@@ -2,7 +2,7 @@
 set -eu
 
 env_file=/etc/mycfc/mycfc.env
-deployment_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 state_dir=/etc/mycfc/deployment
 release_credentials_file=/etc/mycfc/release-aws/credentials
 

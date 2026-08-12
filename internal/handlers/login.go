@@ -62,7 +62,7 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := uuid.Nil
+	var userID uuid.UUID
 	credentialVersion := int64(0)
 	var passwordHash *string
 	var err error
