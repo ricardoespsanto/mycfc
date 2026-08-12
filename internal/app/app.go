@@ -201,8 +201,9 @@ func New(ctx context.Context) (*Application, error) {
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256, ImageURL: cfg.ConsentImageURL}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, members, profile, news, suggestions, foundation))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, members, profile, news, suggestions, photoAlbums, foundation))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

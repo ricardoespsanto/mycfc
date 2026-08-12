@@ -14,7 +14,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System{PageMeta: foundation.PageMeta}
@@ -122,6 +122,12 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /sugestoes", auth.RequireAuthenticated(http.HandlerFunc(suggestions.Create)))
 	mux.Handle("GET /admin/sugestoes", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Index)))
 	mux.Handle("POST /admin/sugestoes/{id}", auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Update)))
+	mux.Handle("GET /albuns", auth.RequireAuthenticated(http.HandlerFunc(photoAlbums.Index)))
+	mux.Handle("GET /albuns/{id}", auth.RequireAuthenticated(http.HandlerFunc(photoAlbums.Detail)))
+	mux.Handle("GET /admin/albuns", auth.RequireContentStaff(http.HandlerFunc(photoAlbums.Index)))
+	mux.Handle("GET /admin/albuns/{id}", auth.RequireContentStaff(http.HandlerFunc(photoAlbums.Detail)))
+	mux.Handle("POST /admin/albuns", auth.RequireContentStaff(http.HandlerFunc(photoAlbums.Create)))
+	mux.Handle("POST /admin/albuns/{id}/arquivar", auth.RequireContentStaff(http.HandlerFunc(photoAlbums.Archive)))
 
 	return customNotFound(mux, system.NotFound)
 }

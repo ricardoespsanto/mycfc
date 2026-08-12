@@ -1,0 +1,137 @@
+package pages
+
+import (
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type PhotoAlbumOption struct { ID, Name string; Selected bool }
+type PhotoAlbumForm struct {
+	CSRFField templ.Component
+	Title, Description string
+	Programmes, Teams []PhotoAlbumOption
+	Errors validation.FieldErrors
+}
+type PhotoAlbumItem struct { ID, Title, Description, Status, Audience, CreatedAt, UpdatedAt string }
+type PhotoAlbumAuditItem struct { Action, Actor, OccurredAt string }
+type PhotoAlbumsPage struct {
+	Meta components.PageMeta
+	Management, CanManage bool
+	Success string
+	Form PhotoAlbumForm
+	Items []PhotoAlbumItem
+}
+type PhotoAlbumDetailPage struct {
+	Meta components.PageMeta
+	Management, CanManage bool
+	Conflict string
+	Album PhotoAlbumItem
+	Audit []PhotoAlbumAuditItem
+	CSRFField templ.Component
+}
+
+templ PhotoAlbums(page PhotoAlbumsPage) { @components.Base(page.Meta, photoAlbumsContent(page)) }
+
+templ photoAlbumsContent(page PhotoAlbumsPage) {
+	if page.Management {
+		@components.PageHeader("Administração", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}})
+	} else {
+		@components.PageHeader("Atividade", "Álbuns privados", "Consulte os álbuns dos seus programas e equipas.", nil)
+	}
+	@components.StatusMessage(page.Success, "success")
+	if page.Management && page.CanManage {
+		<details id="novo-album" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="photo-album-authoring-title">
+			<summary><span><strong id="photo-album-authoring-title">Novo álbum privado</strong><small>Defina os destinatários antes de abrir o álbum.</small></span></summary>
+			<button class="create-panel__close" type="button">Fechar</button>
+			<div class="disclosure__content">
+				<form class="form-layout" method="post" action="/admin/albuns">
+					@page.Form.CSRFField
+					@components.RequiredNote()
+					@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "title", Field: "photo-album-title"}, {Key: "description", Field: "photo-album-description"}, {Key: "audience", Field: "photo-album-audience"}, {Key: "programme_id", Field: "photo-album-audience"}, {Key: "team_id", Field: "photo-album-audience"}}))
+					@components.FieldLabel("photo-album-title", "Título", true)
+					<input id="photo-album-title" name="title" maxlength="180" value={ page.Form.Title } required aria-invalid?={ page.Form.Errors["title"] != "" } aria-describedby="title-error"/>
+					@components.FieldErrorMessage("title", page.Form.Errors["title"])
+					@components.FieldLabel("photo-album-description", "Descrição", false)
+					<textarea id="photo-album-description" name="description" maxlength="2000" aria-invalid?={ page.Form.Errors["description"] != "" } aria-describedby="description-error">{ page.Form.Description }</textarea>
+					@components.FieldErrorMessage("description", page.Form.Errors["description"])
+					<fieldset id="photo-album-audience"><legend>Destinatários</legend><p>Selecione pelo menos um programa ou equipa.</p>
+						if len(page.Form.Programmes) > 0 {
+							<h3>Programas</h3>
+						}
+						for _, option := range page.Form.Programmes {
+							<label><input type="checkbox" name="programme_id" value={ option.ID } checked?={ option.Selected }/> { option.Name }</label>
+						}
+						if len(page.Form.Teams) > 0 {
+							<h3>Equipas</h3>
+						}
+						for _, option := range page.Form.Teams {
+							<label><input type="checkbox" name="team_id" value={ option.ID } checked?={ option.Selected }/> { option.Name }</label>
+						}
+					</fieldset>
+					@components.FieldErrorMessage("audience", photoAlbumAudienceError(page.Form.Errors))
+					@components.FormActions("/admin/albuns") {
+						<button type="submit">Criar álbum</button>
+					}
+				</form>
+			</div>
+		</details>
+	}
+	<section class="module">
+		@components.SectionHeading("Partilha privada", photoAlbumListTitle(page.Management), photoAlbumListDescription(page.Management))
+		if len(page.Items) == 0 {
+			@components.EmptyState("Ainda sem álbuns", photoAlbumEmptyText(page.Management))
+		}
+		if len(page.Items) > 0 {
+			@components.RecordList("Álbuns privados") {
+				for _, item := range page.Items {
+					<li class="record-item record-item--stacked"><div class="record-item__copy"><h3><a href={ templ.SafeURL(photoAlbumDetailURL(item, page.Management)) }>{ item.Title }</a></h3><p class="record-meta">{ item.Audience } · Criado em { item.CreatedAt }</p>
+						if item.Description != "" {
+							<p>{ item.Description }</p>
+						}
+					</div>@components.Badge(photoAlbumStatusLabel(item.Status), photoAlbumStatusTone(item.Status))</li>
+				}
+			}
+		}
+	</section>
+}
+
+templ PhotoAlbumDetail(page PhotoAlbumDetailPage) { @components.Base(page.Meta, photoAlbumDetailContent(page)) }
+
+templ photoAlbumDetailContent(page PhotoAlbumDetailPage) {
+	@components.PageHeader(photoAlbumArea(page.Management), page.Album.Title, page.Album.Audience, []components.PageAction{{Label: "Voltar aos álbuns", Href: photoAlbumIndexURL(page.Management), Variant: "secondary"}})
+	@components.StatusMessage(page.Conflict, "warning")
+	<section class="module">
+		@components.SectionHeading("Álbum", "Ainda sem fotografias", "A estrutura privada está pronta. Os envios e a moderação chegam na próxima fase.")
+		if page.Album.Description != "" {
+			<p>{ page.Album.Description }</p>
+		}
+		@components.EmptyState("Nenhuma fotografia publicada", "Este álbum não aceita fotografias nesta fase.")
+	</section>
+	if page.Management && page.CanManage {
+		<section class="module"><h2>Gestão</h2>
+			if page.Album.Status == "OPEN" {
+				<form method="post" action={ "/admin/albuns/" + page.Album.ID + "/arquivar" }>@page.CSRFField<input type="hidden" name="updated_at" value={ page.Album.UpdatedAt }/><button class="action action--danger" type="submit">Arquivar álbum</button></form>
+			} else {
+				<p>Este álbum está arquivado e permanece apenas para consulta da equipa responsável.</p>
+			}
+		</section>
+		<section class="module"><h2>Histórico</h2>
+			@components.RecordList("Histórico do álbum") {
+				for _, event := range page.Audit {
+					<li class="record-item"><span>{ photoAlbumAuditLabel(event.Action) }</span><span class="record-meta">{ event.Actor } · { event.OccurredAt }</span></li>
+				}
+			}
+		</section>
+	}
+}
+
+func photoAlbumAudienceError(errors validation.FieldErrors) string { if errors["audience"] != "" { return errors["audience"] }; if errors["programme_id"] != "" { return errors["programme_id"] }; return errors["team_id"] }
+func photoAlbumListTitle(management bool) string { if management { return "Todos os álbuns" }; return "Os meus álbuns" }
+func photoAlbumListDescription(management bool) string { if management { return "Álbuns abertos e arquivados, sempre limitados aos destinatários definidos." }; return "A visibilidade acompanha as suas inscrições e relações de tutela atuais." }
+func photoAlbumEmptyText(management bool) string { if management { return "Crie o primeiro álbum para um programa ou equipa." }; return "Não existem álbuns abertos para os seus programas ou equipas." }
+func photoAlbumStatusLabel(status string) string { if status == "ARCHIVED" { return "Arquivado" }; return "Aberto" }
+func photoAlbumStatusTone(status string) string { if status == "ARCHIVED" { return "neutral" }; return "success" }
+func photoAlbumDetailURL(item PhotoAlbumItem, management bool) string { if management { return "/admin/albuns/" + item.ID }; return "/albuns/" + item.ID }
+func photoAlbumIndexURL(management bool) string { if management { return "/admin/albuns" }; return "/albuns" }
+func photoAlbumArea(management bool) string { if management { return "Administração" }; return "Atividade" }
+func photoAlbumAuditLabel(action string) string { if action == "ARCHIVED" { return "Álbum arquivado" }; return "Álbum criado" }
