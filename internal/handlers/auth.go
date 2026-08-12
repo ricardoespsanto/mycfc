@@ -9,6 +9,7 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,10 @@ type CurrentUserLookup interface {
 	GetActiveAccountByIDWithoutProfile(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDWithoutProfileRow, error)
 	ListActiveMembershipProgrammeCodesForUser(context.Context, uuid.UUID) ([]string, error)
 	ListActiveStaffGrantsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveStaffGrantsForUserRow, error)
+}
+
+type FeatureFlagLookup interface {
+	ListFeatureFlags(context.Context) ([]dbgen.ListFeatureFlagsRow, error)
 }
 
 type CurrentUser struct {
@@ -36,10 +41,12 @@ type CurrentUser struct {
 	CoachTeamIDs       map[uuid.UUID]bool
 	CanManageEvents    bool
 	CanModerateContent bool
+	FeatureModes       map[featureflags.Key]featureflags.Mode
 }
 
 type Auth struct {
 	Users    CurrentUserLookup
+	Features FeatureFlagLookup
 	Sessions *scs.SessionManager
 	System   System
 }
@@ -92,7 +99,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, Email: stringValue(user.Email), EmailVerified: user.EmailVerified, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}}
+		current := CurrentUser{ID: user.ID, Name: user.Name, Email: stringValue(user.Email), EmailVerified: user.EmailVerified, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}, FeatureModes: map[featureflags.Key]featureflags.Mode{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
 		}
@@ -116,6 +123,19 @@ func (a Auth) Load(next http.Handler) http.Handler {
 				}
 			case "MODERATOR":
 				current.CanModerateContent = true
+			}
+		}
+		if a.Features != nil {
+			flags, flagErr := a.Features.ListFeatureFlags(r.Context())
+			if flagErr != nil {
+				a.System.InternalError(w, r)
+				return
+			}
+			for _, flag := range flags {
+				key := featureflags.Key(flag.FeatureKey)
+				if _, known := featureflags.DefinitionFor(key); known {
+					current.FeatureModes[key] = featureflags.Mode(flag.Mode)
+				}
 			}
 		}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
@@ -210,6 +230,17 @@ func (a Auth) RequireModerator(next http.Handler) http.Handler {
 
 func (a Auth) RequireSuggestionStaff(next http.Handler) http.Handler {
 	return a.RequireContentStaff(next)
+}
+
+func (a Auth) RequireFeature(key featureflags.Key, next http.Handler) http.Handler {
+	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := currentUser(r.Context())
+		if featureflags.Available(user.FeatureModes, key, user.IsAdmin) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		a.System.NotFound(w, r)
+	}))
 }
 
 func (a Auth) RequireContentStaff(next http.Handler) http.Handler {

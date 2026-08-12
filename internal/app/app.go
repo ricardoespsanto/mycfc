@@ -181,6 +181,7 @@ func New(ctx context.Context) (*Application, error) {
 		Fleet:                 dbgen.New(pool),
 		Equipment:             dbgen.New(pool),
 		Releases:              releaseChecker,
+		Features:              dbgen.New(pool),
 		Objects:               objectStore,
 		MaxRequestBytes:       cfg.MaxRequestBytes,
 		MaxPhotoBytes:         cfg.MaxPhotoBytes,
@@ -192,7 +193,7 @@ func New(ctx context.Context) (*Application, error) {
 		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
 		ResponsibilityURL: cfg.ConsentMinorURL,
 	}
-	auth := handlers.Auth{Users: dbgen.New(pool), Sessions: sessions, System: system}
+	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), Sessions: sessions, System: system}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -20,6 +21,15 @@ type currentUserLookup struct {
 	grants          []dbgen.ListActiveStaffGrantsForUserRow
 	err             error
 	profileFallback bool
+}
+
+type featureFlagLookup struct {
+	rows []dbgen.ListFeatureFlagsRow
+	err  error
+}
+
+func (l featureFlagLookup) ListFeatureFlags(context.Context) ([]dbgen.ListFeatureFlagsRow, error) {
+	return l.rows, l.err
 }
 
 func (l currentUserLookup) GetActiveAccountByID(context.Context, uuid.UUID) (dbgen.GetActiveAccountByIDRow, error) {
@@ -92,6 +102,51 @@ func TestAuthAllowsSessionFromCurrentCredentialVersion(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
 	if response := authenticatedRequestVersion(t, sessions, id.String(), 2, handler); response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestAuthFeatureAvailabilityModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode    string
+		administrator bool
+		want          int
+	}{
+		{"disabled member", "DISABLED", false, http.StatusNotFound},
+		{"disabled administrator", "DISABLED", true, http.StatusNotFound},
+		{"administrator only member", "ADMIN_ONLY", false, http.StatusNotFound},
+		{"administrator only administrator", "ADMIN_ONLY", true, http.StatusNoContent},
+		{"enabled member", "ENABLED", false, http.StatusNoContent},
+		{"enabled administrator", "ENABLED", true, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := uuid.New()
+			auth := Auth{
+				Users:    currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: tc.administrator}},
+				Features: featureFlagLookup{rows: []dbgen.ListFeatureFlagsRow{{FeatureKey: string(featureflags.Suggestions), Mode: tc.mode}}},
+				Sessions: scs.New(),
+			}
+			handler := auth.Load(auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})))
+			if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != tc.want {
+				t.Fatalf("status = %d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthFeatureReadFailureDoesNotBroadenAccess(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{
+		Users:    currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: true}},
+		Features: featureFlagLookup{err: errors.New("flags unavailable")},
+		Sessions: scs.New(),
+	}
+	handler := auth.Load(auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("feature handler called after flag read failure")
+	})))
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", response.Code)
 	}
 }

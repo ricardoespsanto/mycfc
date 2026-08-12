@@ -244,6 +244,30 @@ CREATE INDEX training_session_activity_matches_user_idx ON training_session_acti
 CREATE UNIQUE INDEX training_session_activity_matches_confirmed_session_uidx ON training_session_activity_matches (session_id, user_id) WHERE status = 'CONFIRMED';
 CREATE UNIQUE INDEX training_session_activity_matches_confirmed_activity_uidx ON training_session_activity_matches (activity_id) WHERE status = 'CONFIRMED';
 
+CREATE TYPE feature_availability_mode AS ENUM ('DISABLED', 'ADMIN_ONLY', 'ENABLED');
+CREATE TABLE feature_flags (
+ feature_key varchar(80) PRIMARY KEY,
+ mode feature_availability_mode NOT NULL,
+ updated_by_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT feature_flags_key_valid CHECK (feature_key = btrim(feature_key) AND feature_key ~ '^[a-z][a-z0-9_]{1,79}$')
+);
+INSERT INTO feature_flags (feature_key, mode) VALUES ('suggestions', 'ENABLED'), ('photo_submissions', 'DISABLED');
+CREATE TABLE feature_flag_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ feature_key varchar(80) NOT NULL REFERENCES feature_flags(feature_key) ON DELETE RESTRICT,
+ previous_mode feature_availability_mode NOT NULL,
+ new_mode feature_availability_mode NOT NULL,
+ actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ occurred_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT feature_flag_events_change_valid CHECK (previous_mode <> new_mode)
+);
+CREATE INDEX feature_flag_events_feature_idx ON feature_flag_events (feature_key, occurred_at DESC, id DESC);
+CREATE FUNCTION audit_feature_flag_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.updated_by_id IS NULL THEN RAISE EXCEPTION 'feature flag changes require an administrator'; END IF; IF OLD.mode = NEW.mode THEN RETURN NEW; END IF; INSERT INTO feature_flag_events (feature_key, previous_mode, new_mode, actor_user_id, occurred_at) VALUES (NEW.feature_key, OLD.mode, NEW.mode, NEW.updated_by_id, NEW.updated_at); RETURN NEW; END; $$;
+CREATE TRIGGER feature_flags_audit_trigger AFTER UPDATE ON feature_flags FOR EACH ROW EXECUTE FUNCTION audit_feature_flag_change();
+CREATE FUNCTION prevent_feature_flag_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'feature flag events are append-only'; END; $$;
+CREATE TRIGGER feature_flag_events_immutable_trigger BEFORE UPDATE OR DELETE ON feature_flag_events FOR EACH ROW EXECUTE FUNCTION prevent_feature_flag_event_mutation();
+
 CREATE TYPE suggestion_category AS ENUM ('FACILITIES', 'EQUIPMENT', 'TRAINING', 'EVENTS', 'COMMUNICATION', 'OTHER');
 CREATE TYPE suggestion_status AS ENUM ('SUBMITTED', 'UNDER_REVIEW', 'PLANNED', 'DECLINED', 'COMPLETED');
 CREATE TABLE suggestions (

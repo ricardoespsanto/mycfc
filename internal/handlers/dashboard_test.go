@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/google/uuid"
@@ -85,6 +86,36 @@ func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 				t.Errorf("reader-facing announcements exposed as a navigation destination: %+v", item)
 			}
 		}
+	}
+}
+
+func TestDashboardNavigationFiltersSuggestionsByFeatureMode(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mode          featureflags.Mode
+		administrator bool
+		want          bool
+	}{
+		{"disabled member", featureflags.Disabled, false, false},
+		{"disabled administrator", featureflags.Disabled, true, false},
+		{"administrator only member", featureflags.AdminOnly, false, false},
+		{"administrator only administrator", featureflags.AdminOnly, true, true},
+		{"enabled member", featureflags.Enabled, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := CurrentUser{IsAdmin: tc.administrator, FeatureModes: map[featureflags.Key]featureflags.Mode{featureflags.Suggestions: tc.mode}}
+			found := false
+			for _, group := range dashboardNavigation(user) {
+				for _, item := range group.Items {
+					if item.Path == "/sugestoes" || item.Path == "/admin/sugestoes" {
+						found = true
+					}
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("suggestions navigation found = %t, want %t", found, tc.want)
+			}
+		})
 	}
 }
 

@@ -785,3 +785,90 @@ func TestEventEditAndCancellationPreserveResponsesAndRejectStaleWrites(t *testin
 		t.Fatalf("cancelled event missing from member list: %#v", visible)
 	}
 }
+
+func TestFeatureFlagsUseDefaultsConcurrencyAndImmutableAudit(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(ctx) })
+
+	actorID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Administradora de funcionalidades', $2, 'hash', '1980-01-01')`, actorID, "feature-admin-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	suggestionID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO suggestions (id, requester_id, category, subject, description) VALUES ($1, $2, 'OTHER', 'Sugestão preservada', 'Este registo não pode ser removido ao desligar a funcionalidade.')`, suggestionID, actorID); err != nil {
+		t.Fatal(err)
+	}
+
+	queries := dbgen.New(pool)
+	flags, err := queries.ListFeatureFlags(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := make(map[string]dbgen.ListFeatureFlagsRow, len(flags))
+	for _, flag := range flags {
+		byKey[flag.FeatureKey] = flag
+	}
+	if byKey["suggestions"].Mode != "ENABLED" || byKey["photo_submissions"].Mode != "DISABLED" {
+		t.Fatalf("seeded feature flags = %#v", byKey)
+	}
+
+	current := byKey["suggestions"]
+	changed, err := queries.UpdateFeatureFlag(ctx, dbgen.UpdateFeatureFlagParams{
+		FeatureKey: "suggestions", Mode: dbgen.FeatureAvailabilityModeADMINONLY,
+		ActorUserID: &actorID, ExpectedUpdatedAt: current.UpdatedAt,
+	})
+	if err != nil || changed != 1 {
+		t.Fatalf("feature update rows = %d, err = %v", changed, err)
+	}
+	staleRows, err := queries.UpdateFeatureFlag(ctx, dbgen.UpdateFeatureFlagParams{
+		FeatureKey: "suggestions", Mode: dbgen.FeatureAvailabilityModeDISABLED,
+		ActorUserID: &actorID, ExpectedUpdatedAt: current.UpdatedAt,
+	})
+	if err != nil || staleRows != 0 {
+		t.Fatalf("stale feature update rows = %d, err = %v", staleRows, err)
+	}
+
+	events, err := queries.ListFeatureFlagEvents(ctx, 10)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("feature events = %#v, err = %v", events, err)
+	}
+	event := events[0]
+	if event.FeatureKey != "suggestions" || event.PreviousMode != "ENABLED" || event.NewMode != "ADMIN_ONLY" || event.ActorUserID != actorID {
+		t.Fatalf("feature event = %#v", event)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE feature_flag_events SET new_mode = 'DISABLED' WHERE id = $1`, event.ID); err == nil {
+		t.Fatal("feature flag audit update unexpectedly succeeded")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flag_events WHERE id = $1`, event.ID); err == nil {
+		t.Fatal("feature flag audit delete unexpectedly succeeded")
+	}
+	var suggestionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM suggestions WHERE id = $1`, suggestionID).Scan(&suggestionCount); err != nil || suggestionCount != 1 {
+		t.Fatalf("preserved suggestion count = %d, err = %v", suggestionCount, err)
+	}
+
+	flags, err = queries.ListFeatureFlags(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range flags {
+		if flag.FeatureKey == "suggestions" {
+			changed, err = queries.UpdateFeatureFlag(ctx, dbgen.UpdateFeatureFlagParams{FeatureKey: "suggestions", Mode: dbgen.FeatureAvailabilityModeENABLED, ActorUserID: &actorID, ExpectedUpdatedAt: flag.UpdatedAt})
+			if err != nil || changed != 1 {
+				t.Fatalf("restore suggestions rows = %d, err = %v", changed, err)
+			}
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE feature_key = 'photo_submissions'`); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = queries.UpdateFeatureFlag(ctx, dbgen.UpdateFeatureFlagParams{FeatureKey: "photo_submissions", Mode: dbgen.FeatureAvailabilityModeDISABLED, ActorUserID: &actorID})
+	if err != nil || changed != 1 {
+		t.Fatalf("repair missing registered flag rows = %d, err = %v", changed, err)
+	}
+}

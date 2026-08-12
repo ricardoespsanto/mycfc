@@ -3,18 +3,30 @@ package pages
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type ReleasesPage struct {
-	Meta components.PageMeta
-	Release ReleaseStatus
+	Meta          components.PageMeta
+	Release       ReleaseStatus
+	Features      []FeatureFlag
+	FeatureEvents []FeatureFlagEvent
+	Success       string
+	Error         string
+	Conflict      string
 }
 
 type ReleaseStatus struct { CurrentLabel, CurrentReleasedAt, LatestLabel, LatestReleasedAt, LatestURL, CheckedAt, Status string; CheckUnavailable bool }
+
+type FeatureFlag struct { Key, Label, Description, Mode, UpdatedAt, UpdatedLabel, UpdatedBy string }
+
+type FeatureFlagEvent struct { Label, PreviousMode, NewMode, ActorName, OccurredAt string }
 
 templ Releases(page ReleasesPage) {
 	@components.Base(page.Meta, releasesContent(page))
 }
 
 templ releasesContent(page ReleasesPage) {
-	@components.PageHeader("Administração", "Sistema", "Consulte a versão em execução e a última release publicada.", nil)
+	@components.PageHeader("Administração", "Sistema", "Consulte a versão em execução e controle a disponibilidade das funcionalidades opcionais.", nil)
+	@components.StatusMessage(page.Success, "success")
+	@components.StatusMessage(page.Error, "error")
+	@components.StatusMessage(page.Conflict, "warning")
 	<section class="module release-status" aria-labelledby="release-status-title">
 		<div class="section-heading"><div><h2 id="release-status-title">Estado da versão</h2><p>{ releaseStatusSummary(page.Release) }</p></div>@components.Badge(releaseStatusBadge(page.Release), releaseStatusTone(page.Release))</div>
 		<div class="release-status__grid">
@@ -47,6 +59,65 @@ templ releasesContent(page ReleasesPage) {
 				<small>{ releaseCheckDetail(page.Release) }</small></div>
 		</div>
 	</section>
+	<section class="module" aria-label="Funcionalidades">
+		@components.SectionHeading("Configuração", "Funcionalidades", "Escolha quem pode usar cada funcionalidade. As permissões normais continuam a aplicar-se.")
+		<div class="record-list">
+			for _, feature := range page.Features {
+				<article class="record-item record-item--stacked">
+					<div class="record-item__copy">
+						<h3>{ feature.Label }</h3>
+						<p>{ feature.Description }</p>
+						<p class="record-meta">{ featureFlagChangeMeta(feature) }</p>
+					</div>
+					@components.Badge(featureModeLabel(feature.Mode), featureModeTone(feature.Mode))
+					<form class="form-layout" method="post" action={ "/admin/sistema/funcionalidades/" + feature.Key }>
+						@page.Meta.CSRFField
+						<input type="hidden" name="expected_updated_at" value={ feature.UpdatedAt }/>
+						<fieldset>
+							<legend>Disponibilidade de { feature.Label }</legend>
+							<label><input type="radio" name="mode" value="DISABLED" checked?={ feature.Mode == "DISABLED" }/> Desativada</label>
+							<label><input type="radio" name="mode" value="ADMIN_ONLY" checked?={ feature.Mode == "ADMIN_ONLY" }/> Só administradores</label>
+							<label><input type="radio" name="mode" value="ENABLED" checked?={ feature.Mode == "ENABLED" }/> Ativa</label>
+						</fieldset>
+						<button class="action action--secondary" type="submit">Guardar { feature.Label }</button>
+					</form>
+				</article>
+			}
+		</div>
+	</section>
+	if len(page.FeatureEvents) > 0 {
+		<section class="module" aria-label="Histórico de funcionalidades">
+			@components.SectionHeading("Auditoria", "Alterações recentes", "As mudanças de disponibilidade ficam registadas com o administrador responsável.")
+			<ul class="record-list" aria-label="Alterações recentes às funcionalidades">
+				for _, event := range page.FeatureEvents {
+					<li class="record-item"><div class="record-item__copy"><strong>{ event.Label }</strong><p>{ featureModeLabel(event.PreviousMode) } → { featureModeLabel(event.NewMode) }</p><p class="record-meta">{ event.ActorName } · { event.OccurredAt }</p></div></li>
+				}
+			</ul>
+		</section>
+	}
+}
+
+func featureModeLabel(mode string) string {
+	switch mode {
+	case "DISABLED": return "Desativada"
+	case "ADMIN_ONLY": return "Só administradores"
+	case "ENABLED": return "Ativa"
+	default: return "Indisponível"
+	}
+}
+
+func featureModeTone(mode string) string {
+	switch mode {
+	case "DISABLED": return "selected"
+	case "ADMIN_ONLY": return "warning"
+	case "ENABLED": return "success"
+	default: return "warning"
+	}
+}
+
+func featureFlagChangeMeta(feature FeatureFlag) string {
+	if feature.UpdatedAt == "" { return feature.UpdatedBy }
+	return "Última alteração por " + feature.UpdatedBy + " · " + feature.UpdatedLabel
 }
 
 func releaseStatusSummary(release ReleaseStatus) string {
