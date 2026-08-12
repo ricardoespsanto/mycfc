@@ -26,22 +26,28 @@ templ BasicCalendar(month BasicCalendarMonth, label, intro string) {
 			<span class="collection-count">{ month.Label }</span>
 		}
 		<div class="calendar-month__grid" role="grid" aria-label={ label + " - " + month.Label }>
-			<div class="calendar-month__weekday" role="columnheader">Seg</div>
-			<div class="calendar-month__weekday" role="columnheader">Ter</div>
-			<div class="calendar-month__weekday" role="columnheader">Qua</div>
-			<div class="calendar-month__weekday" role="columnheader">Qui</div>
-			<div class="calendar-month__weekday" role="columnheader">Sex</div>
-			<div class="calendar-month__weekday" role="columnheader">Sáb</div>
-			<div class="calendar-month__weekday" role="columnheader">Dom</div>
-			for _, day := range month.Days {
-				<div class={ calendarDayClass(day) } role="gridcell">
-					<span class="calendar-month__day-number">{ day.Number }</span>
-					if len(day.Entries) > 0 {
-						<ul class="calendar-month__entries" aria-label={ "Itens de " + day.Number }>
-							for _, entry := range day.Entries {
-								<li><a href={ templ.SafeURL(entry.URL) }><span>{ entry.Kind }</span>{ entry.Title }</a></li>
+			<div class="calendar-month__row" role="row">
+				<div class="calendar-month__weekday" role="columnheader">Seg</div>
+				<div class="calendar-month__weekday" role="columnheader">Ter</div>
+				<div class="calendar-month__weekday" role="columnheader">Qua</div>
+				<div class="calendar-month__weekday" role="columnheader">Qui</div>
+				<div class="calendar-month__weekday" role="columnheader">Sex</div>
+				<div class="calendar-month__weekday" role="columnheader">Sáb</div>
+				<div class="calendar-month__weekday" role="columnheader">Dom</div>
+			</div>
+			for weekStart := 0; weekStart < len(month.Days); weekStart += 7 {
+				<div class="calendar-month__row" role="row">
+					for _, day := range month.Days[weekStart:min(weekStart+7, len(month.Days))] {
+						<div class={ calendarDayClass(day) } role="gridcell">
+							<span class="calendar-month__day-number">{ day.Number }</span>
+							if len(day.Entries) > 0 {
+								<ul class="calendar-month__entries" aria-label={ "Itens de " + day.Number }>
+									for _, entry := range day.Entries {
+										<li><a href={ templ.SafeURL(entry.URL) }><span>{ entry.Kind }</span>{ entry.Title }</a></li>
+									}
+								</ul>
 							}
-						</ul>
+						</div>
 					}
 				</div>
 			}

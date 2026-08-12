@@ -56,13 +56,13 @@ templ photoAlbumsContent(page PhotoAlbumsPage) {
 					@components.FieldErrorMessage("description", page.Form.Errors["description"])
 					<fieldset id="photo-album-audience"><legend>Destinatários</legend><p>Selecione pelo menos um programa ou equipa.</p>
 						if len(page.Form.Programmes) > 0 {
-							<h3>Programas</h3>
+							<p><strong>Programas</strong></p>
 						}
 						for _, option := range page.Form.Programmes {
 							<label><input type="checkbox" name="programme_id" value={ option.ID } checked?={ option.Selected }/> { option.Name }</label>
 						}
 						if len(page.Form.Teams) > 0 {
-							<h3>Equipas</h3>
+							<p><strong>Equipas</strong></p>
 						}
 						for _, option := range page.Form.Teams {
 							<label><input type="checkbox" name="team_id" value={ option.ID } checked?={ option.Selected }/> { option.Name }</label>

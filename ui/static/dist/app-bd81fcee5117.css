@@ -138,6 +138,7 @@ button:hover {
 .site-header a { color: inherit; }
 .calendar-links { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; margin: 0; padding: 0; list-style: none; }
 .calendar-month__grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); border-block-start: 1px solid var(--c-border); border-inline-start: 1px solid var(--c-border); background: var(--c-raised); }
+.calendar-month__row { display: contents; }
 .calendar-month__weekday,.calendar-month__day { min-inline-size: 0; border-block-end: 1px solid var(--c-border); border-inline-end: 1px solid var(--c-border); }
 .calendar-month__weekday { padding: var(--space-2); color: var(--c-muted); background: #f2f6f8; font-size: var(--text-xs); font-weight: 800; text-align: center; }
 .calendar-month__day { display: grid; grid-template-rows: auto 1fr; min-block-size: 7.5rem; padding: var(--space-2); background: #fff; }

@@ -56,6 +56,7 @@ func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 		`data-announcement-trigger`,
 		`href="/announcements"`,
 		`id="announcement-panel"`,
+		`<h2 id="announcement-panel-title" class="visually-hidden">Avisos</h2>`,
 		`aria-label="Avisos"`,
 		`aria-label="Conta atual"`,
 		`Beatriz Administradora`,
