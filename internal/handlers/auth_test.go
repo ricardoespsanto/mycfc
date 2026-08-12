@@ -159,7 +159,7 @@ func TestAuthRequiresActiveDelegatedGrantForStaffWorkspaces(t *testing.T) {
 	}
 }
 
-func TestAuthLimitsSuggestionTriageToAdministratorsAndModerators(t *testing.T) {
+func TestAuthLimitsContentWorkspacesToAdministratorsAndModerators(t *testing.T) {
 	id := uuid.New()
 	for _, tc := range []struct {
 		name   string
@@ -174,9 +174,11 @@ func TestAuthLimitsSuggestionTriageToAdministratorsAndModerators(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: tc.admin}, grants: tc.grants}, Sessions: scs.New()}
-			handler := auth.Load(auth.RequireSuggestionStaff(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
-			if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != tc.status {
-				t.Fatalf("status = %d, want %d", response.Code, tc.status)
+			for name, guard := range map[string]func(http.Handler) http.Handler{"content": auth.RequireContentStaff, "suggestions": auth.RequireSuggestionStaff} {
+				handler := auth.Load(guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
+				if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != tc.status {
+					t.Fatalf("%s status = %d, want %d", name, response.Code, tc.status)
+				}
 			}
 		})
 	}

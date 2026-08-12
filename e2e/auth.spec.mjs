@@ -717,6 +717,47 @@ test.describe('authentication', () => {
     await expect(leaderboard).not.toContainText(athleteName);
   });
 
+  test('administrator creates a private album without JavaScript and the scoped athlete can open it', async ({ page, browser }) => {
+    test.setTimeout(120000);
+    const title = `Álbum competição E2E ${Date.now()}`;
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const adminPage = await context.newPage();
+    await adminPage.goto('/login');
+    await adminPage.getByLabel('Correio eletrónico').fill(adminEmail);
+    await adminPage.getByLabel('Palavra-passe').fill(password);
+    await adminPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await adminPage.goto('/admin/albuns');
+    await adminPage.getByText('Novo álbum privado', { exact: true }).click();
+    await adminPage.locator('#photo-album-title').fill(title);
+    await adminPage.locator('#photo-album-description').fill('Espaço privado da equipa de competição.');
+    await adminPage.locator('#photo-album-audience').getByLabel('Competição').check();
+    await adminPage.getByRole('button', { name: 'Criar álbum' }).click();
+    await expect(adminPage.getByRole('status')).toHaveText('Álbum privado criado.');
+    await adminPage.getByRole('link', { name: title }).click();
+    const adminDetailURL = adminPage.url();
+    await expect(adminPage.getByRole('heading', { name: title })).toBeVisible();
+    await expect(adminPage.getByText('Nenhuma fotografia publicada')).toBeVisible();
+    await expect(adminPage.locator('input[type="file"]')).toHaveCount(0);
+
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/albuns');
+    await expect(page.getByRole('link', { name: title })).toBeVisible();
+    await page.getByRole('link', { name: title }).click();
+    await expect(page.getByText('Programas: Competição')).toBeVisible();
+    await expect(page.locator('input[type="file"]')).toHaveCount(0);
+    await expectNoSeriousAxeViolations(page);
+
+    await adminPage.goto(adminDetailURL);
+    await adminPage.getByRole('button', { name: 'Arquivar álbum' }).click();
+    await expect(adminPage.getByRole('status')).toHaveText('Álbum arquivado.');
+    await page.goto('/albuns');
+    await expect(page.getByRole('link', { name: title })).toHaveCount(0);
+    await context.close();
+  });
+
   test('administrator manages event capacity, waitlist confirmation, and check-in', async ({ page }) => {
     test.setTimeout(240000);
     const waitlistedName = `Lista de espera E2E ${Date.now()}`;

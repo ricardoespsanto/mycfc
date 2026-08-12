@@ -405,6 +405,48 @@ func (ns NullMetricType) Value() (driver.Value, error) {
 	return string(ns.MetricType), nil
 }
 
+type PhotoAlbumStatus string
+
+const (
+	PhotoAlbumStatusOPEN     PhotoAlbumStatus = "OPEN"
+	PhotoAlbumStatusARCHIVED PhotoAlbumStatus = "ARCHIVED"
+)
+
+func (e *PhotoAlbumStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PhotoAlbumStatus(s)
+	case string:
+		*e = PhotoAlbumStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PhotoAlbumStatus: %T", src)
+	}
+	return nil
+}
+
+type NullPhotoAlbumStatus struct {
+	PhotoAlbumStatus PhotoAlbumStatus `json:"photo_album_status"`
+	Valid            bool             `json:"valid"` // Valid is true if PhotoAlbumStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPhotoAlbumStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.PhotoAlbumStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PhotoAlbumStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPhotoAlbumStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PhotoAlbumStatus), nil
+}
+
 type RepairStatus string
 
 const (
@@ -929,6 +971,36 @@ type PerformanceMetric struct {
 	UnitPt     string             `json:"unit_pt"`
 	MeasuredAt pgtype.Timestamptz `json:"measured_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type PhotoAlbum struct {
+	ID           uuid.UUID          `json:"id"`
+	Title        string             `json:"title"`
+	Description  string             `json:"description"`
+	Status       PhotoAlbumStatus   `json:"status"`
+	CreatedByID  uuid.UUID          `json:"created_by_id"`
+	ArchivedByID *uuid.UUID         `json:"archived_by_id"`
+	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PhotoAlbumAuditEvent struct {
+	ID          uuid.UUID          `json:"id"`
+	AlbumID     uuid.UUID          `json:"album_id"`
+	Action      string             `json:"action"`
+	ActorUserID uuid.UUID          `json:"actor_user_id"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PhotoAlbumProgrammeAudience struct {
+	AlbumID     uuid.UUID `json:"album_id"`
+	ProgrammeID uuid.UUID `json:"programme_id"`
+}
+
+type PhotoAlbumTeamAudience struct {
+	AlbumID uuid.UUID `json:"album_id"`
+	TeamID  uuid.UUID `json:"team_id"`
 }
 
 type PlatformRole struct {

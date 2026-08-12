@@ -209,6 +209,10 @@ func (a Auth) RequireModerator(next http.Handler) http.Handler {
 }
 
 func (a Auth) RequireSuggestionStaff(next http.Handler) http.Handler {
+	return a.RequireContentStaff(next)
+}
+
+func (a Auth) RequireContentStaff(next http.Handler) http.Handler {
 	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, _ := currentUser(r.Context())
 		if user.IsAdmin || user.CanModerateContent {

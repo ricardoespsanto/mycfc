@@ -16,6 +16,9 @@ type Querier interface {
 	AddEventAudience(ctx context.Context, arg AddEventAudienceParams) error
 	AddEventTeamAudience(ctx context.Context, arg AddEventTeamAudienceParams) error
 	AddMembershipModality(ctx context.Context, arg AddMembershipModalityParams) error
+	AddPhotoAlbumProgrammeAudience(ctx context.Context, arg AddPhotoAlbumProgrammeAudienceParams) error
+	AddPhotoAlbumTeamAudience(ctx context.Context, arg AddPhotoAlbumTeamAudienceParams) error
+	ArchivePhotoAlbum(ctx context.Context, arg ArchivePhotoAlbumParams) (PhotoAlbum, error)
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)
 	CancelEvent(ctx context.Context, arg CancelEventParams) (Event, error)
@@ -50,6 +53,7 @@ type Querier interface {
 	CreateMemberProfileAudit(ctx context.Context, arg CreateMemberProfileAuditParams) (uuid.UUID, error)
 	CreateNews(ctx context.Context, arg CreateNewsParams) (NewsItem, error)
 	CreatePasswordReset(ctx context.Context, arg CreatePasswordResetParams) (uuid.UUID, error)
+	CreatePhotoAlbum(ctx context.Context, arg CreatePhotoAlbumParams) (PhotoAlbum, error)
 	CreateRepairRequest(ctx context.Context, arg CreateRepairRequestParams) (RepairRequest, error)
 	CreateSeason(ctx context.Context, arg CreateSeasonParams) (Season, error)
 	CreateSuggestion(ctx context.Context, arg CreateSuggestionParams) (CreateSuggestionRow, error)
@@ -101,6 +105,7 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, email *string) (GetUserByEmailRow, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error)
 	GetVisibleAnnouncement(ctx context.Context, arg GetVisibleAnnouncementParams) (GetVisibleAnnouncementRow, error)
+	GetVisiblePhotoAlbum(ctx context.Context, arg GetVisiblePhotoAlbumParams) (GetVisiblePhotoAlbumRow, error)
 	GrantPlatformRoleByCode(ctx context.Context, arg GrantPlatformRoleByCodeParams) error
 	GrantStaffCapability(ctx context.Context, arg GrantStaffCapabilityParams) (GrantStaffCapabilityRow, error)
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
@@ -136,6 +141,7 @@ type Querier interface {
 	ListNewsForAdmin(ctx context.Context, arg ListNewsForAdminParams) ([]NewsItem, error)
 	ListOperationalEquipment(ctx context.Context, rowLimit int32) ([]Equipment, error)
 	ListPendingRepairRequests(ctx context.Context, arg ListPendingRepairRequestsParams) ([]ListPendingRepairRequestsRow, error)
+	ListPhotoAlbumAuditEvents(ctx context.Context, albumID uuid.UUID) ([]ListPhotoAlbumAuditEventsRow, error)
 	ListProgrammes(ctx context.Context) ([]Programme, error)
 	ListPublishedNews(ctx context.Context, rowLimit int32) ([]NewsItem, error)
 	ListRecentPerformanceMetrics(ctx context.Context, arg ListRecentPerformanceMetricsParams) ([]PerformanceMetric, error)
@@ -153,6 +159,7 @@ type Querier interface {
 	ListUpcomingMaintenance(ctx context.Context, arg ListUpcomingMaintenanceParams) ([]ListUpcomingMaintenanceRow, error)
 	ListUpcomingTrainingSessionsForDashboard(ctx context.Context, arg ListUpcomingTrainingSessionsForDashboardParams) ([]ListUpcomingTrainingSessionsForDashboardRow, error)
 	ListVisibleAnnouncements(ctx context.Context, arg ListVisibleAnnouncementsParams) ([]ListVisibleAnnouncementsRow, error)
+	ListVisiblePhotoAlbums(ctx context.Context, arg ListVisiblePhotoAlbumsParams) ([]ListVisiblePhotoAlbumsRow, error)
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
