@@ -583,6 +583,48 @@ func (ns NullMetricType) Value() (driver.Value, error) {
 	return string(ns.MetricType), nil
 }
 
+type PaddlingCraft string
+
+const (
+	PaddlingCraftKAYAK PaddlingCraft = "KAYAK"
+	PaddlingCraftCANOE PaddlingCraft = "CANOE"
+)
+
+func (e *PaddlingCraft) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PaddlingCraft(s)
+	case string:
+		*e = PaddlingCraft(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PaddlingCraft: %T", src)
+	}
+	return nil
+}
+
+type NullPaddlingCraft struct {
+	PaddlingCraft PaddlingCraft `json:"paddling_craft"`
+	Valid         bool          `json:"valid"` // Valid is true if PaddlingCraft is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPaddlingCraft) Scan(value interface{}) error {
+	if value == nil {
+		ns.PaddlingCraft, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PaddlingCraft.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPaddlingCraft) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PaddlingCraft), nil
+}
+
 type PhotoAlbumStatus string
 
 const (
@@ -890,6 +932,48 @@ func (ns NullTrainingEntryKind) Value() (driver.Value, error) {
 	return string(ns.TrainingEntryKind), nil
 }
 
+type TrainingMeasureCertainty string
+
+const (
+	TrainingMeasureCertaintyEXACT     TrainingMeasureCertainty = "EXACT"
+	TrainingMeasureCertaintyESTIMATED TrainingMeasureCertainty = "ESTIMATED"
+)
+
+func (e *TrainingMeasureCertainty) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingMeasureCertainty(s)
+	case string:
+		*e = TrainingMeasureCertainty(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingMeasureCertainty: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingMeasureCertainty struct {
+	TrainingMeasureCertainty TrainingMeasureCertainty `json:"training_measure_certainty"`
+	Valid                    bool                     `json:"valid"` // Valid is true if TrainingMeasureCertainty is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingMeasureCertainty) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingMeasureCertainty, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingMeasureCertainty.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingMeasureCertainty) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingMeasureCertainty), nil
+}
+
 type TrainingObjective string
 
 const (
@@ -1113,6 +1197,96 @@ func (ns NullTrainingSegmentModality) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.TrainingSegmentModality), nil
+}
+
+type WaterStepKind string
+
+const (
+	WaterStepKindEFFORT      WaterStepKind = "EFFORT"
+	WaterStepKindREPEATGROUP WaterStepKind = "REPEAT_GROUP"
+)
+
+func (e *WaterStepKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WaterStepKind(s)
+	case string:
+		*e = WaterStepKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WaterStepKind: %T", src)
+	}
+	return nil
+}
+
+type NullWaterStepKind struct {
+	WaterStepKind WaterStepKind `json:"water_step_kind"`
+	Valid         bool          `json:"valid"` // Valid is true if WaterStepKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWaterStepKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.WaterStepKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WaterStepKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWaterStepKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WaterStepKind), nil
+}
+
+type WaterWorkMethod string
+
+const (
+	WaterWorkMethodCONTINUOUS     WaterWorkMethod = "CONTINUOUS"
+	WaterWorkMethodINTERVALS      WaterWorkMethod = "INTERVALS"
+	WaterWorkMethodFARTLEK        WaterWorkMethod = "FARTLEK"
+	WaterWorkMethodTECHNIQUE      WaterWorkMethod = "TECHNIQUE"
+	WaterWorkMethodSTARTS         WaterWorkMethod = "STARTS"
+	WaterWorkMethodRACESIMULATION WaterWorkMethod = "RACE_SIMULATION"
+	WaterWorkMethodTACTICALDRILL  WaterWorkMethod = "TACTICAL_DRILL"
+	WaterWorkMethodCUSTOM         WaterWorkMethod = "CUSTOM"
+)
+
+func (e *WaterWorkMethod) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WaterWorkMethod(s)
+	case string:
+		*e = WaterWorkMethod(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WaterWorkMethod: %T", src)
+	}
+	return nil
+}
+
+type NullWaterWorkMethod struct {
+	WaterWorkMethod WaterWorkMethod `json:"water_work_method"`
+	Valid           bool            `json:"valid"` // Valid is true if WaterWorkMethod is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWaterWorkMethod) Scan(value interface{}) error {
+	if value == nil {
+		ns.WaterWorkMethod, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WaterWorkMethod.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWaterWorkMethod) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WaterWorkMethod), nil
 }
 
 type ActivityConnection struct {
@@ -1787,6 +1961,62 @@ type UserPlatformRole struct {
 	UserID    uuid.UUID          `json:"user_id"`
 	RoleID    uuid.UUID          `json:"role_id"`
 	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+}
+
+type WaterBlockPrescription struct {
+	BlockID                 uuid.UUID                 `json:"block_id"`
+	Method                  WaterWorkMethod           `json:"method"`
+	IntensityProfileID      *uuid.UUID                `json:"intensity_profile_id"`
+	TargetDistanceMetres    *int32                    `json:"target_distance_metres"`
+	TargetDistanceCertainty *TrainingMeasureCertainty `json:"target_distance_certainty"`
+	CreatedAt               pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz        `json:"updated_at"`
+}
+
+type WaterIntensityProfile struct {
+	ID           uuid.UUID          `json:"id"`
+	Name         string             `json:"name"`
+	Craft        PaddlingCraft      `json:"craft"`
+	Revision     int32              `json:"revision"`
+	SupersedesID *uuid.UUID         `json:"supersedes_id"`
+	Notes        string             `json:"notes"`
+	IsActive     bool               `json:"is_active"`
+	CreatedByID  uuid.UUID          `json:"created_by_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type WaterIntensityZone struct {
+	ID         uuid.UUID `json:"id"`
+	ProfileID  uuid.UUID `json:"profile_id"`
+	Position   int32     `json:"position"`
+	Code       string    `json:"code"`
+	Label      string    `json:"label"`
+	CadenceMin *int32    `json:"cadence_min"`
+	CadenceMax *int32    `json:"cadence_max"`
+	Meaning    string    `json:"meaning"`
+}
+
+type WaterWorkStep struct {
+	ID                uuid.UUID                 `json:"id"`
+	BlockID           uuid.UUID                 `json:"block_id"`
+	ParentStepID      *uuid.UUID                `json:"parent_step_id"`
+	Position          int32                     `json:"position"`
+	Kind              WaterStepKind             `json:"kind"`
+	Name              string                    `json:"name"`
+	Repeats           *int32                    `json:"repeats"`
+	DurationSeconds   *int32                    `json:"duration_seconds"`
+	DurationCertainty *TrainingMeasureCertainty `json:"duration_certainty"`
+	DistanceMetres    *int32                    `json:"distance_metres"`
+	DistanceCertainty *TrainingMeasureCertainty `json:"distance_certainty"`
+	RecoverySeconds   *int32                    `json:"recovery_seconds"`
+	IntensityCode     *string                   `json:"intensity_code"`
+	CadenceSpm        *int32                    `json:"cadence_spm"`
+	DrillFocus        *string                   `json:"drill_focus"`
+	DrillFormat       *string                   `json:"drill_format"`
+	RoleNotes         *string                   `json:"role_notes"`
+	Instructions      string                    `json:"instructions"`
+	CreatedAt         pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz        `json:"updated_at"`
 }
 
 type WhatsappGroup struct {

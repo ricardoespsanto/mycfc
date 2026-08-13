@@ -30,6 +30,12 @@ type StructuredGymBlockInput struct {
 	Exercise     dbgen.CreateGymExerciseParams
 }
 
+type StructuredWaterBlockInput struct {
+	Block        dbgen.CreateTrainingSegmentBlockParams
+	Prescription dbgen.CreateWaterBlockPrescriptionParams
+	Step         dbgen.CreateWaterWorkStepParams
+}
+
 type StructuredRoutineSource struct {
 	PlanID          uuid.UUID
 	SourceUpdatedAt pgtype.Timestamptz
@@ -74,6 +80,11 @@ type StructuredTrainingStore interface {
 	CreateTrainingSegmentBlock(context.Context, dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error)
 	CreateGymBlock(context.Context, StructuredGymBlockInput) (uuid.UUID, error)
 	CreateGymExercise(context.Context, dbgen.CreateGymExerciseParams) (uuid.UUID, error)
+	CreateWaterBlock(context.Context, StructuredWaterBlockInput) (uuid.UUID, error)
+	CreateWaterWorkStep(context.Context, dbgen.CreateWaterWorkStepParams) (uuid.UUID, error)
+	CreateWaterIntensityProfile(context.Context, dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error)
+	CreateWaterIntensityZone(context.Context, dbgen.CreateWaterIntensityZoneParams) (uuid.UUID, error)
+	ListActiveWaterIntensityProfiles(context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error)
 	GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredSegmentPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredBlockPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
@@ -209,6 +220,51 @@ func (s PostgresStructuredTrainingStore) CreateGymBlock(ctx context.Context, inp
 
 func (s PostgresStructuredTrainingStore) CreateGymExercise(ctx context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
 	return s.queries().CreateGymExercise(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CreateWaterBlock(ctx context.Context, input StructuredWaterBlockInput) (blockID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	blockID, err = queries.CreateTrainingSegmentBlock(ctx, input.Block)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	input.Prescription.BlockID = blockID
+	rows, err := queries.CreateWaterBlockPrescription(ctx, input.Prescription)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if rows != 1 {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	input.Step.BlockID = blockID
+	if _, err := queries.CreateWaterWorkStep(ctx, input.Step); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return blockID, nil
+}
+
+func (s PostgresStructuredTrainingStore) CreateWaterWorkStep(ctx context.Context, params dbgen.CreateWaterWorkStepParams) (uuid.UUID, error) {
+	return s.queries().CreateWaterWorkStep(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CreateWaterIntensityProfile(ctx context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error) {
+	return s.queries().CreateWaterIntensityProfile(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CreateWaterIntensityZone(ctx context.Context, params dbgen.CreateWaterIntensityZoneParams) (uuid.UUID, error) {
+	return s.queries().CreateWaterIntensityZone(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListActiveWaterIntensityProfiles(ctx context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error) {
+	return s.queries().ListActiveWaterIntensityProfiles(ctx)
 }
 
 func (s PostgresStructuredTrainingStore) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {

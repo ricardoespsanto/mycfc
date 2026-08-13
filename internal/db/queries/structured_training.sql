@@ -143,6 +143,62 @@ WHERE prescription.block_id = sqlc.arg(block_id)
 GROUP BY prescription.block_id
 RETURNING id;
 
+-- name: CreateWaterBlockPrescription :execrows
+INSERT INTO water_block_prescriptions (block_id, method, intensity_profile_id, target_distance_metres, target_distance_certainty)
+SELECT block.id, sqlc.arg(method)::water_work_method, sqlc.narg(intensity_profile_id),
+       sqlc.narg(target_distance_metres), sqlc.narg(target_distance_certainty)::training_measure_certainty
+FROM training_segment_blocks block
+JOIN training_session_segments segment ON segment.id = block.segment_id
+WHERE block.id = sqlc.arg(block_id) AND segment.modality = 'WATER';
+
+-- name: CreateWaterWorkStep :one
+INSERT INTO water_work_steps (block_id, parent_step_id, position, kind, name, repeats,
+                              duration_seconds, duration_certainty, distance_metres, distance_certainty,
+                              recovery_seconds, intensity_code, cadence_spm, drill_focus, drill_format,
+                              role_notes, instructions)
+SELECT prescription.block_id, sqlc.narg(parent_step_id), COALESCE(max(step.position), 0) + 1,
+       sqlc.arg(kind)::water_step_kind, sqlc.arg(name), sqlc.narg(repeats),
+       sqlc.narg(duration_seconds), sqlc.narg(duration_certainty)::training_measure_certainty,
+       sqlc.narg(distance_metres), sqlc.narg(distance_certainty)::training_measure_certainty,
+       sqlc.narg(recovery_seconds), sqlc.narg(intensity_code), sqlc.narg(cadence_spm),
+       sqlc.narg(drill_focus), sqlc.narg(drill_format), sqlc.narg(role_notes), sqlc.arg(instructions)
+FROM water_block_prescriptions prescription
+LEFT JOIN water_work_steps step ON step.block_id = prescription.block_id
+ AND step.parent_step_id IS NOT DISTINCT FROM sqlc.narg(parent_step_id)
+WHERE prescription.block_id = sqlc.arg(block_id)
+GROUP BY prescription.block_id
+RETURNING id;
+
+-- name: CreateWaterIntensityProfile :one
+WITH previous AS (
+ UPDATE water_intensity_profiles SET is_active = false
+ WHERE name = sqlc.arg(name) AND craft = sqlc.arg(craft)::paddling_craft AND is_active
+ RETURNING id, revision
+)
+INSERT INTO water_intensity_profiles (name, craft, revision, supersedes_id, notes, created_by_id)
+VALUES (sqlc.arg(name), sqlc.arg(craft)::paddling_craft,
+        COALESCE((SELECT max(revision) + 1 FROM previous), 1),
+        (SELECT id FROM previous ORDER BY revision DESC LIMIT 1), sqlc.arg(notes), sqlc.arg(created_by_id))
+RETURNING id, name, craft, revision, supersedes_id, notes, is_active, created_by_id, created_at;
+
+-- name: CreateWaterIntensityZone :one
+INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
+SELECT profile.id, COALESCE(max(zone.position), 0) + 1, sqlc.arg(code), sqlc.arg(label),
+       sqlc.narg(cadence_min), sqlc.narg(cadence_max), sqlc.arg(meaning)
+FROM water_intensity_profiles profile
+LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
+WHERE profile.id = sqlc.arg(profile_id) AND profile.is_active
+GROUP BY profile.id
+RETURNING id;
+
+-- name: ListActiveWaterIntensityProfiles :many
+SELECT profile.id, profile.name, profile.craft, profile.revision, profile.notes,
+       zone.id AS zone_id, zone.position, zone.code, zone.label, zone.cadence_min, zone.cadence_max, zone.meaning
+FROM water_intensity_profiles profile
+LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
+WHERE profile.is_active
+ORDER BY profile.craft, profile.name, profile.revision DESC, zone.position;
+
 -- name: MoveTrainingSessionSegment :one
 SELECT move_training_session_segment(sqlc.arg(segment_id), sqlc.arg(direction));
 
@@ -167,6 +223,20 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        block.title AS block_title, block.instructions AS block_instructions,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
+       water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water.target_distance_metres AS water_target_distance_metres,
+       water.target_distance_certainty AS water_target_distance_certainty,
+       water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
+       water_step.position AS water_step_position, water_step.kind AS water_step_kind,
+       water_step.name AS water_step_name, water_step.repeats AS water_step_repeats,
+       water_step.duration_seconds AS water_step_duration_seconds,
+       water_step.duration_certainty AS water_step_duration_certainty,
+       water_step.distance_metres AS water_step_distance_metres,
+       water_step.distance_certainty AS water_step_distance_certainty,
+       water_step.recovery_seconds AS water_step_recovery_seconds,
+       water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
+       water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
        exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
        exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
@@ -183,6 +253,8 @@ LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
+LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 WHERE sqlc.arg(is_admin)::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
@@ -192,7 +264,8 @@ WHERE sqlc.arg(is_admin)::boolean
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
 ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position;
+         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         water_step.created_at NULLS FIRST, exercise.position;
 
 -- name: ListStructuredTrainingOverviewForSubject :many
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
@@ -208,6 +281,20 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        block.title AS block_title, block.instructions AS block_instructions,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
+       water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water.target_distance_metres AS water_target_distance_metres,
+       water.target_distance_certainty AS water_target_distance_certainty,
+       water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
+       water_step.position AS water_step_position, water_step.kind AS water_step_kind,
+       water_step.name AS water_step_name, water_step.repeats AS water_step_repeats,
+       water_step.duration_seconds AS water_step_duration_seconds,
+       water_step.duration_certainty AS water_step_duration_certainty,
+       water_step.distance_metres AS water_step_distance_metres,
+       water_step.distance_certainty AS water_step_distance_certainty,
+       water_step.recovery_seconds AS water_step_recovery_seconds,
+       water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
+       water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
        exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
        exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
@@ -225,13 +312,16 @@ LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
+LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 WHERE (subject.id = sqlc.arg(user_id)
        OR (subject.guardian_id = sqlc.arg(user_id) AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position;
+         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         water_step.created_at NULLS FIRST, exercise.position;
 
 -- name: GetStructuredSessionPlanID :one
 SELECT session.plan_id

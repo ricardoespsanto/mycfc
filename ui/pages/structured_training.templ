@@ -15,10 +15,21 @@ type StructuredGymExercise struct {
 	ID, Name, Prescription, Resistance, Intent, Tempo, Notes string
 	Position                                                 int
 }
+type StructuredWaterStep struct {
+	ID, ParentID, Kind, Name, Prescription, Intensity, Drill, Instructions string
+	Position, Repeats, Recovery                                            int
+}
+type StructuredWaterProfile struct {
+	ID, Name, Craft, Notes string
+	Revision               int
+	Zones                   []StructuredWaterZone
+}
+type StructuredWaterZone struct{ Code, Label, Cadence, Meaning string }
 type StructuredTrainingBlock struct {
-	ID, Purpose, Title, Instructions, GymStructure, GymObjective string
-	Position, GymRounds, GymRoundRecovery                        int
-	Exercises                                                    []StructuredGymExercise
+	ID, Purpose, Title, Instructions, GymStructure, GymObjective, WaterMethod, WaterTarget string
+	Position, GymRounds, GymRoundRecovery                                                  int
+	Exercises                                                                              []StructuredGymExercise
+	WaterSteps                                                                             []StructuredWaterStep
 }
 type StructuredTrainingSegment struct {
 	ID, Modality, Title, Location, Duration, PlannedStart, EquipmentNotes string
@@ -72,6 +83,7 @@ type StructuredTrainingPage struct {
 	Routines                                                    []StructuredTrainingRoutine
 	Memberships                                                 []StructuredTrainingMembershipChoice
 	Programmes, Teams, Groups, Weeks, Sessions, Segments        []StructuredTrainingChoice
+	WaterProfiles                                               []StructuredWaterProfile
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
 	SessionForm                                                 StructuredTrainingSessionForm
@@ -239,6 +251,49 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 																		@structuredGymExerciseForm(page, block.ID)
 																	}
 																}
+																if block.WaterMethod != "" {
+																	<p class="record-meta">
+																		{ block.WaterMethod }
+																		if block.WaterTarget != "" {
+																			<span>· { block.WaterTarget }</span>
+																		}
+																	</p>
+																	<ol class="record-list">
+																		for _, step := range block.WaterSteps {
+																			<li class="record-item record-item--stacked"><div class="record-item__copy">
+																				<strong>
+																					if step.ParentID != "" {
+																						<span>↳ </span>
+																					}
+																					{ step.Name }
+																				</strong>
+																				<p>
+																					{ step.Prescription }
+																					if step.Repeats > 0 {
+																						<span>{ fmt.Sprintf("%d repetições", step.Repeats) }</span>
+																					}
+																					if step.Recovery > 0 {
+																						<span> · { fmt.Sprintf("%d s de recuperação", step.Recovery) }</span>
+																					}
+																				</p>
+																				if step.Intensity != "" || step.Drill != "" {
+																					<p class="record-meta">
+																						{ step.Intensity }
+																						if step.Drill != "" {
+																							<span>· { step.Drill }</span>
+																						}
+																					</p>
+																				}
+																				if step.Instructions != "" {
+																					<p>{ step.Instructions }</p>
+																				}
+																			</div></li>
+																		}
+																	</ol>
+																	if page.Management {
+																		@structuredWaterStepForm(page, block)
+																	}
+																}
 																if page.Management {
 																	<details class="training-action-menu"><summary class="action action--quiet">Ações do bloco</summary><div class="training-actions">@structuredMoveBlock(page, block)
 @structuredSaveRoutineForm(page, "BLOCK", block.ID)
@@ -256,6 +311,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 																	@structuredBlockForm(page, segment.ID)
 																	if segment.Modality == "GYM" {
 																		@structuredGymBlockForm(page, segment.ID)
+																	}
+																	if segment.Modality == "WATER" {
+																		@structuredWaterBlockForm(page, segment.ID)
 																	}
 																</div>
 															</details>
@@ -703,6 +761,54 @@ templ structuredGymExerciseFields(id string) {
 	<input id={ "gym-tempo-" + id } name="tempo" maxlength="30" placeholder="Ex.: 3-1-1-0"/>
 	@components.FieldLabel("gym-exercise-notes-"+id, "Notas do exercício (opcional)", false)
 	<textarea id={ "gym-exercise-notes-" + id } name="exercise_notes" maxlength="1000"></textarea>
+}
+
+templ structuredWaterBlockForm(page StructuredTrainingPage, segmentID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-water-block-" + segmentID }>Adicionar treino de água</button>
+	<dialog id={ "add-water-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-title-" + segmentID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Água</p><h3 id={ "add-water-title-" + segmentID }>Adicionar bloco estruturado</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/agua") }>
+			@page.CSRFField
+			@components.FieldLabel("water-purpose-"+segmentID, "Fase", true)<select id={ "water-purpose-" + segmentID } name="purpose" required>@gymPurposeOptions()</select>
+			@components.FieldLabel("water-title-"+segmentID, "Título", true)<input id={ "water-title-" + segmentID } name="title" required minlength="2" maxlength="120"/>
+			@components.FieldLabel("water-instructions-"+segmentID, "Instruções gerais", true)<textarea id={ "water-instructions-" + segmentID } name="instructions" required minlength="2" maxlength="4000"></textarea>
+			@components.FieldLabel("water-method-"+segmentID, "Método", true)<select id={ "water-method-" + segmentID } name="method" required>@waterMethodOptions()</select>
+			<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-target-"+segmentID, "Distância alvo (m)", false)<input id={ "water-target-" + segmentID } name="target_distance_metres" type="number" min="1" max="200000"/></div><div>@components.FieldLabel("water-target-certainty-"+segmentID, "Precisão", false)<select id={ "water-target-certainty-" + segmentID } name="target_distance_certainty"><option value="">Sem distância alvo</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div></div>
+			@structuredWaterStepFields(segmentID, nil)
+			<button type="submit">Adicionar bloco de água</button>
+		</form>
+	</dialog>
+}
+
+templ structuredWaterStepForm(page StructuredTrainingPage, block StructuredTrainingBlock) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-water-step-" + block.ID }>Adicionar passo</button>
+	<dialog id={ "add-water-step-" + block.ID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-step-title-" + block.ID }>
+		<div class="task-dialog__header"><h3 id={ "add-water-step-title-" + block.ID }>Adicionar esforço ou grupo</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + block.ID + "/agua/passos") }>@page.CSRFField @structuredWaterStepFields(block.ID, block.WaterSteps)<button type="submit">Adicionar passo</button></form>
+	</dialog>
+}
+
+templ structuredWaterStepFields(id string, steps []StructuredWaterStep) {
+	@components.FieldLabel("water-step-parent-"+id, "Dentro de um grupo (opcional)", false)
+	<select id={ "water-step-parent-" + id } name="parent_step_id">
+		<option value="">Ao nível do bloco</option>
+		for _, step := range steps {
+			if step.Kind == "REPEAT_GROUP" {
+				<option value={ step.ID }>{ step.Name }</option>
+			}
+		}
+	</select>
+	@components.FieldLabel("water-step-kind-"+id, "Tipo", true)<select id={ "water-step-kind-" + id } name="step_kind" required><option value="EFFORT">Esforço ou exercício</option><option value="REPEAT_GROUP">Grupo de repetições</option></select>
+	@components.FieldLabel("water-step-name-"+id, "Nome", true)<input id={ "water-step-name-" + id } name="step_name" required minlength="2" maxlength="180"/>
+	<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-repeats-"+id, "Repetições (para grupo)", false)<input id={ "water-repeats-" + id } name="repeats" type="number" min="1" max="100"/></div><div>@components.FieldLabel("water-duration-"+id, "Duração (s)", false)<input id={ "water-duration-" + id } name="duration_seconds" type="number" min="1" max="86400"/></div><div>@components.FieldLabel("water-duration-certainty-"+id, "Precisão da duração", false)<select id={ "water-duration-certainty-" + id } name="duration_certainty"><option value="">Sem duração</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div><div>@components.FieldLabel("water-distance-"+id, "Distância (m)", false)<input id={ "water-distance-" + id } name="distance_metres" type="number" min="1" max="200000"/></div><div>@components.FieldLabel("water-distance-certainty-"+id, "Precisão da distância", false)<select id={ "water-distance-certainty-" + id } name="distance_certainty"><option value="">Sem distância</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div><div>@components.FieldLabel("water-recovery-"+id, "Recuperação (s)", false)<input id={ "water-recovery-" + id } name="recovery_seconds" type="number" min="1" max="86400"/></div></div>
+	<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-intensity-"+id, "Intensidade", false)<input id={ "water-intensity-" + id } name="intensity_code" maxlength="20" placeholder="Ex.: R7"/></div><div>@components.FieldLabel("water-cadence-"+id, "Cadência (remadas/min)", false)<input id={ "water-cadence-" + id } name="cadence_spm" type="number" min="1" max="300"/></div><div>@components.FieldLabel("water-focus-"+id, "Foco técnico/tático", false)<input id={ "water-focus-" + id } name="drill_focus" maxlength="180"/></div><div>@components.FieldLabel("water-format-"+id, "Formato", false)<input id={ "water-format-" + id } name="drill_format" maxlength="180" placeholder="Ex.: 3 contra 2"/></div><div>@components.FieldLabel("water-roles-"+id, "Papéis", false)<input id={ "water-roles-" + id } name="role_notes" maxlength="500" placeholder="Ex.: GR e pivot"/></div></div>
+	@components.FieldLabel("water-step-notes-"+id, "Instruções (opcional)", false)<textarea id={ "water-step-notes-" + id } name="step_instructions" maxlength="1000"></textarea>
+}
+
+templ waterMethodOptions() {
+	for _, option := range []struct{ Value, Label string }{{"CONTINUOUS", "Contínuo"}, {"INTERVALS", "Intervalos"}, {"FARTLEK", "Fartlek"}, {"TECHNIQUE", "Técnica"}, {"STARTS", "Partidas"}, {"RACE_SIMULATION", "Simulação de prova"}, {"TACTICAL_DRILL", "Exercício técnico-tático"}, {"CUSTOM", "Outro método"}} {
+		<option value={ option.Value }>{ option.Label }</option>
+	}
 }
 
 templ structuredMoveSegment(page StructuredTrainingPage, segment StructuredTrainingSegment) {
