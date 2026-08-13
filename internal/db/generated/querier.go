@@ -73,6 +73,10 @@ type Querier interface {
 	CreateTrainingSession(ctx context.Context, arg CreateTrainingSessionParams) (TrainingSession, error)
 	CreateTrainingSessionSegment(ctx context.Context, arg CreateTrainingSessionSegmentParams) (uuid.UUID, error)
 	CreateUserMembership(ctx context.Context, arg CreateUserMembershipParams) (UserMembership, error)
+	CreateWaterBlockPrescription(ctx context.Context, arg CreateWaterBlockPrescriptionParams) (int64, error)
+	CreateWaterIntensityProfile(ctx context.Context, arg CreateWaterIntensityProfileParams) (WaterIntensityProfile, error)
+	CreateWaterIntensityZone(ctx context.Context, arg CreateWaterIntensityZoneParams) (uuid.UUID, error)
+	CreateWaterWorkStep(ctx context.Context, arg CreateWaterWorkStepParams) (uuid.UUID, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error
 	DecideActivityMatch(ctx context.Context, arg DecideActivityMatchParams) (TrainingSessionActivityMatch, error)
 	DeleteEventProgrammeAudiences(ctx context.Context, eventID uuid.UUID) error
@@ -135,6 +139,7 @@ type Querier interface {
 	ListActiveMembershipProgrammeCodesForUser(ctx context.Context, userID uuid.UUID) ([]string, error)
 	ListActiveMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListActiveMembershipsForUserRow, error)
 	ListActiveStaffGrantsForUser(ctx context.Context, userID uuid.UUID) ([]ListActiveStaffGrantsForUserRow, error)
+	ListActiveWaterIntensityProfiles(ctx context.Context) ([]ListActiveWaterIntensityProfilesRow, error)
 	ListAnnouncementCategories(ctx context.Context) ([]ListAnnouncementCategoriesRow, error)
 	ListAnnouncementEvents(ctx context.Context) ([]ListAnnouncementEventsRow, error)
 	ListAnnouncementModalities(ctx context.Context) ([]ListAnnouncementModalitiesRow, error)

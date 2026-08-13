@@ -487,6 +487,175 @@ func (q *Queries) CreateTrainingSessionSegment(ctx context.Context, arg CreateTr
 	return id, err
 }
 
+const createWaterBlockPrescription = `-- name: CreateWaterBlockPrescription :execrows
+INSERT INTO water_block_prescriptions (block_id, method, intensity_profile_id, target_distance_metres, target_distance_certainty)
+SELECT block.id, $1::water_work_method, $2,
+       $3, $4::training_measure_certainty
+FROM training_segment_blocks block
+JOIN training_session_segments segment ON segment.id = block.segment_id
+WHERE block.id = $5 AND segment.modality = 'WATER'
+`
+
+type CreateWaterBlockPrescriptionParams struct {
+	Method                  WaterWorkMethod           `json:"method"`
+	IntensityProfileID      *uuid.UUID                `json:"intensity_profile_id"`
+	TargetDistanceMetres    *int32                    `json:"target_distance_metres"`
+	TargetDistanceCertainty *TrainingMeasureCertainty `json:"target_distance_certainty"`
+	BlockID                 uuid.UUID                 `json:"block_id"`
+}
+
+func (q *Queries) CreateWaterBlockPrescription(ctx context.Context, arg CreateWaterBlockPrescriptionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createWaterBlockPrescription,
+		arg.Method,
+		arg.IntensityProfileID,
+		arg.TargetDistanceMetres,
+		arg.TargetDistanceCertainty,
+		arg.BlockID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createWaterIntensityProfile = `-- name: CreateWaterIntensityProfile :one
+WITH previous AS (
+ UPDATE water_intensity_profiles SET is_active = false
+ WHERE name = $1 AND craft = $2::paddling_craft AND is_active
+ RETURNING id, revision
+)
+INSERT INTO water_intensity_profiles (name, craft, revision, supersedes_id, notes, created_by_id)
+VALUES ($1, $2::paddling_craft,
+        COALESCE((SELECT max(revision) + 1 FROM previous), 1),
+        (SELECT id FROM previous ORDER BY revision DESC LIMIT 1), $3, $4)
+RETURNING id, name, craft, revision, supersedes_id, notes, is_active, created_by_id, created_at
+`
+
+type CreateWaterIntensityProfileParams struct {
+	Name        string        `json:"name"`
+	Craft       PaddlingCraft `json:"craft"`
+	Notes       string        `json:"notes"`
+	CreatedByID uuid.UUID     `json:"created_by_id"`
+}
+
+func (q *Queries) CreateWaterIntensityProfile(ctx context.Context, arg CreateWaterIntensityProfileParams) (WaterIntensityProfile, error) {
+	row := q.db.QueryRow(ctx, createWaterIntensityProfile,
+		arg.Name,
+		arg.Craft,
+		arg.Notes,
+		arg.CreatedByID,
+	)
+	var i WaterIntensityProfile
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Craft,
+		&i.Revision,
+		&i.SupersedesID,
+		&i.Notes,
+		&i.IsActive,
+		&i.CreatedByID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createWaterIntensityZone = `-- name: CreateWaterIntensityZone :one
+INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
+SELECT profile.id, COALESCE(max(zone.position), 0) + 1, $1, $2,
+       $3, $4, $5
+FROM water_intensity_profiles profile
+LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
+WHERE profile.id = $6 AND profile.is_active
+GROUP BY profile.id
+RETURNING id
+`
+
+type CreateWaterIntensityZoneParams struct {
+	Code       string    `json:"code"`
+	Label      string    `json:"label"`
+	CadenceMin *int32    `json:"cadence_min"`
+	CadenceMax *int32    `json:"cadence_max"`
+	Meaning    string    `json:"meaning"`
+	ProfileID  uuid.UUID `json:"profile_id"`
+}
+
+func (q *Queries) CreateWaterIntensityZone(ctx context.Context, arg CreateWaterIntensityZoneParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createWaterIntensityZone,
+		arg.Code,
+		arg.Label,
+		arg.CadenceMin,
+		arg.CadenceMax,
+		arg.Meaning,
+		arg.ProfileID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createWaterWorkStep = `-- name: CreateWaterWorkStep :one
+INSERT INTO water_work_steps (block_id, parent_step_id, position, kind, name, repeats,
+                              duration_seconds, duration_certainty, distance_metres, distance_certainty,
+                              recovery_seconds, intensity_code, cadence_spm, drill_focus, drill_format,
+                              role_notes, instructions)
+SELECT prescription.block_id, $1, COALESCE(max(step.position), 0) + 1,
+       $2::water_step_kind, $3, $4,
+       $5, $6::training_measure_certainty,
+       $7, $8::training_measure_certainty,
+       $9, $10, $11,
+       $12, $13, $14, $15
+FROM water_block_prescriptions prescription
+LEFT JOIN water_work_steps step ON step.block_id = prescription.block_id
+ AND step.parent_step_id IS NOT DISTINCT FROM $1
+WHERE prescription.block_id = $16
+GROUP BY prescription.block_id
+RETURNING id
+`
+
+type CreateWaterWorkStepParams struct {
+	ParentStepID      *uuid.UUID                `json:"parent_step_id"`
+	Kind              WaterStepKind             `json:"kind"`
+	Name              string                    `json:"name"`
+	Repeats           *int32                    `json:"repeats"`
+	DurationSeconds   *int32                    `json:"duration_seconds"`
+	DurationCertainty *TrainingMeasureCertainty `json:"duration_certainty"`
+	DistanceMetres    *int32                    `json:"distance_metres"`
+	DistanceCertainty *TrainingMeasureCertainty `json:"distance_certainty"`
+	RecoverySeconds   *int32                    `json:"recovery_seconds"`
+	IntensityCode     *string                   `json:"intensity_code"`
+	CadenceSpm        *int32                    `json:"cadence_spm"`
+	DrillFocus        *string                   `json:"drill_focus"`
+	DrillFormat       *string                   `json:"drill_format"`
+	RoleNotes         *string                   `json:"role_notes"`
+	Instructions      string                    `json:"instructions"`
+	BlockID           uuid.UUID                 `json:"block_id"`
+}
+
+func (q *Queries) CreateWaterWorkStep(ctx context.Context, arg CreateWaterWorkStepParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createWaterWorkStep,
+		arg.ParentStepID,
+		arg.Kind,
+		arg.Name,
+		arg.Repeats,
+		arg.DurationSeconds,
+		arg.DurationCertainty,
+		arg.DistanceMetres,
+		arg.DistanceCertainty,
+		arg.RecoverySeconds,
+		arg.IntensityCode,
+		arg.CadenceSpm,
+		arg.DrillFocus,
+		arg.DrillFormat,
+		arg.RoleNotes,
+		arg.Instructions,
+		arg.BlockID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getBlockRoutineSource = `-- name: GetBlockRoutineSource :one
 SELECT session.plan_id, block.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
        segment.modality, gym.objective, training_block_snapshot(block.id) AS snapshot
@@ -726,6 +895,63 @@ func (q *Queries) GetVisibleTrainingRoutine(ctx context.Context, arg GetVisibleT
 	return i, err
 }
 
+const listActiveWaterIntensityProfiles = `-- name: ListActiveWaterIntensityProfiles :many
+SELECT profile.id, profile.name, profile.craft, profile.revision, profile.notes,
+       zone.id AS zone_id, zone.position, zone.code, zone.label, zone.cadence_min, zone.cadence_max, zone.meaning
+FROM water_intensity_profiles profile
+LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
+WHERE profile.is_active
+ORDER BY profile.craft, profile.name, profile.revision DESC, zone.position
+`
+
+type ListActiveWaterIntensityProfilesRow struct {
+	ID         uuid.UUID     `json:"id"`
+	Name       string        `json:"name"`
+	Craft      PaddlingCraft `json:"craft"`
+	Revision   int32         `json:"revision"`
+	Notes      string        `json:"notes"`
+	ZoneID     *uuid.UUID    `json:"zone_id"`
+	Position   *int32        `json:"position"`
+	Code       *string       `json:"code"`
+	Label      *string       `json:"label"`
+	CadenceMin *int32        `json:"cadence_min"`
+	CadenceMax *int32        `json:"cadence_max"`
+	Meaning    *string       `json:"meaning"`
+}
+
+func (q *Queries) ListActiveWaterIntensityProfiles(ctx context.Context) ([]ListActiveWaterIntensityProfilesRow, error) {
+	rows, err := q.db.Query(ctx, listActiveWaterIntensityProfiles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveWaterIntensityProfilesRow{}
+	for rows.Next() {
+		var i ListActiveWaterIntensityProfilesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Craft,
+			&i.Revision,
+			&i.Notes,
+			&i.ZoneID,
+			&i.Position,
+			&i.Code,
+			&i.Label,
+			&i.CadenceMin,
+			&i.CadenceMax,
+			&i.Meaning,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEligibleTrainingGroupMemberships = `-- name: ListEligibleTrainingGroupMemberships :many
 SELECT membership.id, subject.name AS athlete_name, programme.name_pt AS programme_name,
        team.name AS team_name, membership.programme_id, membership.team_id
@@ -888,6 +1114,20 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        block.title AS block_title, block.instructions AS block_instructions,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
+       water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water.target_distance_metres AS water_target_distance_metres,
+       water.target_distance_certainty AS water_target_distance_certainty,
+       water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
+       water_step.position AS water_step_position, water_step.kind AS water_step_kind,
+       water_step.name AS water_step_name, water_step.repeats AS water_step_repeats,
+       water_step.duration_seconds AS water_step_duration_seconds,
+       water_step.duration_certainty AS water_step_duration_certainty,
+       water_step.distance_metres AS water_step_distance_metres,
+       water_step.distance_certainty AS water_step_distance_certainty,
+       water_step.recovery_seconds AS water_step_recovery_seconds,
+       water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
+       water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
        exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
        exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
@@ -904,6 +1144,8 @@ LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
+LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 WHERE $1::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
@@ -913,7 +1155,8 @@ WHERE $1::boolean
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
 ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position
+         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         water_step.created_at NULLS FIRST, exercise.position
 `
 
 type ListStructuredTrainingOverviewForManagerParams struct {
@@ -922,54 +1165,75 @@ type ListStructuredTrainingOverviewForManagerParams struct {
 }
 
 type ListStructuredTrainingOverviewForManagerRow struct {
-	GroupID                   uuid.UUID                `json:"group_id"`
-	GroupName                 string                   `json:"group_name"`
-	ProgrammeName             string                   `json:"programme_name"`
-	TeamName                  *string                  `json:"team_name"`
-	MemberCount               int32                    `json:"member_count"`
-	PlanID                    *uuid.UUID               `json:"plan_id"`
-	PlanTitle                 *string                  `json:"plan_title"`
-	PlanDescription           *string                  `json:"plan_description"`
-	SeasonName                *string                  `json:"season_name"`
-	WeekStart                 pgtype.Date              `json:"week_start"`
-	SessionID                 *uuid.UUID               `json:"session_id"`
-	SessionTitle              *string                  `json:"session_title"`
-	SessionDescription        *string                  `json:"session_description"`
-	StartsAt                  pgtype.Timestamptz       `json:"starts_at"`
-	EndsAt                    pgtype.Timestamptz       `json:"ends_at"`
-	EntryKind                 *TrainingEntryKind       `json:"entry_kind"`
-	SegmentID                 *uuid.UUID               `json:"segment_id"`
-	SegmentPosition           *int32                   `json:"segment_position"`
-	SegmentModality           *TrainingSegmentModality `json:"segment_modality"`
-	SegmentTitle              *string                  `json:"segment_title"`
-	SegmentLocation           *string                  `json:"segment_location"`
-	PlannedDurationMinutes    *int32                   `json:"planned_duration_minutes"`
-	PlannedStartOffsetMinutes *int32                   `json:"planned_start_offset_minutes"`
-	TransitionDurationMinutes *int32                   `json:"transition_duration_minutes"`
-	EquipmentNotes            *string                  `json:"equipment_notes"`
-	BlockID                   *uuid.UUID               `json:"block_id"`
-	BlockPosition             *int32                   `json:"block_position"`
-	BlockPurpose              *TrainingBlockPurpose    `json:"block_purpose"`
-	BlockTitle                *string                  `json:"block_title"`
-	BlockInstructions         *string                  `json:"block_instructions"`
-	GymStructure              *GymBlockStructure       `json:"gym_structure"`
-	GymObjective              *TrainingObjective       `json:"gym_objective"`
-	GymRounds                 *int32                   `json:"gym_rounds"`
-	RoundRecoverySeconds      *int32                   `json:"round_recovery_seconds"`
-	ExerciseID                *uuid.UUID               `json:"exercise_id"`
-	ExercisePosition          *int32                   `json:"exercise_position"`
-	ExerciseName              *string                  `json:"exercise_name"`
-	ExerciseSets              *int32                   `json:"exercise_sets"`
-	ExerciseRepetitions       *int32                   `json:"exercise_repetitions"`
-	ExerciseDurationSeconds   *int32                   `json:"exercise_duration_seconds"`
-	ExerciseDistanceMetres    *int32                   `json:"exercise_distance_metres"`
-	ExerciseRecoverySeconds   *int32                   `json:"exercise_recovery_seconds"`
-	ResistanceKind            *GymResistanceKind       `json:"resistance_kind"`
-	ResistanceValue           *float64                 `json:"resistance_value"`
-	ResistanceText            *string                  `json:"resistance_text"`
-	ExecutionIntent           *GymExecutionIntent      `json:"execution_intent"`
-	Tempo                     *string                  `json:"tempo"`
-	ExerciseNotes             *string                  `json:"exercise_notes"`
+	GroupID                      uuid.UUID                 `json:"group_id"`
+	GroupName                    string                    `json:"group_name"`
+	ProgrammeName                string                    `json:"programme_name"`
+	TeamName                     *string                   `json:"team_name"`
+	MemberCount                  int32                     `json:"member_count"`
+	PlanID                       *uuid.UUID                `json:"plan_id"`
+	PlanTitle                    *string                   `json:"plan_title"`
+	PlanDescription              *string                   `json:"plan_description"`
+	SeasonName                   *string                   `json:"season_name"`
+	WeekStart                    pgtype.Date               `json:"week_start"`
+	SessionID                    *uuid.UUID                `json:"session_id"`
+	SessionTitle                 *string                   `json:"session_title"`
+	SessionDescription           *string                   `json:"session_description"`
+	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
+	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
+	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SegmentID                    *uuid.UUID                `json:"segment_id"`
+	SegmentPosition              *int32                    `json:"segment_position"`
+	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
+	SegmentTitle                 *string                   `json:"segment_title"`
+	SegmentLocation              *string                   `json:"segment_location"`
+	PlannedDurationMinutes       *int32                    `json:"planned_duration_minutes"`
+	PlannedStartOffsetMinutes    *int32                    `json:"planned_start_offset_minutes"`
+	TransitionDurationMinutes    *int32                    `json:"transition_duration_minutes"`
+	EquipmentNotes               *string                   `json:"equipment_notes"`
+	BlockID                      *uuid.UUID                `json:"block_id"`
+	BlockPosition                *int32                    `json:"block_position"`
+	BlockPurpose                 *TrainingBlockPurpose     `json:"block_purpose"`
+	BlockTitle                   *string                   `json:"block_title"`
+	BlockInstructions            *string                   `json:"block_instructions"`
+	GymStructure                 *GymBlockStructure        `json:"gym_structure"`
+	GymObjective                 *TrainingObjective        `json:"gym_objective"`
+	GymRounds                    *int32                    `json:"gym_rounds"`
+	RoundRecoverySeconds         *int32                    `json:"round_recovery_seconds"`
+	WaterMethod                  *WaterWorkMethod          `json:"water_method"`
+	WaterIntensityProfileID      *uuid.UUID                `json:"water_intensity_profile_id"`
+	WaterTargetDistanceMetres    *int32                    `json:"water_target_distance_metres"`
+	WaterTargetDistanceCertainty *TrainingMeasureCertainty `json:"water_target_distance_certainty"`
+	WaterStepID                  *uuid.UUID                `json:"water_step_id"`
+	WaterParentStepID            *uuid.UUID                `json:"water_parent_step_id"`
+	WaterStepPosition            *int32                    `json:"water_step_position"`
+	WaterStepKind                *WaterStepKind            `json:"water_step_kind"`
+	WaterStepName                *string                   `json:"water_step_name"`
+	WaterStepRepeats             *int32                    `json:"water_step_repeats"`
+	WaterStepDurationSeconds     *int32                    `json:"water_step_duration_seconds"`
+	WaterStepDurationCertainty   *TrainingMeasureCertainty `json:"water_step_duration_certainty"`
+	WaterStepDistanceMetres      *int32                    `json:"water_step_distance_metres"`
+	WaterStepDistanceCertainty   *TrainingMeasureCertainty `json:"water_step_distance_certainty"`
+	WaterStepRecoverySeconds     *int32                    `json:"water_step_recovery_seconds"`
+	WaterStepIntensityCode       *string                   `json:"water_step_intensity_code"`
+	WaterStepCadenceSpm          *int32                    `json:"water_step_cadence_spm"`
+	WaterStepDrillFocus          *string                   `json:"water_step_drill_focus"`
+	WaterStepDrillFormat         *string                   `json:"water_step_drill_format"`
+	WaterStepRoleNotes           *string                   `json:"water_step_role_notes"`
+	WaterStepInstructions        *string                   `json:"water_step_instructions"`
+	ExerciseID                   *uuid.UUID                `json:"exercise_id"`
+	ExercisePosition             *int32                    `json:"exercise_position"`
+	ExerciseName                 *string                   `json:"exercise_name"`
+	ExerciseSets                 *int32                    `json:"exercise_sets"`
+	ExerciseRepetitions          *int32                    `json:"exercise_repetitions"`
+	ExerciseDurationSeconds      *int32                    `json:"exercise_duration_seconds"`
+	ExerciseDistanceMetres       *int32                    `json:"exercise_distance_metres"`
+	ExerciseRecoverySeconds      *int32                    `json:"exercise_recovery_seconds"`
+	ResistanceKind               *GymResistanceKind        `json:"resistance_kind"`
+	ResistanceValue              *float64                  `json:"resistance_value"`
+	ResistanceText               *string                   `json:"resistance_text"`
+	ExecutionIntent              *GymExecutionIntent       `json:"execution_intent"`
+	Tempo                        *string                   `json:"tempo"`
+	ExerciseNotes                *string                   `json:"exercise_notes"`
 }
 
 func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, arg ListStructuredTrainingOverviewForManagerParams) ([]ListStructuredTrainingOverviewForManagerRow, error) {
@@ -1016,6 +1280,27 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 			&i.GymObjective,
 			&i.GymRounds,
 			&i.RoundRecoverySeconds,
+			&i.WaterMethod,
+			&i.WaterIntensityProfileID,
+			&i.WaterTargetDistanceMetres,
+			&i.WaterTargetDistanceCertainty,
+			&i.WaterStepID,
+			&i.WaterParentStepID,
+			&i.WaterStepPosition,
+			&i.WaterStepKind,
+			&i.WaterStepName,
+			&i.WaterStepRepeats,
+			&i.WaterStepDurationSeconds,
+			&i.WaterStepDurationCertainty,
+			&i.WaterStepDistanceMetres,
+			&i.WaterStepDistanceCertainty,
+			&i.WaterStepRecoverySeconds,
+			&i.WaterStepIntensityCode,
+			&i.WaterStepCadenceSpm,
+			&i.WaterStepDrillFocus,
+			&i.WaterStepDrillFormat,
+			&i.WaterStepRoleNotes,
+			&i.WaterStepInstructions,
 			&i.ExerciseID,
 			&i.ExercisePosition,
 			&i.ExerciseName,
@@ -1055,6 +1340,20 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        block.title AS block_title, block.instructions AS block_instructions,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
+       water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water.target_distance_metres AS water_target_distance_metres,
+       water.target_distance_certainty AS water_target_distance_certainty,
+       water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
+       water_step.position AS water_step_position, water_step.kind AS water_step_kind,
+       water_step.name AS water_step_name, water_step.repeats AS water_step_repeats,
+       water_step.duration_seconds AS water_step_duration_seconds,
+       water_step.duration_certainty AS water_step_duration_certainty,
+       water_step.distance_metres AS water_step_distance_metres,
+       water_step.distance_certainty AS water_step_distance_certainty,
+       water_step.recovery_seconds AS water_step_recovery_seconds,
+       water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
+       water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
        exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
        exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
@@ -1072,63 +1371,87 @@ LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
+LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 WHERE (subject.id = $1
        OR (subject.guardian_id = $1 AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position
+         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         water_step.created_at NULLS FIRST, exercise.position
 `
 
 type ListStructuredTrainingOverviewForSubjectRow struct {
-	AthleteID                 uuid.UUID                `json:"athlete_id"`
-	AthleteName               string                   `json:"athlete_name"`
-	GroupID                   uuid.UUID                `json:"group_id"`
-	GroupName                 string                   `json:"group_name"`
-	PlanID                    uuid.UUID                `json:"plan_id"`
-	PlanTitle                 string                   `json:"plan_title"`
-	PlanDescription           string                   `json:"plan_description"`
-	SeasonName                string                   `json:"season_name"`
-	WeekStart                 pgtype.Date              `json:"week_start"`
-	SessionID                 *uuid.UUID               `json:"session_id"`
-	SessionTitle              *string                  `json:"session_title"`
-	SessionDescription        *string                  `json:"session_description"`
-	StartsAt                  pgtype.Timestamptz       `json:"starts_at"`
-	EndsAt                    pgtype.Timestamptz       `json:"ends_at"`
-	EntryKind                 *TrainingEntryKind       `json:"entry_kind"`
-	SegmentID                 *uuid.UUID               `json:"segment_id"`
-	SegmentPosition           *int32                   `json:"segment_position"`
-	SegmentModality           *TrainingSegmentModality `json:"segment_modality"`
-	SegmentTitle              *string                  `json:"segment_title"`
-	SegmentLocation           *string                  `json:"segment_location"`
-	PlannedDurationMinutes    *int32                   `json:"planned_duration_minutes"`
-	PlannedStartOffsetMinutes *int32                   `json:"planned_start_offset_minutes"`
-	TransitionDurationMinutes *int32                   `json:"transition_duration_minutes"`
-	EquipmentNotes            *string                  `json:"equipment_notes"`
-	BlockID                   *uuid.UUID               `json:"block_id"`
-	BlockPosition             *int32                   `json:"block_position"`
-	BlockPurpose              *TrainingBlockPurpose    `json:"block_purpose"`
-	BlockTitle                *string                  `json:"block_title"`
-	BlockInstructions         *string                  `json:"block_instructions"`
-	GymStructure              *GymBlockStructure       `json:"gym_structure"`
-	GymObjective              *TrainingObjective       `json:"gym_objective"`
-	GymRounds                 *int32                   `json:"gym_rounds"`
-	RoundRecoverySeconds      *int32                   `json:"round_recovery_seconds"`
-	ExerciseID                *uuid.UUID               `json:"exercise_id"`
-	ExercisePosition          *int32                   `json:"exercise_position"`
-	ExerciseName              *string                  `json:"exercise_name"`
-	ExerciseSets              *int32                   `json:"exercise_sets"`
-	ExerciseRepetitions       *int32                   `json:"exercise_repetitions"`
-	ExerciseDurationSeconds   *int32                   `json:"exercise_duration_seconds"`
-	ExerciseDistanceMetres    *int32                   `json:"exercise_distance_metres"`
-	ExerciseRecoverySeconds   *int32                   `json:"exercise_recovery_seconds"`
-	ResistanceKind            *GymResistanceKind       `json:"resistance_kind"`
-	ResistanceValue           *float64                 `json:"resistance_value"`
-	ResistanceText            *string                  `json:"resistance_text"`
-	ExecutionIntent           *GymExecutionIntent      `json:"execution_intent"`
-	Tempo                     *string                  `json:"tempo"`
-	ExerciseNotes             *string                  `json:"exercise_notes"`
+	AthleteID                    uuid.UUID                 `json:"athlete_id"`
+	AthleteName                  string                    `json:"athlete_name"`
+	GroupID                      uuid.UUID                 `json:"group_id"`
+	GroupName                    string                    `json:"group_name"`
+	PlanID                       uuid.UUID                 `json:"plan_id"`
+	PlanTitle                    string                    `json:"plan_title"`
+	PlanDescription              string                    `json:"plan_description"`
+	SeasonName                   string                    `json:"season_name"`
+	WeekStart                    pgtype.Date               `json:"week_start"`
+	SessionID                    *uuid.UUID                `json:"session_id"`
+	SessionTitle                 *string                   `json:"session_title"`
+	SessionDescription           *string                   `json:"session_description"`
+	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
+	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
+	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SegmentID                    *uuid.UUID                `json:"segment_id"`
+	SegmentPosition              *int32                    `json:"segment_position"`
+	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
+	SegmentTitle                 *string                   `json:"segment_title"`
+	SegmentLocation              *string                   `json:"segment_location"`
+	PlannedDurationMinutes       *int32                    `json:"planned_duration_minutes"`
+	PlannedStartOffsetMinutes    *int32                    `json:"planned_start_offset_minutes"`
+	TransitionDurationMinutes    *int32                    `json:"transition_duration_minutes"`
+	EquipmentNotes               *string                   `json:"equipment_notes"`
+	BlockID                      *uuid.UUID                `json:"block_id"`
+	BlockPosition                *int32                    `json:"block_position"`
+	BlockPurpose                 *TrainingBlockPurpose     `json:"block_purpose"`
+	BlockTitle                   *string                   `json:"block_title"`
+	BlockInstructions            *string                   `json:"block_instructions"`
+	GymStructure                 *GymBlockStructure        `json:"gym_structure"`
+	GymObjective                 *TrainingObjective        `json:"gym_objective"`
+	GymRounds                    *int32                    `json:"gym_rounds"`
+	RoundRecoverySeconds         *int32                    `json:"round_recovery_seconds"`
+	WaterMethod                  *WaterWorkMethod          `json:"water_method"`
+	WaterIntensityProfileID      *uuid.UUID                `json:"water_intensity_profile_id"`
+	WaterTargetDistanceMetres    *int32                    `json:"water_target_distance_metres"`
+	WaterTargetDistanceCertainty *TrainingMeasureCertainty `json:"water_target_distance_certainty"`
+	WaterStepID                  *uuid.UUID                `json:"water_step_id"`
+	WaterParentStepID            *uuid.UUID                `json:"water_parent_step_id"`
+	WaterStepPosition            *int32                    `json:"water_step_position"`
+	WaterStepKind                *WaterStepKind            `json:"water_step_kind"`
+	WaterStepName                *string                   `json:"water_step_name"`
+	WaterStepRepeats             *int32                    `json:"water_step_repeats"`
+	WaterStepDurationSeconds     *int32                    `json:"water_step_duration_seconds"`
+	WaterStepDurationCertainty   *TrainingMeasureCertainty `json:"water_step_duration_certainty"`
+	WaterStepDistanceMetres      *int32                    `json:"water_step_distance_metres"`
+	WaterStepDistanceCertainty   *TrainingMeasureCertainty `json:"water_step_distance_certainty"`
+	WaterStepRecoverySeconds     *int32                    `json:"water_step_recovery_seconds"`
+	WaterStepIntensityCode       *string                   `json:"water_step_intensity_code"`
+	WaterStepCadenceSpm          *int32                    `json:"water_step_cadence_spm"`
+	WaterStepDrillFocus          *string                   `json:"water_step_drill_focus"`
+	WaterStepDrillFormat         *string                   `json:"water_step_drill_format"`
+	WaterStepRoleNotes           *string                   `json:"water_step_role_notes"`
+	WaterStepInstructions        *string                   `json:"water_step_instructions"`
+	ExerciseID                   *uuid.UUID                `json:"exercise_id"`
+	ExercisePosition             *int32                    `json:"exercise_position"`
+	ExerciseName                 *string                   `json:"exercise_name"`
+	ExerciseSets                 *int32                    `json:"exercise_sets"`
+	ExerciseRepetitions          *int32                    `json:"exercise_repetitions"`
+	ExerciseDurationSeconds      *int32                    `json:"exercise_duration_seconds"`
+	ExerciseDistanceMetres       *int32                    `json:"exercise_distance_metres"`
+	ExerciseRecoverySeconds      *int32                    `json:"exercise_recovery_seconds"`
+	ResistanceKind               *GymResistanceKind        `json:"resistance_kind"`
+	ResistanceValue              *float64                  `json:"resistance_value"`
+	ResistanceText               *string                   `json:"resistance_text"`
+	ExecutionIntent              *GymExecutionIntent       `json:"execution_intent"`
+	Tempo                        *string                   `json:"tempo"`
+	ExerciseNotes                *string                   `json:"exercise_notes"`
 }
 
 func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, userID uuid.UUID) ([]ListStructuredTrainingOverviewForSubjectRow, error) {
@@ -1174,6 +1497,27 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 			&i.GymObjective,
 			&i.GymRounds,
 			&i.RoundRecoverySeconds,
+			&i.WaterMethod,
+			&i.WaterIntensityProfileID,
+			&i.WaterTargetDistanceMetres,
+			&i.WaterTargetDistanceCertainty,
+			&i.WaterStepID,
+			&i.WaterParentStepID,
+			&i.WaterStepPosition,
+			&i.WaterStepKind,
+			&i.WaterStepName,
+			&i.WaterStepRepeats,
+			&i.WaterStepDurationSeconds,
+			&i.WaterStepDurationCertainty,
+			&i.WaterStepDistanceMetres,
+			&i.WaterStepDistanceCertainty,
+			&i.WaterStepRecoverySeconds,
+			&i.WaterStepIntensityCode,
+			&i.WaterStepCadenceSpm,
+			&i.WaterStepDrillFocus,
+			&i.WaterStepDrillFormat,
+			&i.WaterStepRoleNotes,
+			&i.WaterStepInstructions,
 			&i.ExerciseID,
 			&i.ExercisePosition,
 			&i.ExerciseName,

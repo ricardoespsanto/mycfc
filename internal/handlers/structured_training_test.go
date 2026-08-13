@@ -29,6 +29,10 @@ type structuredTrainingStoreStub struct {
 	blocks           []dbgen.CreateTrainingSegmentBlockParams
 	gymBlocks        []StructuredGymBlockInput
 	gymExercises     []dbgen.CreateGymExerciseParams
+	waterBlocks      []StructuredWaterBlockInput
+	waterSteps       []dbgen.CreateWaterWorkStepParams
+	waterProfiles    []dbgen.CreateWaterIntensityProfileParams
+	waterZones       []dbgen.CreateWaterIntensityZoneParams
 	planID           uuid.UUID
 	movedSegments    []dbgen.MoveTrainingSessionSegmentParams
 	movedBlocks      []dbgen.MoveTrainingSegmentBlockParams
@@ -102,6 +106,30 @@ func (s *structuredTrainingStoreStub) CreateGymBlock(_ context.Context, input St
 func (s *structuredTrainingStoreStub) CreateGymExercise(_ context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
 	s.gymExercises = append(s.gymExercises, params)
 	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateWaterBlock(_ context.Context, input StructuredWaterBlockInput) (uuid.UUID, error) {
+	s.waterBlocks = append(s.waterBlocks, input)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateWaterWorkStep(_ context.Context, params dbgen.CreateWaterWorkStepParams) (uuid.UUID, error) {
+	s.waterSteps = append(s.waterSteps, params)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateWaterIntensityProfile(_ context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error) {
+	s.waterProfiles = append(s.waterProfiles, params)
+	return dbgen.WaterIntensityProfile{ID: uuid.New(), Name: params.Name, Craft: params.Craft, Revision: 1}, nil
+}
+
+func (s *structuredTrainingStoreStub) CreateWaterIntensityZone(_ context.Context, params dbgen.CreateWaterIntensityZoneParams) (uuid.UUID, error) {
+	s.waterZones = append(s.waterZones, params)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) ListActiveWaterIntensityProfiles(context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error) {
+	return nil, nil
 }
 
 func (s *structuredTrainingStoreStub) MoveTrainingSessionSegment(_ context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
@@ -535,5 +563,54 @@ func TestStructuredCopyRejectionRecognisesSafeDatabaseFailures(t *testing.T) {
 	}
 	if isStructuredCopyRejection(&pgconn.PgError{Code: "XX000"}) {
 		t.Fatal("unexpected database failures must not be converted to validation errors")
+	}
+}
+
+func TestStructuredWaterAuthoringPreservesNestedRecoveryAndTacticalMetadata(t *testing.T) {
+	store := &structuredTrainingStoreStub{weekOK: true, planID: uuid.New()}
+	handler := StructuredTraining{Store: store, System: System{}}
+	user := CurrentUser{ID: uuid.New(), IsAdmin: true}
+	segmentID, blockID, parentID := uuid.New(), uuid.New(), uuid.New()
+
+	blockValues := url.Values{
+		"purpose": {"MAIN"}, "title": {"Bloco técnico-tático"}, "instructions": {"Manter qualidade sob pressão"},
+		"method": {"TACTICAL_DRILL"}, "target_distance_metres": {"12000"}, "target_distance_certainty": {"ESTIMATED"},
+		"step_kind": {"REPEAT_GROUP"}, "step_name": {"Série principal"}, "repeats": {"3"}, "recovery_seconds": {"180"},
+	}
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/segmentos/"+segmentID.String()+"/agua", blockValues, "id", segmentID.String(), handler.CreateWaterBlock)
+	if response.Code != http.StatusSeeOther || len(store.waterBlocks) != 1 {
+		t.Fatalf("create water block: status=%d writes=%d", response.Code, len(store.waterBlocks))
+	}
+	if got := store.waterBlocks[0]; got.Prescription.Method != dbgen.WaterWorkMethodTACTICALDRILL || got.Prescription.TargetDistanceCertainty == nil || *got.Prescription.TargetDistanceCertainty != dbgen.TrainingMeasureCertaintyESTIMATED || got.Step.Repeats == nil || *got.Step.Repeats != 3 || got.Step.RecoverySeconds == nil || *got.Step.RecoverySeconds != 180 {
+		t.Fatalf("water block lost structured semantics: %+v", got)
+	}
+
+	stepValues := url.Values{
+		"parent_step_id": {parentID.String()}, "step_kind": {"EFFORT"}, "step_name": {"Ataque 3 contra 2"},
+		"duration_seconds": {"120"}, "duration_certainty": {"EXACT"}, "recovery_seconds": {"60"},
+		"intensity_code": {"R7"}, "drill_focus": {"Ataque"}, "drill_format": {"3 contra 2"},
+		"role_notes": {"GR e pivot"}, "step_instructions": {"Ritmo de uma prova de dois minutos"},
+	}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/agua/passos", stepValues, "id", blockID.String(), handler.CreateWaterWorkStep)
+	if response.Code != http.StatusSeeOther || len(store.waterSteps) != 1 {
+		t.Fatalf("create water step: status=%d writes=%d", response.Code, len(store.waterSteps))
+	}
+	if got := store.waterSteps[0]; got.ParentStepID == nil || *got.ParentStepID != parentID || got.IntensityCode == nil || *got.IntensityCode != "R7" || got.DrillFormat == nil || *got.DrillFormat != "3 contra 2" || got.RecoverySeconds == nil || *got.RecoverySeconds != 60 {
+		t.Fatalf("water step lost nesting or drill metadata: %+v", got)
+	}
+}
+
+func TestWaterProfilesAreVersionableWithoutAssumingTheDisputedR5Boundary(t *testing.T) {
+	store := &structuredTrainingStoreStub{}
+	handler := StructuredTraining{Store: store, System: System{}}
+	user := CurrentUser{ID: uuid.New(), IsAdmin: true}
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/agua/perfis", url.Values{"name": {"Perfil do clube"}, "craft": {"KAYAK"}, "notes": {"R5 por confirmar com o treinador"}}, "", "", handler.CreateWaterIntensityProfile)
+	if response.Code != http.StatusSeeOther || len(store.waterProfiles) != 1 {
+		t.Fatalf("create profile: status=%d writes=%d", response.Code, len(store.waterProfiles))
+	}
+	profileID := uuid.New()
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/agua/perfis/"+profileID.String()+"/zonas", url.Values{"code": {"R7"}, "label": {"Ritmo de prova"}, "meaning": {"Ritmo sustentável para a duração ou distância prescrita"}}, "id", profileID.String(), handler.CreateWaterIntensityZone)
+	if response.Code != http.StatusSeeOther || len(store.waterZones) != 1 || store.waterZones[0].CadenceMin != nil || store.waterZones[0].CadenceMax != nil {
+		t.Fatalf("duration-relative zone should not invent cadence: status=%d zone=%+v", response.Code, store.waterZones)
 	}
 }

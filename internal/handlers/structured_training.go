@@ -46,6 +46,10 @@ type structuredTrainingRow struct {
 	gymStructure, gymObjective                                                                              string
 	gymRounds, gymRoundRecovery                                                                             int
 	exerciseName, exercisePrescription, exerciseResistance, exerciseIntent, exerciseTempo, exerciseNotes    string
+	waterMethod, waterTarget                                                                                string
+	waterStepID, waterParentStepID                                                                          *uuid.UUID
+	waterStepPosition, waterStepRepeats, waterStepRecovery                                                  int
+	waterStepKind, waterStepName, waterStepPrescription, waterStepIntensity, waterStepDrill, waterStepNotes string
 }
 
 func (h StructuredTraining) Index(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +78,12 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		page.Routines = structuredRoutineRows(routines, h.location())
+		profiles, err := h.Store.ListActiveWaterIntensityProfiles(ctx)
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.WaterProfiles = structuredWaterProfiles(profiles)
 		memberships, err := h.Store.ListEligibleTrainingGroupMemberships(ctx, dbgen.ListEligibleTrainingGroupMembershipsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if err != nil {
 			h.System.InternalError(w, r)
@@ -407,6 +417,132 @@ func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Req
 		return
 	}
 	h.flash(r, "Exercício adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateWaterBlock(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	segmentID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	block, prescription, step, err := parseStructuredWaterForm(r, segmentID, true)
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetStructuredSegmentPlanID(ctx, segmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	if _, err := h.Store.CreateWaterBlock(ctx, StructuredWaterBlockInput{Block: block, Prescription: prescription, Step: step}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Bloco de água adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateWaterWorkStep(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	blockID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	_, _, step, err := parseStructuredWaterForm(r, blockID, false)
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetStructuredBlockPlanID(ctx, blockID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	step.BlockID = blockID
+	if _, err := h.Store.CreateWaterWorkStep(ctx, step); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Passo de água adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateWaterIntensityProfile(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	name, notes := strings.TrimSpace(r.PostForm.Get("name")), strings.TrimSpace(r.PostForm.Get("notes"))
+	craft := dbgen.PaddlingCraft(r.PostForm.Get("craft"))
+	if !validTrainingText(name, 2, 120) || utf8.RuneCountInString(notes) > 1000 || !validPaddlingCraft(craft) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if _, err := h.Store.CreateWaterIntensityProfile(ctx, dbgen.CreateWaterIntensityProfileParams{Name: name, Craft: craft, Notes: notes, CreatedByID: user.ID}); err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Nova revisão do perfil de intensidade criada.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateWaterIntensityZone(w http.ResponseWriter, r *http.Request) {
+	profileID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	code, label, meaning := strings.TrimSpace(r.PostForm.Get("code")), strings.TrimSpace(r.PostForm.Get("label")), strings.TrimSpace(r.PostForm.Get("meaning"))
+	minimum, minErr := optionalNonNegativeInt32(r.PostForm.Get("cadence_min"), 300)
+	maximum, maxErr := optionalNonNegativeInt32(r.PostForm.Get("cadence_max"), 300)
+	if !validTrainingText(code, 1, 20) || !validTrainingText(label, 2, 120) || !validTrainingText(meaning, 2, 500) || minErr != nil || maxErr != nil || (minimum != nil && maximum != nil && *minimum > *maximum) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if _, err := h.Store.CreateWaterIntensityZone(ctx, dbgen.CreateWaterIntensityZoneParams{ProfileID: profileID, Code: code, Label: label, CadenceMin: minimum, CadenceMax: maximum, Meaning: meaning}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Zona de intensidade adicionada.")
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
@@ -977,6 +1113,133 @@ func validGymResistanceValue(kind dbgen.GymResistanceKind, value float64) bool {
 	}
 }
 
+func parseStructuredWaterForm(r *http.Request, parentID uuid.UUID, includeBlock bool) (dbgen.CreateTrainingSegmentBlockParams, dbgen.CreateWaterBlockPrescriptionParams, dbgen.CreateWaterWorkStepParams, error) {
+	block := dbgen.CreateTrainingSegmentBlockParams{SegmentID: parentID}
+	prescription := dbgen.CreateWaterBlockPrescriptionParams{}
+	if includeBlock {
+		block.Purpose = dbgen.TrainingBlockPurpose(r.PostForm.Get("purpose"))
+		block.Title = strings.TrimSpace(r.PostForm.Get("title"))
+		block.Instructions = strings.TrimSpace(r.PostForm.Get("instructions"))
+		prescription.Method = dbgen.WaterWorkMethod(r.PostForm.Get("method"))
+		profileID, err := optionalUUID(r.PostForm.Get("intensity_profile_id"))
+		if err != nil {
+			return block, prescription, dbgen.CreateWaterWorkStepParams{}, err
+		}
+		prescription.IntensityProfileID = profileID
+		prescription.TargetDistanceMetres, err = optionalPositiveInt32(r.PostForm.Get("target_distance_metres"), 200000)
+		if err != nil {
+			return block, prescription, dbgen.CreateWaterWorkStepParams{}, err
+		}
+		if prescription.TargetDistanceMetres != nil {
+			certainty := dbgen.TrainingMeasureCertainty(r.PostForm.Get("target_distance_certainty"))
+			if !validTrainingMeasureCertainty(certainty) {
+				return block, prescription, dbgen.CreateWaterWorkStepParams{}, errors.New("target distance certainty required")
+			}
+			prescription.TargetDistanceCertainty = &certainty
+		} else if r.PostForm.Get("target_distance_certainty") != "" {
+			return block, prescription, dbgen.CreateWaterWorkStepParams{}, errors.New("target distance required")
+		}
+		if !validTrainingBlockPurpose(block.Purpose) || !validWaterWorkMethod(prescription.Method) || utf8.RuneCountInString(block.Title) > 120 || !validTrainingText(block.Instructions, 2, 4000) {
+			return block, prescription, dbgen.CreateWaterWorkStepParams{}, errors.New("invalid water block")
+		}
+	}
+	step, err := parseWaterWorkStep(r)
+	return block, prescription, step, err
+}
+
+func parseWaterWorkStep(r *http.Request) (dbgen.CreateWaterWorkStepParams, error) {
+	step := dbgen.CreateWaterWorkStepParams{
+		Kind:         dbgen.WaterStepKind(r.PostForm.Get("step_kind")),
+		Name:         strings.TrimSpace(r.PostForm.Get("step_name")),
+		Instructions: strings.TrimSpace(r.PostForm.Get("step_instructions")),
+	}
+	var err error
+	if step.ParentStepID, err = optionalUUID(r.PostForm.Get("parent_step_id")); err != nil {
+		return step, err
+	}
+	if step.Repeats, err = optionalPositiveInt32(r.PostForm.Get("repeats"), 100); err != nil {
+		return step, err
+	}
+	if step.DurationSeconds, err = optionalPositiveInt32(r.PostForm.Get("duration_seconds"), 86400); err != nil {
+		return step, err
+	}
+	if step.DistanceMetres, err = optionalPositiveInt32(r.PostForm.Get("distance_metres"), 200000); err != nil {
+		return step, err
+	}
+	if step.RecoverySeconds, err = optionalPositiveInt32(r.PostForm.Get("recovery_seconds"), 86400); err != nil {
+		return step, err
+	}
+	if step.CadenceSpm, err = optionalPositiveInt32(r.PostForm.Get("cadence_spm"), 300); err != nil {
+		return step, err
+	}
+	if step.DurationCertainty, err = waterMeasureCertainty(r.PostForm.Get("duration_certainty"), step.DurationSeconds != nil); err != nil {
+		return step, err
+	}
+	if step.DistanceCertainty, err = waterMeasureCertainty(r.PostForm.Get("distance_certainty"), step.DistanceMetres != nil); err != nil {
+		return step, err
+	}
+	for raw, target := range map[string]**string{
+		"intensity_code": &step.IntensityCode, "drill_focus": &step.DrillFocus,
+		"drill_format": &step.DrillFormat, "role_notes": &step.RoleNotes,
+	} {
+		value := strings.TrimSpace(r.PostForm.Get(raw))
+		if value != "" {
+			*target = &value
+		}
+	}
+	if !validTrainingText(step.Name, 2, 180) || utf8.RuneCountInString(step.Instructions) > 1000 || !optionalTextWithin(step.IntensityCode, 20) || !optionalTextWithin(step.DrillFocus, 180) || !optionalTextWithin(step.DrillFormat, 180) || !optionalTextWithin(step.RoleNotes, 500) {
+		return step, errors.New("invalid water step text")
+	}
+	switch step.Kind {
+	case dbgen.WaterStepKindREPEATGROUP:
+		if step.Repeats == nil || step.DurationSeconds != nil || step.DistanceMetres != nil {
+			return step, errors.New("invalid repeat group")
+		}
+	case dbgen.WaterStepKindEFFORT:
+		if step.Repeats != nil || (step.DurationSeconds == nil && step.DistanceMetres == nil && !validTrainingText(step.Instructions, 2, 1000)) {
+			return step, errors.New("invalid effort")
+		}
+	default:
+		return step, errors.New("invalid water step kind")
+	}
+	return step, nil
+}
+
+func waterMeasureCertainty(raw string, present bool) (*dbgen.TrainingMeasureCertainty, error) {
+	if !present {
+		if raw != "" {
+			return nil, errors.New("measure required")
+		}
+		return nil, nil
+	}
+	certainty := dbgen.TrainingMeasureCertainty(raw)
+	if !validTrainingMeasureCertainty(certainty) {
+		return nil, errors.New("measure certainty required")
+	}
+	return &certainty, nil
+}
+
+func optionalTextWithin(value *string, maximum int) bool {
+	return value == nil || validTrainingText(*value, 1, maximum)
+}
+
+func validWaterWorkMethod(value dbgen.WaterWorkMethod) bool {
+	switch value {
+	case dbgen.WaterWorkMethodCONTINUOUS, dbgen.WaterWorkMethodINTERVALS, dbgen.WaterWorkMethodFARTLEK, dbgen.WaterWorkMethodTECHNIQUE, dbgen.WaterWorkMethodSTARTS, dbgen.WaterWorkMethodRACESIMULATION, dbgen.WaterWorkMethodTACTICALDRILL, dbgen.WaterWorkMethodCUSTOM:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTrainingMeasureCertainty(value dbgen.TrainingMeasureCertainty) bool {
+	return value == dbgen.TrainingMeasureCertaintyEXACT || value == dbgen.TrainingMeasureCertaintyESTIMATED
+}
+
+func validPaddlingCraft(value dbgen.PaddlingCraft) bool {
+	return value == dbgen.PaddlingCraftKAYAK || value == dbgen.PaddlingCraftCANOE
+}
+
 func structuredChoices(rows []dbgen.ListEligibleTrainingGroupMembershipsRow) ([]pages.StructuredTrainingMembershipChoice, []pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice) {
 	members := make([]pages.StructuredTrainingMembershipChoice, 0, len(rows))
 	programmes, teams := []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}
@@ -1062,11 +1325,18 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 		segment := &session.Segments[len(session.Segments)-1]
 		if row.blockID != nil {
 			if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
-				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery})
+				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget})
 			}
 			block := &segment.Blocks[len(segment.Blocks)-1]
 			if row.exerciseID != nil {
 				block.Exercises = append(block.Exercises, pages.StructuredGymExercise{ID: row.exerciseID.String(), Name: row.exerciseName, Prescription: row.exercisePrescription, Resistance: row.exerciseResistance, Intent: row.exerciseIntent, Tempo: row.exerciseTempo, Notes: row.exerciseNotes, Position: row.exercisePosition})
+			}
+			if row.waterStepID != nil {
+				parentID := ""
+				if row.waterParentStepID != nil {
+					parentID = row.waterParentStepID.String()
+				}
+				block.WaterSteps = append(block.WaterSteps, pages.StructuredWaterStep{ID: row.waterStepID.String(), ParentID: parentID, Kind: row.waterStepKind, Name: row.waterStepName, Prescription: row.waterStepPrescription, Intensity: row.waterStepIntensity, Drill: row.waterStepDrill, Instructions: row.waterStepNotes, Position: row.waterStepPosition, Repeats: row.waterStepRepeats, Recovery: row.waterStepRecovery})
 			}
 		}
 	}
@@ -1214,7 +1484,8 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 		if row.TeamName != nil {
 			scope += " · " + *row.TeamName
 		}
-		result = append(result, structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes))
+		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
+		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result
 }
@@ -1222,7 +1493,8 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 func subjectStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForSubjectRow) []structuredTrainingRow {
 	result := make([]structuredTrainingRow, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, structuredRowFromValues(structuredTrainingRow{athleteName: row.AthleteName, groupID: &row.GroupID, groupName: row.GroupName, scope: "Plano atribuído", planID: &row.PlanID, planTitle: row.PlanTitle, planDescription: row.PlanDescription, seasonName: row.SeasonName, weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes))
+		assembled := structuredRowFromValues(structuredTrainingRow{athleteName: row.AthleteName, groupID: &row.GroupID, groupName: row.GroupName, scope: "Plano atribuído", planID: &row.PlanID, planTitle: row.PlanTitle, planDescription: row.PlanDescription, seasonName: row.SeasonName, weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
+		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result
 }
@@ -1235,6 +1507,81 @@ func structuredRowFromValues(row structuredTrainingRow, structure *dbgen.GymBloc
 	row.exerciseResistance = gymResistanceLabel(enumString(resistanceKind), resistanceValue, stringValue(resistanceText))
 	row.exerciseIntent, row.exerciseTempo, row.exerciseNotes = enumString(intent), stringValue(tempo), stringValue(notes)
 	return row
+}
+
+func structuredWaterRow(row structuredTrainingRow, method *dbgen.WaterWorkMethod, targetDistance *int32, targetCertainty *dbgen.TrainingMeasureCertainty, stepID, parentID *uuid.UUID, position *int32, kind *dbgen.WaterStepKind, name *string, repeats, duration *int32, durationCertainty *dbgen.TrainingMeasureCertainty, distance *int32, distanceCertainty *dbgen.TrainingMeasureCertainty, recovery *int32, intensity *string, cadence *int32, focus, format, roles, notes *string) structuredTrainingRow {
+	row.waterMethod = waterMethodLabel(enumString(method))
+	if targetDistance != nil {
+		row.waterTarget = fmt.Sprintf("Objetivo %s (%s)", formatKilometres(int64(*targetDistance)), trainingMeasureCertaintyLabel(enumString(targetCertainty)))
+	}
+	row.waterStepID, row.waterParentStepID = stepID, parentID
+	row.waterStepPosition, row.waterStepRepeats, row.waterStepRecovery = intValue(position), intValue(repeats), intValue(recovery)
+	row.waterStepKind, row.waterStepName, row.waterStepNotes = enumString(kind), stringValue(name), stringValue(notes)
+	parts := []string{}
+	if duration != nil {
+		parts = append(parts, fmt.Sprintf("%d s (%s)", *duration, trainingMeasureCertaintyLabel(enumString(durationCertainty))))
+	}
+	if distance != nil {
+		parts = append(parts, fmt.Sprintf("%s (%s)", formatKilometres(int64(*distance)), trainingMeasureCertaintyLabel(enumString(distanceCertainty))))
+	}
+	row.waterStepPrescription = strings.Join(parts, " · ")
+	if intensity != nil {
+		row.waterStepIntensity = *intensity
+	}
+	if cadence != nil {
+		row.waterStepIntensity += fmt.Sprintf(" · %d remadas/min", *cadence)
+	}
+	drill := []string{}
+	for _, value := range []*string{focus, format, roles} {
+		if value != nil {
+			drill = append(drill, *value)
+		}
+	}
+	row.waterStepDrill = strings.Join(drill, " · ")
+	return row
+}
+
+func structuredWaterProfiles(rows []dbgen.ListActiveWaterIntensityProfilesRow) []pages.StructuredWaterProfile {
+	profiles := []pages.StructuredWaterProfile{}
+	for _, row := range rows {
+		if len(profiles) == 0 || profiles[len(profiles)-1].ID != row.ID.String() {
+			profiles = append(profiles, pages.StructuredWaterProfile{ID: row.ID.String(), Name: row.Name, Craft: paddlingCraftLabel(string(row.Craft)), Notes: row.Notes, Revision: int(row.Revision)})
+		}
+		if row.ZoneID != nil {
+			cadence := "Sem cadência fixa"
+			if row.CadenceMin != nil || row.CadenceMax != nil {
+				cadence = fmt.Sprintf("%s–%s remadas/min", optionalIntLabel(row.CadenceMin), optionalIntLabel(row.CadenceMax))
+			}
+			profiles[len(profiles)-1].Zones = append(profiles[len(profiles)-1].Zones, pages.StructuredWaterZone{Code: stringValue(row.Code), Label: stringValue(row.Label), Cadence: cadence, Meaning: stringValue(row.Meaning)})
+		}
+	}
+	return profiles
+}
+
+func optionalIntLabel(value *int32) string {
+	if value == nil {
+		return "—"
+	}
+	return strconv.Itoa(int(*value))
+}
+
+func waterMethodLabel(value string) string {
+	labels := map[string]string{"CONTINUOUS": "Contínuo", "INTERVALS": "Intervalos", "FARTLEK": "Fartlek", "TECHNIQUE": "Técnica", "STARTS": "Partidas", "RACE_SIMULATION": "Simulação de prova", "TACTICAL_DRILL": "Exercício técnico-tático", "CUSTOM": "Outro método"}
+	return labels[value]
+}
+
+func trainingMeasureCertaintyLabel(value string) string {
+	if value == "ESTIMATED" {
+		return "estimado"
+	}
+	return "exato"
+}
+
+func paddlingCraftLabel(value string) string {
+	if value == "CANOE" {
+		return "Canoa"
+	}
+	return "Kayak"
 }
 
 func gymExercisePrescription(sets, repetitions, duration, distance, recovery int) string {
