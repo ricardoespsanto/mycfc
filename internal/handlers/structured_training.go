@@ -455,8 +455,8 @@ func optionalPositiveInt32(value string, maximum int) (*int32, error) {
 	if value == "" {
 		return nil, nil
 	}
-	n, err := strconv.Atoi(value)
-	if err != nil || n < 1 || n > maximum {
+	n, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || n < 1 || n > int64(maximum) {
 		return nil, errors.New("invalid positive integer")
 	}
 	result := int32(n)

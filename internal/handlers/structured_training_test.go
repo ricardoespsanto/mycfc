@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -14,9 +15,22 @@ import (
 
 type structuredTrainingStoreStub struct {
 	StructuredTrainingStore
-	manageable bool
-	manageArgs []dbgen.CanManageStructuredTrainingGroupParams
-	created    []dbgen.CreateStructuredTrainingWeekParams
+	manageable    bool
+	manageArgs    []dbgen.CanManageStructuredTrainingGroupParams
+	created       []dbgen.CreateStructuredTrainingWeekParams
+	groups        []StructuredTrainingGroupInput
+	weekOK        bool
+	sessions      []dbgen.CreateStructuredTrainingSessionParams
+	segments      []StructuredTrainingSegmentInput
+	blocks        []dbgen.CreateTrainingSegmentBlockParams
+	planID        uuid.UUID
+	movedSegments []dbgen.MoveTrainingSessionSegmentParams
+	movedBlocks   []dbgen.MoveTrainingSegmentBlockParams
+}
+
+func (s *structuredTrainingStoreStub) CreateGroup(_ context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
+	s.groups = append(s.groups, input)
+	return dbgen.TrainingGroup{ID: uuid.New(), Name: input.Params.Name}, nil
 }
 
 func (s *structuredTrainingStoreStub) CanManageStructuredTrainingGroup(_ context.Context, params dbgen.CanManageStructuredTrainingGroupParams) (bool, error) {
@@ -27,6 +41,47 @@ func (s *structuredTrainingStoreStub) CanManageStructuredTrainingGroup(_ context
 func (s *structuredTrainingStoreStub) CreateStructuredTrainingWeek(_ context.Context, params dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error) {
 	s.created = append(s.created, params)
 	return dbgen.TrainingPlan{ID: uuid.New(), Title: params.Title, TrainingGroupID: &params.GroupID, WeekStart: params.WeekStart}, nil
+}
+
+func (s *structuredTrainingStoreStub) CanManageStructuredTrainingWeek(_ context.Context, _ dbgen.CanManageStructuredTrainingWeekParams) (bool, error) {
+	return s.weekOK, nil
+}
+
+func (s *structuredTrainingStoreStub) CreateStructuredTrainingSession(_ context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
+	s.sessions = append(s.sessions, params)
+	return dbgen.TrainingSession{ID: uuid.New(), PlanID: params.PlanID, Title: params.Title}, nil
+}
+
+func (s *structuredTrainingStoreStub) GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error) {
+	return s.planID, nil
+}
+
+func (s *structuredTrainingStoreStub) GetStructuredSegmentPlanID(context.Context, uuid.UUID) (uuid.UUID, error) {
+	return s.planID, nil
+}
+
+func (s *structuredTrainingStoreStub) GetStructuredBlockPlanID(context.Context, uuid.UUID) (uuid.UUID, error) {
+	return s.planID, nil
+}
+
+func (s *structuredTrainingStoreStub) CreateSegment(_ context.Context, input StructuredTrainingSegmentInput) (uuid.UUID, error) {
+	s.segments = append(s.segments, input)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateTrainingSegmentBlock(_ context.Context, params dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error) {
+	s.blocks = append(s.blocks, params)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) MoveTrainingSessionSegment(_ context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
+	s.movedSegments = append(s.movedSegments, params)
+	return true, nil
+}
+
+func (s *structuredTrainingStoreStub) MoveTrainingSegmentBlock(_ context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
+	s.movedBlocks = append(s.movedBlocks, params)
+	return true, nil
 }
 
 func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
@@ -96,6 +151,79 @@ func TestCreateStructuredWeekEnforcesGroupAuthorization(t *testing.T) {
 	}
 }
 
+func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) {
+	userID, programmeID, membershipID := uuid.New(), uuid.New(), uuid.New()
+	planID, sessionID, segmentID, blockID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{manageable: true, weekOK: true, planID: planID}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	user := CurrentUser{ID: userID, CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}}
+
+	groupValues := url.Values{
+		"name":          {"Cadetes"},
+		"programme_id":  {programmeID.String()},
+		"membership_id": {membershipID.String()},
+	}
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/grupos", groupValues, "", "", handler.CreateGroup)
+	if response.Code != http.StatusSeeOther || len(store.groups) != 1 || store.groups[0].Params.ProgrammeID == nil || *store.groups[0].Params.ProgrammeID != programmeID || len(store.groups[0].MembershipIDs) != 1 {
+		t.Fatalf("group response=%d inputs=%#v", response.Code, store.groups)
+	}
+
+	sessionValues := url.Values{
+		"plan_id":     {planID.String()},
+		"title":       {"Ginásio + água"},
+		"description": {"Sessão híbrida"},
+		"starts_at":   {"2026-08-18T17:00"},
+		"ends_at":     {"2026-08-18T19:00"},
+		"entry_kind":  {"TRAINING"},
+	}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes", sessionValues, "", "", handler.CreateSession)
+	if response.Code != http.StatusSeeOther || len(store.sessions) != 1 || store.sessions[0].PlanID != planID || store.sessions[0].EntryKind != dbgen.TrainingEntryKindTRAINING {
+		t.Fatalf("session response=%d inputs=%#v", response.Code, store.sessions)
+	}
+
+	segmentValues := url.Values{
+		"modality":                 {"WATER"},
+		"title":                    {"Ataque e defesa"},
+		"location":                 {"Mondego"},
+		"planned_duration_minutes": {"90"},
+		"purpose":                  {"MAIN"},
+		"block_title":              {"Jogo condicionado"},
+		"instructions":             {"2x7' HxH com guarda-redes e pivot"},
+	}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes/"+sessionID.String()+"/segmentos", segmentValues, "id", sessionID.String(), handler.CreateSegment)
+	if response.Code != http.StatusSeeOther || len(store.segments) != 1 || store.segments[0].Segment.Modality != dbgen.TrainingSegmentModalityWATER || store.segments[0].Segment.PlannedDurationMinutes == nil || *store.segments[0].Segment.PlannedDurationMinutes != 90 {
+		t.Fatalf("segment response=%d inputs=%#v", response.Code, store.segments)
+	}
+
+	blockValues := url.Values{"purpose": {"COOL_DOWN"}, "title": {"Retorno à calma"}, "instructions": {"Remar suave até completar 12 km"}}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/segmentos/"+segmentID.String()+"/blocos", blockValues, "id", segmentID.String(), handler.CreateBlock)
+	if response.Code != http.StatusSeeOther || len(store.blocks) != 1 || store.blocks[0].SegmentID != segmentID || store.blocks[0].Purpose != dbgen.TrainingBlockPurposeCOOLDOWN {
+		t.Fatalf("block response=%d inputs=%#v", response.Code, store.blocks)
+	}
+
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/segmentos/"+segmentID.String()+"/mover", url.Values{"direction": {"up"}}, "id", segmentID.String(), handler.MoveSegment)
+	if response.Code != http.StatusSeeOther || len(store.movedSegments) != 1 || store.movedSegments[0].Direction != -1 {
+		t.Fatalf("move segment response=%d inputs=%#v", response.Code, store.movedSegments)
+	}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/mover", url.Values{"direction": {"down"}}, "id", blockID.String(), handler.MoveBlock)
+	if response.Code != http.StatusSeeOther || len(store.movedBlocks) != 1 || store.movedBlocks[0].Direction != 1 {
+		t.Fatalf("move block response=%d inputs=%#v", response.Code, store.movedBlocks)
+	}
+}
+
+func performStructuredTrainingRequest(t *testing.T, user CurrentUser, method, target string, values url.Values, pathKey, pathValue string, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, target, strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if pathKey != "" {
+		request.SetPathValue(pathKey, pathValue)
+	}
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user))
+	response := httptest.NewRecorder()
+	handler(response, request)
+	return response
+}
+
 func TestStructuredScopeAllowedFailsClosed(t *testing.T) {
 	programmeID, teamID := uuid.New(), uuid.New()
 	coach := CurrentUser{CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}, CoachTeamIDs: map[uuid.UUID]bool{}}
@@ -128,5 +256,10 @@ func TestOptionalPositiveInt32(t *testing.T) {
 	}
 	if value, err := optionalPositiveInt32("90", 1440); err != nil || value == nil || *value != 90 {
 		t.Fatalf("valid value = %v, %v", value, err)
+	}
+	for _, value := range []string{"1441", "2147483648", "999999999999999999999999"} {
+		if parsed, err := optionalPositiveInt32(value, 1440); err == nil || parsed != nil {
+			t.Fatalf("out-of-range value %q = %v, %v", value, parsed, err)
+		}
 	}
 }
