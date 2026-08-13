@@ -535,6 +535,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await page.getByRole('tab', { name: /Manutenção/ }).click();
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
+    await page.getByRole('tab', { name: 'Equipamentos', exact: true }).click();
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
