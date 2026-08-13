@@ -203,3 +203,42 @@ func TestPrivatePhotoAlbumMigrationCanFollowCurrentBaseline(t *testing.T) {
 		}
 	}
 }
+
+func TestStructuredTrainingFoundationExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608120003_structured_training_foundation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"CREATE TABLE training_groups", "CREATE TABLE training_group_members", "season_id uuid NULL REFERENCES seasons", "CREATE TABLE training_session_segments", "CREATE TABLE training_segment_blocks", "move_training_session_segment", "move_training_segment_block", "structured_training_planning"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "CREATE TABLE IF NOT EXISTS training_groups", "CREATE TABLE IF NOT EXISTS training_group_members", "ADD COLUMN IF NOT EXISTS training_group_id", "ADD COLUMN IF NOT EXISTS season_id", "training_plans_structured_season_valid", "ADD COLUMN IF NOT EXISTS entry_kind", "CREATE TABLE IF NOT EXISTS training_session_segments", "CREATE TABLE IF NOT EXISTS training_segment_blocks", "CREATE OR REPLACE FUNCTION move_training_session_segment", "CREATE OR REPLACE FUNCTION move_training_segment_block", "ON CONFLICT (feature_key) DO NOTHING"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("forward migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_", "DELETE FROM feature_flag"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("forward migration contains prohibited statement %q", prohibited)
+		}
+	}
+}
+
+func TestStructuredTrainingSeasonCanFollowTheFoundationMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608130001_structured_training_season.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"ADD COLUMN IF NOT EXISTS season_id", "REFERENCES seasons", "training_plans_structured_season_valid", "training_group_id IS NOT NULL AND season_id IS NOT NULL"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("season migration is not foundation-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("season migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

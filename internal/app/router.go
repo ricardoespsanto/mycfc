@@ -15,7 +15,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, structuredTraining handlers.StructuredTraining, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System(foundation)
@@ -120,6 +120,15 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/treinos/sessoes/{id}/cancelar", auth.RequireEventStaff(http.HandlerFunc(training.CancelSession)))
 	mux.Handle("POST /treinos/sessoes/resultados", auth.RequireAuthenticated(http.HandlerFunc(training.ReportOutcome)))
 	mux.Handle("POST /treinos/sessoes/distancia", auth.RequireAuthenticated(http.HandlerFunc(training.UpdateDistance)))
+	mux.Handle("GET /treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.Index)))
+	mux.Handle("GET /admin/treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.Index))))
+	mux.Handle("POST /admin/treinos/estruturados/grupos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateGroup))))
+	mux.Handle("POST /admin/treinos/estruturados/semanas", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateWeek))))
+	mux.Handle("POST /admin/treinos/estruturados/sessoes", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSession))))
+	mux.Handle("POST /admin/treinos/estruturados/sessoes/{id}/segmentos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSegment))))
+	mux.Handle("POST /admin/treinos/estruturados/segmentos/{id}/blocos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateBlock))))
+	mux.Handle("POST /admin/treinos/estruturados/segmentos/{id}/mover", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.MoveSegment))))
+	mux.Handle("POST /admin/treinos/estruturados/blocos/{id}/mover", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.MoveBlock))))
 	mux.Handle("GET /sugestoes", auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(suggestions.Index)))
 	mux.Handle("POST /sugestoes", auth.RequireFeature(featureflags.Suggestions, http.HandlerFunc(suggestions.Create)))
 	mux.Handle("GET /admin/sugestoes", auth.RequireFeature(featureflags.Suggestions, auth.RequireSuggestionStaff(http.HandlerFunc(suggestions.Index))))

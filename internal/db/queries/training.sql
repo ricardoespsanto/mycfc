@@ -1,16 +1,16 @@
 -- name: CreateTrainingPlan :one
 INSERT INTO training_plans (title, description, programme_id, team_id, created_by_id)
 VALUES (sqlc.arg(title), sqlc.arg(description), sqlc.narg(programme_id), sqlc.narg(team_id), sqlc.arg(created_by_id))
-RETURNING id, title, description, programme_id, team_id, created_by_id, created_at, updated_at;
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id, created_at, updated_at;
 
 -- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 VALUES (sqlc.arg(plan_id), sqlc.arg(title), sqlc.arg(description), sqlc.arg(starts_at), sqlc.arg(ends_at), sqlc.narg(modality_id), sqlc.arg(created_by_id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: GetTrainingSessionForEdit :one
 SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at, s.modality_id,
-       s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
+       s.entry_kind, s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
        canceller.name AS cancelled_by_name, s.created_by_id, s.created_at, s.updated_at,
        EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id) AS has_outcomes
 FROM training_sessions s
@@ -27,7 +27,7 @@ WHERE s.id = sqlc.arg(id)
   AND s.starts_at > sqlc.arg(as_of)
   AND s.updated_at = sqlc.arg(expected_updated_at)
   AND (s.plan_id = sqlc.arg(plan_id) OR NOT EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: CancelTrainingSession :one
 UPDATE training_sessions
@@ -37,7 +37,7 @@ WHERE id = sqlc.arg(id)
   AND status = 'ACTIVE'
   AND starts_at > sqlc.arg(cancelled_at)
   AND updated_at = sqlc.arg(expected_updated_at)
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: SaveTrainingSessionOutcome :execrows
 INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)

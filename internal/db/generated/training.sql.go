@@ -36,7 +36,7 @@ WHERE id = $4
   AND status = 'ACTIVE'
   AND starts_at > $1
   AND updated_at = $5
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
 `
 
 type CancelTrainingSessionParams struct {
@@ -64,6 +64,7 @@ func (q *Queries) CancelTrainingSession(ctx context.Context, arg CancelTrainingS
 		&i.StartsAt,
 		&i.EndsAt,
 		&i.ModalityID,
+		&i.EntryKind,
 		&i.Status,
 		&i.CancelledAt,
 		&i.CancelledByID,
@@ -126,7 +127,7 @@ func (q *Queries) CreateCompetitionDocument(ctx context.Context, arg CreateCompe
 const createTrainingPlan = `-- name: CreateTrainingPlan :one
 INSERT INTO training_plans (title, description, programme_id, team_id, created_by_id)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, title, description, programme_id, team_id, created_by_id, created_at, updated_at
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id, created_at, updated_at
 `
 
 type CreateTrainingPlanParams struct {
@@ -152,6 +153,9 @@ func (q *Queries) CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlan
 		&i.Description,
 		&i.ProgrammeID,
 		&i.TeamID,
+		&i.TrainingGroupID,
+		&i.SeasonID,
+		&i.WeekStart,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -162,7 +166,7 @@ func (q *Queries) CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlan
 const createTrainingSession = `-- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
 `
 
 type CreateTrainingSessionParams struct {
@@ -194,6 +198,7 @@ func (q *Queries) CreateTrainingSession(ctx context.Context, arg CreateTrainingS
 		&i.StartsAt,
 		&i.EndsAt,
 		&i.ModalityID,
+		&i.EntryKind,
 		&i.Status,
 		&i.CancelledAt,
 		&i.CancelledByID,
@@ -207,7 +212,7 @@ func (q *Queries) CreateTrainingSession(ctx context.Context, arg CreateTrainingS
 
 const getTrainingSessionForEdit = `-- name: GetTrainingSessionForEdit :one
 SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at, s.modality_id,
-       s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
+       s.entry_kind, s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
        canceller.name AS cancelled_by_name, s.created_by_id, s.created_at, s.updated_at,
        EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id) AS has_outcomes
 FROM training_sessions s
@@ -223,6 +228,7 @@ type GetTrainingSessionForEditRow struct {
 	StartsAt           pgtype.Timestamptz `json:"starts_at"`
 	EndsAt             pgtype.Timestamptz `json:"ends_at"`
 	ModalityID         *uuid.UUID         `json:"modality_id"`
+	EntryKind          TrainingEntryKind  `json:"entry_kind"`
 	Status             string             `json:"status"`
 	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
 	CancelledByID      *uuid.UUID         `json:"cancelled_by_id"`
@@ -245,6 +251,7 @@ func (q *Queries) GetTrainingSessionForEdit(ctx context.Context, id uuid.UUID) (
 		&i.StartsAt,
 		&i.EndsAt,
 		&i.ModalityID,
+		&i.EntryKind,
 		&i.Status,
 		&i.CancelledAt,
 		&i.CancelledByID,
@@ -783,7 +790,7 @@ WHERE s.id = $7
   AND s.starts_at > $8
   AND s.updated_at = $9
   AND (s.plan_id = $1 OR NOT EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
 `
 
 type UpdateTrainingSessionParams struct {
@@ -819,6 +826,7 @@ func (q *Queries) UpdateTrainingSession(ctx context.Context, arg UpdateTrainingS
 		&i.StartsAt,
 		&i.EndsAt,
 		&i.ModalityID,
+		&i.EntryKind,
 		&i.Status,
 		&i.CancelledAt,
 		&i.CancelledByID,
