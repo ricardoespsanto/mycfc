@@ -14,7 +14,7 @@ contract for `/admin/membros` and `/admin/membros/{id}`.
 - Credential issuance, account deactivation and programme membership remain
   native server-rendered forms. Risky and secondary actions are disclosed only
   when requested, while validation reopens the relevant panel.
-- The established “Inscrições ativas” wording and no-JavaScript workflows are
+- The established “Inscrições ativas” wording and browser workflows are
   preserved.
 - The member table's action heading and the search form were corrected so the
   route does not create page-level horizontal scrolling at 320 CSS pixels or

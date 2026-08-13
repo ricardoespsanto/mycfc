@@ -714,16 +714,33 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gymID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityGYM, Title: "Mobilidade"})
+	gymID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityGYM, Title: "Mobilidade", PlannedDurationMinutes: int32PtrDB(30), PlannedStartOffsetMinutes: int32PtrDB(0), EquipmentNotes: "Elásticos e halteres"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waterID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Série principal"})
+	waterID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Série principal", PlannedStartOffsetMinutes: int32PtrDB(35), TransitionDurationMinutes: int32PtrDB(5), EquipmentNotes: "Barco e pagaia"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: gymID, Purpose: dbgen.TrainingBlockPurposeWARMUP, Instructions: "Mobilidade articular"}); err != nil {
+	gymBlockID, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: gymID, Purpose: dbgen.TrainingBlockPurposeWARMUP, Instructions: "Mobilidade articular"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if rows, err := queries.CreateGymBlockPrescription(ctx, dbgen.CreateGymBlockPrescriptionParams{BlockID: gymBlockID, Structure: dbgen.GymBlockStructureSUPERSET, Objective: dbgen.TrainingObjectiveACTIVATION, Rounds: 3, RoundRecoverySeconds: int32PtrDB(120)}); err != nil || rows != 1 {
+		t.Fatalf("create gym prescription rows = %d, err = %v", rows, err)
+	}
+	percentKind, explosive := dbgen.GymResistanceKindPERCENT1RM, dbgen.GymExecutionIntentEXPLOSIVE
+	percent, tempo := 75.0, "2-0-X-1"
+	firstExerciseID, err := queries.CreateGymExercise(ctx, dbgen.CreateGymExerciseParams{BlockID: gymBlockID, Name: "Supino", Sets: int32PtrDB(3), Repetitions: int32PtrDB(5), RecoverySeconds: int32PtrDB(60), ResistanceKind: &percentKind, ResistanceValue: &percent, ExecutionIntent: &explosive, Tempo: &tempo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondExerciseID, err := queries.CreateGymExercise(ctx, dbgen.CreateGymExerciseParams{BlockID: gymBlockID, Name: "Elevação frontal", Sets: int32PtrDB(3), Repetitions: int32PtrDB(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := queries.MoveGymExercise(ctx, dbgen.MoveGymExerciseParams{ExerciseID: secondExerciseID, Direction: -1}); err != nil || !moved {
+		t.Fatalf("move gym exercise = %t, err = %v", moved, err)
 	}
 	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: waterID, Purpose: dbgen.TrainingBlockPurposeMAIN, Instructions: "3x2' R4 / 1'"}); err != nil {
 		t.Fatal(err)
@@ -734,11 +751,17 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 
 	for name, userID := range map[string]uuid.UUID{"athlete": athleteID, "guardian": guardianID} {
 		rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, userID)
-		if err != nil || len(rows) != 2 {
+		if err != nil || len(rows) != 3 {
 			t.Fatalf("%s rows = %d, err = %v", name, len(rows), err)
 		}
 		if rows[0].SegmentModality == nil || *rows[0].SegmentModality != dbgen.TrainingSegmentModalityWATER {
 			t.Fatalf("%s first segment = %#v", name, rows[0].SegmentModality)
+		}
+		if rows[1].ExerciseID == nil || *rows[1].ExerciseID != secondExerciseID || rows[2].ExerciseID == nil || *rows[2].ExerciseID != firstExerciseID {
+			t.Fatalf("%s exercise order = %#v, %#v", name, rows[1].ExerciseID, rows[2].ExerciseID)
+		}
+		if rows[1].PlannedStartOffsetMinutes == nil || *rows[1].PlannedStartOffsetMinutes != 0 || rows[1].EquipmentNotes == nil || *rows[1].EquipmentNotes != "Elásticos e halteres" {
+			t.Fatalf("%s gym metadata = offset %#v, equipment %#v", name, rows[1].PlannedStartOffsetMinutes, rows[1].EquipmentNotes)
 		}
 	}
 	rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, unrelatedID)
@@ -762,6 +785,53 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("guardian rows after membership expiry = %d, err = %v", len(rows), err)
 	}
+
+	source, err := queries.GetSessionRoutineSource(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routine, err := queries.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{Name: "Sessão híbrida reutilizável", Kind: dbgen.TrainingRoutineKindSESSION, Visibility: dbgen.TrainingRoutineVisibilityPRIVATE, OwnerUserID: actorID, Method: "Ativação + água", Tags: []string{"híbrido", "ginásio"}, SourceID: session.ID, SourceUpdatedAt: source.SourceUpdatedAt, Snapshot: source.Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: actorID, Query: "híbrida"})
+	if err != nil || len(visible) != 1 || visible[0].ID != routine.ID {
+		t.Fatalf("owner routine visibility = %#v, err = %v", visible, err)
+	}
+	visible, err = queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: actorID, Tag: "GINÁSIO"})
+	if err != nil || len(visible) != 1 || visible[0].ID != routine.ID {
+		t.Fatalf("case-insensitive routine tag filter = %#v, err = %v", visible, err)
+	}
+	visible, err = queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: unrelatedID})
+	if err != nil || len(visible) != 0 {
+		t.Fatalf("private routine leaked = %#v, err = %v", visible, err)
+	}
+	copiedSessionID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: routine.Snapshot, PlanID: week.ID, StartsAt: pgtype.Timestamptz{Time: startsAt.AddDate(0, 0, 1), Valid: true}, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: routine.ID, SourceUpdatedAt: routine.UpdatedAt, DestinationKind: "SESSION", DestinationID: copiedSessionID, CopiedByID: actorID}); err != nil {
+		t.Fatal(err)
+	}
+	var copiedExerciseID uuid.UUID
+	if err := conn.QueryRow(ctx, `SELECT exercise.id FROM gym_exercises exercise JOIN training_segment_blocks block ON block.id = exercise.block_id JOIN training_session_segments segment ON segment.id = block.segment_id WHERE segment.session_id = $1 ORDER BY exercise.position LIMIT 1`, copiedSessionID).Scan(&copiedExerciseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE gym_exercises SET name = 'Cópia alterada' WHERE id = $1`, copiedExerciseID); err != nil {
+		t.Fatal(err)
+	}
+	var originalName string
+	if err := conn.QueryRow(ctx, `SELECT name FROM gym_exercises WHERE id = $1`, secondExerciseID).Scan(&originalName); err != nil || originalName != "Elevação frontal" {
+		t.Fatalf("source exercise changed through copy: name=%q err=%v", originalName, err)
+	}
+	var copyEvents int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM training_copy_events WHERE destination_id = $1 AND source_id = $2`, copiedSessionID, routine.ID).Scan(&copyEvents); err != nil || copyEvents != 1 {
+		t.Fatalf("copy provenance count=%d err=%v", copyEvents, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE training_copy_events SET copied_at = now() WHERE destination_id = $1`, copiedSessionID); err == nil {
+		t.Fatal("expected copy provenance to be append-only")
+	}
+
 }
 
 func stringPtrDB(value string) *string { return &value }

@@ -4,54 +4,79 @@ import (
 	"fmt"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
+	"strings"
 )
 
-type StructuredTrainingMembershipChoice struct { ID, Athlete, Scope string }
-type StructuredTrainingChoice struct { ID, Name string }
+type StructuredTrainingMembershipChoice struct{ ID, Athlete, Scope string }
+type StructuredTrainingChoice struct{ ID, Name string }
+type StructuredTrainingRoutine struct{ ID, Name, Description, Kind, Visibility, Owner, Scope, Modality, Objective, Method, Tags, Preview, Provenance string }
 
-type StructuredTrainingBlock struct { ID, Purpose, Title, Instructions string; Position int }
+type StructuredGymExercise struct {
+	ID, Name, Prescription, Resistance, Intent, Tempo, Notes string
+	Position                                                 int
+}
+type StructuredTrainingBlock struct {
+	ID, Purpose, Title, Instructions, GymStructure, GymObjective string
+	Position, GymRounds, GymRoundRecovery                        int
+	Exercises                                                    []StructuredGymExercise
+}
 type StructuredTrainingSegment struct {
-	ID, Modality, Title, Location, Duration string
-	Position int
-	Blocks []StructuredTrainingBlock
+	ID, Modality, Title, Location, Duration, PlannedStart, EquipmentNotes string
+	Position, Transition                                                  int
+	Blocks                                                                []StructuredTrainingBlock
 }
 type StructuredTrainingSession struct {
 	ID, Title, Description, When, EntryKind string
-	Segments []StructuredTrainingSegment
+	Modalities                              []string
+	Segments                                []StructuredTrainingSegment
 }
 type StructuredTrainingWeek struct {
 	ID, Title, Description, Season, DateRange string
-	Sessions []StructuredTrainingSession
+	Sessions                                  []StructuredTrainingSession
 }
 type StructuredTrainingAudience struct {
 	AthleteName, GroupID, GroupName, Scope string
-	MemberCount int
-	Weeks []StructuredTrainingWeek
+	MemberCount                            int
+	Weeks                                  []StructuredTrainingWeek
 }
 
 type StructuredTrainingGroupForm struct {
 	Name, ProgrammeID, TeamID string
-	MembershipIDs map[string]bool
-	Errors validation.FieldErrors
+	MembershipIDs             map[string]bool
+	Errors                    validation.FieldErrors
 }
-type StructuredTrainingWeekForm struct { GroupID, Title, Description, WeekStart string; Errors validation.FieldErrors }
-type StructuredTrainingSessionForm struct { PlanID, Title, Description, StartsAt, EndsAt, EntryKind string; Errors validation.FieldErrors }
-type StructuredTrainingSegmentForm struct { SessionID, Modality, Title, Location, Duration, Purpose, BlockTitle, Instructions string; Errors validation.FieldErrors }
-type StructuredTrainingBlockForm struct { SegmentID, Purpose, Title, Instructions string; Errors validation.FieldErrors }
+type StructuredTrainingWeekForm struct {
+	GroupID, Title, Description, WeekStart string
+	Errors                                 validation.FieldErrors
+}
+type StructuredTrainingSessionForm struct {
+	PlanID, Title, Description, StartsAt, EndsAt, EntryKind string
+	Errors                                                  validation.FieldErrors
+}
+type StructuredTrainingSegmentForm struct {
+	SessionID, Modality, Title, Location, Duration, Purpose, BlockTitle, Instructions string
+	Errors                                                                            validation.FieldErrors
+}
+type StructuredTrainingBlockForm struct {
+	SegmentID, Purpose, Title, Instructions string
+	Errors                                  validation.FieldErrors
+}
 
 type StructuredTrainingPage struct {
-	Meta components.PageMeta
-	CSRFField templ.Component
-	Management bool
-	Success, Error, OpenForm string
-	Audiences []StructuredTrainingAudience
-	Memberships []StructuredTrainingMembershipChoice
-	Programmes, Teams, Groups, Weeks []StructuredTrainingChoice
-	GroupForm StructuredTrainingGroupForm
-	WeekForm StructuredTrainingWeekForm
-	SessionForm StructuredTrainingSessionForm
-	SegmentForm StructuredTrainingSegmentForm
-	BlockForm StructuredTrainingBlockForm
+	Meta                                                        components.PageMeta
+	CSRFField                                                   templ.Component
+	Management                                                  bool
+	Success, Error, OpenForm                                    string
+	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
+	Audiences                                                   []StructuredTrainingAudience
+	Routines                                                    []StructuredTrainingRoutine
+	Memberships                                                 []StructuredTrainingMembershipChoice
+	Programmes, Teams, Groups, Weeks, Sessions, Segments        []StructuredTrainingChoice
+	GroupForm                                                   StructuredTrainingGroupForm
+	WeekForm                                                    StructuredTrainingWeekForm
+	SessionForm                                                 StructuredTrainingSessionForm
+	SegmentForm                                                 StructuredTrainingSegmentForm
+	BlockForm                                                   StructuredTrainingBlockForm
 }
 
 templ StructuredTraining(page StructuredTrainingPage) {
@@ -66,95 +91,196 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Error, "error")
-	<section class="module">
-		@components.SectionHeading("", "Semanas de treino", "Os horários são exatos; manhã e tarde são apenas agrupamentos visuais.")
-		if len(page.Audiences) == 0 {
-			@components.EmptyState("Ainda sem planeamento estruturado", "Quando existir uma semana no seu âmbito, ela aparece aqui.")
+	<div class="training-workspace" data-tab-scope>
+		if page.Management {
+			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
+				<a href="#training-plan">Plano semanal</a>
+				<a href="#training-routines">Rotinas</a>
+				<a href="#training-copy-tools">Copiar conteúdo</a>
+			</nav>
 		}
-		for _, audience := range page.Audiences {
-			<article class="record-item record-item--stacked">
-				<div class="record-item__copy">
-					if audience.AthleteName != "" {
-						<p class="eyebrow">{ audience.AthleteName }</p>
-					}
-					<h3>{ audience.GroupName }</h3>
-					<p class="record-meta">
-						{ audience.Scope }
-						if page.Management {
-							<span> · { fmt.Sprintf("%d atletas", audience.MemberCount) }</span>
+		<section id="training-plan" class="module training-plan" data-tab-panel>
+			@components.SectionHeading("", "Semanas de treino", "Os horários são exatos; manhã e tarde são apenas agrupamentos visuais.")
+			if len(page.Audiences) == 0 {
+				@components.EmptyState("Ainda sem planeamento estruturado", "Quando existir uma semana no seu âmbito, ela aparece aqui.")
+			}
+			for _, audience := range page.Audiences {
+				<article class="record-item record-item--stacked">
+					<div class="record-item__copy">
+						if audience.AthleteName != "" {
+							<p class="eyebrow">{ audience.AthleteName }</p>
 						}
-					</p>
-					if len(audience.Weeks) == 0 {
-						<p>Ainda sem semanas.</p>
-					}
-					for _, week := range audience.Weeks {
-						<section class="nested-record" aria-labelledby={ "week-" + week.ID }>
-							<h4 id={ "week-" + week.ID }>{ week.Title }</h4>
-							<p class="record-meta">{ week.Season } · { week.DateRange }</p>
-							if week.Description != "" {
-								<p>{ week.Description }</p>
+						<h3>{ audience.GroupName }</h3>
+						<p class="record-meta">
+							{ audience.Scope }
+							if page.Management {
+								<span>· { fmt.Sprintf("%d atletas", audience.MemberCount) }</span>
 							}
-							if len(week.Sessions) == 0 {
-								<p class="record-meta">Ainda sem sessões.</p>
-							}
-							for _, session := range week.Sessions {
-								<article class="nested-record" aria-labelledby={ "structured-session-" + session.ID }>
-									<h5 id={ "structured-session-" + session.ID }>{ session.Title }</h5>
-									<p class="record-meta">{ session.When } · { structuredEntryKindLabel(session.EntryKind) }</p>
-									if session.Description != "" {
-										<p>{ session.Description }</p>
+						</p>
+						if len(audience.Weeks) == 0 {
+							<p>Ainda sem semanas.</p>
+						}
+						for weekIndex, week := range audience.Weeks {
+							<section class="nested-record training-card training-card--week" aria-labelledby={ "week-" + week.ID } data-training-card data-default-open={ fmt.Sprintf("%t", weekIndex == 0) }>
+								<div class="training-card__header">
+									<div><h4 id={ "week-" + week.ID }>{ week.Title }</h4><p class="record-meta">{ week.Season } · { week.DateRange } · { fmt.Sprintf("%d sessões", len(week.Sessions)) }</p></div>
+									<button class="action action--quiet training-card__toggle" type="button" aria-expanded="true" aria-controls={ "week-content-" + week.ID } data-training-toggle><span data-training-toggle-label>Ocultar</span></button>
+								</div>
+								<div id={ "week-content-" + week.ID } class="training-card__body">
+									if week.Description != "" {
+										<p>{ week.Description }</p>
 									}
-									if len(session.Segments) == 0 && session.EntryKind == "TRAINING" {
-										<p class="record-meta">Sessão ainda sem segmentos.</p>
+									if page.Management {
+										<div class="training-actions">@structuredCopyWeekForm(page, week)
+</div>
 									}
-									for _, segment := range session.Segments {
-										<section class="nested-record" aria-labelledby={ "segment-" + segment.ID }>
-										<h6 id={ "segment-" + segment.ID }>
-											{ structuredModalityLabel(segment.Modality) }
-											if segment.Title != "" {
-												<span> · { segment.Title }</span>
-											}
-										</h6>
-										if segment.Location != "" || segment.Duration != "" {
-											<p class="record-meta">
-												{ segment.Location }
-												if segment.Location != "" && segment.Duration != "" {
-													<span> · </span>
-												}
-												{ segment.Duration }
-											</p>
-										}
-											for _, block := range segment.Blocks {
-												<div class="nested-record">
-													<p><strong>
-														{ structuredPurposeLabel(block.Purpose) }
-														if block.Title != "" {
-															<span> · { block.Title }</span>
+									if len(week.Sessions) == 0 {
+										<p class="record-meta">Ainda sem sessões.</p>
+									}
+									for sessionIndex, session := range week.Sessions {
+										<article class="nested-record training-card training-card--session" aria-labelledby={ "structured-session-" + session.ID } data-training-card data-default-open={ fmt.Sprintf("%t", sessionIndex == 0) }>
+											<div class="training-card__header">
+												<div>
+													<h5 id={ "structured-session-" + session.ID }>{ session.Title }</h5>
+													<p class="record-meta">
+														{ session.When } · { structuredEntryKindLabel(session.EntryKind) }
+														if len(session.Modalities) > 0 {
+															<span>· { structuredModalitiesLabel(session.Modalities) }</span>
 														}
-													</strong></p>
-													<p class="preserve-lines">{ block.Instructions }</p>
-													if page.Management {
-														@structuredMoveBlock(page, block)
-													}
+													</p>
 												</div>
-											}
-											if page.Management {
-												@structuredMoveSegment(page, segment)
-												@structuredBlockForm(page, segment.ID)
-											}
-										</section>
+												<button class="action action--quiet training-card__toggle" type="button" aria-expanded="true" aria-controls={ "session-content-" + session.ID } data-training-toggle><span data-training-toggle-label>Ocultar</span></button>
+											</div>
+											<div id={ "session-content-" + session.ID } class="training-card__body">
+												if session.Description != "" {
+													<p>{ session.Description }</p>
+												}
+												if page.Management {
+													<details class="training-action-menu"><summary class="action action--quiet">Ações da sessão</summary><div class="training-actions">@structuredSaveRoutineForm(page, "SESSION", session.ID)
+@structuredCopySessionForm(page, session.ID)
+</div></details>
+												}
+												if len(session.Segments) == 0 && session.EntryKind == "TRAINING" {
+													<p class="record-meta">Sessão ainda sem segmentos.</p>
+												}
+												for _, segment := range session.Segments {
+													<section class="nested-record" aria-labelledby={ "segment-" + segment.ID }>
+														<h6 id={ "segment-" + segment.ID }>
+															{ structuredModalityLabel(segment.Modality) }
+															if segment.Title != "" {
+																<span>· { segment.Title }</span>
+															}
+														</h6>
+														if segment.Location != "" || segment.Duration != "" || segment.PlannedStart != "" || segment.Transition > 0 {
+															<p class="record-meta">
+																if segment.PlannedStart != "" {
+																	<span>Início previsto { segment.PlannedStart }</span>
+																}
+																if segment.Duration != "" {
+																	<span>· { segment.Duration }</span>
+																}
+																if segment.Transition > 0 {
+																	<span>· { fmt.Sprintf("%d min de transição", segment.Transition) }</span>
+																}
+																if segment.Location != "" {
+																	<span>· { segment.Location }</span>
+																}
+															</p>
+														}
+														if segment.EquipmentNotes != "" {
+															<p><strong>Material:</strong> { segment.EquipmentNotes }</p>
+														}
+														for _, block := range segment.Blocks {
+															<div class="nested-record">
+																<p>
+																	<strong>
+																		{ structuredPurposeLabel(block.Purpose) }
+																		if block.Title != "" {
+																			<span>· { block.Title }</span>
+																		}
+																	</strong>
+																</p>
+																<p class="preserve-lines">{ block.Instructions }</p>
+																if block.GymStructure != "" {
+																	<p class="record-meta">
+																		{ gymStructureLabel(block.GymStructure) } · { trainingObjectiveLabel(block.GymObjective) } · { fmt.Sprintf("%d voltas", block.GymRounds) }
+																		if block.GymRoundRecovery > 0 {
+																			<span>· { fmt.Sprintf("%d s de recuperação entre voltas", block.GymRoundRecovery) }</span>
+																		}
+																	</p>
+																	<ol class="record-list">
+																		for _, exercise := range block.Exercises {
+																			<li class="record-item record-item--stacked">
+																				<div class="record-item__copy">
+																					<strong>{ exercise.Name }</strong>
+																					<p>{ exercise.Prescription }</p>
+																					if exercise.Resistance != "" || exercise.Intent != "" || exercise.Tempo != "" {
+																						<p class="record-meta">
+																							{ exercise.Resistance }
+																							if exercise.Intent != "" {
+																								<span>· { gymExecutionIntentLabel(exercise.Intent) }</span>
+																							}
+																							if exercise.Tempo != "" {
+																								<span>· Tempo { exercise.Tempo }</span>
+																							}
+																						</p>
+																					}
+																					if exercise.Notes != "" {
+																						<p>{ exercise.Notes }</p>
+																					}
+																				</div>
+																				if page.Management {
+																					@structuredMoveExercise(page, exercise)
+																				}
+																			</li>
+																		}
+																	</ol>
+																	if page.Management {
+																		@structuredGymExerciseForm(page, block.ID)
+																	}
+																}
+																if page.Management {
+																	<details class="training-action-menu"><summary class="action action--quiet">Ações do bloco</summary><div class="training-actions">@structuredMoveBlock(page, block)
+@structuredSaveRoutineForm(page, "BLOCK", block.ID)
+@structuredCopyBlockForm(page, block.ID)
+</div></details>
+																}
+															</div>
+														}
+														if page.Management {
+															<details class="training-action-menu">
+																<summary class="action action--quiet">Ações do segmento</summary>
+																<div class="training-actions">
+																	@structuredMoveSegment(page, segment)
+																	@structuredSaveRoutineForm(page, "SEGMENT", segment.ID)
+																	@structuredBlockForm(page, segment.ID)
+																	if segment.Modality == "GYM" {
+																		@structuredGymBlockForm(page, segment.ID)
+																	}
+																</div>
+															</details>
+														}
+													</section>
+												}
+												if page.Management && session.EntryKind == "TRAINING" {
+													<div class="training-actions">@structuredSegmentForm(page, session.ID)
+</div>
+												}
+											</div>
+										</article>
 									}
-									if page.Management && session.EntryKind == "TRAINING" {
-										@structuredSegmentForm(page, session.ID)
-									}
-								</article>
-							}
-						</section>
-					}
-				</div>
-			</article>
+								</div>
+							</section>
+						}
+					</div>
+				</article>
+			}
+		</section>
+		if page.Management {
+			@structuredRoutineLibrary(page)
+			@structuredCopyDayForm(page)
 		}
-	</section>
+	</div>
 	if page.Management {
 		@structuredGroupForm(page)
 		@structuredWeekForm(page)
@@ -162,29 +288,224 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 	}
 }
 
+templ structuredRoutineLibrary(page StructuredTrainingPage) {
+	<section id="training-routines" class="module" aria-labelledby="routine-library-title" data-tab-panel>
+		@components.SectionHeading("", "Biblioteca de rotinas", "Pesquise, pré-visualize e insira uma cópia independente no plano de destino.")
+		<form class="filter-bar" method="get" action="/admin/treinos/estruturados">
+			@components.FieldLabel("routine-query", "Pesquisar", false)
+			<input id="routine-query" name="routine_query" value={ page.RoutineQuery } maxlength="180"/>
+			@components.FieldLabel("routine-modality", "Modalidade", false)
+			<select id="routine-modality" name="routine_modality">
+				<option value="">Todas</option>
+				for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
+					<option value={ value } selected?={ page.RoutineModality == value }>{ structuredModalityLabel(value) }</option>
+				}
+			</select>
+			@components.FieldLabel("routine-objective", "Objetivo", false)
+			<select id="routine-objective" name="routine_objective">
+				<option value="">Todos</option>
+				for _, value := range []string{"MOBILITY", "ACTIVATION", "MAX_STRENGTH_HYPERTROPHY", "MAX_STRENGTH_NEURAL", "EXPLOSIVE_STRENGTH", "STRENGTH_ENDURANCE", "TECHNIQUE", "CORE", "CUSTOM"} {
+					<option value={ value } selected?={ page.RoutineObjective == value }>{ trainingObjectiveLabel(value) }</option>
+				}
+			</select>
+			@components.FieldLabel("routine-tag", "Etiqueta", false)
+			<input id="routine-tag" name="routine_tag" value={ page.RoutineTag } maxlength="40"/>
+			<button type="submit">Filtrar rotinas</button>
+		</form>
+		if len(page.Routines) == 0 {
+			@components.EmptyState("Sem rotinas visíveis", "Guarde um bloco, segmento ou sessão para começar.")
+		}
+		for _, routine := range page.Routines {
+			<article class="record-item record-item--stacked">
+				<div class="record-item__copy">
+					<h3>{ routine.Name }</h3>
+					<p class="record-meta">
+						{ trainingRoutineKindLabel(routine.Kind) } · { routine.Visibility } · { routine.Owner }
+						if routine.Scope != "" {
+							<span>· { routine.Scope }</span>
+						}
+					</p>
+					if routine.Description != "" {
+						<p>{ routine.Description }</p>
+					}
+					<p><strong>Pré-visualização:</strong> { routine.Preview }</p>
+					<p class="record-meta">
+						if routine.Modality != "" {
+							<span>{ structuredModalityLabel(routine.Modality) }</span>
+						}
+						if routine.Objective != "" {
+							<span>· { trainingObjectiveLabel(routine.Objective) }</span>
+						}
+						if routine.Method != "" {
+							<span>· Método: { routine.Method }</span>
+						}
+						if routine.Tags != "" {
+							<span>· { routine.Tags }</span>
+						}
+					</p>
+					<p class="record-meta">{ routine.Provenance }</p>
+				</div>
+				@structuredInsertRoutineForm(page, routine)
+			</article>
+		}
+	</section>
+}
+
+templ structuredSaveRoutineForm(page StructuredTrainingPage, kind, sourceID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "save-routine-" + sourceID }>Guardar como rotina</button>
+	<dialog id={ "save-routine-" + sourceID } class="task-dialog" data-task-dialog aria-labelledby={ "save-routine-title-" + sourceID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Biblioteca</p><h3 id={ "save-routine-title-" + sourceID }>Guardar como rotina</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action="/admin/treinos/estruturados/rotinas">
+			@page.CSRFField
+			<input type="hidden" name="source_kind" value={ kind }/><input type="hidden" name="source_id" value={ sourceID }/>
+			@components.FieldLabel("routine-name-"+sourceID, "Nome da rotina", true)
+			<input id={ "routine-name-" + sourceID } name="name" required minlength="2" maxlength="180"/>
+			@components.FieldLabel("routine-description-"+sourceID, "Descrição (opcional)", false)
+			<textarea id={ "routine-description-" + sourceID } name="description" maxlength="1000"></textarea>
+			@components.FieldLabel("routine-visibility-"+sourceID, "Partilha", true)
+			<select id={ "routine-visibility-" + sourceID } name="visibility" required><option value="PRIVATE">Só para mim</option><option value="SHARED">Partilhar no âmbito deste plano</option></select>
+			@components.FieldLabel("routine-method-"+sourceID, "Método (opcional)", false)
+			<input id={ "routine-method-" + sourceID } name="method" maxlength="80"/>
+			@components.FieldLabel("routine-tags-"+sourceID, "Etiquetas separadas por vírgula (opcional)", false)
+			<input id={ "routine-tags-" + sourceID } name="tags" maxlength="400"/>
+			<button type="submit">Guardar rotina</button>
+		</form>
+	</dialog>
+}
+
+templ structuredInsertRoutineForm(page StructuredTrainingPage, routine StructuredTrainingRoutine) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "insert-routine-" + routine.ID }>Usar rotina</button>
+	<dialog id={ "insert-routine-" + routine.ID } class="task-dialog" data-task-dialog aria-labelledby={ "insert-routine-title-" + routine.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">{ trainingRoutineKindLabel(routine.Kind) }</p><h3 id={ "insert-routine-title-" + routine.ID }>Usar { routine.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/rotinas/" + routine.ID + "/inserir") }>
+			@page.CSRFField
+			@components.FieldLabel("routine-target-"+routine.ID, trainingRoutineTargetLabel(routine.Kind), true)
+			<select id={ "routine-target-" + routine.ID } name="target_id" required>
+				<option value="">Selecione</option>
+				if routine.Kind == "BLOCK" {
+					for _, choice := range page.Segments {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+				if routine.Kind == "SEGMENT" {
+					for _, choice := range page.Sessions {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+				if routine.Kind == "SESSION" {
+					for _, choice := range page.Weeks {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+			</select>
+			if routine.Kind == "SESSION" {
+				@components.FieldLabel("routine-start-"+routine.ID, "Novo início", true)
+				<input id={ "routine-start-" + routine.ID } name="starts_at" type="datetime-local" required/>
+			}
+			<button type="submit">Inserir cópia independente</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCopyBlockForm(page StructuredTrainingPage, blockID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "copy-block-" + blockID }>Copiar bloco</button>
+	<dialog id={ "copy-block-" + blockID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-block-title-" + blockID }>
+		<div class="task-dialog__header"><h3 id={ "copy-block-title-" + blockID }>Copiar bloco</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + blockID + "/copiar") }>
+			@page.CSRFField
+			@components.FieldLabel("copy-block-target-"+blockID, "Segmento de destino", true)
+			<select id={ "copy-block-target-" + blockID } name="target_id" required>
+				<option value="">Selecione</option>
+				for _, choice := range page.Segments {
+					<option value={ choice.ID }>{ choice.Name }</option>
+				}
+			</select><button type="submit">Criar cópia do bloco</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCopySessionForm(page StructuredTrainingPage, sessionID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "copy-session-" + sessionID }>Copiar sessão</button>
+	<dialog id={ "copy-session-" + sessionID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-session-title-" + sessionID }>
+		<div class="task-dialog__header"><h3 id={ "copy-session-title-" + sessionID }>Copiar sessão</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/copiar") }>
+			@page.CSRFField
+			@components.FieldLabel("copy-session-week-"+sessionID, "Semana de destino", true)
+			<select id={ "copy-session-week-" + sessionID } name="target_id" required>
+				<option value="">Selecione</option>
+				for _, choice := range page.Weeks {
+					<option value={ choice.ID }>{ choice.Name }</option>
+				}
+			</select>@components.FieldLabel("copy-session-start-"+sessionID, "Novo início", true)
+			<input id={ "copy-session-start-" + sessionID } name="starts_at" type="datetime-local" required/><button type="submit">Criar cópia da sessão</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCopyWeekForm(page StructuredTrainingPage, week StructuredTrainingWeek) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "copy-week-" + week.ID }>Copiar semana</button><dialog id={ "copy-week-" + week.ID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-week-title-dialog-" + week.ID }><div class="task-dialog__header"><div><p class="eyebrow">{ week.DateRange }</p><h3 id={ "copy-week-title-dialog-" + week.ID }>Copiar { week.Title }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div><form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + week.ID + "/copiar") }>@page.CSRFField
+@components.FieldLabel("copy-week-title-"+week.ID, "Título da nova semana", true)
+<input id={ "copy-week-title-" + week.ID } name="title" value={ week.Title } required minlength="2" maxlength="180"/>@components.FieldLabel("copy-week-start-"+week.ID, "Nova segunda-feira", true)
+<input id={ "copy-week-start-" + week.ID } name="week_start" type="date" required/><button type="submit">Criar cópia da semana</button></form></dialog>
+}
+
+templ structuredCopyDayForm(page StructuredTrainingPage) {
+	<section id="training-copy-tools" class="module" data-tab-panel>
+		@components.SectionHeading("", "Copiar conteúdo", "Repita um dia completo entre semanas. Para copiar uma semana, sessão ou bloco, use o menu de ações junto ao respetivo conteúdo.")
+		<form class="form-layout form-layout--compact" method="post" action="/admin/treinos/estruturados/dias/copiar">
+			@page.CSRFField
+			@components.FieldLabel("copy-day-source-plan", "Semana de origem", true)
+			<select id="copy-day-source-plan" name="source_plan_id" required>
+				for _, choice := range page.Weeks {
+					<option value={ choice.ID }>{ choice.Name }</option>
+				}
+			</select>@components.FieldLabel("copy-day-source-date", "Dia de origem", true)
+			<input id="copy-day-source-date" name="source_date" type="date" required/>@components.FieldLabel("copy-day-target-plan", "Semana de destino", true)
+			<select id="copy-day-target-plan" name="target_plan_id" required>
+				for _, choice := range page.Weeks {
+					<option value={ choice.ID }>{ choice.Name }</option>
+				}
+			</select>@components.FieldLabel("copy-day-target-date", "Dia de destino", true)
+			<input id="copy-day-target-date" name="target_date" type="date" required/><button type="submit">Copiar dia</button>
+		</form>
+	</section>
+}
+
 templ structuredGroupForm(page StructuredTrainingPage) {
 	<details id="criar-grupo-treino" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "group" } aria-labelledby="structured-group-title">
 		<summary><span><strong id="structured-group-title">Criar grupo de treino</strong><small>Selecione um âmbito e os atletas atuais.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.GroupForm.Errors), []components.FieldErrorRef{{Key:"name",Field:"structured-group-name"},{Key:"scope",Field:"structured-group-team"},{Key:"members",Field:"structured-group-members"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos">@page.CSRFField @components.RequiredNote()
-				@components.FieldLabel("structured-group-name", "Nome", true)<input id="structured-group-name" name="name" value={ page.GroupForm.Name } required minlength="2" maxlength="120"/>@components.FieldErrorMessage("name", page.GroupForm.Errors["name"])
-				@components.FieldLabel("structured-group-team", "Equipa", false)<select id="structured-group-team" name="team_id"><option value="">Sem equipa</option>
+		<div class="disclosure__content">
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.GroupForm.Errors), []components.FieldErrorRef{{Key: "name", Field: "structured-group-name"}, {Key: "scope", Field: "structured-group-team"}, {Key: "members", Field: "structured-group-members"}}))
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos">
+				@page.CSRFField
+				@components.RequiredNote()
+				@components.FieldLabel("structured-group-name", "Nome", true)
+				<input id="structured-group-name" name="name" value={ page.GroupForm.Name } required minlength="2" maxlength="120"/>@components.FieldErrorMessage("name", page.GroupForm.Errors["name"])
+				@components.FieldLabel("structured-group-team", "Equipa", false)
+				<select id="structured-group-team" name="team_id">
+					<option value="">Sem equipa</option>
 					for _, choice := range page.Teams {
 						<option value={ choice.ID } selected?={ choice.ID == page.GroupForm.TeamID }>{ choice.Name }</option>
 					}
 				</select>
-				@components.FieldLabel("structured-group-programme", "Programa", false)<select id="structured-group-programme" name="programme_id"><option value="">Sem programa</option>
+				@components.FieldLabel("structured-group-programme", "Programa", false)
+				<select id="structured-group-programme" name="programme_id">
+					<option value="">Sem programa</option>
 					for _, choice := range page.Programmes {
 						<option value={ choice.ID } selected?={ choice.ID == page.GroupForm.ProgrammeID }>{ choice.Name }</option>
 					}
 				</select>
-				@components.FieldHelp("structured-group-scope-help", "Escolha exatamente uma equipa ou um programa. A autorização do treinador continua a ser verificada separadamente.")@components.FieldErrorMessage("scope", page.GroupForm.Errors["scope"])
-				<fieldset id="structured-group-members"><legend>Atletas</legend>
+				@components.FieldHelp("structured-group-scope-help", "Escolha exatamente uma equipa ou um programa. A autorização do treinador continua a ser verificada separadamente.")
+				@components.FieldErrorMessage("scope", page.GroupForm.Errors["scope"])
+				<fieldset id="structured-group-members">
+					<legend>Atletas</legend>
 					for _, member := range page.Memberships {
 						<label><input type="checkbox" name="membership_id" value={ member.ID } checked?={ page.GroupForm.MembershipIDs[member.ID] }/> <strong>{ member.Athlete }</strong> — { member.Scope }</label>
 					}
 				</fieldset>@components.FieldErrorMessage("members", page.GroupForm.Errors["members"])
-				@components.FormActions("/admin/treinos/estruturados") { <button type="submit">Criar grupo</button> }
+				@components.FormActions("/admin/treinos/estruturados") {
+					<button type="submit">Criar grupo</button>
+				}
 			</form>
 		</div>
 	</details>
@@ -193,17 +514,27 @@ templ structuredGroupForm(page StructuredTrainingPage) {
 templ structuredWeekForm(page StructuredTrainingPage) {
 	<details id="criar-semana-treino" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "week" } aria-labelledby="structured-week-title">
 		<summary><span><strong id="structured-week-title">Criar semana</strong><small>Associe uma semana datada a um grupo.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key:"group_id",Field:"structured-week-group"},{Key:"title",Field:"structured-week-name"},{Key:"week_start",Field:"structured-week-start"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas">@page.CSRFField @components.RequiredNote()
-				@components.FieldLabel("structured-week-group", "Grupo", true)<select id="structured-week-group" name="group_id" required><option value="">Selecione</option>
+		<div class="disclosure__content">
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}}))
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas">
+				@page.CSRFField
+				@components.RequiredNote()
+				@components.FieldLabel("structured-week-group", "Grupo", true)
+				<select id="structured-week-group" name="group_id" required>
+					<option value="">Selecione</option>
 					for _, choice := range page.Groups {
 						<option value={ choice.ID } selected?={ choice.ID == page.WeekForm.GroupID }>{ choice.Name }</option>
 					}
 				</select>@components.FieldErrorMessage("group_id", page.WeekForm.Errors["group_id"])
-				@components.FieldLabel("structured-week-name", "Título", true)<input id="structured-week-name" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
-				@components.FieldLabel("structured-week-start", "Segunda-feira da semana", true)<input id="structured-week-start" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
-				@components.FieldLabel("structured-week-description", "Notas (opcional)", false)<textarea id="structured-week-description" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>
-				@components.FormActions("/admin/treinos/estruturados") { <button type="submit">Criar semana</button> }
+				@components.FieldLabel("structured-week-name", "Título", true)
+				<input id="structured-week-name" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
+				@components.FieldLabel("structured-week-start", "Segunda-feira da semana", true)
+				<input id="structured-week-start" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
+				@components.FieldLabel("structured-week-description", "Notas (opcional)", false)
+				<textarea id="structured-week-description" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>
+				@components.FormActions("/admin/treinos/estruturados") {
+					<button type="submit">Criar semana</button>
+				}
 			</form>
 		</div>
 	</details>
@@ -212,83 +543,326 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 templ structuredSessionForm(page StructuredTrainingPage) {
 	<details id="criar-sessao-estruturada" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "session" } aria-labelledby="structured-session-title">
 		<summary><span><strong id="structured-session-title">Criar sessão</strong><small>Adicione um horário exato à semana.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key:"plan_id",Field:"structured-session-week"},{Key:"title",Field:"structured-session-name"},{Key:"starts_at",Field:"structured-session-start"},{Key:"ends_at",Field:"structured-session-end"},{Key:"entry_kind",Field:"structured-session-kind"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes">@page.CSRFField @components.RequiredNote()
-				@components.FieldLabel("structured-session-week", "Semana", true)<select id="structured-session-week" name="plan_id" required><option value="">Selecione</option>
+		<div class="disclosure__content">
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}}))
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes">
+				@page.CSRFField
+				@components.RequiredNote()
+				@components.FieldLabel("structured-session-week", "Semana", true)
+				<select id="structured-session-week" name="plan_id" required>
+					<option value="">Selecione</option>
 					for _, choice := range page.Weeks {
 						<option value={ choice.ID } selected?={ choice.ID == page.SessionForm.PlanID }>{ choice.Name }</option>
 					}
 				</select>@components.FieldErrorMessage("plan_id", page.SessionForm.Errors["plan_id"])
-				@components.FieldLabel("structured-session-name", "Título", true)<input id="structured-session-name" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
-				@components.FieldLabel("structured-session-kind", "Tipo", true)<select id="structured-session-kind" name="entry_kind" required>
+				@components.FieldLabel("structured-session-name", "Título", true)
+				<input id="structured-session-name" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
+				@components.FieldLabel("structured-session-kind", "Tipo", true)
+				<select id="structured-session-kind" name="entry_kind" required>
 					for _, value := range []string{"TRAINING", "REST", "COMPETITION", "LOGISTICS"} {
 						<option value={ value } selected?={ value == page.SessionForm.EntryKind }>{ structuredEntryKindLabel(value) }</option>
 					}
 				</select>@components.FieldErrorMessage("entry_kind", page.SessionForm.Errors["entry_kind"])
-				@components.FieldLabel("structured-session-start", "Início", true)<input id="structured-session-start" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
-				@components.FieldLabel("structured-session-end", "Fim", true)<input id="structured-session-end" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
-				@components.FieldLabel("structured-session-description", "Instruções gerais (opcional)", false)<textarea id="structured-session-description" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>
-				@components.FormActions("/admin/treinos/estruturados") { <button type="submit">Criar sessão</button> }
+				@components.FieldLabel("structured-session-start", "Início", true)
+				<input id="structured-session-start" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
+				@components.FieldLabel("structured-session-end", "Fim", true)
+				<input id="structured-session-end" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
+				@components.FieldLabel("structured-session-description", "Instruções gerais (opcional)", false)
+				<textarea id="structured-session-description" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>
+				@components.FormActions("/admin/treinos/estruturados") {
+					<button type="submit">Criar sessão</button>
+				}
 			</form>
 		</div>
 	</details>
 }
 
 templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
-	<details class="inline-disclosure"><summary>Adicionar segmento</summary>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/"+sessionID+"/segmentos") }>@page.CSRFField
-			@components.FieldLabel("segment-modality-"+sessionID, "Modalidade", true)<select id={ "segment-modality-"+sessionID } name="modality" required>
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-segment-" + sessionID }>Adicionar segmento</button>
+	<dialog id={ "add-segment-" + sessionID } class="task-dialog" data-task-dialog aria-labelledby={ "add-segment-title-" + sessionID }>
+		<div class="task-dialog__header"><h3 id={ "add-segment-title-" + sessionID }>Adicionar segmento</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos") }>
+			@page.CSRFField
+			@components.FieldLabel("segment-modality-"+sessionID, "Modalidade", true)
+			<select id={ "segment-modality-" + sessionID } name="modality" required>
 				for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
 					<option value={ value }>{ structuredModalityLabel(value) }</option>
 				}
 			</select>
-			@components.FieldLabel("segment-title-"+sessionID, "Título (opcional)", false)<input id={ "segment-title-"+sessionID } name="title" maxlength="120"/>
-			@components.FieldLabel("segment-location-"+sessionID, "Local (opcional)", false)<input id={ "segment-location-"+sessionID } name="location" maxlength="180"/>
-			@components.FieldLabel("segment-duration-"+sessionID, "Duração prevista em minutos (opcional)", false)<input id={ "segment-duration-"+sessionID } name="planned_duration_minutes" type="number" min="1" max="1440"/>
-			@components.FieldLabel("segment-purpose-"+sessionID, "Objetivo do primeiro bloco", true)<select id={ "segment-purpose-"+sessionID } name="purpose" required>
+			@components.FieldLabel("segment-title-"+sessionID, "Título (opcional)", false)
+			<input id={ "segment-title-" + sessionID } name="title" maxlength="120"/>
+			@components.FieldLabel("segment-location-"+sessionID, "Local (opcional)", false)
+			<input id={ "segment-location-" + sessionID } name="location" maxlength="180"/>
+			@components.FieldLabel("segment-duration-"+sessionID, "Duração prevista em minutos (opcional)", false)
+			<input id={ "segment-duration-" + sessionID } name="planned_duration_minutes" type="number" min="1" max="1440"/>
+			@components.FieldLabel("segment-start-offset-"+sessionID, "Início previsto, em minutos após o início da sessão (opcional)", false)
+			<input id={ "segment-start-offset-" + sessionID } name="planned_start_offset_minutes" type="number" min="0" max="1440"/>
+			@components.FieldLabel("segment-transition-"+sessionID, "Transição antes deste segmento, em minutos (opcional)", false)
+			<input id={ "segment-transition-" + sessionID } name="transition_duration_minutes" type="number" min="1" max="1440"/>
+			@components.FieldLabel("segment-equipment-"+sessionID, "Material e preparação (opcional)", false)
+			<textarea id={ "segment-equipment-" + sessionID } name="equipment_notes" maxlength="1000"></textarea>
+			@components.FieldLabel("segment-purpose-"+sessionID, "Objetivo do primeiro bloco", true)
+			<select id={ "segment-purpose-" + sessionID } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
 					<option value={ value }>{ structuredPurposeLabel(value) }</option>
 				}
 			</select>
-			@components.FieldLabel("segment-block-title-"+sessionID, "Título do bloco (opcional)", false)<input id={ "segment-block-title-"+sessionID } name="block_title" maxlength="120"/>
-			@components.FieldLabel("segment-instructions-"+sessionID, "Instruções", true)<textarea id={ "segment-instructions-"+sessionID } name="instructions" minlength="2" maxlength="4000" required></textarea>
+			@components.FieldLabel("segment-block-title-"+sessionID, "Título do bloco (opcional)", false)
+			<input id={ "segment-block-title-" + sessionID } name="block_title" maxlength="120"/>
+			@components.FieldLabel("segment-instructions-"+sessionID, "Instruções", true)
+			<textarea id={ "segment-instructions-" + sessionID } name="instructions" minlength="2" maxlength="4000" required></textarea>
 			<button type="submit">Adicionar segmento</button>
 		</form>
-	</details>
+	</dialog>
 }
 
 templ structuredBlockForm(page StructuredTrainingPage, segmentID string) {
-	<details class="inline-disclosure"><summary>Adicionar bloco</summary>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/"+segmentID+"/blocos") }>@page.CSRFField
-			@components.FieldLabel("block-purpose-"+segmentID, "Objetivo", true)<select id={ "block-purpose-"+segmentID } name="purpose" required>
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-block-" + segmentID }>Adicionar bloco</button>
+	<dialog id={ "add-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-block-title-dialog-" + segmentID }>
+		<div class="task-dialog__header"><h3 id={ "add-block-title-dialog-" + segmentID }>Adicionar bloco</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/blocos") }>
+			@page.CSRFField
+			@components.FieldLabel("block-purpose-"+segmentID, "Objetivo", true)
+			<select id={ "block-purpose-" + segmentID } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
 					<option value={ value }>{ structuredPurposeLabel(value) }</option>
 				}
 			</select>
-			@components.FieldLabel("block-title-"+segmentID, "Título (opcional)", false)<input id={ "block-title-"+segmentID } name="title" maxlength="120"/>
-			@components.FieldLabel("block-instructions-"+segmentID, "Instruções", true)<textarea id={ "block-instructions-"+segmentID } name="instructions" minlength="2" maxlength="4000" required></textarea>
+			@components.FieldLabel("block-title-"+segmentID, "Título (opcional)", false)
+			<input id={ "block-title-" + segmentID } name="title" maxlength="120"/>
+			@components.FieldLabel("block-instructions-"+segmentID, "Instruções", true)
+			<textarea id={ "block-instructions-" + segmentID } name="instructions" minlength="2" maxlength="4000" required></textarea>
 			<button type="submit">Adicionar bloco</button>
 		</form>
-	</details>
+	</dialog>
+}
+
+templ structuredGymBlockForm(page StructuredTrainingPage, segmentID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-gym-block-" + segmentID }>Adicionar treino de ginásio</button>
+	<dialog id={ "add-gym-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-gym-block-title-" + segmentID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Ginásio</p><h3 id={ "add-gym-block-title-" + segmentID }>Adicionar bloco estruturado</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/ginasio") }>
+			@page.CSRFField
+			@components.FieldLabel("gym-purpose-"+segmentID, "Fase do treino", true)
+			<select id={ "gym-purpose-" + segmentID } name="purpose" required>@gymPurposeOptions()
+</select>
+			@components.FieldLabel("gym-title-"+segmentID, "Título do bloco", true)
+			<input id={ "gym-title-" + segmentID } name="title" required minlength="2" maxlength="120"/>
+			@components.FieldLabel("gym-instructions-"+segmentID, "Instruções gerais", true)
+			<textarea id={ "gym-instructions-" + segmentID } name="instructions" required minlength="2" maxlength="4000"></textarea>
+			@components.FieldLabel("gym-structure-"+segmentID, "Estrutura", true)
+			<select id={ "gym-structure-" + segmentID } name="structure" required><option value="STRAIGHT_SETS">Séries simples</option><option value="CIRCUIT">Circuito</option><option value="SUPERSET">Supersérie</option></select>
+			@components.FieldLabel("gym-objective-"+segmentID, "Objetivo", true)
+			<select id={ "gym-objective-" + segmentID } name="objective" required>@gymObjectiveOptions()
+</select>
+			@components.FieldLabel("gym-rounds-"+segmentID, "Voltas", true)
+			<input id={ "gym-rounds-" + segmentID } name="rounds" type="number" min="1" max="100" value="1" required/>
+			@components.FieldLabel("gym-round-recovery-"+segmentID, "Recuperação entre voltas em segundos (opcional)", false)
+			<input id={ "gym-round-recovery-" + segmentID } name="round_recovery_seconds" type="number" min="1" max="86400"/>
+			@structuredGymExerciseFields(segmentID)
+			<button type="submit">Adicionar bloco de ginásio</button>
+		</form>
+	</dialog>
+}
+
+templ structuredGymExerciseForm(page StructuredTrainingPage, blockID string) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "add-exercise-" + blockID }>Adicionar exercício</button>
+	<dialog id={ "add-exercise-" + blockID } class="task-dialog" data-task-dialog aria-labelledby={ "add-exercise-title-" + blockID }>
+		<div class="task-dialog__header"><h3 id={ "add-exercise-title-" + blockID }>Adicionar exercício</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + blockID + "/exercicios") }>@page.CSRFField
+@structuredGymExerciseFields(blockID)
+<button type="submit">Adicionar exercício</button></form>
+	</dialog>
+}
+
+templ structuredGymExerciseFields(id string) {
+	@components.FieldLabel("gym-exercise-name-"+id, "Exercício", true)
+	<input id={ "gym-exercise-name-" + id } name="exercise_name" required minlength="2" maxlength="180"/>
+	<div class="form-grid form-grid--three">
+		<div>@components.FieldLabel("gym-sets-"+id, "Séries (opcional)", false)
+<input id={ "gym-sets-" + id } name="sets" type="number" min="1" max="100"/></div>
+		<div>@components.FieldLabel("gym-repetitions-"+id, "Repetições (opcional)", false)
+<input id={ "gym-repetitions-" + id } name="repetitions" type="number" min="1" max="10000"/></div>
+		<div>@components.FieldLabel("gym-duration-"+id, "Duração em segundos (opcional)", false)
+<input id={ "gym-duration-" + id } name="duration_seconds" type="number" min="1" max="86400"/></div>
+		<div>@components.FieldLabel("gym-distance-"+id, "Distância em metros (opcional)", false)
+<input id={ "gym-distance-" + id } name="distance_metres" type="number" min="1" max="100000"/></div>
+		<div>@components.FieldLabel("gym-recovery-"+id, "Recuperação em segundos (opcional)", false)
+<input id={ "gym-recovery-" + id } name="recovery_seconds" type="number" min="1" max="86400"/></div>
+	</div>
+	@components.FieldHelp("gym-prescription-help-"+id, "Indique pelo menos repetições, duração ou distância.")
+	@components.FieldLabel("gym-resistance-kind-"+id, "Resistência (opcional)", false)
+	<select id={ "gym-resistance-kind-" + id } name="resistance_kind"><option value="">Sem resistência indicada</option><option value="KILOGRAMS">Quilogramas</option><option value="PERCENT_1RM">Percentagem de 1RM</option><option value="BODY_WEIGHT">Peso corporal</option><option value="BAND">Banda ou elástico</option><option value="RPE">RPE</option><option value="RIR">RIR</option><option value="COACH_INSTRUCTION">Instrução do treinador</option></select>
+	<div data-resistance-value>@components.FieldLabel("gym-resistance-value-"+id, "Valor da resistência", false)
+<input id={ "gym-resistance-value-" + id } name="resistance_value" type="number" min="0" max="10000" step="0.01"/></div>
+	<div data-resistance-text>@components.FieldLabel("gym-resistance-text-"+id, "Descrição da banda ou instrução", false)
+<input id={ "gym-resistance-text-" + id } name="resistance_text" maxlength="180"/></div>
+	@components.FieldLabel("gym-intent-"+id, "Intenção de execução (opcional)", false)
+	<select id={ "gym-intent-" + id } name="execution_intent"><option value="">Sem indicação</option><option value="CONTROLLED">Controlada</option><option value="EXPLOSIVE">Explosiva</option><option value="MAXIMUM_VELOCITY">Velocidade máxima</option><option value="ISOMETRIC">Isométrica</option><option value="CUSTOM">Outra</option></select>
+	@components.FieldLabel("gym-tempo-"+id, "Tempo (opcional)", false)
+	<input id={ "gym-tempo-" + id } name="tempo" maxlength="30" placeholder="Ex.: 3-1-1-0"/>
+	@components.FieldLabel("gym-exercise-notes-"+id, "Notas do exercício (opcional)", false)
+	<textarea id={ "gym-exercise-notes-" + id } name="exercise_notes" maxlength="1000"></textarea>
 }
 
 templ structuredMoveSegment(page StructuredTrainingPage, segment StructuredTrainingSegment) {
 	<div class="record-item__actions" aria-label="Ordenar segmento">
-		for _, move := range []struct{ Value, Label string }{{"up", "Subir"}, {"down", "Descer"}} {
-			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/"+segment.ID+"/mover") }>@page.CSRFField<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet" type="submit">{ move.Label }</button></form>
+		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir segmento", "↑"}, {"down", "Descer segmento", "↓"}} {
+			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segment.ID + "/mover") }>@page.CSRFField
+<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
 		}
 	</div>
 }
 
 templ structuredMoveBlock(page StructuredTrainingPage, block StructuredTrainingBlock) {
 	<div class="record-item__actions" aria-label="Ordenar bloco">
-		for _, move := range []struct{ Value, Label string }{{"up", "Subir"}, {"down", "Descer"}} {
-			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/"+block.ID+"/mover") }>@page.CSRFField<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet" type="submit">{ move.Label }</button></form>
+		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir bloco", "↑"}, {"down", "Descer bloco", "↓"}} {
+			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + block.ID + "/mover") }>@page.CSRFField
+<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
 		}
 	</div>
 }
 
-func structuredTrainingActions() []components.PageAction { return []components.PageAction{{Label:"Criar grupo",Href:"#criar-grupo-treino",Variant:"primary"},{Label:"Criar semana",Href:"#criar-semana-treino",Variant:"secondary"},{Label:"Criar sessão",Href:"#criar-sessao-estruturada",Variant:"secondary"},{Label:"Treinos atuais",Href:"/admin/treinos",Variant:"quiet"}} }
-func structuredEntryKindLabel(value string) string { switch value { case "REST": return "Descanso"; case "COMPETITION": return "Competição"; case "LOGISTICS": return "Logística"; default: return "Treino" } }
-func structuredModalityLabel(value string) string { switch value { case "WATER": return "Água"; case "GYM": return "Ginásio"; case "RUN": return "Corrida"; case "BIKE": return "Bicicleta"; case "ERGOMETER": return "Ergómetro"; case "FLEXIBILITY": return "Flexibilidade e mobilidade"; case "SPORTS_GAMES": return "Jogos desportivos"; default: return "Outra" } }
-func structuredPurposeLabel(value string) string { switch value { case "WARM_UP": return "Aquecimento"; case "MAIN": return "Trabalho principal"; case "COOL_DOWN": return "Retorno à calma"; case "TECHNIQUE": return "Técnica"; default: return "Outro objetivo" } }
+templ structuredMoveExercise(page StructuredTrainingPage, exercise StructuredGymExercise) {
+	<div class="record-item__actions" aria-label="Ordenar exercício">
+		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir exercício", "↑"}, {"down", "Descer exercício", "↓"}} {
+			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/exercicios/" + exercise.ID + "/mover") }>@page.CSRFField
+<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
+		}
+	</div>
+}
+
+templ gymPurposeOptions() {
+	for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
+		<option value={ value }>{ structuredPurposeLabel(value) }</option>
+	}
+}
+
+templ gymObjectiveOptions() {
+	for _, value := range []string{"MOBILITY", "ACTIVATION", "MAX_STRENGTH_HYPERTROPHY", "MAX_STRENGTH_NEURAL", "EXPLOSIVE_STRENGTH", "STRENGTH_ENDURANCE", "TECHNIQUE", "CORE", "CUSTOM"} {
+		<option value={ value }>{ trainingObjectiveLabel(value) }</option>
+	}
+}
+
+func structuredTrainingActions() []components.PageAction {
+	return []components.PageAction{{Label: "Criar grupo", Href: "#criar-grupo-treino", Variant: "primary"}, {Label: "Criar semana", Href: "#criar-semana-treino", Variant: "secondary"}, {Label: "Criar sessão", Href: "#criar-sessao-estruturada", Variant: "secondary"}, {Label: "Treinos atuais", Href: "/admin/treinos", Variant: "quiet"}}
+}
+func structuredEntryKindLabel(value string) string {
+	switch value {
+	case "REST":
+		return "Descanso"
+	case "COMPETITION":
+		return "Competição"
+	case "LOGISTICS":
+		return "Logística"
+	default:
+		return "Treino"
+	}
+}
+func structuredModalityLabel(value string) string {
+	switch value {
+	case "WATER":
+		return "Água"
+	case "GYM":
+		return "Ginásio"
+	case "RUN":
+		return "Corrida"
+	case "BIKE":
+		return "Bicicleta"
+	case "ERGOMETER":
+		return "Ergómetro"
+	case "FLEXIBILITY":
+		return "Flexibilidade e mobilidade"
+	case "SPORTS_GAMES":
+		return "Jogos desportivos"
+	default:
+		return "Outra"
+	}
+}
+func structuredModalitiesLabel(values []string) string {
+	labels := make([]string, 0, len(values))
+	for _, value := range values {
+		labels = append(labels, structuredModalityLabel(value))
+	}
+	return strings.Join(labels, " + ")
+}
+func structuredPurposeLabel(value string) string {
+	switch value {
+	case "WARM_UP":
+		return "Aquecimento"
+	case "MAIN":
+		return "Trabalho principal"
+	case "COOL_DOWN":
+		return "Retorno à calma"
+	case "TECHNIQUE":
+		return "Técnica"
+	default:
+		return "Outro objetivo"
+	}
+}
+func gymStructureLabel(value string) string {
+	switch value {
+	case "CIRCUIT":
+		return "Circuito"
+	case "SUPERSET":
+		return "Supersérie"
+	default:
+		return "Séries simples"
+	}
+}
+func trainingObjectiveLabel(value string) string {
+	switch value {
+	case "MOBILITY":
+		return "Flexibilidade e mobilidade"
+	case "ACTIVATION":
+		return "Ativação"
+	case "MAX_STRENGTH_HYPERTROPHY":
+		return "Força máxima — hipertrofia"
+	case "MAX_STRENGTH_NEURAL":
+		return "Força máxima — neural"
+	case "EXPLOSIVE_STRENGTH":
+		return "Força veloz e explosiva"
+	case "STRENGTH_ENDURANCE":
+		return "Força resistência"
+	case "TECHNIQUE":
+		return "Técnica"
+	case "CORE":
+		return "Core"
+	default:
+		return "Outro objetivo"
+	}
+}
+func gymExecutionIntentLabel(value string) string {
+	switch value {
+	case "CONTROLLED":
+		return "Execução controlada"
+	case "EXPLOSIVE":
+		return "Execução explosiva"
+	case "MAXIMUM_VELOCITY":
+		return "Velocidade máxima"
+	case "ISOMETRIC":
+		return "Isométrica"
+	default:
+		return "Outra intenção"
+	}
+}
+func trainingRoutineKindLabel(value string) string {
+	switch value {
+	case "BLOCK":
+		return "Bloco"
+	case "SEGMENT":
+		return "Segmento"
+	default:
+		return "Sessão"
+	}
+}
+func trainingRoutineTargetLabel(value string) string {
+	switch value {
+	case "BLOCK":
+		return "Segmento de destino"
+	case "SEGMENT":
+		return "Sessão de destino"
+	default:
+		return "Semana de destino"
+	}
+}

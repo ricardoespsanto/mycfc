@@ -317,6 +317,141 @@ func (ns NullFeatureAvailabilityMode) Value() (driver.Value, error) {
 	return string(ns.FeatureAvailabilityMode), nil
 }
 
+type GymBlockStructure string
+
+const (
+	GymBlockStructureSTRAIGHTSETS GymBlockStructure = "STRAIGHT_SETS"
+	GymBlockStructureCIRCUIT      GymBlockStructure = "CIRCUIT"
+	GymBlockStructureSUPERSET     GymBlockStructure = "SUPERSET"
+)
+
+func (e *GymBlockStructure) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = GymBlockStructure(s)
+	case string:
+		*e = GymBlockStructure(s)
+	default:
+		return fmt.Errorf("unsupported scan type for GymBlockStructure: %T", src)
+	}
+	return nil
+}
+
+type NullGymBlockStructure struct {
+	GymBlockStructure GymBlockStructure `json:"gym_block_structure"`
+	Valid             bool              `json:"valid"` // Valid is true if GymBlockStructure is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullGymBlockStructure) Scan(value interface{}) error {
+	if value == nil {
+		ns.GymBlockStructure, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.GymBlockStructure.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullGymBlockStructure) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.GymBlockStructure), nil
+}
+
+type GymExecutionIntent string
+
+const (
+	GymExecutionIntentCONTROLLED      GymExecutionIntent = "CONTROLLED"
+	GymExecutionIntentEXPLOSIVE       GymExecutionIntent = "EXPLOSIVE"
+	GymExecutionIntentMAXIMUMVELOCITY GymExecutionIntent = "MAXIMUM_VELOCITY"
+	GymExecutionIntentISOMETRIC       GymExecutionIntent = "ISOMETRIC"
+	GymExecutionIntentCUSTOM          GymExecutionIntent = "CUSTOM"
+)
+
+func (e *GymExecutionIntent) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = GymExecutionIntent(s)
+	case string:
+		*e = GymExecutionIntent(s)
+	default:
+		return fmt.Errorf("unsupported scan type for GymExecutionIntent: %T", src)
+	}
+	return nil
+}
+
+type NullGymExecutionIntent struct {
+	GymExecutionIntent GymExecutionIntent `json:"gym_execution_intent"`
+	Valid              bool               `json:"valid"` // Valid is true if GymExecutionIntent is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullGymExecutionIntent) Scan(value interface{}) error {
+	if value == nil {
+		ns.GymExecutionIntent, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.GymExecutionIntent.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullGymExecutionIntent) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.GymExecutionIntent), nil
+}
+
+type GymResistanceKind string
+
+const (
+	GymResistanceKindKILOGRAMS        GymResistanceKind = "KILOGRAMS"
+	GymResistanceKindPERCENT1RM       GymResistanceKind = "PERCENT_1RM"
+	GymResistanceKindBODYWEIGHT       GymResistanceKind = "BODY_WEIGHT"
+	GymResistanceKindBAND             GymResistanceKind = "BAND"
+	GymResistanceKindRPE              GymResistanceKind = "RPE"
+	GymResistanceKindRIR              GymResistanceKind = "RIR"
+	GymResistanceKindCOACHINSTRUCTION GymResistanceKind = "COACH_INSTRUCTION"
+)
+
+func (e *GymResistanceKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = GymResistanceKind(s)
+	case string:
+		*e = GymResistanceKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for GymResistanceKind: %T", src)
+	}
+	return nil
+}
+
+type NullGymResistanceKind struct {
+	GymResistanceKind GymResistanceKind `json:"gym_resistance_kind"`
+	Valid             bool              `json:"valid"` // Valid is true if GymResistanceKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullGymResistanceKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.GymResistanceKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.GymResistanceKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullGymResistanceKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.GymResistanceKind), nil
+}
+
 type MaintenanceStatus string
 
 const (
@@ -755,6 +890,55 @@ func (ns NullTrainingEntryKind) Value() (driver.Value, error) {
 	return string(ns.TrainingEntryKind), nil
 }
 
+type TrainingObjective string
+
+const (
+	TrainingObjectiveMOBILITY               TrainingObjective = "MOBILITY"
+	TrainingObjectiveACTIVATION             TrainingObjective = "ACTIVATION"
+	TrainingObjectiveMAXSTRENGTHHYPERTROPHY TrainingObjective = "MAX_STRENGTH_HYPERTROPHY"
+	TrainingObjectiveMAXSTRENGTHNEURAL      TrainingObjective = "MAX_STRENGTH_NEURAL"
+	TrainingObjectiveEXPLOSIVESTRENGTH      TrainingObjective = "EXPLOSIVE_STRENGTH"
+	TrainingObjectiveSTRENGTHENDURANCE      TrainingObjective = "STRENGTH_ENDURANCE"
+	TrainingObjectiveTECHNIQUE              TrainingObjective = "TECHNIQUE"
+	TrainingObjectiveCORE                   TrainingObjective = "CORE"
+	TrainingObjectiveCUSTOM                 TrainingObjective = "CUSTOM"
+)
+
+func (e *TrainingObjective) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingObjective(s)
+	case string:
+		*e = TrainingObjective(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingObjective: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingObjective struct {
+	TrainingObjective TrainingObjective `json:"training_objective"`
+	Valid             bool              `json:"valid"` // Valid is true if TrainingObjective is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingObjective) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingObjective, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingObjective.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingObjective) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingObjective), nil
+}
+
 type TrainingOutcomeStatus string
 
 const (
@@ -796,6 +980,91 @@ func (ns NullTrainingOutcomeStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.TrainingOutcomeStatus), nil
+}
+
+type TrainingRoutineKind string
+
+const (
+	TrainingRoutineKindBLOCK   TrainingRoutineKind = "BLOCK"
+	TrainingRoutineKindSEGMENT TrainingRoutineKind = "SEGMENT"
+	TrainingRoutineKindSESSION TrainingRoutineKind = "SESSION"
+)
+
+func (e *TrainingRoutineKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingRoutineKind(s)
+	case string:
+		*e = TrainingRoutineKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingRoutineKind: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingRoutineKind struct {
+	TrainingRoutineKind TrainingRoutineKind `json:"training_routine_kind"`
+	Valid               bool                `json:"valid"` // Valid is true if TrainingRoutineKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingRoutineKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingRoutineKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingRoutineKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingRoutineKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingRoutineKind), nil
+}
+
+type TrainingRoutineVisibility string
+
+const (
+	TrainingRoutineVisibilityPRIVATE TrainingRoutineVisibility = "PRIVATE"
+	TrainingRoutineVisibilitySHARED  TrainingRoutineVisibility = "SHARED"
+)
+
+func (e *TrainingRoutineVisibility) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingRoutineVisibility(s)
+	case string:
+		*e = TrainingRoutineVisibility(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingRoutineVisibility: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingRoutineVisibility struct {
+	TrainingRoutineVisibility TrainingRoutineVisibility `json:"training_routine_visibility"`
+	Valid                     bool                      `json:"valid"` // Valid is true if TrainingRoutineVisibility is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingRoutineVisibility) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingRoutineVisibility, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingRoutineVisibility.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingRoutineVisibility) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingRoutineVisibility), nil
 }
 
 type TrainingSegmentModality string
@@ -1064,6 +1333,36 @@ type FeatureFlagEvent struct {
 	OccurredAt   pgtype.Timestamptz      `json:"occurred_at"`
 }
 
+type GymBlockPrescription struct {
+	BlockID              uuid.UUID          `json:"block_id"`
+	Structure            GymBlockStructure  `json:"structure"`
+	Objective            TrainingObjective  `json:"objective"`
+	Rounds               int32              `json:"rounds"`
+	RoundRecoverySeconds *int32             `json:"round_recovery_seconds"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GymExercise struct {
+	ID              uuid.UUID           `json:"id"`
+	BlockID         uuid.UUID           `json:"block_id"`
+	Position        int32               `json:"position"`
+	Name            string              `json:"name"`
+	Sets            *int32              `json:"sets"`
+	Repetitions     *int32              `json:"repetitions"`
+	DurationSeconds *int32              `json:"duration_seconds"`
+	DistanceMetres  *int32              `json:"distance_metres"`
+	RecoverySeconds *int32              `json:"recovery_seconds"`
+	ResistanceKind  *GymResistanceKind  `json:"resistance_kind"`
+	ResistanceValue *float64            `json:"resistance_value"`
+	ResistanceText  *string             `json:"resistance_text"`
+	ExecutionIntent *GymExecutionIntent `json:"execution_intent"`
+	Tempo           *string             `json:"tempo"`
+	Notes           string              `json:"notes"`
+	CreatedAt       pgtype.Timestamptz  `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz  `json:"updated_at"`
+}
+
 type MaintenanceTask struct {
 	ID           uuid.UUID          `json:"id"`
 	EquipmentID  uuid.UUID          `json:"equipment_id"`
@@ -1313,6 +1612,17 @@ type Team struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type TrainingCopyEvent struct {
+	ID              uuid.UUID          `json:"id"`
+	SourceKind      string             `json:"source_kind"`
+	SourceID        uuid.UUID          `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
+	DestinationKind string             `json:"destination_kind"`
+	DestinationID   uuid.UUID          `json:"destination_id"`
+	CopiedByID      uuid.UUID          `json:"copied_by_id"`
+	CopiedAt        pgtype.Timestamptz `json:"copied_at"`
+}
+
 type TrainingGroup struct {
 	ID          uuid.UUID          `json:"id"`
 	Name        string             `json:"name"`
@@ -1352,6 +1662,26 @@ type TrainingPlan struct {
 	CreatedByID     uuid.UUID          `json:"created_by_id"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingRoutine struct {
+	ID              uuid.UUID                 `json:"id"`
+	Name            string                    `json:"name"`
+	Description     string                    `json:"description"`
+	Kind            TrainingRoutineKind       `json:"kind"`
+	Visibility      TrainingRoutineVisibility `json:"visibility"`
+	OwnerUserID     uuid.UUID                 `json:"owner_user_id"`
+	ProgrammeID     *uuid.UUID                `json:"programme_id"`
+	TeamID          *uuid.UUID                `json:"team_id"`
+	Modality        *TrainingSegmentModality  `json:"modality"`
+	Objective       *TrainingObjective        `json:"objective"`
+	Method          string                    `json:"method"`
+	Tags            []string                  `json:"tags"`
+	SourceID        uuid.UUID                 `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz        `json:"source_updated_at"`
+	Snapshot        []byte                    `json:"snapshot"`
+	CreatedAt       pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz        `json:"updated_at"`
 }
 
 type TrainingSegmentBlock struct {
@@ -1409,15 +1739,18 @@ type TrainingSessionOutcome struct {
 }
 
 type TrainingSessionSegment struct {
-	ID                     uuid.UUID               `json:"id"`
-	SessionID              uuid.UUID               `json:"session_id"`
-	Position               int32                   `json:"position"`
-	Modality               TrainingSegmentModality `json:"modality"`
-	Title                  string                  `json:"title"`
-	Location               string                  `json:"location"`
-	PlannedDurationMinutes *int32                  `json:"planned_duration_minutes"`
-	CreatedAt              pgtype.Timestamptz      `json:"created_at"`
-	UpdatedAt              pgtype.Timestamptz      `json:"updated_at"`
+	ID                        uuid.UUID               `json:"id"`
+	SessionID                 uuid.UUID               `json:"session_id"`
+	Position                  int32                   `json:"position"`
+	Modality                  TrainingSegmentModality `json:"modality"`
+	Title                     string                  `json:"title"`
+	Location                  string                  `json:"location"`
+	PlannedDurationMinutes    *int32                  `json:"planned_duration_minutes"`
+	PlannedStartOffsetMinutes *int32                  `json:"planned_start_offset_minutes"`
+	TransitionDurationMinutes *int32                  `json:"transition_duration_minutes"`
+	EquipmentNotes            string                  `json:"equipment_notes"`
+	CreatedAt                 pgtype.Timestamptz      `json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz      `json:"updated_at"`
 }
 
 type User struct {

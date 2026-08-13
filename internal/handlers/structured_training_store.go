@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
+	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,6 +24,43 @@ type StructuredTrainingSegmentInput struct {
 	Block   dbgen.CreateTrainingSegmentBlockParams
 }
 
+type StructuredGymBlockInput struct {
+	Block        dbgen.CreateTrainingSegmentBlockParams
+	Prescription dbgen.CreateGymBlockPrescriptionParams
+	Exercise     dbgen.CreateGymExerciseParams
+}
+
+type StructuredRoutineSource struct {
+	PlanID          uuid.UUID
+	SourceUpdatedAt pgtype.Timestamptz
+	ProgrammeID     *uuid.UUID
+	TeamID          *uuid.UUID
+	Modality        *dbgen.TrainingSegmentModality
+	Objective       *dbgen.TrainingObjective
+	Snapshot        []byte
+}
+
+type StructuredRoutineInsertInput struct {
+	Routine  dbgen.TrainingRoutine
+	TargetID uuid.UUID
+	StartsAt pgtype.Timestamptz
+	ActorID  uuid.UUID
+}
+
+type StructuredWeekCopyInput struct {
+	SourcePlanID uuid.UUID
+	WeekStart    time.Time
+	Title        string
+	Description  string
+	ActorID      uuid.UUID
+}
+
+type StructuredDayCopyInput struct {
+	SourcePlanID, TargetPlanID uuid.UUID
+	SourceDate, TargetDate     time.Time
+	ActorID                    uuid.UUID
+}
+
 type StructuredTrainingStore interface {
 	ListEligibleTrainingGroupMemberships(context.Context, dbgen.ListEligibleTrainingGroupMembershipsParams) ([]dbgen.ListEligibleTrainingGroupMembershipsRow, error)
 	ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error)
@@ -33,11 +72,25 @@ type StructuredTrainingStore interface {
 	CreateStructuredTrainingSession(context.Context, dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error)
 	CreateSegment(context.Context, StructuredTrainingSegmentInput) (uuid.UUID, error)
 	CreateTrainingSegmentBlock(context.Context, dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error)
+	CreateGymBlock(context.Context, StructuredGymBlockInput) (uuid.UUID, error)
+	CreateGymExercise(context.Context, dbgen.CreateGymExerciseParams) (uuid.UUID, error)
 	GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredSegmentPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredBlockPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
+	GetGymExercisePlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	MoveTrainingSessionSegment(context.Context, dbgen.MoveTrainingSessionSegmentParams) (bool, error)
 	MoveTrainingSegmentBlock(context.Context, dbgen.MoveTrainingSegmentBlockParams) (bool, error)
+	MoveGymExercise(context.Context, dbgen.MoveGymExerciseParams) (bool, error)
+	GetRoutineSource(context.Context, dbgen.TrainingRoutineKind, uuid.UUID) (StructuredRoutineSource, error)
+	CreateTrainingRoutine(context.Context, dbgen.CreateTrainingRoutineParams) (dbgen.TrainingRoutine, error)
+	ListVisibleTrainingRoutines(context.Context, dbgen.ListVisibleTrainingRoutinesParams) ([]dbgen.ListVisibleTrainingRoutinesRow, error)
+	GetVisibleTrainingRoutine(context.Context, dbgen.GetVisibleTrainingRoutineParams) (dbgen.TrainingRoutine, error)
+	InsertTrainingRoutine(context.Context, StructuredRoutineInsertInput) (uuid.UUID, error)
+	CopyTrainingBlock(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (uuid.UUID, error)
+	CopyTrainingSession(context.Context, uuid.UUID, uuid.UUID, pgtype.Timestamptz, uuid.UUID) (uuid.UUID, error)
+	CopyStructuredTrainingDay(context.Context, StructuredDayCopyInput) (int, error)
+	CopyStructuredTrainingWeek(context.Context, StructuredWeekCopyInput) (dbgen.TrainingPlan, error)
+	GetStructuredPlanCopySource(context.Context, uuid.UUID) (dbgen.GetStructuredPlanCopySourceRow, error)
 }
 
 type PostgresStructuredTrainingStore struct {
@@ -125,6 +178,39 @@ func (s PostgresStructuredTrainingStore) CreateTrainingSegmentBlock(ctx context.
 	return s.queries().CreateTrainingSegmentBlock(ctx, params)
 }
 
+func (s PostgresStructuredTrainingStore) CreateGymBlock(ctx context.Context, input StructuredGymBlockInput) (blockID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	blockID, err = queries.CreateTrainingSegmentBlock(ctx, input.Block)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	input.Prescription.BlockID = blockID
+	rows, err := queries.CreateGymBlockPrescription(ctx, input.Prescription)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if rows != 1 {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	input.Exercise.BlockID = blockID
+	if _, err := queries.CreateGymExercise(ctx, input.Exercise); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return blockID, nil
+}
+
+func (s PostgresStructuredTrainingStore) CreateGymExercise(ctx context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
+	return s.queries().CreateGymExercise(ctx, params)
+}
+
 func (s PostgresStructuredTrainingStore) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
 	return s.queries().GetStructuredSessionPlanID(ctx, sessionID)
 }
@@ -137,10 +223,191 @@ func (s PostgresStructuredTrainingStore) GetStructuredBlockPlanID(ctx context.Co
 	return s.queries().GetStructuredBlockPlanID(ctx, blockID)
 }
 
+func (s PostgresStructuredTrainingStore) GetGymExercisePlanID(ctx context.Context, exerciseID uuid.UUID) (uuid.UUID, error) {
+	return s.queries().GetGymExercisePlanID(ctx, exerciseID)
+}
+
 func (s PostgresStructuredTrainingStore) MoveTrainingSessionSegment(ctx context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
 	return s.queries().MoveTrainingSessionSegment(ctx, params)
 }
 
 func (s PostgresStructuredTrainingStore) MoveTrainingSegmentBlock(ctx context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
 	return s.queries().MoveTrainingSegmentBlock(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) MoveGymExercise(ctx context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
+	return s.queries().MoveGymExercise(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) GetRoutineSource(ctx context.Context, kind dbgen.TrainingRoutineKind, sourceID uuid.UUID) (StructuredRoutineSource, error) {
+	switch kind {
+	case dbgen.TrainingRoutineKindBLOCK:
+		row, err := s.queries().GetBlockRoutineSource(ctx, sourceID)
+		modality := row.Modality
+		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: &modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
+	case dbgen.TrainingRoutineKindSEGMENT:
+		row, err := s.queries().GetSegmentRoutineSource(ctx, sourceID)
+		modality := row.Modality
+		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: &modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
+	case dbgen.TrainingRoutineKindSESSION:
+		row, err := s.queries().GetSessionRoutineSource(ctx, sourceID)
+		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: row.Modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
+	default:
+		return StructuredRoutineSource{}, pgx.ErrNoRows
+	}
+}
+
+func (s PostgresStructuredTrainingStore) CreateTrainingRoutine(ctx context.Context, params dbgen.CreateTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	return s.queries().CreateTrainingRoutine(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListVisibleTrainingRoutines(ctx context.Context, params dbgen.ListVisibleTrainingRoutinesParams) ([]dbgen.ListVisibleTrainingRoutinesRow, error) {
+	return s.queries().ListVisibleTrainingRoutines(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) GetVisibleTrainingRoutine(ctx context.Context, params dbgen.GetVisibleTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	return s.queries().GetVisibleTrainingRoutine(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) InsertTrainingRoutine(ctx context.Context, input StructuredRoutineInsertInput) (destinationID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	destinationKind := string(input.Routine.Kind)
+	switch input.Routine.Kind {
+	case dbgen.TrainingRoutineKindBLOCK:
+		destinationID, err = queries.RestoreTrainingBlock(ctx, dbgen.RestoreTrainingBlockParams{Snapshot: input.Routine.Snapshot, SegmentID: input.TargetID})
+	case dbgen.TrainingRoutineKindSEGMENT:
+		destinationID, err = queries.RestoreTrainingSegment(ctx, dbgen.RestoreTrainingSegmentParams{Snapshot: input.Routine.Snapshot, SessionID: input.TargetID})
+	case dbgen.TrainingRoutineKindSESSION:
+		if !input.StartsAt.Valid {
+			return uuid.Nil, pgx.ErrNoRows
+		}
+		destinationID, err = queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: input.Routine.Snapshot, PlanID: input.TargetID, StartsAt: input.StartsAt, CreatedByID: input.ActorID})
+	default:
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: input.Routine.ID, SourceUpdatedAt: input.Routine.UpdatedAt, DestinationKind: destinationKind, DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+		return uuid.Nil, err
+	}
+	return destinationID, tx.Commit(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) CopyTrainingBlock(ctx context.Context, sourceID, targetSegmentID, actorID uuid.UUID) (destinationID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	source, err := queries.GetBlockRoutineSource(ctx, sourceID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	destinationID, err = queries.RestoreTrainingBlock(ctx, dbgen.RestoreTrainingBlockParams{Snapshot: source.Snapshot, SegmentID: targetSegmentID})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "BLOCK", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "BLOCK", DestinationID: destinationID, CopiedByID: actorID}); err != nil {
+		return uuid.Nil, err
+	}
+	return destinationID, tx.Commit(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) CopyTrainingSession(ctx context.Context, sourceID, targetPlanID uuid.UUID, startsAt pgtype.Timestamptz, actorID uuid.UUID) (destinationID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	source, err := queries.GetSessionRoutineSource(ctx, sourceID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	destinationID, err = queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: source.Snapshot, PlanID: targetPlanID, StartsAt: startsAt, CreatedByID: actorID})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "SESSION", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: actorID}); err != nil {
+		return uuid.Nil, err
+	}
+	return destinationID, tx.Commit(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) CopyStructuredTrainingDay(ctx context.Context, input StructuredDayCopyInput) (copied int, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	rows, err := queries.ListStructuredSessionSnapshotsForDay(ctx, dbgen.ListStructuredSessionSnapshotsForDayParams{PlanID: input.SourcePlanID, SourceDate: pgtype.Date{Time: input.SourceDate, Valid: true}})
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		local := row.StartsAt.Time.In(input.TargetDate.Location())
+		startsAt := time.Date(input.TargetDate.Year(), input.TargetDate.Month(), input.TargetDate.Day(), local.Hour(), local.Minute(), local.Second(), 0, input.TargetDate.Location())
+		destinationID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: row.Snapshot, PlanID: input.TargetPlanID, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, CreatedByID: input.ActorID})
+		if err != nil {
+			return copied, err
+		}
+		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "DAY", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+			return copied, err
+		}
+		copied++
+	}
+	return copied, tx.Commit(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.Context, input StructuredWeekCopyInput) (plan dbgen.TrainingPlan, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return plan, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	source, err := queries.GetStructuredPlanCopySource(ctx, input.SourcePlanID)
+	if err != nil || source.TrainingGroupID == nil || !source.WeekStart.Valid {
+		return plan, pgx.ErrNoRows
+	}
+	description := input.Description
+	if description == "" {
+		description = source.Description
+	}
+	plan, err = queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: input.Title, Description: description, WeekStart: pgtype.Date{Time: input.WeekStart, Valid: true}, CreatedByID: input.ActorID, GroupID: *source.TrainingGroupID})
+	if err != nil {
+		return plan, err
+	}
+	rows, err := queries.ListStructuredSessionSnapshotsForPlan(ctx, input.SourcePlanID)
+	if err != nil {
+		return plan, err
+	}
+	sourceDate := time.Date(source.WeekStart.Time.Year(), source.WeekStart.Time.Month(), source.WeekStart.Time.Day(), 0, 0, 0, 0, time.UTC)
+	targetDate := time.Date(input.WeekStart.Year(), input.WeekStart.Month(), input.WeekStart.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(targetDate.Sub(sourceDate).Hours() / 24)
+	for _, row := range rows {
+		destinationID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: row.Snapshot, PlanID: plan.ID, StartsAt: pgtype.Timestamptz{Time: row.StartsAt.Time.AddDate(0, 0, days), Valid: true}, CreatedByID: input.ActorID})
+		if err != nil {
+			return plan, err
+		}
+		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+			return plan, err
+		}
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: input.SourcePlanID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "WEEK", DestinationID: plan.ID, CopiedByID: input.ActorID}); err != nil {
+		return plan, err
+	}
+	return plan, tx.Commit(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) GetStructuredPlanCopySource(ctx context.Context, planID uuid.UUID) (dbgen.GetStructuredPlanCopySourceRow, error) {
+	return s.queries().GetStructuredPlanCopySource(ctx, planID)
 }

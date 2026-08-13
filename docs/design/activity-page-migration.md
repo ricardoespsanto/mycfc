@@ -25,4 +25,4 @@ The full authenticated-route inventory and remaining owners are tracked in [auth
 - `CI=true make test-e2e`
 - `CI=true make ui-review-screenshots`
 
-The screenshot gate runs axe checks and checks the activity routes at 320px, simulated 200% zoom, and with keyboard focus. The existing event and announcement journeys exercise their server-rendered workflows; the wider suite retains JavaScript-disabled form coverage.
+The screenshot gate runs axe checks and checks the activity routes at 320px, simulated 200% zoom, and with keyboard focus. The existing event and announcement journeys exercise their server-authoritative workflows; the wider suite covers interactive form validation and recovery.

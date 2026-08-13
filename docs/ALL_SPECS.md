@@ -74,7 +74,7 @@ This file has highest precedence. Later files may add detail but MUST NOT contra
 | Go toolchain | Go `1.26.5`; `go.mod` module `github.com/cfcoimbra/mycfc` and `go 1.26.0` |
 | HTTP | Standard-library `net/http` router and patterns; no third-party router |
 | Rendering | Server-side rendering with `github.com/a-h/templ` |
-| Interaction | HTMX with response-targets extension; progressive enhancement is mandatory |
+| Interaction | JavaScript-enhanced server-rendered UI; use HTMX or focused native JavaScript when it materially improves the task |
 | Styling | Pico CSS, locally bundled; no runtime CDN dependency |
 | Browser assets | npm lockfile + esbuild; locally bundled and embedded into the Go binary |
 | Database | PostgreSQL 16, `timestamptz`, UUID primary keys |
@@ -107,7 +107,7 @@ Dependency versions MUST be recorded in `go.mod`, `go.sum`, `package-lock.json`,
 5. Browser calendar integration is allowed only for explicitly public Google Calendars. The browser API key is not a secret but MUST be restricted to the production and local origins in Google Cloud.
 6. S3 repair images are private. Pages needing an image receive a short-lived pre-signed GET URL generated server-side.
 7. Database migrations MUST use expand/contract compatibility. A deployment may run new code and old code simultaneously during a rolling update.
-8. The application MUST remain usable for core tasks without JavaScript: login, registration, dashboard navigation, dependent creation, and repair submission.
+8. Core tasks MUST provide clear loading, success, validation, error and recovery states. JavaScript is an accepted application dependency; server authorization and validation remain authoritative.
 9. All user-facing text, validation messages, date formatting, and accessibility labels are pt-PT.
 10. Production startup MUST fail closed when required configuration is invalid. It must not silently use insecure defaults.
 
@@ -695,7 +695,7 @@ Calendar data is fetched directly by the browser from Google Calendar and theref
 - Locale exactly `pt` with custom labels reviewed for pt-PT.
 - Default desktop view `dayGridMonth`; narrow viewport defaults to `listMonth`.
 - Event source failures show an accessible inline warning and log only a non-sensitive browser-console message.
-- Render a non-JavaScript fallback containing links to the public calendars and a message that the interactive calendar needs JavaScript.
+- When the interactive calendar cannot load, render a recoverable error with direct links to the public calendars.
 - Calendar API key must never be described as confidential. Infrastructure documentation must require HTTP-referrer and Google Calendar API restrictions.
 
 Role event sources:
@@ -787,7 +787,7 @@ All dashboard queries use request context and a 5-second database deadline.
 - Golden or DOM-based component tests cover populated and empty state for all four dashboards.
 - Role dashboards never show navigation or data belonging exclusively to another role.
 - Calendar source tests verify exact role mapping and deduplication.
-- JavaScript-disabled Playwright tests complete login, navigation, dependent creation and repair submission.
+- JavaScript-enabled Playwright tests complete login, navigation, dependent creation and repair submission, including keyboard and recoverable-error coverage.
 - HTMX tests verify 200 success fragments, 422 form replacement, focus target attributes and normal-form redirects.
 - Built HTML contains no inline script/style, no CDN URLs and no unescaped configuration.
 - `npm run build` and templ generation are deterministic.
@@ -1123,7 +1123,7 @@ Every page MUST have:
 - Visible keyboard focus meeting WCAG 2.2 focus appearance requirements.
 - No positive `tabindex`.
 - No click-only non-button elements.
-- A useful page when CSS or JavaScript fails.
+- A useful, recoverable state when CSS or JavaScript assets fail to load.
 
 ## 5. Forms
 

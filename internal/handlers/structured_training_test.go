@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,22 +11,37 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type structuredTrainingStoreStub struct {
 	StructuredTrainingStore
-	manageable    bool
-	manageArgs    []dbgen.CanManageStructuredTrainingGroupParams
-	created       []dbgen.CreateStructuredTrainingWeekParams
-	groups        []StructuredTrainingGroupInput
-	weekOK        bool
-	sessions      []dbgen.CreateStructuredTrainingSessionParams
-	segments      []StructuredTrainingSegmentInput
-	blocks        []dbgen.CreateTrainingSegmentBlockParams
-	planID        uuid.UUID
-	movedSegments []dbgen.MoveTrainingSessionSegmentParams
-	movedBlocks   []dbgen.MoveTrainingSegmentBlockParams
+	manageable       bool
+	manageArgs       []dbgen.CanManageStructuredTrainingGroupParams
+	created          []dbgen.CreateStructuredTrainingWeekParams
+	groups           []StructuredTrainingGroupInput
+	weekOK           bool
+	sessions         []dbgen.CreateStructuredTrainingSessionParams
+	segments         []StructuredTrainingSegmentInput
+	blocks           []dbgen.CreateTrainingSegmentBlockParams
+	gymBlocks        []StructuredGymBlockInput
+	gymExercises     []dbgen.CreateGymExerciseParams
+	planID           uuid.UUID
+	movedSegments    []dbgen.MoveTrainingSessionSegmentParams
+	movedBlocks      []dbgen.MoveTrainingSegmentBlockParams
+	movedExercises   []dbgen.MoveGymExerciseParams
+	routineSource    StructuredRoutineSource
+	createdRoutines  []dbgen.CreateTrainingRoutineParams
+	visibleRoutine   dbgen.TrainingRoutine
+	insertedRoutines []StructuredRoutineInsertInput
+	copiedBlocks     [][3]uuid.UUID
+	copiedSessions   []struct {
+		SourceID, TargetID, ActorID uuid.UUID
+		StartsAt                    pgtype.Timestamptz
+	}
 }
 
 func (s *structuredTrainingStoreStub) CreateGroup(_ context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
@@ -64,6 +80,10 @@ func (s *structuredTrainingStoreStub) GetStructuredBlockPlanID(context.Context, 
 	return s.planID, nil
 }
 
+func (s *structuredTrainingStoreStub) GetGymExercisePlanID(context.Context, uuid.UUID) (uuid.UUID, error) {
+	return s.planID, nil
+}
+
 func (s *structuredTrainingStoreStub) CreateSegment(_ context.Context, input StructuredTrainingSegmentInput) (uuid.UUID, error) {
 	s.segments = append(s.segments, input)
 	return uuid.New(), nil
@@ -71,6 +91,16 @@ func (s *structuredTrainingStoreStub) CreateSegment(_ context.Context, input Str
 
 func (s *structuredTrainingStoreStub) CreateTrainingSegmentBlock(_ context.Context, params dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error) {
 	s.blocks = append(s.blocks, params)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateGymBlock(_ context.Context, input StructuredGymBlockInput) (uuid.UUID, error) {
+	s.gymBlocks = append(s.gymBlocks, input)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CreateGymExercise(_ context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
+	s.gymExercises = append(s.gymExercises, params)
 	return uuid.New(), nil
 }
 
@@ -82,6 +112,42 @@ func (s *structuredTrainingStoreStub) MoveTrainingSessionSegment(_ context.Conte
 func (s *structuredTrainingStoreStub) MoveTrainingSegmentBlock(_ context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
 	s.movedBlocks = append(s.movedBlocks, params)
 	return true, nil
+}
+
+func (s *structuredTrainingStoreStub) MoveGymExercise(_ context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
+	s.movedExercises = append(s.movedExercises, params)
+	return true, nil
+}
+
+func (s *structuredTrainingStoreStub) GetRoutineSource(context.Context, dbgen.TrainingRoutineKind, uuid.UUID) (StructuredRoutineSource, error) {
+	return s.routineSource, nil
+}
+
+func (s *structuredTrainingStoreStub) CreateTrainingRoutine(_ context.Context, params dbgen.CreateTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	s.createdRoutines = append(s.createdRoutines, params)
+	return dbgen.TrainingRoutine{ID: uuid.New()}, nil
+}
+
+func (s *structuredTrainingStoreStub) GetVisibleTrainingRoutine(context.Context, dbgen.GetVisibleTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	return s.visibleRoutine, nil
+}
+
+func (s *structuredTrainingStoreStub) InsertTrainingRoutine(_ context.Context, input StructuredRoutineInsertInput) (uuid.UUID, error) {
+	s.insertedRoutines = append(s.insertedRoutines, input)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CopyTrainingBlock(_ context.Context, sourceID, targetID, actorID uuid.UUID) (uuid.UUID, error) {
+	s.copiedBlocks = append(s.copiedBlocks, [3]uuid.UUID{sourceID, targetID, actorID})
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CopyTrainingSession(_ context.Context, sourceID, targetID uuid.UUID, startsAt pgtype.Timestamptz, actorID uuid.UUID) (uuid.UUID, error) {
+	s.copiedSessions = append(s.copiedSessions, struct {
+		SourceID, TargetID, ActorID uuid.UUID
+		StartsAt                    pgtype.Timestamptz
+	}{sourceID, targetID, actorID, startsAt})
+	return uuid.New(), nil
 }
 
 func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
@@ -108,6 +174,9 @@ func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
 	}
 	if audiences[0].Weeks[0].Season != "2025/2026" {
 		t.Fatalf("season = %q", audiences[0].Weeks[0].Season)
+	}
+	if modalities := audiences[0].Weeks[0].Sessions[0].Modalities; len(modalities) != 2 || modalities[0] != "GYM" || modalities[1] != "WATER" {
+		t.Fatalf("derived modalities = %#v", modalities)
 	}
 }
 
@@ -182,16 +251,19 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 	}
 
 	segmentValues := url.Values{
-		"modality":                 {"WATER"},
-		"title":                    {"Ataque e defesa"},
-		"location":                 {"Mondego"},
-		"planned_duration_minutes": {"90"},
-		"purpose":                  {"MAIN"},
-		"block_title":              {"Jogo condicionado"},
-		"instructions":             {"2x7' HxH com guarda-redes e pivot"},
+		"modality":                     {"WATER"},
+		"title":                        {"Ataque e defesa"},
+		"location":                     {"Mondego"},
+		"planned_duration_minutes":     {"90"},
+		"planned_start_offset_minutes": {"20"},
+		"transition_duration_minutes":  {"5"},
+		"equipment_notes":              {"Colete e bola"},
+		"purpose":                      {"MAIN"},
+		"block_title":                  {"Jogo condicionado"},
+		"instructions":                 {"2x7' HxH com guarda-redes e pivot"},
 	}
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes/"+sessionID.String()+"/segmentos", segmentValues, "id", sessionID.String(), handler.CreateSegment)
-	if response.Code != http.StatusSeeOther || len(store.segments) != 1 || store.segments[0].Segment.Modality != dbgen.TrainingSegmentModalityWATER || store.segments[0].Segment.PlannedDurationMinutes == nil || *store.segments[0].Segment.PlannedDurationMinutes != 90 {
+	if response.Code != http.StatusSeeOther || len(store.segments) != 1 || store.segments[0].Segment.Modality != dbgen.TrainingSegmentModalityWATER || store.segments[0].Segment.PlannedDurationMinutes == nil || *store.segments[0].Segment.PlannedDurationMinutes != 90 || store.segments[0].Segment.PlannedStartOffsetMinutes == nil || *store.segments[0].Segment.PlannedStartOffsetMinutes != 20 || store.segments[0].Segment.TransitionDurationMinutes == nil || *store.segments[0].Segment.TransitionDurationMinutes != 5 || store.segments[0].Segment.EquipmentNotes != "Colete e bola" {
 		t.Fatalf("segment response=%d inputs=%#v", response.Code, store.segments)
 	}
 
@@ -208,6 +280,29 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/mover", url.Values{"direction": {"down"}}, "id", blockID.String(), handler.MoveBlock)
 	if response.Code != http.StatusSeeOther || len(store.movedBlocks) != 1 || store.movedBlocks[0].Direction != 1 {
 		t.Fatalf("move block response=%d inputs=%#v", response.Code, store.movedBlocks)
+	}
+
+	gymValues := url.Values{
+		"purpose": {"WARM_UP"}, "title": {"Mobilidade e força"}, "instructions": {"Duas voltas controladas"},
+		"structure": {"SUPERSET"}, "objective": {"ACTIVATION"}, "rounds": {"3"}, "round_recovery_seconds": {"120"},
+		"exercise_name": {"Supino + elevação"}, "sets": {"3"}, "repetitions": {"10"}, "recovery_seconds": {"60"},
+		"resistance_kind": {"PERCENT_1RM"}, "resistance_value": {"75"}, "execution_intent": {"EXPLOSIVE"}, "tempo": {"2-0-X-1"},
+	}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/segmentos/"+segmentID.String()+"/ginasio", gymValues, "id", segmentID.String(), handler.CreateGymBlock)
+	if response.Code != http.StatusSeeOther || len(store.gymBlocks) != 1 || store.gymBlocks[0].Prescription.Structure != dbgen.GymBlockStructureSUPERSET || store.gymBlocks[0].Prescription.Rounds != 3 || store.gymBlocks[0].Exercise.ResistanceValue == nil || *store.gymBlocks[0].Exercise.ResistanceValue != 75 {
+		t.Fatalf("gym block response=%d inputs=%#v", response.Code, store.gymBlocks)
+	}
+
+	exerciseValues := url.Values{"exercise_name": {"Prancha"}, "duration_seconds": {"45"}, "resistance_kind": {"BODY_WEIGHT"}, "execution_intent": {"ISOMETRIC"}}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/exercicios", exerciseValues, "id", blockID.String(), handler.CreateGymExercise)
+	if response.Code != http.StatusSeeOther || len(store.gymExercises) != 1 || store.gymExercises[0].BlockID != blockID || store.gymExercises[0].DurationSeconds == nil || *store.gymExercises[0].DurationSeconds != 45 {
+		t.Fatalf("gym exercise response=%d inputs=%#v", response.Code, store.gymExercises)
+	}
+
+	exerciseID := uuid.New()
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/exercicios/"+exerciseID.String()+"/mover", url.Values{"direction": {"up"}}, "id", exerciseID.String(), handler.MoveGymExercise)
+	if response.Code != http.StatusSeeOther || len(store.movedExercises) != 1 || store.movedExercises[0].Direction != -1 {
+		t.Fatalf("move exercise response=%d inputs=%#v", response.Code, store.movedExercises)
 	}
 }
 
@@ -261,5 +356,184 @@ func TestOptionalPositiveInt32(t *testing.T) {
 		if parsed, err := optionalPositiveInt32(value, 1440); err == nil || parsed != nil {
 			t.Fatalf("out-of-range value %q = %v, %v", value, parsed, err)
 		}
+	}
+}
+
+func TestParseGymExerciseValidatesPrescriptionAndResistance(t *testing.T) {
+	valid := url.Values{"exercise_name": {"Supino"}, "repetitions": {"5"}, "resistance_kind": {"PERCENT_1RM"}, "resistance_value": {"75"}, "execution_intent": {"EXPLOSIVE"}}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(valid.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	exercise, err := parseGymExercise(request)
+	if err != nil || exercise.Repetitions == nil || *exercise.Repetitions != 5 || exercise.ResistanceValue == nil || *exercise.ResistanceValue != 75 {
+		t.Fatalf("valid exercise = %#v, %v", exercise, err)
+	}
+
+	for name, values := range map[string]url.Values{
+		"missing prescription":     {"exercise_name": {"Supino"}},
+		"RPE outside scale":        {"exercise_name": {"Supino"}, "repetitions": {"5"}, "resistance_kind": {"RPE"}, "resistance_value": {"11"}},
+		"band without description": {"exercise_name": {"Supino"}, "repetitions": {"5"}, "resistance_kind": {"BAND"}},
+		"value without type":       {"exercise_name": {"Supino"}, "repetitions": {"5"}, "resistance_value": {"75"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(values.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if err := request.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseGymExercise(request); err == nil {
+				t.Fatal("invalid exercise was accepted")
+			}
+		})
+	}
+}
+
+func TestStructuredTrainingRoutineHandlersPreserveScopeAndRequireTargetAuthorization(t *testing.T) {
+	userID, planID, programmeID, sourceID, targetID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	modality := dbgen.TrainingSegmentModalityGYM
+	sourceUpdatedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	store := &structuredTrainingStoreStub{weekOK: true, planID: planID, routineSource: StructuredRoutineSource{PlanID: planID, SourceUpdatedAt: sourceUpdatedAt, ProgrammeID: &programmeID, Modality: &modality, Snapshot: []byte(`{"title":"Mobilidade","blocks":[]}`)}}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	user := CurrentUser{ID: userID}
+
+	values := url.Values{"source_kind": {"SEGMENT"}, "source_id": {sourceID.String()}, "name": {"Mobilidade habitual"}, "visibility": {"SHARED"}, "method": {"Ativação"}, "tags": {"ginásio, aquecimento, Ginásio"}}
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas", values, "", "", handler.CreateRoutine)
+	if response.Code != http.StatusSeeOther || len(store.createdRoutines) != 1 {
+		t.Fatalf("create routine response=%d routines=%#v", response.Code, store.createdRoutines)
+	}
+	created := store.createdRoutines[0]
+	if created.ProgrammeID == nil || *created.ProgrammeID != programmeID || created.TeamID != nil || len(created.Tags) != 2 || created.Snapshot == nil {
+		t.Fatalf("created routine scope/tags = %#v", created)
+	}
+
+	store.visibleRoutine = dbgen.TrainingRoutine{ID: uuid.New(), Kind: dbgen.TrainingRoutineKindBLOCK, Snapshot: []byte(`{"purpose":"MAIN","instructions":"3x5"}`), UpdatedAt: sourceUpdatedAt}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas/"+store.visibleRoutine.ID.String()+"/inserir", url.Values{"target_id": {targetID.String()}}, "id", store.visibleRoutine.ID.String(), handler.InsertRoutine)
+	if response.Code != http.StatusSeeOther || len(store.insertedRoutines) != 1 || store.insertedRoutines[0].TargetID != targetID || store.insertedRoutines[0].ActorID != userID {
+		t.Fatalf("insert routine response=%d inputs=%#v", response.Code, store.insertedRoutines)
+	}
+}
+
+func TestStructuredTrainingDirectCopiesAuthorizeBothPlans(t *testing.T) {
+	userID, planID, sourceID, targetID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{weekOK: true, planID: planID}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	user := CurrentUser{ID: userID}
+
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+sourceID.String()+"/copiar", url.Values{"target_id": {targetID.String()}}, "id", sourceID.String(), handler.CopyBlock)
+	if response.Code != http.StatusSeeOther || len(store.copiedBlocks) != 1 || store.copiedBlocks[0] != [3]uuid.UUID{sourceID, targetID, userID} {
+		t.Fatalf("copy block response=%d inputs=%#v", response.Code, store.copiedBlocks)
+	}
+
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes/"+sourceID.String()+"/copiar", url.Values{"target_id": {targetID.String()}, "starts_at": {"2026-08-18T17:00"}}, "id", sourceID.String(), handler.CopySession)
+	if response.Code != http.StatusSeeOther || len(store.copiedSessions) != 1 || !store.copiedSessions[0].StartsAt.Valid {
+		t.Fatalf("copy session response=%d inputs=%#v", response.Code, store.copiedSessions)
+	}
+}
+
+func TestParseTrainingRoutineTagsDeduplicatesAndRejectsInvalidInput(t *testing.T) {
+	tags, err := parseTrainingRoutineTags("ginásio, Aquecimento, GINÁSIO")
+	if err != nil || len(tags) != 2 || tags[0] != "ginásio" || tags[1] != "Aquecimento" {
+		t.Fatalf("tags = %#v, %v", tags, err)
+	}
+	if _, err := parseTrainingRoutineTags(strings.Repeat("x", 41)); err == nil {
+		t.Fatal("overlong tag should be rejected")
+	}
+}
+
+func TestStructuredTrainingViewHelpersBuildReadableChoicesAndRoutines(t *testing.T) {
+	programmeID, teamID := uuid.New(), uuid.New()
+	teamName, programmeName := "K1 cadetes", "Competição"
+	rows := []dbgen.ListEligibleTrainingGroupMembershipsRow{
+		{ID: uuid.New(), AthleteName: "Atleta A", ProgrammeID: programmeID, ProgrammeName: programmeName},
+		{ID: uuid.New(), AthleteName: "Atleta B", ProgrammeID: programmeID, ProgrammeName: programmeName, TeamID: &teamID, TeamName: &teamName},
+	}
+	members, programmes, teams := structuredChoices(rows)
+	if len(members) != 2 || members[1].Scope != "Competição · K1 cadetes" || len(programmes) != 1 || len(teams) != 1 {
+		t.Fatalf("choices = members %#v, programmes %#v, teams %#v", members, programmes, teams)
+	}
+
+	audiences := []pages.StructuredTrainingAudience{{
+		GroupID: "group-1", GroupName: "Cadetes",
+		Weeks: []pages.StructuredTrainingWeek{{ID: "week-1", Title: "M41", DateRange: "17/08/2026–23/08/2026", Sessions: []pages.StructuredTrainingSession{{
+			ID: "session-1", Title: "Ginásio + água", When: "18/08/2026 17:00–19:00",
+			Segments: []pages.StructuredTrainingSegment{{ID: "segment-1", Modality: "WATER", Title: "Técnica"}},
+		}}}},
+	}}
+	groups, weeks, sessions, segments := structuredPlanChoices(audiences)
+	if len(groups) != 1 || len(weeks) != 1 || len(sessions) != 1 || len(segments) != 1 || !strings.Contains(segments[0].Name, "Água · Técnica") {
+		t.Fatalf("plan choices = %#v %#v %#v %#v", groups, weeks, sessions, segments)
+	}
+
+	modality, objective := dbgen.TrainingSegmentModalityGYM, dbgen.TrainingObjectiveACTIVATION
+	sourceTime := time.Date(2026, 8, 13, 9, 30, 0, 0, time.UTC)
+	routines := structuredRoutineRows([]dbgen.ListVisibleTrainingRoutinesRow{{
+		ID: uuid.New(), Name: "Ativação", Kind: dbgen.TrainingRoutineKindSEGMENT,
+		Visibility: dbgen.TrainingRoutineVisibilitySHARED, OwnerName: "Treinador",
+		ProgrammeName: &programmeName, Modality: &modality, Objective: &objective,
+		Tags: []string{"ginásio", "aquecimento"}, SourceUpdatedAt: pgtype.Timestamptz{Time: sourceTime, Valid: true},
+		Snapshot: []byte(`{"title":"Mobilidade","blocks":[{}]}`),
+	}}, time.UTC)
+	if len(routines) != 1 || routines[0].Visibility != "Partilhada" || routines[0].Scope != programmeName || routines[0].Preview != "Mobilidade · 1 blocos" || !strings.Contains(routines[0].Provenance, "um segmento") {
+		t.Fatalf("routines = %#v", routines)
+	}
+}
+
+func TestStructuredTrainingFormattingHelpersCoverSupportedPrescriptions(t *testing.T) {
+	if got := gymExercisePrescription(3, 8, 45, 500, 60); got != "3 séries · 8 repetições · 45 s · 500 m · recuperação 60 s" {
+		t.Fatalf("prescription = %q", got)
+	}
+	value := 75.0
+	for _, tc := range []struct{ kind, text, want string }{
+		{"KILOGRAMS", "", "75 kg"}, {"PERCENT_1RM", "", "75% de 1RM"}, {"RPE", "", "RPE 75"}, {"RIR", "", "RIR 75"},
+		{"BODY_WEIGHT", "", "Peso corporal"}, {"BAND", "forte", "Banda · forte"}, {"COACH_INSTRUCTION", "carga técnica", "carga técnica"},
+	} {
+		var resistanceValue *float64
+		if tc.kind == "KILOGRAMS" || tc.kind == "PERCENT_1RM" || tc.kind == "RPE" || tc.kind == "RIR" {
+			resistanceValue = &value
+		}
+		if got := gymResistanceLabel(tc.kind, resistanceValue, tc.text); got != tc.want {
+			t.Errorf("%s label = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+	if got := gymResistanceLabel("UNKNOWN", nil, ""); got != "" {
+		t.Fatalf("unknown resistance = %q", got)
+	}
+
+	for _, tc := range []struct {
+		kind     dbgen.TrainingRoutineKind
+		snapshot string
+		want     string
+	}{
+		{dbgen.TrainingRoutineKindBLOCK, `{"title":"Série","instructions":"3x5"}`, "Série · 3x5"},
+		{dbgen.TrainingRoutineKindBLOCK, `{"instructions":"3x5"}`, "3x5"},
+		{dbgen.TrainingRoutineKindSEGMENT, `{"blocks":[{},{}]}`, "Segmento · 2 blocos"},
+		{dbgen.TrainingRoutineKindSESSION, `{"segments":[{}]}`, "Sessão · 1 segmentos"},
+		{dbgen.TrainingRoutineKindSESSION, `{`, "Conteúdo estruturado"},
+	} {
+		if got := trainingRoutinePreview([]byte(tc.snapshot), tc.kind); got != tc.want {
+			t.Errorf("preview = %q, want %q", got, tc.want)
+		}
+	}
+
+	for modality, want := range map[string]string{"WATER": "Água", "GYM": "Ginásio", "RUN": "Corrida", "BIKE": "Bicicleta", "ERGOMETER": "Ergómetro", "FLEXIBILITY": "Flexibilidade e mobilidade", "SPORTS_GAMES": "Jogos desportivos", "OTHER": "Outra"} {
+		if got := structuredModalityName(modality); got != want {
+			t.Errorf("modality %s = %q, want %q", modality, got, want)
+		}
+	}
+}
+
+func TestStructuredCopyRejectionRecognisesSafeDatabaseFailures(t *testing.T) {
+	if isStructuredCopyRejection(errors.New("ordinary failure")) {
+		t.Fatal("ordinary errors must not be treated as copy validation failures")
+	}
+	for _, code := range []string{"P0002", "23503", "23505", "23514"} {
+		if !isStructuredCopyRejection(&pgconn.PgError{Code: code}) {
+			t.Errorf("database code %s should be recognised", code)
+		}
+	}
+	if isStructuredCopyRejection(&pgconn.PgError{Code: "XX000"}) {
+		t.Fatal("unexpected database failures must not be converted to validation errors")
 	}
 }

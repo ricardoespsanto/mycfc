@@ -139,6 +139,7 @@ function activateCollectionTab(link) {
   const navigation = link.closest("[data-collection-tabs]");
   const target = document.querySelector(link.hash);
   if (!navigation || !(target instanceof HTMLElement) || !target.matches("[data-tab-panel]")) return;
+  const scope = navigation.closest("[data-tab-scope]") || document;
   navigation.querySelectorAll("a").forEach((candidate) => {
     const selected = candidate === link;
     candidate.setAttribute("aria-selected", String(selected));
@@ -146,7 +147,7 @@ function activateCollectionTab(link) {
     if (selected) candidate.setAttribute("aria-current", "page");
     else candidate.removeAttribute("aria-current");
   });
-  document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+  scope.querySelectorAll("[data-tab-panel]").forEach((panel) => {
     panel.hidden = panel !== target;
   });
 }
@@ -165,7 +166,10 @@ for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
     }
   }
   const hashLink = links.find((link) => link.hash === window.location.hash && document.querySelector(link.hash)?.matches("[data-tab-panel]"));
-  activateCollectionTab(hashLink || links[0]);
+  const queryLink = [...new window.URLSearchParams(window.location.search).keys()].some((key) => key.startsWith("routine_"))
+    ? links.find((link) => link.hash === "#training-routines")
+    : null;
+  activateCollectionTab(hashLink || queryLink || links[0]);
   navigation.addEventListener("keydown", (event) => {
     const currentIndex = links.indexOf(document.activeElement);
     if (currentIndex < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -222,6 +226,83 @@ document.addEventListener("keydown", (event) => {
 
 const initialCreatePanel = window.location.hash ? document.querySelector(window.location.hash) : null;
 if (initialCreatePanel?.matches?.("[data-create-panel]")) openCreatePanel(initialCreatePanel, null);
+
+let taskDialogOpener = null;
+
+function openTaskDialog(dialog, opener) {
+  if (!(dialog instanceof HTMLElement) || typeof dialog.showModal !== "function") return;
+  taskDialogOpener = opener instanceof HTMLElement ? opener : null;
+  dialog.showModal();
+  const firstField = dialog.querySelector("input:not([type='hidden']), select, textarea");
+  (firstField || dialog.querySelector("[data-dialog-close]"))?.focus();
+}
+
+function closeTaskDialog(dialog) {
+  if (!(dialog instanceof HTMLElement) || typeof dialog.close !== "function") return;
+  dialog.close();
+  taskDialogOpener?.focus();
+  taskDialogOpener = null;
+}
+
+document.addEventListener("click", (event) => {
+  const opener = event.target.closest?.("[data-dialog-open]");
+  if (opener instanceof HTMLButtonElement) {
+    const dialog = document.getElementById(opener.dataset.dialogOpen || "");
+    if (dialog instanceof HTMLElement && typeof dialog.showModal === "function") openTaskDialog(dialog, opener);
+    return;
+  }
+  const closer = event.target.closest?.("[data-dialog-close]");
+  if (closer instanceof HTMLButtonElement) closeTaskDialog(closer.closest("dialog"));
+});
+
+for (const dialog of document.querySelectorAll("dialog[data-task-dialog]")) {
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closeTaskDialog(dialog);
+  });
+  dialog.addEventListener("close", () => {
+    if (taskDialogOpener) {
+      taskDialogOpener.focus();
+      taskDialogOpener = null;
+    }
+  });
+}
+
+for (const card of document.querySelectorAll("[data-training-card]")) {
+  const toggle = card.querySelector(":scope > .training-card__header [data-training-toggle]");
+  if (!(toggle instanceof HTMLButtonElement)) continue;
+  const content = document.getElementById(toggle.getAttribute("aria-controls") || "");
+  if (!(content instanceof HTMLElement)) continue;
+  const storageKey = `mycfc:training-card:${toggle.getAttribute("aria-controls")}`;
+  const stored = window.sessionStorage.getItem(storageKey);
+  let expanded = stored === null ? card.dataset.defaultOpen === "true" : stored === "open";
+  const render = () => {
+    toggle.setAttribute("aria-expanded", String(expanded));
+    content.hidden = !expanded;
+    const label = toggle.querySelector("[data-training-toggle-label]");
+    if (label) label.textContent = expanded ? "Ocultar" : "Mostrar";
+  };
+  toggle.addEventListener("click", () => {
+    expanded = !expanded;
+    window.sessionStorage.setItem(storageKey, expanded ? "open" : "closed");
+    render();
+  });
+  render();
+}
+
+for (const form of document.querySelectorAll("form")) {
+  const resistance = form.querySelector("select[name='resistance_kind']");
+  if (!(resistance instanceof HTMLElement) || resistance.tagName !== "SELECT") continue;
+  const valueField = form.querySelector("[data-resistance-value]");
+  const textField = form.querySelector("[data-resistance-text]");
+  const syncResistanceFields = () => {
+    const numeric = ["KILOGRAMS", "PERCENT_1RM", "RPE", "RIR"].includes(resistance.value);
+    const descriptive = ["BAND", "COACH_INSTRUCTION"].includes(resistance.value);
+    if (valueField instanceof HTMLElement) valueField.hidden = !numeric;
+    if (textField instanceof HTMLElement) textField.hidden = !descriptive;
+  };
+  resistance.addEventListener("change", syncResistanceFields);
+  syncResistanceFields();
+}
 
 for (const typeSelect of document.querySelectorAll("[data-event-type]")) {
   const form = typeSelect.closest("form");
