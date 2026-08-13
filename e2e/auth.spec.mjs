@@ -213,8 +213,8 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Avisos', exact: true }).click();
-    await expect(page).toHaveURL('/announcements');
+    await page.getByRole('link', { name: /^Avisos/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Avisos' })).toBeVisible();
     await page.goto('/today');
     await page.getByRole('link', { name: 'Frota', exact: true }).click();
     await expect(page).toHaveURL('/fleet');
@@ -533,6 +533,7 @@ test.describe('authentication', () => {
     await maintenance.getByLabel('Descrição').fill(maintenanceDescription);
     await maintenance.getByRole('button', { name: 'Agendar manutenção' }).click();
     await expect(page).toHaveURL('/admin/fleet');
+    await page.getByRole('tab', { name: /Manutenção/ }).click();
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
@@ -913,7 +914,7 @@ test.describe('authentication', () => {
     await adminPage.getByLabel('Palavra-passe').fill(password);
     await adminPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await adminPage.goto('/admin/albuns');
-    await adminPage.getByText('Novo álbum privado', { exact: true }).click();
+    await adminPage.getByRole('link', { name: 'Novo álbum', exact: true }).click();
     await adminPage.locator('#photo-album-title').fill(title);
     await adminPage.locator('#photo-album-description').fill('Espaço privado da equipa de competição.');
     await adminPage.locator('#photo-album-audience').getByLabel('Competição').check();

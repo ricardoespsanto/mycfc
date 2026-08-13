@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -436,5 +439,101 @@ func TestParseTrainingRoutineTagsDeduplicatesAndRejectsInvalidInput(t *testing.T
 	}
 	if _, err := parseTrainingRoutineTags(strings.Repeat("x", 41)); err == nil {
 		t.Fatal("overlong tag should be rejected")
+	}
+}
+
+func TestStructuredTrainingViewHelpersBuildReadableChoicesAndRoutines(t *testing.T) {
+	programmeID, teamID := uuid.New(), uuid.New()
+	teamName, programmeName := "K1 cadetes", "Competição"
+	rows := []dbgen.ListEligibleTrainingGroupMembershipsRow{
+		{ID: uuid.New(), AthleteName: "Atleta A", ProgrammeID: programmeID, ProgrammeName: programmeName},
+		{ID: uuid.New(), AthleteName: "Atleta B", ProgrammeID: programmeID, ProgrammeName: programmeName, TeamID: &teamID, TeamName: &teamName},
+	}
+	members, programmes, teams := structuredChoices(rows)
+	if len(members) != 2 || members[1].Scope != "Competição · K1 cadetes" || len(programmes) != 1 || len(teams) != 1 {
+		t.Fatalf("choices = members %#v, programmes %#v, teams %#v", members, programmes, teams)
+	}
+
+	audiences := []pages.StructuredTrainingAudience{{
+		GroupID: "group-1", GroupName: "Cadetes",
+		Weeks: []pages.StructuredTrainingWeek{{ID: "week-1", Title: "M41", DateRange: "17/08/2026–23/08/2026", Sessions: []pages.StructuredTrainingSession{{
+			ID: "session-1", Title: "Ginásio + água", When: "18/08/2026 17:00–19:00",
+			Segments: []pages.StructuredTrainingSegment{{ID: "segment-1", Modality: "WATER", Title: "Técnica"}},
+		}}}},
+	}}
+	groups, weeks, sessions, segments := structuredPlanChoices(audiences)
+	if len(groups) != 1 || len(weeks) != 1 || len(sessions) != 1 || len(segments) != 1 || !strings.Contains(segments[0].Name, "Água · Técnica") {
+		t.Fatalf("plan choices = %#v %#v %#v %#v", groups, weeks, sessions, segments)
+	}
+
+	modality, objective := dbgen.TrainingSegmentModalityGYM, dbgen.TrainingObjectiveACTIVATION
+	sourceTime := time.Date(2026, 8, 13, 9, 30, 0, 0, time.UTC)
+	routines := structuredRoutineRows([]dbgen.ListVisibleTrainingRoutinesRow{{
+		ID: uuid.New(), Name: "Ativação", Kind: dbgen.TrainingRoutineKindSEGMENT,
+		Visibility: dbgen.TrainingRoutineVisibilitySHARED, OwnerName: "Treinador",
+		ProgrammeName: &programmeName, Modality: &modality, Objective: &objective,
+		Tags: []string{"ginásio", "aquecimento"}, SourceUpdatedAt: pgtype.Timestamptz{Time: sourceTime, Valid: true},
+		Snapshot: []byte(`{"title":"Mobilidade","blocks":[{}]}`),
+	}}, time.UTC)
+	if len(routines) != 1 || routines[0].Visibility != "Partilhada" || routines[0].Scope != programmeName || routines[0].Preview != "Mobilidade · 1 blocos" || !strings.Contains(routines[0].Provenance, "um segmento") {
+		t.Fatalf("routines = %#v", routines)
+	}
+}
+
+func TestStructuredTrainingFormattingHelpersCoverSupportedPrescriptions(t *testing.T) {
+	if got := gymExercisePrescription(3, 8, 45, 500, 60); got != "3 séries · 8 repetições · 45 s · 500 m · recuperação 60 s" {
+		t.Fatalf("prescription = %q", got)
+	}
+	value := 75.0
+	for _, tc := range []struct{ kind, text, want string }{
+		{"KILOGRAMS", "", "75 kg"}, {"PERCENT_1RM", "", "75% de 1RM"}, {"RPE", "", "RPE 75"}, {"RIR", "", "RIR 75"},
+		{"BODY_WEIGHT", "", "Peso corporal"}, {"BAND", "forte", "Banda · forte"}, {"COACH_INSTRUCTION", "carga técnica", "carga técnica"},
+	} {
+		var resistanceValue *float64
+		if tc.kind == "KILOGRAMS" || tc.kind == "PERCENT_1RM" || tc.kind == "RPE" || tc.kind == "RIR" {
+			resistanceValue = &value
+		}
+		if got := gymResistanceLabel(tc.kind, resistanceValue, tc.text); got != tc.want {
+			t.Errorf("%s label = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+	if got := gymResistanceLabel("UNKNOWN", nil, ""); got != "" {
+		t.Fatalf("unknown resistance = %q", got)
+	}
+
+	for _, tc := range []struct {
+		kind     dbgen.TrainingRoutineKind
+		snapshot string
+		want     string
+	}{
+		{dbgen.TrainingRoutineKindBLOCK, `{"title":"Série","instructions":"3x5"}`, "Série · 3x5"},
+		{dbgen.TrainingRoutineKindBLOCK, `{"instructions":"3x5"}`, "3x5"},
+		{dbgen.TrainingRoutineKindSEGMENT, `{"blocks":[{},{}]}`, "Segmento · 2 blocos"},
+		{dbgen.TrainingRoutineKindSESSION, `{"segments":[{}]}`, "Sessão · 1 segmentos"},
+		{dbgen.TrainingRoutineKindSESSION, `{`, "Conteúdo estruturado"},
+	} {
+		if got := trainingRoutinePreview([]byte(tc.snapshot), tc.kind); got != tc.want {
+			t.Errorf("preview = %q, want %q", got, tc.want)
+		}
+	}
+
+	for modality, want := range map[string]string{"WATER": "Água", "GYM": "Ginásio", "RUN": "Corrida", "BIKE": "Bicicleta", "ERGOMETER": "Ergómetro", "FLEXIBILITY": "Flexibilidade e mobilidade", "SPORTS_GAMES": "Jogos desportivos", "OTHER": "Outra"} {
+		if got := structuredModalityName(modality); got != want {
+			t.Errorf("modality %s = %q, want %q", modality, got, want)
+		}
+	}
+}
+
+func TestStructuredCopyRejectionRecognisesSafeDatabaseFailures(t *testing.T) {
+	if isStructuredCopyRejection(errors.New("ordinary failure")) {
+		t.Fatal("ordinary errors must not be treated as copy validation failures")
+	}
+	for _, code := range []string{"P0002", "23503", "23505", "23514"} {
+		if !isStructuredCopyRejection(&pgconn.PgError{Code: code}) {
+			t.Errorf("database code %s should be recognised", code)
+		}
+	}
+	if isStructuredCopyRejection(&pgconn.PgError{Code: "XX000"}) {
+		t.Fatal("unexpected database failures must not be converted to validation errors")
 	}
 }
