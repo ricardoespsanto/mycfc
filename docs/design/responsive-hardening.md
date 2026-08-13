@@ -62,7 +62,7 @@ same deterministic pages after #60 hardening.
 - `make ui-review-screenshots` runs the full six-persona visual and responsive
   matrix from a fresh deterministic database. The final acceptance run passed
   all six persona projects across the 22 representative route/persona states.
-- `CI=true make test-e2e` retains the interaction and no-JavaScript application
+- `CI=true make test-e2e` retains the interactive application
   journeys.
 - `go test ./...` and `make verify-foundation` retain the server and generated
   asset gates.

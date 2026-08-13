@@ -10,7 +10,7 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
   reporting, event response, training authoring and the administrator member,
   news and fleet workflows without a pointing device.
 - Complete password-recovery request, email-link reset, validation correction,
-  successful login and used-link handling without JavaScript or a pointing device.
+  successful login and used-link handling with keyboard-only navigation.
 - Confirm the skip link is the first focusable control and becomes visible on focus.
 - Confirm focus order follows the visual and semantic order.
 - Confirm every focus indicator remains clearly visible at 200% zoom.
@@ -46,7 +46,7 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 
 ## Calendar fallback
 
-- Disable JavaScript and confirm internal agenda items remain available from server-rendered events and training data.
+- Confirm internal agenda items expose clear loading, empty, success and failure states, including keyboard-recoverable interactive failures.
 - Confirm agenda links and labels use natural pt-PT text and can be operated by keyboard.
 
 ## Language

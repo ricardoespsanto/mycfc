@@ -86,7 +86,7 @@ async function recoveryLinkFor(recipient) {
 test.describe('authentication', () => {
   test.describe.configure({ mode: 'parallel' });
 
-  test('renders an accessible public landing page with working calls to action', async ({ page, browser }) => {
+  test('renders an accessible public landing page with working calls to action', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'A promover a canoagem, dentro e fora de água.' })).toBeVisible();
     await expect(page.getByAltText('Instalações do Clube Fluvial de Coimbra junto ao rio')).toBeVisible();
@@ -101,14 +101,9 @@ test.describe('authentication', () => {
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-    const noJavaScriptPage = await context.newPage();
-    await noJavaScriptPage.goto('/');
-    await expect(noJavaScriptPage.getByRole('heading', { name: 'A promover a canoagem, dentro e fora de água.' })).toBeVisible();
-    await context.close();
   });
 
-  test('requests password recovery and handles invalid reset links accessibly', async ({ page, browser }) => {
+  test('requests password recovery and handles invalid reset links accessibly', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('/login');
     const recoveryLink = page.getByRole('link', { name: 'Recuperar palavra-passe' });
@@ -138,17 +133,10 @@ test.describe('authentication', () => {
     await expect(page.locator('a[href^="http"]')).toHaveCount(0);
     await expectNoSeriousAxeViolations(page);
 
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-    const noJavaScriptPage = await context.newPage();
-    await noJavaScriptPage.goto('/recuperar-palavra-passe');
-    await noJavaScriptPage.getByLabel('Correio eletrónico').fill('another-unknown@example.test');
-    await noJavaScriptPage.getByRole('button', { name: 'Enviar instruções' }).click();
-    await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
-    await noJavaScriptPage.goto('/recuperar-palavra-passe');
-    await noJavaScriptPage.getByLabel('Correio eletrónico').fill('CFC-AB12CD34');
-    await noJavaScriptPage.getByRole('button', { name: 'Enviar instruções' }).click();
-    await expect(noJavaScriptPage.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
-    await context.close();
+    await page.goto('/recuperar-palavra-passe');
+    await page.getByLabel('Correio eletrónico').fill('CFC-AB12CD34');
+    await page.getByRole('button', { name: 'Enviar instruções' }).click();
+    await expect(page.getByRole('heading', { name: 'Consulte o seu email' })).toBeVisible();
   });
 
   test.describe('member registration and repair journey', () => {
@@ -216,8 +204,8 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/login');
   });
 
-  test('logs in and navigates with JavaScript disabled', async ({ browser }) => {
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+  test('logs in and navigates', async ({ browser }) => {
+    const context = await browser.newContext({ baseURL });
     const page = await context.newPage();
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(email);
@@ -231,7 +219,7 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Frota', exact: true }).click();
     await expect(page).toHaveURL('/fleet');
 
-    await page.locator('#repair-form > summary').click();
+    await page.getByRole('link', { name: 'Reportar avaria' }).click();
     const idempotencyKey = await page.locator('input[name="idempotency_key"]').inputValue();
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
@@ -255,7 +243,7 @@ test.describe('authentication', () => {
 
   });
 
-  test('member submits a private suggestion and receives the administrator response', async ({ page, browser }) => {
+  test('member submits a private suggestion and receives the administrator response', async ({ page }) => {
     test.setTimeout(180_000);
     const subject = `Ideia E2E ${Date.now()}`;
     const suggestionMemberEmail = `e2e-suggestion-${Date.now()}@example.test`;
@@ -304,16 +292,6 @@ test.describe('authentication', () => {
     await expect(updated.getByText('Planeada')).toBeVisible();
     await expect(updated.getByText('A direção vai avaliar esta melhoria no próximo plano de instalações.')).toBeVisible();
 
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-    const noJavaScriptPage = await context.newPage();
-    await noJavaScriptPage.goto('/login');
-    await noJavaScriptPage.getByLabel('Correio eletrónico').fill(suggestionMemberEmail);
-    await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
-    await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await noJavaScriptPage.goto('/sugestoes');
-    await noJavaScriptPage.locator('#nova-sugestao > summary').click();
-    await expect(noJavaScriptPage.getByRole('button', { name: 'Enviar sugestão' })).toBeVisible();
-    await context.close();
   });
 
   test('resets a password from Mailpit and revokes every older session', async ({ browser }) => {
@@ -344,7 +322,6 @@ test.describe('authentication', () => {
 
     const recoveryLink = await recoveryLinkFor(recoveryEmail);
     const resetPage = await requestContext.newPage();
-    await resetPage.route('**/assets/*.js', (route) => route.abort());
     await resetPage.goto(recoveryLink);
     await expect(resetPage.getByRole('heading', { name: 'Definir nova palavra-passe' })).toBeVisible();
     await expectNoSeriousFormAxeViolations(resetPage);
@@ -385,7 +362,7 @@ test.describe('authentication', () => {
     await oldSessionContext.close();
   });
 
-  test('creates a dependent with JavaScript disabled', async ({ page, browser }) => {
+  test('creates a dependent', async ({ page, browser }) => {
     await page.goto('/registo');
     await page.getByLabel('Nome').fill('Guardião de teste');
     await page.getByLabel('Correio eletrónico').fill(guardianEmail);
@@ -400,43 +377,43 @@ test.describe('authentication', () => {
     await expectNoSeriousAxeViolations(page);
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
 
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-    const noJavaScriptPage = await context.newPage();
-    await noJavaScriptPage.goto('/login');
-    await noJavaScriptPage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
-    await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await noJavaScriptPage.getByRole('link', { name: 'Menores a cargo' }).click();
-    await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
-    await noJavaScriptPage.locator('#adicionar-menor > summary').click();
+    const context = await browser.newContext({ baseURL });
+    const interactivePage = await context.newPage();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.getByRole('link', { name: 'Menores a cargo' }).click();
+    await expect(interactivePage).toHaveURL('/dashboard/guardian');
+    await interactivePage.getByRole('link', { name: 'Adicionar menor' }).click();
 
-    await noJavaScriptPage.getByLabel('Nome').fill('X');
-    await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
-    await noJavaScriptPage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await noJavaScriptPage.getByRole('button', { name: 'Adicionar menor' }).click();
-    await expect(noJavaScriptPage.locator('.error-summary')).toBeVisible();
-    await expect(noJavaScriptPage.getByLabel('Nome')).toHaveValue('X');
+    await interactivePage.getByLabel('Nome').fill('X');
+    await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
+    await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
+    await interactivePage.getByRole('button', { name: 'Adicionar menor' }).click();
+    await expect(interactivePage.locator('.error-summary')).toBeVisible();
+    await expect(interactivePage.getByLabel('Nome')).toHaveValue('X');
 
-    await noJavaScriptPage.getByLabel('Nome').fill('Menor de teste');
-    await noJavaScriptPage.getByLabel('Data de nascimento').fill('2014-01-01');
-    await noJavaScriptPage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await noJavaScriptPage.getByRole('button', { name: 'Adicionar menor' }).click();
+    await interactivePage.getByLabel('Nome').fill('Menor de teste');
+    await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
+    await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
+    await interactivePage.getByRole('button', { name: 'Adicionar menor' }).click();
 
-    await expect(noJavaScriptPage).toHaveURL('/dashboard/guardian');
-    await expect(noJavaScriptPage.getByText('Menor a cargo adicionado.')).toBeVisible();
-	const dependentLink = noJavaScriptPage.getByRole('link', { name: 'Menor de teste' });
+    await expect(interactivePage).toHaveURL('/dashboard/guardian');
+    await expect(interactivePage.getByText('Menor a cargo adicionado.')).toBeVisible();
+	const dependentLink = interactivePage.getByRole('link', { name: 'Menor de teste' });
 	await expect(dependentLink).toBeVisible();
 	await dependentLink.click();
-	await noJavaScriptPage.locator('#profile-emergency-name').fill('Guardião de teste');
-	await noJavaScriptPage.locator('#profile-emergency-relationship').fill('Tutor');
-	await noJavaScriptPage.locator('#profile-emergency-phone').fill('+351 930 000 000');
-	await noJavaScriptPage.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
-	await noJavaScriptPage.getByRole('button', { name: 'Guardar perfil' }).click();
-	await expect(noJavaScriptPage.getByText('Perfil atualizado.')).toBeVisible();
-	await noJavaScriptPage.getByRole('link', { name: 'Voltar aos menores' }).click();
-	await expect(noJavaScriptPage.getByText(/Perfil incompleto/)).toHaveCount(0);
-    await noJavaScriptPage.setViewportSize({ width: 320, height: 720 });
-    await expectNoHorizontalOverflow(noJavaScriptPage);
+	await interactivePage.locator('#profile-emergency-name').fill('Guardião de teste');
+	await interactivePage.locator('#profile-emergency-relationship').fill('Tutor');
+	await interactivePage.locator('#profile-emergency-phone').fill('+351 930 000 000');
+	await interactivePage.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
+	await interactivePage.getByRole('button', { name: 'Guardar perfil' }).click();
+	await expect(interactivePage.getByText('Perfil atualizado.')).toBeVisible();
+	await interactivePage.getByRole('link', { name: 'Voltar aos menores' }).click();
+	await expect(interactivePage.getByText(/Perfil incompleto/)).toHaveCount(0);
+    await interactivePage.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(interactivePage);
     await context.close();
   });
 
@@ -492,9 +469,9 @@ test.describe('authentication', () => {
     await expect(page.getByRole('status')).toHaveText('Manutenção concluída.');
   });
 
-  test('administrator manages equipment lifecycle and audit history without JavaScript', async ({ browser }) => {
+  test('administrator manages equipment lifecycle and audit history', async ({ browser }) => {
     test.setTimeout(120000);
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const context = await browser.newContext({ baseURL });
     const page = await context.newPage();
     const suffix = Date.now();
     const assetTag = `E2E-${suffix}`;
@@ -507,7 +484,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Frota', exact: true }).click();
 
-    await page.locator('#equipment-form > summary').click();
+    await page.getByRole('link', { name: 'Adicionar equipamento' }).click();
     const create = page.locator('#equipment-form');
     await create.getByLabel('Identificador').fill('X');
     await create.getByLabel('Nome').fill('X');
@@ -549,7 +526,7 @@ test.describe('authentication', () => {
     await expect(page.getByText('Equipamento criado')).toBeVisible();
     await page.getByRole('link', { name: 'Voltar à frota' }).click();
 
-    await page.locator('#maintenance-form > summary').click();
+    await page.getByRole('link', { name: 'Agendar manutenção' }).click();
     const maintenance = page.locator('#maintenance-form');
     await maintenance.getByLabel('Equipamento').selectOption({ label: `${updatedTag} - Pagaia E2E atualizada` });
     await maintenance.getByLabel('Data e hora').fill(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
@@ -717,9 +694,9 @@ test.describe('authentication', () => {
     await expect(leaderboard).not.toContainText(athleteName);
   });
 
-  test('administrator authors a responsive hybrid training week without JavaScript', async ({ browser }) => {
+  test('administrator authors a responsive hybrid training week', async ({ browser }) => {
     test.setTimeout(600000);
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const context = await browser.newContext({ baseURL });
     const page = await context.newPage();
     const suffix = Date.now();
     const structuredAthleteName = `Atleta estruturado E2E ${suffix}`;
@@ -742,7 +719,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/membros');
-    await page.locator('#criar-conta > summary').click();
+    await page.getByRole('link', { name: 'Criar conta' }).click();
     await page.locator('#member-name').fill(structuredAthleteName);
     await page.locator('#member-email').fill(structuredAthleteEmail);
     await page.locator('#member-birth').fill('2005-01-01');
@@ -762,7 +739,7 @@ test.describe('authentication', () => {
     await page.goto('/admin/treinos/estruturados');
 
     await expect(page.getByRole('heading', { name: 'Planeamento semanal', level: 1 })).toBeVisible();
-    await page.locator('#criar-grupo-treino > summary').click();
+    await page.getByRole('link', { name: 'Criar grupo' }).click();
     const groupForm = page.locator('form[action="/admin/treinos/estruturados/grupos"]');
     await groupForm.getByLabel('Nome').fill(groupName);
     await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
@@ -770,7 +747,7 @@ test.describe('authentication', () => {
     await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
     await expect(page.getByRole('status')).toHaveText('Grupo de treino criado.');
 
-    await page.locator('#criar-semana-treino > summary').click();
+    await page.getByRole('link', { name: 'Criar semana' }).click();
     const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
     await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
     await weekForm.getByLabel('Título').fill(weekTitle);
@@ -780,7 +757,7 @@ test.describe('authentication', () => {
     const week = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
     await expect(week).toContainText(`Época ${today.getFullYear()}`);
 
-    await page.locator('#criar-sessao-estruturada > summary').click();
+    await page.getByRole('link', { name: 'Criar sessão' }).click();
     const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');
     const weekOption = sessionForm.getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
     await sessionForm.getByLabel('Semana').selectOption(await weekOption.getAttribute('value'));
@@ -791,7 +768,7 @@ test.describe('authentication', () => {
     await expect(page.getByRole('status')).toHaveText('Sessão estruturada criada.');
 
     let session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
-    await session.locator('summary').filter({ hasText: 'Adicionar segmento' }).click();
+    await session.getByRole('button', { name: 'Adicionar segmento' }).click();
     let segmentForm = session.locator('form[action$="/segmentos"]');
     await segmentForm.getByLabel('Modalidade').selectOption('GYM');
     await segmentForm.getByLabel('Título (opcional)').fill('Mobilidade');
@@ -806,7 +783,8 @@ test.describe('authentication', () => {
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
     const gymSegment = session.getByRole('heading', { name: /Ginásio · Mobilidade/ }).locator('xpath=ancestor::section[1]');
     await expect(gymSegment).toContainText('Material: Elásticos e halteres');
-    await gymSegment.locator('summary').filter({ hasText: 'Adicionar bloco estruturado de ginásio' }).click();
+    await gymSegment.getByText('Ações do segmento', { exact: true }).click();
+    await gymSegment.getByRole('button', { name: 'Adicionar treino de ginásio' }).click();
     const gymBlockForm = gymSegment.locator('form[action$="/ginasio"]');
     await gymBlockForm.locator('select[name="purpose"]').selectOption('WARM_UP');
     await gymBlockForm.locator('input[name="title"]').fill('Supersérie de ativação');
@@ -826,11 +804,11 @@ test.describe('authentication', () => {
     await expect(page.getByRole('status')).toHaveText('Bloco de ginásio adicionado.');
 
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
-    const gymBlock = session.locator('form[action$="/exercicios"]').locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    const gymBlock = session.getByRole('button', { name: 'Adicionar exercício' }).first().locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
     await expect(gymBlock).toContainText('Supersérie · Ativação · 3 voltas');
     await expect(gymBlock).toContainText('Supino');
     await expect(gymBlock).toContainText('75% de 1RM');
-    await gymBlock.locator('summary').filter({ hasText: 'Adicionar exercício' }).click();
+    await gymBlock.getByRole('button', { name: 'Adicionar exercício' }).click();
     const exerciseForm = gymBlock.locator('form[action$="/exercicios"]');
     await exerciseForm.locator('input[name="exercise_name"]').fill('Prancha');
     await exerciseForm.locator('input[name="duration_seconds"]').fill('45');
@@ -840,7 +818,7 @@ test.describe('authentication', () => {
     await expect(page.getByRole('status')).toHaveText('Exercício adicionado.');
 
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
-    await session.locator('summary').filter({ hasText: 'Adicionar segmento' }).click();
+    await session.getByRole('button', { name: 'Adicionar segmento' }).click();
     segmentForm = session.locator('form[action$="/segmentos"]');
     await segmentForm.getByLabel('Modalidade').selectOption('WATER');
     await segmentForm.getByLabel('Título (opcional)').fill('Ataque 3 e defesa 2-2');
@@ -856,8 +834,9 @@ test.describe('authentication', () => {
     await expect(session).toContainText('Prancha');
 
     const reusableBlockName = `Ativação reutilizável ${suffix}`;
-    let reusableGymBlock = session.locator('form[action$="/exercicios"]').locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
-    await reusableGymBlock.locator('summary').filter({ hasText: 'Guardar como rotina' }).click();
+    let reusableGymBlock = session.getByRole('button', { name: 'Adicionar exercício' }).first().locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    await reusableGymBlock.getByText('Ações do bloco', { exact: true }).click();
+    await reusableGymBlock.getByRole('button', { name: 'Guardar como rotina' }).click();
     const saveRoutineForm = reusableGymBlock.locator('form[action="/admin/treinos/estruturados/rotinas"]');
     await saveRoutineForm.getByLabel('Nome da rotina').fill(reusableBlockName);
     await saveRoutineForm.getByLabel('Método (opcional)').fill('Ativação pré-água');
@@ -865,12 +844,13 @@ test.describe('authentication', () => {
     await saveRoutineForm.getByRole('button', { name: 'Guardar rotina' }).click();
     await expect(page.getByRole('status')).toHaveText('Rotina guardada como cópia independente.');
 
+    await page.getByRole('tab', { name: 'Rotinas' }).click();
     const routineLibrary = page.getByRole('heading', { name: 'Biblioteca de rotinas' }).locator('xpath=ancestor::section[1]');
     await routineLibrary.getByLabel('Etiqueta').fill('ginásio');
     await routineLibrary.getByRole('button', { name: 'Filtrar rotinas' }).click();
     const routineCard = page.getByRole('heading', { name: reusableBlockName }).locator('xpath=ancestor::article[1]');
     await expect(routineCard).toContainText('Pré-visualização: Supersérie de ativação');
-    await routineCard.locator('summary').filter({ hasText: 'Inserir cópia' }).click();
+    await routineCard.getByRole('button', { name: 'Usar rotina' }).click();
     const insertRoutineForm = routineCard.locator('form[action$="/inserir"]');
     const gymTarget = insertRoutineForm.getByLabel('Segmento de destino').locator('option').filter({ hasText: `${sessionTitle} · Ginásio · Mobilidade` });
     await insertRoutineForm.getByLabel('Segmento de destino').selectOption(await gymTarget.getAttribute('value'));
@@ -881,7 +861,7 @@ test.describe('authentication', () => {
 
     const copiedWeekTitle = `Microciclo copiado E2E ${suffix}`;
     const sourceWeek = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
-    await sourceWeek.locator('summary').filter({ hasText: 'Copiar semana completa' }).click();
+    await sourceWeek.getByRole('button', { name: 'Copiar semana' }).click();
     const copyWeekForm = sourceWeek.locator('input[name="week_start"]').locator('xpath=ancestor::form[1]');
     await copyWeekForm.getByLabel('Título da nova semana').fill(copiedWeekTitle);
     await copyWeekForm.getByLabel('Nova segunda-feira').fill(formatDate(nextMonday));
@@ -891,12 +871,17 @@ test.describe('authentication', () => {
     await expect(copiedWeek).toContainText(sessionTitle);
     await expect(copiedWeek).toContainText('Prancha');
 
-    session = sourceWeek.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    const sourceWeekToggle = sourceWeek.locator(':scope > .training-card__header').getByRole('button');
+    if ((await sourceWeekToggle.getAttribute('aria-expanded')) === 'false') await sourceWeekToggle.click();
+    session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
+    const sourceSessionToggle = session.locator(':scope > .training-card__header').getByRole('button');
+    if ((await sourceSessionToggle.getAttribute('aria-expanded')) === 'false') await sourceSessionToggle.click();
     await expect(session.getByRole('heading', { name: /Ginásio · Mobilidade/ })).toBeVisible();
     const waterSegment = session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ }).locator('xpath=ancestor::section[1]');
     await expect(waterSegment).toContainText("2x7' jogo · HxH · GR e pivot");
-    await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir' }).click();
-    session = sourceWeek.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await waterSegment.getByText('Ações do segmento', { exact: true }).click();
+    await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir segmento' }).click();
+    session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
     await expect(session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ })).toBeVisible();
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
@@ -911,15 +896,17 @@ test.describe('authentication', () => {
     await accessibilityPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await accessibilityPage.goto('/admin/treinos/estruturados');
     const accessibleSourceWeek = accessibilityPage.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    const accessibleWeekToggle = accessibleSourceWeek.getByRole('button', { name: 'Mostrar' }).first();
+    if (await accessibleWeekToggle.isVisible()) await accessibleWeekToggle.click();
     await expect(accessibleSourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
     await expectNoSeriousAxeViolations(accessibilityPage);
     await accessibilityContext.close();
   });
 
-  test('administrator creates a private album without JavaScript and the scoped athlete can open it', async ({ page, browser }) => {
+  test('administrator creates a private album and the scoped athlete can open it', async ({ page, browser }) => {
     test.setTimeout(120000);
     const title = `Álbum competição E2E ${Date.now()}`;
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const context = await browser.newContext({ baseURL });
     const adminPage = await context.newPage();
     await adminPage.goto('/login');
     await adminPage.getByLabel('Correio eletrónico').fill(adminEmail);
@@ -1165,7 +1152,7 @@ test.describe('authentication', () => {
 
   });
 
-  test('administrator publishes news and confirms member deactivation without JavaScript', async ({ page, browser }) => {
+  test('administrator publishes news and confirms member deactivation', async ({ page, browser }) => {
     test.setTimeout(120000);
     const memberName = `Lazer E2E ${Date.now()}`;
     const title = `Notícia E2E ${Date.now()}`;
@@ -1215,24 +1202,24 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Notícias' }).click();
     await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
 
-    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-    const noJavaScriptPage = await context.newPage();
-    await noJavaScriptPage.goto('/login');
-    await noJavaScriptPage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await noJavaScriptPage.getByLabel('Palavra-passe').fill(password);
-    await noJavaScriptPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await noJavaScriptPage.getByRole('link', { name: 'Membros', exact: true }).click();
-    await noJavaScriptPage.getByLabel('Pesquisar membros').fill(memberName);
-    await noJavaScriptPage.getByRole('button', { name: 'Procurar' }).click();
-    await noJavaScriptPage.getByRole('link', { name: memberName }).click();
-    await noJavaScriptPage.getByText('Desativar conta', { exact: true }).click();
-    const deactivate = noJavaScriptPage.getByRole('button', { name: `Desativar conta de ${memberName}` });
+    const context = await browser.newContext({ baseURL });
+    const interactivePage = await context.newPage();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.getByRole('link', { name: 'Membros', exact: true }).click();
+    await interactivePage.getByLabel('Pesquisar membros').fill(memberName);
+    await interactivePage.getByRole('button', { name: 'Procurar' }).click();
+    await interactivePage.getByRole('link', { name: memberName }).click();
+    await interactivePage.getByText('Desativar conta', { exact: true }).click();
+    const deactivate = interactivePage.getByRole('button', { name: `Desativar conta de ${memberName}` });
     await expect(deactivate).toBeVisible();
-    await expect(noJavaScriptPage.getByRole('link', { name: 'Cancelar' }).last()).toHaveAttribute('href', /\/admin\/membros\//);
-    await noJavaScriptPage.getByLabel(`Confirmo que pretendo desativar a conta de ${memberName}.`).check();
+    await expect(interactivePage.getByRole('link', { name: 'Cancelar' }).last()).toHaveAttribute('href', /\/admin\/membros\//);
+    await interactivePage.getByLabel(`Confirmo que pretendo desativar a conta de ${memberName}.`).check();
     await deactivate.click();
-    await expect(noJavaScriptPage.getByRole('status')).toHaveText('Conta desativada.');
-    const accountModule = noJavaScriptPage.locator('.module').filter({ has: noJavaScriptPage.getByRole('heading', { name: 'Identidade e acesso' }) });
+    await expect(interactivePage.getByRole('status')).toHaveText('Conta desativada.');
+    const accountModule = interactivePage.locator('.module').filter({ has: interactivePage.getByRole('heading', { name: 'Identidade e acesso' }) });
     await expect(accountModule.getByText('Desativada', { exact: true })).toBeVisible();
     await context.close();
   });

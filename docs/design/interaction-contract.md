@@ -13,9 +13,9 @@ to #64; this ticket proves the contract on tutor, event, fleet and member workfl
   generic “OK”, “Enviar” or “Guardar” where a more specific label exists.
 - Cancel returns to the owning list or detail route. Post/redirect/get returns to
   the same owner after success. Authorization is always checked by the server.
-- Destructive or difficult-to-reverse changes require proportionate confirmation
-  that also works without JavaScript. Native required controls are preferred over
-  custom dialogs.
+- Destructive or difficult-to-reverse changes require proportionate confirmation.
+  Prefer accessible native dialogs and controls, with explicit focus return and
+  an unambiguous cancel path.
 
 ## Fields and validation
 
@@ -24,19 +24,19 @@ to #64; this ticket proves the contract on tutor, event, fleet and member workfl
   to its control with `aria-describedby`.
 - Invalid submissions return `422`, preserve safe values and reopen the owning
   disclosure. Passwords and file inputs are intentionally never repopulated.
-- A linked error summary appears before the invalid form, receives programmatic
-  focus when JavaScript is available, and remains the first error landmark without
-  JavaScript. Field-level messages remain next to their controls; invalid controls
-  expose `aria-invalid` and reference their messages.
+- A linked error summary appears before the invalid form and receives programmatic
+  focus. Field-level messages remain next to their controls; invalid controls expose
+  `aria-invalid` and reference their messages.
 
-## Feedback and progressive enhancement
+## Feedback and interaction enhancement
 
 - Success, warning and failure feedback stays beside the task that caused it.
   Success uses `role=status`; blocking failures use `role=alert`. The same message
   is not repeated in a toast or a second live region.
-- Normal HTML submission is complete. HTMX may replace only the owning region,
-  disables its submit controls while pending, and restores focus to the returned
-  summary or status message. It must not change validation, redirects or access.
+- JavaScript, HTMX, dialogs, tabs and conditional fields may be used whenever they
+  reduce cognitive load or make the task clearer. Enhancements disable their submit
+  controls while pending and restore focus to the returned summary or status message.
+  They must not change server validation, authorization or audit behaviour.
 - Pending state uses `aria-busy`; unavailable actions are explained in visible
   text instead of silently disappearing when that explanation is useful.
 

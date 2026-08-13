@@ -33,4 +33,4 @@ The before captures use the original representative page for each context: the o
 - The UI review harness asserts the shared modules plus tutor, athlete, multi-capability, and administrator variants before capturing all six personas at 1440×900 and 375×812.
 - Each Today capture is also checked at 320 CSS px for horizontal document overflow.
 - Axe reports no serious or critical violations in the persona matrix.
-- The CI browser suite retains keyboard, 200% zoom, no-JavaScript, registration, tutor, athlete, and administrator journeys.
+- The CI browser suite retains keyboard, 200% zoom, registration, tutor, athlete, and administrator journeys.

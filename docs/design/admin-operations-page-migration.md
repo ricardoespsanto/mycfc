@@ -21,4 +21,4 @@ This #64 page-family slice migrates the news publishing and fleet operations sur
 - authenticated Playwright journeys for news and maintenance workflows
 - deterministic admin screenshot journey with axe, keyboard focus, 320px and simulated 200% zoom checks
 
-News creation and status transitions now use redirect-after-success feedback. Fleet status labels are localized and conveyed by both text and badge cues; the existing HTMX and no-JavaScript form endpoints remain unchanged.
+News creation and status transitions now use redirect-after-success feedback. Fleet status labels are localized and conveyed by both text and badge cues; the existing HTMX and server form endpoints remain unchanged.

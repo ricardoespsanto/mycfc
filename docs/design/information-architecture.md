@@ -57,7 +57,7 @@ adult account, not an exclusive persisted role.
 | `POST /admin/events` | Administrator or coach | Create an event in `/events` within authorized scope | Keep route and contextual authoring |
 | `POST /admin/events/{id}/confirm` | Administrator or coach | Confirm a waitlisted participant from event detail | Keep as event child action |
 | `POST /admin/events/{id}/check-in` | Administrator or coach | Record attendance from event detail | Keep as event child action |
-| `GET /announcements` | Authenticated | Browse visible notices | Keep as the no-JavaScript and bookmark fallback; omit from task navigation |
+| `GET /announcements` | Authenticated | Browse visible notices | Keep as the full-page and bookmark view; omit from task navigation |
 | `GET /announcements/panel` | Authenticated | Load the unread count and six most recent visible notices | Global bell fragment; private and non-cacheable |
 | `GET /announcements/{id}` | Authenticated and announcement-visible | Read a notice or official document | Open from the bell and mark read on detail |
 | `POST /admin/announcements` | Administrator or coach | Create a scoped notice in `/admin/avisos` | Keep route and dedicated authoring workspace |
@@ -95,7 +95,7 @@ mode.
 
 ```text
 MyCFC
-├── Avisos                       global bell; `/announcements` without JavaScript
+├── Avisos                       global bell; `/announcements` as full-page view
 ├── Hoje                         /today
 ├── Atividade
 │   ├── Eventos                  /events
@@ -138,8 +138,8 @@ MyCFC
    mutations returning to a detail page retain their parent destination. Query
    strings never affect selection.
 8. **Mobile changes presentation, not hierarchy.** Every destination and logout
-   remains reachable without JavaScript; disclosure state must not conceal the
-   current destination.
+   remains reachable from the interactive shell; disclosure state must not conceal
+   the current destination.
 
 ## Cumulative capabilities and active subject
 
@@ -216,7 +216,7 @@ authorization on every target.
 | `/dashboard/coach` | Redirect to `/events` | Current page is only a pointer to the implemented event-management task; Treinos remains directly available |
 | `/dashboard/moderator` | Keep temporarily but remove from primary navigation | No moderation task exists yet; redirect target is deferred rather than invented |
 | `/events` and `/events/{id}` | Keep canonical | Shared attendee and staff task family |
-| `/announcements` | Keep as fallback, remove from navigation | Bell is the primary reader surface; the route preserves no-JavaScript access and bookmarks |
+| `/announcements` | Keep full-page view, remove from navigation | Bell is the primary reader surface; the route preserves bookmarks and a focused reading view |
 | `/announcements/{id}` | Keep canonical | Stable notice and official-document detail route |
 | `/admin/avisos` | Keep canonical | Dedicated administrator/coach authoring workspace |
 | `/treinos` | Keep canonical | Shared athlete and staff task family |

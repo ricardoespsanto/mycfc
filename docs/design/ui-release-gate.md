@@ -9,10 +9,10 @@ the completed named-screen-reader check.
 | Persona | Representative routes and journey | Automated contract |
 | --- | --- | --- |
 | Member | `/today`, `/events`, `/announcements`, denied `/admin/fleet`, `/missing` | shared shell and identity, sparse/empty states, 403/404 orientation, responsive, keyboard, axe |
-| Tutor | `/today`, `/dashboard/guardian` | dependant context, direct deep link, validation and no-JavaScript dependant creation |
+| Tutor | `/today`, `/dashboard/guardian` | dependant context, direct deep link, validation and interactive dependant creation |
 | Athlete | `/today`, `/dashboard/competition`, `/treinos` | programme capability/navigation, direct deep links, training state, administrator-granted membership journey |
 | Coach | `/today`, `/events`, `/treinos` | coach capability as context rather than a false destination, staff authoring surfaces |
-| Administrator | `/today`, `/admin/membros`, member detail, `/admin/noticias`, `/admin/fleet` | cumulative navigation, breadcrumbs, validation/focus recovery, status transitions, maintenance and no-JavaScript account workflow |
+| Administrator | `/today`, `/admin/membros`, member detail, `/admin/noticias`, `/admin/fleet` | cumulative navigation, breadcrumbs, validation/focus recovery, status transitions, maintenance and interactive account workflow |
 | Multi-capability | `/today`, `/dashboard/leisure`, `/dashboard/competition`, `/events` | additive programme/staff context, stable navigation ordering and no role switcher |
 
 `CI=true make ui-review-screenshots` executes every row at desktop and mobile
@@ -33,7 +33,7 @@ contract in the assertion message.
 | Breadcrumbs, local navigation, page headers and actions | component tests and member/event detail browser journeys |
 | Validation, empty and status states | component/handler tests and guardian, event, fleet, news and announcement journeys |
 | Canonical and compatibility routes | `internal/app/router_test.go` and the `/dashboard/member?from=legacy` browser assertion; capability middleware remains outside each redirect handler |
-| No-JavaScript support | public navigation, authenticated member/tutor navigation, dependant and repair workflows, and administrator member deactivation in `e2e/auth.spec.mjs` |
+| Interactive resilience | public navigation, authenticated member/tutor navigation, dependant and repair workflows, and administrator member deactivation in `e2e/auth.spec.mjs` |
 | Generated source/assets | CI `generated-and-format`: regenerate, format-check and require a clean diff |
 
 The application gate is:

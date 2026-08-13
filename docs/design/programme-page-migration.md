@@ -21,7 +21,7 @@ This #64 page-family slice applies the authenticated UI foundation to the tutor 
 
 - `go test ./...`
 - `make verify-foundation`
-- authenticated Playwright journeys, including the JavaScript-disabled dependent workflow
+- authenticated Playwright journeys, including the interactive dependent workflow
 - deterministic tutor, athlete and multi-role screenshot journeys with axe, keyboard focus, 320px and simulated 200% zoom checks
 
 The shared repair disclosure was migrated with this slice because it appears directly in every programme workspace. Its server endpoint and form semantics are unchanged.

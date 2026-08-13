@@ -22,4 +22,4 @@ the #56 migration.
 Each page-family slice uses the shared page header, module, record list, badge,
 empty-state, action and interaction contracts. Routes are only marked complete
 after desktop/mobile evidence plus baseline keyboard, 320 CSS pixel, 200% zoom
-and no-JavaScript verification exists.
+and browser verification exists.

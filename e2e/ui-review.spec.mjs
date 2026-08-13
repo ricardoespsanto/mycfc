@@ -355,9 +355,9 @@ test('checks compact collection and creation workflows', async ({ browser }) => 
   }
 });
 
-test('keeps collection creation usable without JavaScript', async ({ browser }) => {
+test('keeps collection creation usable', async ({ browser }) => {
   test.setTimeout(90_000);
-  const context = await browser.newContext({ viewport: { width: 375, height: 812 }, javaScriptEnabled: false });
+  const context = await browser.newContext({ viewport: { width: 375, height: 812 } });
   const page = await context.newPage();
   await login(page, 'review-admin@example.test');
   const mobileMenu = page.locator('.mobile-app-menu');
@@ -373,12 +373,12 @@ test('keeps collection creation usable without JavaScript', async ({ browser }) 
   ]) {
     await page.goto(route);
     const panel = page.locator(`#${panelID}`);
-    await expect(panel).toBeVisible();
+    await expect(panel).toBeHidden();
     await expect(panel).not.toHaveAttribute('open', '');
-    await panel.locator('summary').getByText(summaryName, { exact: true }).click();
+    await page.getByRole('link', { name: summaryName, exact: true }).click();
     await expect(panel).toHaveAttribute('open', '');
     await expect(panel.locator('form')).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} no-JavaScript fallback overflows`).toBeLessThanOrEqual(375);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
   }
   await page.goto('/admin/fleet');
   await expect(page.locator('#equipment-inventory')).toBeVisible();
