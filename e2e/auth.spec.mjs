@@ -535,6 +535,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL('/admin/fleet');
     await page.getByRole('tab', { name: /Manutenção/ }).click();
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
+    await page.locator('#maintenance-form').getByRole('button', { name: 'Fechar' }).click();
     await page.getByRole('tab', { name: 'Equipamentos', exact: true }).click();
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
