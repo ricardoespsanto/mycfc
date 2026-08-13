@@ -242,3 +242,25 @@ func TestStructuredTrainingSeasonCanFollowTheFoundationMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestStructuredGymWorkoutsExistInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608130002_structured_gym_workouts.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"CREATE TYPE gym_block_structure", "CREATE TYPE training_objective", "CREATE TABLE gym_block_prescriptions", "CREATE TABLE gym_exercises", "planned_start_offset_minutes", "transition_duration_minutes", "equipment_notes", "move_gym_exercise"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "ADD COLUMN IF NOT EXISTS planned_start_offset_minutes", "CREATE TABLE IF NOT EXISTS gym_block_prescriptions", "CREATE TABLE IF NOT EXISTS gym_exercises", "CREATE OR REPLACE FUNCTION move_gym_exercise"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("gym migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("gym migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

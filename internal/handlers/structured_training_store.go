@@ -22,6 +22,12 @@ type StructuredTrainingSegmentInput struct {
 	Block   dbgen.CreateTrainingSegmentBlockParams
 }
 
+type StructuredGymBlockInput struct {
+	Block        dbgen.CreateTrainingSegmentBlockParams
+	Prescription dbgen.CreateGymBlockPrescriptionParams
+	Exercise     dbgen.CreateGymExerciseParams
+}
+
 type StructuredTrainingStore interface {
 	ListEligibleTrainingGroupMemberships(context.Context, dbgen.ListEligibleTrainingGroupMembershipsParams) ([]dbgen.ListEligibleTrainingGroupMembershipsRow, error)
 	ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error)
@@ -33,11 +39,15 @@ type StructuredTrainingStore interface {
 	CreateStructuredTrainingSession(context.Context, dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error)
 	CreateSegment(context.Context, StructuredTrainingSegmentInput) (uuid.UUID, error)
 	CreateTrainingSegmentBlock(context.Context, dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error)
+	CreateGymBlock(context.Context, StructuredGymBlockInput) (uuid.UUID, error)
+	CreateGymExercise(context.Context, dbgen.CreateGymExerciseParams) (uuid.UUID, error)
 	GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredSegmentPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetStructuredBlockPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
+	GetGymExercisePlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	MoveTrainingSessionSegment(context.Context, dbgen.MoveTrainingSessionSegmentParams) (bool, error)
 	MoveTrainingSegmentBlock(context.Context, dbgen.MoveTrainingSegmentBlockParams) (bool, error)
+	MoveGymExercise(context.Context, dbgen.MoveGymExerciseParams) (bool, error)
 }
 
 type PostgresStructuredTrainingStore struct {
@@ -125,6 +135,39 @@ func (s PostgresStructuredTrainingStore) CreateTrainingSegmentBlock(ctx context.
 	return s.queries().CreateTrainingSegmentBlock(ctx, params)
 }
 
+func (s PostgresStructuredTrainingStore) CreateGymBlock(ctx context.Context, input StructuredGymBlockInput) (blockID uuid.UUID, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	blockID, err = queries.CreateTrainingSegmentBlock(ctx, input.Block)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	input.Prescription.BlockID = blockID
+	rows, err := queries.CreateGymBlockPrescription(ctx, input.Prescription)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if rows != 1 {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	input.Exercise.BlockID = blockID
+	if _, err := queries.CreateGymExercise(ctx, input.Exercise); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return blockID, nil
+}
+
+func (s PostgresStructuredTrainingStore) CreateGymExercise(ctx context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
+	return s.queries().CreateGymExercise(ctx, params)
+}
+
 func (s PostgresStructuredTrainingStore) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
 	return s.queries().GetStructuredSessionPlanID(ctx, sessionID)
 }
@@ -137,10 +180,18 @@ func (s PostgresStructuredTrainingStore) GetStructuredBlockPlanID(ctx context.Co
 	return s.queries().GetStructuredBlockPlanID(ctx, blockID)
 }
 
+func (s PostgresStructuredTrainingStore) GetGymExercisePlanID(ctx context.Context, exerciseID uuid.UUID) (uuid.UUID, error) {
+	return s.queries().GetGymExercisePlanID(ctx, exerciseID)
+}
+
 func (s PostgresStructuredTrainingStore) MoveTrainingSessionSegment(ctx context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
 	return s.queries().MoveTrainingSessionSegment(ctx, params)
 }
 
 func (s PostgresStructuredTrainingStore) MoveTrainingSegmentBlock(ctx context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
 	return s.queries().MoveTrainingSegmentBlock(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) MoveGymExercise(ctx context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
+	return s.queries().MoveGymExercise(ctx, params)
 }

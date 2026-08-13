@@ -33,12 +33,17 @@ type StructuredTraining struct {
 
 type structuredTrainingRow struct {
 	athleteName, groupName, scope, planTitle, planDescription, seasonName, sessionTitle, sessionDescription string
-	groupID, planID, sessionID, segmentID, blockID                                                          *uuid.UUID
-	memberCount, segmentPosition, blockPosition                                                             int
+	groupID, planID, sessionID, segmentID, blockID, exerciseID                                              *uuid.UUID
+	memberCount, segmentPosition, blockPosition, exercisePosition                                           int
 	weekStart                                                                                               time.Time
 	startsAt, endsAt                                                                                        time.Time
 	entryKind, modality, segmentTitle, segmentLocation, blockPurpose, blockTitle, instructions              string
-	duration                                                                                                int
+	duration, startOffset, transition                                                                       int
+	plannedStartSet                                                                                         bool
+	equipmentNotes                                                                                          string
+	gymStructure, gymObjective                                                                              string
+	gymRounds, gymRoundRecovery                                                                             int
+	exerciseName, exercisePrescription, exerciseResistance, exerciseIntent, exerciseTempo, exerciseNotes    string
 }
 
 func (h StructuredTraining) Index(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +250,10 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 	blockTitle := strings.TrimSpace(r.PostForm.Get("block_title"))
 	instructions := strings.TrimSpace(r.PostForm.Get("instructions"))
 	duration, durationErr := optionalPositiveInt32(r.PostForm.Get("planned_duration_minutes"), 1440)
-	if !validTrainingSegmentModality(modality) || !validTrainingBlockPurpose(purpose) || utf8.RuneCountInString(title) > 120 || utf8.RuneCountInString(location) > 180 || utf8.RuneCountInString(blockTitle) > 120 || !validTrainingText(instructions, 2, 4000) || durationErr != nil {
+	startOffset, startOffsetErr := optionalNonNegativeInt32(r.PostForm.Get("planned_start_offset_minutes"), 1440)
+	transition, transitionErr := optionalPositiveInt32(r.PostForm.Get("transition_duration_minutes"), 1440)
+	equipmentNotes := strings.TrimSpace(r.PostForm.Get("equipment_notes"))
+	if !validTrainingSegmentModality(modality) || !validTrainingBlockPurpose(purpose) || utf8.RuneCountInString(title) > 120 || utf8.RuneCountInString(location) > 180 || utf8.RuneCountInString(blockTitle) > 120 || !validTrainingText(instructions, 2, 4000) || utf8.RuneCountInString(equipmentNotes) > 1000 || durationErr != nil || startOffsetErr != nil || transitionErr != nil {
 		h.System.RequestRejected(w, r)
 		return
 	}
@@ -263,7 +271,7 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 	if !h.canManageWeek(ctx, user, planID, w, r) {
 		return
 	}
-	_, err = h.Store.CreateSegment(ctx, StructuredTrainingSegmentInput{Segment: dbgen.CreateTrainingSessionSegmentParams{SessionID: sessionID, Modality: modality, Title: title, Location: location, PlannedDurationMinutes: duration}, Block: dbgen.CreateTrainingSegmentBlockParams{Purpose: purpose, Title: blockTitle, Instructions: instructions}})
+	_, err = h.Store.CreateSegment(ctx, StructuredTrainingSegmentInput{Segment: dbgen.CreateTrainingSessionSegmentParams{SessionID: sessionID, Modality: modality, Title: title, Location: location, PlannedDurationMinutes: duration, PlannedStartOffsetMinutes: startOffset, TransitionDurationMinutes: transition, EquipmentNotes: equipmentNotes}, Block: dbgen.CreateTrainingSegmentBlockParams{Purpose: purpose, Title: blockTitle, Instructions: instructions}})
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.RequestRejected(w, r)
 		return
@@ -317,8 +325,115 @@ func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) 
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
+func (h StructuredTraining) CreateGymBlock(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	segmentID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	block, prescription, exercise, err := parseStructuredGymForm(r, segmentID, true)
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetStructuredSegmentPlanID(ctx, segmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	if _, err := h.Store.CreateGymBlock(ctx, StructuredGymBlockInput{Block: block, Prescription: prescription, Exercise: exercise}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Bloco de ginásio adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	blockID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	_, _, exercise, err := parseStructuredGymForm(r, blockID, false)
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetStructuredBlockPlanID(ctx, blockID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	exercise.BlockID = blockID
+	if _, err := h.Store.CreateGymExercise(ctx, exercise); err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Exercício adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
 func (h StructuredTraining) MoveSegment(w http.ResponseWriter, r *http.Request) { h.move(w, r, true) }
 func (h StructuredTraining) MoveBlock(w http.ResponseWriter, r *http.Request)   { h.move(w, r, false) }
+func (h StructuredTraining) MoveGymExercise(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	direction := int32(1)
+	if r.PostForm.Get("direction") == "up" {
+		direction = -1
+	} else if r.PostForm.Get("direction") != "down" {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetGymExercisePlanID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	if _, err := h.Store.MoveGymExercise(ctx, dbgen.MoveGymExerciseParams{ExerciseID: id, Direction: direction}); err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
 
 func (h StructuredTraining) move(w http.ResponseWriter, r *http.Request, segment bool) {
 	user, _ := CurrentUserFromContext(r.Context())
@@ -463,6 +578,147 @@ func optionalPositiveInt32(value string, maximum int) (*int32, error) {
 	return &result, nil
 }
 
+func optionalNonNegativeInt32(value string, maximum int) (*int32, error) {
+	if value == "" {
+		return nil, nil
+	}
+	n, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || n < 0 || n > int64(maximum) {
+		return nil, errors.New("invalid non-negative integer")
+	}
+	result := int32(n)
+	return &result, nil
+}
+
+func parseStructuredGymForm(r *http.Request, parentID uuid.UUID, includeBlock bool) (dbgen.CreateTrainingSegmentBlockParams, dbgen.CreateGymBlockPrescriptionParams, dbgen.CreateGymExerciseParams, error) {
+	block := dbgen.CreateTrainingSegmentBlockParams{SegmentID: parentID}
+	prescription := dbgen.CreateGymBlockPrescriptionParams{}
+	if includeBlock {
+		block.Purpose = dbgen.TrainingBlockPurpose(r.PostForm.Get("purpose"))
+		block.Title = strings.TrimSpace(r.PostForm.Get("title"))
+		block.Instructions = strings.TrimSpace(r.PostForm.Get("instructions"))
+		prescription.Structure = dbgen.GymBlockStructure(r.PostForm.Get("structure"))
+		prescription.Objective = dbgen.TrainingObjective(r.PostForm.Get("objective"))
+		rounds, err := optionalPositiveInt32(r.PostForm.Get("rounds"), 100)
+		if err != nil || rounds == nil || !validTrainingBlockPurpose(block.Purpose) || !validGymBlockStructure(prescription.Structure) || !validTrainingObjective(prescription.Objective) || utf8.RuneCountInString(block.Title) > 120 || !validTrainingText(block.Instructions, 2, 4000) {
+			return block, prescription, dbgen.CreateGymExerciseParams{}, errors.New("invalid gym block")
+		}
+		prescription.Rounds = *rounds
+		prescription.RoundRecoverySeconds, err = optionalPositiveInt32(r.PostForm.Get("round_recovery_seconds"), 86400)
+		if err != nil {
+			return block, prescription, dbgen.CreateGymExerciseParams{}, err
+		}
+	}
+	exercise, err := parseGymExercise(r)
+	return block, prescription, exercise, err
+}
+
+func parseGymExercise(r *http.Request) (dbgen.CreateGymExerciseParams, error) {
+	exercise := dbgen.CreateGymExerciseParams{Name: strings.TrimSpace(r.PostForm.Get("exercise_name")), Notes: strings.TrimSpace(r.PostForm.Get("exercise_notes"))}
+	var err error
+	if exercise.Sets, err = optionalPositiveInt32(r.PostForm.Get("sets"), 100); err != nil {
+		return exercise, err
+	}
+	if exercise.Repetitions, err = optionalPositiveInt32(r.PostForm.Get("repetitions"), 10000); err != nil {
+		return exercise, err
+	}
+	if exercise.DurationSeconds, err = optionalPositiveInt32(r.PostForm.Get("duration_seconds"), 86400); err != nil {
+		return exercise, err
+	}
+	if exercise.DistanceMetres, err = optionalPositiveInt32(r.PostForm.Get("distance_metres"), 100000); err != nil {
+		return exercise, err
+	}
+	if exercise.RecoverySeconds, err = optionalPositiveInt32(r.PostForm.Get("recovery_seconds"), 86400); err != nil {
+		return exercise, err
+	}
+	if !validTrainingText(exercise.Name, 2, 180) || utf8.RuneCountInString(exercise.Notes) > 1000 || (exercise.Repetitions == nil && exercise.DurationSeconds == nil && exercise.DistanceMetres == nil) {
+		return exercise, errors.New("invalid gym exercise")
+	}
+	if tempo := strings.TrimSpace(r.PostForm.Get("tempo")); tempo != "" {
+		if utf8.RuneCountInString(tempo) > 30 {
+			return exercise, errors.New("invalid tempo")
+		}
+		exercise.Tempo = &tempo
+	}
+	if raw := r.PostForm.Get("execution_intent"); raw != "" {
+		intent := dbgen.GymExecutionIntent(raw)
+		if !validGymExecutionIntent(intent) {
+			return exercise, errors.New("invalid execution intent")
+		}
+		exercise.ExecutionIntent = &intent
+	}
+	if raw := r.PostForm.Get("resistance_kind"); raw != "" {
+		kind := dbgen.GymResistanceKind(raw)
+		if !validGymResistanceKind(kind) {
+			return exercise, errors.New("invalid resistance kind")
+		}
+		exercise.ResistanceKind = &kind
+		valueText := strings.TrimSpace(r.PostForm.Get("resistance_value"))
+		instruction := strings.TrimSpace(r.PostForm.Get("resistance_text"))
+		switch kind {
+		case dbgen.GymResistanceKindKILOGRAMS, dbgen.GymResistanceKindPERCENT1RM, dbgen.GymResistanceKindRPE, dbgen.GymResistanceKindRIR:
+			value, parseErr := strconv.ParseFloat(valueText, 64)
+			if parseErr != nil || !validGymResistanceValue(kind, value) || instruction != "" {
+				return exercise, errors.New("invalid resistance value")
+			}
+			exercise.ResistanceValue = &value
+		case dbgen.GymResistanceKindBODYWEIGHT:
+			if valueText != "" || instruction != "" {
+				return exercise, errors.New("invalid body-weight resistance")
+			}
+		case dbgen.GymResistanceKindBAND, dbgen.GymResistanceKindCOACHINSTRUCTION:
+			if valueText != "" || !validTrainingText(instruction, 1, 180) {
+				return exercise, errors.New("invalid resistance instruction")
+			}
+			exercise.ResistanceText = &instruction
+		}
+	} else if strings.TrimSpace(r.PostForm.Get("resistance_value")) != "" || strings.TrimSpace(r.PostForm.Get("resistance_text")) != "" {
+		return exercise, errors.New("resistance type required")
+	}
+	return exercise, nil
+}
+
+func validGymBlockStructure(value dbgen.GymBlockStructure) bool {
+	return value == dbgen.GymBlockStructureSTRAIGHTSETS || value == dbgen.GymBlockStructureCIRCUIT || value == dbgen.GymBlockStructureSUPERSET
+}
+
+func validTrainingObjective(value dbgen.TrainingObjective) bool {
+	switch value {
+	case dbgen.TrainingObjectiveMOBILITY, dbgen.TrainingObjectiveACTIVATION, dbgen.TrainingObjectiveMAXSTRENGTHHYPERTROPHY, dbgen.TrainingObjectiveMAXSTRENGTHNEURAL, dbgen.TrainingObjectiveEXPLOSIVESTRENGTH, dbgen.TrainingObjectiveSTRENGTHENDURANCE, dbgen.TrainingObjectiveTECHNIQUE, dbgen.TrainingObjectiveCORE, dbgen.TrainingObjectiveCUSTOM:
+		return true
+	default:
+		return false
+	}
+}
+
+func validGymResistanceKind(value dbgen.GymResistanceKind) bool {
+	switch value {
+	case dbgen.GymResistanceKindKILOGRAMS, dbgen.GymResistanceKindPERCENT1RM, dbgen.GymResistanceKindBODYWEIGHT, dbgen.GymResistanceKindBAND, dbgen.GymResistanceKindRPE, dbgen.GymResistanceKindRIR, dbgen.GymResistanceKindCOACHINSTRUCTION:
+		return true
+	default:
+		return false
+	}
+}
+
+func validGymExecutionIntent(value dbgen.GymExecutionIntent) bool {
+	return value == dbgen.GymExecutionIntentCONTROLLED || value == dbgen.GymExecutionIntentEXPLOSIVE || value == dbgen.GymExecutionIntentMAXIMUMVELOCITY || value == dbgen.GymExecutionIntentISOMETRIC || value == dbgen.GymExecutionIntentCUSTOM
+}
+
+func validGymResistanceValue(kind dbgen.GymResistanceKind, value float64) bool {
+	switch kind {
+	case dbgen.GymResistanceKindKILOGRAMS:
+		return value >= 0.01 && value <= 10000
+	case dbgen.GymResistanceKindPERCENT1RM:
+		return value >= 0.01 && value <= 200
+	case dbgen.GymResistanceKindRPE:
+		return value >= 1 && value <= 10
+	case dbgen.GymResistanceKindRIR:
+		return value >= 0 && value <= 20
+	default:
+		return false
+	}
+}
+
 func structuredChoices(rows []dbgen.ListEligibleTrainingGroupMembershipsRow) ([]pages.StructuredTrainingMembershipChoice, []pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice) {
 	members := make([]pages.StructuredTrainingMembershipChoice, 0, len(rows))
 	programmes, teams := []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}
@@ -526,14 +782,36 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 			if row.duration > 0 {
 				duration = fmt.Sprintf("%d min", row.duration)
 			}
-			session.Segments = append(session.Segments, pages.StructuredTrainingSegment{ID: row.segmentID.String(), Modality: row.modality, Title: row.segmentTitle, Location: row.segmentLocation, Duration: duration, Position: row.segmentPosition})
+			plannedStart := ""
+			if row.startOffset > 0 {
+				plannedStart = row.startsAt.Add(time.Duration(row.startOffset) * time.Minute).In(location).Format("15:04")
+			} else if row.plannedStartSet {
+				plannedStart = row.startsAt.In(location).Format("15:04")
+			}
+			session.Segments = append(session.Segments, pages.StructuredTrainingSegment{ID: row.segmentID.String(), Modality: row.modality, Title: row.segmentTitle, Location: row.segmentLocation, Duration: duration, PlannedStart: plannedStart, Transition: row.transition, EquipmentNotes: row.equipmentNotes, Position: row.segmentPosition})
+			session.Modalities = appendStructuredModality(session.Modalities, row.modality)
 		}
 		segment := &session.Segments[len(session.Segments)-1]
 		if row.blockID != nil {
-			segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition})
+			if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
+				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery})
+			}
+			block := &segment.Blocks[len(segment.Blocks)-1]
+			if row.exerciseID != nil {
+				block.Exercises = append(block.Exercises, pages.StructuredGymExercise{ID: row.exerciseID.String(), Name: row.exerciseName, Prescription: row.exercisePrescription, Resistance: row.exerciseResistance, Intent: row.exerciseIntent, Tempo: row.exerciseTempo, Notes: row.exerciseNotes, Position: row.exercisePosition})
+			}
 		}
 	}
 	return audiences
+}
+
+func appendStructuredModality(modalities []string, modality string) []string {
+	for _, existing := range modalities {
+		if existing == modality {
+			return modalities
+		}
+	}
+	return append(modalities, modality)
 }
 
 func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManagerRow) []structuredTrainingRow {
@@ -543,7 +821,7 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 		if row.TeamName != nil {
 			scope += " · " + *row.TeamName
 		}
-		result = append(result, structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)})
+		result = append(result, structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes))
 	}
 	return result
 }
@@ -551,9 +829,64 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 func subjectStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForSubjectRow) []structuredTrainingRow {
 	result := make([]structuredTrainingRow, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, structuredTrainingRow{athleteName: row.AthleteName, groupID: &row.GroupID, groupName: row.GroupName, scope: "Plano atribuído", planID: &row.PlanID, planTitle: row.PlanTitle, planDescription: row.PlanDescription, seasonName: row.SeasonName, weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)})
+		result = append(result, structuredRowFromValues(structuredTrainingRow{athleteName: row.AthleteName, groupID: &row.GroupID, groupName: row.GroupName, scope: "Plano atribuído", planID: &row.PlanID, planTitle: row.PlanTitle, planDescription: row.PlanDescription, seasonName: row.SeasonName, weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes))
 	}
 	return result
+}
+
+func structuredRowFromValues(row structuredTrainingRow, structure *dbgen.GymBlockStructure, objective *dbgen.TrainingObjective, rounds, roundRecovery *int32, exerciseID *uuid.UUID, exercisePosition *int32, name *string, sets, repetitions, duration, distance, recovery *int32, resistanceKind *dbgen.GymResistanceKind, resistanceValue *float64, resistanceText *string, intent *dbgen.GymExecutionIntent, tempo, notes *string) structuredTrainingRow {
+	row.gymStructure, row.gymObjective = enumString(structure), enumString(objective)
+	row.gymRounds, row.gymRoundRecovery = intValue(rounds), intValue(roundRecovery)
+	row.exerciseID, row.exercisePosition, row.exerciseName = exerciseID, intValue(exercisePosition), stringValue(name)
+	row.exercisePrescription = gymExercisePrescription(intValue(sets), intValue(repetitions), intValue(duration), intValue(distance), intValue(recovery))
+	row.exerciseResistance = gymResistanceLabel(enumString(resistanceKind), resistanceValue, stringValue(resistanceText))
+	row.exerciseIntent, row.exerciseTempo, row.exerciseNotes = enumString(intent), stringValue(tempo), stringValue(notes)
+	return row
+}
+
+func gymExercisePrescription(sets, repetitions, duration, distance, recovery int) string {
+	parts := []string{}
+	if sets > 0 {
+		parts = append(parts, fmt.Sprintf("%d séries", sets))
+	}
+	if repetitions > 0 {
+		parts = append(parts, fmt.Sprintf("%d repetições", repetitions))
+	}
+	if duration > 0 {
+		parts = append(parts, fmt.Sprintf("%d s", duration))
+	}
+	if distance > 0 {
+		parts = append(parts, fmt.Sprintf("%d m", distance))
+	}
+	if recovery > 0 {
+		parts = append(parts, fmt.Sprintf("recuperação %d s", recovery))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func gymResistanceLabel(kind string, value *float64, text string) string {
+	if value != nil {
+		formatted := strconv.FormatFloat(*value, 'f', -1, 64)
+		switch kind {
+		case "KILOGRAMS":
+			return formatted + " kg"
+		case "PERCENT_1RM":
+			return formatted + "% de 1RM"
+		case "RPE":
+			return "RPE " + formatted
+		case "RIR":
+			return "RIR " + formatted
+		}
+	}
+	switch kind {
+	case "BODY_WEIGHT":
+		return "Peso corporal"
+	case "BAND":
+		return "Banda · " + text
+	case "COACH_INSTRUCTION":
+		return text
+	}
+	return ""
 }
 
 func enumString[T ~string](value *T) string {

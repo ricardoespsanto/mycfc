@@ -97,10 +97,12 @@ WHERE plan.id = sqlc.arg(plan_id)
 RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: CreateTrainingSessionSegment :one
-INSERT INTO training_session_segments (session_id, position, modality, title, location, planned_duration_minutes)
+INSERT INTO training_session_segments (session_id, position, modality, title, location, planned_duration_minutes,
+                                       planned_start_offset_minutes, transition_duration_minutes, equipment_notes)
 SELECT sqlc.arg(session_id), COALESCE(max(segment.position), 0) + 1,
        sqlc.arg(modality)::training_segment_modality, sqlc.arg(title), sqlc.arg(location),
-       sqlc.narg(planned_duration_minutes)
+       sqlc.narg(planned_duration_minutes), sqlc.narg(planned_start_offset_minutes),
+       sqlc.narg(transition_duration_minutes), sqlc.arg(equipment_notes)
 FROM training_sessions session
 LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
@@ -118,11 +120,37 @@ WHERE segment.id = sqlc.arg(segment_id)
 GROUP BY segment.id
 RETURNING id;
 
+-- name: CreateGymBlockPrescription :execrows
+INSERT INTO gym_block_prescriptions (block_id, structure, objective, rounds, round_recovery_seconds)
+SELECT block.id, sqlc.arg(structure)::gym_block_structure, sqlc.arg(objective)::training_objective,
+       sqlc.arg(rounds), sqlc.narg(round_recovery_seconds)
+FROM training_segment_blocks block
+JOIN training_session_segments segment ON segment.id = block.segment_id
+WHERE block.id = sqlc.arg(block_id) AND segment.modality = 'GYM';
+
+-- name: CreateGymExercise :one
+INSERT INTO gym_exercises (block_id, position, name, sets, repetitions, duration_seconds, distance_metres,
+                           recovery_seconds, resistance_kind, resistance_value, resistance_text,
+                           execution_intent, tempo, notes)
+SELECT prescription.block_id, COALESCE(max(exercise.position), 0) + 1, sqlc.arg(name), sqlc.narg(sets),
+       sqlc.narg(repetitions), sqlc.narg(duration_seconds), sqlc.narg(distance_metres),
+       sqlc.narg(recovery_seconds), sqlc.narg(resistance_kind)::gym_resistance_kind,
+       sqlc.narg(resistance_value), sqlc.narg(resistance_text),
+       sqlc.narg(execution_intent)::gym_execution_intent, sqlc.narg(tempo), sqlc.arg(notes)
+FROM gym_block_prescriptions prescription
+LEFT JOIN gym_exercises exercise ON exercise.block_id = prescription.block_id
+WHERE prescription.block_id = sqlc.arg(block_id)
+GROUP BY prescription.block_id
+RETURNING id;
+
 -- name: MoveTrainingSessionSegment :one
 SELECT move_training_session_segment(sqlc.arg(segment_id), sqlc.arg(direction));
 
 -- name: MoveTrainingSegmentBlock :one
 SELECT move_training_segment_block(sqlc.arg(block_id), sqlc.arg(direction));
+
+-- name: MoveGymExercise :one
+SELECT move_gym_exercise(sqlc.arg(exercise_id), sqlc.arg(direction));
 
 -- name: ListStructuredTrainingOverviewForManager :many
 SELECT group_row.id AS group_id, group_row.name AS group_name,
@@ -133,9 +161,18 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
-       segment.planned_duration_minutes,
+       segment.planned_duration_minutes, segment.planned_start_offset_minutes,
+       segment.transition_duration_minutes, segment.equipment_notes,
        block.id AS block_id, block.position AS block_position, block.purpose AS block_purpose,
-       block.title AS block_title, block.instructions AS block_instructions
+       block.title AS block_title, block.instructions AS block_instructions,
+       gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
+       gym.round_recovery_seconds,
+       exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
+       exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
+       exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
+       exercise.recovery_seconds AS exercise_recovery_seconds, exercise.resistance_kind,
+       exercise.resistance_value, exercise.resistance_text, exercise.execution_intent, exercise.tempo,
+       exercise.notes AS exercise_notes
 FROM training_groups group_row
 LEFT JOIN teams team ON team.id = group_row.team_id
 JOIN programmes programme ON programme.id = COALESCE(group_row.programme_id, team.programme_id)
@@ -144,6 +181,8 @@ LEFT JOIN seasons season ON season.id = plan.season_id
 LEFT JOIN training_sessions session ON session.plan_id = plan.id
 LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
+LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
+LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
 WHERE sqlc.arg(is_admin)::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
@@ -153,7 +192,7 @@ WHERE sqlc.arg(is_admin)::boolean
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
 ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position;
+         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position;
 
 -- name: ListStructuredTrainingOverviewForSubject :many
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
@@ -163,9 +202,18 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
-       segment.planned_duration_minutes,
+       segment.planned_duration_minutes, segment.planned_start_offset_minutes,
+       segment.transition_duration_minutes, segment.equipment_notes,
        block.id AS block_id, block.position AS block_position, block.purpose AS block_purpose,
-       block.title AS block_title, block.instructions AS block_instructions
+       block.title AS block_title, block.instructions AS block_instructions,
+       gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
+       gym.round_recovery_seconds,
+       exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
+       exercise.sets AS exercise_sets, exercise.repetitions AS exercise_repetitions,
+       exercise.duration_seconds AS exercise_duration_seconds, exercise.distance_metres AS exercise_distance_metres,
+       exercise.recovery_seconds AS exercise_recovery_seconds, exercise.resistance_kind,
+       exercise.resistance_value, exercise.resistance_text, exercise.execution_intent, exercise.tempo,
+       exercise.notes AS exercise_notes
 FROM training_group_members group_member
 JOIN user_memberships membership ON membership.id = group_member.membership_id
 JOIN users subject ON subject.id = membership.user_id
@@ -175,13 +223,15 @@ JOIN seasons season ON season.id = plan.season_id
 LEFT JOIN training_sessions session ON session.plan_id = plan.id
 LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
+LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
+LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
 WHERE (subject.id = sqlc.arg(user_id)
        OR (subject.guardian_id = sqlc.arg(user_id) AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position;
+         session.starts_at NULLS LAST, session.id, segment.position, block.position, exercise.position;
 
 -- name: GetStructuredSessionPlanID :one
 SELECT session.plan_id
@@ -203,3 +253,12 @@ JOIN training_session_segments segment ON segment.id = block.segment_id
 JOIN training_sessions session ON session.id = segment.session_id
 JOIN training_plans plan ON plan.id = session.plan_id
 WHERE block.id = sqlc.arg(block_id) AND plan.training_group_id IS NOT NULL;
+
+-- name: GetGymExercisePlanID :one
+SELECT session.plan_id
+FROM gym_exercises exercise
+JOIN training_segment_blocks block ON block.id = exercise.block_id
+JOIN training_session_segments segment ON segment.id = block.segment_id
+JOIN training_sessions session ON session.id = segment.session_id
+JOIN training_plans plan ON plan.id = session.plan_id
+WHERE exercise.id = sqlc.arg(exercise_id) AND plan.training_group_id IS NOT NULL;

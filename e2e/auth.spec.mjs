@@ -718,7 +718,7 @@ test.describe('authentication', () => {
   });
 
   test('administrator authors a responsive hybrid training week without JavaScript', async ({ browser }) => {
-    test.setTimeout(300000);
+    test.setTimeout(600000);
     const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
     const page = await context.newPage();
     const suffix = Date.now();
@@ -793,22 +793,65 @@ test.describe('authentication', () => {
     let segmentForm = session.locator('form[action$="/segmentos"]');
     await segmentForm.getByLabel('Modalidade').selectOption('GYM');
     await segmentForm.getByLabel('Título (opcional)').fill('Mobilidade');
+    await segmentForm.getByLabel('Duração prevista em minutos (opcional)').fill('30');
+    await segmentForm.getByLabel('Início previsto, em minutos após o início da sessão (opcional)').fill('0');
+    await segmentForm.getByLabel('Material e preparação (opcional)').fill('Elásticos e halteres');
     await segmentForm.getByLabel('Objetivo do primeiro bloco').selectOption('WARM_UP');
     await segmentForm.getByLabel('Instruções').fill('5 min de mobilidade articular');
     await segmentForm.getByRole('button', { name: 'Adicionar segmento' }).click();
     await expect(page.getByRole('status')).toHaveText('Segmento adicionado.');
 
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    const gymSegment = session.getByRole('heading', { name: /Ginásio · Mobilidade/ }).locator('xpath=ancestor::section[1]');
+    await expect(gymSegment).toContainText('Material: Elásticos e halteres');
+    await gymSegment.locator('summary').filter({ hasText: 'Adicionar bloco estruturado de ginásio' }).click();
+    const gymBlockForm = gymSegment.locator('form[action$="/ginasio"]');
+    await gymBlockForm.locator('select[name="purpose"]').selectOption('WARM_UP');
+    await gymBlockForm.locator('input[name="title"]').fill('Supersérie de ativação');
+    await gymBlockForm.locator('textarea[name="instructions"]').fill('Três voltas com execução cuidada');
+    await gymBlockForm.locator('select[name="structure"]').selectOption('SUPERSET');
+    await gymBlockForm.locator('select[name="objective"]').selectOption('ACTIVATION');
+    await gymBlockForm.locator('input[name="rounds"]').fill('3');
+    await gymBlockForm.locator('input[name="round_recovery_seconds"]').fill('120');
+    await gymBlockForm.locator('input[name="exercise_name"]').fill('Supino');
+    await gymBlockForm.locator('input[name="sets"]').fill('3');
+    await gymBlockForm.locator('input[name="repetitions"]').fill('5');
+    await gymBlockForm.locator('select[name="resistance_kind"]').selectOption('PERCENT_1RM');
+    await gymBlockForm.locator('input[name="resistance_value"]').fill('75');
+    await gymBlockForm.locator('select[name="execution_intent"]').selectOption('EXPLOSIVE');
+    await gymBlockForm.locator('input[name="tempo"]').fill('2-0-X-1');
+    await gymBlockForm.getByRole('button', { name: 'Adicionar bloco de ginásio' }).click();
+    await expect(page.getByRole('status')).toHaveText('Bloco de ginásio adicionado.');
+
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    const gymBlock = session.locator('form[action$="/exercicios"]').locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    await expect(gymBlock).toContainText('Supersérie · Ativação · 3 voltas');
+    await expect(gymBlock).toContainText('Supino');
+    await expect(gymBlock).toContainText('75% de 1RM');
+    await gymBlock.locator('summary').filter({ hasText: 'Adicionar exercício' }).click();
+    const exerciseForm = gymBlock.locator('form[action$="/exercicios"]');
+    await exerciseForm.locator('input[name="exercise_name"]').fill('Prancha');
+    await exerciseForm.locator('input[name="duration_seconds"]').fill('45');
+    await exerciseForm.locator('select[name="resistance_kind"]').selectOption('BODY_WEIGHT');
+    await exerciseForm.locator('select[name="execution_intent"]').selectOption('ISOMETRIC');
+    await exerciseForm.getByRole('button', { name: 'Adicionar exercício' }).click();
+    await expect(page.getByRole('status')).toHaveText('Exercício adicionado.');
+
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
     await session.locator('summary').filter({ hasText: 'Adicionar segmento' }).click();
     segmentForm = session.locator('form[action$="/segmentos"]');
     await segmentForm.getByLabel('Modalidade').selectOption('WATER');
     await segmentForm.getByLabel('Título (opcional)').fill('Ataque 3 e defesa 2-2');
+    await segmentForm.getByLabel('Início previsto, em minutos após o início da sessão (opcional)').fill('35');
+    await segmentForm.getByLabel('Transição antes deste segmento, em minutos (opcional)').fill('5');
     await segmentForm.getByLabel('Objetivo do primeiro bloco').selectOption('MAIN');
     await segmentForm.getByLabel('Instruções').fill("2x7' jogo · HxH · GR e pivot");
     await segmentForm.getByRole('button', { name: 'Adicionar segmento' }).click();
     await expect(page.getByRole('status')).toHaveText('Segmento adicionado.');
 
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await expect(session).toContainText('Ginásio + Água');
+    await expect(session).toContainText('Prancha');
     await expect(session.getByRole('heading', { name: /Ginásio · Mobilidade/ })).toBeVisible();
     const waterSegment = session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ }).locator('xpath=ancestor::section[1]');
     await expect(waterSegment).toContainText("2x7' jogo · HxH · GR e pivot");
