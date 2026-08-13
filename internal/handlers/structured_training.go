@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -62,13 +64,23 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		page.Audiences = assembleStructuredTraining(managerStructuredRows(rows), h.location())
+		page.RoutineQuery = strings.TrimSpace(r.URL.Query().Get("routine_query"))
+		page.RoutineModality = r.URL.Query().Get("routine_modality")
+		page.RoutineObjective = r.URL.Query().Get("routine_objective")
+		page.RoutineTag = strings.TrimSpace(r.URL.Query().Get("routine_tag"))
+		routines, err := h.Store.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: user.ID, IsAdmin: user.IsAdmin, Query: page.RoutineQuery, Modality: page.RoutineModality, Objective: page.RoutineObjective, Tag: page.RoutineTag})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.Routines = structuredRoutineRows(routines, h.location())
 		memberships, err := h.Store.ListEligibleTrainingGroupMemberships(ctx, dbgen.ListEligibleTrainingGroupMembershipsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if err != nil {
 			h.System.InternalError(w, r)
 			return
 		}
 		page.Memberships, page.Programmes, page.Teams = structuredChoices(memberships)
-		page.Groups, page.Weeks = structuredPlanChoices(page.Audiences)
+		page.Groups, page.Weeks, page.Sessions, page.Segments = structuredPlanChoices(page.Audiences)
 	} else {
 		rows, err := h.Store.ListStructuredTrainingOverviewForSubject(ctx, user.ID)
 		if err != nil {
@@ -395,6 +407,252 @@ func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Req
 		return
 	}
 	h.flash(r, "Exercício adicionado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateRoutine(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	kind := dbgen.TrainingRoutineKind(r.PostForm.Get("source_kind"))
+	sourceID, idErr := uuid.Parse(r.PostForm.Get("source_id"))
+	name := strings.TrimSpace(r.PostForm.Get("name"))
+	description := strings.TrimSpace(r.PostForm.Get("description"))
+	method := strings.TrimSpace(r.PostForm.Get("method"))
+	visibility := dbgen.TrainingRoutineVisibility(r.PostForm.Get("visibility"))
+	tags, tagsErr := parseTrainingRoutineTags(r.PostForm.Get("tags"))
+	if idErr != nil || !validTrainingRoutineKind(kind) || !validTrainingRoutineVisibility(visibility) || !validTrainingText(name, 2, 180) || utf8.RuneCountInString(description) > 1000 || utf8.RuneCountInString(method) > 80 || tagsErr != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	source, err := h.Store.GetRoutineSource(ctx, kind, sourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, source.PlanID, w, r) {
+		return
+	}
+	var programmeID, teamID *uuid.UUID
+	if visibility == dbgen.TrainingRoutineVisibilitySHARED {
+		if source.TeamID != nil {
+			teamID = source.TeamID
+		} else if source.ProgrammeID != nil {
+			programmeID = source.ProgrammeID
+		} else {
+			h.System.RequestRejected(w, r)
+			return
+		}
+	}
+	_, err = h.Store.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{Name: name, Description: description, Kind: kind, Visibility: visibility, OwnerUserID: user.ID, ProgrammeID: programmeID, TeamID: teamID, Modality: source.Modality, Objective: source.Objective, Method: method, Tags: tags, SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, Snapshot: source.Snapshot})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Rotina guardada como cópia independente.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	routineID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	targetID, err := uuid.Parse(r.PostForm.Get("target_id"))
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	routine, err := h.Store.GetVisibleTrainingRoutine(ctx, dbgen.GetVisibleTrainingRoutineParams{RoutineID: routineID, UserID: user.ID, IsAdmin: user.IsAdmin})
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	var planID uuid.UUID
+	startsAt := pgtype.Timestamptz{}
+	switch routine.Kind {
+	case dbgen.TrainingRoutineKindBLOCK:
+		planID, err = h.Store.GetStructuredSegmentPlanID(ctx, targetID)
+	case dbgen.TrainingRoutineKindSEGMENT:
+		planID, err = h.Store.GetStructuredSessionPlanID(ctx, targetID)
+	case dbgen.TrainingRoutineKindSESSION:
+		planID = targetID
+		parsed, parseErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
+		if parseErr != nil {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		startsAt = pgtype.Timestamptz{Time: parsed, Valid: true}
+	default:
+		err = pgx.ErrNoRows
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	if _, err := h.Store.InsertTrainingRoutine(ctx, StructuredRoutineInsertInput{Routine: routine, TargetID: targetID, StartsAt: startsAt, ActorID: user.ID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Rotina inserida como cópia independente.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CopyBlock(w http.ResponseWriter, r *http.Request) {
+	h.copyBlockOrSession(w, r, true)
+}
+
+func (h StructuredTraining) CopySession(w http.ResponseWriter, r *http.Request) {
+	h.copyBlockOrSession(w, r, false)
+}
+
+func (h StructuredTraining) copyBlockOrSession(w http.ResponseWriter, r *http.Request, block bool) {
+	user, _ := CurrentUserFromContext(r.Context())
+	sourceID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	targetID, err := uuid.Parse(r.PostForm.Get("target_id"))
+	if err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	var sourcePlanID, targetPlanID uuid.UUID
+	if block {
+		sourcePlanID, err = h.Store.GetStructuredBlockPlanID(ctx, sourceID)
+		if err == nil {
+			targetPlanID, err = h.Store.GetStructuredSegmentPlanID(ctx, targetID)
+		}
+	} else {
+		sourcePlanID, err = h.Store.GetStructuredSessionPlanID(ctx, sourceID)
+		targetPlanID = targetID
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, sourcePlanID, w, r) || !h.canManageWeek(ctx, user, targetPlanID, w, r) {
+		return
+	}
+	if block {
+		_, err = h.Store.CopyTrainingBlock(ctx, sourceID, targetID, user.ID)
+	} else {
+		startsAt, parseErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
+		if parseErr != nil {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		_, err = h.Store.CopyTrainingSession(ctx, sourceID, targetID, pgtype.Timestamptz{Time: startsAt, Valid: true}, user.ID)
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Conteúdo copiado de forma independente.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CopyDay(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	sourcePlanID, sourcePlanErr := uuid.Parse(r.PostForm.Get("source_plan_id"))
+	targetPlanID, targetPlanErr := uuid.Parse(r.PostForm.Get("target_plan_id"))
+	sourceDate, sourceDateErr := time.ParseInLocation("2006-01-02", r.PostForm.Get("source_date"), h.location())
+	targetDate, targetDateErr := time.ParseInLocation("2006-01-02", r.PostForm.Get("target_date"), h.location())
+	if sourcePlanErr != nil || targetPlanErr != nil || sourceDateErr != nil || targetDateErr != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageWeek(ctx, user, sourcePlanID, w, r) || !h.canManageWeek(ctx, user, targetPlanID, w, r) {
+		return
+	}
+	count, err := h.Store.CopyStructuredTrainingDay(ctx, StructuredDayCopyInput{SourcePlanID: sourcePlanID, TargetPlanID: targetPlanID, SourceDate: sourceDate, TargetDate: targetDate, ActorID: user.ID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	if count == 0 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	h.flash(r, fmt.Sprintf("Dia copiado: %d sessões independentes.", count))
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CopyWeek(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	sourcePlanID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	weekStart, dateErr := time.ParseInLocation("2006-01-02", r.PostForm.Get("week_start"), h.location())
+	title := strings.TrimSpace(r.PostForm.Get("title"))
+	if dateErr != nil || weekStart.Weekday() != time.Monday || !validTrainingText(title, 2, 180) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageWeek(ctx, user, sourcePlanID, w, r) {
+		return
+	}
+	if _, err := h.Store.CopyStructuredTrainingWeek(ctx, StructuredWeekCopyInput{SourcePlanID: sourcePlanID, WeekStart: weekStart, Title: title, ActorID: user.ID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Semana copiada como novo rascunho independente.")
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
@@ -741,15 +999,25 @@ func structuredChoices(rows []dbgen.ListEligibleTrainingGroupMembershipsRow) ([]
 	return members, programmes, teams
 }
 
-func structuredPlanChoices(audiences []pages.StructuredTrainingAudience) ([]pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice) {
-	groups, weeks := []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}
+func structuredPlanChoices(audiences []pages.StructuredTrainingAudience) ([]pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice, []pages.StructuredTrainingChoice) {
+	groups, weeks, sessions, segments := []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}, []pages.StructuredTrainingChoice{}
 	for _, audience := range audiences {
 		groups = append(groups, pages.StructuredTrainingChoice{ID: audience.GroupID, Name: audience.GroupName})
 		for _, week := range audience.Weeks {
 			weeks = append(weeks, pages.StructuredTrainingChoice{ID: week.ID, Name: audience.GroupName + " · " + week.Title + " · " + week.DateRange})
+			for _, session := range week.Sessions {
+				sessions = append(sessions, pages.StructuredTrainingChoice{ID: session.ID, Name: week.Title + " · " + session.When + " · " + session.Title})
+				for _, segment := range session.Segments {
+					name := structuredModalityName(segment.Modality)
+					if segment.Title != "" {
+						name += " · " + segment.Title
+					}
+					segments = append(segments, pages.StructuredTrainingChoice{ID: segment.ID, Name: week.Title + " · " + session.Title + " · " + name})
+				}
+			}
 		}
 	}
-	return groups, weeks
+	return groups, weeks, sessions, segments
 }
 
 func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Location) []pages.StructuredTrainingAudience {
@@ -812,6 +1080,131 @@ func appendStructuredModality(modalities []string, modality string) []string {
 		}
 	}
 	return append(modalities, modality)
+}
+
+func structuredRoutineRows(rows []dbgen.ListVisibleTrainingRoutinesRow, location *time.Location) []pages.StructuredTrainingRoutine {
+	result := make([]pages.StructuredTrainingRoutine, 0, len(rows))
+	for _, row := range rows {
+		scope := ""
+		if row.TeamName != nil {
+			scope = *row.TeamName
+		} else if row.ProgrammeName != nil {
+			scope = *row.ProgrammeName
+		}
+		visibility := "Só para mim"
+		if row.Visibility == dbgen.TrainingRoutineVisibilitySHARED {
+			visibility = "Partilhada"
+		}
+		result = append(result, pages.StructuredTrainingRoutine{ID: row.ID.String(), Name: row.Name, Description: row.Description, Kind: string(row.Kind), Visibility: visibility, Owner: row.OwnerName, Scope: scope, Modality: enumString(row.Modality), Objective: enumString(row.Objective), Method: row.Method, Tags: strings.Join(row.Tags, ", "), Preview: trainingRoutinePreview(row.Snapshot, row.Kind), Provenance: "Guardada de " + trainingRoutineKindName(row.Kind) + " em " + row.SourceUpdatedAt.Time.In(location).Format("02/01/2006 15:04")})
+	}
+	return result
+}
+
+func trainingRoutinePreview(snapshot []byte, kind dbgen.TrainingRoutineKind) string {
+	var value struct {
+		Title        string            `json:"title"`
+		Instructions string            `json:"instructions"`
+		Blocks       []json.RawMessage `json:"blocks"`
+		Segments     []json.RawMessage `json:"segments"`
+	}
+	if json.Unmarshal(snapshot, &value) != nil {
+		return "Conteúdo estruturado"
+	}
+	switch kind {
+	case dbgen.TrainingRoutineKindBLOCK:
+		if value.Title != "" {
+			return value.Title + " · " + value.Instructions
+		}
+		return value.Instructions
+	case dbgen.TrainingRoutineKindSEGMENT:
+		label := value.Title
+		if label == "" {
+			label = "Segmento"
+		}
+		return fmt.Sprintf("%s · %d blocos", label, len(value.Blocks))
+	default:
+		label := value.Title
+		if label == "" {
+			label = "Sessão"
+		}
+		return fmt.Sprintf("%s · %d segmentos", label, len(value.Segments))
+	}
+}
+
+func trainingRoutineKindName(kind dbgen.TrainingRoutineKind) string {
+	switch kind {
+	case dbgen.TrainingRoutineKindBLOCK:
+		return "um bloco"
+	case dbgen.TrainingRoutineKindSEGMENT:
+		return "um segmento"
+	default:
+		return "uma sessão"
+	}
+}
+
+func structuredModalityName(value string) string {
+	switch value {
+	case "WATER":
+		return "Água"
+	case "GYM":
+		return "Ginásio"
+	case "RUN":
+		return "Corrida"
+	case "BIKE":
+		return "Bicicleta"
+	case "ERGOMETER":
+		return "Ergómetro"
+	case "FLEXIBILITY":
+		return "Flexibilidade e mobilidade"
+	case "SPORTS_GAMES":
+		return "Jogos desportivos"
+	default:
+		return "Outra"
+	}
+}
+
+func parseTrainingRoutineTags(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}, nil
+	}
+	tags := make([]string, 0, 20)
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		tag := strings.TrimSpace(part)
+		key := strings.ToLower(tag)
+		if tag == "" || utf8.RuneCountInString(tag) > 40 {
+			return nil, errors.New("invalid routine tag")
+		}
+		if !seen[key] {
+			tags = append(tags, tag)
+			seen[key] = true
+		}
+		if len(tags) > 20 {
+			return nil, errors.New("too many routine tags")
+		}
+	}
+	return tags, nil
+}
+
+func validTrainingRoutineKind(value dbgen.TrainingRoutineKind) bool {
+	return value == dbgen.TrainingRoutineKindBLOCK || value == dbgen.TrainingRoutineKindSEGMENT || value == dbgen.TrainingRoutineKindSESSION
+}
+
+func validTrainingRoutineVisibility(value dbgen.TrainingRoutineVisibility) bool {
+	return value == dbgen.TrainingRoutineVisibilityPRIVATE || value == dbgen.TrainingRoutineVisibilitySHARED
+}
+
+func isStructuredCopyRejection(err error) bool {
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) {
+		return false
+	}
+	switch databaseError.Code {
+	case "P0002", "23503", "23505", "23514":
+		return true
+	default:
+		return false
+	}
 }
 
 func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManagerRow) []structuredTrainingRow {

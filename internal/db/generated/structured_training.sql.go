@@ -320,6 +320,101 @@ func (q *Queries) CreateStructuredTrainingWeek(ctx context.Context, arg CreateSt
 	return i, err
 }
 
+const createTrainingCopyEvent = `-- name: CreateTrainingCopyEvent :exec
+INSERT INTO training_copy_events (source_kind, source_id, source_updated_at, destination_kind, destination_id, copied_by_id)
+VALUES ($1, $2, $3, $4,
+        $5, $6)
+`
+
+type CreateTrainingCopyEventParams struct {
+	SourceKind      string             `json:"source_kind"`
+	SourceID        uuid.UUID          `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
+	DestinationKind string             `json:"destination_kind"`
+	DestinationID   uuid.UUID          `json:"destination_id"`
+	CopiedByID      uuid.UUID          `json:"copied_by_id"`
+}
+
+func (q *Queries) CreateTrainingCopyEvent(ctx context.Context, arg CreateTrainingCopyEventParams) error {
+	_, err := q.db.Exec(ctx, createTrainingCopyEvent,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.SourceUpdatedAt,
+		arg.DestinationKind,
+		arg.DestinationID,
+		arg.CopiedByID,
+	)
+	return err
+}
+
+const createTrainingRoutine = `-- name: CreateTrainingRoutine :one
+INSERT INTO training_routines (name, description, kind, visibility, owner_user_id, programme_id, team_id,
+                               modality, objective, method, tags, source_id, source_updated_at, snapshot)
+VALUES ($1, $2, $3::training_routine_kind,
+        $4::training_routine_visibility, $5,
+        $6, $7, $8::training_segment_modality,
+        $9::training_objective, $10, $11,
+        $12, $13, $14)
+RETURNING id, name, description, kind, visibility, owner_user_id, programme_id, team_id, modality, objective, method, tags, source_id, source_updated_at, snapshot, created_at, updated_at
+`
+
+type CreateTrainingRoutineParams struct {
+	Name            string                    `json:"name"`
+	Description     string                    `json:"description"`
+	Kind            TrainingRoutineKind       `json:"kind"`
+	Visibility      TrainingRoutineVisibility `json:"visibility"`
+	OwnerUserID     uuid.UUID                 `json:"owner_user_id"`
+	ProgrammeID     *uuid.UUID                `json:"programme_id"`
+	TeamID          *uuid.UUID                `json:"team_id"`
+	Modality        *TrainingSegmentModality  `json:"modality"`
+	Objective       *TrainingObjective        `json:"objective"`
+	Method          string                    `json:"method"`
+	Tags            []string                  `json:"tags"`
+	SourceID        uuid.UUID                 `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz        `json:"source_updated_at"`
+	Snapshot        []byte                    `json:"snapshot"`
+}
+
+func (q *Queries) CreateTrainingRoutine(ctx context.Context, arg CreateTrainingRoutineParams) (TrainingRoutine, error) {
+	row := q.db.QueryRow(ctx, createTrainingRoutine,
+		arg.Name,
+		arg.Description,
+		arg.Kind,
+		arg.Visibility,
+		arg.OwnerUserID,
+		arg.ProgrammeID,
+		arg.TeamID,
+		arg.Modality,
+		arg.Objective,
+		arg.Method,
+		arg.Tags,
+		arg.SourceID,
+		arg.SourceUpdatedAt,
+		arg.Snapshot,
+	)
+	var i TrainingRoutine
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Kind,
+		&i.Visibility,
+		&i.OwnerUserID,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.Modality,
+		&i.Objective,
+		&i.Method,
+		&i.Tags,
+		&i.SourceID,
+		&i.SourceUpdatedAt,
+		&i.Snapshot,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createTrainingSegmentBlock = `-- name: CreateTrainingSegmentBlock :one
 INSERT INTO training_segment_blocks (segment_id, position, purpose, title, instructions)
 SELECT $1, COALESCE(max(block.position), 0) + 1,
@@ -392,6 +487,42 @@ func (q *Queries) CreateTrainingSessionSegment(ctx context.Context, arg CreateTr
 	return id, err
 }
 
+const getBlockRoutineSource = `-- name: GetBlockRoutineSource :one
+SELECT session.plan_id, block.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       segment.modality, gym.objective, training_block_snapshot(block.id) AS snapshot
+FROM training_segment_blocks block
+JOIN training_session_segments segment ON segment.id = block.segment_id
+JOIN training_sessions session ON session.id = segment.session_id
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
+WHERE block.id = $1 AND session.status = 'ACTIVE'
+`
+
+type GetBlockRoutineSourceRow struct {
+	PlanID          uuid.UUID               `json:"plan_id"`
+	SourceUpdatedAt pgtype.Timestamptz      `json:"source_updated_at"`
+	ProgrammeID     *uuid.UUID              `json:"programme_id"`
+	TeamID          *uuid.UUID              `json:"team_id"`
+	Modality        TrainingSegmentModality `json:"modality"`
+	Objective       *TrainingObjective      `json:"objective"`
+	Snapshot        []byte                  `json:"snapshot"`
+}
+
+func (q *Queries) GetBlockRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetBlockRoutineSourceRow, error) {
+	row := q.db.QueryRow(ctx, getBlockRoutineSource, sourceID)
+	var i GetBlockRoutineSourceRow
+	err := row.Scan(
+		&i.PlanID,
+		&i.SourceUpdatedAt,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.Modality,
+		&i.Objective,
+		&i.Snapshot,
+	)
+	return i, err
+}
+
 const getGymExercisePlanID = `-- name: GetGymExercisePlanID :one
 SELECT session.plan_id
 FROM gym_exercises exercise
@@ -409,6 +540,74 @@ func (q *Queries) GetGymExercisePlanID(ctx context.Context, exerciseID uuid.UUID
 	return plan_id, err
 }
 
+const getSegmentRoutineSource = `-- name: GetSegmentRoutineSource :one
+SELECT session.plan_id, segment.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       segment.modality, NULL::training_objective AS objective, training_segment_snapshot(segment.id) AS snapshot
+FROM training_session_segments segment
+JOIN training_sessions session ON session.id = segment.session_id
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+WHERE segment.id = $1 AND session.status = 'ACTIVE'
+`
+
+type GetSegmentRoutineSourceRow struct {
+	PlanID          uuid.UUID               `json:"plan_id"`
+	SourceUpdatedAt pgtype.Timestamptz      `json:"source_updated_at"`
+	ProgrammeID     *uuid.UUID              `json:"programme_id"`
+	TeamID          *uuid.UUID              `json:"team_id"`
+	Modality        TrainingSegmentModality `json:"modality"`
+	Objective       *TrainingObjective      `json:"objective"`
+	Snapshot        []byte                  `json:"snapshot"`
+}
+
+func (q *Queries) GetSegmentRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSegmentRoutineSourceRow, error) {
+	row := q.db.QueryRow(ctx, getSegmentRoutineSource, sourceID)
+	var i GetSegmentRoutineSourceRow
+	err := row.Scan(
+		&i.PlanID,
+		&i.SourceUpdatedAt,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.Modality,
+		&i.Objective,
+		&i.Snapshot,
+	)
+	return i, err
+}
+
+const getSessionRoutineSource = `-- name: GetSessionRoutineSource :one
+SELECT session.plan_id, session.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       NULL::training_segment_modality AS modality, NULL::training_objective AS objective,
+       training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+WHERE session.id = $1 AND session.status = 'ACTIVE'
+`
+
+type GetSessionRoutineSourceRow struct {
+	PlanID          uuid.UUID                `json:"plan_id"`
+	SourceUpdatedAt pgtype.Timestamptz       `json:"source_updated_at"`
+	ProgrammeID     *uuid.UUID               `json:"programme_id"`
+	TeamID          *uuid.UUID               `json:"team_id"`
+	Modality        *TrainingSegmentModality `json:"modality"`
+	Objective       *TrainingObjective       `json:"objective"`
+	Snapshot        []byte                   `json:"snapshot"`
+}
+
+func (q *Queries) GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSessionRoutineSourceRow, error) {
+	row := q.db.QueryRow(ctx, getSessionRoutineSource, sourceID)
+	var i GetSessionRoutineSourceRow
+	err := row.Scan(
+		&i.PlanID,
+		&i.SourceUpdatedAt,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.Modality,
+		&i.Objective,
+		&i.Snapshot,
+	)
+	return i, err
+}
+
 const getStructuredBlockPlanID = `-- name: GetStructuredBlockPlanID :one
 SELECT session.plan_id
 FROM training_segment_blocks block
@@ -423,6 +622,35 @@ func (q *Queries) GetStructuredBlockPlanID(ctx context.Context, blockID uuid.UUI
 	var plan_id uuid.UUID
 	err := row.Scan(&plan_id)
 	return plan_id, err
+}
+
+const getStructuredPlanCopySource = `-- name: GetStructuredPlanCopySource :one
+SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.updated_at
+FROM training_plans plan
+WHERE plan.id = $1 AND plan.training_group_id IS NOT NULL
+`
+
+type GetStructuredPlanCopySourceRow struct {
+	ID              uuid.UUID          `json:"id"`
+	TrainingGroupID *uuid.UUID         `json:"training_group_id"`
+	Title           string             `json:"title"`
+	Description     string             `json:"description"`
+	WeekStart       pgtype.Date        `json:"week_start"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetStructuredPlanCopySource(ctx context.Context, planID uuid.UUID) (GetStructuredPlanCopySourceRow, error) {
+	row := q.db.QueryRow(ctx, getStructuredPlanCopySource, planID)
+	var i GetStructuredPlanCopySourceRow
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.Title,
+		&i.Description,
+		&i.WeekStart,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getStructuredSegmentPlanID = `-- name: GetStructuredSegmentPlanID :one
@@ -452,6 +680,50 @@ func (q *Queries) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid
 	var plan_id uuid.UUID
 	err := row.Scan(&plan_id)
 	return plan_id, err
+}
+
+const getVisibleTrainingRoutine = `-- name: GetVisibleTrainingRoutine :one
+SELECT routine.id, routine.name, routine.description, routine.kind, routine.visibility, routine.owner_user_id, routine.programme_id, routine.team_id, routine.modality, routine.objective, routine.method, routine.tags, routine.source_id, routine.source_updated_at, routine.snapshot, routine.created_at, routine.updated_at
+FROM training_routines routine
+WHERE routine.id = $1
+  AND (routine.owner_user_id = $2
+       OR $3::boolean
+       OR (routine.visibility = 'SHARED' AND EXISTS (
+           SELECT 1 FROM staff_grants grant_row
+           WHERE grant_row.user_id = $2 AND grant_row.capability = 'COACH'
+             AND grant_row.revoked_at IS NULL
+             AND (grant_row.programme_id = routine.programme_id OR grant_row.team_id = routine.team_id))))
+`
+
+type GetVisibleTrainingRoutineParams struct {
+	RoutineID uuid.UUID `json:"routine_id"`
+	UserID    uuid.UUID `json:"user_id"`
+	IsAdmin   bool      `json:"is_admin"`
+}
+
+func (q *Queries) GetVisibleTrainingRoutine(ctx context.Context, arg GetVisibleTrainingRoutineParams) (TrainingRoutine, error) {
+	row := q.db.QueryRow(ctx, getVisibleTrainingRoutine, arg.RoutineID, arg.UserID, arg.IsAdmin)
+	var i TrainingRoutine
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Kind,
+		&i.Visibility,
+		&i.OwnerUserID,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.Modality,
+		&i.Objective,
+		&i.Method,
+		&i.Tags,
+		&i.SourceID,
+		&i.SourceUpdatedAt,
+		&i.Snapshot,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const listEligibleTrainingGroupMemberships = `-- name: ListEligibleTrainingGroupMemberships :many
@@ -506,6 +778,90 @@ func (q *Queries) ListEligibleTrainingGroupMemberships(ctx context.Context, arg 
 			&i.TeamName,
 			&i.ProgrammeID,
 			&i.TeamID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStructuredSessionSnapshotsForDay = `-- name: ListStructuredSessionSnapshotsForDay :many
+SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
+  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = $2::date
+ORDER BY session.starts_at, session.id
+`
+
+type ListStructuredSessionSnapshotsForDayParams struct {
+	PlanID     uuid.UUID   `json:"plan_id"`
+	SourceDate pgtype.Date `json:"source_date"`
+}
+
+type ListStructuredSessionSnapshotsForDayRow struct {
+	ID        uuid.UUID          `json:"id"`
+	StartsAt  pgtype.Timestamptz `json:"starts_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Snapshot  []byte             `json:"snapshot"`
+}
+
+func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg ListStructuredSessionSnapshotsForDayParams) ([]ListStructuredSessionSnapshotsForDayRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredSessionSnapshotsForDay, arg.PlanID, arg.SourceDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStructuredSessionSnapshotsForDayRow{}
+	for rows.Next() {
+		var i ListStructuredSessionSnapshotsForDayRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.StartsAt,
+			&i.UpdatedAt,
+			&i.Snapshot,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStructuredSessionSnapshotsForPlan = `-- name: ListStructuredSessionSnapshotsForPlan :many
+SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
+ORDER BY session.starts_at, session.id
+`
+
+type ListStructuredSessionSnapshotsForPlanRow struct {
+	ID        uuid.UUID          `json:"id"`
+	StartsAt  pgtype.Timestamptz `json:"starts_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Snapshot  []byte             `json:"snapshot"`
+}
+
+func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, planID uuid.UUID) ([]ListStructuredSessionSnapshotsForPlanRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredSessionSnapshotsForPlan, planID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStructuredSessionSnapshotsForPlanRow{}
+	for rows.Next() {
+		var i ListStructuredSessionSnapshotsForPlanRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.StartsAt,
+			&i.UpdatedAt,
+			&i.Snapshot,
 		); err != nil {
 			return nil, err
 		}
@@ -843,6 +1199,112 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 	return items, nil
 }
 
+const listVisibleTrainingRoutines = `-- name: ListVisibleTrainingRoutines :many
+SELECT routine.id, routine.name, routine.description, routine.kind, routine.visibility,
+       routine.owner_user_id, owner.name AS owner_name, routine.programme_id, programme.name_pt AS programme_name,
+       routine.team_id, team.name AS team_name, routine.modality, routine.objective, routine.method, routine.tags,
+       routine.source_id, routine.source_updated_at, routine.snapshot, routine.created_at, routine.updated_at
+FROM training_routines routine
+JOIN users owner ON owner.id = routine.owner_user_id
+LEFT JOIN programmes programme ON programme.id = routine.programme_id
+LEFT JOIN teams team ON team.id = routine.team_id
+WHERE (routine.owner_user_id = $1
+       OR $2::boolean
+       OR (routine.visibility = 'SHARED' AND EXISTS (
+           SELECT 1 FROM staff_grants grant_row
+           WHERE grant_row.user_id = $1 AND grant_row.capability = 'COACH'
+             AND grant_row.revoked_at IS NULL
+             AND (grant_row.programme_id = routine.programme_id OR grant_row.team_id = routine.team_id))))
+  AND ($3::text = '' OR routine.name ILIKE '%' || $3 || '%'
+       OR routine.description ILIKE '%' || $3 || '%' OR routine.method ILIKE '%' || $3 || '%')
+  AND ($4::text = '' OR routine.modality::text = $4)
+  AND ($5::text = '' OR routine.objective::text = $5)
+  AND ($6::text = '' OR EXISTS (
+      SELECT 1 FROM unnest(routine.tags) routine_tag
+      WHERE lower(routine_tag) = lower($6)))
+ORDER BY routine.updated_at DESC, routine.id
+`
+
+type ListVisibleTrainingRoutinesParams struct {
+	UserID    uuid.UUID `json:"user_id"`
+	IsAdmin   bool      `json:"is_admin"`
+	Query     string    `json:"query"`
+	Modality  string    `json:"modality"`
+	Objective string    `json:"objective"`
+	Tag       string    `json:"tag"`
+}
+
+type ListVisibleTrainingRoutinesRow struct {
+	ID              uuid.UUID                 `json:"id"`
+	Name            string                    `json:"name"`
+	Description     string                    `json:"description"`
+	Kind            TrainingRoutineKind       `json:"kind"`
+	Visibility      TrainingRoutineVisibility `json:"visibility"`
+	OwnerUserID     uuid.UUID                 `json:"owner_user_id"`
+	OwnerName       string                    `json:"owner_name"`
+	ProgrammeID     *uuid.UUID                `json:"programme_id"`
+	ProgrammeName   *string                   `json:"programme_name"`
+	TeamID          *uuid.UUID                `json:"team_id"`
+	TeamName        *string                   `json:"team_name"`
+	Modality        *TrainingSegmentModality  `json:"modality"`
+	Objective       *TrainingObjective        `json:"objective"`
+	Method          string                    `json:"method"`
+	Tags            []string                  `json:"tags"`
+	SourceID        uuid.UUID                 `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz        `json:"source_updated_at"`
+	Snapshot        []byte                    `json:"snapshot"`
+	CreatedAt       pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz        `json:"updated_at"`
+}
+
+func (q *Queries) ListVisibleTrainingRoutines(ctx context.Context, arg ListVisibleTrainingRoutinesParams) ([]ListVisibleTrainingRoutinesRow, error) {
+	rows, err := q.db.Query(ctx, listVisibleTrainingRoutines,
+		arg.UserID,
+		arg.IsAdmin,
+		arg.Query,
+		arg.Modality,
+		arg.Objective,
+		arg.Tag,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVisibleTrainingRoutinesRow{}
+	for rows.Next() {
+		var i ListVisibleTrainingRoutinesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Kind,
+			&i.Visibility,
+			&i.OwnerUserID,
+			&i.OwnerName,
+			&i.ProgrammeID,
+			&i.ProgrammeName,
+			&i.TeamID,
+			&i.TeamName,
+			&i.Modality,
+			&i.Objective,
+			&i.Method,
+			&i.Tags,
+			&i.SourceID,
+			&i.SourceUpdatedAt,
+			&i.Snapshot,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const moveGymExercise = `-- name: MoveGymExercise :one
 SELECT move_gym_exercise($1, $2)
 `
@@ -889,4 +1351,59 @@ func (q *Queries) MoveTrainingSessionSegment(ctx context.Context, arg MoveTraini
 	var move_training_session_segment bool
 	err := row.Scan(&move_training_session_segment)
 	return move_training_session_segment, err
+}
+
+const restoreTrainingBlock = `-- name: RestoreTrainingBlock :one
+SELECT restore_training_block($1::jsonb, $2)
+`
+
+type RestoreTrainingBlockParams struct {
+	Snapshot  []byte    `json:"snapshot"`
+	SegmentID uuid.UUID `json:"segment_id"`
+}
+
+func (q *Queries) RestoreTrainingBlock(ctx context.Context, arg RestoreTrainingBlockParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, restoreTrainingBlock, arg.Snapshot, arg.SegmentID)
+	var restore_training_block uuid.UUID
+	err := row.Scan(&restore_training_block)
+	return restore_training_block, err
+}
+
+const restoreTrainingSegment = `-- name: RestoreTrainingSegment :one
+SELECT restore_training_segment($1::jsonb, $2)
+`
+
+type RestoreTrainingSegmentParams struct {
+	Snapshot  []byte    `json:"snapshot"`
+	SessionID uuid.UUID `json:"session_id"`
+}
+
+func (q *Queries) RestoreTrainingSegment(ctx context.Context, arg RestoreTrainingSegmentParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, restoreTrainingSegment, arg.Snapshot, arg.SessionID)
+	var restore_training_segment uuid.UUID
+	err := row.Scan(&restore_training_segment)
+	return restore_training_segment, err
+}
+
+const restoreTrainingSession = `-- name: RestoreTrainingSession :one
+SELECT restore_training_session($1::jsonb, $2, $3, $4)
+`
+
+type RestoreTrainingSessionParams struct {
+	Snapshot    []byte             `json:"snapshot"`
+	PlanID      uuid.UUID          `json:"plan_id"`
+	StartsAt    pgtype.Timestamptz `json:"starts_at"`
+	CreatedByID uuid.UUID          `json:"created_by_id"`
+}
+
+func (q *Queries) RestoreTrainingSession(ctx context.Context, arg RestoreTrainingSessionParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, restoreTrainingSession,
+		arg.Snapshot,
+		arg.PlanID,
+		arg.StartsAt,
+		arg.CreatedByID,
+	)
+	var restore_training_session uuid.UUID
+	err := row.Scan(&restore_training_session)
+	return restore_training_session, err
 }

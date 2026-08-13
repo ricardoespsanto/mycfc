@@ -262,3 +262,108 @@ JOIN training_session_segments segment ON segment.id = block.segment_id
 JOIN training_sessions session ON session.id = segment.session_id
 JOIN training_plans plan ON plan.id = session.plan_id
 WHERE exercise.id = sqlc.arg(exercise_id) AND plan.training_group_id IS NOT NULL;
+
+-- name: GetBlockRoutineSource :one
+SELECT session.plan_id, block.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       segment.modality, gym.objective, training_block_snapshot(block.id) AS snapshot
+FROM training_segment_blocks block
+JOIN training_session_segments segment ON segment.id = block.segment_id
+JOIN training_sessions session ON session.id = segment.session_id
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
+WHERE block.id = sqlc.arg(source_id) AND session.status = 'ACTIVE';
+
+-- name: GetSegmentRoutineSource :one
+SELECT session.plan_id, segment.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       segment.modality, NULL::training_objective AS objective, training_segment_snapshot(segment.id) AS snapshot
+FROM training_session_segments segment
+JOIN training_sessions session ON session.id = segment.session_id
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+WHERE segment.id = sqlc.arg(source_id) AND session.status = 'ACTIVE';
+
+-- name: GetSessionRoutineSource :one
+SELECT session.plan_id, session.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+       NULL::training_segment_modality AS modality, NULL::training_objective AS objective,
+       training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
+WHERE session.id = sqlc.arg(source_id) AND session.status = 'ACTIVE';
+
+-- name: CreateTrainingRoutine :one
+INSERT INTO training_routines (name, description, kind, visibility, owner_user_id, programme_id, team_id,
+                               modality, objective, method, tags, source_id, source_updated_at, snapshot)
+VALUES (sqlc.arg(name), sqlc.arg(description), sqlc.arg(kind)::training_routine_kind,
+        sqlc.arg(visibility)::training_routine_visibility, sqlc.arg(owner_user_id),
+        sqlc.narg(programme_id), sqlc.narg(team_id), sqlc.narg(modality)::training_segment_modality,
+        sqlc.narg(objective)::training_objective, sqlc.arg(method), sqlc.arg(tags),
+        sqlc.arg(source_id), sqlc.arg(source_updated_at), sqlc.arg(snapshot))
+RETURNING *;
+
+-- name: ListVisibleTrainingRoutines :many
+SELECT routine.id, routine.name, routine.description, routine.kind, routine.visibility,
+       routine.owner_user_id, owner.name AS owner_name, routine.programme_id, programme.name_pt AS programme_name,
+       routine.team_id, team.name AS team_name, routine.modality, routine.objective, routine.method, routine.tags,
+       routine.source_id, routine.source_updated_at, routine.snapshot, routine.created_at, routine.updated_at
+FROM training_routines routine
+JOIN users owner ON owner.id = routine.owner_user_id
+LEFT JOIN programmes programme ON programme.id = routine.programme_id
+LEFT JOIN teams team ON team.id = routine.team_id
+WHERE (routine.owner_user_id = sqlc.arg(user_id)
+       OR sqlc.arg(is_admin)::boolean
+       OR (routine.visibility = 'SHARED' AND EXISTS (
+           SELECT 1 FROM staff_grants grant_row
+           WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+             AND grant_row.revoked_at IS NULL
+             AND (grant_row.programme_id = routine.programme_id OR grant_row.team_id = routine.team_id))))
+  AND (sqlc.arg(query)::text = '' OR routine.name ILIKE '%' || sqlc.arg(query) || '%'
+       OR routine.description ILIKE '%' || sqlc.arg(query) || '%' OR routine.method ILIKE '%' || sqlc.arg(query) || '%')
+  AND (sqlc.arg(modality)::text = '' OR routine.modality::text = sqlc.arg(modality))
+  AND (sqlc.arg(objective)::text = '' OR routine.objective::text = sqlc.arg(objective))
+  AND (sqlc.arg(tag)::text = '' OR EXISTS (
+      SELECT 1 FROM unnest(routine.tags) routine_tag
+      WHERE lower(routine_tag) = lower(sqlc.arg(tag))))
+ORDER BY routine.updated_at DESC, routine.id;
+
+-- name: GetVisibleTrainingRoutine :one
+SELECT routine.*
+FROM training_routines routine
+WHERE routine.id = sqlc.arg(routine_id)
+  AND (routine.owner_user_id = sqlc.arg(user_id)
+       OR sqlc.arg(is_admin)::boolean
+       OR (routine.visibility = 'SHARED' AND EXISTS (
+           SELECT 1 FROM staff_grants grant_row
+           WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+             AND grant_row.revoked_at IS NULL
+             AND (grant_row.programme_id = routine.programme_id OR grant_row.team_id = routine.team_id))));
+
+-- name: RestoreTrainingBlock :one
+SELECT restore_training_block(sqlc.arg(snapshot)::jsonb, sqlc.arg(segment_id));
+
+-- name: RestoreTrainingSegment :one
+SELECT restore_training_segment(sqlc.arg(snapshot)::jsonb, sqlc.arg(session_id));
+
+-- name: RestoreTrainingSession :one
+SELECT restore_training_session(sqlc.arg(snapshot)::jsonb, sqlc.arg(plan_id), sqlc.arg(starts_at), sqlc.arg(created_by_id));
+
+-- name: CreateTrainingCopyEvent :exec
+INSERT INTO training_copy_events (source_kind, source_id, source_updated_at, destination_kind, destination_id, copied_by_id)
+VALUES (sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(source_updated_at), sqlc.arg(destination_kind),
+        sqlc.arg(destination_id), sqlc.arg(copied_by_id));
+
+-- name: GetStructuredPlanCopySource :one
+SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.updated_at
+FROM training_plans plan
+WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL;
+
+-- name: ListStructuredSessionSnapshotsForPlan :many
+SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
+ORDER BY session.starts_at, session.id;
+
+-- name: ListStructuredSessionSnapshotsForDay :many
+SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+FROM training_sessions session
+WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
+  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = sqlc.arg(source_date)::date
+ORDER BY session.starts_at, session.id;

@@ -982,6 +982,91 @@ func (ns NullTrainingOutcomeStatus) Value() (driver.Value, error) {
 	return string(ns.TrainingOutcomeStatus), nil
 }
 
+type TrainingRoutineKind string
+
+const (
+	TrainingRoutineKindBLOCK   TrainingRoutineKind = "BLOCK"
+	TrainingRoutineKindSEGMENT TrainingRoutineKind = "SEGMENT"
+	TrainingRoutineKindSESSION TrainingRoutineKind = "SESSION"
+)
+
+func (e *TrainingRoutineKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingRoutineKind(s)
+	case string:
+		*e = TrainingRoutineKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingRoutineKind: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingRoutineKind struct {
+	TrainingRoutineKind TrainingRoutineKind `json:"training_routine_kind"`
+	Valid               bool                `json:"valid"` // Valid is true if TrainingRoutineKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingRoutineKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingRoutineKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingRoutineKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingRoutineKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingRoutineKind), nil
+}
+
+type TrainingRoutineVisibility string
+
+const (
+	TrainingRoutineVisibilityPRIVATE TrainingRoutineVisibility = "PRIVATE"
+	TrainingRoutineVisibilitySHARED  TrainingRoutineVisibility = "SHARED"
+)
+
+func (e *TrainingRoutineVisibility) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingRoutineVisibility(s)
+	case string:
+		*e = TrainingRoutineVisibility(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingRoutineVisibility: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingRoutineVisibility struct {
+	TrainingRoutineVisibility TrainingRoutineVisibility `json:"training_routine_visibility"`
+	Valid                     bool                      `json:"valid"` // Valid is true if TrainingRoutineVisibility is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingRoutineVisibility) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingRoutineVisibility, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingRoutineVisibility.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingRoutineVisibility) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingRoutineVisibility), nil
+}
+
 type TrainingSegmentModality string
 
 const (
@@ -1527,6 +1612,17 @@ type Team struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type TrainingCopyEvent struct {
+	ID              uuid.UUID          `json:"id"`
+	SourceKind      string             `json:"source_kind"`
+	SourceID        uuid.UUID          `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
+	DestinationKind string             `json:"destination_kind"`
+	DestinationID   uuid.UUID          `json:"destination_id"`
+	CopiedByID      uuid.UUID          `json:"copied_by_id"`
+	CopiedAt        pgtype.Timestamptz `json:"copied_at"`
+}
+
 type TrainingGroup struct {
 	ID          uuid.UUID          `json:"id"`
 	Name        string             `json:"name"`
@@ -1566,6 +1662,26 @@ type TrainingPlan struct {
 	CreatedByID     uuid.UUID          `json:"created_by_id"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingRoutine struct {
+	ID              uuid.UUID                 `json:"id"`
+	Name            string                    `json:"name"`
+	Description     string                    `json:"description"`
+	Kind            TrainingRoutineKind       `json:"kind"`
+	Visibility      TrainingRoutineVisibility `json:"visibility"`
+	OwnerUserID     uuid.UUID                 `json:"owner_user_id"`
+	ProgrammeID     *uuid.UUID                `json:"programme_id"`
+	TeamID          *uuid.UUID                `json:"team_id"`
+	Modality        *TrainingSegmentModality  `json:"modality"`
+	Objective       *TrainingObjective        `json:"objective"`
+	Method          string                    `json:"method"`
+	Tags            []string                  `json:"tags"`
+	SourceID        uuid.UUID                 `json:"source_id"`
+	SourceUpdatedAt pgtype.Timestamptz        `json:"source_updated_at"`
+	Snapshot        []byte                    `json:"snapshot"`
+	CreatedAt       pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz        `json:"updated_at"`
 }
 
 type TrainingSegmentBlock struct {

@@ -105,6 +105,84 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 	}
 }
 
+func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndependently(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	store := PostgresStructuredTrainingStore{Pool: pool}
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorID, seasonID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Treinador cópias', $2, 'hash', '1980-01-01')`, actorID, "copy-store-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().In(time.Local)
+	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.Local)
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época cópias', $3, $4)`, seasonID, "CP_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
+		t.Fatal(err)
+	}
+	group, err := queries.CreateStructuredTrainingGroup(ctx, dbgen.CreateStructuredTrainingGroupParams{Name: "Grupo cópias " + uuid.NewString()[:8], ProgrammeID: &programme.ID, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_groups WHERE id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, actorID)
+	})
+	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M41", Description: "Semana fonte", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID, GroupID: group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startsAt := weekStart.Add(17 * time.Hour)
+	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{PlanID: week.ID, Title: "Ginásio fonte", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityGYM, Title: "Força"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockID, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: segmentID, Purpose: dbgen.TrainingBlockPurposeMAIN, Title: "Circuito fonte", Instructions: "3 voltas"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copiedWeekStart := weekStart.AddDate(0, 0, 7)
+	copiedWeek, err := store.CopyStructuredTrainingWeek(ctx, StructuredWeekCopyInput{SourcePlanID: week.ID, WeekStart: copiedWeekStart, Title: "M42", ActorID: actorID})
+	if err != nil || copiedWeek.Description != "Semana fonte" {
+		t.Fatalf("copy week=%#v err=%v", copiedWeek, err)
+	}
+	count, err := store.CopyStructuredTrainingDay(ctx, StructuredDayCopyInput{SourcePlanID: week.ID, TargetPlanID: copiedWeek.ID, SourceDate: weekStart, TargetDate: copiedWeekStart.AddDate(0, 0, 1), ActorID: actorID})
+	if err != nil || count != 1 {
+		t.Fatalf("copy day count=%d err=%v", count, err)
+	}
+	if _, err := store.CopyTrainingSession(ctx, session.ID, copiedWeek.ID, pgtype.Timestamptz{Time: copiedWeekStart.AddDate(0, 0, 2).Add(17 * time.Hour), Valid: true}, actorID); err != nil {
+		t.Fatal(err)
+	}
+	var copiedSegmentID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT segment.id FROM training_session_segments segment JOIN training_sessions session ON session.id = segment.session_id WHERE session.plan_id = $1 ORDER BY session.starts_at, segment.position LIMIT 1`, copiedWeek.ID).Scan(&copiedSegmentID); err != nil {
+		t.Fatal(err)
+	}
+	copiedBlockID, err := store.CopyTrainingBlock(ctx, blockID, copiedSegmentID, actorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE training_segment_blocks SET instructions = 'Cópia alterada' WHERE id = $1`, copiedBlockID); err != nil {
+		t.Fatal(err)
+	}
+	var sourceInstructions string
+	if err := pool.QueryRow(ctx, `SELECT instructions FROM training_segment_blocks WHERE id = $1`, blockID).Scan(&sourceInstructions); err != nil || sourceInstructions != "3 voltas" {
+		t.Fatalf("source block instructions=%q err=%v", sourceInstructions, err)
+	}
+	var events int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_copy_events WHERE copied_by_id = $1`, actorID).Scan(&events); err != nil || events < 5 {
+		t.Fatalf("copy events=%d err=%v", events, err)
+	}
+}
+
 func TestPostgresProfileStoreEmailChangeInvalidatesVerificationAtomically(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)

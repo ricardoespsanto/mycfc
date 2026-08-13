@@ -734,6 +734,7 @@ test.describe('authentication', () => {
     const formatDate = (value) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-');
     const startsAt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1, 17, 0);
     const endsAt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1, 19, 0);
+    const nextMonday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 7);
     const formatDateTime = (value) => `${formatDate(value)}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
 
     await page.goto('/login');
@@ -756,7 +757,8 @@ test.describe('authentication', () => {
     const structuredMembershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
     await structuredMembershipForm.getByLabel('Competição').check();
     await structuredMembershipForm.getByRole('button', { name: 'Guardar' }).click();
-    await expect(structuredMembershipForm.getByLabel('Competição')).toBeChecked();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
+    await expect(page.locator('form').filter({ has: page.getByLabel('Competição') }).getByLabel('Competição')).toBeChecked();
     await page.goto('/admin/treinos/estruturados');
 
     await expect(page.getByRole('heading', { name: 'Planeamento semanal', level: 1 })).toBeVisible();
@@ -852,15 +854,53 @@ test.describe('authentication', () => {
     session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
     await expect(session).toContainText('Ginásio + Água');
     await expect(session).toContainText('Prancha');
+
+    const reusableBlockName = `Ativação reutilizável ${suffix}`;
+    let reusableGymBlock = session.locator('form[action$="/exercicios"]').locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
+    await reusableGymBlock.locator('summary').filter({ hasText: 'Guardar como rotina' }).click();
+    const saveRoutineForm = reusableGymBlock.locator('form[action="/admin/treinos/estruturados/rotinas"]');
+    await saveRoutineForm.getByLabel('Nome da rotina').fill(reusableBlockName);
+    await saveRoutineForm.getByLabel('Método (opcional)').fill('Ativação pré-água');
+    await saveRoutineForm.getByLabel('Etiquetas separadas por vírgula (opcional)').fill('ginásio, aquecimento');
+    await saveRoutineForm.getByRole('button', { name: 'Guardar rotina' }).click();
+    await expect(page.getByRole('status')).toHaveText('Rotina guardada como cópia independente.');
+
+    const routineLibrary = page.getByRole('heading', { name: 'Biblioteca de rotinas' }).locator('xpath=ancestor::section[1]');
+    await routineLibrary.getByLabel('Etiqueta').fill('ginásio');
+    await routineLibrary.getByRole('button', { name: 'Filtrar rotinas' }).click();
+    const routineCard = page.getByRole('heading', { name: reusableBlockName }).locator('xpath=ancestor::article[1]');
+    await expect(routineCard).toContainText('Pré-visualização: Supersérie de ativação');
+    await routineCard.locator('summary').filter({ hasText: 'Inserir cópia' }).click();
+    const insertRoutineForm = routineCard.locator('form[action$="/inserir"]');
+    const gymTarget = insertRoutineForm.getByLabel('Segmento de destino').locator('option').filter({ hasText: `${sessionTitle} · Ginásio · Mobilidade` });
+    await insertRoutineForm.getByLabel('Segmento de destino').selectOption(await gymTarget.getAttribute('value'));
+    await insertRoutineForm.getByRole('button', { name: 'Inserir cópia independente' }).click();
+    await expect(page.getByRole('status')).toHaveText('Rotina inserida como cópia independente.');
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await expect(session.getByText('Supino', { exact: true })).toHaveCount(2);
+
+    const copiedWeekTitle = `Microciclo copiado E2E ${suffix}`;
+    const sourceWeek = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    await sourceWeek.locator('summary').filter({ hasText: 'Copiar semana completa' }).click();
+    const copyWeekForm = sourceWeek.locator('input[name="week_start"]').locator('xpath=ancestor::form[1]');
+    await copyWeekForm.getByLabel('Título da nova semana').fill(copiedWeekTitle);
+    await copyWeekForm.getByLabel('Nova segunda-feira').fill(formatDate(nextMonday));
+    await copyWeekForm.getByRole('button', { name: 'Criar cópia da semana' }).click();
+    await expect(page.getByRole('status')).toHaveText('Semana copiada como novo rascunho independente.');
+    const copiedWeek = page.getByRole('heading', { name: copiedWeekTitle }).locator('xpath=ancestor::section[1]');
+    await expect(copiedWeek).toContainText(sessionTitle);
+    await expect(copiedWeek).toContainText('Prancha');
+
+    session = sourceWeek.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
     await expect(session.getByRole('heading', { name: /Ginásio · Mobilidade/ })).toBeVisible();
     const waterSegment = session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ }).locator('xpath=ancestor::section[1]');
     await expect(waterSegment).toContainText("2x7' jogo · HxH · GR e pivot");
     await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir' }).click();
-    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    session = sourceWeek.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
     await expect(session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ })).toBeVisible();
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
-    await expect(page.getByRole('heading', { name: sessionTitle })).toBeVisible();
+    await expect(sourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
     await context.close();
 
     const accessibilityContext = await browser.newContext({ baseURL });
@@ -870,7 +910,8 @@ test.describe('authentication', () => {
     await accessibilityPage.getByLabel('Palavra-passe').fill(password);
     await accessibilityPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await accessibilityPage.goto('/admin/treinos/estruturados');
-    await expect(accessibilityPage.getByRole('heading', { name: sessionTitle })).toBeVisible();
+    const accessibleSourceWeek = accessibilityPage.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    await expect(accessibleSourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
     await expectNoSeriousAxeViolations(accessibilityPage);
     await accessibilityContext.close();
   });

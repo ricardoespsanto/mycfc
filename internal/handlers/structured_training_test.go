@@ -11,24 +11,34 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type structuredTrainingStoreStub struct {
 	StructuredTrainingStore
-	manageable     bool
-	manageArgs     []dbgen.CanManageStructuredTrainingGroupParams
-	created        []dbgen.CreateStructuredTrainingWeekParams
-	groups         []StructuredTrainingGroupInput
-	weekOK         bool
-	sessions       []dbgen.CreateStructuredTrainingSessionParams
-	segments       []StructuredTrainingSegmentInput
-	blocks         []dbgen.CreateTrainingSegmentBlockParams
-	gymBlocks      []StructuredGymBlockInput
-	gymExercises   []dbgen.CreateGymExerciseParams
-	planID         uuid.UUID
-	movedSegments  []dbgen.MoveTrainingSessionSegmentParams
-	movedBlocks    []dbgen.MoveTrainingSegmentBlockParams
-	movedExercises []dbgen.MoveGymExerciseParams
+	manageable       bool
+	manageArgs       []dbgen.CanManageStructuredTrainingGroupParams
+	created          []dbgen.CreateStructuredTrainingWeekParams
+	groups           []StructuredTrainingGroupInput
+	weekOK           bool
+	sessions         []dbgen.CreateStructuredTrainingSessionParams
+	segments         []StructuredTrainingSegmentInput
+	blocks           []dbgen.CreateTrainingSegmentBlockParams
+	gymBlocks        []StructuredGymBlockInput
+	gymExercises     []dbgen.CreateGymExerciseParams
+	planID           uuid.UUID
+	movedSegments    []dbgen.MoveTrainingSessionSegmentParams
+	movedBlocks      []dbgen.MoveTrainingSegmentBlockParams
+	movedExercises   []dbgen.MoveGymExerciseParams
+	routineSource    StructuredRoutineSource
+	createdRoutines  []dbgen.CreateTrainingRoutineParams
+	visibleRoutine   dbgen.TrainingRoutine
+	insertedRoutines []StructuredRoutineInsertInput
+	copiedBlocks     [][3]uuid.UUID
+	copiedSessions   []struct {
+		SourceID, TargetID, ActorID uuid.UUID
+		StartsAt                    pgtype.Timestamptz
+	}
 }
 
 func (s *structuredTrainingStoreStub) CreateGroup(_ context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
@@ -104,6 +114,37 @@ func (s *structuredTrainingStoreStub) MoveTrainingSegmentBlock(_ context.Context
 func (s *structuredTrainingStoreStub) MoveGymExercise(_ context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
 	s.movedExercises = append(s.movedExercises, params)
 	return true, nil
+}
+
+func (s *structuredTrainingStoreStub) GetRoutineSource(context.Context, dbgen.TrainingRoutineKind, uuid.UUID) (StructuredRoutineSource, error) {
+	return s.routineSource, nil
+}
+
+func (s *structuredTrainingStoreStub) CreateTrainingRoutine(_ context.Context, params dbgen.CreateTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	s.createdRoutines = append(s.createdRoutines, params)
+	return dbgen.TrainingRoutine{ID: uuid.New()}, nil
+}
+
+func (s *structuredTrainingStoreStub) GetVisibleTrainingRoutine(context.Context, dbgen.GetVisibleTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
+	return s.visibleRoutine, nil
+}
+
+func (s *structuredTrainingStoreStub) InsertTrainingRoutine(_ context.Context, input StructuredRoutineInsertInput) (uuid.UUID, error) {
+	s.insertedRoutines = append(s.insertedRoutines, input)
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CopyTrainingBlock(_ context.Context, sourceID, targetID, actorID uuid.UUID) (uuid.UUID, error) {
+	s.copiedBlocks = append(s.copiedBlocks, [3]uuid.UUID{sourceID, targetID, actorID})
+	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) CopyTrainingSession(_ context.Context, sourceID, targetID uuid.UUID, startsAt pgtype.Timestamptz, actorID uuid.UUID) (uuid.UUID, error) {
+	s.copiedSessions = append(s.copiedSessions, struct {
+		SourceID, TargetID, ActorID uuid.UUID
+		StartsAt                    pgtype.Timestamptz
+	}{sourceID, targetID, actorID, startsAt})
+	return uuid.New(), nil
 }
 
 func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
@@ -343,5 +384,57 @@ func TestParseGymExerciseValidatesPrescriptionAndResistance(t *testing.T) {
 				t.Fatal("invalid exercise was accepted")
 			}
 		})
+	}
+}
+
+func TestStructuredTrainingRoutineHandlersPreserveScopeAndRequireTargetAuthorization(t *testing.T) {
+	userID, planID, programmeID, sourceID, targetID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	modality := dbgen.TrainingSegmentModalityGYM
+	sourceUpdatedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	store := &structuredTrainingStoreStub{weekOK: true, planID: planID, routineSource: StructuredRoutineSource{PlanID: planID, SourceUpdatedAt: sourceUpdatedAt, ProgrammeID: &programmeID, Modality: &modality, Snapshot: []byte(`{"title":"Mobilidade","blocks":[]}`)}}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	user := CurrentUser{ID: userID}
+
+	values := url.Values{"source_kind": {"SEGMENT"}, "source_id": {sourceID.String()}, "name": {"Mobilidade habitual"}, "visibility": {"SHARED"}, "method": {"Ativação"}, "tags": {"ginásio, aquecimento, Ginásio"}}
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas", values, "", "", handler.CreateRoutine)
+	if response.Code != http.StatusSeeOther || len(store.createdRoutines) != 1 {
+		t.Fatalf("create routine response=%d routines=%#v", response.Code, store.createdRoutines)
+	}
+	created := store.createdRoutines[0]
+	if created.ProgrammeID == nil || *created.ProgrammeID != programmeID || created.TeamID != nil || len(created.Tags) != 2 || created.Snapshot == nil {
+		t.Fatalf("created routine scope/tags = %#v", created)
+	}
+
+	store.visibleRoutine = dbgen.TrainingRoutine{ID: uuid.New(), Kind: dbgen.TrainingRoutineKindBLOCK, Snapshot: []byte(`{"purpose":"MAIN","instructions":"3x5"}`), UpdatedAt: sourceUpdatedAt}
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas/"+store.visibleRoutine.ID.String()+"/inserir", url.Values{"target_id": {targetID.String()}}, "id", store.visibleRoutine.ID.String(), handler.InsertRoutine)
+	if response.Code != http.StatusSeeOther || len(store.insertedRoutines) != 1 || store.insertedRoutines[0].TargetID != targetID || store.insertedRoutines[0].ActorID != userID {
+		t.Fatalf("insert routine response=%d inputs=%#v", response.Code, store.insertedRoutines)
+	}
+}
+
+func TestStructuredTrainingDirectCopiesAuthorizeBothPlans(t *testing.T) {
+	userID, planID, sourceID, targetID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{weekOK: true, planID: planID}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	user := CurrentUser{ID: userID}
+
+	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+sourceID.String()+"/copiar", url.Values{"target_id": {targetID.String()}}, "id", sourceID.String(), handler.CopyBlock)
+	if response.Code != http.StatusSeeOther || len(store.copiedBlocks) != 1 || store.copiedBlocks[0] != [3]uuid.UUID{sourceID, targetID, userID} {
+		t.Fatalf("copy block response=%d inputs=%#v", response.Code, store.copiedBlocks)
+	}
+
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes/"+sourceID.String()+"/copiar", url.Values{"target_id": {targetID.String()}, "starts_at": {"2026-08-18T17:00"}}, "id", sourceID.String(), handler.CopySession)
+	if response.Code != http.StatusSeeOther || len(store.copiedSessions) != 1 || !store.copiedSessions[0].StartsAt.Valid {
+		t.Fatalf("copy session response=%d inputs=%#v", response.Code, store.copiedSessions)
+	}
+}
+
+func TestParseTrainingRoutineTagsDeduplicatesAndRejectsInvalidInput(t *testing.T) {
+	tags, err := parseTrainingRoutineTags("ginásio, Aquecimento, GINÁSIO")
+	if err != nil || len(tags) != 2 || tags[0] != "ginásio" || tags[1] != "Aquecimento" {
+		t.Fatalf("tags = %#v, %v", tags, err)
+	}
+	if _, err := parseTrainingRoutineTags(strings.Repeat("x", 41)); err == nil {
+		t.Fatal("overlong tag should be rejected")
 	}
 }

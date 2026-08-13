@@ -785,6 +785,53 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("guardian rows after membership expiry = %d, err = %v", len(rows), err)
 	}
+
+	source, err := queries.GetSessionRoutineSource(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routine, err := queries.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{Name: "Sessão híbrida reutilizável", Kind: dbgen.TrainingRoutineKindSESSION, Visibility: dbgen.TrainingRoutineVisibilityPRIVATE, OwnerUserID: actorID, Method: "Ativação + água", Tags: []string{"híbrido", "ginásio"}, SourceID: session.ID, SourceUpdatedAt: source.SourceUpdatedAt, Snapshot: source.Snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: actorID, Query: "híbrida"})
+	if err != nil || len(visible) != 1 || visible[0].ID != routine.ID {
+		t.Fatalf("owner routine visibility = %#v, err = %v", visible, err)
+	}
+	visible, err = queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: actorID, Tag: "GINÁSIO"})
+	if err != nil || len(visible) != 1 || visible[0].ID != routine.ID {
+		t.Fatalf("case-insensitive routine tag filter = %#v, err = %v", visible, err)
+	}
+	visible, err = queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{UserID: unrelatedID})
+	if err != nil || len(visible) != 0 {
+		t.Fatalf("private routine leaked = %#v, err = %v", visible, err)
+	}
+	copiedSessionID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: routine.Snapshot, PlanID: week.ID, StartsAt: pgtype.Timestamptz{Time: startsAt.AddDate(0, 0, 1), Valid: true}, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: routine.ID, SourceUpdatedAt: routine.UpdatedAt, DestinationKind: "SESSION", DestinationID: copiedSessionID, CopiedByID: actorID}); err != nil {
+		t.Fatal(err)
+	}
+	var copiedExerciseID uuid.UUID
+	if err := conn.QueryRow(ctx, `SELECT exercise.id FROM gym_exercises exercise JOIN training_segment_blocks block ON block.id = exercise.block_id JOIN training_session_segments segment ON segment.id = block.segment_id WHERE segment.session_id = $1 ORDER BY exercise.position LIMIT 1`, copiedSessionID).Scan(&copiedExerciseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE gym_exercises SET name = 'Cópia alterada' WHERE id = $1`, copiedExerciseID); err != nil {
+		t.Fatal(err)
+	}
+	var originalName string
+	if err := conn.QueryRow(ctx, `SELECT name FROM gym_exercises WHERE id = $1`, secondExerciseID).Scan(&originalName); err != nil || originalName != "Elevação frontal" {
+		t.Fatalf("source exercise changed through copy: name=%q err=%v", originalName, err)
+	}
+	var copyEvents int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM training_copy_events WHERE destination_id = $1 AND source_id = $2`, copiedSessionID, routine.ID).Scan(&copyEvents); err != nil || copyEvents != 1 {
+		t.Fatalf("copy provenance count=%d err=%v", copyEvents, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE training_copy_events SET copied_at = now() WHERE destination_id = $1`, copiedSessionID); err == nil {
+		t.Fatal("expected copy provenance to be append-only")
+	}
+
 }
 
 func stringPtrDB(value string) *string { return &value }

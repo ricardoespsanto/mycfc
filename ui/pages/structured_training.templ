@@ -9,6 +9,7 @@ import (
 
 type StructuredTrainingMembershipChoice struct { ID, Athlete, Scope string }
 type StructuredTrainingChoice struct { ID, Name string }
+type StructuredTrainingRoutine struct { ID, Name, Description, Kind, Visibility, Owner, Scope, Modality, Objective, Method, Tags, Preview, Provenance string }
 
 type StructuredGymExercise struct { ID, Name, Prescription, Resistance, Intent, Tempo, Notes string; Position int }
 type StructuredTrainingBlock struct {
@@ -51,9 +52,11 @@ type StructuredTrainingPage struct {
 	CSRFField templ.Component
 	Management bool
 	Success, Error, OpenForm string
+	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
 	Audiences []StructuredTrainingAudience
+	Routines []StructuredTrainingRoutine
 	Memberships []StructuredTrainingMembershipChoice
-	Programmes, Teams, Groups, Weeks []StructuredTrainingChoice
+	Programmes, Teams, Groups, Weeks, Sessions, Segments []StructuredTrainingChoice
 	GroupForm StructuredTrainingGroupForm
 	WeekForm StructuredTrainingWeekForm
 	SessionForm StructuredTrainingSessionForm
@@ -101,6 +104,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 							if week.Description != "" {
 								<p>{ week.Description }</p>
 							}
+							if page.Management {
+								@structuredCopyWeekForm(page, week)
+							}
 							if len(week.Sessions) == 0 {
 								<p class="record-meta">Ainda sem sessões.</p>
 							}
@@ -114,6 +120,10 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 									</p>
 									if session.Description != "" {
 										<p>{ session.Description }</p>
+									}
+									if page.Management {
+										@structuredSaveRoutineForm(page, "SESSION", session.ID)
+										@structuredCopySessionForm(page, session.ID)
 									}
 									if len(session.Segments) == 0 && session.EntryKind == "TRAINING" {
 										<p class="record-meta">Sessão ainda sem segmentos.</p>
@@ -144,6 +154,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 										}
 										if segment.EquipmentNotes != "" {
 											<p><strong>Material:</strong> { segment.EquipmentNotes }</p>
+										}
+										if page.Management {
+											@structuredSaveRoutineForm(page, "SEGMENT", segment.ID)
 										}
 											for _, block := range segment.Blocks {
 												<div class="nested-record">
@@ -190,6 +203,8 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 													}
 													if page.Management {
 														@structuredMoveBlock(page, block)
+														@structuredSaveRoutineForm(page, "BLOCK", block.ID)
+														@structuredCopyBlockForm(page, block.ID)
 													}
 												</div>
 											}
@@ -214,10 +229,139 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		}
 	</section>
 	if page.Management {
+		@structuredRoutineLibrary(page)
+		@structuredCopyDayForm(page)
 		@structuredGroupForm(page)
 		@structuredWeekForm(page)
 		@structuredSessionForm(page)
 	}
+}
+
+templ structuredRoutineLibrary(page StructuredTrainingPage) {
+	<section class="module" aria-labelledby="routine-library-title">
+		@components.SectionHeading("", "Biblioteca de rotinas", "Pesquise, pré-visualize e insira uma cópia independente no plano de destino.")
+		<form class="filter-bar" method="get" action="/admin/treinos/estruturados">
+			@components.FieldLabel("routine-query", "Pesquisar", false)<input id="routine-query" name="routine_query" value={ page.RoutineQuery } maxlength="180"/>
+			@components.FieldLabel("routine-modality", "Modalidade", false)<select id="routine-modality" name="routine_modality"><option value="">Todas</option>
+				for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
+					<option value={ value } selected?={ page.RoutineModality == value }>{ structuredModalityLabel(value) }</option>
+				}
+			</select>
+			@components.FieldLabel("routine-objective", "Objetivo", false)<select id="routine-objective" name="routine_objective"><option value="">Todos</option>
+				for _, value := range []string{"MOBILITY", "ACTIVATION", "MAX_STRENGTH_HYPERTROPHY", "MAX_STRENGTH_NEURAL", "EXPLOSIVE_STRENGTH", "STRENGTH_ENDURANCE", "TECHNIQUE", "CORE", "CUSTOM"} {
+					<option value={ value } selected?={ page.RoutineObjective == value }>{ trainingObjectiveLabel(value) }</option>
+				}
+			</select>
+			@components.FieldLabel("routine-tag", "Etiqueta", false)<input id="routine-tag" name="routine_tag" value={ page.RoutineTag } maxlength="40"/>
+			<button type="submit">Filtrar rotinas</button>
+		</form>
+		if len(page.Routines) == 0 {
+			@components.EmptyState("Sem rotinas visíveis", "Guarde um bloco, segmento ou sessão para começar.")
+		}
+		for _, routine := range page.Routines {
+			<article class="record-item record-item--stacked">
+				<div class="record-item__copy"><h3>{ routine.Name }</h3><p class="record-meta">{ trainingRoutineKindLabel(routine.Kind) } · { routine.Visibility } · { routine.Owner }
+					if routine.Scope != "" {
+						<span> · { routine.Scope }</span>
+					}
+				</p>
+					if routine.Description != "" {
+						<p>{ routine.Description }</p>
+					}
+					<p><strong>Pré-visualização:</strong> { routine.Preview }</p>
+					<p class="record-meta">
+						if routine.Modality != "" {
+							<span>{ structuredModalityLabel(routine.Modality) }</span>
+						}
+						if routine.Objective != "" {
+							<span> · { trainingObjectiveLabel(routine.Objective) }</span>
+						}
+						if routine.Method != "" {
+							<span> · Método: { routine.Method }</span>
+						}
+						if routine.Tags != "" {
+							<span> · { routine.Tags }</span>
+						}
+					</p>
+					<p class="record-meta">{ routine.Provenance }</p>
+				</div>
+				@structuredInsertRoutineForm(page, routine)
+			</article>
+		}
+	</section>
+}
+
+templ structuredSaveRoutineForm(page StructuredTrainingPage, kind, sourceID string) {
+	<details class="inline-disclosure"><summary>Guardar como rotina</summary>
+		<form class="form-layout" method="post" action="/admin/treinos/estruturados/rotinas">@page.CSRFField<input type="hidden" name="source_kind" value={ kind }/><input type="hidden" name="source_id" value={ sourceID }/>
+			@components.FieldLabel("routine-name-"+sourceID, "Nome da rotina", true)<input id={ "routine-name-"+sourceID } name="name" required minlength="2" maxlength="180"/>
+			@components.FieldLabel("routine-description-"+sourceID, "Descrição (opcional)", false)<textarea id={ "routine-description-"+sourceID } name="description" maxlength="1000"></textarea>
+			@components.FieldLabel("routine-visibility-"+sourceID, "Partilha", true)<select id={ "routine-visibility-"+sourceID } name="visibility" required><option value="PRIVATE">Só para mim</option><option value="SHARED">Partilhar no âmbito deste plano</option></select>
+			@components.FieldLabel("routine-method-"+sourceID, "Método (opcional)", false)<input id={ "routine-method-"+sourceID } name="method" maxlength="80"/>
+			@components.FieldLabel("routine-tags-"+sourceID, "Etiquetas separadas por vírgula (opcional)", false)<input id={ "routine-tags-"+sourceID } name="tags" maxlength="400"/>
+			<button type="submit">Guardar rotina</button>
+		</form>
+	</details>
+}
+
+templ structuredInsertRoutineForm(page StructuredTrainingPage, routine StructuredTrainingRoutine) {
+	<details class="inline-disclosure"><summary>Inserir cópia</summary>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/rotinas/"+routine.ID+"/inserir") }>@page.CSRFField
+			@components.FieldLabel("routine-target-"+routine.ID, trainingRoutineTargetLabel(routine.Kind), true)<select id={ "routine-target-"+routine.ID } name="target_id" required><option value="">Selecione</option>
+				if routine.Kind == "BLOCK" {
+					for _, choice := range page.Segments {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+				if routine.Kind == "SEGMENT" {
+					for _, choice := range page.Sessions {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+				if routine.Kind == "SESSION" {
+					for _, choice := range page.Weeks {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				}
+			</select>
+			if routine.Kind == "SESSION" {
+				@components.FieldLabel("routine-start-"+routine.ID, "Novo início", true)<input id={ "routine-start-"+routine.ID } name="starts_at" type="datetime-local" required/>
+			}
+			<button type="submit">Inserir cópia independente</button>
+		</form>
+	</details>
+}
+
+templ structuredCopyBlockForm(page StructuredTrainingPage, blockID string) {
+	<details class="inline-disclosure"><summary>Copiar bloco</summary><form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/"+blockID+"/copiar") }>@page.CSRFField @components.FieldLabel("copy-block-target-"+blockID, "Segmento de destino", true)<select id={ "copy-block-target-"+blockID } name="target_id" required><option value="">Selecione</option>
+		for _, choice := range page.Segments {
+			<option value={ choice.ID }>{ choice.Name }</option>
+		}
+	</select><button type="submit">Copiar bloco</button></form></details>
+}
+
+templ structuredCopySessionForm(page StructuredTrainingPage, sessionID string) {
+	<details class="inline-disclosure"><summary>Copiar sessão</summary><form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/"+sessionID+"/copiar") }>@page.CSRFField @components.FieldLabel("copy-session-week-"+sessionID, "Semana de destino", true)<select id={ "copy-session-week-"+sessionID } name="target_id" required><option value="">Selecione</option>
+		for _, choice := range page.Weeks {
+			<option value={ choice.ID }>{ choice.Name }</option>
+		}
+	</select>@components.FieldLabel("copy-session-start-"+sessionID, "Novo início", true)<input id={ "copy-session-start-"+sessionID } name="starts_at" type="datetime-local" required/><button type="submit">Copiar sessão</button></form></details>
+}
+
+templ structuredCopyWeekForm(page StructuredTrainingPage, week StructuredTrainingWeek) {
+	<details class="inline-disclosure"><summary>Copiar semana completa</summary><form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/"+week.ID+"/copiar") }>@page.CSRFField @components.FieldLabel("copy-week-title-"+week.ID, "Título da nova semana", true)<input id={ "copy-week-title-"+week.ID } name="title" value={ week.Title } required minlength="2" maxlength="180"/>@components.FieldLabel("copy-week-start-"+week.ID, "Nova segunda-feira", true)<input id={ "copy-week-start-"+week.ID } name="week_start" type="date" required/><button type="submit">Criar cópia da semana</button></form></details>
+}
+
+templ structuredCopyDayForm(page StructuredTrainingPage) {
+	<details class="module disclosure"><summary><span><strong>Copiar dia</strong><small>Repete todas as sessões do dia no destino escolhido.</small></span></summary><div class="disclosure__content"><form class="form-layout" method="post" action="/admin/treinos/estruturados/dias/copiar">@page.CSRFField @components.FieldLabel("copy-day-source-plan", "Semana de origem", true)<select id="copy-day-source-plan" name="source_plan_id" required>
+		for _, choice := range page.Weeks {
+			<option value={ choice.ID }>{ choice.Name }</option>
+		}
+	</select>@components.FieldLabel("copy-day-source-date", "Dia de origem", true)<input id="copy-day-source-date" name="source_date" type="date" required/>@components.FieldLabel("copy-day-target-plan", "Semana de destino", true)<select id="copy-day-target-plan" name="target_plan_id" required>
+		for _, choice := range page.Weeks {
+			<option value={ choice.ID }>{ choice.Name }</option>
+		}
+	</select>@components.FieldLabel("copy-day-target-date", "Dia de destino", true)<input id="copy-day-target-date" name="target_date" type="date" required/><button type="submit">Copiar dia</button></form></div></details>
 }
 
 templ structuredGroupForm(page StructuredTrainingPage) {
@@ -416,3 +560,5 @@ func structuredPurposeLabel(value string) string { switch value { case "WARM_UP"
 func gymStructureLabel(value string) string { switch value { case "CIRCUIT": return "Circuito"; case "SUPERSET": return "Supersérie"; default: return "Séries simples" } }
 func trainingObjectiveLabel(value string) string { switch value { case "MOBILITY": return "Flexibilidade e mobilidade"; case "ACTIVATION": return "Ativação"; case "MAX_STRENGTH_HYPERTROPHY": return "Força máxima — hipertrofia"; case "MAX_STRENGTH_NEURAL": return "Força máxima — neural"; case "EXPLOSIVE_STRENGTH": return "Força veloz e explosiva"; case "STRENGTH_ENDURANCE": return "Força resistência"; case "TECHNIQUE": return "Técnica"; case "CORE": return "Core"; default: return "Outro objetivo" } }
 func gymExecutionIntentLabel(value string) string { switch value { case "CONTROLLED": return "Execução controlada"; case "EXPLOSIVE": return "Execução explosiva"; case "MAXIMUM_VELOCITY": return "Velocidade máxima"; case "ISOMETRIC": return "Isométrica"; default: return "Outra intenção" } }
+func trainingRoutineKindLabel(value string) string { switch value { case "BLOCK": return "Bloco"; case "SEGMENT": return "Segmento"; default: return "Sessão" } }
+func trainingRoutineTargetLabel(value string) string { switch value { case "BLOCK": return "Segmento de destino"; case "SEGMENT": return "Sessão de destino"; default: return "Semana de destino" } }

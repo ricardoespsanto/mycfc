@@ -63,6 +63,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodPost, "/admin/treinos/estruturados/segmentos/00000000-0000-0000-0000-000000000000/ginasio", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fsegmentos%2F00000000-0000-0000-0000-000000000000%2Fginasio"},
 		{http.MethodPost, "/admin/treinos/estruturados/blocos/00000000-0000-0000-0000-000000000000/exercicios", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fblocos%2F00000000-0000-0000-0000-000000000000%2Fexercicios"},
 		{http.MethodPost, "/admin/treinos/estruturados/exercicios/00000000-0000-0000-0000-000000000000/mover", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fexercicios%2F00000000-0000-0000-0000-000000000000%2Fmover"},
+		{http.MethodPost, "/admin/treinos/estruturados/rotinas", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Frotinas"},
+		{http.MethodPost, "/admin/treinos/estruturados/rotinas/00000000-0000-0000-0000-000000000000/inserir", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Frotinas%2F00000000-0000-0000-0000-000000000000%2Finserir"},
+		{http.MethodPost, "/admin/treinos/estruturados/dias/copiar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fdias%2Fcopiar"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()

@@ -264,3 +264,25 @@ func TestStructuredGymWorkoutsExistInBaselineAndForwardMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestReusableTrainingRoutinesExistInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608130003_reusable_training_routines.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"CREATE TYPE training_routine_kind", "CREATE TABLE training_routines", "CREATE TABLE training_copy_events", "training_block_snapshot", "restore_training_session"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+	}
+	for _, expected := range []string{"EXCEPTION WHEN duplicate_object THEN NULL", "CREATE TABLE IF NOT EXISTS training_routines", "CREATE TABLE IF NOT EXISTS training_copy_events", "CREATE OR REPLACE FUNCTION training_session_snapshot", "CREATE OR REPLACE FUNCTION restore_training_session"} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("routine migration is not baseline-safe: missing %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("routine migration contains prohibited statement %q", prohibited)
+		}
+	}
+}
