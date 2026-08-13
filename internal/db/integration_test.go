@@ -655,6 +655,115 @@ func TestTrainingSessionEditingAndCancellationLifecycle(t *testing.T) {
 	}
 }
 
+func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(ctx) })
+	queries := dbgen.New(conn)
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actorID, guardianID, athleteID, unrelatedID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	seasonID := uuid.New()
+	for id, name := range map[uuid.UUID]string{actorID: "Treinadora estruturada", guardianID: "Responsável estruturada", unrelatedID: "Pessoa sem relação"} {
+		if _, err := conn.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '1980-01-01')`, id, name, "structured-"+uuid.NewString()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Atleta menor estruturada', $2, true, CURRENT_DATE - INTERVAL '14 years')`, athleteID, guardianID); err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	if _, err := conn.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época estruturada', $3, $4)`, seasonID, "ST_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID uuid.UUID
+	if err := conn.QueryRow(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4) RETURNING id`, athleteID, seasonID, programme.ID, today.AddDate(0, 0, -1)).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id IN (SELECT id FROM training_groups WHERE created_by_id = $1)`, actorID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM training_groups WHERE created_by_id = $1`, actorID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{athleteID, actorID, guardianID, unrelatedID})
+	})
+
+	group, err := queries.CreateStructuredTrainingGroup(ctx, dbgen.CreateStructuredTrainingGroupParams{Name: "Cadetes estruturados", ProgrammeID: &programme.ID, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.AddStructuredTrainingGroupMember(ctx, dbgen.AddStructuredTrainingGroupMemberParams{AddedByID: actorID, MembershipID: membershipID, GroupID: group.ID}); err != nil || rows != 1 {
+		t.Fatalf("add group member rows = %d, err = %v", rows, err)
+	}
+	weekStart := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
+	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M33", Description: "Semana híbrida", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID, GroupID: group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if week.SeasonID == nil || *week.SeasonID != seasonID {
+		t.Fatalf("structured week season = %v, want %s", week.SeasonID, seasonID)
+	}
+	startsAt := weekStart.Add(17 * time.Hour)
+	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{Title: "Ginásio + água", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(2 * time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID, PlanID: week.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gymID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityGYM, Title: "Mobilidade"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waterID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Série principal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: gymID, Purpose: dbgen.TrainingBlockPurposeWARMUP, Instructions: "Mobilidade articular"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: waterID, Purpose: dbgen.TrainingBlockPurposeMAIN, Instructions: "3x2' R4 / 1'"}); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := queries.MoveTrainingSessionSegment(ctx, dbgen.MoveTrainingSessionSegmentParams{SegmentID: waterID, Direction: -1}); err != nil || !moved {
+		t.Fatalf("move water segment = %t, err = %v", moved, err)
+	}
+
+	for name, userID := range map[string]uuid.UUID{"athlete": athleteID, "guardian": guardianID} {
+		rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, userID)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("%s rows = %d, err = %v", name, len(rows), err)
+		}
+		if rows[0].SegmentModality == nil || *rows[0].SegmentModality != dbgen.TrainingSegmentModalityWATER {
+			t.Fatalf("%s first segment = %#v", name, rows[0].SegmentModality)
+		}
+	}
+	rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, unrelatedID)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("unrelated rows = %d, err = %v", len(rows), err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE users SET date_of_birth = CURRENT_DATE - INTERVAL '19 years' WHERE id = $1`, athleteID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = queries.ListStructuredTrainingOverviewForSubject(ctx, guardianID)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("guardian rows after athlete adulthood = %d, err = %v", len(rows), err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE users SET date_of_birth = CURRENT_DATE - INTERVAL '14 years' WHERE id = $1`, athleteID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE user_memberships SET ends_on = CURRENT_DATE - 1 WHERE id = $1`, membershipID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = queries.ListStructuredTrainingOverviewForSubject(ctx, guardianID)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("guardian rows after membership expiry = %d, err = %v", len(rows), err)
+	}
+}
+
 func stringPtrDB(value string) *string { return &value }
 
 func TestMemberProfileOptimisticUpdateAndImmutableAudit(t *testing.T) {
@@ -812,7 +921,7 @@ func TestFeatureFlagsUseDefaultsConcurrencyAndImmutableAudit(t *testing.T) {
 	for _, flag := range flags {
 		byKey[flag.FeatureKey] = flag
 	}
-	if byKey["suggestions"].Mode != "ENABLED" || byKey["photo_submissions"].Mode != "DISABLED" {
+	if byKey["suggestions"].Mode != "ENABLED" || byKey["photo_submissions"].Mode != "DISABLED" || byKey["structured_training_planning"].Mode != "ADMIN_ONLY" {
 		t.Fatalf("seeded feature flags = %#v", byKey)
 	}
 

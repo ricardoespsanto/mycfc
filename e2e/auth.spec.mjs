@@ -717,6 +717,121 @@ test.describe('authentication', () => {
     await expect(leaderboard).not.toContainText(athleteName);
   });
 
+  test('administrator authors a responsive hybrid training week without JavaScript', async ({ browser }) => {
+    test.setTimeout(300000);
+    const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+    const page = await context.newPage();
+    const suffix = Date.now();
+    const structuredAthleteName = `Atleta estruturado E2E ${suffix}`;
+    const structuredAthleteEmail = `e2e-structured-${suffix}@example.test`;
+    const groupName = `Grupo estruturado E2E ${suffix}`;
+    const weekTitle = `Microciclo E2E ${suffix}`;
+    const sessionTitle = `Ginásio + água E2E ${suffix}`;
+    const today = new Date();
+    const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const daysSinceMonday = (monday.getDay() + 6) % 7;
+    monday.setDate(monday.getDate() - daysSinceMonday);
+    const formatDate = (value) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-');
+    const startsAt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1, 17, 0);
+    const endsAt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1, 19, 0);
+    const formatDateTime = (value) => `${formatDate(value)}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/admin/membros');
+    await page.locator('#criar-conta > summary').click();
+    await page.locator('#member-name').fill(structuredAthleteName);
+    await page.locator('#member-email').fill(structuredAthleteEmail);
+    await page.locator('#member-birth').fill('2005-01-01');
+    await page.locator('#member-password').fill(password);
+    await page.locator('#member-password-confirmation').fill(password);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+    await page.getByLabel('Pesquisar membros').fill(structuredAthleteName);
+    await page.getByRole('button', { name: 'Procurar' }).click();
+    await page.getByRole('link', { name: structuredAthleteName }).click();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
+    const structuredMembershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
+    await structuredMembershipForm.getByLabel('Competição').check();
+    await structuredMembershipForm.getByRole('button', { name: 'Guardar' }).click();
+    await expect(structuredMembershipForm.getByLabel('Competição')).toBeChecked();
+    await page.goto('/admin/treinos/estruturados');
+
+    await expect(page.getByRole('heading', { name: 'Planeamento semanal', level: 1 })).toBeVisible();
+    await page.locator('#criar-grupo-treino > summary').click();
+    const groupForm = page.locator('form[action="/admin/treinos/estruturados/grupos"]');
+    await groupForm.getByLabel('Nome').fill(groupName);
+    await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
+    await groupForm.getByLabel(new RegExp(structuredAthleteName)).check();
+    await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
+    await expect(page.getByRole('status')).toHaveText('Grupo de treino criado.');
+
+    await page.locator('#criar-semana-treino > summary').click();
+    const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
+    await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
+    await weekForm.getByLabel('Título').fill(weekTitle);
+    await weekForm.getByLabel('Segunda-feira da semana').fill(formatDate(monday));
+    await weekForm.getByRole('button', { name: 'Criar semana' }).click();
+    await expect(page.getByRole('status')).toHaveText('Semana de treino criada.');
+    const week = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    await expect(week).toContainText(`Época ${today.getFullYear()}`);
+
+    await page.locator('#criar-sessao-estruturada > summary').click();
+    const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');
+    const weekOption = sessionForm.getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await sessionForm.getByLabel('Semana').selectOption(await weekOption.getAttribute('value'));
+    await sessionForm.getByLabel('Título').fill(sessionTitle);
+    await sessionForm.getByLabel('Início').fill(formatDateTime(startsAt));
+    await sessionForm.getByLabel('Fim').fill(formatDateTime(endsAt));
+    await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
+    await expect(page.getByRole('status')).toHaveText('Sessão estruturada criada.');
+
+    let session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await session.locator('summary').filter({ hasText: 'Adicionar segmento' }).click();
+    let segmentForm = session.locator('form[action$="/segmentos"]');
+    await segmentForm.getByLabel('Modalidade').selectOption('GYM');
+    await segmentForm.getByLabel('Título (opcional)').fill('Mobilidade');
+    await segmentForm.getByLabel('Objetivo do primeiro bloco').selectOption('WARM_UP');
+    await segmentForm.getByLabel('Instruções').fill('5 min de mobilidade articular');
+    await segmentForm.getByRole('button', { name: 'Adicionar segmento' }).click();
+    await expect(page.getByRole('status')).toHaveText('Segmento adicionado.');
+
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await session.locator('summary').filter({ hasText: 'Adicionar segmento' }).click();
+    segmentForm = session.locator('form[action$="/segmentos"]');
+    await segmentForm.getByLabel('Modalidade').selectOption('WATER');
+    await segmentForm.getByLabel('Título (opcional)').fill('Ataque 3 e defesa 2-2');
+    await segmentForm.getByLabel('Objetivo do primeiro bloco').selectOption('MAIN');
+    await segmentForm.getByLabel('Instruções').fill("2x7' jogo · HxH · GR e pivot");
+    await segmentForm.getByRole('button', { name: 'Adicionar segmento' }).click();
+    await expect(page.getByRole('status')).toHaveText('Segmento adicionado.');
+
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await expect(session.getByRole('heading', { name: /Ginásio · Mobilidade/ })).toBeVisible();
+    const waterSegment = session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ }).locator('xpath=ancestor::section[1]');
+    await expect(waterSegment).toContainText("2x7' jogo · HxH · GR e pivot");
+    await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir' }).click();
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    await expect(session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ })).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByRole('heading', { name: sessionTitle })).toBeVisible();
+    await context.close();
+
+    const accessibilityContext = await browser.newContext({ baseURL });
+    const accessibilityPage = await accessibilityContext.newPage();
+    await accessibilityPage.goto('/login');
+    await accessibilityPage.getByLabel('Correio eletrónico').fill(adminEmail);
+    await accessibilityPage.getByLabel('Palavra-passe').fill(password);
+    await accessibilityPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await accessibilityPage.goto('/admin/treinos/estruturados');
+    await expect(accessibilityPage.getByRole('heading', { name: sessionTitle })).toBeVisible();
+    await expectNoSeriousAxeViolations(accessibilityPage);
+    await accessibilityContext.close();
+  });
+
   test('administrator creates a private album without JavaScript and the scoped athlete can open it', async ({ page, browser }) => {
     test.setTimeout(120000);
     const title = `Álbum competição E2E ${Date.now()}`;

@@ -31,6 +31,9 @@ func TestRegistryDefaultsAndUnknownValuesFailClosed(t *testing.T) {
 	if Available(nil, PhotoSubmissions, true) {
 		t.Fatal("photo submissions should retain its disabled default")
 	}
+	if !Available(nil, StructuredTrainingPlanning, true) || Available(nil, StructuredTrainingPlanning, false) {
+		t.Fatal("structured training should retain its administrator-only default")
+	}
 	if Available(map[Key]Mode{Suggestions: Mode("BROKEN")}, Suggestions, true) {
 		t.Fatal("invalid stored mode should fail closed")
 	}

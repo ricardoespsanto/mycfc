@@ -3,8 +3,9 @@ package featureflags
 type Key string
 
 const (
-	Suggestions      Key = "suggestions"
-	PhotoSubmissions Key = "photo_submissions"
+	Suggestions                Key = "suggestions"
+	PhotoSubmissions           Key = "photo_submissions"
+	StructuredTrainingPlanning Key = "structured_training_planning"
 )
 
 type Mode string
@@ -34,6 +35,12 @@ var registry = []Definition{
 		Label:       "Envio de fotografias para álbuns",
 		Description: "Envio privado de fotografias para moderação antes de qualquer publicação no álbum.",
 		Default:     Disabled,
+	},
+	{
+		Key:         StructuredTrainingPlanning,
+		Label:       "Planeamento estruturado de treinos",
+		Description: "Semanas, grupos de treino e sessões híbridas durante a transição do planeamento atual.",
+		Default:     AdminOnly,
 	},
 }
 

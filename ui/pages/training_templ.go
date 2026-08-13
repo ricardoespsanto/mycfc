@@ -46,7 +46,7 @@ type TrainingSessionEditPage struct {
 type TrainingPage struct {
 	Meta                                         components.PageMeta
 	CSRFField                                    templ.Component
-	Management, CanManage                        bool
+	Management, CanManage, StructuredAvailable   bool
 	Success, Error, OpenForm                     string
 	Sessions                                     []TrainingSession
 	Calendar                                     BasicCalendarMonth
@@ -113,7 +113,7 @@ func trainingContent(page TrainingPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo e registe os respetivos resultados.", nil).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo e registe os respetivos resultados.", trainingPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2177,7 +2177,14 @@ func trainingOutcomeTone(status string) string {
 
 func trainingPageActions(page TrainingPage) []components.PageAction {
 	if page.CanManage {
-		return []components.PageAction{{Label: "Criar plano", Href: "#criar-plano", Variant: "primary"}, {Label: "Criar sessão", Href: "#criar-sessao", Variant: "secondary"}}
+		actions := []components.PageAction{{Label: "Criar plano", Href: "#criar-plano", Variant: "primary"}, {Label: "Criar sessão", Href: "#criar-sessao", Variant: "secondary"}}
+		if page.StructuredAvailable {
+			actions = append(actions, components.PageAction{Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"})
+		}
+		return actions
+	}
+	if page.StructuredAvailable {
+		return []components.PageAction{{Label: "Planeamento semanal", Href: "/treinos/estruturados", Variant: "secondary"}}
 	}
 	return nil
 }

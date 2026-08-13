@@ -666,3 +666,6 @@ html.js .create-panel[open] .disclosure__content { padding: var(--space-5) var(-
   .calendar-month__grid { min-inline-size: 42rem; }
   .calendar-month__day { min-block-size: 6.5rem; }
 }
+.preserve-lines {
+  white-space: pre-wrap;
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -47,6 +48,7 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 	defer cancel()
 	page.Management = strings.HasPrefix(r.URL.Path, "/admin/")
 	page.CanManage = user.IsAdmin || user.CanManageEvents
+	page.StructuredAvailable = featureflags.Available(user.FeatureModes, featureflags.StructuredTrainingPlanning, user.IsAdmin)
 	if !page.Management {
 		sessions, err := h.Store.ListTrainingSessionsForAthlete(ctx, dbgen.ListTrainingSessionsForAthleteParams{UserID: user.ID, RowLimit: 100})
 		if err != nil {
