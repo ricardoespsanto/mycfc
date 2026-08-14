@@ -1968,6 +1968,28 @@ type TrainingPlan struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type TrainingPlanPublication struct {
+	ID              uuid.UUID          `json:"id"`
+	PlanID          uuid.UUID          `json:"plan_id"`
+	Revision        int32              `json:"revision"`
+	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
+	ChangeSummary   string             `json:"change_summary"`
+	SupersedesID    *uuid.UUID         `json:"supersedes_id"`
+	PublishedByID   uuid.UUID          `json:"published_by_id"`
+	PublishedAt     pgtype.Timestamptz `json:"published_at"`
+}
+
+type TrainingPrescription struct {
+	ID             uuid.UUID          `json:"id"`
+	PublicationID  uuid.UUID          `json:"publication_id"`
+	SessionID      uuid.UUID          `json:"session_id"`
+	MembershipID   uuid.UUID          `json:"membership_id"`
+	AthleteUserID  uuid.UUID          `json:"athlete_user_id"`
+	Snapshot       []byte             `json:"snapshot"`
+	SnapshotSha256 string             `json:"snapshot_sha256"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type TrainingRoutine struct {
 	ID              uuid.UUID                 `json:"id"`
 	Name            string                    `json:"name"`
@@ -2034,6 +2056,7 @@ type TrainingSessionActivityMatch struct {
 type TrainingSessionOutcome struct {
 	SessionID            uuid.UUID             `json:"session_id"`
 	UserID               uuid.UUID             `json:"user_id"`
+	PrescriptionID       *uuid.UUID            `json:"prescription_id"`
 	Status               TrainingOutcomeStatus `json:"status"`
 	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
 	ReplacementReason    *string               `json:"replacement_reason"`

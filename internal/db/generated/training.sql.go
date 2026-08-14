@@ -556,7 +556,13 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
+       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres,
+       EXISTS (
+         SELECT 1 FROM training_prescriptions prescription
+         JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+         WHERE prescription.session_id = s.id AND prescription.athlete_user_id = $1
+           AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
+       ) AS prescription_available
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -576,17 +582,18 @@ type ListTrainingSessionsForAthleteParams struct {
 }
 
 type ListTrainingSessionsForAthleteRow struct {
-	ID                 uuid.UUID          `json:"id"`
-	PlanTitle          string             `json:"plan_title"`
-	Title              string             `json:"title"`
-	Description        string             `json:"description"`
-	StartsAt           pgtype.Timestamptz `json:"starts_at"`
-	EndsAt             pgtype.Timestamptz `json:"ends_at"`
-	ModalityName       *string            `json:"modality_name"`
-	Status             string             `json:"status"`
-	CancellationReason *string            `json:"cancellation_reason"`
-	OutcomeStatus      interface{}        `json:"outcome_status"`
-	DistanceMetres     *int32             `json:"distance_metres"`
+	ID                    uuid.UUID          `json:"id"`
+	PlanTitle             string             `json:"plan_title"`
+	Title                 string             `json:"title"`
+	Description           string             `json:"description"`
+	StartsAt              pgtype.Timestamptz `json:"starts_at"`
+	EndsAt                pgtype.Timestamptz `json:"ends_at"`
+	ModalityName          *string            `json:"modality_name"`
+	Status                string             `json:"status"`
+	CancellationReason    *string            `json:"cancellation_reason"`
+	OutcomeStatus         interface{}        `json:"outcome_status"`
+	DistanceMetres        *int32             `json:"distance_metres"`
+	PrescriptionAvailable bool               `json:"prescription_available"`
 }
 
 func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTrainingSessionsForAthleteParams) ([]ListTrainingSessionsForAthleteRow, error) {
@@ -610,6 +617,7 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.CancellationReason,
 			&i.OutcomeStatus,
 			&i.DistanceMetres,
+			&i.PrescriptionAvailable,
 		); err != nil {
 			return nil, err
 		}
@@ -623,15 +631,23 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 
 const listUpcomingTrainingSessionsForDashboard = `-- name: ListUpcomingTrainingSessionsForDashboard :many
 SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason
+       s.status, s.cancellation_reason,
+       EXISTS (
+         SELECT 1 FROM training_prescriptions prescription
+         JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+         JOIN users prescribed_athlete ON prescribed_athlete.id = prescription.athlete_user_id
+         WHERE prescription.session_id = s.id
+           AND (prescribed_athlete.id = $1 OR (prescribed_athlete.guardian_id = $1 AND prescribed_athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
+           AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
+       ) AS prescription_available
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
-WHERE s.ends_at >= $1
+WHERE s.ends_at >= $2
   AND EXISTS (
       SELECT 1 FROM user_memberships membership
       JOIN users subject ON subject.id = membership.user_id
-      WHERE (subject.id = $2 OR subject.guardian_id = $2)
+      WHERE (subject.id = $1 OR subject.guardian_id = $1)
         AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
         AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
         AND (p.team_id IS NULL OR p.team_id = membership.team_id)
@@ -641,24 +657,25 @@ LIMIT $3
 `
 
 type ListUpcomingTrainingSessionsForDashboardParams struct {
-	FromTime pgtype.Timestamptz `json:"from_time"`
 	UserID   uuid.UUID          `json:"user_id"`
+	FromTime pgtype.Timestamptz `json:"from_time"`
 	RowLimit int32              `json:"row_limit"`
 }
 
 type ListUpcomingTrainingSessionsForDashboardRow struct {
-	ID                 uuid.UUID          `json:"id"`
-	PlanTitle          string             `json:"plan_title"`
-	Title              string             `json:"title"`
-	StartsAt           pgtype.Timestamptz `json:"starts_at"`
-	EndsAt             pgtype.Timestamptz `json:"ends_at"`
-	ModalityName       *string            `json:"modality_name"`
-	Status             string             `json:"status"`
-	CancellationReason *string            `json:"cancellation_reason"`
+	ID                    uuid.UUID          `json:"id"`
+	PlanTitle             string             `json:"plan_title"`
+	Title                 string             `json:"title"`
+	StartsAt              pgtype.Timestamptz `json:"starts_at"`
+	EndsAt                pgtype.Timestamptz `json:"ends_at"`
+	ModalityName          *string            `json:"modality_name"`
+	Status                string             `json:"status"`
+	CancellationReason    *string            `json:"cancellation_reason"`
+	PrescriptionAvailable bool               `json:"prescription_available"`
 }
 
 func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, arg ListUpcomingTrainingSessionsForDashboardParams) ([]ListUpcomingTrainingSessionsForDashboardRow, error) {
-	rows, err := q.db.Query(ctx, listUpcomingTrainingSessionsForDashboard, arg.FromTime, arg.UserID, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listUpcomingTrainingSessionsForDashboard, arg.UserID, arg.FromTime, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -675,6 +692,7 @@ func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, 
 			&i.ModalityName,
 			&i.Status,
 			&i.CancellationReason,
+			&i.PrescriptionAvailable,
 		); err != nil {
 			return nil, err
 		}
@@ -687,11 +705,22 @@ func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, 
 }
 
 const saveTrainingSessionOutcome = `-- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)
-SELECT $1, $2, $3::training_outcome_status,
-       $4, $5, $6
+INSERT INTO training_session_outcomes (session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason, distance_metres)
+SELECT $1, $2, current_prescription.id,
+       $3::training_outcome_status, $4, $5, $6
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
+LEFT JOIN LATERAL (
+    SELECT prescription.id
+    FROM training_prescriptions prescription
+    JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+    WHERE prescription.session_id = s.id AND prescription.athlete_user_id = $2
+      AND publication.id = (
+        SELECT current_publication.id FROM training_plan_publications current_publication
+        WHERE current_publication.plan_id = p.id
+        ORDER BY current_publication.revision DESC LIMIT 1
+      )
+) current_prescription ON true
 WHERE s.id = $1
   AND s.status = 'ACTIVE'
   AND EXISTS (
@@ -716,6 +745,7 @@ WHERE s.id = $1
   )
 ON CONFLICT (session_id, user_id) DO UPDATE SET
     status = EXCLUDED.status,
+    prescription_id = COALESCE(training_session_outcomes.prescription_id, EXCLUDED.prescription_id),
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
     distance_metres = EXCLUDED.distance_metres,

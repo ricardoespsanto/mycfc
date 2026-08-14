@@ -970,9 +970,13 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 					detail += " · " + *session.CancellationReason
 				}
 			}
+			trainingURL := "/treinos"
+			if session.PrescriptionAvailable {
+				trainingURL = "/treinos/prescricoes/sessoes/" + session.ID.String()
+			}
 			items = append(items, agendaItem{
 				startsAt: session.StartsAt.Time,
-				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: "/treinos", Kind: kind},
+				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: trainingURL, Kind: kind},
 			})
 		}
 	}

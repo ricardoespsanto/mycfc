@@ -955,6 +955,7 @@ test.describe('authentication', () => {
     await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir segmento' }).click();
     session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
     await expect(session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ })).toBeVisible();
+
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
     await expect(sourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
@@ -973,6 +974,87 @@ test.describe('authentication', () => {
     await expect(accessibleSourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
     await expectNoSeriousAxeViolations(accessibilityPage);
     await accessibilityContext.close();
+  });
+
+  test('administrator publishes an immutable private training prescription', async ({ page }) => {
+    test.setTimeout(600000);
+    const suffix = Date.now();
+    const athleteName = `Atleta publicação E2E ${suffix}`;
+    const athleteEmail = `e2e-publication-${suffix}@example.test`;
+    const groupName = `Grupo publicação E2E ${suffix}`;
+    const weekTitle = `Semana publicação E2E ${suffix}`;
+    const sessionTitle = `Sessão publicação E2E ${suffix}`;
+    const today = new Date();
+    const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    monday.setDate(monday.getDate() + 7);
+    const formatDate = (value) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-');
+    const startsAt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1, 17, 0);
+    const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000);
+    const formatDateTime = (value) => `${formatDate(value)}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/admin/membros');
+    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
+    await page.locator('#member-name').fill(athleteName);
+    await page.locator('#member-email').fill(athleteEmail);
+    await page.locator('#member-birth').fill('2005-01-01');
+    await page.locator('#member-password').fill(password);
+    await page.locator('#member-password-confirmation').fill(password);
+    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await page.getByLabel('Pesquisar membros').fill(athleteName);
+    await page.getByRole('button', { name: 'Procurar' }).click();
+    await page.getByRole('link', { name: athleteName }).click();
+    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
+    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
+    await membershipForm.getByLabel('Competição').check();
+    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+
+    await page.goto('/admin/treinos/estruturados');
+    await page.getByRole('link', { name: 'Criar grupo' }).click();
+    const groupForm = page.locator('form[action="/admin/treinos/estruturados/grupos"]');
+    await groupForm.getByLabel('Nome').fill(groupName);
+    await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
+    await groupForm.getByLabel(new RegExp(athleteName)).check();
+    await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
+    await page.getByRole('link', { name: 'Criar semana' }).click();
+    const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
+    await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
+    await weekForm.getByLabel('Título').fill(weekTitle);
+    await weekForm.getByLabel('Segunda-feira da semana').fill(formatDate(monday));
+    await weekForm.getByRole('button', { name: 'Criar semana' }).click();
+    await page.getByRole('link', { name: 'Criar sessão' }).click();
+    const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');
+    const weekOption = sessionForm.getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await sessionForm.getByLabel('Semana').selectOption(await weekOption.getAttribute('value'));
+    await sessionForm.getByLabel('Título').fill(sessionTitle);
+    await sessionForm.getByLabel('Início').fill(formatDateTime(startsAt));
+    await sessionForm.getByLabel('Fim').fill(formatDateTime(endsAt));
+    await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
+
+    await page.getByRole('tab', { name: 'Publicar' }).click();
+    let publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await expect(publicationCard).toContainText('Pré-visualização: 1 novas · 0 alteradas · 0 removidas · 0 sem alterações');
+    await publicationCard.getByLabel('Resumo desta revisão').fill('Primeira publicação E2E');
+    await publicationCard.getByRole('button', { name: 'Pré-visualizado · publicar revisão' }).click();
+    await expect(page.getByRole('status')).toHaveText('Revisão 1 publicada para 1 prescrições privadas.');
+    await page.getByRole('tab', { name: 'Publicar' }).click();
+    publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await expect(publicationCard).toContainText('Publicado · sem alterações pendentes');
+    await expect(publicationCard).toContainText('0 novas · 0 alteradas · 0 removidas · 1 sem alterações');
+
+    await page.goto('/treinos/estruturados');
+    const publishedSession = page.getByRole('heading', { name: sessionTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await expect(page.getByText(athleteName, { exact: true })).toBeVisible();
+    await publishedSession.getByRole('link', { name: 'Abrir esta revisão da prescrição' }).click();
+    await expect(page.getByText('Prescrição publicada · revisão 1', { exact: false })).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByRole('heading', { name: sessionTitle })).toBeVisible();
   });
 
   test('administrator creates a private album and the scoped athlete can open it', async ({ page, browser }) => {

@@ -15,6 +15,8 @@ import (
 var errStructuredTrainingMembershipScope = errors.New("membership is outside the training group scope")
 var errStructuredVariationMemberScope = errors.New("variation member is outside the training group")
 var errStructuredVariationCrewCapacity = errors.New("variation crew does not match the craft capacity")
+var errStructuredTrainingPublicationConflict = errors.New("structured training plan changed before publication")
+var errStructuredTrainingPublicationVariationConflict = errors.New("structured training variation conflict prevents publication")
 
 type StructuredTrainingGroupInput struct {
 	Params        dbgen.CreateStructuredTrainingGroupParams
@@ -74,6 +76,22 @@ type StructuredDayCopyInput struct {
 	ActorID                    uuid.UUID
 }
 
+type StructuredPrescriptionInput struct {
+	SessionID      uuid.UUID
+	MembershipID   uuid.UUID
+	AthleteUserID  uuid.UUID
+	Snapshot       []byte
+	SnapshotSHA256 string
+}
+
+type StructuredPublicationInput struct {
+	PlanID          uuid.UUID
+	SourceUpdatedAt pgtype.Timestamptz
+	ChangeSummary   string
+	PublishedByID   uuid.UUID
+	Prescriptions   []StructuredPrescriptionInput
+}
+
 type StructuredTrainingStore interface {
 	ListEligibleTrainingGroupMemberships(context.Context, dbgen.ListEligibleTrainingGroupMembershipsParams) ([]dbgen.ListEligibleTrainingGroupMembershipsRow, error)
 	ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error)
@@ -118,6 +136,13 @@ type StructuredTrainingStore interface {
 	ListTrainingVariationMatchesForManager(context.Context, dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error)
 	GetTrainingVariationPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	RetireTrainingVariation(context.Context, dbgen.RetireTrainingVariationParams) (int64, error)
+	ListManagedTrainingPublicationStates(context.Context, dbgen.ListManagedTrainingPublicationStatesParams) ([]dbgen.ListManagedTrainingPublicationStatesRow, error)
+	ListStructuredTrainingPublicationMembers(context.Context, dbgen.ListStructuredTrainingPublicationMembersParams) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error)
+	PublishStructuredTrainingPlan(context.Context, StructuredPublicationInput) (dbgen.TrainingPlanPublication, error)
+	ListTrainingPrescriptionsForViewer(context.Context, dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error)
+	ListLatestTrainingPrescriptionHashesForPlan(context.Context, uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error)
+	GetTrainingPrescriptionForViewer(context.Context, dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error)
+	ListTrainingPrescriptionLinksForSessionViewer(context.Context, dbgen.ListTrainingPrescriptionLinksForSessionViewerParams) ([]dbgen.ListTrainingPrescriptionLinksForSessionViewerRow, error)
 }
 
 type PostgresStructuredTrainingStore struct {
@@ -136,6 +161,69 @@ func (s PostgresStructuredTrainingStore) ListStructuredTrainingOverviewForManage
 
 func (s PostgresStructuredTrainingStore) ListStructuredTrainingOverviewForSubject(ctx context.Context, userID uuid.UUID) ([]dbgen.ListStructuredTrainingOverviewForSubjectRow, error) {
 	return s.queries().ListStructuredTrainingOverviewForSubject(ctx, userID)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingPublicationStates(ctx context.Context, params dbgen.ListManagedTrainingPublicationStatesParams) ([]dbgen.ListManagedTrainingPublicationStatesRow, error) {
+	return s.queries().ListManagedTrainingPublicationStates(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMembers(ctx context.Context, params dbgen.ListStructuredTrainingPublicationMembersParams) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
+	return s.queries().ListStructuredTrainingPublicationMembers(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionsForViewer(ctx context.Context, params dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error) {
+	return s.queries().ListTrainingPrescriptionsForViewer(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error) {
+	return s.queries().ListLatestTrainingPrescriptionHashesForPlan(ctx, planID)
+}
+
+func (s PostgresStructuredTrainingStore) GetTrainingPrescriptionForViewer(ctx context.Context, params dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error) {
+	return s.queries().GetTrainingPrescriptionForViewer(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionLinksForSessionViewer(ctx context.Context, params dbgen.ListTrainingPrescriptionLinksForSessionViewerParams) ([]dbgen.ListTrainingPrescriptionLinksForSessionViewerRow, error) {
+	return s.queries().ListTrainingPrescriptionLinksForSessionViewer(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx context.Context, input StructuredPublicationInput) (publication dbgen.TrainingPlanPublication, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return publication, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	state, err := queries.LockStructuredTrainingPlanForPublication(ctx, input.PlanID)
+	if err != nil {
+		return publication, err
+	}
+	if !state.UpdatedAt.Valid || !input.SourceUpdatedAt.Valid || !state.UpdatedAt.Time.Equal(input.SourceUpdatedAt.Time) {
+		return publication, errStructuredTrainingPublicationConflict
+	}
+	var supersedesID *uuid.UUID
+	if state.LatestPublicationID != uuid.Nil {
+		supersedesID = &state.LatestPublicationID
+	}
+	publication, err = queries.CreateTrainingPlanPublication(ctx, dbgen.CreateTrainingPlanPublicationParams{
+		PlanID: input.PlanID, Revision: state.LatestRevision + 1, SourceUpdatedAt: state.UpdatedAt,
+		ChangeSummary: input.ChangeSummary, SupersedesID: supersedesID, PublishedByID: input.PublishedByID,
+	})
+	if err != nil {
+		return publication, err
+	}
+	for _, prescription := range input.Prescriptions {
+		if _, err = queries.CreateTrainingPrescription(ctx, dbgen.CreateTrainingPrescriptionParams{
+			PublicationID: publication.ID, SessionID: prescription.SessionID, MembershipID: prescription.MembershipID,
+			AthleteUserID: prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
+		}); err != nil {
+			return publication, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return publication, err
+	}
+	return publication, nil
 }
 
 func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (group dbgen.TrainingGroup, err error) {

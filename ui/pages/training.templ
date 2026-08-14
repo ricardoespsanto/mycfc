@@ -6,7 +6,7 @@ import (
 )
 
 type TrainingChoice struct{ ID, Name string }
-type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string; Cancelled bool }
+type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string; Cancelled, PrescriptionAvailable bool }
 type ManagedTrainingSession struct{ ID, Title, Description, When, Modality, CancellationReason, CancelledAt, CancelledBy string; Cancelled, Editable bool }
 type ManagedTrainingPlan struct {
 	ID, Title, Description string
@@ -75,6 +75,9 @@ templ trainingContent(page TrainingPage) {
 								}
 							</p>
 							<p>{ session.Detail }</p>
+							if session.PrescriptionAvailable {
+								<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/sessoes/" + session.ID) }>Abrir prescrição publicada</a></p>
+							}
 							if session.Cancelled {
 								<div class="callout callout--warning" role="status"><strong>Sessão cancelada</strong><p>{ session.CancellationReason }</p></div>
 							}

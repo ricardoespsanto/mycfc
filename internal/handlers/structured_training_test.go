@@ -15,37 +15,41 @@ import (
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type structuredTrainingStoreStub struct {
 	StructuredTrainingStore
-	manageable       bool
-	manageArgs       []dbgen.CanManageStructuredTrainingGroupParams
-	created          []dbgen.CreateStructuredTrainingWeekParams
-	groups           []StructuredTrainingGroupInput
-	weekOK           bool
-	sessions         []dbgen.CreateStructuredTrainingSessionParams
-	segments         []StructuredTrainingSegmentInput
-	blocks           []dbgen.CreateTrainingSegmentBlockParams
-	gymBlocks        []StructuredGymBlockInput
-	gymExercises     []dbgen.CreateGymExerciseParams
-	waterBlocks      []StructuredWaterBlockInput
-	waterSteps       []dbgen.CreateWaterWorkStepParams
-	waterProfiles    []dbgen.CreateWaterIntensityProfileParams
-	waterZones       []dbgen.CreateWaterIntensityZoneParams
-	planID           uuid.UUID
-	movedSegments    []dbgen.MoveTrainingSessionSegmentParams
-	movedBlocks      []dbgen.MoveTrainingSegmentBlockParams
-	movedExercises   []dbgen.MoveGymExerciseParams
-	routineSource    StructuredRoutineSource
-	createdRoutines  []dbgen.CreateTrainingRoutineParams
-	visibleRoutine   dbgen.TrainingRoutine
-	insertedRoutines []StructuredRoutineInsertInput
-	copiedBlocks     [][3]uuid.UUID
-	variationInputs  []dbgen.CreateTrainingVariationParams
-	copiedSessions   []struct {
+	manageable        bool
+	manageArgs        []dbgen.CanManageStructuredTrainingGroupParams
+	created           []dbgen.CreateStructuredTrainingWeekParams
+	groups            []StructuredTrainingGroupInput
+	weekOK            bool
+	sessions          []dbgen.CreateStructuredTrainingSessionParams
+	segments          []StructuredTrainingSegmentInput
+	blocks            []dbgen.CreateTrainingSegmentBlockParams
+	gymBlocks         []StructuredGymBlockInput
+	gymExercises      []dbgen.CreateGymExerciseParams
+	waterBlocks       []StructuredWaterBlockInput
+	waterSteps        []dbgen.CreateWaterWorkStepParams
+	waterProfiles     []dbgen.CreateWaterIntensityProfileParams
+	waterZones        []dbgen.CreateWaterIntensityZoneParams
+	planID            uuid.UUID
+	movedSegments     []dbgen.MoveTrainingSessionSegmentParams
+	movedBlocks       []dbgen.MoveTrainingSegmentBlockParams
+	movedExercises    []dbgen.MoveGymExerciseParams
+	routineSource     StructuredRoutineSource
+	createdRoutines   []dbgen.CreateTrainingRoutineParams
+	visibleRoutine    dbgen.TrainingRoutine
+	insertedRoutines  []StructuredRoutineInsertInput
+	copiedBlocks      [][3]uuid.UUID
+	variationInputs   []dbgen.CreateTrainingVariationParams
+	prescriptionLinks []dbgen.ListTrainingPrescriptionLinksForSessionViewerRow
+	prescriptionRow   dbgen.GetTrainingPrescriptionForViewerRow
+	prescriptionErr   error
+	copiedSessions    []struct {
 		SourceID, TargetID, ActorID uuid.UUID
 		StartsAt                    pgtype.Timestamptz
 	}
@@ -184,6 +188,14 @@ func (s *structuredTrainingStoreStub) CopyTrainingSession(_ context.Context, sou
 		StartsAt                    pgtype.Timestamptz
 	}{sourceID, targetID, actorID, startsAt})
 	return uuid.New(), nil
+}
+
+func (s *structuredTrainingStoreStub) ListTrainingPrescriptionLinksForSessionViewer(context.Context, dbgen.ListTrainingPrescriptionLinksForSessionViewerParams) ([]dbgen.ListTrainingPrescriptionLinksForSessionViewerRow, error) {
+	return s.prescriptionLinks, nil
+}
+
+func (s *structuredTrainingStoreStub) GetTrainingPrescriptionForViewer(context.Context, dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error) {
+	return s.prescriptionRow, s.prescriptionErr
 }
 
 func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
@@ -826,5 +838,90 @@ func TestCalculateWaterTotalsDoesNotInventMissingPace(t *testing.T) {
 	}
 	if totals[3].Label != "Tempo em R7" || totals[3].Value != "Desconhecido" {
 		t.Fatalf("intensity duration should stay unknown: %#v", totals[3])
+	}
+}
+
+func TestResolveStructuredPrescriptionAppliesAthleteOverrideAndPreservesGymValues(t *testing.T) {
+	planID, sessionID, membershipID := uuid.New(), uuid.New(), uuid.New()
+	segmentID, exerciseID := uuid.New(), uuid.New()
+	session := pages.StructuredTrainingSession{
+		ID: sessionID.String(), Modalities: []string{"GYM"},
+		Segments: []pages.StructuredTrainingSegment{{ID: segmentID.String(), Modality: "GYM", Blocks: []pages.StructuredTrainingBlock{{Exercises: []pages.StructuredGymExercise{{ID: exerciseID.String(), Name: "Supino", Sets: 4, Repetitions: 10, RecoverySeconds: 90, Prescription: "4 × 10 · recuperação 90 s"}}}}}},
+	}
+	rows := []dbgen.ListTrainingVariationMatchesForManagerRow{
+		{PlanID: planID, SessionID: sessionID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindGYMEXERCISE, SubjectID: exerciseID, SubjectLabel: "Supino", Operation: dbgen.TrainingVariationOperationOVERRIDE, ChangeSummary: "Carga do subgrupo", Patch: []byte(`{"sets":3}`), Priority: 1},
+		{PlanID: planID, SessionID: sessionID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindGYMEXERCISE, SubjectID: exerciseID, SubjectLabel: "Supino", Operation: dbgen.TrainingVariationOperationOVERRIDE, ChangeSummary: "Carga individual", Patch: []byte(`{"repetitions":8}`), Priority: 2},
+	}
+	if err := resolveStructuredPrescription(&session, rows, planID, sessionID, membershipID); err != nil {
+		t.Fatal(err)
+	}
+	exercise := session.Segments[0].Blocks[0].Exercises[0]
+	if exercise.Sets != 4 || exercise.Repetitions != 8 || exercise.RecoverySeconds != 90 {
+		t.Fatalf("override lost base gym values: %#v", exercise)
+	}
+	if exercise.Prescription != "4 séries · 8 repetições · recuperação 90 s" || len(session.Changes) != 1 || session.Changes[0].Summary != "Carga individual" {
+		t.Fatalf("resolved prescription = %#v changes=%#v", exercise, session.Changes)
+	}
+}
+
+func TestResolveStructuredPrescriptionRejectsPeerConflict(t *testing.T) {
+	planID, sessionID, membershipID, segmentID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	session := pages.StructuredTrainingSession{ID: sessionID.String(), Segments: []pages.StructuredTrainingSegment{{ID: segmentID.String(), Modality: "WATER"}}}
+	rows := []dbgen.ListTrainingVariationMatchesForManagerRow{
+		{PlanID: planID, SessionID: sessionID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: segmentID, Priority: 1},
+		{PlanID: planID, SessionID: sessionID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: segmentID, Priority: 1},
+	}
+	if !errors.Is(resolveStructuredPrescription(&session, rows, planID, sessionID, membershipID), errStructuredTrainingPublicationVariationConflict) {
+		t.Fatal("same-priority variations must block publication")
+	}
+}
+
+func TestApplyStructuredPrescriptionVariationOmitsOnlyTargetedElement(t *testing.T) {
+	sessionID, segmentID, keepID, omitID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	session := pages.StructuredTrainingSession{ID: sessionID.String(), Modalities: []string{"WATER"}, Segments: []pages.StructuredTrainingSegment{{ID: segmentID.String(), Modality: "WATER", Blocks: []pages.StructuredTrainingBlock{{WaterSteps: []pages.StructuredWaterStep{{ID: keepID.String(), Name: "Aquecimento"}, {ID: omitID.String(), Name: "Série"}}}}}}}
+	err := applyStructuredPrescriptionVariation(&session, dbgen.ListTrainingVariationMatchesForManagerRow{SubjectKind: dbgen.TrainingVariationSubjectKindWATERSTEP, SubjectID: omitID, SubjectLabel: "Série", Operation: dbgen.TrainingVariationOperationOMIT, ChangeSummary: "Retirar série"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := session.Segments[0].Blocks[0].WaterSteps
+	if len(steps) != 1 || steps[0].ID != keepID.String() || len(session.Changes) != 1 {
+		t.Fatalf("omit result = %#v changes=%#v", steps, session.Changes)
+	}
+}
+
+func TestPrescriptionForSessionRedirectsWithoutExposingAthleteIdentity(t *testing.T) {
+	prescriptionID, sessionID := uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{prescriptionLinks: []dbgen.ListTrainingPrescriptionLinksForSessionViewerRow{{ID: prescriptionID, AthleteName: "Atleta privado"}}}
+	handler := StructuredTraining{Store: store, System: System{}}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/sessoes/"+sessionID.String(), nil, "id", sessionID.String(), handler.PrescriptionForSession)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/treinos/prescricoes/"+prescriptionID.String() {
+		t.Fatalf("response=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+	if strings.Contains(response.Body.String(), "Atleta privado") {
+		t.Fatal("single-prescription redirect leaked the athlete name")
+	}
+}
+
+func TestPrescriptionForSessionLetsGuardianChooseAuthorizedMinor(t *testing.T) {
+	sessionID := uuid.New()
+	now := pgtype.Timestamptz{Time: time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC), Valid: true}
+	store := &structuredTrainingStoreStub{prescriptionLinks: []dbgen.ListTrainingPrescriptionLinksForSessionViewerRow{
+		{ID: uuid.New(), AthleteName: "Menor A", Revision: 2, PublishedAt: now},
+		{ID: uuid.New(), AthleteName: "Menor B", Revision: 2, PublishedAt: now},
+	}}
+	handler := StructuredTraining{Store: store, System: System{}, Location: time.UTC}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/sessoes/"+sessionID.String(), nil, "id", sessionID.String(), handler.PrescriptionForSession)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Menor A") || !strings.Contains(response.Body.String(), "Menor B") {
+		t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestPrescriptionDetailTreatsUnauthorizedAsNotFound(t *testing.T) {
+	prescriptionID := uuid.New()
+	store := &structuredTrainingStoreStub{prescriptionErr: pgx.ErrNoRows}
+	handler := StructuredTraining{Store: store, System: System{}}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/"+prescriptionID.String(), nil, "id", prescriptionID.String(), handler.PrescriptionDetail)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("response=%d", response.Code)
 	}
 }

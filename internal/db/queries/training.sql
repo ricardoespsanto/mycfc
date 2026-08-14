@@ -40,11 +40,22 @@ WHERE id = sqlc.arg(id)
 RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, status, replacement_session_id, replacement_reason, distance_metres)
-SELECT sqlc.arg(session_id), sqlc.arg(user_id), sqlc.arg(status)::training_outcome_status,
-       sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason), sqlc.narg(distance_metres)
+INSERT INTO training_session_outcomes (session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason, distance_metres)
+SELECT sqlc.arg(session_id), sqlc.arg(user_id), current_prescription.id,
+       sqlc.arg(status)::training_outcome_status, sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason), sqlc.narg(distance_metres)
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
+LEFT JOIN LATERAL (
+    SELECT prescription.id
+    FROM training_prescriptions prescription
+    JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+    WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id)
+      AND publication.id = (
+        SELECT current_publication.id FROM training_plan_publications current_publication
+        WHERE current_publication.plan_id = p.id
+        ORDER BY current_publication.revision DESC LIMIT 1
+      )
+) current_prescription ON true
 WHERE s.id = sqlc.arg(session_id)
   AND s.status = 'ACTIVE'
   AND EXISTS (
@@ -69,6 +80,7 @@ WHERE s.id = sqlc.arg(session_id)
   )
 ON CONFLICT (session_id, user_id) DO UPDATE SET
     status = EXCLUDED.status,
+    prescription_id = COALESCE(training_session_outcomes.prescription_id, EXCLUDED.prescription_id),
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
     distance_metres = EXCLUDED.distance_metres,
@@ -76,7 +88,13 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
 
 -- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres
+       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres,
+       EXISTS (
+         SELECT 1 FROM training_prescriptions prescription
+         JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+         WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id)
+           AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
+       ) AS prescription_available
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
@@ -91,7 +109,15 @@ ORDER BY s.starts_at DESC, s.id DESC LIMIT sqlc.arg(row_limit);
 
 -- name: ListUpcomingTrainingSessionsForDashboard :many
 SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason
+       s.status, s.cancellation_reason,
+       EXISTS (
+         SELECT 1 FROM training_prescriptions prescription
+         JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+         JOIN users prescribed_athlete ON prescribed_athlete.id = prescription.athlete_user_id
+         WHERE prescription.session_id = s.id
+           AND (prescribed_athlete.id = sqlc.arg(user_id) OR (prescribed_athlete.guardian_id = sqlc.arg(user_id) AND prescribed_athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
+           AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
+       ) AS prescription_available
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id

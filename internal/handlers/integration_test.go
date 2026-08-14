@@ -5,7 +5,9 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -676,6 +678,155 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 		if !strings.Contains(joined, action) {
 			t.Fatalf("audit actions = %v, missing %s", actions, action)
 		}
+	}
+}
+
+func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	store := PostgresStructuredTrainingStore{Pool: pool}
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorID, guardianID, athleteID, outsiderID, seasonID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	users := []struct {
+		id, guardian uuid.UUID
+		name, birth  string
+	}{
+		{actorID, uuid.Nil, "Treinador publicação", "1985-01-01"},
+		{guardianID, uuid.Nil, "Tutor publicação", "1980-01-01"},
+		{athleteID, guardianID, "Atleta menor publicação", "2012-01-01"},
+		{outsiderID, uuid.Nil, "Pessoa sem acesso", "1990-01-01"},
+	}
+	for _, user := range users {
+		if user.guardian != uuid.Nil {
+			if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, date_of_birth, guardian_id, is_dependent) VALUES ($1, $2, $3, $4, true)`, user.id, user.name, user.birth, user.guardian); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', $4)`, user.id, user.name, uuid.NewString()+"@example.test", user.birth); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	today := time.Now().UTC()
+	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época publicação', $3, $4)`, seasonID, "PUB_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Grupo publicação " + uuid.NewString()[:8], ProgrammeID: &programme.ID, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{GroupID: group.ID, Title: "Semana publicada", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startsAt := weekStart.Add(10 * time.Hour)
+	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{PlanID: week.ID, Title: "Água publicada", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants (user_id, capability, programme_id, granted_by_id) VALUES ($1, 'COACH', $2, $1)`, actorID, programme.ID); err != nil {
+		t.Fatal(err)
+	}
+	readSource := func() pgtype.Timestamptz {
+		var value time.Time
+		if err := pool.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id = $1`, week.ID).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return pgtype.Timestamptz{Time: value, Valid: true}
+	}
+	publish := func(source pgtype.Timestamptz, summary string, snapshot []byte) dbgen.TrainingPlanPublication {
+		sum := sha256.Sum256(snapshot)
+		publication, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: source, ChangeSummary: summary, PublishedByID: actorID, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership.ID, AthleteUserID: athleteID, Snapshot: snapshot, SnapshotSHA256: hex.EncodeToString(sum[:])}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return publication
+	}
+	snapshot1 := []byte(`{"schema_version":1,"session":{"title":"Versão um"}}`)
+	publication1 := publish(readSource(), "Publicação inicial", snapshot1)
+	if publication1.Revision != 1 {
+		t.Fatalf("first revision = %d", publication1.Revision)
+	}
+	if rows, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: session.ID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); err != nil || rows != 1 {
+		t.Fatalf("save outcome rows=%d err=%v", rows, err)
+	}
+	var firstPrescriptionID, outcomePrescriptionID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM training_prescriptions WHERE publication_id = $1`, publication1.ID).Scan(&firstPrescriptionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
+		t.Fatalf("outcome prescription=%s want=%s err=%v", outcomePrescriptionID, firstPrescriptionID, err)
+	}
+	staleSource := readSource()
+	if _, err := pool.Exec(ctx, `UPDATE training_sessions SET title = 'Água republicada' WHERE id = $1`, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: staleSource, ChangeSummary: "Versão obsoleta", PublishedByID: actorID}); !errors.Is(err, errStructuredTrainingPublicationConflict) {
+		t.Fatalf("stale publication err=%v", err)
+	}
+	snapshot2 := []byte(`{"schema_version":1,"session":{"title":"Versão dois"}}`)
+	publication2 := publish(readSource(), "Ajuste da carga", snapshot2)
+	if publication2.Revision != 2 || publication2.SupersedesID == nil || *publication2.SupersedesID != publication1.ID {
+		t.Fatalf("second publication = %#v", publication2)
+	}
+	for _, viewer := range []struct {
+		id      uuid.UUID
+		admin   bool
+		minimum int
+	}{{athleteID, false, 2}, {guardianID, false, 2}, {actorID, false, 2}, {outsiderID, false, 0}} {
+		rows, err := queries.ListTrainingPrescriptionsForViewer(ctx, dbgen.ListTrainingPrescriptionsForViewerParams{UserID: viewer.id, IsAdmin: viewer.admin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, row := range rows {
+			if row.PlanID == week.ID {
+				count++
+			}
+		}
+		if count != viewer.minimum {
+			t.Fatalf("viewer %s received %d publication rows, want %d", viewer.id, count, viewer.minimum)
+		}
+	}
+	oldRow, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false})
+	if err != nil || !strings.Contains(string(oldRow.Snapshot), `"Versão um"`) || oldRow.IsCurrent {
+		t.Fatalf("historical snapshot changed or hidden: row=%#v err=%v", oldRow, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE training_prescriptions SET snapshot = '{"changed":true}' WHERE id = $1`, firstPrescriptionID); err == nil {
+		t.Fatal("immutable prescription accepted an update")
+	}
+	beforeMembershipChange := readSource()
+	if _, err := pool.Exec(ctx, `UPDATE user_memberships SET ends_on = $2 WHERE id = $1`, membership.ID, weekStart.AddDate(0, 0, -1)); err != nil {
+		t.Fatal(err)
+	}
+	afterMembershipChange := readSource()
+	if !afterMembershipChange.Time.After(beforeMembershipChange.Time) {
+		t.Fatal("membership eligibility change did not invalidate the publication source version")
+	}
+	sum := sha256.Sum256(snapshot2)
+	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: afterMembershipChange, ChangeSummary: "Destinatário já inelegível", PublishedByID: actorID, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership.ID, AthleteUserID: athleteID, Snapshot: snapshot2, SnapshotSHA256: hex.EncodeToString(sum[:])}}}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ineligible prescription publication err=%v", err)
+	}
+	var publicationCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_plan_publications WHERE plan_id = $1`, week.ID).Scan(&publicationCount); err != nil || publicationCount != 2 {
+		t.Fatalf("ineligible publication did not roll back: count=%d err=%v", publicationCount, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM training_group_members WHERE group_id = $1 AND membership_id = $2`, group.ID, membership.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false}); err != nil {
+		t.Fatalf("historical prescription disappeared after group change: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
+		t.Fatalf("outcome lineage moved after republish: %s err=%v", outcomePrescriptionID, err)
 	}
 }
 
