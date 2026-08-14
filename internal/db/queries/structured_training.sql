@@ -733,3 +733,181 @@ WHERE variation.is_active
   )
 ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
          targets.priority DESC, variation.created_at, variation.id;
+
+-- name: ListManagedTrainingPublicationStates :many
+SELECT plan.id, plan.title, plan.updated_at AS source_updated_at,
+       COALESCE(latest.revision, 0)::integer AS published_revision,
+       latest.published_at, publisher.name AS published_by_name,
+       (latest.source_updated_at IS NOT NULL AND latest.source_updated_at = plan.updated_at) AS publication_current
+FROM training_plans plan
+LEFT JOIN LATERAL (
+ SELECT publication.revision, publication.source_updated_at, publication.published_at, publication.published_by_id
+ FROM training_plan_publications publication
+ WHERE publication.plan_id = plan.id
+ ORDER BY publication.revision DESC
+ LIMIT 1
+) latest ON true
+LEFT JOIN users publisher ON publisher.id = latest.published_by_id
+WHERE plan.training_group_id IS NOT NULL
+  AND (sqlc.arg(is_admin)::boolean OR EXISTS (
+    SELECT 1 FROM staff_grants grant_row
+    WHERE grant_row.user_id = sqlc.arg(user_id)
+      AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+      AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+  ))
+ORDER BY plan.week_start DESC, plan.id;
+
+-- name: ListStructuredTrainingPublicationMembers :many
+SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
+       subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
+FROM training_plans plan
+JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active
+JOIN training_sessions session ON session.plan_id = plan.id
+WHERE plan.id = sqlc.arg(plan_id)
+  AND (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date >= membership.starts_on
+  AND (membership.ends_on IS NULL OR (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date <= membership.ends_on)
+ORDER BY subject.name, membership.id, session.id;
+
+-- name: LockStructuredTrainingPlanForPublication :one
+SELECT plan.id, plan.updated_at,
+       COALESCE(latest.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_publication_id,
+       COALESCE(latest.revision, 0)::integer AS latest_revision
+FROM training_plans plan
+LEFT JOIN LATERAL (
+ SELECT publication.id, publication.revision
+ FROM training_plan_publications publication
+ WHERE publication.plan_id = plan.id
+ ORDER BY publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL
+FOR UPDATE OF plan;
+
+-- name: CreateTrainingPlanPublication :one
+INSERT INTO training_plan_publications (
+ plan_id, revision, source_updated_at, change_summary, supersedes_id, published_by_id
+) VALUES (
+ sqlc.arg(plan_id), sqlc.arg(revision), sqlc.arg(source_updated_at), sqlc.arg(change_summary),
+ sqlc.narg(supersedes_id), sqlc.arg(published_by_id)
+)
+RETURNING id, plan_id, revision, source_updated_at, change_summary, supersedes_id, published_by_id, published_at;
+
+-- name: CreateTrainingPrescription :one
+INSERT INTO training_prescriptions (
+ publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256
+) SELECT sqlc.arg(publication_id), session.id, membership.id, athlete.id,
+         sqlc.arg(snapshot), sqlc.arg(snapshot_sha256)
+FROM training_plan_publications publication
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN training_sessions session ON session.id = sqlc.arg(session_id) AND session.plan_id = plan.id
+JOIN user_memberships membership ON membership.id = sqlc.arg(membership_id) AND membership.user_id = sqlc.arg(athlete_user_id)
+JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
+JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id AND group_member.membership_id = membership.id
+WHERE publication.id = sqlc.arg(publication_id)
+  AND membership.starts_on <= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+  AND (membership.ends_on IS NULL OR membership.ends_on >= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date)
+RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at;
+
+-- name: ListTrainingPrescriptionsForViewer :many
+SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
+       publication.revision, publication.change_summary, publication.published_at,
+       publisher.name AS published_by_name, prescription.snapshot,
+       publication.id = latest.id AS is_current
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN seasons season ON season.id = plan.season_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+JOIN users publisher ON publisher.id = publication.published_by_id
+JOIN LATERAL (
+ SELECT current_publication.id
+ FROM training_plan_publications current_publication
+ WHERE current_publication.plan_id = publication.plan_id
+ ORDER BY current_publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE (
+    athlete.id = sqlc.arg(user_id)
+    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR sqlc.arg(is_admin)::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = sqlc.arg(user_id)
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  )
+ORDER BY publication.published_at DESC, athlete.name, prescription.session_id, prescription.id;
+
+-- name: ListLatestTrainingPrescriptionHashesForPlan :many
+SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+WHERE publication.plan_id = sqlc.arg(plan_id)
+  AND publication.revision = (
+    SELECT max(current_publication.revision)
+    FROM training_plan_publications current_publication
+    WHERE current_publication.plan_id = sqlc.arg(plan_id)
+  )
+ORDER BY prescription.membership_id, prescription.session_id;
+
+-- name: GetTrainingPrescriptionForViewer :one
+SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
+       publication.revision, publication.change_summary, publication.published_at,
+       publisher.name AS published_by_name, prescription.snapshot,
+       publication.id = latest.id AS is_current
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN seasons season ON season.id = plan.season_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+JOIN users publisher ON publisher.id = publication.published_by_id
+JOIN LATERAL (
+ SELECT current_publication.id
+ FROM training_plan_publications current_publication
+ WHERE current_publication.plan_id = publication.plan_id
+ ORDER BY current_publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE prescription.id = sqlc.arg(id)
+  AND (
+    athlete.id = sqlc.arg(user_id)
+    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR sqlc.arg(is_admin)::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = sqlc.arg(user_id)
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  );
+
+-- name: ListTrainingPrescriptionLinksForSessionViewer :many
+SELECT prescription.id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.revision, publication.published_at
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+WHERE prescription.session_id = sqlc.arg(session_id)
+  AND publication.id = (
+    SELECT current_publication.id FROM training_plan_publications current_publication
+    WHERE current_publication.plan_id = publication.plan_id
+    ORDER BY current_publication.revision DESC LIMIT 1
+  )
+  AND (
+    athlete.id = sqlc.arg(user_id)
+    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR sqlc.arg(is_admin)::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = sqlc.arg(user_id)
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  )
+ORDER BY athlete.name, prescription.id;

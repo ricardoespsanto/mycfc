@@ -374,6 +374,97 @@ func (q *Queries) CreateTrainingCopyEvent(ctx context.Context, arg CreateTrainin
 	return err
 }
 
+const createTrainingPlanPublication = `-- name: CreateTrainingPlanPublication :one
+INSERT INTO training_plan_publications (
+ plan_id, revision, source_updated_at, change_summary, supersedes_id, published_by_id
+) VALUES (
+ $1, $2, $3, $4,
+ $5, $6
+)
+RETURNING id, plan_id, revision, source_updated_at, change_summary, supersedes_id, published_by_id, published_at
+`
+
+type CreateTrainingPlanPublicationParams struct {
+	PlanID          uuid.UUID          `json:"plan_id"`
+	Revision        int32              `json:"revision"`
+	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
+	ChangeSummary   string             `json:"change_summary"`
+	SupersedesID    *uuid.UUID         `json:"supersedes_id"`
+	PublishedByID   uuid.UUID          `json:"published_by_id"`
+}
+
+func (q *Queries) CreateTrainingPlanPublication(ctx context.Context, arg CreateTrainingPlanPublicationParams) (TrainingPlanPublication, error) {
+	row := q.db.QueryRow(ctx, createTrainingPlanPublication,
+		arg.PlanID,
+		arg.Revision,
+		arg.SourceUpdatedAt,
+		arg.ChangeSummary,
+		arg.SupersedesID,
+		arg.PublishedByID,
+	)
+	var i TrainingPlanPublication
+	err := row.Scan(
+		&i.ID,
+		&i.PlanID,
+		&i.Revision,
+		&i.SourceUpdatedAt,
+		&i.ChangeSummary,
+		&i.SupersedesID,
+		&i.PublishedByID,
+		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const createTrainingPrescription = `-- name: CreateTrainingPrescription :one
+INSERT INTO training_prescriptions (
+ publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256
+) SELECT $1, session.id, membership.id, athlete.id,
+         $2, $3
+FROM training_plan_publications publication
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN training_sessions session ON session.id = $4 AND session.plan_id = plan.id
+JOIN user_memberships membership ON membership.id = $5 AND membership.user_id = $6
+JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
+JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id AND group_member.membership_id = membership.id
+WHERE publication.id = $1
+  AND membership.starts_on <= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+  AND (membership.ends_on IS NULL OR membership.ends_on >= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date)
+RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at
+`
+
+type CreateTrainingPrescriptionParams struct {
+	PublicationID  uuid.UUID `json:"publication_id"`
+	Snapshot       []byte    `json:"snapshot"`
+	SnapshotSha256 string    `json:"snapshot_sha256"`
+	SessionID      uuid.UUID `json:"session_id"`
+	MembershipID   uuid.UUID `json:"membership_id"`
+	AthleteUserID  uuid.UUID `json:"athlete_user_id"`
+}
+
+func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (TrainingPrescription, error) {
+	row := q.db.QueryRow(ctx, createTrainingPrescription,
+		arg.PublicationID,
+		arg.Snapshot,
+		arg.SnapshotSha256,
+		arg.SessionID,
+		arg.MembershipID,
+		arg.AthleteUserID,
+	)
+	var i TrainingPrescription
+	err := row.Scan(
+		&i.ID,
+		&i.PublicationID,
+		&i.SessionID,
+		&i.MembershipID,
+		&i.AthleteUserID,
+		&i.Snapshot,
+		&i.SnapshotSha256,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createTrainingRoutine = `-- name: CreateTrainingRoutine :one
 INSERT INTO training_routines (name, description, kind, visibility, owner_user_id, programme_id, team_id,
                                modality, objective, method, tags, source_id, source_updated_at, snapshot)
@@ -1062,6 +1153,84 @@ func (q *Queries) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid
 	return plan_id, err
 }
 
+const getTrainingPrescriptionForViewer = `-- name: GetTrainingPrescriptionForViewer :one
+SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
+       publication.revision, publication.change_summary, publication.published_at,
+       publisher.name AS published_by_name, prescription.snapshot,
+       publication.id = latest.id AS is_current
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN seasons season ON season.id = plan.season_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+JOIN users publisher ON publisher.id = publication.published_by_id
+JOIN LATERAL (
+ SELECT current_publication.id
+ FROM training_plan_publications current_publication
+ WHERE current_publication.plan_id = publication.plan_id
+ ORDER BY current_publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE prescription.id = $1
+  AND (
+    athlete.id = $2
+    OR (athlete.guardian_id = $2 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR $3::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = $2
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  )
+`
+
+type GetTrainingPrescriptionForViewerParams struct {
+	ID      uuid.UUID `json:"id"`
+	UserID  uuid.UUID `json:"user_id"`
+	IsAdmin bool      `json:"is_admin"`
+}
+
+type GetTrainingPrescriptionForViewerRow struct {
+	ID              uuid.UUID          `json:"id"`
+	SessionID       uuid.UUID          `json:"session_id"`
+	AthleteUserID   uuid.UUID          `json:"athlete_user_id"`
+	AthleteName     string             `json:"athlete_name"`
+	PlanID          uuid.UUID          `json:"plan_id"`
+	PlanTitle       string             `json:"plan_title"`
+	WeekStart       pgtype.Date        `json:"week_start"`
+	SeasonName      string             `json:"season_name"`
+	Revision        int32              `json:"revision"`
+	ChangeSummary   string             `json:"change_summary"`
+	PublishedAt     pgtype.Timestamptz `json:"published_at"`
+	PublishedByName string             `json:"published_by_name"`
+	Snapshot        []byte             `json:"snapshot"`
+	IsCurrent       bool               `json:"is_current"`
+}
+
+func (q *Queries) GetTrainingPrescriptionForViewer(ctx context.Context, arg GetTrainingPrescriptionForViewerParams) (GetTrainingPrescriptionForViewerRow, error) {
+	row := q.db.QueryRow(ctx, getTrainingPrescriptionForViewer, arg.ID, arg.UserID, arg.IsAdmin)
+	var i GetTrainingPrescriptionForViewerRow
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.AthleteUserID,
+		&i.AthleteName,
+		&i.PlanID,
+		&i.PlanTitle,
+		&i.WeekStart,
+		&i.SeasonName,
+		&i.Revision,
+		&i.ChangeSummary,
+		&i.PublishedAt,
+		&i.PublishedByName,
+		&i.Snapshot,
+		&i.IsCurrent,
+	)
+	return i, err
+}
+
 const getTrainingVariationPlanID = `-- name: GetTrainingVariationPlanID :one
 SELECT plan_id FROM training_variations WHERE id = $1
 `
@@ -1237,6 +1406,45 @@ func (q *Queries) ListEligibleTrainingGroupMemberships(ctx context.Context, arg 
 	return items, nil
 }
 
+const listLatestTrainingPrescriptionHashesForPlan = `-- name: ListLatestTrainingPrescriptionHashesForPlan :many
+SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+WHERE publication.plan_id = $1
+  AND publication.revision = (
+    SELECT max(current_publication.revision)
+    FROM training_plan_publications current_publication
+    WHERE current_publication.plan_id = $1
+  )
+ORDER BY prescription.membership_id, prescription.session_id
+`
+
+type ListLatestTrainingPrescriptionHashesForPlanRow struct {
+	MembershipID   uuid.UUID `json:"membership_id"`
+	SessionID      uuid.UUID `json:"session_id"`
+	SnapshotSha256 string    `json:"snapshot_sha256"`
+}
+
+func (q *Queries) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error) {
+	rows, err := q.db.Query(ctx, listLatestTrainingPrescriptionHashesForPlan, planID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLatestTrainingPrescriptionHashesForPlanRow{}
+	for rows.Next() {
+		var i ListLatestTrainingPrescriptionHashesForPlanRow
+		if err := rows.Scan(&i.MembershipID, &i.SessionID, &i.SnapshotSha256); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listManagedStructuredCompetitionEvents = `-- name: ListManagedStructuredCompetitionEvents :many
 SELECT event_row.id, event_row.title, event_row.starts_at
 FROM events event_row
@@ -1337,6 +1545,73 @@ func (q *Queries) ListManagedTrainingGroupMembers(ctx context.Context, arg ListM
 			&i.TrainingGroupName,
 			&i.MembershipID,
 			&i.AthleteName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingPublicationStates = `-- name: ListManagedTrainingPublicationStates :many
+SELECT plan.id, plan.title, plan.updated_at AS source_updated_at,
+       COALESCE(latest.revision, 0)::integer AS published_revision,
+       latest.published_at, publisher.name AS published_by_name,
+       (latest.source_updated_at IS NOT NULL AND latest.source_updated_at = plan.updated_at) AS publication_current
+FROM training_plans plan
+LEFT JOIN LATERAL (
+ SELECT publication.revision, publication.source_updated_at, publication.published_at, publication.published_by_id
+ FROM training_plan_publications publication
+ WHERE publication.plan_id = plan.id
+ ORDER BY publication.revision DESC
+ LIMIT 1
+) latest ON true
+LEFT JOIN users publisher ON publisher.id = latest.published_by_id
+WHERE plan.training_group_id IS NOT NULL
+  AND ($1::boolean OR EXISTS (
+    SELECT 1 FROM staff_grants grant_row
+    WHERE grant_row.user_id = $2
+      AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+      AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+  ))
+ORDER BY plan.week_start DESC, plan.id
+`
+
+type ListManagedTrainingPublicationStatesParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingPublicationStatesRow struct {
+	ID                 uuid.UUID          `json:"id"`
+	Title              string             `json:"title"`
+	SourceUpdatedAt    pgtype.Timestamptz `json:"source_updated_at"`
+	PublishedRevision  int32              `json:"published_revision"`
+	PublishedAt        pgtype.Timestamptz `json:"published_at"`
+	PublishedByName    *string            `json:"published_by_name"`
+	PublicationCurrent *bool              `json:"publication_current"`
+}
+
+func (q *Queries) ListManagedTrainingPublicationStates(ctx context.Context, arg ListManagedTrainingPublicationStatesParams) ([]ListManagedTrainingPublicationStatesRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingPublicationStates, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingPublicationStatesRow{}
+	for rows.Next() {
+		var i ListManagedTrainingPublicationStatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.SourceUpdatedAt,
+			&i.PublishedRevision,
+			&i.PublishedAt,
+			&i.PublishedByName,
+			&i.PublicationCurrent,
 		); err != nil {
 			return nil, err
 		}
@@ -2031,6 +2306,218 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 	return items, nil
 }
 
+const listStructuredTrainingPublicationMembers = `-- name: ListStructuredTrainingPublicationMembers :many
+SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
+       subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
+FROM training_plans plan
+JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active
+JOIN training_sessions session ON session.plan_id = plan.id
+WHERE plan.id = $1
+  AND (session.starts_at AT TIME ZONE $2::text)::date >= membership.starts_on
+  AND (membership.ends_on IS NULL OR (session.starts_at AT TIME ZONE $2::text)::date <= membership.ends_on)
+ORDER BY subject.name, membership.id, session.id
+`
+
+type ListStructuredTrainingPublicationMembersParams struct {
+	PlanID   uuid.UUID `json:"plan_id"`
+	TimeZone string    `json:"time_zone"`
+}
+
+type ListStructuredTrainingPublicationMembersRow struct {
+	MembershipID  uuid.UUID   `json:"membership_id"`
+	AthleteUserID uuid.UUID   `json:"athlete_user_id"`
+	AthleteName   string      `json:"athlete_name"`
+	StartsOn      pgtype.Date `json:"starts_on"`
+	EndsOn        pgtype.Date `json:"ends_on"`
+	SessionID     uuid.UUID   `json:"session_id"`
+}
+
+func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, arg ListStructuredTrainingPublicationMembersParams) ([]ListStructuredTrainingPublicationMembersRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredTrainingPublicationMembers, arg.PlanID, arg.TimeZone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStructuredTrainingPublicationMembersRow{}
+	for rows.Next() {
+		var i ListStructuredTrainingPublicationMembersRow
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.AthleteUserID,
+			&i.AthleteName,
+			&i.StartsOn,
+			&i.EndsOn,
+			&i.SessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingPrescriptionLinksForSessionViewer = `-- name: ListTrainingPrescriptionLinksForSessionViewer :many
+SELECT prescription.id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.revision, publication.published_at
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+WHERE prescription.session_id = $1
+  AND publication.id = (
+    SELECT current_publication.id FROM training_plan_publications current_publication
+    WHERE current_publication.plan_id = publication.plan_id
+    ORDER BY current_publication.revision DESC LIMIT 1
+  )
+  AND (
+    athlete.id = $2
+    OR (athlete.guardian_id = $2 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR $3::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = $2
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  )
+ORDER BY athlete.name, prescription.id
+`
+
+type ListTrainingPrescriptionLinksForSessionViewerParams struct {
+	SessionID uuid.UUID `json:"session_id"`
+	UserID    uuid.UUID `json:"user_id"`
+	IsAdmin   bool      `json:"is_admin"`
+}
+
+type ListTrainingPrescriptionLinksForSessionViewerRow struct {
+	ID            uuid.UUID          `json:"id"`
+	AthleteUserID uuid.UUID          `json:"athlete_user_id"`
+	AthleteName   string             `json:"athlete_name"`
+	Revision      int32              `json:"revision"`
+	PublishedAt   pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) ListTrainingPrescriptionLinksForSessionViewer(ctx context.Context, arg ListTrainingPrescriptionLinksForSessionViewerParams) ([]ListTrainingPrescriptionLinksForSessionViewerRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingPrescriptionLinksForSessionViewer, arg.SessionID, arg.UserID, arg.IsAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingPrescriptionLinksForSessionViewerRow{}
+	for rows.Next() {
+		var i ListTrainingPrescriptionLinksForSessionViewerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AthleteUserID,
+			&i.AthleteName,
+			&i.Revision,
+			&i.PublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrainingPrescriptionsForViewer = `-- name: ListTrainingPrescriptionsForViewer :many
+SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, athlete.name AS athlete_name,
+       publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
+       publication.revision, publication.change_summary, publication.published_at,
+       publisher.name AS published_by_name, prescription.snapshot,
+       publication.id = latest.id AS is_current
+FROM training_prescriptions prescription
+JOIN training_plan_publications publication ON publication.id = prescription.publication_id
+JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN seasons season ON season.id = plan.season_id
+JOIN users athlete ON athlete.id = prescription.athlete_user_id
+JOIN users publisher ON publisher.id = publication.published_by_id
+JOIN LATERAL (
+ SELECT current_publication.id
+ FROM training_plan_publications current_publication
+ WHERE current_publication.plan_id = publication.plan_id
+ ORDER BY current_publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE (
+    athlete.id = $1
+    OR (athlete.guardian_id = $1 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR $2::boolean
+    OR EXISTS (
+      SELECT 1 FROM staff_grants grant_row
+      WHERE grant_row.user_id = $1
+        AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
+        AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
+    )
+  )
+ORDER BY publication.published_at DESC, athlete.name, prescription.session_id, prescription.id
+`
+
+type ListTrainingPrescriptionsForViewerParams struct {
+	UserID  uuid.UUID `json:"user_id"`
+	IsAdmin bool      `json:"is_admin"`
+}
+
+type ListTrainingPrescriptionsForViewerRow struct {
+	ID              uuid.UUID          `json:"id"`
+	SessionID       uuid.UUID          `json:"session_id"`
+	AthleteUserID   uuid.UUID          `json:"athlete_user_id"`
+	AthleteName     string             `json:"athlete_name"`
+	PlanID          uuid.UUID          `json:"plan_id"`
+	PlanTitle       string             `json:"plan_title"`
+	WeekStart       pgtype.Date        `json:"week_start"`
+	SeasonName      string             `json:"season_name"`
+	Revision        int32              `json:"revision"`
+	ChangeSummary   string             `json:"change_summary"`
+	PublishedAt     pgtype.Timestamptz `json:"published_at"`
+	PublishedByName string             `json:"published_by_name"`
+	Snapshot        []byte             `json:"snapshot"`
+	IsCurrent       bool               `json:"is_current"`
+}
+
+func (q *Queries) ListTrainingPrescriptionsForViewer(ctx context.Context, arg ListTrainingPrescriptionsForViewerParams) ([]ListTrainingPrescriptionsForViewerRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingPrescriptionsForViewer, arg.UserID, arg.IsAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingPrescriptionsForViewerRow{}
+	for rows.Next() {
+		var i ListTrainingPrescriptionsForViewerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.AthleteUserID,
+			&i.AthleteName,
+			&i.PlanID,
+			&i.PlanTitle,
+			&i.WeekStart,
+			&i.SeasonName,
+			&i.Revision,
+			&i.ChangeSummary,
+			&i.PublishedAt,
+			&i.PublishedByName,
+			&i.Snapshot,
+			&i.IsCurrent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrainingVariationMatchesForManager = `-- name: ListTrainingVariationMatchesForManager :many
 WITH subject_details AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
@@ -2294,6 +2781,41 @@ func (q *Queries) ListVisibleTrainingRoutines(ctx context.Context, arg ListVisib
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockStructuredTrainingPlanForPublication = `-- name: LockStructuredTrainingPlanForPublication :one
+SELECT plan.id, plan.updated_at,
+       COALESCE(latest.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_publication_id,
+       COALESCE(latest.revision, 0)::integer AS latest_revision
+FROM training_plans plan
+LEFT JOIN LATERAL (
+ SELECT publication.id, publication.revision
+ FROM training_plan_publications publication
+ WHERE publication.plan_id = plan.id
+ ORDER BY publication.revision DESC
+ LIMIT 1
+) latest ON true
+WHERE plan.id = $1 AND plan.training_group_id IS NOT NULL
+FOR UPDATE OF plan
+`
+
+type LockStructuredTrainingPlanForPublicationRow struct {
+	ID                  uuid.UUID          `json:"id"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	LatestPublicationID uuid.UUID          `json:"latest_publication_id"`
+	LatestRevision      int32              `json:"latest_revision"`
+}
+
+func (q *Queries) LockStructuredTrainingPlanForPublication(ctx context.Context, planID uuid.UUID) (LockStructuredTrainingPlanForPublicationRow, error) {
+	row := q.db.QueryRow(ctx, lockStructuredTrainingPlanForPublication, planID)
+	var i LockStructuredTrainingPlanForPublicationRow
+	err := row.Scan(
+		&i.ID,
+		&i.UpdatedAt,
+		&i.LatestPublicationID,
+		&i.LatestRevision,
+	)
+	return i, err
 }
 
 const moveGymExercise = `-- name: MoveGymExercise :one

@@ -286,3 +286,23 @@ func TestReusableTrainingRoutinesExistInBaselineAndForwardMigration(t *testing.T
 		}
 	}
 }
+
+func TestTrainingPrescriptionPublicationExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608140002_training_prescriptions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"CREATE TABLE training_plan_publications", "CREATE TABLE training_prescriptions", "prescription_id uuid NULL REFERENCES training_prescriptions", "prevent_training_publication_mutation", "touch_structured_training_plan"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("publication migration does not contain %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("publication migration contains prohibited statement %q", prohibited)
+		}
+	}
+}

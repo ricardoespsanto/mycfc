@@ -1,0 +1,35 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type TrainingPrescriptionChoice struct {
+	ID, Athlete, PublishedAt string
+	Revision                 int
+}
+
+type TrainingPrescriptionChoicesPage struct {
+	Meta    components.PageMeta
+	Choices []TrainingPrescriptionChoice
+}
+
+templ TrainingPrescriptionChoices(page TrainingPrescriptionChoicesPage) {
+	@components.Base(page.Meta, trainingPrescriptionChoicesContent(page))
+}
+
+templ trainingPrescriptionChoicesContent(page TrainingPrescriptionChoicesPage) {
+	@components.PageHeader("Treino", "Escolher prescrição", "Esta sessão tem prescrições privadas para mais do que um atleta sob a sua responsabilidade.", nil)
+	@components.RecordList("Prescrições desta sessão") {
+		for _, choice := range page.Choices {
+			<li>
+				<div>
+					<strong>{ choice.Athlete }</strong>
+					<p>Revisão { fmt.Sprint(choice.Revision) } · publicada em { choice.PublishedAt }</p>
+				</div>
+				<a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/" + choice.ID) }>Abrir prescrição</a>
+			</li>
+		}
+	}
+}

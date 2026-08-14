@@ -27,10 +27,17 @@ type StructuredVariationPreview struct {
 	Conflict bool
 	Rules []StructuredVariationRule
 }
+type StructuredPublicationState struct {
+	PlanID, Plan, SourceUpdatedAt, Status, PublishedAt, PublishedBy string
+	Revision, AthleteCount, PrescriptionCount, ConflictCount, AddedCount, ChangedCount, RemovedCount, UnchangedCount int
+}
+type StructuredPrescriptionChange struct {
+	Subject, Operation, Summary, Fields string
+}
 
 type StructuredGymExercise struct {
 	ID, Name, Prescription, Resistance, Intent, Tempo, Notes string
-	Position                                                 int
+	Position, Sets, Repetitions, DurationSeconds, DistanceMetres, RecoverySeconds int
 }
 type StructuredWaterStep struct {
 	ID, ParentID, Kind, Name, Prescription, Intensity, Drill, Instructions string
@@ -58,9 +65,10 @@ type StructuredTrainingSegment struct {
 	Blocks                                                                []StructuredTrainingBlock
 }
 type StructuredTrainingSession struct {
-	ID, Title, Description, When, EntryKind string
+	ID, PrescriptionID, Title, Description, When, EntryKind string
 	Modalities                              []string
 	Segments                                []StructuredTrainingSegment
+	Changes                                 []StructuredPrescriptionChange
 }
 type StructuredTrainingWeek struct {
 	ID, Title, Description, Season, DateRange string
@@ -111,6 +119,7 @@ type StructuredTrainingPage struct {
 	VariationSubjects                                          []StructuredVariationSubjectChoice
 	VariationGroups                                            []StructuredVariationGroup
 	VariationPreviews                                          []StructuredVariationPreview
+	Publications                                               []StructuredPublicationState
 	CrewModalities, CompetitionEvents                          []StructuredTrainingChoice
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
@@ -136,6 +145,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
 				<a href="#training-plan">Plano semanal</a>
 				<a href="#training-variations">Variações</a>
+				<a href="#training-publication">Publicar</a>
 				<a href="#training-routines">Rotinas</a>
 				<a href="#training-copy-tools">Copiar conteúdo</a>
 				if page.CanManageWaterProfiles {
@@ -198,6 +208,23 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 											<div id={ "session-content-" + session.ID } class="training-card__body">
 												if session.Description != "" {
 													<p>{ session.Description }</p>
+												}
+												if len(session.Changes) > 0 {
+													<div class="notice notice--info" role="note">
+														<p><strong>Alterações aplicadas a esta prescrição</strong></p>
+														<ul>
+															for _, change := range session.Changes {
+																<li><strong>{ change.Operation } · { change.Subject }:</strong> { change.Summary }
+																	if change.Fields != "" {
+																		<span class="record-meta"> · { change.Fields }</span>
+																	}
+																</li>
+															}
+														</ul>
+													</div>
+												}
+												if session.PrescriptionID != "" {
+													<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/" + session.PrescriptionID) }>Abrir esta revisão da prescrição</a></p>
 												}
 												if page.Management {
 													<details class="training-action-menu"><summary class="action action--quiet">Ações da sessão</summary><div class="training-actions">@structuredSaveRoutineForm(page, "SESSION", session.ID)
@@ -378,6 +405,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		</section>
 		if page.Management {
 			@structuredVariationManagement(page)
+			@structuredPublicationManagement(page)
 			@structuredRoutineLibrary(page)
 			@structuredCopyDayForm(page)
 			if page.CanManageWaterProfiles {
@@ -390,6 +418,45 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		@structuredWeekForm(page)
 		@structuredSessionForm(page)
 	}
+}
+
+templ structuredPublicationManagement(page StructuredTrainingPage) {
+	<section id="training-publication" class="module" aria-labelledby="training-publication-title" data-tab-panel>
+		@components.SectionHeading("", "Publicar prescrições privadas", "Confirme os destinatários e crie uma revisão imutável por atleta. Alterações posteriores ficam em rascunho até nova publicação.")
+		<div class="notice notice--info" role="note"><p>A publicação não envia dados de colegas, subgrupos ou tripulações. Cada atleta recebe apenas a sua sessão resolvida; tutores veem apenas menores atualmente a seu cargo.</p></div>
+		if len(page.Publications) == 0 {
+			@components.EmptyState("Ainda sem semanas publicáveis", "Crie uma semana estruturada com sessões e destinatários válidos.")
+		}
+		<div class="record-list">
+			for _, publication := range page.Publications {
+				<article class="record-item record-item--stacked"><div class="record-item__copy">
+					<p class="eyebrow">{ publication.Status }</p>
+					<h3>{ publication.Plan }</h3>
+					<p class="record-meta">{ fmt.Sprintf("%d atletas · %d prescrições", publication.AthleteCount, publication.PrescriptionCount) }
+						if publication.Revision > 0 {
+							<span> · revisão { fmt.Sprintf("%d", publication.Revision) } · { publication.PublishedAt } · { publication.PublishedBy }</span>
+						}
+					</p>
+					<p class="record-meta">{ fmt.Sprintf("Pré-visualização: %d novas · %d alteradas · %d removidas · %d sem alterações", publication.AddedCount, publication.ChangedCount, publication.RemovedCount, publication.UnchangedCount) }</p>
+					if publication.ConflictCount > 0 {
+						<div class="notice notice--error" role="alert"><p>{ fmt.Sprintf("%d conflitos de variação impedem a publicação.", publication.ConflictCount) }</p></div>
+					} else if publication.PrescriptionCount == 0 && publication.RemovedCount == 0 {
+						<p class="record-meta">Não existem sessões com destinatários válidos nesta semana.</p>
+					} else if publication.Revision > 0 && publication.AddedCount == 0 && publication.ChangedCount == 0 && publication.RemovedCount == 0 {
+						<p class="record-meta">Não há alterações materiais para publicar.</p>
+					} else {
+						<form class="form-layout form-layout--compact" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + publication.PlanID + "/publicar") }>
+							@page.CSRFField
+							<input type="hidden" name="source_updated_at" value={ publication.SourceUpdatedAt }/>
+							@components.FieldLabel("publication-summary-" + publication.PlanID, "Resumo desta revisão", true)
+							<input id={ "publication-summary-" + publication.PlanID } name="change_summary" required minlength="2" maxlength="500" placeholder="Ex.: semana publicada após revisão das variações"/>
+							<button type="submit">Pré-visualizado · publicar revisão</button>
+						</form>
+					}
+				</div></article>
+			}
+		</div>
+	</section>
 }
 
 templ structuredVariationManagement(page StructuredTrainingPage) {

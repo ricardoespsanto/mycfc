@@ -68,12 +68,16 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 				distanceInput = kilometreInput(*session.DistanceMetres)
 			}
 			cancelled := session.Status == "CANCELLED"
-			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput, Cancelled: cancelled, CancellationReason: stringValue(session.CancellationReason)})
+			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput, Cancelled: cancelled, CancellationReason: stringValue(session.CancellationReason), PrescriptionAvailable: session.PrescriptionAvailable})
 			calendarTitle, calendarKind := session.Title, "Treino"
 			if cancelled {
 				calendarTitle, calendarKind = "Cancelada: "+session.Title, "Cancelada"
 			}
-			calendarEntries = append(calendarEntries, calendarEntry{Title: calendarTitle, URL: "/treinos", Kind: calendarKind, StartsAt: session.StartsAt.Time})
+			calendarURL := "/treinos"
+			if session.PrescriptionAvailable {
+				calendarURL = "/treinos/prescricoes/sessoes/" + session.ID.String()
+			}
+			calendarEntries = append(calendarEntries, calendarEntry{Title: calendarTitle, URL: calendarURL, Kind: calendarKind, StartsAt: session.StartsAt.Time})
 		}
 		page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 	}
