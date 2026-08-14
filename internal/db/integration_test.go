@@ -689,6 +689,7 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = conn.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id IN (SELECT id FROM training_groups WHERE created_by_id = $1)`, actorID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM training_groups WHERE created_by_id = $1`, actorID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM water_intensity_profiles WHERE created_by_id = $1`, actorID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{athleteID, actorID, guardianID, unrelatedID})
@@ -742,8 +743,46 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if moved, err := queries.MoveGymExercise(ctx, dbgen.MoveGymExerciseParams{ExerciseID: secondExerciseID, Direction: -1}); err != nil || !moved {
 		t.Fatalf("move gym exercise = %t, err = %v", moved, err)
 	}
-	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: waterID, Purpose: dbgen.TrainingBlockPurposeMAIN, Instructions: "3x2' R4 / 1'"}); err != nil {
+	profile, err := queries.CreateWaterIntensityProfile(ctx, dbgen.CreateWaterIntensityProfileParams{Name: "Perfil integração", Craft: dbgen.PaddlingCraftKAYAK, Notes: "Limites do clube", CreatedByID: actorID})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := queries.CreateWaterIntensityZone(ctx, dbgen.CreateWaterIntensityZoneParams{ProfileID: profile.ID, Code: "R7", Label: "Ritmo de prova", Meaning: "Ritmo sustentável para a duração prescrita"}); err != nil {
+		t.Fatal(err)
+	}
+	waterBlockID, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: waterID, Purpose: dbgen.TrainingBlockPurposeMAIN, Instructions: "3x2' R7 / 1'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.CreateWaterBlockPrescription(ctx, dbgen.CreateWaterBlockPrescriptionParams{BlockID: waterBlockID, Method: dbgen.WaterWorkMethodINTERVALS, IntensityProfileID: &profile.ID}); err != nil || rows != 1 {
+		t.Fatalf("create water prescription rows = %d, err = %v", rows, err)
+	}
+	groupStepID, err := queries.CreateWaterWorkStep(ctx, dbgen.CreateWaterWorkStepParams{BlockID: waterBlockID, Kind: dbgen.WaterStepKindREPEATGROUP, Name: "Série", Repeats: int32PtrDB(3), RecoverySeconds: int32PtrDB(60), Instructions: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durationCertainty := dbgen.TrainingMeasureCertaintyEXACT
+	intensity := "R7"
+	if _, err := queries.CreateWaterWorkStep(ctx, dbgen.CreateWaterWorkStepParams{BlockID: waterBlockID, ParentStepID: &groupStepID, Kind: dbgen.WaterStepKindEFFORT, Name: "Ritmo de prova", DurationSeconds: int32PtrDB(120), DurationCertainty: &durationCertainty, IntensityCode: &intensity, Instructions: "Como uma prova de dois minutos"}); err != nil {
+		t.Fatal(err)
+	}
+	revisedProfile, err := queries.CreateWaterIntensityProfile(ctx, dbgen.CreateWaterIntensityProfileParams{Name: "Perfil integração", Craft: dbgen.PaddlingCraftKAYAK, Notes: "Revisão sem alterar o histórico", CreatedByID: actorID})
+	if err != nil || revisedProfile.Revision != 2 || revisedProfile.SupersedesID == nil || *revisedProfile.SupersedesID != profile.ID {
+		t.Fatalf("revised profile=%#v err=%v", revisedProfile, err)
+	}
+	var copiedZones int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM water_intensity_zones WHERE profile_id = $1`, revisedProfile.ID).Scan(&copiedZones); err != nil || copiedZones != 1 {
+		t.Fatalf("copied profile zones=%d err=%v", copiedZones, err)
+	}
+	if _, err := queries.CreateWaterIntensityZone(ctx, dbgen.CreateWaterIntensityZoneParams{ProfileID: revisedProfile.ID, Code: "R7", Label: "Ritmo de prova revisto", Meaning: "Ritmo sustentável revisto"}); err != nil {
+		t.Fatal(err)
+	}
+	var revisedMeaning, historicalMeaning string
+	if err := conn.QueryRow(ctx, `SELECT meaning FROM water_intensity_zones WHERE profile_id = $1 AND code = 'R7'`, revisedProfile.ID).Scan(&revisedMeaning); err != nil || revisedMeaning != "Ritmo sustentável revisto" {
+		t.Fatalf("revised zone meaning=%q err=%v", revisedMeaning, err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT meaning FROM water_intensity_zones WHERE profile_id = $1 AND code = 'R7'`, profile.ID).Scan(&historicalMeaning); err != nil || historicalMeaning != "Ritmo sustentável para a duração prescrita" {
+		t.Fatalf("historical zone meaning=%q err=%v", historicalMeaning, err)
 	}
 	if moved, err := queries.MoveTrainingSessionSegment(ctx, dbgen.MoveTrainingSessionSegmentParams{SegmentID: waterID, Direction: -1}); err != nil || !moved {
 		t.Fatalf("move water segment = %t, err = %v", moved, err)
@@ -751,17 +790,20 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 
 	for name, userID := range map[string]uuid.UUID{"athlete": athleteID, "guardian": guardianID} {
 		rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, userID)
-		if err != nil || len(rows) != 3 {
+		if err != nil || len(rows) != 4 {
 			t.Fatalf("%s rows = %d, err = %v", name, len(rows), err)
 		}
 		if rows[0].SegmentModality == nil || *rows[0].SegmentModality != dbgen.TrainingSegmentModalityWATER {
 			t.Fatalf("%s first segment = %#v", name, rows[0].SegmentModality)
 		}
-		if rows[1].ExerciseID == nil || *rows[1].ExerciseID != secondExerciseID || rows[2].ExerciseID == nil || *rows[2].ExerciseID != firstExerciseID {
-			t.Fatalf("%s exercise order = %#v, %#v", name, rows[1].ExerciseID, rows[2].ExerciseID)
+		if rows[0].WaterProfileName == nil || *rows[0].WaterProfileName != "Perfil integração" || rows[1].WaterZoneMeaning == nil || *rows[1].WaterZoneMeaning != "Ritmo sustentável para a duração prescrita" {
+			t.Fatalf("%s water profile metadata = %#v, %#v", name, rows[0].WaterProfileName, rows[1].WaterZoneMeaning)
 		}
-		if rows[1].PlannedStartOffsetMinutes == nil || *rows[1].PlannedStartOffsetMinutes != 0 || rows[1].EquipmentNotes == nil || *rows[1].EquipmentNotes != "Elásticos e halteres" {
-			t.Fatalf("%s gym metadata = offset %#v, equipment %#v", name, rows[1].PlannedStartOffsetMinutes, rows[1].EquipmentNotes)
+		if rows[2].ExerciseID == nil || *rows[2].ExerciseID != secondExerciseID || rows[3].ExerciseID == nil || *rows[3].ExerciseID != firstExerciseID {
+			t.Fatalf("%s exercise order = %#v, %#v", name, rows[2].ExerciseID, rows[3].ExerciseID)
+		}
+		if rows[2].PlannedStartOffsetMinutes == nil || *rows[2].PlannedStartOffsetMinutes != 0 || rows[2].EquipmentNotes == nil || *rows[2].EquipmentNotes != "Elásticos e halteres" {
+			t.Fatalf("%s gym metadata = offset %#v, equipment %#v", name, rows[2].PlannedStartOffsetMinutes, rows[2].EquipmentNotes)
 		}
 	}
 	rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, unrelatedID)

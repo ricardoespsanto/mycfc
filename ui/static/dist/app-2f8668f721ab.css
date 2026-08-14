@@ -391,6 +391,11 @@ html.js .create-panel[open] .disclosure__content { padding: var(--space-5) var(-
 .training-workspace { display: grid; gap: var(--space-4); }
 .training-workspace__tabs { position: sticky; z-index: 8; inset-block-start: 0; padding-block-start: var(--space-2); background: var(--c-page); }
 .training-workspace > .module { margin-block: 0; }
+.training-totals, .training-profile-zones { display: grid; gap: var(--space-2); margin: var(--space-3) 0; }
+.training-totals { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+.training-totals div, .training-profile-zones div { padding: var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-raised); }
+.training-totals dt { font-size: var(--text-sm); color: var(--c-text-muted); }
+.training-totals dd, .training-profile-zones dd { margin: var(--space-1) 0 0; }
 .training-card { padding: 0; }
 .training-card__header { display: flex; align-items: start; justify-content: space-between; gap: var(--space-4); padding-block: var(--space-3); }
 .training-card__header :is(h4,h5) { margin: 0; }

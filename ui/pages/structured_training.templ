@@ -18,6 +18,8 @@ type StructuredGymExercise struct {
 type StructuredWaterStep struct {
 	ID, ParentID, Kind, Name, Prescription, Intensity, Drill, Instructions string
 	Position, Repeats, Recovery                                            int
+	DurationSeconds, DistanceMetres                                        int
+	DurationCertainty, DistanceCertainty                                   string
 }
 type StructuredWaterProfile struct {
 	ID, Name, Craft, Notes string
@@ -25,11 +27,13 @@ type StructuredWaterProfile struct {
 	Zones                   []StructuredWaterZone
 }
 type StructuredWaterZone struct{ Code, Label, Cadence, Meaning string }
+type StructuredWaterTotal struct{ Label, Value, Certainty string }
 type StructuredTrainingBlock struct {
-	ID, Purpose, Title, Instructions, GymStructure, GymObjective, WaterMethod, WaterTarget string
+	ID, Purpose, Title, Instructions, GymStructure, GymObjective, WaterMethod, WaterTarget, WaterProfile string
 	Position, GymRounds, GymRoundRecovery                                                  int
 	Exercises                                                                              []StructuredGymExercise
 	WaterSteps                                                                             []StructuredWaterStep
+	WaterTotals                                                                            []StructuredWaterTotal
 }
 type StructuredTrainingSegment struct {
 	ID, Modality, Title, Location, Duration, PlannedStart, EquipmentNotes string
@@ -77,6 +81,7 @@ type StructuredTrainingPage struct {
 	Meta                                                        components.PageMeta
 	CSRFField                                                   templ.Component
 	Management                                                  bool
+	CanManageWaterProfiles                                      bool
 	Success, Error, OpenForm                                    string
 	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
 	Audiences                                                   []StructuredTrainingAudience
@@ -109,6 +114,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 				<a href="#training-plan">Plano semanal</a>
 				<a href="#training-routines">Rotinas</a>
 				<a href="#training-copy-tools">Copiar conteúdo</a>
+				if page.CanManageWaterProfiles {
+					<a href="#training-intensity-profiles">Perfis de intensidade</a>
+				}
 			</nav>
 		}
 		<section id="training-plan" class="module training-plan" data-tab-panel>
@@ -251,13 +259,23 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 																		@structuredGymExerciseForm(page, block.ID)
 																	}
 																}
-																if block.WaterMethod != "" {
-																	<p class="record-meta">
-																		{ block.WaterMethod }
+																	if block.WaterMethod != "" {
+																		<p class="record-meta">
+																			{ block.WaterMethod }
+																			if block.WaterProfile != "" {
+																				<span>· { block.WaterProfile }</span>
+																			}
 																		if block.WaterTarget != "" {
 																			<span>· { block.WaterTarget }</span>
 																		}
-																	</p>
+																		</p>
+																		if len(block.WaterTotals) > 0 {
+																			<dl class="training-totals" aria-label="Totais planeados do bloco">
+																				for _, total := range block.WaterTotals {
+																					<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
+																				}
+																			</dl>
+																		}
 																	<ol class="record-list">
 																		for _, step := range block.WaterSteps {
 																			<li class="record-item record-item--stacked"><div class="record-item__copy">
@@ -337,6 +355,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		if page.Management {
 			@structuredRoutineLibrary(page)
 			@structuredCopyDayForm(page)
+			if page.CanManageWaterProfiles {
+				@structuredWaterProfileManagement(page)
+			}
 		}
 	</div>
 	if page.Management {
@@ -773,11 +794,74 @@ templ structuredWaterBlockForm(page StructuredTrainingPage, segmentID string) {
 			@components.FieldLabel("water-title-"+segmentID, "Título", true)<input id={ "water-title-" + segmentID } name="title" required minlength="2" maxlength="120"/>
 			@components.FieldLabel("water-instructions-"+segmentID, "Instruções gerais", true)<textarea id={ "water-instructions-" + segmentID } name="instructions" required minlength="2" maxlength="4000"></textarea>
 			@components.FieldLabel("water-method-"+segmentID, "Método", true)<select id={ "water-method-" + segmentID } name="method" required>@waterMethodOptions()</select>
-			<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-target-"+segmentID, "Distância alvo (m)", false)<input id={ "water-target-" + segmentID } name="target_distance_metres" type="number" min="1" max="200000"/></div><div>@components.FieldLabel("water-target-certainty-"+segmentID, "Precisão", false)<select id={ "water-target-certainty-" + segmentID } name="target_distance_certainty"><option value="">Sem distância alvo</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div></div>
+			@components.FieldLabel("water-profile-"+segmentID, "Perfil de intensidade (opcional)", false)
+			<select id={ "water-profile-" + segmentID } name="intensity_profile_id">
+				<option value="">Sem perfil associado</option>
+				for _, profile := range page.WaterProfiles {
+					<option value={ profile.ID }>{ profile.Name } · { profile.Craft } · revisão { fmt.Sprintf("%d", profile.Revision) }</option>
+				}
+			</select>
+			@components.FieldHelp("water-profile-help-"+segmentID, "A revisão escolhida fica ligada a este bloco, mesmo quando for criado um perfil mais recente.")
+			<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-target-"+segmentID, "Distância total alvo da sessão (m)", false)<input id={ "water-target-" + segmentID } name="target_distance_metres" type="number" min="1" max="200000"/></div><div>@components.FieldLabel("water-target-certainty-"+segmentID, "Precisão", false)<select id={ "water-target-certainty-" + segmentID } name="target_distance_certainty"><option value="">Sem distância alvo</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div></div>
+			@components.FieldHelp("water-target-help-"+segmentID, "Num retorno à calma, permite prescrever: continuar até a sessão atingir esta distância. Não é usada para inventar a distância dos passos anteriores.")
 			@structuredWaterStepFields(segmentID, nil)
 			<button type="submit">Adicionar bloco de água</button>
 		</form>
 	</dialog>
+}
+
+templ structuredWaterProfileManagement(page StructuredTrainingPage) {
+	<section id="training-intensity-profiles" class="module" aria-labelledby="water-profiles-title" data-tab-panel>
+		@components.SectionHeading("", "Perfis de intensidade", "Defina a linguagem do clube para kayak e canoa. Cada gravação com o mesmo nome e embarcação cria uma revisão nova; os treinos antigos não mudam.")
+		<div class="notice notice--info" role="note">
+			<p><strong>Limites do clube, não uma norma universal.</strong> A cadência é orientação. R7 deve descrever o ritmo de prova sustentável para a duração ou distância prescrita. O limite inferior de R5 em kayak continua por confirmar e não é preenchido automaticamente.</p>
+		</div>
+		<button class="action" type="button" data-dialog-open="add-water-profile">Criar perfil ou nova revisão</button>
+		<dialog id="add-water-profile" class="task-dialog" data-task-dialog aria-labelledby="add-water-profile-title">
+			<div class="task-dialog__header"><h3 id="add-water-profile-title">Criar perfil de intensidade</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/agua/perfis">
+				@page.CSRFField
+				@components.FieldLabel("water-profile-name", "Nome", true)<input id="water-profile-name" name="name" required minlength="2" maxlength="120"/>
+				@components.FieldHelp("water-profile-name-help", "Para rever um perfil, use exatamente o mesmo nome e a mesma embarcação.")
+				@components.FieldLabel("water-profile-craft", "Embarcação", true)<select id="water-profile-craft" name="craft" required><option value="KAYAK">Kayak</option><option value="CANOE">Canoa</option></select>
+				@components.FieldLabel("water-profile-notes", "Notas (opcional)", false)<textarea id="water-profile-notes" name="notes" maxlength="1000"></textarea>
+				<button type="submit">Guardar perfil</button>
+			</form>
+		</dialog>
+		if len(page.WaterProfiles) == 0 {
+			@components.EmptyState("Ainda sem perfis", "Crie o primeiro perfil quando os limites tiverem sido confirmados pelo treinador.")
+		}
+		for _, profile := range page.WaterProfiles {
+			<article class="record-item record-item--stacked">
+				<div class="record-item__copy"><h3>{ profile.Name }</h3><p class="record-meta">{ profile.Craft } · revisão { fmt.Sprintf("%d", profile.Revision) }</p>
+					if profile.Notes != "" {
+						<p>{ profile.Notes }</p>
+					}
+					if len(profile.Zones) == 0 {
+						<p class="record-meta">Ainda sem zonas.</p>
+					}
+					<dl class="training-profile-zones">
+						for _, zone := range profile.Zones {
+							<div><dt><strong>{ zone.Code } · { zone.Label }</strong></dt><dd>{ zone.Cadence } · { zone.Meaning }</dd></div>
+						}
+					</dl>
+				</div>
+				<button class="action action--quiet" type="button" data-dialog-open={ "add-water-zone-" + profile.ID }>Adicionar ou atualizar zona</button>
+				<dialog id={ "add-water-zone-" + profile.ID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-zone-title-" + profile.ID }>
+					<div class="task-dialog__header"><h3 id={ "add-water-zone-title-" + profile.ID }>Adicionar ou atualizar zona de { profile.Name }</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+					<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/agua/perfis/" + profile.ID + "/zonas") }>
+						@page.CSRFField
+						@components.FieldLabel("water-zone-code-"+profile.ID, "Código curto", true)<input id={ "water-zone-code-" + profile.ID } name="code" required maxlength="20" placeholder="Ex.: R7"/>
+						@components.FieldHelp("water-zone-code-help-"+profile.ID, "Se este código já existir na revisão ativa, os restantes campos substituem a definição dessa revisão.")
+						@components.FieldLabel("water-zone-label-"+profile.ID, "Nome completo", true)<input id={ "water-zone-label-" + profile.ID } name="label" required minlength="2" maxlength="120"/>
+						<div class="form-grid"><div>@components.FieldLabel("water-zone-min-"+profile.ID, "Cadência mínima (opcional)", false)<input id={ "water-zone-min-" + profile.ID } name="cadence_min" type="number" min="0" max="300"/></div><div>@components.FieldLabel("water-zone-max-"+profile.ID, "Cadência máxima (opcional)", false)<input id={ "water-zone-max-" + profile.ID } name="cadence_max" type="number" min="0" max="300"/></div></div>
+						@components.FieldLabel("water-zone-meaning-"+profile.ID, "Significado para o atleta", true)<textarea id={ "water-zone-meaning-" + profile.ID } name="meaning" required minlength="2" maxlength="500"></textarea>
+						<button type="submit">Guardar zona</button>
+					</form>
+				</dialog>
+			</article>
+		}
+	</section>
 }
 
 templ structuredWaterStepForm(page StructuredTrainingPage, block StructuredTrainingBlock) {

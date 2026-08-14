@@ -74,7 +74,7 @@ type Querier interface {
 	CreateTrainingSessionSegment(ctx context.Context, arg CreateTrainingSessionSegmentParams) (uuid.UUID, error)
 	CreateUserMembership(ctx context.Context, arg CreateUserMembershipParams) (UserMembership, error)
 	CreateWaterBlockPrescription(ctx context.Context, arg CreateWaterBlockPrescriptionParams) (int64, error)
-	CreateWaterIntensityProfile(ctx context.Context, arg CreateWaterIntensityProfileParams) (WaterIntensityProfile, error)
+	CreateWaterIntensityProfile(ctx context.Context, arg CreateWaterIntensityProfileParams) (CreateWaterIntensityProfileRow, error)
 	CreateWaterIntensityZone(ctx context.Context, arg CreateWaterIntensityZoneParams) (uuid.UUID, error)
 	CreateWaterWorkStep(ctx context.Context, arg CreateWaterWorkStepParams) (uuid.UUID, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error

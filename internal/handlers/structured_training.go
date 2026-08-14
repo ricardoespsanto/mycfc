@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -46,10 +47,12 @@ type structuredTrainingRow struct {
 	gymStructure, gymObjective                                                                              string
 	gymRounds, gymRoundRecovery                                                                             int
 	exerciseName, exercisePrescription, exerciseResistance, exerciseIntent, exerciseTempo, exerciseNotes    string
-	waterMethod, waterTarget                                                                                string
+	waterMethod, waterTarget, waterProfile                                                                  string
 	waterStepID, waterParentStepID                                                                          *uuid.UUID
 	waterStepPosition, waterStepRepeats, waterStepRecovery                                                  int
 	waterStepKind, waterStepName, waterStepPrescription, waterStepIntensity, waterStepDrill, waterStepNotes string
+	waterStepDuration, waterStepDistance                                                                    int
+	waterStepDurationCertainty, waterStepDistanceCertainty                                                  string
 }
 
 func (h StructuredTraining) Index(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +62,7 @@ func (h StructuredTraining) Index(w http.ResponseWriter, r *http.Request) {
 func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, status int, page pages.StructuredTrainingPage) {
 	user, _ := CurrentUserFromContext(r.Context())
 	page.Management = strings.HasPrefix(r.URL.Path, "/admin/")
+	page.CanManageWaterProfiles = page.Management && user.IsAdmin
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
 	if page.Management {
@@ -1325,7 +1329,7 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 		segment := &session.Segments[len(session.Segments)-1]
 		if row.blockID != nil {
 			if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
-				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget})
+				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget, WaterProfile: row.waterProfile})
 			}
 			block := &segment.Blocks[len(segment.Blocks)-1]
 			if row.exerciseID != nil {
@@ -1336,7 +1340,19 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 				if row.waterParentStepID != nil {
 					parentID = row.waterParentStepID.String()
 				}
-				block.WaterSteps = append(block.WaterSteps, pages.StructuredWaterStep{ID: row.waterStepID.String(), ParentID: parentID, Kind: row.waterStepKind, Name: row.waterStepName, Prescription: row.waterStepPrescription, Intensity: row.waterStepIntensity, Drill: row.waterStepDrill, Instructions: row.waterStepNotes, Position: row.waterStepPosition, Repeats: row.waterStepRepeats, Recovery: row.waterStepRecovery})
+				block.WaterSteps = append(block.WaterSteps, pages.StructuredWaterStep{ID: row.waterStepID.String(), ParentID: parentID, Kind: row.waterStepKind, Name: row.waterStepName, Prescription: row.waterStepPrescription, Intensity: row.waterStepIntensity, Drill: row.waterStepDrill, Instructions: row.waterStepNotes, Position: row.waterStepPosition, Repeats: row.waterStepRepeats, Recovery: row.waterStepRecovery, DurationSeconds: row.waterStepDuration, DistanceMetres: row.waterStepDistance, DurationCertainty: row.waterStepDurationCertainty, DistanceCertainty: row.waterStepDistanceCertainty})
+			}
+		}
+	}
+	for audienceIndex := range audiences {
+		for weekIndex := range audiences[audienceIndex].Weeks {
+			for sessionIndex := range audiences[audienceIndex].Weeks[weekIndex].Sessions {
+				for segmentIndex := range audiences[audienceIndex].Weeks[weekIndex].Sessions[sessionIndex].Segments {
+					for blockIndex := range audiences[audienceIndex].Weeks[weekIndex].Sessions[sessionIndex].Segments[segmentIndex].Blocks {
+						block := &audiences[audienceIndex].Weeks[weekIndex].Sessions[sessionIndex].Segments[segmentIndex].Blocks[blockIndex]
+						block.WaterTotals = calculateWaterTotals(block.WaterSteps)
+					}
+				}
 			}
 		}
 	}
@@ -1350,6 +1366,122 @@ func appendStructuredModality(modalities []string, modality string) []string {
 		}
 	}
 	return append(modalities, modality)
+}
+
+type waterMeasureTotal struct {
+	value     int64
+	hasValue  bool
+	estimated bool
+	unknown   bool
+}
+
+func calculateWaterTotals(steps []pages.StructuredWaterStep) []pages.StructuredWaterTotal {
+	if len(steps) == 0 {
+		return nil
+	}
+	children := map[string][]pages.StructuredWaterStep{}
+	for _, step := range steps {
+		children[step.ParentID] = append(children[step.ParentID], step)
+	}
+	duration, distance, recovery := waterMeasureTotal{}, waterMeasureTotal{}, waterMeasureTotal{hasValue: true}
+	byIntensity := map[string]*waterMeasureTotal{}
+	var walk func(string, int64, map[string]bool)
+	walk = func(parentID string, multiplier int64, ancestors map[string]bool) {
+		for _, step := range children[parentID] {
+			if ancestors[step.ID] {
+				duration.unknown, distance.unknown, recovery.unknown = true, true, true
+				continue
+			}
+			if step.Kind == "REPEAT_GROUP" {
+				repeats := int64(step.Repeats)
+				if repeats < 1 || multiplier > (1<<63-1)/repeats {
+					duration.unknown, distance.unknown, recovery.unknown = true, true, true
+					continue
+				}
+				next := make(map[string]bool, len(ancestors)+1)
+				for id := range ancestors {
+					next[id] = true
+				}
+				next[step.ID] = true
+				walk(step.ID, multiplier*repeats, next)
+				if step.Recovery > 0 && repeats > 1 {
+					recovery.value += int64(step.Recovery) * (repeats - 1) * multiplier
+				}
+				continue
+			}
+			if step.DurationSeconds > 0 {
+				duration.value += int64(step.DurationSeconds) * multiplier
+				duration.hasValue = true
+				duration.estimated = duration.estimated || step.DurationCertainty == "ESTIMATED"
+			} else {
+				duration.unknown = true
+			}
+			if step.DistanceMetres > 0 {
+				distance.value += int64(step.DistanceMetres) * multiplier
+				distance.hasValue = true
+				distance.estimated = distance.estimated || step.DistanceCertainty == "ESTIMATED"
+			} else {
+				distance.unknown = true
+			}
+			if step.Recovery > 0 {
+				recovery.value += int64(step.Recovery) * multiplier
+			}
+			if step.Intensity != "" {
+				code := strings.TrimSpace(strings.Split(step.Intensity, " · ")[0])
+				total := byIntensity[code]
+				if total == nil {
+					total = &waterMeasureTotal{}
+					byIntensity[code] = total
+				}
+				if step.DurationSeconds > 0 {
+					total.value += int64(step.DurationSeconds) * multiplier
+					total.hasValue = true
+					total.estimated = total.estimated || step.DurationCertainty == "ESTIMATED"
+				} else {
+					total.unknown = true
+				}
+			}
+		}
+	}
+	walk("", 1, map[string]bool{})
+	totals := []pages.StructuredWaterTotal{
+		waterTotalView("Esforço planeado", duration, formatTrainingDuration),
+		waterTotalView("Recuperação planeada", recovery, formatTrainingDuration),
+		waterTotalView("Distância planeada", distance, func(value int64) string { return formatKilometres(value) }),
+	}
+	codes := make([]string, 0, len(byIntensity))
+	for code := range byIntensity {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	for _, code := range codes {
+		totals = append(totals, waterTotalView("Tempo em "+code, *byIntensity[code], formatTrainingDuration))
+	}
+	return totals
+}
+
+func waterTotalView(label string, total waterMeasureTotal, format func(int64) string) pages.StructuredWaterTotal {
+	if total.unknown || !total.hasValue {
+		return pages.StructuredWaterTotal{Label: label, Value: "Desconhecido", Certainty: "faltam dados; não foi inferido"}
+	}
+	certainty := "exato"
+	if total.estimated {
+		certainty = "estimado"
+	}
+	return pages.StructuredWaterTotal{Label: label, Value: format(total.value), Certainty: certainty}
+}
+
+func formatTrainingDuration(seconds int64) string {
+	if seconds%3600 == 0 && seconds >= 3600 {
+		return fmt.Sprintf("%d h", seconds/3600)
+	}
+	if seconds%60 == 0 {
+		return fmt.Sprintf("%d min", seconds/60)
+	}
+	if seconds >= 60 {
+		return fmt.Sprintf("%d min %d s", seconds/60, seconds%60)
+	}
+	return fmt.Sprintf("%d s", seconds)
 }
 
 func structuredRoutineRows(rows []dbgen.ListVisibleTrainingRoutinesRow, location *time.Location) []pages.StructuredTrainingRoutine {
@@ -1485,7 +1617,7 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 			scope += " · " + *row.TeamName
 		}
 		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
-		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
+		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterProfileName, row.WaterProfileRevision, row.WaterProfileCraft, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterZoneLabel, row.WaterZoneCadenceMin, row.WaterZoneCadenceMax, row.WaterZoneMeaning, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result
 }
@@ -1494,7 +1626,7 @@ func subjectStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForSubject
 	result := make([]structuredTrainingRow, 0, len(rows))
 	for _, row := range rows {
 		assembled := structuredRowFromValues(structuredTrainingRow{athleteName: row.AthleteName, groupID: &row.GroupID, groupName: row.GroupName, scope: "Plano atribuído", planID: &row.PlanID, planTitle: row.PlanTitle, planDescription: row.PlanDescription, seasonName: row.SeasonName, weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
-		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
+		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterProfileName, row.WaterProfileRevision, row.WaterProfileCraft, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterZoneLabel, row.WaterZoneCadenceMin, row.WaterZoneCadenceMax, row.WaterZoneMeaning, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result
 }
@@ -1509,14 +1641,19 @@ func structuredRowFromValues(row structuredTrainingRow, structure *dbgen.GymBloc
 	return row
 }
 
-func structuredWaterRow(row structuredTrainingRow, method *dbgen.WaterWorkMethod, targetDistance *int32, targetCertainty *dbgen.TrainingMeasureCertainty, stepID, parentID *uuid.UUID, position *int32, kind *dbgen.WaterStepKind, name *string, repeats, duration *int32, durationCertainty *dbgen.TrainingMeasureCertainty, distance *int32, distanceCertainty *dbgen.TrainingMeasureCertainty, recovery *int32, intensity *string, cadence *int32, focus, format, roles, notes *string) structuredTrainingRow {
+func structuredWaterRow(row structuredTrainingRow, method *dbgen.WaterWorkMethod, targetDistance *int32, targetCertainty *dbgen.TrainingMeasureCertainty, profileName *string, profileRevision *int32, profileCraft *dbgen.PaddlingCraft, stepID, parentID *uuid.UUID, position *int32, kind *dbgen.WaterStepKind, name *string, repeats, duration *int32, durationCertainty *dbgen.TrainingMeasureCertainty, distance *int32, distanceCertainty *dbgen.TrainingMeasureCertainty, recovery *int32, intensity *string, cadence *int32, zoneLabel *string, zoneCadenceMin, zoneCadenceMax *int32, zoneMeaning *string, focus, format, roles, notes *string) structuredTrainingRow {
 	row.waterMethod = waterMethodLabel(enumString(method))
 	if targetDistance != nil {
-		row.waterTarget = fmt.Sprintf("Objetivo %s (%s)", formatKilometres(int64(*targetDistance)), trainingMeasureCertaintyLabel(enumString(targetCertainty)))
+		row.waterTarget = fmt.Sprintf("Continuar até a sessão atingir %s (%s)", formatKilometres(int64(*targetDistance)), trainingMeasureCertaintyLabel(enumString(targetCertainty)))
+	}
+	if profileName != nil && profileRevision != nil {
+		row.waterProfile = fmt.Sprintf("%s · %s · revisão %d", *profileName, paddlingCraftLabel(enumString(profileCraft)), *profileRevision)
 	}
 	row.waterStepID, row.waterParentStepID = stepID, parentID
 	row.waterStepPosition, row.waterStepRepeats, row.waterStepRecovery = intValue(position), intValue(repeats), intValue(recovery)
 	row.waterStepKind, row.waterStepName, row.waterStepNotes = enumString(kind), stringValue(name), stringValue(notes)
+	row.waterStepDuration, row.waterStepDistance = intValue(duration), intValue(distance)
+	row.waterStepDurationCertainty, row.waterStepDistanceCertainty = enumString(durationCertainty), enumString(distanceCertainty)
 	parts := []string{}
 	if duration != nil {
 		parts = append(parts, fmt.Sprintf("%d s (%s)", *duration, trainingMeasureCertaintyLabel(enumString(durationCertainty))))
@@ -1530,6 +1667,15 @@ func structuredWaterRow(row structuredTrainingRow, method *dbgen.WaterWorkMethod
 	}
 	if cadence != nil {
 		row.waterStepIntensity += fmt.Sprintf(" · %d remadas/min", *cadence)
+	}
+	if zoneLabel != nil {
+		row.waterStepIntensity += " · " + *zoneLabel
+	}
+	if zoneCadenceMin != nil || zoneCadenceMax != nil {
+		row.waterStepIntensity += fmt.Sprintf(" · orientação %s–%s remadas/min", optionalIntLabel(zoneCadenceMin), optionalIntLabel(zoneCadenceMax))
+	}
+	if zoneMeaning != nil {
+		row.waterStepIntensity += " · " + *zoneMeaning
 	}
 	drill := []string{}
 	for _, value := range []*string{focus, format, roles} {

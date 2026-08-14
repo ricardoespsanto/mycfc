@@ -171,15 +171,26 @@ RETURNING id;
 
 -- name: CreateWaterIntensityProfile :one
 WITH previous AS (
- UPDATE water_intensity_profiles SET is_active = false
- WHERE name = sqlc.arg(name) AND craft = sqlc.arg(craft)::paddling_craft AND is_active
- RETURNING id, revision
+ UPDATE water_intensity_profiles AS profile SET is_active = false
+ WHERE profile.name = sqlc.arg(name) AND profile.craft = sqlc.arg(craft)::paddling_craft AND profile.is_active
+ RETURNING profile.id, profile.revision
+), created AS (
+ INSERT INTO water_intensity_profiles (name, craft, revision, supersedes_id, notes, created_by_id)
+ VALUES (sqlc.arg(name), sqlc.arg(craft)::paddling_craft,
+         COALESCE((SELECT max(revision) + 1 FROM previous), 1),
+         (SELECT id FROM previous ORDER BY revision DESC LIMIT 1), sqlc.arg(notes), sqlc.arg(created_by_id))
+ RETURNING id, name, craft, revision, supersedes_id, notes, is_active, created_by_id, created_at
+), copied_zones AS (
+ INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
+ SELECT created.id, zone.position, zone.code, zone.label, zone.cadence_min, zone.cadence_max, zone.meaning
+ FROM created
+ JOIN previous ON true
+ JOIN water_intensity_zones zone ON zone.profile_id = previous.id
+ RETURNING id
 )
-INSERT INTO water_intensity_profiles (name, craft, revision, supersedes_id, notes, created_by_id)
-VALUES (sqlc.arg(name), sqlc.arg(craft)::paddling_craft,
-        COALESCE((SELECT max(revision) + 1 FROM previous), 1),
-        (SELECT id FROM previous ORDER BY revision DESC LIMIT 1), sqlc.arg(notes), sqlc.arg(created_by_id))
-RETURNING id, name, craft, revision, supersedes_id, notes, is_active, created_by_id, created_at;
+SELECT created.id, created.name, created.craft, created.revision, created.supersedes_id,
+       created.notes, created.is_active, created.created_by_id, created.created_at
+FROM created;
 
 -- name: CreateWaterIntensityZone :one
 INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
@@ -189,6 +200,11 @@ FROM water_intensity_profiles profile
 LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
 WHERE profile.id = sqlc.arg(profile_id) AND profile.is_active
 GROUP BY profile.id
+ON CONFLICT (profile_id, code) DO UPDATE SET
+ label = EXCLUDED.label,
+ cadence_min = EXCLUDED.cadence_min,
+ cadence_max = EXCLUDED.cadence_max,
+ meaning = EXCLUDED.meaning
 RETURNING id;
 
 -- name: ListActiveWaterIntensityProfiles :many
@@ -224,6 +240,8 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
        water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water_profile.name AS water_profile_name, water_profile.revision AS water_profile_revision,
+       water_profile.craft AS water_profile_craft,
        water.target_distance_metres AS water_target_distance_metres,
        water.target_distance_certainty AS water_target_distance_certainty,
        water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
@@ -235,6 +253,8 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        water_step.distance_certainty AS water_step_distance_certainty,
        water_step.recovery_seconds AS water_step_recovery_seconds,
        water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_zone.label AS water_zone_label, water_zone.cadence_min AS water_zone_cadence_min,
+       water_zone.cadence_max AS water_zone_cadence_max, water_zone.meaning AS water_zone_meaning,
        water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
        water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
@@ -254,7 +274,10 @@ LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
 LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_intensity_profiles water_profile ON water_profile.id = water.intensity_profile_id
 LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
+LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
+ AND water_zone.code = water_step.intensity_code
 WHERE sqlc.arg(is_admin)::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
@@ -282,6 +305,8 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        gym.structure AS gym_structure, gym.objective AS gym_objective, gym.rounds AS gym_rounds,
        gym.round_recovery_seconds,
        water.method AS water_method, water.intensity_profile_id AS water_intensity_profile_id,
+       water_profile.name AS water_profile_name, water_profile.revision AS water_profile_revision,
+       water_profile.craft AS water_profile_craft,
        water.target_distance_metres AS water_target_distance_metres,
        water.target_distance_certainty AS water_target_distance_certainty,
        water_step.id AS water_step_id, water_step.parent_step_id AS water_parent_step_id,
@@ -293,6 +318,8 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        water_step.distance_certainty AS water_step_distance_certainty,
        water_step.recovery_seconds AS water_step_recovery_seconds,
        water_step.intensity_code AS water_step_intensity_code, water_step.cadence_spm AS water_step_cadence_spm,
+       water_zone.label AS water_zone_label, water_zone.cadence_min AS water_zone_cadence_min,
+       water_zone.cadence_max AS water_zone_cadence_max, water_zone.meaning AS water_zone_meaning,
        water_step.drill_focus AS water_step_drill_focus, water_step.drill_format AS water_step_drill_format,
        water_step.role_notes AS water_step_role_notes, water_step.instructions AS water_step_instructions,
        exercise.id AS exercise_id, exercise.position AS exercise_position, exercise.name AS exercise_name,
@@ -313,7 +340,10 @@ LEFT JOIN training_segment_blocks block ON block.segment_id = segment.id
 LEFT JOIN gym_block_prescriptions gym ON gym.block_id = block.id
 LEFT JOIN gym_exercises exercise ON exercise.block_id = gym.block_id
 LEFT JOIN water_block_prescriptions water ON water.block_id = block.id
+LEFT JOIN water_intensity_profiles water_profile ON water_profile.id = water.intensity_profile_id
 LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
+LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
+ AND water_zone.code = water_step.intensity_code
 WHERE (subject.id = sqlc.arg(user_id)
        OR (subject.guardian_id = sqlc.arg(user_id) AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
   AND subject.is_active

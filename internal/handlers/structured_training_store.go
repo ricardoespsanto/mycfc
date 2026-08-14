@@ -82,7 +82,7 @@ type StructuredTrainingStore interface {
 	CreateGymExercise(context.Context, dbgen.CreateGymExerciseParams) (uuid.UUID, error)
 	CreateWaterBlock(context.Context, StructuredWaterBlockInput) (uuid.UUID, error)
 	CreateWaterWorkStep(context.Context, dbgen.CreateWaterWorkStepParams) (uuid.UUID, error)
-	CreateWaterIntensityProfile(context.Context, dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error)
+	CreateWaterIntensityProfile(context.Context, dbgen.CreateWaterIntensityProfileParams) (dbgen.CreateWaterIntensityProfileRow, error)
 	CreateWaterIntensityZone(context.Context, dbgen.CreateWaterIntensityZoneParams) (uuid.UUID, error)
 	ListActiveWaterIntensityProfiles(context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error)
 	GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
@@ -255,7 +255,7 @@ func (s PostgresStructuredTrainingStore) CreateWaterWorkStep(ctx context.Context
 	return s.queries().CreateWaterWorkStep(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) CreateWaterIntensityProfile(ctx context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error) {
+func (s PostgresStructuredTrainingStore) CreateWaterIntensityProfile(ctx context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.CreateWaterIntensityProfileRow, error) {
 	return s.queries().CreateWaterIntensityProfile(ctx, params)
 }
 
