@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -118,9 +119,9 @@ func (s *structuredTrainingStoreStub) CreateWaterWorkStep(_ context.Context, par
 	return uuid.New(), nil
 }
 
-func (s *structuredTrainingStoreStub) CreateWaterIntensityProfile(_ context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.WaterIntensityProfile, error) {
+func (s *structuredTrainingStoreStub) CreateWaterIntensityProfile(_ context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.CreateWaterIntensityProfileRow, error) {
 	s.waterProfiles = append(s.waterProfiles, params)
-	return dbgen.WaterIntensityProfile{ID: uuid.New(), Name: params.Name, Craft: params.Craft, Revision: 1}, nil
+	return dbgen.CreateWaterIntensityProfileRow{ID: uuid.New(), Name: params.Name, Craft: params.Craft, Revision: 1}, nil
 }
 
 func (s *structuredTrainingStoreStub) CreateWaterIntensityZone(_ context.Context, params dbgen.CreateWaterIntensityZoneParams) (uuid.UUID, error) {
@@ -612,5 +613,36 @@ func TestWaterProfilesAreVersionableWithoutAssumingTheDisputedR5Boundary(t *test
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/agua/perfis/"+profileID.String()+"/zonas", url.Values{"code": {"R7"}, "label": {"Ritmo de prova"}, "meaning": {"Ritmo sustentável para a duração ou distância prescrita"}}, "id", profileID.String(), handler.CreateWaterIntensityZone)
 	if response.Code != http.StatusSeeOther || len(store.waterZones) != 1 || store.waterZones[0].CadenceMin != nil || store.waterZones[0].CadenceMax != nil {
 		t.Fatalf("duration-relative zone should not invent cadence: status=%d zone=%+v", response.Code, store.waterZones)
+	}
+}
+
+func TestCalculateWaterTotalsHandlesNestedRecoveryAndProvenance(t *testing.T) {
+	steps := []pages.StructuredWaterStep{
+		{ID: "outer", Kind: "REPEAT_GROUP", Repeats: 3, Recovery: 180},
+		{ID: "inner", ParentID: "outer", Kind: "REPEAT_GROUP", Repeats: 3, Recovery: 60},
+		{ID: "effort", ParentID: "inner", Kind: "EFFORT", DurationSeconds: 180, DurationCertainty: "EXACT", DistanceMetres: 500, DistanceCertainty: "ESTIMATED", Intensity: "R3 · Limiar"},
+	}
+	totals := calculateWaterTotals(steps)
+	want := []pages.StructuredWaterTotal{
+		{Label: "Esforço planeado", Value: "27 min", Certainty: "exato"},
+		{Label: "Recuperação planeada", Value: "12 min", Certainty: "exato"},
+		{Label: "Distância planeada", Value: "4,5 km", Certainty: "estimado"},
+		{Label: "Tempo em R3", Value: "27 min", Certainty: "exato"},
+	}
+	if !reflect.DeepEqual(totals, want) {
+		t.Fatalf("nested totals = %#v, want %#v", totals, want)
+	}
+}
+
+func TestCalculateWaterTotalsDoesNotInventMissingPace(t *testing.T) {
+	totals := calculateWaterTotals([]pages.StructuredWaterStep{{ID: "distance", Kind: "EFFORT", DistanceMetres: 2000, DistanceCertainty: "EXACT", Intensity: "R7 · Ritmo de prova"}})
+	if totals[0].Value != "Desconhecido" || totals[0].Certainty != "faltam dados; não foi inferido" {
+		t.Fatalf("duration should stay unknown without pace: %#v", totals[0])
+	}
+	if totals[2].Value != "2 km" || totals[2].Certainty != "exato" {
+		t.Fatalf("known distance should remain exact: %#v", totals[2])
+	}
+	if totals[3].Label != "Tempo em R7" || totals[3].Value != "Desconhecido" {
+		t.Fatalf("intensity duration should stay unknown: %#v", totals[3])
 	}
 }

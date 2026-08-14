@@ -129,6 +129,7 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id = $1`, group.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_groups WHERE id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM water_intensity_profiles WHERE created_by_id = $1`, actorID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, actorID)
 	})
@@ -147,6 +148,29 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	}
 	blockID, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: segmentID, Purpose: dbgen.TrainingBlockPurposeMAIN, Title: "Circuito fonte", Instructions: "3 voltas"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	waterSegmentID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Água"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waterBlockID, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: waterSegmentID, Purpose: dbgen.TrainingBlockPurposeMAIN, Title: "Série fonte", Instructions: "Estrutura aninhada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := queries.CreateWaterIntensityProfile(ctx, dbgen.CreateWaterIntensityProfileParams{Name: "Perfil cópias " + uuid.NewString()[:8], Craft: dbgen.PaddlingCraftKAYAK, Notes: "", CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.CreateWaterBlockPrescription(ctx, dbgen.CreateWaterBlockPrescriptionParams{BlockID: waterBlockID, Method: dbgen.WaterWorkMethodINTERVALS, IntensityProfileID: &profile.ID}); err != nil || rows != 1 {
+		t.Fatalf("water prescription rows=%d err=%v", rows, err)
+	}
+	parentStepID, err := queries.CreateWaterWorkStep(ctx, dbgen.CreateWaterWorkStepParams{BlockID: waterBlockID, Kind: dbgen.WaterStepKindREPEATGROUP, Name: "Três séries", Repeats: int32Ptr(3), RecoverySeconds: int32Ptr(180), Instructions: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durationCertainty, intensity := dbgen.TrainingMeasureCertaintyEXACT, "R7"
+	if _, err := queries.CreateWaterWorkStep(ctx, dbgen.CreateWaterWorkStepParams{BlockID: waterBlockID, ParentStepID: &parentStepID, Kind: dbgen.WaterStepKindEFFORT, Name: "Dois minutos", DurationSeconds: int32Ptr(120), DurationCertainty: &durationCertainty, IntensityCode: &intensity, Instructions: "Ritmo de prova"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,12 +197,24 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	if _, err := pool.Exec(ctx, `UPDATE training_segment_blocks SET instructions = 'Cópia alterada' WHERE id = $1`, copiedBlockID); err != nil {
 		t.Fatal(err)
 	}
+	copiedWaterBlockID, err := store.CopyTrainingBlock(ctx, waterBlockID, waterSegmentID, actorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copiedProfileID uuid.UUID
+	var copiedSteps, nestedSteps int
+	if err := pool.QueryRow(ctx, `SELECT intensity_profile_id FROM water_block_prescriptions WHERE block_id = $1`, copiedWaterBlockID).Scan(&copiedProfileID); err != nil || copiedProfileID != profile.ID {
+		t.Fatalf("copied water profile=%s err=%v", copiedProfileID, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*), count(parent_step_id) FROM water_work_steps WHERE block_id = $1`, copiedWaterBlockID).Scan(&copiedSteps, &nestedSteps); err != nil || copiedSteps != 2 || nestedSteps != 1 {
+		t.Fatalf("copied water steps=%d nested=%d err=%v", copiedSteps, nestedSteps, err)
+	}
 	var sourceInstructions string
 	if err := pool.QueryRow(ctx, `SELECT instructions FROM training_segment_blocks WHERE id = $1`, blockID).Scan(&sourceInstructions); err != nil || sourceInstructions != "3 voltas" {
 		t.Fatalf("source block instructions=%q err=%v", sourceInstructions, err)
 	}
 	var events int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_copy_events WHERE copied_by_id = $1`, actorID).Scan(&events); err != nil || events < 5 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_copy_events WHERE copied_by_id = $1`, actorID).Scan(&events); err != nil || events < 6 {
 		t.Fatalf("copy events=%d err=%v", events, err)
 	}
 }
