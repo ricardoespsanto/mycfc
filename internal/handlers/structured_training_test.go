@@ -889,6 +889,66 @@ func TestApplyStructuredPrescriptionVariationOmitsOnlyTargetedElement(t *testing
 	}
 }
 
+func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownSession(t *testing.T) {
+	planID, sessionID, membershipID, athleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	week := pages.StructuredTrainingWeek{
+		ID: planID.String(), Title: "M42", Description: "Transformação", Season: "2025/2026", DateRange: "15–21 junho",
+		Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água", Modalities: []string{"WATER"}}},
+	}
+	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
+		{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID},
+		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New()},
+	}
+
+	inputs, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Cadetes"}, week, recipients, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 || inputs[0].SessionID != sessionID || inputs[0].MembershipID != membershipID || inputs[0].AthleteUserID != athleteID || len(inputs[0].SnapshotSHA256) != 64 {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	var snapshot structuredPrescriptionSnapshot
+	if err := json.Unmarshal(inputs[0].Snapshot, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.SchemaVersion != structuredPrescriptionSchemaVersion || snapshot.PlanID != planID.String() || snapshot.GroupName != "Cadetes" || snapshot.Session.ID != sessionID.String() {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing.T) {
+	planID, firstSessionID, secondSessionID := uuid.New(), uuid.New(), uuid.New()
+	publishedAt := pgtype.Timestamptz{Time: time.Date(2026, time.August, 14, 10, 30, 0, 0, time.UTC), Valid: true}
+	snapshot := func(sessionID uuid.UUID, title string) []byte {
+		encoded, err := json.Marshal(structuredPrescriptionSnapshot{
+			SchemaVersion: structuredPrescriptionSchemaVersion,
+			PlanID:        planID.String(), GroupName: "Cadetes", WeekTitle: "M42", WeekDescription: "Transformação", Season: "2025/2026", DateRange: "15–21 junho",
+			Session: pages.StructuredTrainingSession{ID: sessionID.String(), Title: title},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	rows := []dbgen.ListTrainingPrescriptionsForViewerRow{
+		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água"), IsCurrent: true},
+		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(secondSessionID, "Ginásio"), IsCurrent: true},
+		{ID: uuid.New(), AthleteName: "Ana", Revision: 1, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água anterior")},
+		{ID: uuid.New(), AthleteName: "Ignorada", Snapshot: []byte(`{"schema_version":99}`)},
+	}
+
+	audiences := structuredPublishedTraining(rows, time.UTC)
+	if len(audiences) != 2 || len(audiences[0].Weeks) != 1 || len(audiences[0].Weeks[0].Sessions) != 2 || len(audiences[1].Weeks) != 1 {
+		t.Fatalf("audiences = %#v", audiences)
+	}
+	if audiences[0].GroupName != "Cadetes" || !strings.Contains(audiences[0].Scope, "revisão 2") || !strings.HasPrefix(audiences[1].Scope, "Histórico") {
+		t.Fatalf("scopes = %q / %q", audiences[0].Scope, audiences[1].Scope)
+	}
+	if audiences[0].Weeks[0].Sessions[0].PrescriptionID != rows[0].ID.String() {
+		t.Fatalf("prescription id = %q", audiences[0].Weeks[0].Sessions[0].PrescriptionID)
+	}
+}
+
 func TestPrescriptionForSessionRedirectsWithoutExposingAthleteIdentity(t *testing.T) {
 	prescriptionID, sessionID := uuid.New(), uuid.New()
 	store := &structuredTrainingStoreStub{prescriptionLinks: []dbgen.ListTrainingPrescriptionLinksForSessionViewerRow{{ID: prescriptionID, AthleteName: "Atleta privado"}}}
@@ -923,5 +983,26 @@ func TestPrescriptionDetailTreatsUnauthorizedAsNotFound(t *testing.T) {
 	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/"+prescriptionID.String(), nil, "id", prescriptionID.String(), handler.PrescriptionDetail)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("response=%d", response.Code)
+	}
+}
+
+func TestPrescriptionDetailRendersAuthorizedPublishedSnapshot(t *testing.T) {
+	prescriptionID, sessionID, planID := uuid.New(), uuid.New(), uuid.New()
+	snapshot, err := json.Marshal(structuredPrescriptionSnapshot{
+		SchemaVersion: structuredPrescriptionSchemaVersion,
+		PlanID:        planID.String(), GroupName: "Cadetes", WeekTitle: "M42", Season: "2025/2026", DateRange: "15–21 junho",
+		Session: pages.StructuredTrainingSession{ID: sessionID.String(), Title: "Água R4", Modalities: []string{"WATER"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &structuredTrainingStoreStub{prescriptionRow: dbgen.GetTrainingPrescriptionForViewerRow{
+		ID: prescriptionID, SessionID: sessionID, AthleteUserID: uuid.New(), AthleteName: "Ana", PlanID: planID, PlanTitle: "M42",
+		Revision: 3, PublishedAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 14, 10, 30, 0, 0, time.UTC), Valid: true}, PublishedByName: "Treinador", Snapshot: snapshot, IsCurrent: true,
+	}}
+	handler := StructuredTraining{Store: store, System: System{}, Location: time.UTC}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/"+prescriptionID.String(), nil, "id", prescriptionID.String(), handler.PrescriptionDetail)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Água R4") || !strings.Contains(response.Body.String(), "revisão 3") {
+		t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
 	}
 }
