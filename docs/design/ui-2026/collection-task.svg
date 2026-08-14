@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+<title id="title">MyCFC members collection with modal side-sheet creation task</title>
+<desc id="desc">Desktop application shell, member collection, dimmed background and a contained create-account side sheet.</desc>
+<style>text{font-family:Inter,system-ui,sans-serif;fill:#14252d}.white{fill:#fff}.muted{fill:#5a6c72}.tiny{font-size:14px}.small{font-size:16px}.body{font-size:18px}.h2{font-size:27px;font-weight:800}.h1{font-size:40px;font-weight:850}.nav{font-size:17px;fill:#fff}.card{fill:#fff;stroke:#cfdad7;stroke-width:2}.field{fill:#fff;stroke:#8aa09b;stroke-width:2}.line{stroke:#cfdad7;stroke-width:2}</style>
+<rect width="1440" height="900" fill="#f6f8f8"/>
+<rect width="250" height="900" fill="#0b2b3b"/>
+<text x="32" y="58" font-size="28" font-weight="850" class="white">MyCFC</text>
+<circle cx="62" cy="124" r="26" fill="#dcefeb"/><text x="45" y="132" font-size="17" font-weight="800">BA</text>
+<text x="102" y="118" class="nav">Beatriz Administradora</text><text x="102" y="144" class="tiny" fill="#bcd0d3">Administração · Membro</text>
+<text x="32" y="205" class="tiny" fill="#88a5ab">CLUBE</text><text x="42" y="250" class="nav">Hoje</text><text x="42" y="292" class="nav">Calendário</text>
+<text x="32" y="352" class="tiny" fill="#88a5ab">ADMINISTRAÇÃO</text><rect x="20" y="370" width="210" height="46" rx="8" fill="#ffffff22"/><text x="42" y="400" class="nav" font-weight="800">Membros</text><text x="42" y="448" class="nav">Conteúdos</text><text x="42" y="490" class="nav">Frota</text><text x="42" y="532" class="nav">Sistema</text>
+<rect x="250" width="1190" height="58" class="white"/><text x="285" y="37" class="small muted">MyCFC / Administração / Membros</text><line x1="250" y1="58" x2="1440" y2="58" class="line"/>
+<text x="292" y="120" class="tiny" fill="#0d7d7a" font-weight="800">ADMINISTRAÇÃO</text><text x="292" y="166" class="h1">Membros</text><text x="292" y="198" class="body muted">Encontre pessoas e acompanhe o estado da conta.</text>
+<rect x="1140" y="118" width="170" height="50" rx="9" fill="#0d7d7a"/><text x="1174" y="150" class="body white" font-weight="800">Criar conta</text>
+<rect x="292" y="240" width="400" height="48" rx="8" class="field"/><text x="312" y="271" class="small muted">Pesquisar por nome ou email</text>
+<rect x="712" y="240" width="190" height="48" rx="8" class="field"/><text x="732" y="271" class="small">Todos os estados</text>
+<rect x="292" y="318" width="1018" height="390" rx="12" class="card"/>
+<rect x="292" y="318" width="1018" height="54" rx="12" fill="#eef3f3"/>
+<text x="318" y="351" class="tiny muted" font-weight="800">MEMBRO</text><text x="650" y="351" class="tiny muted" font-weight="800">CONTA</text><text x="790" y="351" class="tiny muted" font-weight="800">INSCRIÇÕES</text><text x="1030" y="351" class="tiny muted" font-weight="800">ALTERAÇÃO</text>
+<line x1="292" y1="372" x2="1310" y2="372" class="line"/>
+<text x="318" y="412" class="body" font-weight="800">Leonor Rodrigues e Albuquerque</text><text x="318" y="440" class="small muted">Menor a cargo</text><rect x="650" y="396" width="78" height="30" rx="15" fill="#dff3e9"/><text x="670" y="417" class="tiny" font-weight="800">Ativa</text><text x="790" y="417" class="small">Iniciação</text><text x="1030" y="417" class="small">Hoje, 10:42</text><rect x="1192" y="390" width="90" height="44" rx="8" class="field"/><text x="1217" y="418" class="small" font-weight="800">Abrir</text>
+<line x1="292" y1="470" x2="1310" y2="470" class="line"/>
+<text x="318" y="512" class="body" font-weight="800">Marta Rodrigues e Albuquerque</text><text x="318" y="540" class="small muted">review-tutor@example.test</text><rect x="650" y="496" width="78" height="30" rx="15" fill="#dff3e9"/><text x="670" y="517" class="tiny" font-weight="800">Ativa</text><text x="790" y="517" class="small">—</text><text x="1030" y="517" class="small">Ontem</text>
+<rect x="250" y="58" width="1190" height="842" fill="#071921" opacity=".48"/>
+<rect x="895" y="58" width="545" height="842" class="white"/>
+<rect x="895" y="58" width="545" height="90" fill="#fff"/><line x1="895" y1="148" x2="1440" y2="148" class="line"/>
+<text x="928" y="88" class="tiny muted">TAREFA CONTEXTUAL</text><text x="928" y="124" class="h2">Criar conta</text><rect x="1330" y="80" width="76" height="44" rx="8" class="field"/><text x="1345" y="108" class="small" font-weight="800">Fechar</text>
+<rect x="928" y="178" width="445" height="70" rx="8" fill="#fff0cd"/><rect x="928" y="178" width="6" height="70" fill="#e39a13"/><text x="952" y="207" class="small">O foco e o scroll ficam contidos nesta tarefa.</text><text x="952" y="232" class="small muted">A coleção permanece como contexto.</text>
+<text x="928" y="294" class="small" font-weight="800">Tipo de pessoa</text><rect x="928" y="310" width="445" height="50" rx="8" class="field"/><text x="946" y="341" class="body">Adulto</text>
+<text x="928" y="401" class="small" font-weight="800">Nome completo</text><rect x="928" y="417" width="445" height="50" rx="8" class="field"/>
+<text x="928" y="508" class="small" font-weight="800">Email</text><rect x="928" y="524" width="445" height="50" rx="8" class="field"/>
+<text x="928" y="615" class="small" font-weight="800">Data de nascimento</text><rect x="928" y="631" width="445" height="50" rx="8" class="field"/>
+<line x1="895" y1="808" x2="1440" y2="808" class="line"/><rect x="1087" y="828" width="118" height="48" rx="8" class="field"/><text x="1112" y="858" class="small" font-weight="800">Cancelar</text><rect x="1221" y="828" width="152" height="48" rx="8" fill="#0d7d7a"/><text x="1248" y="858" class="small white" font-weight="800">Criar conta</text>
+<text x="292" y="800" class="small muted">Desktop: painel modal. Mobile: tarefa de altura completa com cabeçalho e ações fixas.</text>
+</svg>
