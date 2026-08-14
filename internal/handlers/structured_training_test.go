@@ -271,6 +271,90 @@ func TestStructuredCrewSizeUsesConfiguredCraftCapacity(t *testing.T) {
 	}
 }
 
+func TestStructuredVariationChoicesDescribeTargetsGroupsAndSubjects(t *testing.T) {
+	groupID, membershipID, variationGroupID := uuid.New(), uuid.New(), uuid.New()
+	craftID, competitionID := uuid.New(), uuid.New()
+	craftCode, competitionTitle := "C2", "Taça de Portugal"
+	members := []dbgen.ListManagedTrainingGroupMembersRow{{
+		TrainingGroupID: groupID, TrainingGroupName: "Seniores", MembershipID: membershipID, AthleteName: "Ana",
+	}}
+	groups := []dbgen.ListManagedTrainingVariationGroupsRow{
+		{
+			ID: variationGroupID, TrainingGroupID: groupID, TrainingGroupName: "Seniores", Name: "C2 principal",
+			Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: &craftCode,
+			EffectiveFrom:      pgtype.Date{Time: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), Valid: true},
+			CompetitionEventID: &competitionID, CompetitionEventTitle: &competitionTitle,
+			MembershipID: membershipID, AthleteName: "Ana",
+		},
+		{
+			ID: variationGroupID, TrainingGroupID: groupID, TrainingGroupName: "Seniores", Name: "C2 principal",
+			Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: &craftCode,
+			EffectiveFrom:      pgtype.Date{Time: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), Valid: true},
+			CompetitionEventID: &competitionID, CompetitionEventTitle: &competitionTitle,
+			MembershipID: uuid.New(), AthleteName: "Beatriz",
+		},
+	}
+
+	memberChoices := structuredVariationMembers(members)
+	if len(memberChoices) != 1 || memberChoices[0].ID != membershipID.String() || memberChoices[0].Athlete != "Ana" {
+		t.Fatalf("member choices = %#v", memberChoices)
+	}
+	crewChoices := structuredCrewModalities([]dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: craftCode, NamePt: "Canoa de dois"}})
+	if len(crewChoices) != 1 || crewChoices[0].Name != "C2 · Canoa de dois" {
+		t.Fatalf("crew choices = %#v", crewChoices)
+	}
+	eventChoices := structuredCompetitionEvents([]dbgen.ListManagedStructuredCompetitionEventsRow{{
+		ID: competitionID, Title: competitionTitle,
+		StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC), Valid: true},
+	}}, time.UTC)
+	if len(eventChoices) != 1 || eventChoices[0].Name != "05/09/2026 · Taça de Portugal" {
+		t.Fatalf("event choices = %#v", eventChoices)
+	}
+	groupChoices := structuredVariationGroups(groups, time.UTC)
+	if len(groupChoices) != 1 || groupChoices[0].Kind != "Tripulação" || groupChoices[0].Craft != craftCode || len(groupChoices[0].Members) != 2 || groupChoices[0].Period != "desde 17/08/2026 até à competição" {
+		t.Fatalf("group choices = %#v", groupChoices)
+	}
+	targets := structuredVariationTargets(members, groups)
+	if len(targets) != 2 || targets[0].Value != "ATHLETE:"+membershipID.String() || targets[1].Value != "GROUP:"+variationGroupID.String() {
+		t.Fatalf("targets = %#v", targets)
+	}
+
+	audiences := []pages.StructuredTrainingAudience{{Weeks: []pages.StructuredTrainingWeek{{
+		ID: "plan-1", Title: "M34", Sessions: []pages.StructuredTrainingSession{{
+			Title: "Sessão híbrida", When: "18/08/2026 10:00", Segments: []pages.StructuredTrainingSegment{{
+				ID: "segment-1", Position: 1, Modality: "WATER", Title: "Técnica", Blocks: []pages.StructuredTrainingBlock{{
+					ID: "block-1", Position: 1, Purpose: "Principal", WaterSteps: []pages.StructuredWaterStep{{ID: "step-1", Position: 1, Name: "Séries"}},
+					Exercises: []pages.StructuredGymExercise{{ID: "exercise-1", Position: 1, Name: "Remada"}},
+				}},
+			}},
+		}},
+	}}}}
+	subjects := structuredVariationSubjects(audiences)
+	if len(subjects) != 4 || subjects[0].Value != "SEGMENT:segment-1" || subjects[3].Value != "GYM_EXERCISE:exercise-1" {
+		t.Fatalf("subjects = %#v", subjects)
+	}
+}
+
+func TestTrainingVariationLabelsRemainReadable(t *testing.T) {
+	operations := map[dbgen.TrainingVariationOperation]string{
+		dbgen.TrainingVariationOperationOMIT:     "Omitir",
+		dbgen.TrainingVariationOperationREPLACE:  "Substituir",
+		dbgen.TrainingVariationOperationADD:      "Adicionar alternativa",
+		dbgen.TrainingVariationOperationOVERRIDE: "Alterar campos",
+	}
+	for operation, want := range operations {
+		if got := trainingVariationOperationLabel(operation); got != want {
+			t.Errorf("operation %s = %q, want %q", operation, got, want)
+		}
+	}
+	if got := trainingVariationPatchLabel([]byte(`{"intensity_code":"R7","duration_seconds":120}`)); got != "duração (s): 120 · intensidade: R7" {
+		t.Fatalf("patch label = %q", got)
+	}
+	if got := trainingVariationPatchLabel([]byte(`not-json`)); got != "" {
+		t.Fatalf("invalid patch label = %q", got)
+	}
+}
+
 func TestCreateStructuredTrainingVariationPersistsBoundedAthleteOverride(t *testing.T) {
 	userID, planID, membershipID, stepID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	store := &structuredTrainingStoreStub{weekOK: true}
