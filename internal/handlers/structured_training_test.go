@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -43,10 +44,16 @@ type structuredTrainingStoreStub struct {
 	visibleRoutine   dbgen.TrainingRoutine
 	insertedRoutines []StructuredRoutineInsertInput
 	copiedBlocks     [][3]uuid.UUID
+	variationInputs  []dbgen.CreateTrainingVariationParams
 	copiedSessions   []struct {
 		SourceID, TargetID, ActorID uuid.UUID
 		StartsAt                    pgtype.Timestamptz
 	}
+}
+
+func (s *structuredTrainingStoreStub) CreateTrainingVariation(_ context.Context, params dbgen.CreateTrainingVariationParams) (dbgen.TrainingVariation, error) {
+	s.variationInputs = append(s.variationInputs, params)
+	return dbgen.TrainingVariation{ID: uuid.New()}, nil
 }
 
 func (s *structuredTrainingStoreStub) CreateGroup(_ context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
@@ -206,6 +213,181 @@ func TestAssembleStructuredTrainingPreservesHybridHierarchy(t *testing.T) {
 	}
 	if modalities := audiences[0].Weeks[0].Sessions[0].Modalities; len(modalities) != 2 || modalities[0] != "GYM" || modalities[1] != "WATER" {
 		t.Fatalf("derived modalities = %#v", modalities)
+	}
+}
+
+func TestStructuredVariationPreviewResolvesPrecedenceAndFlagsPeerConflicts(t *testing.T) {
+	planID, sessionID, subjectID, membershipID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	startsAt := time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC)
+	row := func(priority int32, target string) dbgen.ListTrainingVariationMatchesForManagerRow {
+		return dbgen.ListTrainingVariationMatchesForManagerRow{
+			VariationID: uuid.New(), PlanID: planID, PlanTitle: "M34", SessionID: sessionID,
+			SessionTitle: "Água", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true},
+			SubjectKind: dbgen.TrainingVariationSubjectKindWATERSTEP, SubjectID: subjectID, SubjectLabel: "Passo de água · Séries",
+			Operation: dbgen.TrainingVariationOperationOVERRIDE, ChangeSummary: "Carga ajustada", Patch: []byte(`{"intensity_code":"R4"}`), Version: 1,
+			MembershipID: &membershipID, AthleteName: "Ana", Priority: priority, TargetKind: target, TargetName: target,
+		}
+	}
+
+	resolved := structuredVariationPreviews([]dbgen.ListTrainingVariationMatchesForManagerRow{row(2, "Atleta"), row(1, "Tripulação")}, time.UTC)
+	if len(resolved) != 1 || resolved[0].Conflict || !resolved[0].Rules[0].Applied || resolved[0].Rules[1].Applied {
+		t.Fatalf("resolved precedence = %#v", resolved)
+	}
+
+	conflicted := structuredVariationPreviews([]dbgen.ListTrainingVariationMatchesForManagerRow{row(1, "Tripulação"), row(1, "Subgrupo")}, time.UTC)
+	if len(conflicted) != 1 || !conflicted[0].Conflict || !conflicted[0].Rules[0].Applied || !conflicted[0].Rules[1].Applied {
+		t.Fatalf("peer conflict = %#v", conflicted)
+	}
+}
+
+func TestParseTrainingVariationPatchKeepsSubjectFieldsBounded(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(url.Values{
+		"duration_seconds": {"120"}, "intensity_code": {"R7"}, "sets": {"4"},
+	}.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := request.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTrainingVariationPatch(request, dbgen.TrainingVariationSubjectKindWATERSTEP); err == nil {
+		t.Fatal("water step accepted a gym-only sets field")
+	}
+
+	delete(request.PostForm, "sets")
+	patch, err := parseTrainingVariationPatch(request, dbgen.TrainingVariationSubjectKindWATERSTEP)
+	if err != nil || patch["duration_seconds"] != int32(120) || patch["intensity_code"] != "R7" {
+		t.Fatalf("patch = %#v, err = %v", patch, err)
+	}
+}
+
+func TestStructuredCrewSizeUsesConfiguredCraftCapacity(t *testing.T) {
+	craftID := uuid.New()
+	rows := []dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: "C4", NamePt: "Canoa de quatro"}}
+	if size, valid := structuredCrewSize(rows, &craftID); !valid || size != 4 {
+		t.Fatalf("size = %d, valid = %t", size, valid)
+	}
+	unknown := uuid.New()
+	if _, valid := structuredCrewSize(rows, &unknown); valid {
+		t.Fatal("unknown craft was accepted")
+	}
+}
+
+func TestStructuredVariationChoicesDescribeTargetsGroupsAndSubjects(t *testing.T) {
+	groupID, membershipID, variationGroupID := uuid.New(), uuid.New(), uuid.New()
+	craftID, competitionID := uuid.New(), uuid.New()
+	craftCode, competitionTitle := "C2", "Taça de Portugal"
+	members := []dbgen.ListManagedTrainingGroupMembersRow{{
+		TrainingGroupID: groupID, TrainingGroupName: "Seniores", MembershipID: membershipID, AthleteName: "Ana",
+	}}
+	groups := []dbgen.ListManagedTrainingVariationGroupsRow{
+		{
+			ID: variationGroupID, TrainingGroupID: groupID, TrainingGroupName: "Seniores", Name: "C2 principal",
+			Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: &craftCode,
+			EffectiveFrom:      pgtype.Date{Time: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), Valid: true},
+			CompetitionEventID: &competitionID, CompetitionEventTitle: &competitionTitle,
+			MembershipID: membershipID, AthleteName: "Ana",
+		},
+		{
+			ID: variationGroupID, TrainingGroupID: groupID, TrainingGroupName: "Seniores", Name: "C2 principal",
+			Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: &craftCode,
+			EffectiveFrom:      pgtype.Date{Time: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), Valid: true},
+			CompetitionEventID: &competitionID, CompetitionEventTitle: &competitionTitle,
+			MembershipID: uuid.New(), AthleteName: "Beatriz",
+		},
+	}
+
+	memberChoices := structuredVariationMembers(members)
+	if len(memberChoices) != 1 || memberChoices[0].ID != membershipID.String() || memberChoices[0].Athlete != "Ana" {
+		t.Fatalf("member choices = %#v", memberChoices)
+	}
+	crewChoices := structuredCrewModalities([]dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: craftCode, NamePt: "Canoa de dois"}})
+	if len(crewChoices) != 1 || crewChoices[0].Name != "C2 · Canoa de dois" {
+		t.Fatalf("crew choices = %#v", crewChoices)
+	}
+	eventChoices := structuredCompetitionEvents([]dbgen.ListManagedStructuredCompetitionEventsRow{{
+		ID: competitionID, Title: competitionTitle,
+		StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC), Valid: true},
+	}}, time.UTC)
+	if len(eventChoices) != 1 || eventChoices[0].Name != "05/09/2026 · Taça de Portugal" {
+		t.Fatalf("event choices = %#v", eventChoices)
+	}
+	groupChoices := structuredVariationGroups(groups, time.UTC)
+	if len(groupChoices) != 1 || groupChoices[0].Kind != "Tripulação" || groupChoices[0].Craft != craftCode || len(groupChoices[0].Members) != 2 || groupChoices[0].Period != "desde 17/08/2026 até à competição" {
+		t.Fatalf("group choices = %#v", groupChoices)
+	}
+	targets := structuredVariationTargets(members, groups)
+	if len(targets) != 2 || targets[0].Value != "ATHLETE:"+membershipID.String() || targets[1].Value != "GROUP:"+variationGroupID.String() {
+		t.Fatalf("targets = %#v", targets)
+	}
+
+	audiences := []pages.StructuredTrainingAudience{{Weeks: []pages.StructuredTrainingWeek{{
+		ID: "plan-1", Title: "M34", Sessions: []pages.StructuredTrainingSession{{
+			Title: "Sessão híbrida", When: "18/08/2026 10:00", Segments: []pages.StructuredTrainingSegment{{
+				ID: "segment-1", Position: 1, Modality: "WATER", Title: "Técnica", Blocks: []pages.StructuredTrainingBlock{{
+					ID: "block-1", Position: 1, Purpose: "Principal", WaterSteps: []pages.StructuredWaterStep{{ID: "step-1", Position: 1, Name: "Séries"}},
+					Exercises: []pages.StructuredGymExercise{{ID: "exercise-1", Position: 1, Name: "Remada"}},
+				}},
+			}},
+		}},
+	}}}}
+	subjects := structuredVariationSubjects(audiences)
+	if len(subjects) != 4 || subjects[0].Value != "SEGMENT:segment-1" || subjects[3].Value != "GYM_EXERCISE:exercise-1" {
+		t.Fatalf("subjects = %#v", subjects)
+	}
+}
+
+func TestTrainingVariationLabelsRemainReadable(t *testing.T) {
+	operations := map[dbgen.TrainingVariationOperation]string{
+		dbgen.TrainingVariationOperationOMIT:     "Omitir",
+		dbgen.TrainingVariationOperationREPLACE:  "Substituir",
+		dbgen.TrainingVariationOperationADD:      "Adicionar alternativa",
+		dbgen.TrainingVariationOperationOVERRIDE: "Alterar campos",
+	}
+	for operation, want := range operations {
+		if got := trainingVariationOperationLabel(operation); got != want {
+			t.Errorf("operation %s = %q, want %q", operation, got, want)
+		}
+	}
+	if got := trainingVariationPatchLabel([]byte(`{"intensity_code":"R7","duration_seconds":120}`)); got != "duração (s): 120 · intensidade: R7" {
+		t.Fatalf("patch label = %q", got)
+	}
+	if got := trainingVariationPatchLabel([]byte(`not-json`)); got != "" {
+		t.Fatalf("invalid patch label = %q", got)
+	}
+}
+
+func TestCreateStructuredTrainingVariationPersistsBoundedAthleteOverride(t *testing.T) {
+	userID, planID, membershipID, stepID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{weekOK: true}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	values := url.Values{
+		"plan_id": {planID.String()}, "target": {"ATHLETE:" + membershipID.String()},
+		"subject": {"WATER_STEP:" + stepID.String()}, "operation": {"OVERRIDE"},
+		"change_summary": {"Ritmo individual"}, "duration_seconds": {"120"}, "intensity_code": {"R7"},
+	}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: userID}, http.MethodPost, "/admin/treinos/estruturados/variacoes", values, "", "", handler.CreateVariation)
+	if response.Code != http.StatusSeeOther || len(store.variationInputs) != 1 {
+		t.Fatalf("response=%d variations=%#v", response.Code, store.variationInputs)
+	}
+	created := store.variationInputs[0]
+	if created.PlanID != planID || created.TargetMembershipID == nil || *created.TargetMembershipID != membershipID || created.TargetGroupID != nil || created.SubjectID != stepID {
+		t.Fatalf("created variation = %#v", created)
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(created.Patch, &patch); err != nil || patch["duration_seconds"] != float64(120) || patch["intensity_code"] != "R7" {
+		t.Fatalf("patch = %#v, err = %v", patch, err)
+	}
+}
+
+func TestCreateStructuredTrainingVariationRechecksWeekAuthorization(t *testing.T) {
+	values := url.Values{
+		"plan_id": {uuid.NewString()}, "target": {"ATHLETE:" + uuid.NewString()},
+		"subject": {"BLOCK:" + uuid.NewString()}, "operation": {"OMIT"}, "change_summary": {"Omitir para este atleta"},
+	}
+	store := &structuredTrainingStoreStub{}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodPost, "/admin/treinos/estruturados/variacoes", values, "", "", handler.CreateVariation)
+	if response.Code != http.StatusForbidden || len(store.variationInputs) != 0 {
+		t.Fatalf("response=%d variations=%#v", response.Code, store.variationInputs)
 	}
 }
 

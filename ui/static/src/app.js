@@ -339,6 +339,61 @@ const initRepairDuplicateWarnings = (root = document) => {
 
 initRepairDuplicateWarnings();
 
+const variationGroupSelect = document.querySelector("#variation-group-base");
+if (variationGroupSelect instanceof HTMLElement && variationGroupSelect.matches("select")) {
+  const syncVariationMembers = () => {
+    const groupID = variationGroupSelect.value;
+    document.querySelectorAll("[data-variation-member]").forEach((card) => {
+      const visible = groupID !== "" && card.dataset.group === groupID;
+      card.hidden = !visible;
+      const checkbox = card.querySelector("input[type='checkbox']");
+      if (checkbox instanceof HTMLElement && checkbox.matches("input[type='checkbox']")) {
+        checkbox.disabled = !visible;
+        if (!visible) checkbox.checked = false;
+      }
+    });
+  };
+  variationGroupSelect.addEventListener("change", syncVariationMembers);
+  syncVariationMembers();
+}
+
+const variationPlanSelect = document.querySelector("#variation-plan");
+const variationTargetSelect = document.querySelector("#variation-target");
+const variationSubjectSelect = document.querySelector("#variation-subject");
+if (variationPlanSelect instanceof HTMLElement && variationPlanSelect.matches("select") && variationTargetSelect instanceof HTMLElement && variationTargetSelect.matches("select") && variationSubjectSelect instanceof HTMLElement && variationSubjectSelect.matches("select")) {
+  const filterVariationOptions = (select, attribute, expected) => {
+    [...select.options].forEach((option, index) => {
+      if (index === 0) return;
+      const visible = expected !== "" && option.dataset[attribute] === expected;
+      option.hidden = !visible;
+      option.disabled = !visible;
+    });
+    if (select.selectedOptions[0]?.disabled) select.value = "";
+  };
+  const syncVariationScope = () => {
+    const selectedPlan = variationPlanSelect.selectedOptions[0];
+    filterVariationOptions(variationTargetSelect, "group", selectedPlan?.dataset.group || "");
+    filterVariationOptions(variationSubjectSelect, "plan", variationPlanSelect.value);
+  };
+  variationPlanSelect.addEventListener("change", syncVariationScope);
+  syncVariationScope();
+}
+
+const variationOperation = document.querySelector("#variation-operation");
+if (variationOperation instanceof HTMLElement && variationOperation.matches("select")) {
+  const form = variationOperation.closest("form");
+  const patchFields = form?.querySelectorAll("input[name]:not([name='version']), select[name='modality'], textarea[name='instructions']") || [];
+  const excludedNames = new Set(["plan_id", "target", "subject", "operation", "change_summary"]);
+  const syncVariationOperation = () => {
+    const omit = variationOperation.value === "OMIT";
+    patchFields.forEach((field) => {
+      if (!excludedNames.has(field.name)) field.disabled = omit;
+    });
+  };
+  variationOperation.addEventListener("change", syncVariationOperation);
+  syncVariationOperation();
+}
+
 document.addEventListener("htmx:afterSwap", (event) => {
 	focusReturnedFeedback(event.detail?.target || document);
 	initRepairDuplicateWarnings(event.detail?.target || document);

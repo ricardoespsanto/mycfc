@@ -66,6 +66,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodPost, "/admin/treinos/estruturados/rotinas", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Frotinas"},
 		{http.MethodPost, "/admin/treinos/estruturados/rotinas/00000000-0000-0000-0000-000000000000/inserir", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Frotinas%2F00000000-0000-0000-0000-000000000000%2Finserir"},
 		{http.MethodPost, "/admin/treinos/estruturados/dias/copiar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fdias%2Fcopiar"},
+		{http.MethodPost, "/admin/treinos/estruturados/variacoes/grupos", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fvariacoes%2Fgrupos"},
+		{http.MethodPost, "/admin/treinos/estruturados/variacoes", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fvariacoes"},
+		{http.MethodPost, "/admin/treinos/estruturados/variacoes/00000000-0000-0000-0000-000000000000/retirar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fvariacoes%2F00000000-0000-0000-0000-000000000000%2Fretirar"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()

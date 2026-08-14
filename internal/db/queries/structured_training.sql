@@ -487,3 +487,249 @@ FROM training_sessions session
 WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
   AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = sqlc.arg(source_date)::date
 ORDER BY session.starts_at, session.id;
+
+-- name: ListManagedTrainingGroupMembers :many
+SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
+       membership.id AS membership_id, subject.name AS athlete_name
+FROM training_groups group_row
+JOIN training_group_members group_member ON group_member.group_id = group_row.id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active
+WHERE membership.starts_on <= CURRENT_DATE
+  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+  AND (sqlc.arg(is_admin)::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = sqlc.arg(user_id)
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   ))
+ORDER BY group_row.name, subject.name, membership.id;
+
+-- name: ListStructuredCrewModalities :many
+SELECT id, code, name_pt
+FROM modalities
+WHERE code ~ '^[A-Z]+[2-9][0-9]*$'
+ORDER BY code;
+
+-- name: ListManagedStructuredCompetitionEvents :many
+SELECT event_row.id, event_row.title, event_row.starts_at
+FROM events event_row
+WHERE event_row.event_type = 'COMPETITION'
+  AND event_row.status = 'ACTIVE'
+  AND event_row.starts_at >= CURRENT_DATE
+  AND (
+      sqlc.arg(is_admin)::boolean
+      OR EXISTS (
+          SELECT 1
+          FROM event_audiences audience
+          JOIN staff_grants grant_row ON true
+          LEFT JOIN teams grant_team ON grant_team.id = grant_row.team_id
+          WHERE audience.event_id = event_row.id
+            AND grant_row.user_id = sqlc.arg(user_id)
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = audience.programme_id OR grant_team.programme_id = audience.programme_id)
+      )
+  )
+ORDER BY event_row.starts_at, event_row.id;
+
+-- name: CreateTrainingVariationGroup :one
+INSERT INTO training_variation_groups (training_group_id, name, kind, craft_modality_id,
+                                       effective_from, effective_until, competition_event_id,
+                                       open_ended_exception, created_by_id)
+VALUES (sqlc.arg(training_group_id), sqlc.arg(name), sqlc.arg(kind)::training_variation_group_kind,
+        sqlc.narg(craft_modality_id), sqlc.arg(effective_from), sqlc.narg(effective_until),
+        sqlc.narg(competition_event_id), sqlc.arg(open_ended_exception), sqlc.arg(created_by_id))
+RETURNING *;
+
+-- name: AddTrainingVariationGroupMember :execrows
+INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
+SELECT variation_group.id, group_member.membership_id, sqlc.arg(added_by_id)
+FROM training_variation_groups variation_group
+JOIN training_group_members group_member ON group_member.group_id = variation_group.training_group_id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+WHERE variation_group.id = sqlc.arg(variation_group_id)
+  AND group_member.membership_id = sqlc.arg(membership_id)
+  AND membership.starts_on <= CURRENT_DATE
+  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+ON CONFLICT (variation_group_id, membership_id) DO NOTHING;
+
+-- name: ListManagedTrainingVariationGroups :many
+SELECT variation_group.id, variation_group.training_group_id, group_row.name AS training_group_name,
+       variation_group.name, variation_group.kind, modality.code AS craft_code,
+       variation_group.effective_from, variation_group.effective_until,
+       event_row.id AS competition_event_id, event_row.title AS competition_event_title,
+       variation_group.open_ended_exception,
+       membership.id AS membership_id, subject.name AS athlete_name
+FROM training_variation_groups variation_group
+JOIN training_groups group_row ON group_row.id = variation_group.training_group_id
+LEFT JOIN modalities modality ON modality.id = variation_group.craft_modality_id
+LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
+JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
+JOIN user_memberships membership ON membership.id = variation_member.membership_id
+JOIN users subject ON subject.id = membership.user_id
+WHERE sqlc.arg(is_admin)::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = sqlc.arg(user_id)
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY group_row.name, variation_group.name, subject.name, membership.id;
+
+-- name: CreateTrainingVariation :one
+WITH subject_plan AS (
+    SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date AS session_date
+    FROM training_session_segments segment
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM training_segment_blocks block
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM water_work_steps step
+    JOIN training_segment_blocks block ON block.id = step.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM gym_exercises exercise
+    JOIN training_segment_blocks block ON block.id = exercise.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+)
+INSERT INTO training_variations (plan_id, target_membership_id, target_group_id, subject_kind,
+                                 subject_id, operation, change_summary, patch, created_by_id)
+SELECT plan.id, sqlc.narg(target_membership_id), sqlc.narg(target_group_id),
+       sqlc.arg(subject_kind)::training_variation_subject_kind, sqlc.arg(subject_id),
+       sqlc.arg(operation)::training_variation_operation, sqlc.arg(change_summary),
+       sqlc.arg(patch)::jsonb, sqlc.arg(created_by_id)
+FROM training_plans plan
+JOIN subject_plan subject ON subject.plan_id = plan.id
+                         AND subject.subject_id = sqlc.arg(subject_id)
+                         AND subject.subject_kind = sqlc.arg(subject_kind)::training_variation_subject_kind
+WHERE plan.id = sqlc.arg(plan_id)
+  AND plan.training_group_id IS NOT NULL
+  AND (
+      (sqlc.narg(target_membership_id)::uuid IS NOT NULL AND EXISTS (
+          SELECT 1 FROM training_group_members group_member
+          JOIN user_memberships membership ON membership.id = group_member.membership_id
+          WHERE group_member.group_id = plan.training_group_id
+            AND group_member.membership_id = sqlc.narg(target_membership_id)
+            AND membership.starts_on <= subject.session_date
+            AND (membership.ends_on IS NULL OR membership.ends_on >= subject.session_date)
+      ))
+      OR
+      (sqlc.narg(target_group_id)::uuid IS NOT NULL AND EXISTS (
+          SELECT 1 FROM training_variation_groups variation_group
+          WHERE variation_group.id = sqlc.narg(target_group_id)
+            AND variation_group.training_group_id = plan.training_group_id
+      ))
+  )
+RETURNING *;
+
+-- name: GetTrainingVariationPlanID :one
+SELECT plan_id FROM training_variations WHERE id = sqlc.arg(id);
+
+-- name: RetireTrainingVariation :execrows
+UPDATE training_variations
+SET is_active = false, retired_at = clock_timestamp(), retired_by_id = sqlc.arg(retired_by_id),
+    version = version + 1, updated_at = clock_timestamp()
+WHERE id = sqlc.arg(id) AND version = sqlc.arg(version) AND is_active;
+
+-- name: ListTrainingVariationMatchesForManager :many
+WITH subject_details AS (
+    SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
+           session.plan_id, session.id AS session_id, session.title AS session_title, session.starts_at,
+           concat('Segmento · ', segment.position, ' · ', segment.modality::text,
+                  CASE WHEN segment.title = '' THEN '' ELSE ' · ' || segment.title END)::text AS subject_label
+    FROM training_session_segments segment
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Bloco · ', block.position, ' · ', block.purpose::text,
+                  CASE WHEN block.title = '' THEN '' ELSE ' · ' || block.title END)::text
+    FROM training_segment_blocks block
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Passo de água · ', step.position, ' · ', step.name)::text
+    FROM water_work_steps step
+    JOIN training_segment_blocks block ON block.id = step.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Exercício · ', exercise.position, ' · ', exercise.name)::text
+    FROM gym_exercises exercise
+    JOIN training_segment_blocks block ON block.id = exercise.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+), target_members AS (
+    SELECT variation.id AS variation_id, variation.target_membership_id AS membership_id,
+           2::integer AS priority, 'Atleta'::text AS target_kind, subject.name AS target_name,
+           NULL::date AS effective_from, NULL::date AS effective_until
+    FROM training_variations variation
+    JOIN user_memberships membership ON membership.id = variation.target_membership_id
+    JOIN users subject ON subject.id = membership.user_id
+    WHERE variation.target_membership_id IS NOT NULL
+    UNION ALL
+    SELECT variation.id, variation_member.membership_id, 1,
+           CASE variation_group.kind WHEN 'CREW' THEN 'Tripulação' ELSE 'Subgrupo' END,
+           variation_group.name, variation_group.effective_from,
+           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date)
+    FROM training_variations variation
+    JOIN training_variation_groups variation_group ON variation_group.id = variation.target_group_id
+    JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
+    LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
+    WHERE variation.target_group_id IS NOT NULL
+)
+SELECT variation.id AS variation_id, variation.plan_id, plan.title AS plan_title,
+       details.session_id, details.session_title, details.starts_at,
+       variation.subject_kind, variation.subject_id, details.subject_label,
+       variation.operation, variation.change_summary, variation.patch, variation.version,
+       targets.membership_id, athlete.name AS athlete_name, targets.priority,
+       targets.target_kind, targets.target_name, targets.effective_from, targets.effective_until
+FROM training_variations variation
+JOIN training_plans plan ON plan.id = variation.plan_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
+JOIN subject_details details ON details.plan_id = variation.plan_id
+                            AND details.subject_id = variation.subject_id
+                            AND details.subject_kind = variation.subject_kind
+JOIN target_members targets ON targets.variation_id = variation.id
+JOIN user_memberships membership ON membership.id = targets.membership_id
+JOIN training_group_members current_group_member
+  ON current_group_member.group_id = plan.training_group_id
+ AND current_group_member.membership_id = targets.membership_id
+JOIN users athlete ON athlete.id = membership.user_id
+WHERE variation.is_active
+  AND athlete.is_active
+  AND membership.starts_on <= (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date
+  AND (membership.ends_on IS NULL OR membership.ends_on >= (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date)
+  AND (targets.effective_from IS NULL OR (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date >= targets.effective_from)
+  AND (targets.effective_until IS NULL OR (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date <= targets.effective_until)
+  AND (
+      sqlc.arg(is_admin)::boolean
+      OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = sqlc.arg(user_id)
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+  )
+ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
+         targets.priority DESC, variation.created_at, variation.id;

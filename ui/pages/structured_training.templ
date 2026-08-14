@@ -8,8 +8,25 @@ import (
 )
 
 type StructuredTrainingMembershipChoice struct{ ID, Athlete, Scope string }
-type StructuredTrainingChoice struct{ ID, Name string }
+type StructuredTrainingChoice struct{ ID, Name, GroupID string }
 type StructuredTrainingRoutine struct{ ID, Name, Description, Kind, Visibility, Owner, Scope, Modality, Objective, Method, Tags, Preview, Provenance string }
+type StructuredVariationMemberChoice struct{ ID, Athlete, GroupID, GroupName string }
+type StructuredVariationTargetChoice struct{ Value, Name, GroupID string }
+type StructuredVariationSubjectChoice struct{ Value, Name, PlanID string }
+type StructuredVariationGroup struct {
+	ID, GroupID, GroupName, Name, Kind, Craft, Period, Competition string
+	Members []string
+}
+type StructuredVariationRule struct {
+	ID, Target, Operation, Summary, Patch string
+	Version int
+	Applied bool
+}
+type StructuredVariationPreview struct {
+	Athlete, Plan, Session, When, Subject, Status string
+	Conflict bool
+	Rules []StructuredVariationRule
+}
 
 type StructuredGymExercise struct {
 	ID, Name, Prescription, Resistance, Intent, Tempo, Notes string
@@ -89,6 +106,12 @@ type StructuredTrainingPage struct {
 	Memberships                                                 []StructuredTrainingMembershipChoice
 	Programmes, Teams, Groups, Weeks, Sessions, Segments        []StructuredTrainingChoice
 	WaterProfiles                                               []StructuredWaterProfile
+	VariationMembers                                           []StructuredVariationMemberChoice
+	VariationTargets                                           []StructuredVariationTargetChoice
+	VariationSubjects                                          []StructuredVariationSubjectChoice
+	VariationGroups                                            []StructuredVariationGroup
+	VariationPreviews                                          []StructuredVariationPreview
+	CrewModalities, CompetitionEvents                          []StructuredTrainingChoice
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
 	SessionForm                                                 StructuredTrainingSessionForm
@@ -112,6 +135,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		if page.Management {
 			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
 				<a href="#training-plan">Plano semanal</a>
+				<a href="#training-variations">Variações</a>
 				<a href="#training-routines">Rotinas</a>
 				<a href="#training-copy-tools">Copiar conteúdo</a>
 				if page.CanManageWaterProfiles {
@@ -353,6 +377,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			}
 		</section>
 		if page.Management {
+			@structuredVariationManagement(page)
 			@structuredRoutineLibrary(page)
 			@structuredCopyDayForm(page)
 			if page.CanManageWaterProfiles {
@@ -365,6 +390,129 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		@structuredWeekForm(page)
 		@structuredSessionForm(page)
 	}
+}
+
+templ structuredVariationManagement(page StructuredTrainingPage) {
+	<section id="training-variations" class="module" aria-labelledby="training-variations-title" data-tab-panel>
+		@components.SectionHeading("", "Variações por atleta e tripulação", "Mantenha a sessão do grupo como base e registe apenas o que muda. A pré-visualização mostra a instrução que prevalece para cada atleta.")
+		<div class="notice notice--info" role="note">
+			<p><strong>Precedência:</strong> uma variação individual prevalece sobre tripulações e subgrupos. Duas variações do mesmo nível para o mesmo item são apresentadas como conflito e nunca são escolhidas silenciosamente.</p>
+		</div>
+		<div class="page-actions">
+			<button class="action action--quiet" type="button" data-dialog-open="add-variation-group">Criar subgrupo ou tripulação</button>
+			<button class="action" type="button" data-dialog-open="add-training-variation">Adicionar variação</button>
+		</div>
+		<dialog id="add-variation-group" class="task-dialog" data-task-dialog aria-labelledby="add-variation-group-title">
+			<div class="task-dialog__header"><h3 id="add-variation-group-title">Novo alvo de variação</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes/grupos">
+				@page.CSRFField
+				@components.FieldLabel("variation-group-base", "Grupo de treino", true)
+				<select id="variation-group-base" name="training_group_id" required><option value="">Selecione</option>
+					for _, choice := range page.Groups {
+						<option value={ choice.ID } data-group={ choice.GroupID }>{ choice.Name }</option>
+					}
+				</select>
+				@components.FieldLabel("variation-group-kind", "Tipo", true)<select id="variation-group-kind" name="kind" required><option value="SUBGROUP">Subgrupo</option><option value="CREW">Tripulação temporária</option></select>
+				@components.FieldLabel("variation-group-name", "Nome", true)<input id="variation-group-name" name="name" required minlength="2" maxlength="120" placeholder="Ex.: Canoas ou C2 para a Taça"/>
+				@components.FieldLabel("variation-group-craft", "Embarcação da tripulação", false)
+				<select id="variation-group-craft" name="craft_modality_id"><option value="">Não se aplica</option>
+					for _, choice := range page.CrewModalities {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				</select>
+				<div class="form-grid"><div>@components.FieldLabel("variation-effective-from", "Válido desde", true)<input id="variation-effective-from" name="effective_from" type="date" required/></div><div>@components.FieldLabel("variation-effective-until", "Válido até", false)<input id="variation-effective-until" name="effective_until" type="date"/></div></div>
+				@components.FieldLabel("variation-competition", "Competição alvo (opcional)", false)
+				<select id="variation-competition" name="competition_event_id"><option value="">Sem competição associada</option>
+					for _, choice := range page.CompetitionEvents {
+						<option value={ choice.ID }>{ choice.Name }</option>
+					}
+				</select>
+				<label class="choice-card"><input type="checkbox" name="open_ended_exception" value="true"/><span><strong>Tripulação excecionalmente sem data final</strong><small>Use apenas quando não existir uma prova ou data final adequada.</small></span></label>
+				<fieldset><legend>Atletas</legend><div class="choice-grid">
+					for _, member := range page.VariationMembers {
+						<label class="choice-card" data-variation-member data-group={ member.GroupID }><input type="checkbox" name="membership_id" value={ member.ID }/><span><strong>{ member.Athlete }</strong><small>{ member.GroupName }</small></span></label>
+					}
+				</div></fieldset>
+				<button type="submit">Guardar alvo</button>
+			</form>
+		</dialog>
+		<dialog id="add-training-variation" class="task-dialog" data-task-dialog aria-labelledby="add-training-variation-title">
+			<div class="task-dialog__header"><h3 id="add-training-variation-title">Adicionar variação</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes">
+				@page.CSRFField
+				@components.FieldLabel("variation-plan", "Semana", true)
+				<select id="variation-plan" name="plan_id" required><option value="">Selecione</option>
+					for _, choice := range page.Weeks {
+						<option value={ choice.ID } data-group={ choice.GroupID }>{ choice.Name }</option>
+					}
+				</select>
+				@components.FieldLabel("variation-target", "Quem recebe", true)<select id="variation-target" name="target" required><option value="">Selecione</option>
+					for _, target := range page.VariationTargets {
+						<option value={ target.Value } data-group={ target.GroupID }>{ target.Name }</option>
+					}
+				</select>
+				@components.FieldLabel("variation-subject", "Item que muda", true)<select id="variation-subject" name="subject" required><option value="">Selecione</option>
+					for _, subject := range page.VariationSubjects {
+						<option value={ subject.Value } data-plan={ subject.PlanID }>{ subject.Name }</option>
+					}
+				</select>
+				@components.FieldLabel("variation-operation", "Alteração", true)<select id="variation-operation" name="operation" required><option value="OVERRIDE">Alterar campos</option><option value="OMIT">Omitir este item</option><option value="REPLACE">Substituir este item</option><option value="ADD">Adicionar alternativa após este item</option></select>
+				@components.FieldLabel("variation-summary", "Resumo legível", true)<textarea id="variation-summary" name="change_summary" required minlength="2" maxlength="500" placeholder="Ex.: fazer o retorno à calma no ergómetro"></textarea>
+				<p class="field-help">Preencha apenas os campos estruturados que mudam. O resumo continua obrigatório e não deve conter informação médica.</p>
+				<div class="form-grid"><div>@components.FieldLabel("variation-title", "Novo título", false)<input id="variation-title" name="title" maxlength="180"/></div><div>@components.FieldLabel("variation-modality", "Nova modalidade", false)<select id="variation-modality" name="modality"><option value="">Manter</option>
+					for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
+						<option value={ value }>{ structuredModalityLabel(value) }</option>
+					}
+				</select></div></div>
+				@components.FieldLabel("variation-instructions", "Novas instruções", false)<textarea id="variation-instructions" name="instructions" maxlength="4000"></textarea>
+				<div class="form-grid form-grid--three"><div>@components.FieldLabel("variation-repeats", "Repetições", false)<input id="variation-repeats" name="repeats" type="number" min="1" max="10000"/></div><div>@components.FieldLabel("variation-duration", "Duração (s)", false)<input id="variation-duration" name="duration_seconds" type="number" min="1" max="86400"/></div><div>@components.FieldLabel("variation-distance", "Distância (m)", false)<input id="variation-distance" name="distance_metres" type="number" min="1" max="200000"/></div></div>
+				<div class="form-grid form-grid--three"><div>@components.FieldLabel("variation-recovery", "Recuperação (s)", false)<input id="variation-recovery" name="recovery_seconds" type="number" min="1" max="86400"/></div><div>@components.FieldLabel("variation-intensity", "Intensidade", false)<input id="variation-intensity" name="intensity_code" maxlength="20" placeholder="Ex.: R4"/></div><div>@components.FieldLabel("variation-sets", "Séries", false)<input id="variation-sets" name="sets" type="number" min="1" max="100"/></div></div>
+				<div class="form-grid"><div>@components.FieldLabel("variation-repetitions", "Repetições do exercício", false)<input id="variation-repetitions" name="exercise_repetitions" type="number" min="1" max="10000"/></div><div>@components.FieldLabel("variation-resistance", "Carga ou instrução", false)<input id="variation-resistance" name="resistance" maxlength="180" placeholder="Ex.: 70 kg, peso corporal ou elástico forte"/></div></div>
+				<button type="submit">Guardar variação</button>
+			</form>
+		</dialog>
+		<h3>Subgrupos e tripulações</h3>
+		if len(page.VariationGroups) == 0 {
+			@components.EmptyState("Ainda sem alvos específicos", "Crie um subgrupo ou uma tripulação quando várias pessoas partilharem a mesma alteração.")
+		}
+		<div class="record-list">
+			for _, group := range page.VariationGroups {
+				<article class="record-item record-item--stacked"><div class="record-item__copy"><p class="eyebrow">{ group.Kind }</p><h4>{ group.Name }</h4><p class="record-meta">{ group.GroupName } · { group.Period }
+					if group.Craft != "" {
+						<span>· { group.Craft }</span>
+					}
+					if group.Competition != "" {
+						<span>· { group.Competition }</span>
+					}
+				</p><p>{ strings.Join(group.Members, ", ") }</p></div></article>
+			}
+		</div>
+		<h3>Pré-visualização resolvida</h3>
+		if len(page.VariationPreviews) == 0 {
+			@components.EmptyState("Ainda sem variações", "As instruções resolvidas por atleta aparecem aqui antes da publicação.")
+		}
+		<div class="record-list">
+			for _, preview := range page.VariationPreviews {
+				<article class={ "record-item record-item--stacked", templ.KV("notice--warning", preview.Conflict) }><div class="record-item__copy"><p class="eyebrow">{ preview.Athlete }</p><h4>{ preview.Session }</h4><p class="record-meta">{ preview.Plan } · { preview.When } · { preview.Subject }</p><p><strong>{ preview.Status }</strong></p><ul>
+					for _, rule := range preview.Rules {
+						<li><strong>{ rule.Target } · { rule.Operation }</strong>: { rule.Summary }
+							if preview.Conflict && rule.Applied {
+								<span class="badge badge--warning">em conflito</span>
+							} else if rule.Applied {
+								<span class="badge badge--success">prevalece</span>
+							} else {
+								<span class="badge">suplantada</span>
+							}
+							if rule.Patch != "" {
+								<span class="record-meta"> · { rule.Patch }</span>
+							}
+							<form class="inline-form" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/variacoes/" + rule.ID + "/retirar") }>@page.CSRFField<input type="hidden" name="version" value={ fmt.Sprintf("%d", rule.Version) }/><button class="action action--quiet" type="submit">Retirar</button></form>
+						</li>
+					}
+				</ul></div></article>
+			}
+		</div>
+	</section>
 }
 
 templ structuredRoutineLibrary(page StructuredTrainingPage) {
