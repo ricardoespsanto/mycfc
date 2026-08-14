@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+<title id="title">MyCFC 2026 interaction decision matrix</title>
+<desc id="desc">Five task types map to inline, modal, side sheet, dedicated page and confirmation surfaces.</desc>
+<style>
+text{font-family:Inter,system-ui,sans-serif;fill:#14252d}.title{font-size:42px;font-weight:800}.sub{font-size:20px;fill:#5a6c72}.h{font-size:22px;font-weight:800}.body{font-size:17px}.small{font-size:15px;fill:#5a6c72}.card{fill:#fff;stroke:#cfdad7;stroke-width:2}.accent{fill:#dcefeb}.navy{fill:#0b2b3b}.teal{fill:#0d7d7a}.white{fill:#fff}.line{stroke:#0d7d7a;stroke-width:4}</style>
+<rect width="1400" height="900" fill="#f6f8f8"/>
+<rect x="0" y="0" width="1400" height="18" class="navy"/>
+<text x="70" y="90" class="title">River Clubhouse 2.0 · modelo de interação</text>
+<text x="70" y="130" class="sub">A complexidade e a consequência da tarefa escolhem a superfície.</text>
+
+<g transform="translate(70 190)">
+<rect width="240" height="560" rx="18" class="card"/>
+<circle cx="42" cy="48" r="22" class="accent"/><text x="34" y="56" class="h">1</text>
+<text x="78" y="55" class="h">Inline</text>
+<text x="24" y="108" class="body">Imediata, baixo risco</text><text x="24" y="135" class="body">e até dois campos.</text>
+<rect x="24" y="180" width="192" height="72" rx="10" fill="#eef3f3"/><text x="40" y="210" class="small">Participação</text><text x="40" y="237" class="body">Confirmada ✓</text>
+<text x="24" y="305" class="small">Exemplos</text><text x="24" y="338" class="body">RSVP</text><text x="24" y="368" class="body">Distância</text><text x="24" y="398" class="body">Privacidade</text>
+<text x="24" y="500" class="small">Feedback junto ao</text><text x="24" y="523" class="small">objeto alterado.</text>
+</g>
+
+<g transform="translate(330 190)">
+<rect width="240" height="560" rx="18" class="card"/>
+<circle cx="42" cy="48" r="22" class="accent"/><text x="34" y="56" class="h">2</text>
+<text x="78" y="55" class="h">Modal</text>
+<text x="24" y="108" class="body">Curta, autónoma</text><text x="24" y="135" class="body">e contextual.</text>
+<rect x="48" y="176" width="144" height="126" rx="12" fill="#fff" stroke="#0d7d7a" stroke-width="3"/><rect x="64" y="198" width="112" height="16" rx="4" fill="#dcefeb"/><rect x="64" y="228" width="112" height="16" rx="4" fill="#eef3f3"/><rect x="108" y="263" width="68" height="22" rx="6" class="teal"/>
+<text x="24" y="355" class="small">Exemplos</text><text x="24" y="388" class="body">Copiar semana</text><text x="24" y="418" class="body">Guardar rotina</text>
+<text x="24" y="500" class="small">Foco contido, Escape</text><text x="24" y="523" class="small">e retorno ao lançador.</text>
+</g>
+
+<g transform="translate(590 190)">
+<rect width="240" height="560" rx="18" class="card"/>
+<circle cx="42" cy="48" r="22" class="accent"/><text x="34" y="56" class="h">3</text>
+<text x="78" y="55" class="h">Painel modal</text>
+<text x="24" y="108" class="body">Média, contextual</text><text x="24" y="135" class="body">e focada.</text>
+<rect x="24" y="176" width="192" height="146" rx="10" fill="#eef3f3"/><rect x="100" y="176" width="116" height="146" rx="10" fill="#fff" stroke="#0d7d7a" stroke-width="3"/><rect x="116" y="198" width="84" height="14" rx="4" fill="#dcefeb"/><rect x="116" y="226" width="84" height="14" rx="4" fill="#eef3f3"/><rect x="116" y="254" width="84" height="14" rx="4" fill="#eef3f3"/><rect x="148" y="289" width="52" height="18" rx="5" class="teal"/>
+<text x="24" y="375" class="small">Exemplos</text><text x="24" y="408" class="body">Adicionar menor</text><text x="24" y="438" class="body">Agendar manutenção</text>
+<text x="24" y="500" class="small">No móvel ocupa a</text><text x="24" y="523" class="small">altura útil completa.</text>
+</g>
+
+<g transform="translate(850 190)">
+<rect width="240" height="560" rx="18" class="card"/>
+<circle cx="42" cy="48" r="22" class="accent"/><text x="34" y="56" class="h">4</text>
+<text x="78" y="55" class="h">Página</text>
+<text x="24" y="108" class="body">Longa, condicional,</text><text x="24" y="135" class="body">sensível ou comparativa.</text>
+<rect x="24" y="176" width="192" height="146" rx="10" fill="#fff" stroke="#cfdad7" stroke-width="2"/><rect x="24" y="176" width="192" height="22" rx="10" class="navy"/><rect x="40" y="218" width="100" height="14" rx="4" fill="#dcefeb"/><rect x="40" y="246" width="160" height="14" rx="4" fill="#eef3f3"/><rect x="40" y="274" width="160" height="14" rx="4" fill="#eef3f3"/>
+<text x="24" y="375" class="small">Exemplos</text><text x="24" y="408" class="body">Criar evento</text><text x="24" y="438" class="body">Editar perfil</text><text x="24" y="468" class="body">Prescrição complexa</text>
+<text x="24" y="523" class="small">URL estável e recuperação.</text>
+</g>
+
+<g transform="translate(1110 190)">
+<rect width="220" height="560" rx="18" class="card"/>
+<circle cx="42" cy="48" r="22" fill="#fff0cd"/><text x="34" y="56" class="h">5</text>
+<text x="78" y="55" class="h">Confirmar</text>
+<text x="24" y="108" class="body">Irreversível ou</text><text x="24" y="135" class="body">destrutiva.</text>
+<rect x="30" y="184" width="160" height="120" rx="12" fill="#fff" stroke="#9d2929" stroke-width="3"/><text x="50" y="218" class="small">Cancelar evento?</text><rect x="50" y="240" width="120" height="12" rx="4" fill="#fde6e3"/><rect x="96" y="271" width="74" height="20" rx="5" fill="#9d2929"/>
+<text x="24" y="355" class="small">Exemplos</text><text x="24" y="388" class="body">Cancelar sessão</text><text x="24" y="418" class="body">Desativar conta</text><text x="24" y="448" class="body">Retirar equipamento</text>
+<text x="24" y="500" class="small">Nomeia objeto, efeito</text><text x="24" y="523" class="small">e permanência.</text>
+</g>
+
+<line x1="180" y1="810" x2="1220" y2="810" class="line"/>
+<text x="70" y="825" class="h">Menos contexto</text><text x="1180" y="825" class="h">Mais consequência</text>
+<text x="70" y="865" class="small">O JavaScript melhora a apresentação; o servidor continua a decidir autorização, validação e estado.</text>
+</svg>
