@@ -13,9 +13,16 @@ import (
 )
 
 var errStructuredTrainingMembershipScope = errors.New("membership is outside the training group scope")
+var errStructuredVariationMemberScope = errors.New("variation member is outside the training group")
+var errStructuredVariationCrewCapacity = errors.New("variation crew does not match the craft capacity")
 
 type StructuredTrainingGroupInput struct {
 	Params        dbgen.CreateStructuredTrainingGroupParams
+	MembershipIDs []uuid.UUID
+}
+
+type StructuredVariationGroupInput struct {
+	Params        dbgen.CreateTrainingVariationGroupParams
 	MembershipIDs []uuid.UUID
 }
 
@@ -102,6 +109,15 @@ type StructuredTrainingStore interface {
 	CopyStructuredTrainingDay(context.Context, StructuredDayCopyInput) (int, error)
 	CopyStructuredTrainingWeek(context.Context, StructuredWeekCopyInput) (dbgen.TrainingPlan, error)
 	GetStructuredPlanCopySource(context.Context, uuid.UUID) (dbgen.GetStructuredPlanCopySourceRow, error)
+	ListManagedTrainingGroupMembers(context.Context, dbgen.ListManagedTrainingGroupMembersParams) ([]dbgen.ListManagedTrainingGroupMembersRow, error)
+	ListStructuredCrewModalities(context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error)
+	ListManagedStructuredCompetitionEvents(context.Context, dbgen.ListManagedStructuredCompetitionEventsParams) ([]dbgen.ListManagedStructuredCompetitionEventsRow, error)
+	CreateTrainingVariationGroup(context.Context, StructuredVariationGroupInput) (dbgen.TrainingVariationGroup, error)
+	ListManagedTrainingVariationGroups(context.Context, dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error)
+	CreateTrainingVariation(context.Context, dbgen.CreateTrainingVariationParams) (dbgen.TrainingVariation, error)
+	ListTrainingVariationMatchesForManager(context.Context, dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error)
+	GetTrainingVariationPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
+	RetireTrainingVariation(context.Context, dbgen.RetireTrainingVariationParams) (int64, error)
 }
 
 type PostgresStructuredTrainingStore struct {
@@ -466,4 +482,72 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.
 
 func (s PostgresStructuredTrainingStore) GetStructuredPlanCopySource(ctx context.Context, planID uuid.UUID) (dbgen.GetStructuredPlanCopySourceRow, error) {
 	return s.queries().GetStructuredPlanCopySource(ctx, planID)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingGroupMembers(ctx context.Context, params dbgen.ListManagedTrainingGroupMembersParams) ([]dbgen.ListManagedTrainingGroupMembersRow, error) {
+	return s.queries().ListManagedTrainingGroupMembers(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListStructuredCrewModalities(ctx context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error) {
+	return s.queries().ListStructuredCrewModalities(ctx)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedStructuredCompetitionEvents(ctx context.Context, params dbgen.ListManagedStructuredCompetitionEventsParams) ([]dbgen.ListManagedStructuredCompetitionEventsRow, error) {
+	return s.queries().ListManagedStructuredCompetitionEvents(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx context.Context, input StructuredVariationGroupInput) (group dbgen.TrainingVariationGroup, err error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return group, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := dbgen.New(tx)
+	if input.Params.Kind == dbgen.TrainingVariationGroupKindCREW {
+		modalities, listErr := queries.ListStructuredCrewModalities(ctx)
+		if listErr != nil {
+			return group, listErr
+		}
+		capacity, valid := structuredCrewSize(modalities, input.Params.CraftModalityID)
+		if !valid || capacity != len(input.MembershipIDs) {
+			return group, errStructuredVariationCrewCapacity
+		}
+	}
+	group, err = queries.CreateTrainingVariationGroup(ctx, input.Params)
+	if err != nil {
+		return group, err
+	}
+	for _, membershipID := range input.MembershipIDs {
+		rows, addErr := queries.AddTrainingVariationGroupMember(ctx, dbgen.AddTrainingVariationGroupMemberParams{VariationGroupID: group.ID, MembershipID: membershipID, AddedByID: input.Params.CreatedByID})
+		if addErr != nil {
+			return group, addErr
+		}
+		if rows != 1 {
+			return group, errStructuredVariationMemberScope
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return group, err
+	}
+	return group, nil
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingVariationGroups(ctx context.Context, params dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error) {
+	return s.queries().ListManagedTrainingVariationGroups(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CreateTrainingVariation(ctx context.Context, params dbgen.CreateTrainingVariationParams) (dbgen.TrainingVariation, error) {
+	return s.queries().CreateTrainingVariation(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListTrainingVariationMatchesForManager(ctx context.Context, params dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error) {
+	return s.queries().ListTrainingVariationMatchesForManager(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) GetTrainingVariationPlanID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	return s.queries().GetTrainingVariationPlanID(ctx, id)
+}
+
+func (s PostgresStructuredTrainingStore) RetireTrainingVariation(ctx context.Context, params dbgen.RetireTrainingVariationParams) (int64, error) {
+	return s.queries().RetireTrainingVariation(ctx, params)
 }

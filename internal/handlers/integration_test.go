@@ -219,6 +219,108 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	}
 }
 
+func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	store := PostgresStructuredTrainingStore{Pool: pool}
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorID, athleteID, seasonID := uuid.New(), uuid.New(), uuid.New()
+	for id, name := range map[uuid.UUID]string{actorID: "Treinador variações", athleteID: "Atleta variações"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '2000-01-01')`, id, name, uuid.NewString()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	today := time.Now().UTC()
+	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época variações', $3, $4)`, seasonID, "VR_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Grupo variações " + uuid.NewString()[:8], ProgrammeID: &programme.ID, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_groups WHERE id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE id = $1`, membership.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{actorID, athleteID})
+	})
+	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{GroupID: group.ID, Title: "M variações", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startsAt := weekStart.Add(10 * time.Hour)
+	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{PlanID: week.ID, Title: "Água", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Séries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crew, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{TrainingGroupID: group.ID, Name: "Tripulação teste", Kind: dbgen.TrainingVariationGroupKindCREW, CraftModalityID: nil, EffectiveFrom: pgtype.Date{Time: weekStart, Valid: true}, EffectiveUntil: pgtype.Date{Time: weekStart.AddDate(0, 0, 6), Valid: true}, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
+	if err == nil {
+		t.Fatal("crew without craft modality unexpectedly persisted")
+	}
+	crew, err = store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{TrainingGroupID: group.ID, Name: "Subgrupo teste", Kind: dbgen.TrainingVariationGroupKindSUBGROUP, EffectiveFrom: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupPatch := []byte(`{"modality":"ERGOMETER"}`)
+	if _, err := queries.CreateTrainingVariation(ctx, dbgen.CreateTrainingVariationParams{PlanID: week.ID, TargetGroupID: &crew.ID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: segmentID, Operation: dbgen.TrainingVariationOperationOVERRIDE, ChangeSummary: "Subgrupo no ergómetro", Patch: groupPatch, CreatedByID: actorID}); err != nil {
+		t.Fatal(err)
+	}
+	athletePatch := []byte(`{"instructions":"Carga individual"}`)
+	if _, err := queries.CreateTrainingVariation(ctx, dbgen.CreateTrainingVariationParams{PlanID: week.ID, TargetMembershipID: &membership.ID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: segmentID, Operation: dbgen.TrainingVariationOperationOVERRIDE, ChangeSummary: "Carga individual", Patch: athletePatch, CreatedByID: actorID}); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := queries.ListTrainingVariationMatchesForManager(ctx, dbgen.ListTrainingVariationMatchesForManagerParams{TimeZone: "UTC", IsAdmin: true, UserID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched := []dbgen.ListTrainingVariationMatchesForManagerRow{}
+	for _, match := range matches {
+		if match.PlanID == week.ID && match.SubjectID == segmentID {
+			matched = append(matched, match)
+		}
+	}
+	if len(matched) != 2 || matched[0].Priority != 2 || matched[1].Priority != 1 {
+		t.Fatalf("variation matches = %#v", matched)
+	}
+	if _, err := queries.ListStructuredTrainingOverviewForManager(ctx, dbgen.ListStructuredTrainingOverviewForManagerParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list structured overview: %v", err)
+	}
+	if _, err := queries.ListVisibleTrainingRoutines(ctx, dbgen.ListVisibleTrainingRoutinesParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list routines: %v", err)
+	}
+	if _, err := queries.ListActiveWaterIntensityProfiles(ctx); err != nil {
+		t.Fatalf("list intensity profiles: %v", err)
+	}
+	if _, err := queries.ListEligibleTrainingGroupMemberships(ctx, dbgen.ListEligibleTrainingGroupMembershipsParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list eligible memberships: %v", err)
+	}
+	if _, err := queries.ListManagedTrainingGroupMembers(ctx, dbgen.ListManagedTrainingGroupMembersParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list variation members: %v", err)
+	}
+	if _, err := queries.ListStructuredCrewModalities(ctx); err != nil {
+		t.Fatalf("list crew modalities: %v", err)
+	}
+	if _, err := queries.ListManagedStructuredCompetitionEvents(ctx, dbgen.ListManagedStructuredCompetitionEventsParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list competition events: %v", err)
+	}
+	if _, err := queries.ListManagedTrainingVariationGroups(ctx, dbgen.ListManagedTrainingVariationGroupsParams{IsAdmin: true, UserID: actorID}); err != nil {
+		t.Fatalf("list variation groups: %v", err)
+	}
+}
+
 func TestPostgresProfileStoreEmailChangeInvalidatesVerificationAtomically(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)

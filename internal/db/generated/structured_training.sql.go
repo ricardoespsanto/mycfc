@@ -39,6 +39,33 @@ func (q *Queries) AddStructuredTrainingGroupMember(ctx context.Context, arg AddS
 	return result.RowsAffected(), nil
 }
 
+const addTrainingVariationGroupMember = `-- name: AddTrainingVariationGroupMember :execrows
+INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
+SELECT variation_group.id, group_member.membership_id, $1
+FROM training_variation_groups variation_group
+JOIN training_group_members group_member ON group_member.group_id = variation_group.training_group_id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+WHERE variation_group.id = $2
+  AND group_member.membership_id = $3
+  AND membership.starts_on <= CURRENT_DATE
+  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+ON CONFLICT (variation_group_id, membership_id) DO NOTHING
+`
+
+type AddTrainingVariationGroupMemberParams struct {
+	AddedByID        uuid.UUID `json:"added_by_id"`
+	VariationGroupID uuid.UUID `json:"variation_group_id"`
+	MembershipID     uuid.UUID `json:"membership_id"`
+}
+
+func (q *Queries) AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.VariationGroupID, arg.MembershipID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const canManageStructuredTrainingGroup = `-- name: CanManageStructuredTrainingGroup :one
 SELECT EXISTS (
     SELECT 1 FROM training_groups group_row
@@ -487,6 +514,162 @@ func (q *Queries) CreateTrainingSessionSegment(ctx context.Context, arg CreateTr
 	return id, err
 }
 
+const createTrainingVariation = `-- name: CreateTrainingVariation :one
+WITH subject_plan AS (
+    SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date AS session_date
+    FROM training_session_segments segment
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM training_segment_blocks block
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM water_work_steps step
+    JOIN training_segment_blocks block ON block.id = step.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id,
+           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+    FROM gym_exercises exercise
+    JOIN training_segment_blocks block ON block.id = exercise.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+)
+INSERT INTO training_variations (plan_id, target_membership_id, target_group_id, subject_kind,
+                                 subject_id, operation, change_summary, patch, created_by_id)
+SELECT plan.id, $1, $2,
+       $3::training_variation_subject_kind, $4,
+       $5::training_variation_operation, $6,
+       $7::jsonb, $8
+FROM training_plans plan
+JOIN subject_plan subject ON subject.plan_id = plan.id
+                         AND subject.subject_id = $4
+                         AND subject.subject_kind = $3::training_variation_subject_kind
+WHERE plan.id = $9
+  AND plan.training_group_id IS NOT NULL
+  AND (
+      ($1::uuid IS NOT NULL AND EXISTS (
+          SELECT 1 FROM training_group_members group_member
+          JOIN user_memberships membership ON membership.id = group_member.membership_id
+          WHERE group_member.group_id = plan.training_group_id
+            AND group_member.membership_id = $1
+            AND membership.starts_on <= subject.session_date
+            AND (membership.ends_on IS NULL OR membership.ends_on >= subject.session_date)
+      ))
+      OR
+      ($2::uuid IS NOT NULL AND EXISTS (
+          SELECT 1 FROM training_variation_groups variation_group
+          WHERE variation_group.id = $2
+            AND variation_group.training_group_id = plan.training_group_id
+      ))
+  )
+RETURNING id, plan_id, target_membership_id, target_group_id, subject_kind, subject_id, operation, change_summary, patch, version, is_active, retired_at, retired_by_id, created_by_id, created_at, updated_at
+`
+
+type CreateTrainingVariationParams struct {
+	TargetMembershipID *uuid.UUID                   `json:"target_membership_id"`
+	TargetGroupID      *uuid.UUID                   `json:"target_group_id"`
+	SubjectKind        TrainingVariationSubjectKind `json:"subject_kind"`
+	SubjectID          uuid.UUID                    `json:"subject_id"`
+	Operation          TrainingVariationOperation   `json:"operation"`
+	ChangeSummary      string                       `json:"change_summary"`
+	Patch              []byte                       `json:"patch"`
+	CreatedByID        uuid.UUID                    `json:"created_by_id"`
+	PlanID             uuid.UUID                    `json:"plan_id"`
+}
+
+func (q *Queries) CreateTrainingVariation(ctx context.Context, arg CreateTrainingVariationParams) (TrainingVariation, error) {
+	row := q.db.QueryRow(ctx, createTrainingVariation,
+		arg.TargetMembershipID,
+		arg.TargetGroupID,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.Operation,
+		arg.ChangeSummary,
+		arg.Patch,
+		arg.CreatedByID,
+		arg.PlanID,
+	)
+	var i TrainingVariation
+	err := row.Scan(
+		&i.ID,
+		&i.PlanID,
+		&i.TargetMembershipID,
+		&i.TargetGroupID,
+		&i.SubjectKind,
+		&i.SubjectID,
+		&i.Operation,
+		&i.ChangeSummary,
+		&i.Patch,
+		&i.Version,
+		&i.IsActive,
+		&i.RetiredAt,
+		&i.RetiredByID,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createTrainingVariationGroup = `-- name: CreateTrainingVariationGroup :one
+INSERT INTO training_variation_groups (training_group_id, name, kind, craft_modality_id,
+                                       effective_from, effective_until, competition_event_id,
+                                       open_ended_exception, created_by_id)
+VALUES ($1, $2, $3::training_variation_group_kind,
+        $4, $5, $6,
+        $7, $8, $9)
+RETURNING id, training_group_id, name, kind, craft_modality_id, effective_from, effective_until, competition_event_id, open_ended_exception, created_by_id, created_at, updated_at
+`
+
+type CreateTrainingVariationGroupParams struct {
+	TrainingGroupID    uuid.UUID                  `json:"training_group_id"`
+	Name               string                     `json:"name"`
+	Kind               TrainingVariationGroupKind `json:"kind"`
+	CraftModalityID    *uuid.UUID                 `json:"craft_modality_id"`
+	EffectiveFrom      pgtype.Date                `json:"effective_from"`
+	EffectiveUntil     pgtype.Date                `json:"effective_until"`
+	CompetitionEventID *uuid.UUID                 `json:"competition_event_id"`
+	OpenEndedException bool                       `json:"open_ended_exception"`
+	CreatedByID        uuid.UUID                  `json:"created_by_id"`
+}
+
+func (q *Queries) CreateTrainingVariationGroup(ctx context.Context, arg CreateTrainingVariationGroupParams) (TrainingVariationGroup, error) {
+	row := q.db.QueryRow(ctx, createTrainingVariationGroup,
+		arg.TrainingGroupID,
+		arg.Name,
+		arg.Kind,
+		arg.CraftModalityID,
+		arg.EffectiveFrom,
+		arg.EffectiveUntil,
+		arg.CompetitionEventID,
+		arg.OpenEndedException,
+		arg.CreatedByID,
+	)
+	var i TrainingVariationGroup
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.Name,
+		&i.Kind,
+		&i.CraftModalityID,
+		&i.EffectiveFrom,
+		&i.EffectiveUntil,
+		&i.CompetitionEventID,
+		&i.OpenEndedException,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createWaterBlockPrescription = `-- name: CreateWaterBlockPrescription :execrows
 INSERT INTO water_block_prescriptions (block_id, method, intensity_profile_id, target_distance_metres, target_distance_certainty)
 SELECT block.id, $1::water_work_method, $2,
@@ -879,6 +1062,17 @@ func (q *Queries) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid
 	return plan_id, err
 }
 
+const getTrainingVariationPlanID = `-- name: GetTrainingVariationPlanID :one
+SELECT plan_id FROM training_variations WHERE id = $1
+`
+
+func (q *Queries) GetTrainingVariationPlanID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getTrainingVariationPlanID, id)
+	var plan_id uuid.UUID
+	err := row.Scan(&plan_id)
+	return plan_id, err
+}
+
 const getVisibleTrainingRoutine = `-- name: GetVisibleTrainingRoutine :one
 SELECT routine.id, routine.name, routine.description, routine.kind, routine.visibility, routine.owner_user_id, routine.programme_id, routine.team_id, routine.modality, routine.objective, routine.method, routine.tags, routine.source_id, routine.source_updated_at, routine.snapshot, routine.created_at, routine.updated_at
 FROM training_routines routine
@@ -1033,6 +1227,230 @@ func (q *Queries) ListEligibleTrainingGroupMemberships(ctx context.Context, arg 
 			&i.ProgrammeID,
 			&i.TeamID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedStructuredCompetitionEvents = `-- name: ListManagedStructuredCompetitionEvents :many
+SELECT event_row.id, event_row.title, event_row.starts_at
+FROM events event_row
+WHERE event_row.event_type = 'COMPETITION'
+  AND event_row.status = 'ACTIVE'
+  AND event_row.starts_at >= CURRENT_DATE
+  AND (
+      $1::boolean
+      OR EXISTS (
+          SELECT 1
+          FROM event_audiences audience
+          JOIN staff_grants grant_row ON true
+          LEFT JOIN teams grant_team ON grant_team.id = grant_row.team_id
+          WHERE audience.event_id = event_row.id
+            AND grant_row.user_id = $2
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = audience.programme_id OR grant_team.programme_id = audience.programme_id)
+      )
+  )
+ORDER BY event_row.starts_at, event_row.id
+`
+
+type ListManagedStructuredCompetitionEventsParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedStructuredCompetitionEventsRow struct {
+	ID       uuid.UUID          `json:"id"`
+	Title    string             `json:"title"`
+	StartsAt pgtype.Timestamptz `json:"starts_at"`
+}
+
+func (q *Queries) ListManagedStructuredCompetitionEvents(ctx context.Context, arg ListManagedStructuredCompetitionEventsParams) ([]ListManagedStructuredCompetitionEventsRow, error) {
+	rows, err := q.db.Query(ctx, listManagedStructuredCompetitionEvents, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedStructuredCompetitionEventsRow{}
+	for rows.Next() {
+		var i ListManagedStructuredCompetitionEventsRow
+		if err := rows.Scan(&i.ID, &i.Title, &i.StartsAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingGroupMembers = `-- name: ListManagedTrainingGroupMembers :many
+SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
+       membership.id AS membership_id, subject.name AS athlete_name
+FROM training_groups group_row
+JOIN training_group_members group_member ON group_member.group_id = group_row.id
+JOIN user_memberships membership ON membership.id = group_member.membership_id
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active
+WHERE membership.starts_on <= CURRENT_DATE
+  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+  AND ($1::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = $2
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   ))
+ORDER BY group_row.name, subject.name, membership.id
+`
+
+type ListManagedTrainingGroupMembersParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingGroupMembersRow struct {
+	TrainingGroupID   uuid.UUID `json:"training_group_id"`
+	TrainingGroupName string    `json:"training_group_name"`
+	MembershipID      uuid.UUID `json:"membership_id"`
+	AthleteName       string    `json:"athlete_name"`
+}
+
+func (q *Queries) ListManagedTrainingGroupMembers(ctx context.Context, arg ListManagedTrainingGroupMembersParams) ([]ListManagedTrainingGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingGroupMembers, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingGroupMembersRow{}
+	for rows.Next() {
+		var i ListManagedTrainingGroupMembersRow
+		if err := rows.Scan(
+			&i.TrainingGroupID,
+			&i.TrainingGroupName,
+			&i.MembershipID,
+			&i.AthleteName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingVariationGroups = `-- name: ListManagedTrainingVariationGroups :many
+SELECT variation_group.id, variation_group.training_group_id, group_row.name AS training_group_name,
+       variation_group.name, variation_group.kind, modality.code AS craft_code,
+       variation_group.effective_from, variation_group.effective_until,
+       event_row.id AS competition_event_id, event_row.title AS competition_event_title,
+       variation_group.open_ended_exception,
+       membership.id AS membership_id, subject.name AS athlete_name
+FROM training_variation_groups variation_group
+JOIN training_groups group_row ON group_row.id = variation_group.training_group_id
+LEFT JOIN modalities modality ON modality.id = variation_group.craft_modality_id
+LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
+JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
+JOIN user_memberships membership ON membership.id = variation_member.membership_id
+JOIN users subject ON subject.id = membership.user_id
+WHERE $1::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = $2
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY group_row.name, variation_group.name, subject.name, membership.id
+`
+
+type ListManagedTrainingVariationGroupsParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingVariationGroupsRow struct {
+	ID                    uuid.UUID                  `json:"id"`
+	TrainingGroupID       uuid.UUID                  `json:"training_group_id"`
+	TrainingGroupName     string                     `json:"training_group_name"`
+	Name                  string                     `json:"name"`
+	Kind                  TrainingVariationGroupKind `json:"kind"`
+	CraftCode             *string                    `json:"craft_code"`
+	EffectiveFrom         pgtype.Date                `json:"effective_from"`
+	EffectiveUntil        pgtype.Date                `json:"effective_until"`
+	CompetitionEventID    *uuid.UUID                 `json:"competition_event_id"`
+	CompetitionEventTitle *string                    `json:"competition_event_title"`
+	OpenEndedException    bool                       `json:"open_ended_exception"`
+	MembershipID          uuid.UUID                  `json:"membership_id"`
+	AthleteName           string                     `json:"athlete_name"`
+}
+
+func (q *Queries) ListManagedTrainingVariationGroups(ctx context.Context, arg ListManagedTrainingVariationGroupsParams) ([]ListManagedTrainingVariationGroupsRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingVariationGroups, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingVariationGroupsRow{}
+	for rows.Next() {
+		var i ListManagedTrainingVariationGroupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TrainingGroupID,
+			&i.TrainingGroupName,
+			&i.Name,
+			&i.Kind,
+			&i.CraftCode,
+			&i.EffectiveFrom,
+			&i.EffectiveUntil,
+			&i.CompetitionEventID,
+			&i.CompetitionEventTitle,
+			&i.OpenEndedException,
+			&i.MembershipID,
+			&i.AthleteName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStructuredCrewModalities = `-- name: ListStructuredCrewModalities :many
+SELECT id, code, name_pt
+FROM modalities
+WHERE code ~ '^[A-Z]+[2-9][0-9]*$'
+ORDER BY code
+`
+
+type ListStructuredCrewModalitiesRow struct {
+	ID     uuid.UUID `json:"id"`
+	Code   string    `json:"code"`
+	NamePt string    `json:"name_pt"`
+}
+
+func (q *Queries) ListStructuredCrewModalities(ctx context.Context) ([]ListStructuredCrewModalitiesRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredCrewModalities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStructuredCrewModalitiesRow{}
+	for rows.Next() {
+		var i ListStructuredCrewModalitiesRow
+		if err := rows.Scan(&i.ID, &i.Code, &i.NamePt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1613,6 +2031,165 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 	return items, nil
 }
 
+const listTrainingVariationMatchesForManager = `-- name: ListTrainingVariationMatchesForManager :many
+WITH subject_details AS (
+    SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
+           session.plan_id, session.id AS session_id, session.title AS session_title, session.starts_at,
+           concat('Segmento · ', segment.position, ' · ', segment.modality::text,
+                  CASE WHEN segment.title = '' THEN '' ELSE ' · ' || segment.title END)::text AS subject_label
+    FROM training_session_segments segment
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Bloco · ', block.position, ' · ', block.purpose::text,
+                  CASE WHEN block.title = '' THEN '' ELSE ' · ' || block.title END)::text
+    FROM training_segment_blocks block
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Passo de água · ', step.position, ' · ', step.name)::text
+    FROM water_work_steps step
+    JOIN training_segment_blocks block ON block.id = step.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+    UNION ALL
+    SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id, session.id,
+           session.title, session.starts_at,
+           concat('Exercício · ', exercise.position, ' · ', exercise.name)::text
+    FROM gym_exercises exercise
+    JOIN training_segment_blocks block ON block.id = exercise.block_id
+    JOIN training_session_segments segment ON segment.id = block.segment_id
+    JOIN training_sessions session ON session.id = segment.session_id
+), target_members AS (
+    SELECT variation.id AS variation_id, variation.target_membership_id AS membership_id,
+           2::integer AS priority, 'Atleta'::text AS target_kind, subject.name AS target_name,
+           NULL::date AS effective_from, NULL::date AS effective_until
+    FROM training_variations variation
+    JOIN user_memberships membership ON membership.id = variation.target_membership_id
+    JOIN users subject ON subject.id = membership.user_id
+    WHERE variation.target_membership_id IS NOT NULL
+    UNION ALL
+    SELECT variation.id, variation_member.membership_id, 1,
+           CASE variation_group.kind WHEN 'CREW' THEN 'Tripulação' ELSE 'Subgrupo' END,
+           variation_group.name, variation_group.effective_from,
+           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE $1::text)::date)
+    FROM training_variations variation
+    JOIN training_variation_groups variation_group ON variation_group.id = variation.target_group_id
+    JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
+    LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
+    WHERE variation.target_group_id IS NOT NULL
+)
+SELECT variation.id AS variation_id, variation.plan_id, plan.title AS plan_title,
+       details.session_id, details.session_title, details.starts_at,
+       variation.subject_kind, variation.subject_id, details.subject_label,
+       variation.operation, variation.change_summary, variation.patch, variation.version,
+       targets.membership_id, athlete.name AS athlete_name, targets.priority,
+       targets.target_kind, targets.target_name, targets.effective_from, targets.effective_until
+FROM training_variations variation
+JOIN training_plans plan ON plan.id = variation.plan_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
+JOIN subject_details details ON details.plan_id = variation.plan_id
+                            AND details.subject_id = variation.subject_id
+                            AND details.subject_kind = variation.subject_kind
+JOIN target_members targets ON targets.variation_id = variation.id
+JOIN user_memberships membership ON membership.id = targets.membership_id
+JOIN training_group_members current_group_member
+  ON current_group_member.group_id = plan.training_group_id
+ AND current_group_member.membership_id = targets.membership_id
+JOIN users athlete ON athlete.id = membership.user_id
+WHERE variation.is_active
+  AND athlete.is_active
+  AND membership.starts_on <= (details.starts_at AT TIME ZONE $1::text)::date
+  AND (membership.ends_on IS NULL OR membership.ends_on >= (details.starts_at AT TIME ZONE $1::text)::date)
+  AND (targets.effective_from IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date >= targets.effective_from)
+  AND (targets.effective_until IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date <= targets.effective_until)
+  AND (
+      $2::boolean
+      OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = $3
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+  )
+ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
+         targets.priority DESC, variation.created_at, variation.id
+`
+
+type ListTrainingVariationMatchesForManagerParams struct {
+	TimeZone string    `json:"time_zone"`
+	IsAdmin  bool      `json:"is_admin"`
+	UserID   uuid.UUID `json:"user_id"`
+}
+
+type ListTrainingVariationMatchesForManagerRow struct {
+	VariationID    uuid.UUID                    `json:"variation_id"`
+	PlanID         uuid.UUID                    `json:"plan_id"`
+	PlanTitle      string                       `json:"plan_title"`
+	SessionID      uuid.UUID                    `json:"session_id"`
+	SessionTitle   string                       `json:"session_title"`
+	StartsAt       pgtype.Timestamptz           `json:"starts_at"`
+	SubjectKind    TrainingVariationSubjectKind `json:"subject_kind"`
+	SubjectID      uuid.UUID                    `json:"subject_id"`
+	SubjectLabel   string                       `json:"subject_label"`
+	Operation      TrainingVariationOperation   `json:"operation"`
+	ChangeSummary  string                       `json:"change_summary"`
+	Patch          []byte                       `json:"patch"`
+	Version        int32                        `json:"version"`
+	MembershipID   *uuid.UUID                   `json:"membership_id"`
+	AthleteName    string                       `json:"athlete_name"`
+	Priority       int32                        `json:"priority"`
+	TargetKind     string                       `json:"target_kind"`
+	TargetName     string                       `json:"target_name"`
+	EffectiveFrom  pgtype.Date                  `json:"effective_from"`
+	EffectiveUntil pgtype.Date                  `json:"effective_until"`
+}
+
+func (q *Queries) ListTrainingVariationMatchesForManager(ctx context.Context, arg ListTrainingVariationMatchesForManagerParams) ([]ListTrainingVariationMatchesForManagerRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingVariationMatchesForManager, arg.TimeZone, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingVariationMatchesForManagerRow{}
+	for rows.Next() {
+		var i ListTrainingVariationMatchesForManagerRow
+		if err := rows.Scan(
+			&i.VariationID,
+			&i.PlanID,
+			&i.PlanTitle,
+			&i.SessionID,
+			&i.SessionTitle,
+			&i.StartsAt,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.SubjectLabel,
+			&i.Operation,
+			&i.ChangeSummary,
+			&i.Patch,
+			&i.Version,
+			&i.MembershipID,
+			&i.AthleteName,
+			&i.Priority,
+			&i.TargetKind,
+			&i.TargetName,
+			&i.EffectiveFrom,
+			&i.EffectiveUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVisibleTrainingRoutines = `-- name: ListVisibleTrainingRoutines :many
 SELECT routine.id, routine.name, routine.description, routine.kind, routine.visibility,
        routine.owner_user_id, owner.name AS owner_name, routine.programme_id, programme.name_pt AS programme_name,
@@ -1820,4 +2397,25 @@ func (q *Queries) RestoreTrainingSession(ctx context.Context, arg RestoreTrainin
 	var restore_training_session uuid.UUID
 	err := row.Scan(&restore_training_session)
 	return restore_training_session, err
+}
+
+const retireTrainingVariation = `-- name: RetireTrainingVariation :execrows
+UPDATE training_variations
+SET is_active = false, retired_at = clock_timestamp(), retired_by_id = $1,
+    version = version + 1, updated_at = clock_timestamp()
+WHERE id = $2 AND version = $3 AND is_active
+`
+
+type RetireTrainingVariationParams struct {
+	RetiredByID *uuid.UUID `json:"retired_by_id"`
+	ID          uuid.UUID  `json:"id"`
+	Version     int32      `json:"version"`
+}
+
+func (q *Queries) RetireTrainingVariation(ctx context.Context, arg RetireTrainingVariationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retireTrainingVariation, arg.RetiredByID, arg.ID, arg.Version)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

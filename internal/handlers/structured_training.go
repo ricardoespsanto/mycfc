@@ -95,6 +95,38 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 		}
 		page.Memberships, page.Programmes, page.Teams = structuredChoices(memberships)
 		page.Groups, page.Weeks, page.Sessions, page.Segments = structuredPlanChoices(page.Audiences)
+		variationMembers, err := h.Store.ListManagedTrainingGroupMembers(ctx, dbgen.ListManagedTrainingGroupMembersParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.VariationMembers = structuredVariationMembers(variationMembers)
+		modalities, err := h.Store.ListStructuredCrewModalities(ctx)
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.CrewModalities = structuredCrewModalities(modalities)
+		competitionEvents, err := h.Store.ListManagedStructuredCompetitionEvents(ctx, dbgen.ListManagedStructuredCompetitionEventsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.CompetitionEvents = structuredCompetitionEvents(competitionEvents, h.location())
+		variationGroups, err := h.Store.ListManagedTrainingVariationGroups(ctx, dbgen.ListManagedTrainingVariationGroupsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.VariationGroups = structuredVariationGroups(variationGroups, h.location())
+		page.VariationTargets = structuredVariationTargets(variationMembers, variationGroups)
+		page.VariationSubjects = structuredVariationSubjects(page.Audiences)
+		variationMatches, err := h.Store.ListTrainingVariationMatchesForManager(ctx, dbgen.ListTrainingVariationMatchesForManagerParams{TimeZone: h.location().String(), IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.VariationPreviews = structuredVariationPreviews(variationMatches, h.location())
 	} else {
 		rows, err := h.Store.ListStructuredTrainingOverviewForSubject(ctx, user.ID)
 		if err != nil {
@@ -796,6 +828,202 @@ func (h StructuredTraining) CopyWeek(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
+func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	trainingGroupID, groupErr := uuid.Parse(r.PostForm.Get("training_group_id"))
+	kind := dbgen.TrainingVariationGroupKind(r.PostForm.Get("kind"))
+	name := strings.TrimSpace(r.PostForm.Get("name"))
+	effectiveFrom, fromErr := time.ParseInLocation("2006-01-02", r.PostForm.Get("effective_from"), h.location())
+	var effectiveUntil pgtype.Date
+	if raw := r.PostForm.Get("effective_until"); raw != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", raw, h.location())
+		if err != nil {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		effectiveUntil = pgtype.Date{Time: parsed, Valid: true}
+	}
+	craftID, craftErr := optionalUUID(r.PostForm.Get("craft_modality_id"))
+	competitionID, competitionErr := optionalUUID(r.PostForm.Get("competition_event_id"))
+	openEnded := r.PostForm.Get("open_ended_exception") == "true"
+	if groupErr != nil || fromErr != nil || craftErr != nil || competitionErr != nil || !validTrainingText(name, 2, 120) || (effectiveUntil.Valid && effectiveUntil.Time.Before(effectiveFrom)) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	membershipIDs := make([]uuid.UUID, 0, len(r.PostForm["membership_id"]))
+	seenMembers := map[uuid.UUID]bool{}
+	for _, raw := range r.PostForm["membership_id"] {
+		membershipID, err := uuid.Parse(raw)
+		if err != nil || seenMembers[membershipID] {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		seenMembers[membershipID] = true
+		membershipIDs = append(membershipIDs, membershipID)
+	}
+	if len(membershipIDs) == 0 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageGroup(ctx, user, trainingGroupID, w, r) {
+		return
+	}
+	modalities, err := h.Store.ListStructuredCrewModalities(ctx)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	crewSize, craftAllowed := structuredCrewSize(modalities, craftID)
+	switch kind {
+	case dbgen.TrainingVariationGroupKindSUBGROUP:
+		if craftID != nil || competitionID != nil || openEnded {
+			h.System.RequestRejected(w, r)
+			return
+		}
+	case dbgen.TrainingVariationGroupKindCREW:
+		if !craftAllowed || crewSize != len(membershipIDs) || (!effectiveUntil.Valid && competitionID == nil && !openEnded) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+	default:
+		h.System.RequestRejected(w, r)
+		return
+	}
+	if competitionID != nil {
+		events, err := h.Store.ListManagedStructuredCompetitionEvents(ctx, dbgen.ListManagedStructuredCompetitionEventsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		allowed := false
+		for _, event := range events {
+			if event.ID == *competitionID {
+				eventDate := event.StartsAt.Time.In(h.location())
+				allowed = !time.Date(eventDate.Year(), eventDate.Month(), eventDate.Day(), 0, 0, 0, 0, h.location()).Before(effectiveFrom)
+			}
+		}
+		if !allowed {
+			h.System.Forbidden(w, r)
+			return
+		}
+	}
+	_, err = h.Store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{
+		TrainingGroupID: trainingGroupID, Name: name, Kind: kind, CraftModalityID: craftID,
+		EffectiveFrom: pgtype.Date{Time: effectiveFrom, Valid: true}, EffectiveUntil: effectiveUntil,
+		CompetitionEventID: competitionID, OpenEndedException: openEnded, CreatedByID: user.ID,
+	}, MembershipIDs: membershipIDs})
+	if errors.Is(err, errStructuredVariationMemberScope) || errors.Is(err, errStructuredVariationCrewCapacity) || isUniqueViolation(err) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Subgrupo ou tripulação criado.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados#training-variations", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CreateVariation(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	planID, planErr := uuid.Parse(r.PostForm.Get("plan_id"))
+	targetKind, targetRaw, targetOK := strings.Cut(r.PostForm.Get("target"), ":")
+	targetID, targetErr := uuid.Parse(targetRaw)
+	subjectRawKind, subjectRawID, subjectOK := strings.Cut(r.PostForm.Get("subject"), ":")
+	subjectID, subjectErr := uuid.Parse(subjectRawID)
+	subjectKind := dbgen.TrainingVariationSubjectKind(subjectRawKind)
+	operation := dbgen.TrainingVariationOperation(r.PostForm.Get("operation"))
+	summary := strings.TrimSpace(r.PostForm.Get("change_summary"))
+	if planErr != nil || !targetOK || targetErr != nil || !subjectOK || subjectErr != nil || !validTrainingVariationSubject(subjectKind) || !validTrainingVariationOperation(operation) || !validTrainingText(summary, 2, 500) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	patch, err := parseTrainingVariationPatch(r, subjectKind)
+	if err != nil || (operation == dbgen.TrainingVariationOperationOMIT && len(patch) != 0) || (operation != dbgen.TrainingVariationOperationOMIT && len(patch) == 0) {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	encodedPatch, err := json.Marshal(patch)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	params := dbgen.CreateTrainingVariationParams{PlanID: planID, SubjectKind: subjectKind, SubjectID: subjectID, Operation: operation, ChangeSummary: summary, Patch: encodedPatch, CreatedByID: user.ID}
+	switch targetKind {
+	case "ATHLETE":
+		params.TargetMembershipID = &targetID
+	case "GROUP":
+		params.TargetGroupID = &targetID
+	default:
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	if _, err := h.Store.CreateTrainingVariation(ctx, params); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isUniqueViolation(err) {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Variação adicionada; confirme a pré-visualização por atleta.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados#training-variations", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) RetireVariation(w http.ResponseWriter, r *http.Request) {
+	user, _ := CurrentUserFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	version64, err := strconv.ParseInt(r.PostForm.Get("version"), 10, 32)
+	if err != nil || version64 < 1 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	planID, err := h.Store.GetTrainingVariationPlanID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageWeek(ctx, user, planID, w, r) {
+		return
+	}
+	rows, err := h.Store.RetireTrainingVariation(ctx, dbgen.RetireTrainingVariationParams{RetiredByID: &user.ID, ID: id, Version: int32(version64)})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if rows != 1 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	h.flash(r, "Variação retirada.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados#training-variations", http.StatusSeeOther)
+}
+
 func (h StructuredTraining) MoveSegment(w http.ResponseWriter, r *http.Request) { h.move(w, r, true) }
 func (h StructuredTraining) MoveBlock(w http.ResponseWriter, r *http.Request)   { h.move(w, r, false) }
 func (h StructuredTraining) MoveGymExercise(w http.ResponseWriter, r *http.Request) {
@@ -949,6 +1177,77 @@ func structuredScopeAllowed(user CurrentUser, programmeID, teamID *uuid.UUID) bo
 
 func validTrainingEntryKind(value dbgen.TrainingEntryKind) bool {
 	return value == dbgen.TrainingEntryKindTRAINING || value == dbgen.TrainingEntryKindREST || value == dbgen.TrainingEntryKindCOMPETITION || value == dbgen.TrainingEntryKindLOGISTICS
+}
+
+func validTrainingVariationSubject(value dbgen.TrainingVariationSubjectKind) bool {
+	switch value {
+	case dbgen.TrainingVariationSubjectKindSEGMENT, dbgen.TrainingVariationSubjectKindBLOCK, dbgen.TrainingVariationSubjectKindWATERSTEP, dbgen.TrainingVariationSubjectKindGYMEXERCISE:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTrainingVariationOperation(value dbgen.TrainingVariationOperation) bool {
+	switch value {
+	case dbgen.TrainingVariationOperationOMIT, dbgen.TrainingVariationOperationREPLACE, dbgen.TrainingVariationOperationADD, dbgen.TrainingVariationOperationOVERRIDE:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseTrainingVariationPatch(r *http.Request, subject dbgen.TrainingVariationSubjectKind) (map[string]any, error) {
+	patch := map[string]any{}
+	texts := []struct {
+		form, key string
+		maximum   int
+	}{
+		{"title", "title", 180}, {"instructions", "instructions", 4000}, {"intensity_code", "intensity_code", 20}, {"resistance", "resistance", 180},
+	}
+	for _, field := range texts {
+		value := strings.TrimSpace(r.PostForm.Get(field.form))
+		if value != "" {
+			if utf8.RuneCountInString(value) > field.maximum {
+				return nil, errors.New("variation text too long")
+			}
+			patch[field.key] = value
+		}
+	}
+	if raw := r.PostForm.Get("modality"); raw != "" {
+		modality := dbgen.TrainingSegmentModality(raw)
+		if !validTrainingSegmentModality(modality) {
+			return nil, errors.New("invalid variation modality")
+		}
+		patch["modality"] = string(modality)
+	}
+	numbers := []struct {
+		form, key string
+		maximum   int
+	}{
+		{"repeats", "repeats", 10000}, {"duration_seconds", "duration_seconds", 86400}, {"distance_metres", "distance_metres", 200000}, {"recovery_seconds", "recovery_seconds", 86400}, {"sets", "sets", 100}, {"exercise_repetitions", "repetitions", 10000},
+	}
+	for _, field := range numbers {
+		value, err := optionalPositiveInt32(r.PostForm.Get(field.form), field.maximum)
+		if err != nil {
+			return nil, err
+		}
+		if value != nil {
+			patch[field.key] = *value
+		}
+	}
+	allowed := map[dbgen.TrainingVariationSubjectKind]map[string]bool{
+		dbgen.TrainingVariationSubjectKindSEGMENT:     {"title": true, "modality": true, "instructions": true},
+		dbgen.TrainingVariationSubjectKindBLOCK:       {"title": true, "instructions": true},
+		dbgen.TrainingVariationSubjectKindWATERSTEP:   {"title": true, "instructions": true, "repeats": true, "duration_seconds": true, "distance_metres": true, "recovery_seconds": true, "intensity_code": true},
+		dbgen.TrainingVariationSubjectKindGYMEXERCISE: {"title": true, "instructions": true, "sets": true, "repetitions": true, "duration_seconds": true, "distance_metres": true, "recovery_seconds": true, "resistance": true},
+	}[subject]
+	for key := range patch {
+		if !allowed[key] {
+			return nil, errors.New("field is not valid for variation subject")
+		}
+	}
+	return patch, nil
 }
 
 func validTrainingSegmentModality(value dbgen.TrainingSegmentModality) bool {
@@ -1271,7 +1570,7 @@ func structuredPlanChoices(audiences []pages.StructuredTrainingAudience) ([]page
 	for _, audience := range audiences {
 		groups = append(groups, pages.StructuredTrainingChoice{ID: audience.GroupID, Name: audience.GroupName})
 		for _, week := range audience.Weeks {
-			weeks = append(weeks, pages.StructuredTrainingChoice{ID: week.ID, Name: audience.GroupName + " · " + week.Title + " · " + week.DateRange})
+			weeks = append(weeks, pages.StructuredTrainingChoice{ID: week.ID, Name: audience.GroupName + " · " + week.Title + " · " + week.DateRange, GroupID: audience.GroupID})
 			for _, session := range week.Sessions {
 				sessions = append(sessions, pages.StructuredTrainingChoice{ID: session.ID, Name: week.Title + " · " + session.When + " · " + session.Title})
 				for _, segment := range session.Segments {
@@ -1285,6 +1584,199 @@ func structuredPlanChoices(audiences []pages.StructuredTrainingAudience) ([]page
 		}
 	}
 	return groups, weeks, sessions, segments
+}
+
+func structuredVariationMembers(rows []dbgen.ListManagedTrainingGroupMembersRow) []pages.StructuredVariationMemberChoice {
+	result := make([]pages.StructuredVariationMemberChoice, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, pages.StructuredVariationMemberChoice{ID: row.MembershipID.String(), Athlete: row.AthleteName, GroupID: row.TrainingGroupID.String(), GroupName: row.TrainingGroupName})
+	}
+	return result
+}
+
+func structuredCrewModalities(rows []dbgen.ListStructuredCrewModalitiesRow) []pages.StructuredTrainingChoice {
+	result := make([]pages.StructuredTrainingChoice, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, pages.StructuredTrainingChoice{ID: row.ID.String(), Name: row.Code + " · " + row.NamePt})
+	}
+	return result
+}
+
+func structuredCrewSize(rows []dbgen.ListStructuredCrewModalitiesRow, craftID *uuid.UUID) (int, bool) {
+	if craftID == nil {
+		return 0, false
+	}
+	for _, row := range rows {
+		if row.ID != *craftID {
+			continue
+		}
+		index := len(row.Code)
+		for index > 0 && row.Code[index-1] >= '0' && row.Code[index-1] <= '9' {
+			index--
+		}
+		size, err := strconv.Atoi(row.Code[index:])
+		return size, err == nil && size >= 2
+	}
+	return 0, false
+}
+
+func structuredCompetitionEvents(rows []dbgen.ListManagedStructuredCompetitionEventsRow, location *time.Location) []pages.StructuredTrainingChoice {
+	result := make([]pages.StructuredTrainingChoice, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, pages.StructuredTrainingChoice{ID: row.ID.String(), Name: row.StartsAt.Time.In(location).Format("02/01/2006") + " · " + row.Title})
+	}
+	return result
+}
+
+func structuredVariationGroups(rows []dbgen.ListManagedTrainingVariationGroupsRow, _ *time.Location) []pages.StructuredVariationGroup {
+	result := []pages.StructuredVariationGroup{}
+	for _, row := range rows {
+		if len(result) == 0 || result[len(result)-1].ID != row.ID.String() {
+			period := "desde " + row.EffectiveFrom.Time.Format("02/01/2006")
+			if row.EffectiveUntil.Valid {
+				period += " até " + row.EffectiveUntil.Time.Format("02/01/2006")
+			} else if row.CompetitionEventID != nil {
+				period += " até à competição"
+			} else if row.OpenEndedException {
+				period += " · sem data final (exceção)"
+			}
+			kind := "Subgrupo"
+			if row.Kind == dbgen.TrainingVariationGroupKindCREW {
+				kind = "Tripulação"
+			}
+			result = append(result, pages.StructuredVariationGroup{ID: row.ID.String(), GroupID: row.TrainingGroupID.String(), GroupName: row.TrainingGroupName, Name: row.Name, Kind: kind, Craft: stringValue(row.CraftCode), Period: period, Competition: stringValue(row.CompetitionEventTitle)})
+		}
+		result[len(result)-1].Members = append(result[len(result)-1].Members, row.AthleteName)
+	}
+	return result
+}
+
+func structuredVariationTargets(members []dbgen.ListManagedTrainingGroupMembersRow, groups []dbgen.ListManagedTrainingVariationGroupsRow) []pages.StructuredVariationTargetChoice {
+	result := make([]pages.StructuredVariationTargetChoice, 0, len(members)+len(groups))
+	for _, row := range members {
+		result = append(result, pages.StructuredVariationTargetChoice{Value: "ATHLETE:" + row.MembershipID.String(), Name: row.AthleteName + " · " + row.TrainingGroupName, GroupID: row.TrainingGroupID.String()})
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, row := range groups {
+		if seen[row.ID] {
+			continue
+		}
+		seen[row.ID] = true
+		kind := "Subgrupo"
+		if row.Kind == dbgen.TrainingVariationGroupKindCREW {
+			kind = "Tripulação"
+		}
+		result = append(result, pages.StructuredVariationTargetChoice{Value: "GROUP:" + row.ID.String(), Name: kind + " · " + row.Name + " · " + row.TrainingGroupName, GroupID: row.TrainingGroupID.String()})
+	}
+	return result
+}
+
+func structuredVariationSubjects(audiences []pages.StructuredTrainingAudience) []pages.StructuredVariationSubjectChoice {
+	result := []pages.StructuredVariationSubjectChoice{}
+	seen := map[string]bool{}
+	for _, audience := range audiences {
+		for _, week := range audience.Weeks {
+			for _, session := range week.Sessions {
+				prefix := week.Title + " · " + session.When + " · " + session.Title
+				for _, segment := range session.Segments {
+					segmentName := structuredModalityName(segment.Modality)
+					if segment.Title != "" {
+						segmentName += " · " + segment.Title
+					}
+					appendVariationSubject(&result, seen, "SEGMENT:"+segment.ID, prefix+" · Segmento "+strconv.Itoa(segment.Position)+" · "+segmentName, week.ID)
+					for _, block := range segment.Blocks {
+						blockName := block.Title
+						if blockName == "" {
+							blockName = block.Purpose
+						}
+						appendVariationSubject(&result, seen, "BLOCK:"+block.ID, prefix+" · "+segmentName+" · Bloco "+strconv.Itoa(block.Position)+" · "+blockName, week.ID)
+						for _, step := range block.WaterSteps {
+							appendVariationSubject(&result, seen, "WATER_STEP:"+step.ID, prefix+" · Passo de água "+strconv.Itoa(step.Position)+" · "+step.Name, week.ID)
+						}
+						for _, exercise := range block.Exercises {
+							appendVariationSubject(&result, seen, "GYM_EXERCISE:"+exercise.ID, prefix+" · Exercício "+strconv.Itoa(exercise.Position)+" · "+exercise.Name, week.ID)
+						}
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+func appendVariationSubject(result *[]pages.StructuredVariationSubjectChoice, seen map[string]bool, value, name, planID string) {
+	if value == "" || seen[value] {
+		return
+	}
+	seen[value] = true
+	*result = append(*result, pages.StructuredVariationSubjectChoice{Value: value, Name: name, PlanID: planID})
+}
+
+func structuredVariationPreviews(rows []dbgen.ListTrainingVariationMatchesForManagerRow, location *time.Location) []pages.StructuredVariationPreview {
+	result := []pages.StructuredVariationPreview{}
+	for index := 0; index < len(rows); {
+		row := rows[index]
+		if row.MembershipID == nil {
+			index++
+			continue
+		}
+		end := index + 1
+		for end < len(rows) && rows[end].MembershipID != nil && *rows[end].MembershipID == *row.MembershipID && rows[end].PlanID == row.PlanID && rows[end].SubjectKind == row.SubjectKind && rows[end].SubjectID == row.SubjectID {
+			end++
+		}
+		highest := row.Priority
+		preview := pages.StructuredVariationPreview{Athlete: row.AthleteName, Plan: row.PlanTitle, Session: row.SessionTitle, When: row.StartsAt.Time.In(location).Format("02/01/2006 15:04"), Subject: row.SubjectLabel}
+		for _, candidate := range rows[index:end] {
+			applied := candidate.Priority == highest
+			preview.Rules = append(preview.Rules, pages.StructuredVariationRule{ID: candidate.VariationID.String(), Target: candidate.TargetKind + " · " + candidate.TargetName, Operation: trainingVariationOperationLabel(candidate.Operation), Summary: candidate.ChangeSummary, Patch: trainingVariationPatchLabel(candidate.Patch), Version: int(candidate.Version), Applied: applied})
+		}
+		appliedCount := 0
+		for _, rule := range preview.Rules {
+			if rule.Applied {
+				appliedCount++
+			}
+		}
+		preview.Conflict = appliedCount > 1
+		if preview.Conflict {
+			preview.Status = "Conflito: resolva as variações do mesmo nível antes de publicar."
+		} else {
+			preview.Status = "Resolvida com precedência explícita."
+		}
+		result = append(result, preview)
+		index = end
+	}
+	return result
+}
+
+func trainingVariationOperationLabel(value dbgen.TrainingVariationOperation) string {
+	switch value {
+	case dbgen.TrainingVariationOperationOMIT:
+		return "Omitir"
+	case dbgen.TrainingVariationOperationREPLACE:
+		return "Substituir"
+	case dbgen.TrainingVariationOperationADD:
+		return "Adicionar alternativa"
+	default:
+		return "Alterar campos"
+	}
+}
+
+func trainingVariationPatchLabel(encoded []byte) string {
+	values := map[string]any{}
+	if len(encoded) == 0 || json.Unmarshal(encoded, &values) != nil {
+		return ""
+	}
+	labels := map[string]string{"title": "título", "modality": "modalidade", "instructions": "instruções", "repeats": "repetições", "duration_seconds": "duração (s)", "distance_metres": "distância (m)", "recovery_seconds": "recuperação (s)", "intensity_code": "intensidade", "sets": "séries", "repetitions": "repetições do exercício", "resistance": "carga"}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %v", labels[key], values[key]))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Location) []pages.StructuredTrainingAudience {

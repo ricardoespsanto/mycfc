@@ -1199,6 +1199,136 @@ func (ns NullTrainingSegmentModality) Value() (driver.Value, error) {
 	return string(ns.TrainingSegmentModality), nil
 }
 
+type TrainingVariationGroupKind string
+
+const (
+	TrainingVariationGroupKindSUBGROUP TrainingVariationGroupKind = "SUBGROUP"
+	TrainingVariationGroupKindCREW     TrainingVariationGroupKind = "CREW"
+)
+
+func (e *TrainingVariationGroupKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingVariationGroupKind(s)
+	case string:
+		*e = TrainingVariationGroupKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingVariationGroupKind: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingVariationGroupKind struct {
+	TrainingVariationGroupKind TrainingVariationGroupKind `json:"training_variation_group_kind"`
+	Valid                      bool                       `json:"valid"` // Valid is true if TrainingVariationGroupKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingVariationGroupKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingVariationGroupKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingVariationGroupKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingVariationGroupKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingVariationGroupKind), nil
+}
+
+type TrainingVariationOperation string
+
+const (
+	TrainingVariationOperationOMIT     TrainingVariationOperation = "OMIT"
+	TrainingVariationOperationREPLACE  TrainingVariationOperation = "REPLACE"
+	TrainingVariationOperationADD      TrainingVariationOperation = "ADD"
+	TrainingVariationOperationOVERRIDE TrainingVariationOperation = "OVERRIDE"
+)
+
+func (e *TrainingVariationOperation) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingVariationOperation(s)
+	case string:
+		*e = TrainingVariationOperation(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingVariationOperation: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingVariationOperation struct {
+	TrainingVariationOperation TrainingVariationOperation `json:"training_variation_operation"`
+	Valid                      bool                       `json:"valid"` // Valid is true if TrainingVariationOperation is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingVariationOperation) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingVariationOperation, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingVariationOperation.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingVariationOperation) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingVariationOperation), nil
+}
+
+type TrainingVariationSubjectKind string
+
+const (
+	TrainingVariationSubjectKindSEGMENT     TrainingVariationSubjectKind = "SEGMENT"
+	TrainingVariationSubjectKindBLOCK       TrainingVariationSubjectKind = "BLOCK"
+	TrainingVariationSubjectKindWATERSTEP   TrainingVariationSubjectKind = "WATER_STEP"
+	TrainingVariationSubjectKindGYMEXERCISE TrainingVariationSubjectKind = "GYM_EXERCISE"
+)
+
+func (e *TrainingVariationSubjectKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TrainingVariationSubjectKind(s)
+	case string:
+		*e = TrainingVariationSubjectKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TrainingVariationSubjectKind: %T", src)
+	}
+	return nil
+}
+
+type NullTrainingVariationSubjectKind struct {
+	TrainingVariationSubjectKind TrainingVariationSubjectKind `json:"training_variation_subject_kind"`
+	Valid                        bool                         `json:"valid"` // Valid is true if TrainingVariationSubjectKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTrainingVariationSubjectKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TrainingVariationSubjectKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TrainingVariationSubjectKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTrainingVariationSubjectKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TrainingVariationSubjectKind), nil
+}
+
 type WaterStepKind string
 
 const (
@@ -1925,6 +2055,47 @@ type TrainingSessionSegment struct {
 	EquipmentNotes            string                  `json:"equipment_notes"`
 	CreatedAt                 pgtype.Timestamptz      `json:"created_at"`
 	UpdatedAt                 pgtype.Timestamptz      `json:"updated_at"`
+}
+
+type TrainingVariation struct {
+	ID                 uuid.UUID                    `json:"id"`
+	PlanID             uuid.UUID                    `json:"plan_id"`
+	TargetMembershipID *uuid.UUID                   `json:"target_membership_id"`
+	TargetGroupID      *uuid.UUID                   `json:"target_group_id"`
+	SubjectKind        TrainingVariationSubjectKind `json:"subject_kind"`
+	SubjectID          uuid.UUID                    `json:"subject_id"`
+	Operation          TrainingVariationOperation   `json:"operation"`
+	ChangeSummary      string                       `json:"change_summary"`
+	Patch              []byte                       `json:"patch"`
+	Version            int32                        `json:"version"`
+	IsActive           bool                         `json:"is_active"`
+	RetiredAt          pgtype.Timestamptz           `json:"retired_at"`
+	RetiredByID        *uuid.UUID                   `json:"retired_by_id"`
+	CreatedByID        uuid.UUID                    `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz           `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz           `json:"updated_at"`
+}
+
+type TrainingVariationGroup struct {
+	ID                 uuid.UUID                  `json:"id"`
+	TrainingGroupID    uuid.UUID                  `json:"training_group_id"`
+	Name               string                     `json:"name"`
+	Kind               TrainingVariationGroupKind `json:"kind"`
+	CraftModalityID    *uuid.UUID                 `json:"craft_modality_id"`
+	EffectiveFrom      pgtype.Date                `json:"effective_from"`
+	EffectiveUntil     pgtype.Date                `json:"effective_until"`
+	CompetitionEventID *uuid.UUID                 `json:"competition_event_id"`
+	OpenEndedException bool                       `json:"open_ended_exception"`
+	CreatedByID        uuid.UUID                  `json:"created_by_id"`
+	CreatedAt          pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz         `json:"updated_at"`
+}
+
+type TrainingVariationGroupMember struct {
+	VariationGroupID uuid.UUID          `json:"variation_group_id"`
+	MembershipID     uuid.UUID          `json:"membership_id"`
+	AddedByID        uuid.UUID          `json:"added_by_id"`
+	AddedAt          pgtype.Timestamptz `json:"added_at"`
 }
 
 type User struct {
