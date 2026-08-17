@@ -8,7 +8,7 @@ import (
 type EventItem struct { ID, Title, Type, When, Status, Capacity, CancellationReason string; Cancelled bool }
 type EventDocument struct { Title, URL, Source, ReviewedOn, Context string }
 type EventResponse struct { UserID, Name, Status, RespondedAt, CheckedInAt string }
-type EventDependent struct { ID, Name string }
+type EventSubjectChoice struct { ID, Name string; Selected, Self bool }
 type EventProgramme struct { ID, Name string; Selected bool }
 type EventTeam struct { ID, Name string; Selected bool }
 type EventForm struct {
@@ -45,7 +45,8 @@ type EventDetailPage struct {
     Documents []EventDocument
     Responses []EventResponse
     ResponsesPreviousURL, ResponsesNextURL string
-    Dependents []EventDependent
+    Subjects []EventSubjectChoice
+    SelectedSubject EventSubjectChoice
     CSRFField templ.Component
 }
 
@@ -53,7 +54,7 @@ templ Events(page EventsPage) { @components.Base(page.Meta, eventsContent(page))
 templ eventsContent(page EventsPage) {
     <div class="collection-page">
     if page.Management {
-        @components.PageHeader("Administração", "Eventos", "Crie eventos e acompanhe as respostas dos participantes.", eventPageActions(page))
+        @components.PageHeader("Coordenação", "Eventos", "Crie eventos e acompanhe as respostas dos participantes.", eventPageActions(page))
     } else {
         @components.PageHeader("Atividade", "Eventos", "Consulte a agenda e responda às atividades relevantes para si.", nil)
     }
@@ -156,7 +157,7 @@ templ EventEdit(page EventEditPage) {
 }
 
 templ eventEditContent(page EventEditPage) {
-	@components.PageHeader("Administração · Eventos", "Editar evento", page.Form.Title, []components.PageAction{{Label: "Voltar ao evento", Href: "/admin/eventos/" + page.EventID, Variant: "quiet"}})
+	@components.PageHeader("Coordenação · Eventos", "Editar evento", page.Form.Title, []components.PageAction{{Label: "Voltar ao evento", Href: "/admin/eventos/" + page.EventID, Variant: "quiet"}})
 	@components.StatusMessage(page.Conflict, "error")
 	@EventAuthoringForm(page.Form)
 	<section class="module destructive-region" aria-labelledby="cancel-event-title">
@@ -209,14 +210,21 @@ templ eventDetailContent(page EventDetailPage) {
             @components.SectionHeading("Participação", "A sua resposta", "Confirme a participação da pessoa certa.") {
                 <span class="record-item__actions"><span class="record-meta">Estado: { page.Status }</span>@components.Badge(page.Status, eventStatusTone(page.Status))</span>
             }
-            if page.Status != "Fora do prazo" {
-                <form class="form-layout" method="post" action={ "/events/" + page.ID + "/responses" }>
-                    @page.CSRFField@components.FieldLabel("event-subject", "Resposta para", false)
-                    <select id="event-subject" name="subject_user_id"><option value="">A minha participação</option>
-                        for _, dependent := range page.Dependents {
-                            <option value={ dependent.ID }>{ dependent.Name }</option>
+            <p class="callout"><strong>A responder por</strong><br/>{ eventSubjectLabel(page.SelectedSubject) }</p>
+            if len(page.Subjects) > 1 {
+                <form class="form-layout" method="get" action={ "/events/" + page.ID }>
+                    @components.FieldLabel("event-subject-switcher", "Participação de", false)
+                    <select id="event-subject-switcher" name="subject_user_id">
+                        for _, subject := range page.Subjects {
+                            <option value={ subject.ID } selected?={ subject.Selected }>{ eventSubjectLabel(subject) }</option>
                         }
                     </select>
+                    @components.FormActions("") { <button class="action action--secondary" type="submit">Ver participação</button> }
+                </form>
+            }
+            if page.Status != "Fora do prazo" {
+                <form class="form-layout" method="post" action={ "/events/" + page.ID + "/responses" }>
+                    @page.CSRFField<input type="hidden" name="subject_user_id" value={ page.SelectedSubject.ID }/>
                     @components.FormActions("/events") {
                         <button class="action action--primary" name="status" value="Going" type="submit">Vou</button>
                         <button class="action action--secondary" name="status" value="NotGoing" type="submit">Não vou</button>
@@ -267,6 +275,8 @@ templ eventDetailContent(page EventDetailPage) {
     }
 }
 
+func eventSubjectLabel(subject EventSubjectChoice) string { if subject.Self { return subject.Name + " (eu)" }; return subject.Name }
+
 templ eventDocumentsSection(documents []EventDocument) {
     <section class="module">
         @components.SectionHeading("Documentação", "Cadernos de prova e documentos oficiais", "Ligações verificadas associadas às competições do clube.")
@@ -295,7 +305,7 @@ func eventPageActions(page EventsPage) []components.PageAction {
 }
 
 func eventPageURL(page EventsPage, id string) string { if page.Management { return "/admin/eventos/" + id }; return "/events/" + id }
-func eventDetailArea(page EventDetailPage) string { if page.CanManageEvents { return "Administração · Eventos" }; return "Evento" }
+func eventDetailArea(page EventDetailPage) string { if page.CanManageEvents { return "Coordenação · Eventos" }; return "Evento" }
 func eventDetailBackURL(page EventDetailPage) string { if page.CanManageEvents { return "/admin/eventos" }; return "/events" }
 func eventDetailActions(page EventDetailPage) []components.PageAction {
 	actions := []components.PageAction{{Label: "Voltar aos eventos", Href: eventDetailBackURL(page), Variant: "quiet"}}

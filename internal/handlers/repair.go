@@ -234,8 +234,10 @@ func repairRequestForm(form *multipart.Form) (repairForm, *multipart.FileHeader,
 		return repairForm{}, nil, errors.New("O formulário contém campos inválidos.")
 	}
 	returnTo := ""
-	if values := form.Value["return_to"]; len(values) == 1 && values[0] == "/admin/fleet" {
-		returnTo = values[0]
+	if values := form.Value["return_to"]; len(values) == 1 {
+		if safe := safeCollectionReturn(values[0]); strings.HasPrefix(safe, "/admin/fleet") {
+			returnTo = safe
+		}
 	}
 	f := repairForm{IdempotencyKey: form.Value["idempotency_key"][0], EquipmentID: form.Value["equipment_id"][0], Description: form.Value["issue_description"][0], ReturnTo: returnTo, Errors: map[string]string{}}
 	if files := form.File["photo"]; len(files) == 1 && files[0].Filename != "" {
@@ -260,7 +262,7 @@ func (h Repair) success(w http.ResponseWriter, r *http.Request, repair dbgen.Rep
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "repair_flash", "Avaria reportada. Referência: "+repair.ID.String()[:8])
 	}
-	if returnTo != "/admin/fleet" {
+	if !strings.HasPrefix(returnTo, "/admin/fleet") {
 		returnTo = "/fleet"
 	}
 	http.Redirect(w, r, returnTo, http.StatusSeeOther)

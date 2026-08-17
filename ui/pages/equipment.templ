@@ -8,7 +8,7 @@ import (
 
 type EquipmentForm struct {
 	CSRFField templ.Component
-	ID, AssetTag, Name, Type, Status, Notes, ExpectedUpdatedAt string
+	ID, AssetTag, Name, Type, Status, Notes, ExpectedUpdatedAt, ReturnURL string
 	PhotoURL, PhotoUnavailable string
 	HasPhoto bool
 	Retired bool
@@ -25,7 +25,14 @@ type EquipmentEditPage struct {
 	Meta components.PageMeta
 	Form EquipmentForm
 	Audit []EquipmentAuditItem
-	Conflict string
+	Conflict, ReturnURL string
+}
+
+type EquipmentRetirePage struct {
+	Meta components.PageMeta
+	Form EquipmentForm
+	ReturnURL, Conflict string
+	Errors validation.FieldErrors
 }
 
 templ EquipmentCreateForm(form EquipmentForm) {
@@ -34,10 +41,10 @@ templ EquipmentCreateForm(form EquipmentForm) {
 		<button class="create-panel__close" type="button">Fechar</button>
 		<div class="disclosure__content">
 			@equipmentErrorSummary(form, "create")
-			<form class="form-layout" method="post" action="/admin/fleet/equipment" enctype="multipart/form-data">
+			<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment", form.ReturnURL)) } enctype="multipart/form-data">
 				@form.CSRFField
 				@equipmentFields(form, "create")
-				@components.FormActions("/admin/fleet") { <button type="submit">Adicionar equipamento</button> }
+				@components.FormActions(form.ReturnURL) { <button type="submit">Adicionar equipamento</button> }
 			</form>
 		</div>
 	</details>
@@ -48,7 +55,7 @@ templ EquipmentEdit(page EquipmentEditPage) {
 }
 
 templ equipmentEditContent(page EquipmentEditPage) {
-	@components.PageHeader("Frota", "Editar equipamento", page.Form.AssetTag+" · "+page.Form.Name, []components.PageAction{{Label: "Voltar à frota", Href: "/admin/fleet", Variant: "secondary"}})
+	@components.PageHeader("Frota", "Editar equipamento", page.Form.AssetTag+" · "+page.Form.Name, []components.PageAction{{Label: "Voltar à frota", Href: page.ReturnURL, Variant: "secondary"}})
 	@components.StatusMessage(page.Conflict, "error")
 	<section class="module">
 		@components.SectionHeading("Inventário", "Dados do equipamento", "Atualize a identificação, classificação e estado operacional.")
@@ -59,11 +66,11 @@ templ equipmentEditContent(page EquipmentEditPage) {
 		if page.Form.PhotoUnavailable != "" {
 			<p role="status">{ page.Form.PhotoUnavailable }</p>
 		}
-		<form class="form-layout" method="post" action={ "/admin/fleet/equipment/" + page.Form.ID } enctype="multipart/form-data">
+		<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+page.Form.ID, page.ReturnURL)) } enctype="multipart/form-data">
 			@page.Form.CSRFField
 			<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
 			@equipmentFields(page.Form, "edit")
-			@components.FormActions("/admin/fleet") { <button type="submit">Guardar alterações</button> }
+			@components.FormActions(page.ReturnURL) { <button type="submit">Guardar alterações</button> }
 		</form>
 	</section>
 	<section class="module">
@@ -90,6 +97,27 @@ templ equipmentEditContent(page EquipmentEditPage) {
 			}
 		}
 	</section>
+}
+
+templ EquipmentRetire(page EquipmentRetirePage) {
+	@components.Base(page.Meta, equipmentRetireContent(page))
+}
+
+templ equipmentRetireContent(page EquipmentRetirePage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "retirar-equipamento", TitleID: "equipment-retire-title", Eyebrow: "Confirmação", Title: "Retirar equipamento da frota", Description: page.Form.AssetTag+" · "+page.Form.Name, Variant: "confirmation", ReturnURL: page.ReturnURL}) {
+			<form class="form-layout task-form destructive-region" method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+page.Form.ID+"/retire", page.ReturnURL)) } data-task-form>
+				@page.Meta.CSRFField
+				<input type="hidden" name="expected_updated_at" value={ page.Form.ExpectedUpdatedAt }/>
+				@components.TaskConflict("O estado do equipamento foi alterado", page.Conflict, "", page.ReturnURL, "Voltar à frota")
+				@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "confirmation", Field: "confirm-equipment-retirement"}, {Key: "version", Field: "confirm-equipment-retirement"}}))
+				<p>O equipamento deixa de estar disponível e todas as manutenções ativas associadas são canceladas. O histórico e as reparações são preservados.</p>
+				<label for="confirm-equipment-retirement"><input id="confirm-equipment-retirement" type="checkbox" name="confirm_retirement" value="yes" required aria-invalid?={ page.Errors["confirmation"] != "" } aria-describedby="confirmation-error"/> Confirmo que pretendo retirar { page.Form.AssetTag } · { page.Form.Name } da frota.</label>
+				@components.FieldErrorMessage("confirmation", page.Errors["confirmation"])
+				@components.TaskActions(page.ReturnURL) { <button class="action action--danger" type="submit" data-task-submit>Retirar equipamento da frota</button> }
+			</form>
+		}
+	</div>
 }
 
 templ equipmentErrorSummary(form EquipmentForm, prefix string) {

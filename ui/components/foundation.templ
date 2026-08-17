@@ -1,15 +1,21 @@
 package components
 
-type PageAction struct { Label, Href, Variant string }
+type PageAction struct { Label, Href, Variant, TaskID string }
+type StatusItem struct { Label, Value string }
+type CollectionToolbarData struct { TitleID, Title, Count, ClearHref, ClearLabel string }
 
 templ PageHeader(eyebrow, title, intro string, actions []PageAction) {
 	<header class="page-header">
 		<div class="page-header__copy"><p class="eyebrow">{ eyebrow }</p><h1>{ title }</h1><p>{ intro }</p></div>
 		if len(actions) > 0 {
-			<div class="page-actions">
-				for _, action := range actions {
-					<a class={ "action action--" + action.Variant } href={ templ.SafeURL(action.Href) }>{ action.Label }</a>
-				}
+				<div class="page-actions">
+					for _, action := range normalizedPageActions(actions) {
+						if action.TaskID != "" {
+							<a class={ "action action--" + action.Variant } href={ templ.SafeURL(action.Href) } aria-haspopup="dialog" aria-controls={ action.TaskID } data-task-open={ action.TaskID }>{ action.Label }</a>
+						} else {
+							<a class={ "action action--" + action.Variant } href={ templ.SafeURL(action.Href) }>{ action.Label }</a>
+						}
+					}
 			</div>
 		}
 	</header>
@@ -70,6 +76,37 @@ templ Icon(label string, decorative bool) {
 }
 
 templ DataRegion(label string, content templ.Component) { <div class="data-region" role="region" aria-label={ label } tabindex="0">@content</div> }
+templ DataRegionDescribed(label, describedBy string, content templ.Component) { <div class="data-region" role="region" aria-label={ label } aria-describedby={ describedBy } tabindex="0">@content</div> }
+
+templ CollectionToolbar(data CollectionToolbarData) {
+	<div class="collection-toolbar">
+		<h2 id={ data.TitleID } class="visually-hidden">{ data.Title }</h2>
+		<div class="collection-toolbar__controls">{ children... }</div>
+		<div class="collection-toolbar__summary">
+			<span class="collection-count">{ data.Count }</span>
+			if data.ClearHref != "" {
+				<a class="action action--quiet" href={ templ.SafeURL(data.ClearHref) }>{ data.ClearLabel }</a>
+			}
+		</div>
+	</div>
+}
+
+templ RowActionMenu(id, recordName string) {
+	<details class="row-action-menu" data-row-action-menu>
+		<summary aria-controls={ id } aria-label={ "Mais ações para " + recordName }><span aria-hidden="true">Mais ações</span></summary>
+		<div id={ id } class="row-action-menu__panel" data-row-action-menu-panel>
+			<div class="row-action-menu__items">{ children... }</div>
+		</div>
+	</details>
+}
+
+templ StatusSummary(label string, items []StatusItem) {
+	<dl class="status-summary" aria-label={ label }>
+		for _, item := range items {
+			<div><dt>{ item.Label }</dt><dd>{ item.Value }</dd></div>
+		}
+	</dl>
+}
 
 templ Avatar(userID, name string) {
 	if userID != "" {
@@ -80,3 +117,20 @@ templ Avatar(userID, name string) {
 templ PersonName(userID, name string) { <span class="person-name">@Avatar(userID, name)<span>{ name }</span></span> }
 
 func calloutRole(tone string) string { if tone == "error" { return "alert" }; return "status" }
+
+func normalizedPageActions(actions []PageAction) []PageAction {
+	normalized := make([]PageAction, len(actions))
+	primarySeen := false
+	for index, action := range actions {
+		switch action.Variant {
+		case "primary":
+			if primarySeen { action.Variant = "secondary" }
+			primarySeen = true
+		case "secondary", "quiet", "danger":
+		default:
+			action.Variant = "secondary"
+		}
+		normalized[index] = action
+	}
+	return normalized
+}

@@ -37,7 +37,7 @@ type StructuredTraining struct {
 
 type structuredTrainingRow struct {
 	athleteName, groupName, scope, planTitle, planDescription, seasonName, sessionTitle, sessionDescription string
-	groupID, planID, sessionID, segmentID, blockID, exerciseID                                              *uuid.UUID
+	athleteID, groupID, planID, sessionID, segmentID, blockID, exerciseID                                   *uuid.UUID
 	memberCount, segmentPosition, blockPosition, exercisePosition                                           int
 	plannedLoadPercentage                                                                                   *int16
 	weekStart                                                                                               time.Time
@@ -75,6 +75,13 @@ type structuredPrescriptionSnapshot struct {
 	Session         pages.StructuredTrainingSession `json:"session"`
 }
 
+type structuredTrainingSubject struct {
+	ID   uuid.UUID
+	Name string
+}
+
+var errStructuredTrainingSubjectNotFound = errors.New("structured training subject not found")
+
 func (h StructuredTraining) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, pages.StructuredTrainingPage{})
 }
@@ -83,6 +90,7 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	user, _ := CurrentUserFromContext(r.Context())
 	page.Management = strings.HasPrefix(r.URL.Path, "/admin/")
 	page.CanManageWaterProfiles = page.Management && user.IsAdmin
+	var selectedSubject *structuredTrainingSubject
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
 	if page.Management {
@@ -159,9 +167,28 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			h.System.InternalError(w, r)
 			return
 		}
+		var subjects []structuredTrainingSubject
+		rows, subjects, selectedSubject, err = filterStructuredTrainingSubjectRows(rows, r.URL.Query().Get("subject_user_id"))
+		if errors.Is(err, errStructuredTrainingSubjectNotFound) {
+			h.System.NotFound(w, r)
+			return
+		}
 		page.Audiences = structuredPublishedTraining(rows, h.location())
+		page.AllSubjectsSelected = selectedSubject == nil
+		for _, subject := range subjects {
+			page.Subjects = append(page.Subjects, pages.StructuredTrainingSubjectChoice{ID: subject.ID.String(), Name: subject.Name, Selected: selectedSubject != nil && selectedSubject.ID == subject.ID, Self: subject.ID == user.ID})
+		}
 	}
 	page.Meta = h.meta(r, user, page.Management)
+	page.Meta.PageLabel = "Planeamento semanal"
+	if page.Management {
+		page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
+	} else {
+		page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Treinos", Path: "/treinos"}}
+		if selectedSubject != nil && selectedSubject.ID != user.ID {
+			page.Meta.SubjectContext = selectedSubject.Name
+		}
+	}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	if h.Sessions != nil && page.Success == "" {
 		page.Success = h.Sessions.PopString(r.Context(), "structured_training_flash")
@@ -2820,6 +2847,41 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 	return result
 }
 
+func filterStructuredTrainingSubjectRows(rows []dbgen.ListTrainingPrescriptionsForViewerRow, requested string) ([]dbgen.ListTrainingPrescriptionsForViewerRow, []structuredTrainingSubject, *structuredTrainingSubject, error) {
+	subjects := make([]structuredTrainingSubject, 0)
+	seen := make(map[uuid.UUID]bool)
+	for _, row := range rows {
+		if seen[row.AthleteUserID] {
+			continue
+		}
+		seen[row.AthleteUserID] = true
+		subjects = append(subjects, structuredTrainingSubject{ID: row.AthleteUserID, Name: row.AthleteName})
+	}
+	if requested == "" {
+		return rows, subjects, nil, nil
+	}
+	requestedID, err := uuid.Parse(requested)
+	if err != nil {
+		return nil, subjects, nil, errStructuredTrainingSubjectNotFound
+	}
+	var selected *structuredTrainingSubject
+	for i := range subjects {
+		if subjects[i].ID == requestedID {
+			selected = &subjects[i]
+			break
+		}
+	}
+	if selected == nil {
+		return nil, subjects, nil, errStructuredTrainingSubjectNotFound
+	}
+	filtered := make([]dbgen.ListTrainingPrescriptionsForViewerRow, 0, len(rows))
+	for _, row := range rows {
+		if row.AthleteUserID == requestedID {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, subjects, selected, nil
+}
 func structuredRowFromValues(row structuredTrainingRow, structure *dbgen.GymBlockStructure, objective *dbgen.TrainingObjective, rounds, roundRecovery *int32, exerciseID *uuid.UUID, exercisePosition *int32, name *string, sets, repetitions, duration, distance, recovery *int32, resistanceKind *dbgen.GymResistanceKind, resistanceValue *float64, resistanceText *string, intent *dbgen.GymExecutionIntent, tempo, notes *string) structuredTrainingRow {
 	row.gymStructure, row.gymObjective = enumString(structure), enumString(objective)
 	row.gymRounds, row.gymRoundRecovery = intValue(rounds), intValue(roundRecovery)

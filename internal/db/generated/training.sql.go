@@ -275,7 +275,8 @@ WHERE (
     d.event_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id
         WHERE (subject.id = $1 OR subject.guardian_id = $1) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-          AND (NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id)
+          AND ((NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id)
+                AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = d.event_id))
                OR EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id AND a.programme_id = m.programme_id)
                OR EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = d.event_id AND a.team_id = m.team_id))
     )

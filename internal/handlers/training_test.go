@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -143,6 +144,18 @@ func TestManagedTrainingPlansPageURL(t *testing.T) {
 	}
 }
 
+func TestTrainingSessionEditDeepLinkMetadataUsesPlanningWorkspace(t *testing.T) {
+	sessionID := uuid.New()
+	h := Training{Store: &trainingEditStore{}}
+	r := httptest.NewRequest(http.MethodGet, "/admin/treinos/sessoes/"+sessionID.String()+"/editar", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Treinadora"}))
+	w := httptest.NewRecorder()
+	h.renderSessionEdit(w, r, http.StatusOK, sessionID, pages.TrainingSessionForm{Title: "Técnica de água"}, "", "", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Planear treinos") || !strings.Contains(w.Body.String(), "Coordenação · Treinos") || !strings.Contains(w.Body.String(), `aria-current="page">Editar sessão`) {
+		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestParseKilometresUsesExactMetres(t *testing.T) {
 	tests := []struct {
 		value string
@@ -180,12 +193,12 @@ func TestReportTrainingOutcomePersistsOnlyCompletedDistance(t *testing.T) {
 	userID := uuid.New()
 	store := &trainingOutcomeStore{saveRows: 1}
 	training := Training{Store: store}
-	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=COMPLETED&distance_km=12.34&actual_duration_minutes=75&perceived_exertion=7&recovery_feeling=4&perception_note=Boa+sessao"))
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=COMPLETED&distance_km=12.34&actual_duration_minutes=75&perceived_exertion=7&recovery_feeling=4&perception_note=Boa+sessao&subject_user_id="+uuid.NewString()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
 	response := httptest.NewRecorder()
 	training.ReportOutcome(response, request)
-	if response.Code != http.StatusSeeOther || store.saveParams.DistanceMetres == nil || *store.saveParams.DistanceMetres != 12340 || store.saveParams.ActualDurationMinutes == nil || *store.saveParams.ActualDurationMinutes != 75 || store.saveParams.PerceivedExertion == nil || *store.saveParams.PerceivedExertion != 7 || store.saveParams.RecoveryFeeling == nil || *store.saveParams.RecoveryFeeling != 4 || store.saveParams.PerceptionNote == nil || *store.saveParams.PerceptionNote != "Boa sessao" {
+	if response.Code != http.StatusSeeOther || store.saveParams.UserID != userID || store.saveParams.DistanceMetres == nil || *store.saveParams.DistanceMetres != 12340 || store.saveParams.ActualDurationMinutes == nil || *store.saveParams.ActualDurationMinutes != 75 || store.saveParams.PerceivedExertion == nil || *store.saveParams.PerceivedExertion != 7 || store.saveParams.RecoveryFeeling == nil || *store.saveParams.RecoveryFeeling != 4 || store.saveParams.PerceptionNote == nil || *store.saveParams.PerceptionNote != "Boa sessao" {
 		t.Fatalf("response = %d, params = %+v", response.Code, store.saveParams)
 	}
 
@@ -204,7 +217,7 @@ func TestUpdateTrainingFeedbackRequiresOwnFreshCompletedOutcome(t *testing.T) {
 	store := &trainingOutcomeStore{updateRows: 1}
 	training := Training{Store: store}
 	userID, sessionID := uuid.New(), uuid.New()
-	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/feedback", strings.NewReader("session_id="+sessionID.String()+"&expected_version=3&distance_km=7.5&actual_duration_minutes=62&perceived_exertion=6&recovery_feeling=3&perception_note=Corrente+forte"))
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/feedback", strings.NewReader("session_id="+sessionID.String()+"&expected_version=3&distance_km=7.5&actual_duration_minutes=62&perceived_exertion=6&recovery_feeling=3&perception_note=Corrente+forte&subject_user_id="+uuid.NewString()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
 	response := httptest.NewRecorder()
@@ -251,6 +264,16 @@ type trainingOutcomeStore struct {
 	updateParams dbgen.UpdateOwnCompletedSessionFeedbackParams
 	saveRows     int64
 	updateRows   int64
+}
+
+type trainingEditStore struct{ dbgen.Querier }
+
+func (*trainingEditStore) ListTrainingPlansForCoach(context.Context, dbgen.ListTrainingPlansForCoachParams) ([]dbgen.ListTrainingPlansForCoachRow, error) {
+	return nil, nil
+}
+
+func (*trainingEditStore) ListAnnouncementModalities(context.Context) ([]dbgen.ListAnnouncementModalitiesRow, error) {
+	return nil, nil
 }
 
 func (s *trainingOutcomeStore) SaveTrainingSessionOutcome(_ context.Context, params dbgen.SaveTrainingSessionOutcomeParams) (int64, error) {

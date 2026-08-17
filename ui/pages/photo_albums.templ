@@ -34,7 +34,7 @@ templ PhotoAlbums(page PhotoAlbumsPage) { @components.Base(page.Meta, photoAlbum
 
 templ photoAlbumsContent(page PhotoAlbumsPage) {
 	if page.Management {
-		@components.PageHeader("Administração", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}})
+		@components.PageHeader("Moderação", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}})
 	} else {
 		@components.PageHeader("Atividade", "Álbuns privados", "Consulte os álbuns dos seus programas e equipas.", nil)
 	}
@@ -133,5 +133,5 @@ func photoAlbumStatusLabel(status string) string { if status == "ARCHIVED" { ret
 func photoAlbumStatusTone(status string) string { if status == "ARCHIVED" { return "neutral" }; return "success" }
 func photoAlbumDetailURL(item PhotoAlbumItem, management bool) string { if management { return "/admin/albuns/" + item.ID }; return "/albuns/" + item.ID }
 func photoAlbumIndexURL(management bool) string { if management { return "/admin/albuns" }; return "/albuns" }
-func photoAlbumArea(management bool) string { if management { return "Administração" }; return "Atividade" }
+func photoAlbumArea(management bool) string { if management { return "Moderação" }; return "Atividade" }
 func photoAlbumAuditLabel(action string) string { if action == "ARCHIVED" { return "Álbum arquivado" }; return "Álbum criado" }

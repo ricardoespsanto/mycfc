@@ -224,6 +224,37 @@ func (s *structuredTrainingStoreStub) CopyTrainingBlock(_ context.Context, sourc
 	return uuid.New(), nil
 }
 
+func TestFilterStructuredTrainingSubjectRowsUsesOnlyAuthorizedQueryResults(t *testing.T) {
+	actorID, dependentID := uuid.New(), uuid.New()
+	rows := []dbgen.ListTrainingPrescriptionsForViewerRow{
+		{AthleteUserID: actorID, AthleteName: "Marta"},
+		{AthleteUserID: dependentID, AthleteName: "Leonor"},
+		{AthleteUserID: dependentID, AthleteName: "Leonor"},
+	}
+	filtered, subjects, selected, err := filterStructuredTrainingSubjectRows(rows, dependentID.String())
+	if err != nil || selected == nil || selected.ID != dependentID || selected.Name != "Leonor" || len(subjects) != 2 || len(filtered) != 2 {
+		t.Fatalf("filtered = %#v, subjects = %#v, selected = %#v, err = %v", filtered, subjects, selected, err)
+	}
+	for _, row := range filtered {
+		if row.AthleteUserID != dependentID {
+			t.Fatalf("foreign row survived filter: %#v", row)
+		}
+	}
+}
+
+func TestFilterStructuredTrainingSubjectRowsFailsClosed(t *testing.T) {
+	rows := []dbgen.ListTrainingPrescriptionsForViewerRow{{AthleteUserID: uuid.New(), AthleteName: "Marta"}}
+	for _, requested := range []string{"invalid", uuid.NewString()} {
+		if _, _, _, err := filterStructuredTrainingSubjectRows(rows, requested); !errors.Is(err, errStructuredTrainingSubjectNotFound) {
+			t.Errorf("requested %q error = %v", requested, err)
+		}
+	}
+	all, subjects, selected, err := filterStructuredTrainingSubjectRows(rows, "")
+	if err != nil || len(all) != 1 || len(subjects) != 1 || selected != nil {
+		t.Fatalf("unfiltered rows = %#v, subjects = %#v, selected = %#v, err = %v", all, subjects, selected, err)
+	}
+}
+
 func (s *structuredTrainingStoreStub) CopyTrainingSession(_ context.Context, sourceID, targetID uuid.UUID, startsAt pgtype.Timestamptz, actorID uuid.UUID) (uuid.UUID, error) {
 	s.copiedSessions = append(s.copiedSessions, struct {
 		SourceID, TargetID, ActorID uuid.UUID

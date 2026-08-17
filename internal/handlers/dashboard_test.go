@@ -30,12 +30,12 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 		user    CurrentUser
 		handler http.HandlerFunc
 	}{
-		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos", "Frota"}, []string{"Menores a cargo", "Os meus espaços", "Gestão", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
-		{"tutor", []string{"Membro", "Menores a cargo", "Hoje", "Frota"}, []string{"Competição", "Treinador", "Moderador"}, CurrentUser{}, dashboard.Guardian},
-		{"competition athlete", []string{"Competição", "Frota"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
-		{"multiple memberships", []string{"Lazer", "Iniciação", "Competição", "Kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
-		{"active staff grants", []string{"Treinador", "Moderador", "Frota"}, nil, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
-		{"admin", []string{"Frota", "Sistema"}, []string{"Treinador", "Moderador", "Componentes"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
+		{"ordinary member", []string{"Membro", "Hoje", "Eventos", "Treinos", "Avisos", "Frota"}, []string{"Menores a cargo", "Família", "Coordenação", "Administração"}, CurrentUser{IsDependent: true}, dashboard.Today},
+		{"tutor", []string{"Membro", "Menores a cargo", "Família", "Hoje", "Frota"}, []string{"Competição", "Treinador", "Moderador"}, CurrentUser{}, dashboard.Guardian},
+		{"competition athlete", []string{"Inscrições", "Competição", "Frota"}, []string{"Iniciação", "Kayak polo", "Treinador", "Moderador"}, CurrentUser{Programmes: map[string]bool{"Competition": true}}, dashboard.Competition},
+		{"multiple memberships", []string{"Inscrições", "Lazer", "Iniciação", "Competição", "Kayak polo"}, nil, CurrentUser{Programmes: map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true}}, dashboard.Competition},
+		{"active staff grants", []string{"Treinador", "Moderador", "Coordenação", "Moderação", "Frota"}, nil, CurrentUser{CanManageEvents: true, CanModerateContent: true}, dashboard.Coach},
+		{"admin", []string{"Gerir frota", "Sistema", "Coordenação", "Moderação", "Administração"}, []string{"Treinador", "Moderador", "Componentes"}, CurrentUser{IsAdmin: true}, dashboard.Admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
@@ -69,10 +69,16 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
 	labels := strings.Join(dashboardCapabilities(user), ",")
-	for _, want := range []string{"Tutor", "Competição", "Treinador", "Moderador", "Administrador"} {
+	for _, want := range []string{"Tutor", "Treinador", "Moderador", "Administrador"} {
 		if !strings.Contains(labels, want) {
 			t.Errorf("capabilities %q do not contain %q", labels, want)
 		}
+	}
+	if strings.Contains(labels, "Competição") {
+		t.Errorf("programme membership exposed as responsibility: %q", labels)
+	}
+	if memberships := strings.Join(dashboardMemberships(user), ","); memberships != "Competição" {
+		t.Errorf("membership context = %q, want Competição", memberships)
 	}
 	for _, group := range dashboardNavigation(user) {
 		for _, item := range group.Items {
@@ -87,6 +93,104 @@ func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestDashboardNavigationIsOrderedAndUnambiguousForSixPersonas(t *testing.T) {
+	tests := []struct {
+		name string
+		user CurrentUser
+		want string
+	}{
+		{"member", CurrentUser{IsDependent: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet"},
+		{"tutor", CurrentUser{}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian"},
+		{"athlete", CurrentUser{Programmes: map[string]bool{"Competition": true}}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Inscrições:Competição=/dashboard/competition"},
+		{"coach", CurrentUser{CanManageEvents: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Coordenação:Gerir eventos=/admin/eventos,Planear treinos=/admin/treinos,Gerir avisos=/admin/avisos"},
+		{"moderator", CurrentUser{CanModerateContent: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Moderação:Gerir álbuns=/admin/albuns,Triar sugestões=/admin/sugestoes"},
+		{"administrator", CurrentUser{IsAdmin: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes|Família:Menores a cargo=/dashboard/guardian|Coordenação:Gerir eventos=/admin/eventos,Planear treinos=/admin/treinos,Gerir avisos=/admin/avisos|Moderação:Gerir álbuns=/admin/albuns,Triar sugestões=/admin/sugestoes|Administração:Membros=/admin/membros,Notícias=/admin/noticias,Gerir frota=/admin/fleet,Sistema=/admin/sistema"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := navigationSignature(dashboardNavigation(tc.user)); got != tc.want {
+				t.Fatalf("navigation = %q\nwant       = %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDashboardNavigationMarksNestedCurrentRouteForSixPersonas(t *testing.T) {
+	tests := []struct {
+		name, currentPath, label, path string
+		user                           CurrentUser
+	}{
+		{"member", "/events/event-id", "Eventos", "/events", CurrentUser{IsDependent: true}},
+		{"tutor", "/dashboard/guardian/dependent-id", "Menores a cargo", "/dashboard/guardian", CurrentUser{}},
+		{"athlete", "/dashboard/competition/details", "Competição", "/dashboard/competition", CurrentUser{Programmes: map[string]bool{"Competition": true}}},
+		{"coach", "/admin/eventos/event-id", "Gerir eventos", "/admin/eventos", CurrentUser{CanManageEvents: true}},
+		{"moderator", "/admin/albuns/album-id", "Gerir álbuns", "/admin/albuns", CurrentUser{CanModerateContent: true}},
+		{"administrator", "/admin/membros/member-id", "Membros", "/admin/membros", CurrentUser{IsAdmin: true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var output strings.Builder
+			if err := components.Navigation(tc.currentPath, dashboardNavigation(tc.user)).Render(context.Background(), &output); err != nil {
+				t.Fatalf("render navigation: %v", err)
+			}
+			body := output.String()
+			want := `href="` + tc.path + `" aria-current="page">` + tc.label + `</a>`
+			if !strings.Contains(body, want) || strings.Count(body, `aria-current="page"`) != 1 {
+				t.Fatalf("navigation for %q does not uniquely mark %q current: %s", tc.currentPath, want, body)
+			}
+		})
+	}
+}
+
+func TestDashboardNavigationMaximalPersonaHasUniqueTaskLabels(t *testing.T) {
+	user := CurrentUser{
+		IsAdmin: true, CanManageEvents: true, CanModerateContent: true,
+		Programmes:   map[string]bool{"Leisure": true, "Initiation": true, "Competition": true, "Kayak_Polo": true},
+		FeatureModes: map[featureflags.Key]featureflags.Mode{featureflags.Suggestions: featureflags.Enabled},
+	}
+	seen := map[string]string{}
+	for _, group := range dashboardNavigation(user) {
+		for _, item := range group.Items {
+			if previous, duplicate := seen[item.Label]; duplicate {
+				t.Fatalf("ambiguous label %q points to %q and %q", item.Label, previous, item.Path)
+			}
+			seen[item.Label] = item.Path
+		}
+	}
+	for _, want := range []string{"Gerir eventos", "Planear treinos", "Gerir avisos", "Gerir álbuns", "Triar sugestões", "Gerir frota"} {
+		if seen[want] == "" {
+			t.Errorf("maximal navigation does not contain %q", want)
+		}
+	}
+}
+
+func TestTodayShortcutsFindProgrammeByRouteRatherThanNavigationGroupLabel(t *testing.T) {
+	shortcuts := todayShortcuts(CurrentUser{Programmes: map[string]bool{"Leisure": true, "Competition": true}})
+	if len(shortcuts) != 3 || shortcuts[2].Label != "Lazer" || shortcuts[2].Path != "/dashboard/leisure" {
+		t.Fatalf("shortcuts = %#v, want the first programme destination after activity shortcuts", shortcuts)
+	}
+	guardianOnly := todayShortcuts(CurrentUser{})
+	if len(guardianOnly) != 2 {
+		t.Fatalf("guardian-only shortcuts = %#v, want no family destination in programme slot", guardianOnly)
+	}
+}
+
+func navigationSignature(groups []components.NavigationGroup) string {
+	result := make([]string, 0, len(groups))
+	for _, group := range groups {
+		label := group.Label
+		if label == "" {
+			label = "Principal"
+		}
+		items := make([]string, 0, len(group.Items))
+		for _, item := range group.Items {
+			items = append(items, item.Label+"="+item.Path)
+		}
+		result = append(result, label+":"+strings.Join(items, ","))
+	}
+	return strings.Join(result, "|")
 }
 
 func TestDashboardNavigationFiltersSuggestionsByFeatureMode(t *testing.T) {
@@ -459,7 +563,7 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
 	response := httptest.NewRecorder()
 	dashboard.Maintenance(response, request)
-	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet" {
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet#maintenance-schedule" {
 		t.Fatalf("normal response = %d %q", response.Code, response.Header().Get("Location"))
 	}
 }
@@ -477,7 +581,7 @@ func TestRepairStatusRequiresSequentialTransitionsAndSupportsHTMXAndNormalForms(
 	}{
 		{"invalid transition", "repair_id=" + repairID.String() + "&expected_status=Pendente&status=Resolvido", "HX", http.StatusUnprocessableEntity, "", "", "A alteração de estado não é válida."},
 		{"start analysis", "repair_id=" + repairID.String() + "&expected_status=Pendente&status=Em_Analise", "HX", http.StatusOK, "Em_Analise", "", "Pedido de reparação em análise."},
-		{"resolve normally", "repair_id=" + repairID.String() + "&expected_status=Em_Analise&status=Resolvido", "normal", http.StatusSeeOther, "Resolvido", "/admin/fleet", ""},
+		{"resolve normally", "repair_id=" + repairID.String() + "&expected_status=Em_Analise&status=Resolvido", "normal", http.StatusSeeOther, "Resolvido", "/admin/fleet#repair-" + repairID.String(), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/admin/repairs/status", strings.NewReader(tc.body))
@@ -552,7 +656,7 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Admin, uuid.New())
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet"`) {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2#equipment-inventory"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet#repair-requests"`) || !strings.Contains(response.Body.String(), `data-row-action-menu`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
@@ -624,13 +728,13 @@ func TestAdminFleetPaginatesSectionsIndependently(t *testing.T) {
 	if store.adminParams.RowOffset != 6 || store.pendingRepairParams.RowOffset != 12 || store.maintenanceParams.RowOffset != 18 {
 		t.Fatalf("unexpected fleet offsets: %+v", store)
 	}
-	if page.EquipmentPreviousURL != "/admin/fleet?maintenance_page=4&repairs_page=3" || page.EquipmentNextURL != "/admin/fleet?equipment_page=3&maintenance_page=4&repairs_page=3" {
+	if page.EquipmentPreviousURL != "/admin/fleet?maintenance_page=4&repairs_page=3#equipment-inventory" || page.EquipmentNextURL != "/admin/fleet?equipment_page=3&maintenance_page=4&repairs_page=3#equipment-inventory" {
 		t.Fatalf("unexpected equipment pagination URLs: %+v", page)
 	}
-	if page.RepairsPreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=2" || page.RepairsNextURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=4" {
+	if page.RepairsPreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=2#repair-requests" || page.RepairsNextURL != "/admin/fleet?equipment_page=2&maintenance_page=4&repairs_page=4#repair-requests" {
 		t.Fatalf("unexpected repair pagination URLs: %+v", page)
 	}
-	if page.MaintenancePreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=3&repairs_page=3" || page.MaintenanceNextURL != "/admin/fleet?equipment_page=2&maintenance_page=5&repairs_page=3" {
+	if page.MaintenancePreviousURL != "/admin/fleet?equipment_page=2&maintenance_page=3&repairs_page=3#maintenance-schedule" || page.MaintenanceNextURL != "/admin/fleet?equipment_page=2&maintenance_page=5&repairs_page=3#maintenance-schedule" {
 		t.Fatalf("unexpected maintenance pagination URLs: %+v", page)
 	}
 }

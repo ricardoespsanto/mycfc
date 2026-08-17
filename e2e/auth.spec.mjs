@@ -195,8 +195,8 @@ test.describe('authentication', () => {
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
-    const mobileMenu = page.locator('.mobile-app-menu');
-    await mobileMenu.locator('summary').click();
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
     const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
     await logout.focus();
     await expect(logout).toBeFocused();
@@ -423,7 +423,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+    await page.getByRole('link', { name: 'Gerir frota', exact: true }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Agendar manutenção', exact: true }).click();
@@ -481,7 +481,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+    await page.getByRole('link', { name: 'Gerir frota', exact: true }).click();
 
     await page.getByRole('link', { name: 'Adicionar equipamento' }).click();
     const create = page.locator('#equipment-form');

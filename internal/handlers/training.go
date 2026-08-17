@@ -544,6 +544,9 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 	}
 	page.Meta = h.meta(r, user, true)
 	page.Meta.Title = "Editar sessão | MyCFC"
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = "Editar sessão"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.TrainingSessionEdit(page).Render(r.Context(), w)
@@ -813,9 +816,13 @@ func (h Training) meta(r *http.Request, user CurrentUser, management bool) compo
 	meta := h.PageMeta
 	meta.Title = "Treinos e competição | MyCFC"
 	meta.CurrentPath = "/treinos"
+	meta.AreaLabel = "Atividade"
+	meta.PageLabel = "Treinos"
 	if management {
 		meta.Title = "Gestão de treinos | MyCFC"
 		meta.CurrentPath = "/admin/treinos"
+		meta.AreaLabel = "Coordenação"
+		meta.PageLabel = "Planear treinos"
 	}
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

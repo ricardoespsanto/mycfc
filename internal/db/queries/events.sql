@@ -67,7 +67,10 @@ FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
 WHERE e.starts_at >= now()
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m
            JOIN event_audiences a ON a.programme_id = m.programme_id
@@ -93,7 +96,10 @@ WHERE e.starts_at < sqlc.arg(day_ends_at)
   AND e.ends_at >= sqlc.arg(day_starts_at)
   AND (
       sqlc.arg(is_admin)::boolean
-      OR NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      OR (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
       OR (
           EXISTS (
               SELECT 1
@@ -176,7 +182,10 @@ JOIN users subject ON subject.id = sqlc.arg(subject_user_id) AND subject.is_acti
 WHERE e.id = sqlc.arg(event_id)
   AND (subject.id = sqlc.arg(actor_user_id) OR subject.guardian_id = sqlc.arg(actor_user_id))
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           WHERE a.event_id = e.id AND m.user_id = subject.id
@@ -210,7 +219,10 @@ FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
 WHERE e.id = sqlc.arg(event_id)
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id

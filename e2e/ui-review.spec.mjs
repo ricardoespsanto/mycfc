@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
@@ -19,6 +19,42 @@ const viewports = [
   { key: 'desktop', width: 1440, height: 900 },
   { key: 'mobile', width: 375, height: 812 },
 ];
+
+test('foundation primitives preserve compact and accessibility contracts', async ({ page }) => {
+  const stylesheet = await readFile(path.resolve('ui/static/src/app.css'), 'utf8');
+  await page.setViewportSize({ width: 375, height: 720 });
+  await page.setContent(`<!doctype html><html lang="pt-PT"><head><title>Prova dos componentes River Clubhouse</title><style>${stylesheet}</style></head><body class="app-body"><main class="collection-page">
+    <form class="form-layout"><fieldset class="form-section"><legend>Identificação e contacto</legend><p class="form-section__summary">Dados usados para identificar a pessoa e devolver informação importante.</p><div class="field-grid"><div class="field-group"><label for="proof-name">Nome completo da pessoa responsável pela inscrição</label><input id="proof-name" value="Inês Atleta de Competição"></div><div class="field-group"><label for="proof-email">Endereço de email principal para comunicações do clube</label><input id="proof-email" value="valor inválido" aria-invalid="true"></div></div></fieldset><button type="submit">Guardar dados</button></form>
+    <div class="data-region" role="region" aria-label="Comparação de membros" tabindex="0"><table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Programa</th><th scope="col">Estado</th></tr></thead><tbody><tr><th scope="row">Inês Atleta de Competição</th><td>Competição</td><td>Ativa</td></tr></tbody></table></div>
+    <button type="button">Ação contextual</button><a class="action" href="#proof-name">Ação partilhada</a>
+  </main></body></html>`);
+
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  const tableContract = await page.locator('.data-region').evaluate((region) => ({
+    overflow: getComputedStyle(region).overflowX,
+    scrollWidth: region.scrollWidth,
+    clientWidth: region.clientWidth,
+    headerDisplay: getComputedStyle(region.querySelector('thead')).display,
+    cellDisplay: getComputedStyle(region.querySelector('td')).display,
+  }));
+  expect(tableContract.overflow).toBe('auto');
+  expect(tableContract.scrollWidth).toBeGreaterThan(tableContract.clientWidth);
+  expect(tableContract.headerDisplay).toBe('table-header-group');
+  expect(tableContract.cellDisplay).toBe('table-cell');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  expect(await page.locator('.action').evaluate((action) => Number.parseFloat(getComputedStyle(action).transitionDuration))).toBeLessThanOrEqual(0.001);
+  await page.emulateMedia({ forcedColors: 'active' });
+  expect(await page.locator('.action').evaluate((action) => getComputedStyle(action).borderTopStyle)).not.toBe('none');
+
+  const violations = (await new AxeBuilder({ page }).analyze()).violations
+    .filter(({ impact }) => impact === 'serious' || impact === 'critical');
+  expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+});
 async function expectResponsiveContract(page, route, viewport) {
   const initialHeadingSize = await page.locator('main h1').evaluate((heading) => Number.parseFloat(getComputedStyle(heading).fontSize));
   const maximumHeadingSize = viewport.width <= 640 ? 32 : 48;
@@ -214,6 +250,18 @@ async function login(page, email) {
   await expect(page).toHaveURL(/\/today$/);
 }
 
+async function expectVisibleResponsibility(page, label) {
+  let openedDrawer = false;
+  if (await page.locator('.account-context:visible').count() === 0) {
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    openedDrawer = true;
+  }
+  await expect(page.locator('.account-context:visible').getByText(label, { exact: true })).toBeVisible();
+  if (openedDrawer) {
+    await page.getByRole('dialog', { name: 'Menu MyCFC' }).getByRole('button', { name: 'Fechar' }).click();
+  }
+}
+
 async function expectTodayComposition(page, persona) {
   await expect(page.getByRole('heading', { name: /^Olá,/ })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Agenda de hoje' })).toBeVisible();
@@ -246,13 +294,14 @@ async function expectCollectionWorkflow(page, route) {
     const tabs = page.getByRole('tablist', { name: 'Áreas da frota' });
     const equipmentTab = tabs.getByRole('tab', { name: /Equipamentos/ });
     const repairTab = tabs.getByRole('tab', { name: /Reparações/ });
-    await expect(equipmentTab).toHaveAttribute('aria-selected', 'true');
-    await equipmentTab.focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(repairTab).toBeFocused();
+    const maintenanceTab = tabs.getByRole('tab', { name: /Manutenção/ });
     await expect(repairTab).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('#repair-requests')).toBeVisible();
-    await expect(page.locator('#equipment-inventory')).toBeHidden();
+    await repairTab.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(maintenanceTab).toBeFocused();
+    await expect(maintenanceTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#maintenance-schedule')).toBeVisible();
+    await expect(page.locator('#repair-requests')).toBeHidden();
     await equipmentTab.click();
   }
 
@@ -265,6 +314,17 @@ async function expectCollectionWorkflow(page, route) {
   const trigger = page.getByRole('link', { name: actionName, exact: true });
   if (await trigger.count() === 0) return;
   const targetID = (await trigger.getAttribute('href')).slice(1);
+  if (route === '/admin/membros') {
+    const dialog = page.getByRole('dialog', { name: 'Criar conta' });
+    await expect(dialog).toBeHidden();
+    await trigger.click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('Nome')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+    return;
+  }
   const panel = page.locator(`#${targetID}`);
   await expect(panel).not.toHaveAttribute('open', '');
   await trigger.click();
@@ -360,12 +420,13 @@ test('keeps collection creation usable', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 375, height: 812 } });
   const page = await context.newPage();
   await login(page, 'review-admin@example.test');
-  const mobileMenu = page.locator('.mobile-app-menu');
-  await mobileMenu.locator('summary').click();
-  await expect(mobileMenu).toHaveAttribute('open', '');
+  const mobileMenuTrigger = page.getByRole('button', { name: 'Menu', exact: true });
+  await mobileMenuTrigger.click();
+  const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
+  await expect(mobileMenu).toBeVisible();
   await expect(mobileMenu.getByRole('navigation', { name: 'Navegação principal' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth), 'mobile navigation fallback overflows').toBeLessThanOrEqual(375);
-  await mobileMenu.locator('summary').click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), 'mobile navigation drawer overflows').toBeLessThanOrEqual(375);
+  await mobileMenu.getByRole('button', { name: 'Fechar' }).click();
   for (const [route, panelID, summaryName] of [
     ['/admin/membros', 'criar-conta', 'Criar conta'],
     ['/admin/eventos', 'criar-evento', 'Criar evento'],
@@ -373,6 +434,14 @@ test('keeps collection creation usable', async ({ browser }) => {
   ]) {
     await page.goto(route);
     const panel = page.locator(`#${panelID}`);
+    if (route === '/admin/membros') {
+      await expect(panel).toBeHidden();
+      await page.getByRole('link', { name: summaryName, exact: true }).click();
+      await expect(page.getByRole('dialog', { name: 'Criar conta' })).toBeVisible();
+      await expect(panel.locator('form')).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
+      continue;
+    }
     await expect(panel).toBeHidden();
     await expect(panel).not.toHaveAttribute('open', '');
     await page.getByRole('link', { name: summaryName, exact: true }).click();
@@ -381,9 +450,9 @@ test('keeps collection creation usable', async ({ browser }) => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
   }
   await page.goto('/admin/fleet');
-  await expect(page.locator('#equipment-inventory')).toBeVisible();
   await expect(page.locator('#repair-requests')).toBeVisible();
-  await expect(page.locator('#maintenance-schedule')).toBeVisible();
+  await expect(page.locator('#maintenance-schedule')).toBeHidden();
+  await expect(page.locator('#equipment-inventory')).toBeHidden();
   await context.close();
 });
 
@@ -410,15 +479,15 @@ for (const persona of personas) {
 		  await expect(page.getByRole('heading', { level: 2, name: 'Dependentes associados' })).toBeVisible();
 		  await expect(page.getByRole('heading', { level: 2, name: 'Menores a cargo' })).toHaveCount(0);
 		}
+		await expectAccessibilityContract(page, route);
 		if (persona.key === 'coach') {
-			await expect(page.getByText('Treinador', { exact: true })).toBeVisible();
+			await expectVisibleResponsibility(page, 'Treinador');
 			await expect(page.getByRole('link', { name: 'Treinador', exact: true })).toHaveCount(0);
 		}
 		if (persona.key === 'multi') {
-			await expect(page.getByText('Moderador', { exact: true })).toBeVisible();
+			await expectVisibleResponsibility(page, 'Moderador');
 			await expect(page.getByRole('link', { name: 'Moderador', exact: true })).toHaveCount(0);
 		}
-		await expectAccessibilityContract(page, route);
 		const routeTitle = await page.title();
 		expect(seenTitles.has(routeTitle), `${route} shares its document title with ${seenTitles.get(routeTitle)}`).toBe(false);
 		seenTitles.set(routeTitle, route);
@@ -435,7 +504,11 @@ for (const persona of personas) {
         await page.screenshot({ path: path.join(directory, `${slug}.png`), fullPage: true });
         if (route === '/admin/membros') {
           const detailHref = await page.locator('tbody th a').first().getAttribute('href');
-          expect(detailHref).toMatch(/^\/admin\/membros\/[0-9a-f-]+$/);
+          const detailURL = new URL(detailHref, page.url());
+          const detailMatch = detailURL.pathname.match(/^\/admin\/membros\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/);
+          expect(detailMatch).not.toBeNull();
+          const memberID = detailMatch[1];
+          expect(detailURL.searchParams.get('return_to')).toBe(`/admin/membros#member-${memberID}`);
           await page.goto(detailHref);
           await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
           await expect(page.getByRole('heading', { name: 'Identidade e acesso' })).toBeVisible();

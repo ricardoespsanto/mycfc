@@ -106,26 +106,14 @@ templ Base(meta PageMeta, content templ.Component) {
 					</a>
 					<div class="mobile-app-header__actions">
 						@announcementTrigger()
-						<details class="mobile-app-menu"><summary>Menu</summary><div class="mobile-app-menu__content">
-						<section class="account-context" aria-label="Conta atual"><a class="account-profile-link person-name" href="/perfil" aria-label={ "Abrir perfil de " + meta.CurrentUserName }>@Avatar(meta.CurrentUserID, meta.CurrentUserName)<strong>{ meta.CurrentUserName }</strong></a>
-						if meta.EmailVerificationPending {
-							<a class="email-verification-cue" href="/perfil">Email por verificar</a>
-						}
-						<span class="visually-hidden">Conta com responsabilidades cumulativas</span><div class="capability-list">
-							for _, label := range capabilityLabels(meta.Navigation) {
-								<span>{ label }</span>
-							}
-						</div></section>
-						@Navigation(meta.CurrentPath, meta.Navigation)
-						<div class="account-actions"><form method="post" action="/logout">
-							if meta.CSRFField != nil {
-								@meta.CSRFField
-							}
-							<button class="logout-button" type="submit">Terminar sessão</button>
-						</form></div>
-						</div></details>
+						<button class="mobile-navigation-trigger" type="button" aria-controls="mobile-navigation" aria-expanded="false" data-mobile-navigation-open hidden>Menu</button>
+						<details class="mobile-app-menu" data-mobile-navigation-fallback><summary>Menu</summary><div class="mobile-app-menu__content">@mobileNavigationContent(meta)</div></details>
 					</div>
 				</header>
+				<dialog id="mobile-navigation" class="mobile-navigation-drawer" aria-labelledby="mobile-navigation-title" data-mobile-navigation>
+					<header><h2 id="mobile-navigation-title">Menu MyCFC</h2><button type="button" class="action action--quiet" data-mobile-navigation-close autofocus>Fechar</button></header>
+					<div class="mobile-navigation-drawer__content">@mobileNavigationContent(meta)</div>
+				</dialog>
 				<section id="announcement-panel" class="announcement-panel" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title" data-announcement-panel hidden>
 					<h2 id="announcement-panel-title" class="visually-hidden">Avisos</h2>
 					<p class="announcement-panel__loading" role="status">A carregar avisos…</p>
@@ -144,21 +132,8 @@ templ Base(meta PageMeta, content templ.Component) {
 							@announcementTrigger()
 						</div>
 						@Navigation(meta.CurrentPath, meta.Navigation)
-						<section class="account-context" aria-label="Conta atual"><a class="account-profile-link person-name" href="/perfil" aria-label={ "Abrir perfil de " + meta.CurrentUserName }>@Avatar(meta.CurrentUserID, meta.CurrentUserName)<strong>{ meta.CurrentUserName }</strong></a>
-						if meta.EmailVerificationPending {
-							<a class="email-verification-cue" href="/perfil">Email por verificar</a>
-						}
-						<div class="capability-list">
-							for _, label := range capabilityLabels(meta.Navigation) {
-								<span>{ label }</span>
-							}
-						</div></section>
-						<div class="account-actions"><form method="post" action="/logout">
-							if meta.CSRFField != nil {
-								@meta.CSRFField
-							}
-							<button class="logout-button" type="submit">Terminar sessão</button>
-						</form></div>
+						@accountContext(meta)
+						@accountActions(meta)
 					</aside>
 					<div class="app-workspace">
 						<header class={ "workspace-header " + workspaceHeaderClass(meta) }><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFC</a></li>
@@ -184,6 +159,47 @@ templ Base(meta PageMeta, content templ.Component) {
 	</html>
 }
 
+templ mobileNavigationContent(meta PageMeta) {
+	@accountContext(meta)
+	@Navigation(meta.CurrentPath, meta.Navigation)
+	@accountActions(meta)
+}
+
+templ accountContext(meta PageMeta) {
+	<section class="account-context" aria-label="Conta atual">
+		<p class="account-context__label">Conta</p>
+		<a class="account-profile-link person-name" href="/perfil" aria-label={ "Abrir perfil de " + meta.CurrentUserName }>@Avatar(meta.CurrentUserID, meta.CurrentUserName)<strong>{ meta.CurrentUserName }</strong></a>
+		<span class="account-context__kind">Membro</span>
+		if meta.EmailVerificationPending {
+			<a class="email-verification-cue" href="/perfil">Email por verificar</a>
+		}
+		<span class="visually-hidden">Conta com responsabilidades cumulativas</span>
+		if labels := membershipLabels(meta.Navigation); len(labels) > 0 {
+			<p class="account-context__label">Inscrições</p><div class="capability-list capability-list--memberships">
+				for _, label := range labels {
+					<span>{ label }</span>
+				}
+			</div>
+		}
+		if labels := capabilityLabels(meta.Navigation); len(labels) > 0 {
+			<p class="account-context__label">Responsabilidades</p><div class="capability-list">
+				for _, label := range labels {
+					<span>{ label }</span>
+				}
+			</div>
+		}
+	</section>
+}
+
+templ accountActions(meta PageMeta) {
+	<div class="account-actions"><form method="post" action="/logout">
+		if meta.CSRFField != nil {
+			@meta.CSRFField
+		}
+		<button class="logout-button" type="submit">Terminar sessão</button>
+	</form></div>
+}
+
 templ announcementTrigger() {
 	<a class="announcement-trigger" href="/announcements" aria-label="Avisos" aria-controls="announcement-panel" aria-expanded="false" data-announcement-trigger>
 		<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
@@ -192,11 +208,17 @@ templ announcementTrigger() {
 }
 
 func capabilityLabels(groups []NavigationGroup) []string {
-	labels := []string{"Membro"}
+	labels := []string{}
 	for _, group := range groups { labels = append(labels, group.Capabilities...) }
 	return labels
 }
 
-func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if meta.CurrentPath == "/today" { return "Hoje" }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Os meus espaços" }; return "Atividade" }
+func membershipLabels(groups []NavigationGroup) []string {
+	labels := []string{}
+	for _, group := range groups { labels = append(labels, group.Memberships...) }
+	return labels
+}
+
+func resolvedArea(meta PageMeta) string { if meta.AreaLabel != "" { return meta.AreaLabel }; if meta.CurrentPath == "/today" { return "Hoje" }; for _, group := range meta.Navigation { if group.Label != "" { for _, item := range group.Items { if navigationMatches(meta.CurrentPath, item.Path) { return group.Label } } } }; if strings.HasPrefix(meta.CurrentPath, "/admin/") { return "Administração" }; if strings.HasPrefix(meta.CurrentPath, "/dashboard/") { return "Inscrições" }; return "Atividade" }
 func resolvedPage(meta PageMeta) string { if meta.PageLabel != "" { return meta.PageLabel }; for _, group := range meta.Navigation { for _, item := range group.Items { if navigationMatches(meta.CurrentPath, item.Path) { return item.Label } } }; return "Página atual" }
 func workspaceHeaderClass(meta PageMeta) string { if meta.SubjectContext == "" && len(meta.Breadcrumbs) == 0 { return "workspace-header--root" }; return "workspace-header--detail" }

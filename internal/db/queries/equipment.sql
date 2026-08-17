@@ -68,7 +68,9 @@ FROM updated;
 WITH previous AS MATERIALIZED (
     SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at
     FROM equipment
-    WHERE equipment.id = sqlc.arg(equipment_id) AND equipment.status <> 'Retired'
+    WHERE equipment.id = sqlc.arg(equipment_id)
+      AND equipment.updated_at = sqlc.arg(expected_updated_at)
+      AND equipment.status <> 'Retired'
     FOR UPDATE
 ), updated AS (
     UPDATE equipment e SET status = 'Retired', updated_at = now()

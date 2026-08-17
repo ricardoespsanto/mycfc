@@ -111,7 +111,7 @@ func trainingContent(page TrainingPage) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if page.Management {
-			templ_7745c5c3_Err = components.PageHeader("Administração", "Treinos", "Organize planos e sessões para os grupos sob a sua responsabilidade.", trainingPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.PageHeader("Coordenação", "Treinos", "Organize planos e sessões para os grupos sob a sua responsabilidade.", trainingPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1966,7 +1966,7 @@ func trainingSessionEditContent(page TrainingSessionEditPage) templ.Component {
 			templ_7745c5c3_Var75 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = components.PageHeader("Administração · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}}).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.PageHeader("Coordenação · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}}).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

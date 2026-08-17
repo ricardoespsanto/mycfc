@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -127,7 +128,7 @@ func (h Profile) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Perfil atualizado.")
-	httpx.Redirect(w, r, base, http.StatusSeeOther)
+	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
 }
 
 func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +192,7 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	h.deleteObject(r, oldKey)
 	h.flash(r, "Fotografia atualizada.")
-	httpx.Redirect(w, r, base, http.StatusSeeOther)
+	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
 }
 
 func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +216,7 @@ func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	h.deleteObject(r, oldKey)
 	h.flash(r, "Fotografia removida.")
-	httpx.Redirect(w, r, base, http.StatusSeeOther)
+	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
 }
 
 func (h Profile) Avatar(w http.ResponseWriter, r *http.Request) {
@@ -309,17 +310,43 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	meta.Navigation = dashboardNavigation(actor)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	meta.PageLabel = "Perfil"
+	switch {
+	case strings.HasPrefix(base, "/admin/"):
+		meta.AreaLabel = "Administração"
+		returnURL := profileCollectionReturn(r, actor)
+		meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: returnURL}, {Label: record.Name, Path: memberDetailPath(record.ID, returnURL)}}
+	case strings.HasPrefix(base, "/perfil/dependentes/"):
+		meta.AreaLabel = "Família"
+		meta.Breadcrumbs = []components.NavigationItem{{Label: "Menores a cargo", Path: "/dashboard/guardian"}}
+	default:
+		meta.AreaLabel = "Conta"
+	}
 	if record.ID != actor.ID {
 		meta.SubjectContext = record.Name
 	}
 	avatar, avatarErr := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: record.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
 	visible := avatarErr == nil && avatar.PhotoObjectKey != nil && avatar.ConsentCurrent
 	nationalHistoryURL, internationalHistoryURL := fpcHistoryURLs(stringValue(record.FederationLicenceNumber))
-	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ImageConsentURL: h.ImageURL, FPCNationalHistoryURL: nationalHistoryURL, FPCInternationalHistoryURL: internationalHistoryURL, Form: form, Conflict: conflict}
+	returnURL := profileCollectionReturn(r, actor)
+	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ActionPath: profileActionPath(base, returnURL), ReturnURL: returnURL, ImageConsentURL: h.ImageURL, FPCNationalHistoryURL: nationalHistoryURL, FPCInternationalHistoryURL: internationalHistoryURL, Form: form, Conflict: conflict}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "profile_flash")
 	}
 	return page
+}
+
+func profileCollectionReturn(r *http.Request, actor CurrentUser) string {
+	if !actor.IsAdmin {
+		return ""
+	}
+	return memberCollectionReturn(r)
+}
+
+func profileActionPath(base, returnURL string) string {
+	if returnURL == "" || returnURL == "/admin/membros" {
+		return base
+	}
+	return base + "?return_to=" + url.QueryEscape(returnURL)
 }
 
 func (h Profile) validateForm(r *http.Request, current dbgen.GetMemberProfileRow, isAdmin bool) (pages.ProfileForm, dbgen.UpdateMemberProfileParams, *dbgen.UpdateMemberIdentityParams) {

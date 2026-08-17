@@ -85,7 +85,7 @@ func suggestionsContent(page SuggestionsPage) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if page.Management {
-			templ_7745c5c3_Err = components.PageHeader("Administração", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.PageHeader("Moderação", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

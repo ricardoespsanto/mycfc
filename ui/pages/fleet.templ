@@ -2,12 +2,15 @@ package pages
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 )
 
 type FleetPage struct {
 	Meta                 components.PageMeta
+	ReturnURL            string
 	Success              string
 	Counts               []FleetStatusCount
 	Equipment            []FleetEquipment
@@ -31,7 +34,7 @@ type FleetMaintenance struct { ID, Equipment, Description, Status, ScheduledFor,
 type FleetMaintenanceForm struct {
 	CSRFField templ.Component
 	Equipment []components.RepairEquipment
-	EquipmentID, ScheduledFor, Description, Success string
+	EquipmentID, ScheduledFor, Description, Success, ReturnURL string
 	Errors validation.FieldErrors
 }
 
@@ -48,19 +51,7 @@ templ fleetContent(page FleetPage) {
 			<li><strong>{ fleetCountLabel(count.Total) }</strong><span>{ fleetStatusLabel(count.Status) }</span></li>
 		}
 	</ul></section>
-	<nav class="collection-tabs" aria-label="Áreas da frota" data-collection-tabs><a href="#equipment-inventory" aria-current="page">Equipamentos</a><a href="#repair-requests">Reparações <span>{ len(page.Repairs) }</span></a><a href="#maintenance-schedule">Manutenção <span>{ len(page.Maintenance) }</span></a></nav>
-	<section id="equipment-inventory" class="collection-view collection-tab-panel" data-tab-panel>
-		@components.SectionHeading("Inventário", "Equipamentos", "Consulte o inventário e o estado de cada equipamento.") {
-			<span class="collection-count">{ len(page.Equipment) } nesta página</span>
-		}
-		if len(page.Equipment) == 0 {
-			@components.EmptyState("Ainda sem equipamentos", "Os equipamentos registados aparecem aqui.")
-		}
-		if len(page.Equipment) > 0 {
-			@components.DataRegion("Inventário da frota", fleetEquipmentTable(page))
-		}
-		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
-	</section>
+	<nav class="collection-tabs" aria-label="Áreas da frota" data-collection-tabs><a href="#repair-requests" aria-current="page">Reparações <span>{ len(page.Repairs) }</span></a><a href="#maintenance-schedule">Manutenção <span>{ len(page.Maintenance) }</span></a><a href="#equipment-inventory">Equipamentos</a></nav>
 	<section id="repair-requests" class="collection-view collection-tab-panel" data-tab-panel>
 		@components.SectionHeading("Avarias", "Pedidos de reparação pendentes", "Problemas reportados que ainda exigem acompanhamento.") {
 			<span class="collection-count">{ len(page.Repairs) } pendentes</span>
@@ -71,14 +62,14 @@ templ fleetContent(page FleetPage) {
 		if len(page.Repairs) > 0 {
 			<ul class="record-list collection-list" aria-label="Pedidos de reparação pendentes">
 			for _, repair := range page.Repairs {
-				<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">{ repair.ReportedAt }</p>
+				<li id={ "repair-" + repair.ID } class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ repair.Equipment }</h3><p>{ repair.Description }</p><p class="record-meta">{ repair.ReportedAt }</p>
 					if repair.PhotoURL != "" {
 						<img class="record-thumbnail" src={ repair.PhotoURL } alt="Fotografia da avaria"/>
 					}
 					if repair.PhotoUnavailable != "" {
 						<span class="record-meta">{ repair.PhotoUnavailable }</span>
 					}
-				</div>@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))<div class="record-item__actions">@RepairStatusForm(repair, page.Meta.CSRFField)</div></li>
+				</div><div id={ "repair-status-" + repair.ID } data-local-status>@components.Badge(fleetStatusLabel(repair.Status), fleetStatusTone(repair.Status))</div><div id={ "repair-action-" + repair.ID } class="record-item__actions" data-local-action>@RepairStatusForm(repair, page.Meta.CSRFField, fleetItemReturn(page.ReturnURL, "repair-"+repair.ID))</div></li>
 			}
 			</ul>
 		}
@@ -94,11 +85,24 @@ templ fleetContent(page FleetPage) {
 		if len(page.Maintenance) > 0 {
 			<ul class="record-list collection-list" aria-label="Próximas manutenções">
 			for _, task := range page.Maintenance {
-				<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ task.Equipment }</h3><p>{ task.Description }</p><p class="record-meta">{ task.ScheduledFor }</p></div>@components.Badge(fleetStatusLabel(task.Status), fleetStatusTone(task.Status))<div class="record-item__actions">@MaintenanceCompletionForm(task, page.Meta.CSRFField)</div></li>
+				<li id={ "maintenance-" + task.ID } class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ task.Equipment }</h3><p>{ task.Description }</p><p class="record-meta">{ task.ScheduledFor }</p></div><div id={ "maintenance-status-" + task.ID } data-local-status>@components.Badge(fleetStatusLabel(task.Status), fleetStatusTone(task.Status))</div><div id={ "maintenance-action-" + task.ID } class="record-item__actions" data-local-action>@MaintenanceCompletionForm(task, page.Meta.CSRFField, fleetItemReturn(page.ReturnURL, "maintenance-"+task.ID))</div></li>
 			}
 			</ul>
 		}
 		@fleetPagination(page.MaintenancePreviousURL, page.MaintenanceNextURL, "Paginação de manutenções")
+	</section>
+	<section id="equipment-inventory" class="collection-view collection-tab-panel" data-tab-panel>
+		@components.SectionHeading("Inventário", "Equipamentos", "Consulte o inventário e o estado de cada equipamento.") {
+			<span class="collection-count">{ len(page.Equipment) } nesta página</span>
+		}
+		if len(page.Equipment) == 0 {
+			@components.EmptyState("Ainda sem equipamentos", "Os equipamentos registados aparecem aqui.")
+		}
+		if len(page.Equipment) > 0 {
+			<p id="fleet-comparison-help" class="comparison-region-hint">A tabela pode ser percorrida horizontalmente para comparar todas as colunas.</p>
+			@components.DataRegionDescribed("Inventário da frota", "fleet-comparison-help", fleetEquipmentTable(page))
+		}
+		@fleetPagination(page.EquipmentPreviousURL, page.EquipmentNextURL, "Paginação de equipamentos")
 	</section>
 	@EquipmentCreateForm(page.EquipmentForm)
 	@MaintenanceForm(page.MaintenanceForm)
@@ -109,7 +113,7 @@ templ fleetContent(page FleetPage) {
 templ fleetEquipmentTable(page FleetPage) {
 	<table class="data-table collection-table"><thead><tr><th scope="col">Equipamento</th><th scope="col">Tipo</th><th scope="col">Estado</th><th scope="col" aria-label="Ações"></th></tr></thead><tbody>
 				for _, equipment := range page.Equipment {
-					<tr><th scope="row"><span class="equipment-identity">
+					<tr id={ "equipment-" + equipment.ID }><th scope="row"><span class="equipment-identity">
 						if equipment.PhotoURL != "" {
 							<img class="equipment-thumbnail" src={ equipment.PhotoURL } alt="" loading="lazy"/>
 						}
@@ -117,13 +121,15 @@ templ fleetEquipmentTable(page FleetPage) {
 						if equipment.PhotoUnavailable != "" {
 							<small>{ equipment.PhotoUnavailable }</small>
 						}
-						</span></span></th><td>{ equipmentTypeLabel(equipment.Type) }</td><td>@components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status))</td><td><details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions"><a class="action action--secondary" href={ templ.SafeURL("/admin/fleet/equipment/" + equipment.ID + "/edit") }>Editar</a>
+					</span></span></th><td>{ equipmentTypeLabel(equipment.Type) }</td><td>@components.Badge(fleetStatusLabel(equipment.Status), fleetStatusTone(equipment.Status))</td><td><div class="row-actions"><a class="action action--quiet" href={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+equipment.ID+"/edit", fleetItemReturn(page.ReturnURL, "equipment-"+equipment.ID))) }>Editar</a>
+						@components.RowActionMenu("equipment-actions-"+equipment.ID, equipment.AssetTag+" · "+equipment.Name) {
 							if equipment.Status == "Retired" {
-								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/reactivate" }>@page.Meta.CSRFField<button type="submit">Reativar</button></form>
+								<form method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+equipment.ID+"/reactivate", fleetItemReturn(page.ReturnURL, "equipment-"+equipment.ID))) }>@page.Meta.CSRFField<button type="submit">Reativar equipamento</button></form>
 							} else {
-								<form method="post" action={ "/admin/fleet/equipment/" + equipment.ID + "/retire" }>@page.Meta.CSRFField<button class="action action--secondary" type="submit">Retirar da frota</button></form>
+								<a class="action action--danger" href={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+equipment.ID+"/retire", fleetItemReturn(page.ReturnURL, "equipment-"+equipment.ID))) }>Retirar da frota</a>
 							}
-						</div></details></td></tr>
+						}
+					</div></td></tr>
 				}
 	</tbody></table>
 }
@@ -141,9 +147,9 @@ templ fleetPagination(previousURL, nextURL, label string) {
 	}
 }
 
-templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
+templ RepairStatusForm(repair FleetRepair, csrfField templ.Component, returnURL string) {
 	if repair.Status == "Pendente" || repair.Status == "Em_Analise" {
-		<form class="inline-action" method="post" action="/admin/repairs/status" hx-post="/admin/repairs/status" hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="inline-action" method="post" action={ templ.SafeURL(fleetActionURL("/admin/repairs/status", returnURL)) } hx-post={ templ.SafeURL(fleetActionURL("/admin/repairs/status", returnURL)) } hx-target={ "#repair-action-" + repair.ID } hx-swap="outerHTML" hx-target-422={ "#repair-action-" + repair.ID } hx-swap-422="outerHTML" hx-target-409={ "#repair-action-" + repair.ID } hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']" data-local-mutation>
 			@csrfField
 			<input type="hidden" name="repair_id" value={ repair.ID }/>
 			<input type="hidden" name="expected_status" value={ repair.Status }/>
@@ -159,9 +165,9 @@ templ RepairStatusForm(repair FleetRepair, csrfField templ.Component) {
 	}
 }
 
-templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component) {
+templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component, returnURL string) {
 	if task.Status == "Scheduled" || task.Status == "In_Progress" {
-		<form class="inline-action" method="post" action={ "/admin/maintenance/" + task.ID + "/complete" } hx-post={ "/admin/maintenance/" + task.ID + "/complete" } hx-target="this" hx-swap="outerHTML" hx-target-422="this" hx-swap-422="outerHTML" hx-target-409="this" hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="inline-action" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+task.ID+"/complete", returnURL)) } hx-post={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+task.ID+"/complete", returnURL)) } hx-target={ "#maintenance-action-" + task.ID } hx-swap="outerHTML" hx-target-422={ "#maintenance-action-" + task.ID } hx-swap-422="outerHTML" hx-target-409={ "#maintenance-action-" + task.ID } hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']" data-local-mutation>
 			@csrfField
 			<input type="hidden" name="maintenance_id" value={ task.ID }/><button type="submit">Concluir manutenção</button>
 			if task.ActionError != "" {
@@ -182,6 +188,24 @@ templ FleetActionFeedback(success, errorMessage string) {
 	</section>
 }
 
+templ FleetMutationFeedback(kind, id, status, success, errorMessage, recoveryURL string) {
+	<div id={ kind + "-action-" + id } class="record-item__actions" data-local-action aria-live="polite">
+		if success != "" {
+			<p class="status-message" role="status" tabindex="-1">{ success }</p>
+		}
+		if errorMessage != "" {
+			<div data-local-response-feedback><p class="status-message" role="alert" tabindex="-1">{ errorMessage }</p>
+				if recoveryURL != "" {
+					<a href={ templ.SafeURL(recoveryURL) }>Atualizar frota</a>
+				}
+			</div>
+		}
+	</div>
+	if status != "" {
+		<div id={ kind + "-status-" + id } data-local-status hx-swap-oob="outerHTML">@components.Badge(fleetStatusLabel(status), fleetStatusTone(status))</div>
+	}
+}
+
 templ MaintenanceForm(form FleetMaintenanceForm) {
 	<details id="maintenance-form" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
 		<summary><span><strong id="maintenance-title">Agendar manutenção</strong><small>Planeie uma intervenção para um equipamento.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
@@ -189,7 +213,7 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 			@components.StatusMessage(form.Success, "success")
 		}
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "equipment_id", Field: "maintenance-equipment"}, {Key: "scheduled_for", Field: "maintenance-scheduled-for"}, {Key: "description", Field: "maintenance-description"}}))
-		<form class="form-layout" method="post" action="/admin/maintenance" hx-post="/admin/maintenance" hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance", form.ReturnURL)) } hx-post={ templ.SafeURL(fleetActionURL("/admin/maintenance", form.ReturnURL)) } hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
 			@form.CSRFField
 			@components.RequiredNote()
 			@components.FieldLabel("maintenance-equipment", "Equipamento", true)
@@ -208,7 +232,7 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 			<textarea id="maintenance-description" name="description" required aria-invalid?={ form.Errors["description"] != "" } aria-describedby="maintenance-description-help description-error">{ form.Description }</textarea>
 			@components.FieldHelp("maintenance-description-help", "Descreva a intervenção prevista (10 a 2000 caracteres).")
 			@components.FieldErrorMessage("description", form.Errors["description"])
-			@components.FormActions("/admin/fleet") { <button type="submit">Agendar manutenção</button> }
+			@components.FormActions(form.ReturnURL) { <button type="submit">Agendar manutenção</button> }
 		</form>
 	</div></details>
 }
@@ -245,3 +269,6 @@ func equipmentTypeLabel(value string) string {
 	default: return value
 	}
 }
+
+func fleetItemReturn(base, fragment string) string { return strings.SplitN(base, "#", 2)[0]+"#"+fragment }
+func fleetActionURL(path, returnURL string) string { if returnURL == "" || returnURL == "/admin/fleet" { return path }; return path+"?return_to="+url.QueryEscape(returnURL) }

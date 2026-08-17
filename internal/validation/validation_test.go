@@ -78,7 +78,7 @@ func TestValidatePassword(t *testing.T) {
 }
 
 func TestSafeNext(t *testing.T) {
-	for _, valid := range []string{"/dashboard", "/admin/fleet"} {
+	for _, valid := range []string{"/dashboard", "/admin/fleet", "/admin/membros/criar"} {
 		if got := SafeNext(valid); got != valid {
 			t.Errorf("SafeNext(%q) = %q", valid, got)
 		}

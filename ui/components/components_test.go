@@ -2,6 +2,9 @@ package components
 
 import (
 	"context"
+	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -86,8 +89,58 @@ func TestBaseMarksUnverifiedEmailInDesktopAndMobileAccountContext(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(output.String(), `class="email-verification-cue" href="/perfil">Email por verificar</a>`); got != 2 {
-		t.Fatalf("verification cue count = %d, want desktop and mobile cues", got)
+	if got := strings.Count(output.String(), `class="email-verification-cue" href="/perfil">Email por verificar</a>`); got != 3 {
+		t.Fatalf("verification cue count = %d, want desktop, enhanced-mobile and fallback-mobile cues", got)
+	}
+}
+
+func TestBaseSeparatesAccountMembershipsAndResponsibilities(t *testing.T) {
+	var output strings.Builder
+	err := Base(PageMeta{
+		Title:           "Hoje | MyCFC",
+		CurrentUserName: "Maria Silva",
+		CurrentUserID:   "member-1",
+		Navigation: []NavigationGroup{{
+			Items:        []NavigationItem{{Label: "Hoje", Path: "/today"}},
+			Memberships:  []string{"Competição"},
+			Capabilities: []string{"Tutor", "Treinador"},
+		}},
+	}, Flash("")).Render(context.Background(), &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := output.String()
+	for _, expected := range []string{"Conta", "Membro", "Inscrições", "Competição", "Responsabilidades", "Tutor", "Treinador"} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("account context does not contain %q", expected)
+		}
+	}
+	if strings.Contains(body, `capability-list"><span>Competição</span>`) {
+		t.Error("programme membership is rendered in the responsibility list")
+	}
+}
+
+func TestBaseRendersEnhancedMobileDrawerAndNoJSFallback(t *testing.T) {
+	var output strings.Builder
+	err := Base(PageMeta{
+		Title:           "Hoje | MyCFC",
+		CurrentUserName: "Maria Silva",
+		Navigation:      []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}},
+	}, Flash("")).Render(context.Background(), &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := output.String()
+	for _, expected := range []string{
+		`data-mobile-navigation-open hidden`,
+		`data-mobile-navigation-fallback`,
+		`<dialog id="mobile-navigation"`,
+		`aria-labelledby="mobile-navigation-title"`,
+		`data-mobile-navigation-close autofocus`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("mobile navigation contract does not contain %q", expected)
+		}
 	}
 }
 
@@ -111,6 +164,25 @@ func TestBaseRendersSubjectContext(t *testing.T) {
 	for _, expected := range []string{`<a href="/admin/membros">Membros</a>`, `<li aria-current="page">Detalhe do membro</li>`, `A atuar sobre`, `Rui Atleta`, `href="/admin/membros" aria-current="page"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("member context does not contain %q", expected)
+		}
+	}
+}
+
+func TestResolvedAreaUsesOwningNavigationGroupForNestedRoutes(t *testing.T) {
+	meta := PageMeta{Navigation: []NavigationGroup{
+		{Label: "Atividade", Items: []NavigationItem{{Label: "Eventos", Path: "/events"}}},
+		{Label: "Coordenação", Items: []NavigationItem{{Label: "Gerir eventos", Path: "/admin/eventos"}}},
+		{Label: "Moderação", Items: []NavigationItem{{Label: "Gerir álbuns", Path: "/admin/albuns"}}},
+	}}
+	for _, tc := range []struct{ path, want string }{
+		{"/events/event-id", "Atividade"},
+		{"/admin/eventos/event-id/editar", "Coordenação"},
+		{"/admin/albuns/album-id", "Moderação"},
+		{"/admin/desconhecido", "Administração"},
+	} {
+		meta.CurrentPath = tc.path
+		if got := resolvedArea(meta); got != tc.want {
+			t.Errorf("resolvedArea(%q) = %q, want %q", tc.path, got, tc.want)
 		}
 	}
 }
@@ -246,6 +318,111 @@ func TestPageHeaderRendersActionContract(t *testing.T) {
 	}
 }
 
+func TestPageHeaderTaskActionKeepsGuardedFallback(t *testing.T) {
+	var output strings.Builder
+	action := PageAction{Label: "Criar conta", Href: "/admin/membros/criar", Variant: "primary", TaskID: "criar-conta"}
+	if err := PageHeader("Administração", "Membros", "Gerir contas.", []PageAction{action}).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`href="/admin/membros/criar"`, `aria-haspopup="dialog"`, `aria-controls="criar-conta"`, `data-task-open="criar-conta"`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("task action does not contain %q: %s", expected, output.String())
+		}
+	}
+}
+
+func TestTaskSurfaceExposesDialogRouteActionsAndConflictContracts(t *testing.T) {
+	var output strings.Builder
+	config := TaskSurfaceConfig{ID: "create-member", TitleID: "create-member-title", Title: "Criar conta", Variant: "sheet", URL: "/admin/membros/criar", ReturnURL: "/admin/membros"}
+	if err := TaskDialog(config).Render(templ.WithChildren(context.Background(), templ.Raw(`<form data-task-form></form>`)), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := TaskRoute(config).Render(templ.WithChildren(context.Background(), TaskConflict("Dados alterados", "Reveja a versão atual.", "member-name", "/admin/membros", "Atualizar a lista")), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := TaskActions("/admin/membros").Render(templ.WithChildren(context.Background(), templ.Raw(`<button type="submit">Criar conta</button>`)), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := DiscardConfirmation().Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	body := output.String()
+	for _, expected := range []string{`<dialog id="create-member"`, `data-task-surface`, `aria-labelledby="create-member-title"`, `data-task-url="/admin/membros/criar"`, `task-surface--route`, `<h1 id="create-member-title">Criar conta</h1>`, `role="alert"`, `href="#member-name"`, `data-task-cancel`, `data-task-discard-confirmation`, `Descartar alterações?`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("task primitives do not contain %q", expected)
+		}
+	}
+}
+
+func TestPageHeaderAllowsOnlyOnePrimaryAction(t *testing.T) {
+	var output strings.Builder
+	actions := []PageAction{
+		{Label: "Criar conta", Href: "#criar", Variant: "primary"},
+		{Label: "Importar contas", Href: "#importar", Variant: "primary"},
+		{Label: "Ajuda", Href: "#ajuda", Variant: "unknown"},
+	}
+	if err := PageHeader("Administração", "Membros", "Gerir contas.", actions).Render(context.Background(), &output); err != nil {
+		t.Fatalf("render page header: %v", err)
+	}
+	body := output.String()
+	if got := strings.Count(body, `action--primary`); got != 1 {
+		t.Fatalf("primary actions = %d, want exactly one; output = %q", got, body)
+	}
+	if got := strings.Count(body, `action--secondary`); got != 2 {
+		t.Fatalf("secondary actions = %d, want downgraded duplicate and unknown variants", got)
+	}
+}
+
+func TestFormAndStatusSummaryPrimitivesExposeStructure(t *testing.T) {
+	var output strings.Builder
+	fields := templ.Join(
+		templ.Raw(`<div class="field-group"><label for="member-name">Nome completo da pessoa responsável</label><input id="member-name" disabled></div>`),
+		templ.Raw(`<div class="field-group"><label for="member-email">Email</label><input id="member-email" aria-invalid="true"></div>`),
+	)
+	section := FormSection("Identificação e contacto", "Dados usados para identificar a pessoa.")
+	if err := section.Render(templ.WithChildren(context.Background(), fields), &output); err != nil {
+		t.Fatalf("render form section: %v", err)
+	}
+	if err := FieldGrid().Render(templ.WithChildren(context.Background(), fields), &output); err != nil {
+		t.Fatalf("render field grid: %v", err)
+	}
+	if err := StatusSummary("Estado da conta", []StatusItem{{Label: "Conta", Value: "Ativa"}, {Label: "Email", Value: "Por verificar"}}).Render(context.Background(), &output); err != nil {
+		t.Fatalf("render status summary: %v", err)
+	}
+	body := output.String()
+	for _, expected := range []string{`<fieldset class="form-section">`, `<legend>Identificação e contacto</legend>`, `class="field-grid"`, `disabled`, `aria-invalid="true"`, `<dl class="status-summary" aria-label="Estado da conta">`, `<dt>Conta</dt><dd>Ativa</dd>`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("shared primitives do not contain %q", expected)
+		}
+	}
+}
+
+func TestAuthenticatedStylesDefineEveryConsumedToken(t *testing.T) {
+	stylesheet, err := os.ReadFile("../static/src/app.css")
+	if err != nil {
+		t.Fatalf("read app stylesheet: %v", err)
+	}
+	definitionPattern := regexp.MustCompile(`(?m)(--[a-z0-9-]+)\s*:`)
+	usagePattern := regexp.MustCompile(`var\((--[a-z0-9-]+)\b`)
+	defined := make(map[string]bool)
+	for _, match := range definitionPattern.FindAllStringSubmatch(string(stylesheet), -1) {
+		defined[match[1]] = true
+	}
+	var undefined []string
+	seen := make(map[string]bool)
+	for _, match := range usagePattern.FindAllStringSubmatch(string(stylesheet), -1) {
+		name := match[1]
+		if !defined[name] && !seen[name] {
+			undefined = append(undefined, name)
+			seen[name] = true
+		}
+	}
+	sort.Strings(undefined)
+	if len(undefined) > 0 {
+		t.Fatalf("consumed design tokens are undefined: %s", strings.Join(undefined, ", "))
+	}
+}
+
 func TestRecordCollectionRendersSemanticContract(t *testing.T) {
 	var output strings.Builder
 	item := RecordItem("Treino técnico", "/treinos/1", "Hoje · 18:30")
@@ -270,6 +447,29 @@ func TestSectionHeadingSupportsContextualActions(t *testing.T) {
 	for _, expected := range []string{`class="section-heading"`, `<h2>Próximos eventos</h2>`, `Atividade relevante.`, `href="#novo"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("section heading does not contain %q", expected)
+		}
+	}
+}
+
+func TestCollectionToolbarAndRowActionMenuContracts(t *testing.T) {
+	var output strings.Builder
+	toolbar := CollectionToolbar(CollectionToolbarData{TitleID: "members-title", Title: "Diretório de membros", Count: "6 nesta página", ClearHref: "/admin/membros", ClearLabel: "Limpar pesquisa"})
+	if err := toolbar.Render(templ.WithChildren(context.Background(), templ.Raw(`<form method="get"><input name="q"></form>`)), &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`id="members-title"`, `class="collection-toolbar__controls"`, `6 nesta página`, `href="/admin/membros"`, `Limpar pesquisa`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("toolbar does not contain %q: %s", expected, output.String())
+		}
+	}
+	output.Reset()
+	menu := RowActionMenu("actions-equipment-1", "K1 Competição")
+	if err := menu.Render(templ.WithChildren(context.Background(), templ.Raw(`<a href="/edit">Editar</a>`)), &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`<details class="row-action-menu" data-row-action-menu>`, `aria-controls="actions-equipment-1"`, `aria-label="Mais ações para K1 Competição"`, `data-row-action-menu-panel`, `href="/edit"`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("row action menu does not contain %q: %s", expected, output.String())
 		}
 	}
 }

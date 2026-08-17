@@ -62,7 +62,8 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
         OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
-            NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+            (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+             AND NOT EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id))
             OR EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id AND ea.programme_id = m.programme_id)
             OR EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id AND eta.team_id = m.team_id)
           )
@@ -96,7 +97,8 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
         OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
-            NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+            (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+             AND NOT EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id))
             OR EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id AND ea.programme_id = m.programme_id)
             OR EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id AND eta.team_id = m.team_id)
           )
@@ -127,7 +129,8 @@ WHERE a.id = sqlc.arg(id)
         OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
-            NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+            (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
+             AND NOT EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id))
             OR EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id AND ea.programme_id = m.programme_id)
             OR EXISTS (SELECT 1 FROM event_team_audiences eta WHERE eta.event_id = e.id AND eta.team_id = m.team_id)
           )

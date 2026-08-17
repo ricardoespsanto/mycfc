@@ -47,6 +47,11 @@ type eventForm struct {
 	Errors                                                              validation.FieldErrors
 }
 
+type eventSubject struct {
+	ID   uuid.UUID
+	Name string
+}
+
 func (h Events) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, eventForm{Errors: validation.FieldErrors{}})
 }
@@ -403,7 +408,16 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 		}
 		page = h.adminDetailPage(event, responses, responsePage)
 	} else {
-		event, err := h.Store.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: user.ID, EventID: eventID})
+		selected, subjects, err := h.resolveEventSubject(ctx, user, eventID, r.URL.Query().Get("subject_user_id"))
+		if errors.Is(err, errEventSubjectNotFound) {
+			h.System.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		event, err := h.Store.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: selected.ID, EventID: eventID})
 		if errors.Is(err, pgx.ErrNoRows) {
 			h.System.NotFound(w, r)
 			return
@@ -412,12 +426,10 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 			h.System.InternalError(w, r)
 			return
 		}
-		dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 10})
-		if err != nil {
-			h.System.InternalError(w, r)
-			return
+		page = h.memberDetailPage(event, selected, subjects, user.ID)
+		if selected.ID != user.ID {
+			page.Meta.SubjectContext = selected.Name
 		}
-		page = h.memberDetailPage(event, dependents)
 	}
 	documents, err := h.Store.ListCompetitionDocumentsForEvent(ctx, &eventID)
 	if err != nil {
@@ -427,15 +439,17 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 	for _, document := range documents {
 		page.Documents = append(page.Documents, pages.EventDocument{Title: document.Title, URL: document.Url, Source: document.Source, ReviewedOn: document.ReviewedOn.Time.Format("02/01/2006")})
 	}
-	basePath, pageLabel := "/events", "Evento"
+	basePath, pageLabel, breadcrumbLabel := "/events", "Evento", "Eventos"
 	if management {
-		basePath, pageLabel = "/admin/eventos", "Evento"
+		basePath, pageLabel, breadcrumbLabel = "/admin/eventos", "Evento", "Gerir eventos"
 	}
+	subjectContext := page.Meta.SubjectContext
 	page.Meta = h.meta(r, user, basePath, pageLabel)
+	page.Meta.SubjectContext = subjectContext
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = page.Title
 	page.Meta.Title = page.Title + " | MyCFC"
-	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: basePath}}
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: breadcrumbLabel, Path: basePath}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
@@ -534,7 +548,7 @@ func (h Events) Respond(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/events/"+eventID.String(), http.StatusSeeOther)
+	httpx.Redirect(w, r, eventSubjectURL(eventID, subjectID, user.ID), http.StatusSeeOther)
 }
 
 func (h Events) Confirm(w http.ResponseWriter, r *http.Request) { h.staffAction(w, r, true) }
@@ -643,12 +657,13 @@ func (h Events) staffAction(w http.ResponseWriter, r *http.Request, confirm bool
 }
 
 var (
-	errResponseDeadline    = errors.New("event response deadline")
-	errEventFull           = errors.New("event full")
-	errInvalidEventState   = errors.New("invalid event state")
-	errEventNotStarted     = errors.New("event has not started")
-	errEventNotRespondable = errors.New("event not respondable by actor")
-	errEventNotManageable  = errors.New("event not manageable by actor")
+	errResponseDeadline     = errors.New("event response deadline")
+	errEventFull            = errors.New("event full")
+	errInvalidEventState    = errors.New("invalid event state")
+	errEventNotStarted      = errors.New("event has not started")
+	errEventNotRespondable  = errors.New("event not respondable by actor")
+	errEventNotManageable   = errors.New("event not manageable by actor")
+	errEventSubjectNotFound = errors.New("event subject not found")
 )
 
 func (h Events) validateEvent(r *http.Request) eventForm {
@@ -875,7 +890,7 @@ func (h Events) renderEdit(w http.ResponseWriter, r *http.Request, status int, e
 		Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors,
 	}
 	page.Meta.CurrentPath = r.URL.Path
-	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Eventos", Path: "/admin/eventos"}, {Label: form.Title, Path: "/admin/eventos/" + eventID.String()}}
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Gerir eventos", Path: "/admin/eventos"}, {Label: form.Title, Path: "/admin/eventos/" + eventID.String()}}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.EventEdit(page).Render(r.Context(), w)
@@ -1041,7 +1056,7 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	currentPath, area := "/events", "Eventos"
 	if management {
-		currentPath, area = "/admin/eventos", "Eventos"
+		currentPath, area = "/admin/eventos", "Gerir eventos"
 	}
 	page.Meta = h.meta(r, user, currentPath, area)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1067,7 +1082,7 @@ func managedEventResponsesPageURL(eventID uuid.UUID, page int) string {
 	return "/admin/eventos/" + eventID.String() + "?response_page=" + strconv.Itoa(page)
 }
 
-func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, dependents []dbgen.ListDependentsByGuardianRow) pages.EventDetailPage {
+func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, selected eventSubject, subjects []eventSubject, actorID uuid.UUID) pages.EventDetailPage {
 	page := pages.EventDetailPage{ID: event.ID.String(), Title: event.Title, Type: eventTypeLabel(event.EventType), Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity), Status: eventStatus(event.ResponseStatus), Cancelled: event.Status == "CANCELLED", CancellationReason: stringValue(event.CancellationReason)}
 	if page.Cancelled {
 		page.Status = "Cancelado"
@@ -1075,10 +1090,66 @@ func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, depende
 	if event.ResponseDeadline.Valid && h.now().After(event.ResponseDeadline.Time) {
 		page.Status = "Fora do prazo"
 	}
-	for _, dependent := range dependents {
-		page.Dependents = append(page.Dependents, pages.EventDependent{ID: dependent.ID.String(), Name: dependent.Name})
+	for _, subject := range subjects {
+		choice := pages.EventSubjectChoice{ID: subject.ID.String(), Name: subject.Name, Selected: subject.ID == selected.ID, Self: subject.ID == actorID}
+		page.Subjects = append(page.Subjects, choice)
+		if choice.Selected {
+			page.SelectedSubject = choice
+		}
 	}
 	return page
+}
+
+func (h Events) resolveEventSubject(ctx context.Context, actor CurrentUser, eventID uuid.UUID, requested string) (eventSubject, []eventSubject, error) {
+	dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &actor.ID, RowLimit: 10})
+	if err != nil {
+		return eventSubject{}, nil, err
+	}
+	candidates := make([]eventSubject, 0, len(dependents)+1)
+	candidates = append(candidates, eventSubject{ID: actor.ID, Name: actor.Name})
+	for _, dependent := range dependents {
+		candidates = append(candidates, eventSubject{ID: dependent.ID, Name: dependent.Name})
+	}
+	authorized := make([]eventSubject, 0, len(candidates))
+	for _, candidate := range candidates {
+		_, err := h.Store.GetRespondableEvent(ctx, dbgen.GetRespondableEventParams{SubjectUserID: candidate.ID, EventID: eventID, ActorUserID: actor.ID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return eventSubject{}, nil, err
+		}
+		authorized = append(authorized, candidate)
+	}
+	if len(authorized) == 0 {
+		return eventSubject{}, nil, errEventSubjectNotFound
+	}
+	if requested == "" {
+		for _, subject := range authorized {
+			if subject.ID == actor.ID {
+				return subject, authorized, nil
+			}
+		}
+		return authorized[0], authorized, nil
+	}
+	requestedID, err := uuid.Parse(requested)
+	if err != nil {
+		return eventSubject{}, nil, errEventSubjectNotFound
+	}
+	for _, subject := range authorized {
+		if subject.ID == requestedID {
+			return subject, authorized, nil
+		}
+	}
+	return eventSubject{}, nil, errEventSubjectNotFound
+}
+
+func eventSubjectURL(eventID, subjectID, actorID uuid.UUID) string {
+	path := "/events/" + eventID.String()
+	if subjectID == actorID {
+		return path
+	}
+	return path + "?subject_user_id=" + subjectID.String()
 }
 func (h Events) adminDetailPage(event dbgen.GetEventDetailForAdminRow, responses []dbgen.ListEventResponsesForAdminRow, responsePage int) pages.EventDetailPage {
 	page := pages.EventDetailPage{CanManageEvents: true, ID: event.ID.String(), Title: event.Title, Type: eventTypeLabel(event.EventType), Description: event.Description, When: h.dateRange(event.StartsAt.Time, event.EndsAt.Time), Deadline: h.deadline(event.ResponseDeadline), Capacity: h.capacity(event.Capacity), Cancelled: event.Status == "CANCELLED", CancellationReason: stringValue(event.CancellationReason), Editable: event.Status == "ACTIVE" && event.StartsAt.Time.After(h.now())}

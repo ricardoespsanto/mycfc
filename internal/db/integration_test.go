@@ -110,7 +110,36 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	retired, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: created.ID, ActorUserID: actorID})
+	if _, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{
+		EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, ActorUserID: actorID,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale retirement error = %v, want no rows", err)
+	}
+	afterStaleRetirement, err := queries.GetEquipmentByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterStaleRetirement.Status != updated.Status || afterStaleRetirement.Name != updated.Name ||
+		afterStaleRetirement.UpdatedAt.Valid != updated.UpdatedAt.Valid || !afterStaleRetirement.UpdatedAt.Time.Equal(updated.UpdatedAt.Time) {
+		t.Fatalf("equipment changed after stale retirement = %#v, want version %#v", afterStaleRetirement, updated)
+	}
+	var activeMaintenanceCount, retirementAuditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM maintenance_tasks WHERE equipment_id = $1 AND status IN ('Scheduled', 'In_Progress')`, created.ID).Scan(&activeMaintenanceCount); err != nil {
+		t.Fatal(err)
+	}
+	if activeMaintenanceCount != 2 {
+		t.Fatalf("active maintenance after stale retirement = %d, want 2", activeMaintenanceCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM equipment_audit_events WHERE equipment_id = $1 AND action = 'RETIRED'`, created.ID).Scan(&retirementAuditCount); err != nil {
+		t.Fatal(err)
+	}
+	if retirementAuditCount != 0 {
+		t.Fatalf("retirement audit events after stale retirement = %d, want 0", retirementAuditCount)
+	}
+
+	retired, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{
+		EquipmentID: created.ID, ExpectedUpdatedAt: updated.UpdatedAt, ActorUserID: actorID,
+	})
 	if err != nil || retired.Status != "Retired" {
 		t.Fatalf("retired = %#v, err = %v", retired, err)
 	}
@@ -436,6 +465,262 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 	assertTitles(outsiderID, false, public.Title)
 	assertTitles(coachID, false, public.Title, competitionEvent.Title)
 	assertTitles(outsiderID, true, public.Title, competitionEvent.Title, hidden.Title)
+}
+
+func TestTeamScopedEventVisibilityAndResponseAuthorization(t *testing.T) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	queries := dbgen.New(tx)
+
+	authorID, memberID := uuid.New(), uuid.New()
+	guardianID, dependentID, outsiderID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := tx.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES
+		($1, 'Autora de evento de equipa', $2, 'hash', '1980-01-01'),
+		($3, 'Membro da equipa', $4, 'hash', '2000-01-01'),
+		($5, 'Responsável da atleta', $6, 'hash', '1980-01-01'),
+		($7, 'Pessoa sem acesso à equipa', $8, 'hash', '2000-01-01')`,
+		authorID, "team-event-author-"+uuid.NewString()+"@example.test",
+		memberID, "team-event-member-"+uuid.NewString()+"@example.test",
+		guardianID, "team-event-guardian-"+uuid.NewString()+"@example.test",
+		outsiderID, "team-event-outsider-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth)
+		VALUES ($1, 'Atleta dependente da equipa', $2, true, CURRENT_DATE - INTERVAL '14 years')`, dependentID, guardianID); err != nil {
+		t.Fatal(err)
+	}
+
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	season, err := queries.CreateSeason(ctx, dbgen.CreateSeasonParams{
+		Code:     "ITEV_" + uuid.NewString()[:8],
+		Name:     "Época evento de equipa",
+		StartsOn: pgtype.Date{Time: today.AddDate(0, 0, -1), Valid: true},
+		EndsOn:   pgtype.Date{Time: today.AddDate(1, 0, 0), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizedTeam, err := queries.CreateTeam(ctx, dbgen.CreateTeamParams{
+		SeasonID: season.ID, ProgrammeID: programme.ID,
+		Code: "IT_TEAM_" + uuid.NewString()[:8], Name: "Equipa autorizada",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedTeam, err := queries.CreateTeam(ctx, dbgen.CreateTeamParams{
+		SeasonID: season.ID, ProgrammeID: programme.ID,
+		Code: "IT_OTHER_" + uuid.NewString()[:8], Name: "Outra equipa",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []dbgen.CreateUserMembershipParams{
+		{UserID: memberID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+		{UserID: dependentID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+		{UserID: outsiderID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &unrelatedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+	} {
+		if _, err := queries.CreateUserMembership(ctx, membership); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{
+		Title: "Evento reservado à equipa", EventType: "COMPETITION",
+		StartsAt:    pgtype.Timestamptz{Time: now.Add(2 * time.Hour), Valid: true},
+		EndsAt:      pgtype.Timestamptz{Time: now.Add(3 * time.Hour), Valid: true},
+		CreatedByID: authorID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.AddEventTeamAudience(ctx, dbgen.AddEventTeamAudienceParams{EventID: event.ID, TeamID: authorizedTeam.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertMemberList := func(userID uuid.UUID, want bool) {
+		t.Helper()
+		items, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range items {
+			found = found || item.ID == event.ID
+		}
+		if found != want {
+			t.Fatalf("team event in member list for %s = %t, want %t", userID, found, want)
+		}
+	}
+	assertMemberList(memberID, true)
+	assertMemberList(dependentID, true)
+	assertMemberList(guardianID, true)
+	assertMemberList(outsiderID, false)
+
+	assertToday := func(userID uuid.UUID, want bool) {
+		t.Helper()
+		items, err := queries.ListEventsForToday(ctx, dbgen.ListEventsForTodayParams{
+			UserID: userID, IsAdmin: false,
+			DayStartsAt: pgtype.Timestamptz{Time: now, Valid: true},
+			DayEndsAt:   pgtype.Timestamptz{Time: now.Add(4 * time.Hour), Valid: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range items {
+			found = found || item.ID == event.ID
+		}
+		if found != want {
+			t.Fatalf("team event in Hoje for %s = %t, want %t", userID, found, want)
+		}
+	}
+	assertToday(memberID, true)
+	assertToday(dependentID, true)
+	assertToday(guardianID, true)
+	assertToday(outsiderID, false)
+
+	for _, userID := range []uuid.UUID{memberID, dependentID, guardianID} {
+		detail, err := queries.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{EventID: event.ID, UserID: userID})
+		if err != nil || detail.ID != event.ID {
+			t.Fatalf("authorized event detail for %s = %#v, err = %v", userID, detail, err)
+		}
+	}
+	if _, err := queries.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{EventID: event.ID, UserID: outsiderID}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("unrelated member event detail error = %v, want no rows", err)
+	}
+
+	for _, params := range []dbgen.GetRespondableEventParams{
+		{EventID: event.ID, SubjectUserID: memberID, ActorUserID: memberID},
+		{EventID: event.ID, SubjectUserID: dependentID, ActorUserID: dependentID},
+		{EventID: event.ID, SubjectUserID: dependentID, ActorUserID: guardianID},
+	} {
+		respondable, err := queries.GetRespondableEvent(ctx, params)
+		if err != nil || respondable.ID != event.ID {
+			t.Fatalf("authorized respondable event for actor %s and subject %s = %#v, err = %v", params.ActorUserID, params.SubjectUserID, respondable, err)
+		}
+	}
+	if _, err := queries.GetRespondableEvent(ctx, dbgen.GetRespondableEventParams{EventID: event.ID, SubjectUserID: outsiderID, ActorUserID: outsiderID}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("unrelated member RSVP authorization error = %v, want no rows", err)
+	}
+
+	visibilitySubjects := []uuid.UUID{memberID, dependentID, guardianID, outsiderID}
+	unreadBefore := make(map[uuid.UUID]int64, len(visibilitySubjects))
+	for _, userID := range visibilitySubjects {
+		unreadBefore[userID], err = queries.CountUnreadVisibleAnnouncements(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventAnnouncement, err := queries.CreateAnnouncement(ctx, dbgen.CreateAnnouncementParams{
+		Title: "Aviso do evento de equipa", Body: "Informação reservada à equipa do evento.", AuthorID: authorID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.AddAnnouncementTarget(ctx, dbgen.AddAnnouncementTargetParams{
+		AnnouncementID: eventAnnouncement.ID, TargetType: dbgen.AnnouncementTargetTypeEVENT, TargetID: &event.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.PublishAnnouncement(ctx, dbgen.PublishAnnouncementParams{ActorUserID: &authorID, ID: eventAnnouncement.ID}); err != nil || rows != 1 {
+		t.Fatalf("publish event announcement rows = %d, err = %v", rows, err)
+	}
+
+	assertAnnouncementVisibility := func(userID uuid.UUID, want bool) {
+		t.Helper()
+		items, err := queries.ListVisibleAnnouncements(ctx, dbgen.ListVisibleAnnouncementsParams{UserID: userID, RowLimit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range items {
+			found = found || item.ID == eventAnnouncement.ID
+		}
+		if found != want {
+			t.Fatalf("team event announcement in list for %s = %t, want %t", userID, found, want)
+		}
+		_, detailErr := queries.GetVisibleAnnouncement(ctx, dbgen.GetVisibleAnnouncementParams{UserID: userID, ID: eventAnnouncement.ID})
+		if want && detailErr != nil {
+			t.Fatalf("authorized event announcement detail for %s: %v", userID, detailErr)
+		}
+		if !want && !errors.Is(detailErr, pgx.ErrNoRows) {
+			t.Fatalf("unrelated event announcement detail for %s error = %v, want no rows", userID, detailErr)
+		}
+		unread, err := queries.CountUnreadVisibleAnnouncements(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUnread := unreadBefore[userID]
+		if want {
+			wantUnread++
+		}
+		if unread != wantUnread {
+			t.Fatalf("unread announcements for %s = %d, want %d", userID, unread, wantUnread)
+		}
+	}
+	assertAnnouncementVisibility(memberID, true)
+	assertAnnouncementVisibility(dependentID, true)
+	assertAnnouncementVisibility(guardianID, true)
+	assertAnnouncementVisibility(outsiderID, false)
+
+	programmeAnnouncement, err := queries.CreateAnnouncement(ctx, dbgen.CreateAnnouncementParams{
+		Title: "Aviso geral do programa", Body: "Informação para todas as equipas deste programa.", AuthorID: authorID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.AddAnnouncementTarget(ctx, dbgen.AddAnnouncementTargetParams{
+		AnnouncementID: programmeAnnouncement.ID, TargetType: dbgen.AnnouncementTargetTypePROGRAMME, TargetID: &programme.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.PublishAnnouncement(ctx, dbgen.PublishAnnouncementParams{ActorUserID: &authorID, ID: programmeAnnouncement.ID}); err != nil || rows != 1 {
+		t.Fatalf("publish programme announcement rows = %d, err = %v", rows, err)
+	}
+	if programmeDetail, err := queries.GetVisibleAnnouncement(ctx, dbgen.GetVisibleAnnouncementParams{UserID: outsiderID, ID: programmeAnnouncement.ID}); err != nil || programmeDetail.ID != programmeAnnouncement.ID {
+		t.Fatalf("same-programme announcement for other-team member = %#v, err = %v", programmeDetail, err)
+	}
+
+	document, err := queries.CreateCompetitionDocument(ctx, dbgen.CreateCompetitionDocumentParams{
+		Title: "Documento reservado ao evento", Url: "https://example.test/evento-equipa.pdf", Source: "Federação de teste",
+		ReviewedOn: pgtype.Date{Time: today, Valid: true}, EventID: &event.ID, AuthorID: authorID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocumentVisibility := func(userID uuid.UUID, want bool) {
+		t.Helper()
+		items, err := queries.ListCompetitionDocumentsForAthlete(ctx, dbgen.ListCompetitionDocumentsForAthleteParams{UserID: userID, RowLimit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range items {
+			found = found || item.ID == document.ID
+		}
+		if found != want {
+			t.Fatalf("team event document in athlete list for %s = %t, want %t", userID, found, want)
+		}
+	}
+	assertDocumentVisibility(memberID, true)
+	assertDocumentVisibility(dependentID, true)
+	assertDocumentVisibility(guardianID, true)
+	assertDocumentVisibility(outsiderID, false)
 }
 
 func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
