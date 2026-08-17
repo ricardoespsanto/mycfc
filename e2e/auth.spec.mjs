@@ -425,7 +425,7 @@ test.describe('authentication', () => {
 
     await expect(page).toHaveURL('/today');
     await page.getByRole('link', { name: 'Gerir frota', exact: true }).click();
-    await expect(page).toHaveURL('/admin/fleet#equipment-inventory');
+    await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Agendar manutenção', exact: true }).click();
     await expect(page.locator('#maintenance-equipment')).toBeVisible();
@@ -513,7 +513,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Notas (opcional)').fill('Notas atualizadas');
     await page.getByLabel('Substituir fotografia (opcional)').setInputFiles({ name: 'pagaia.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Guardar alterações' }).click();
-    await expect(page).toHaveURL('/admin/fleet#equipment-inventory');
+    await expect(page).toHaveURL(/^\/admin\/fleet#equipment-[0-9a-f-]+$/);
     await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
@@ -1057,7 +1057,7 @@ test.describe('authentication', () => {
 
     await page.goto('/treinos/estruturados');
     const publishedSession = page.getByRole('heading', { name: sessionTitle, exact: true }).locator('xpath=ancestor::article[1]');
-    await expect(page.getByText(athleteName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: athleteName, exact: true })).toBeVisible();
     await publishedSession.getByRole('link', { name: 'Abrir esta revisão da prescrição' }).click();
     const prescriptionURL = page.url();
     await expect(page.getByText('Prescrição publicada · revisão 1', { exact: false })).toBeVisible();
