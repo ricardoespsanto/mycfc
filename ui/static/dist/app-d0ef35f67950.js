@@ -258,6 +258,23 @@ function activateCollectionTab(link) {
   });
 }
 
+function collectionTabForHash(links, hash) {
+  const direct = links.find((link) => link.hash === hash && document.querySelector(link.hash)?.matches("[data-tab-panel]"));
+  if (direct) return direct;
+  if (!hash.startsWith("#")) return null;
+
+  let anchorID;
+  try {
+    anchorID = window.decodeURIComponent(hash.slice(1));
+  } catch {
+    return null;
+  }
+  const anchor = document.getElementById(anchorID);
+  const panel = anchor?.closest("[data-tab-panel]");
+  if (!(panel instanceof HTMLElement)) return null;
+  return links.find((link) => link.hash === `#${panel.id}`) || null;
+}
+
 for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
   navigation.setAttribute("role", "tablist");
   const links = [...navigation.querySelectorAll("a")];
@@ -271,7 +288,7 @@ for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
       panel.setAttribute("aria-labelledby", link.id);
     }
   }
-  const hashLink = links.find((link) => link.hash === window.location.hash && document.querySelector(link.hash)?.matches("[data-tab-panel]"));
+  const hashLink = collectionTabForHash(links, window.location.hash);
   const queryLink = [...new window.URLSearchParams(window.location.search).keys()].some((key) => key.startsWith("routine_"))
     ? links.find((link) => link.hash === "#training-routines")
     : null;

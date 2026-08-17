@@ -516,6 +516,7 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL(/\/admin\/fleet#equipment-[0-9a-f-]+$/);
     await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
 
+    await expect(page.getByRole('tab', { name: 'Equipamentos', exact: true })).toHaveAttribute('aria-selected', 'true');
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();

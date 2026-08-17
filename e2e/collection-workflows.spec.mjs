@@ -70,10 +70,17 @@ test('Fleet prioritises work queues and row action menus restore focus predictab
   await page.getByRole('heading', { name: 'Equipamentos' }).click();
   await expect(menus.nth(1)).not.toHaveAttribute('open', '');
 
-  await firstSummary.click();
-  await menus.nth(0).getByRole('link', { name: 'Retirar da frota' }).focus();
+  const rowID = await tableRegion.locator('tbody tr[id^="equipment-"]').first().getAttribute('id');
+  await page.goto(`/admin/fleet#${rowID}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('tab', { name: 'Equipamentos', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator(`#${rowID}`)).toBeVisible();
+
+  const returnedMenu = page.locator(`#${rowID}`).locator('details[data-row-action-menu]');
+  const returnedSummary = returnedMenu.locator('summary');
+  await returnedSummary.click();
+  await returnedMenu.getByRole('link', { name: 'Retirar da frota' }).focus();
   await page.keyboard.press('Tab');
-  await expect(menus.nth(0)).not.toHaveAttribute('open', '');
+  await expect(returnedMenu).not.toHaveAttribute('open', '');
 });
 
 test('Fleet local mutation has visible pending state, suppresses duplicates and refreshes local status', async ({ page }) => {
