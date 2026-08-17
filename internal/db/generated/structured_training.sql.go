@@ -1158,13 +1158,20 @@ SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, a
        publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
        publication.revision, publication.change_summary, publication.published_at,
        publisher.name AS published_by_name, prescription.snapshot,
-       publication.id = latest.id AS is_current
+       publication.id = latest.id AS is_current,
+       COALESCE(outcome.status::text, ''::text) AS outcome_status,
+       outcome.distance_metres, outcome.actual_duration_minutes, outcome.perceived_exertion,
+       outcome.recovery_feeling, outcome.perception_note, outcome.updated_at AS outcome_updated_at,
+       COALESCE(outcome.version, 0)::integer AS outcome_version
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN seasons season ON season.id = plan.season_id
 JOIN users athlete ON athlete.id = prescription.athlete_user_id
 JOIN users publisher ON publisher.id = publication.published_by_id
+LEFT JOIN training_session_outcomes outcome
+  ON outcome.prescription_id = prescription.id
+ AND outcome.user_id = prescription.athlete_user_id
 JOIN LATERAL (
  SELECT current_publication.id
  FROM training_plan_publications current_publication
@@ -1193,20 +1200,28 @@ type GetTrainingPrescriptionForViewerParams struct {
 }
 
 type GetTrainingPrescriptionForViewerRow struct {
-	ID              uuid.UUID          `json:"id"`
-	SessionID       uuid.UUID          `json:"session_id"`
-	AthleteUserID   uuid.UUID          `json:"athlete_user_id"`
-	AthleteName     string             `json:"athlete_name"`
-	PlanID          uuid.UUID          `json:"plan_id"`
-	PlanTitle       string             `json:"plan_title"`
-	WeekStart       pgtype.Date        `json:"week_start"`
-	SeasonName      string             `json:"season_name"`
-	Revision        int32              `json:"revision"`
-	ChangeSummary   string             `json:"change_summary"`
-	PublishedAt     pgtype.Timestamptz `json:"published_at"`
-	PublishedByName string             `json:"published_by_name"`
-	Snapshot        []byte             `json:"snapshot"`
-	IsCurrent       bool               `json:"is_current"`
+	ID                    uuid.UUID          `json:"id"`
+	SessionID             uuid.UUID          `json:"session_id"`
+	AthleteUserID         uuid.UUID          `json:"athlete_user_id"`
+	AthleteName           string             `json:"athlete_name"`
+	PlanID                uuid.UUID          `json:"plan_id"`
+	PlanTitle             string             `json:"plan_title"`
+	WeekStart             pgtype.Date        `json:"week_start"`
+	SeasonName            string             `json:"season_name"`
+	Revision              int32              `json:"revision"`
+	ChangeSummary         string             `json:"change_summary"`
+	PublishedAt           pgtype.Timestamptz `json:"published_at"`
+	PublishedByName       string             `json:"published_by_name"`
+	Snapshot              []byte             `json:"snapshot"`
+	IsCurrent             bool               `json:"is_current"`
+	OutcomeStatus         interface{}        `json:"outcome_status"`
+	DistanceMetres        *int32             `json:"distance_metres"`
+	ActualDurationMinutes *int32             `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16             `json:"perceived_exertion"`
+	RecoveryFeeling       *int16             `json:"recovery_feeling"`
+	PerceptionNote        *string            `json:"perception_note"`
+	OutcomeUpdatedAt      pgtype.Timestamptz `json:"outcome_updated_at"`
+	OutcomeVersion        int32              `json:"outcome_version"`
 }
 
 func (q *Queries) GetTrainingPrescriptionForViewer(ctx context.Context, arg GetTrainingPrescriptionForViewerParams) (GetTrainingPrescriptionForViewerRow, error) {
@@ -1227,6 +1242,14 @@ func (q *Queries) GetTrainingPrescriptionForViewer(ctx context.Context, arg GetT
 		&i.PublishedByName,
 		&i.Snapshot,
 		&i.IsCurrent,
+		&i.OutcomeStatus,
+		&i.DistanceMetres,
+		&i.ActualDurationMinutes,
+		&i.PerceivedExertion,
+		&i.RecoveryFeeling,
+		&i.PerceptionNote,
+		&i.OutcomeUpdatedAt,
+		&i.OutcomeVersion,
 	)
 	return i, err
 }
@@ -2433,13 +2456,20 @@ SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, a
        publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
        publication.revision, publication.change_summary, publication.published_at,
        publisher.name AS published_by_name, prescription.snapshot,
-       publication.id = latest.id AS is_current
+       publication.id = latest.id AS is_current,
+       COALESCE(outcome.status::text, ''::text) AS outcome_status,
+       outcome.distance_metres, outcome.actual_duration_minutes, outcome.perceived_exertion,
+       outcome.recovery_feeling, outcome.perception_note, outcome.updated_at AS outcome_updated_at,
+       COALESCE(outcome.version, 0)::integer AS outcome_version
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN seasons season ON season.id = plan.season_id
 JOIN users athlete ON athlete.id = prescription.athlete_user_id
 JOIN users publisher ON publisher.id = publication.published_by_id
+LEFT JOIN training_session_outcomes outcome
+  ON outcome.prescription_id = prescription.id
+ AND outcome.user_id = prescription.athlete_user_id
 JOIN LATERAL (
  SELECT current_publication.id
  FROM training_plan_publications current_publication
@@ -2467,20 +2497,28 @@ type ListTrainingPrescriptionsForViewerParams struct {
 }
 
 type ListTrainingPrescriptionsForViewerRow struct {
-	ID              uuid.UUID          `json:"id"`
-	SessionID       uuid.UUID          `json:"session_id"`
-	AthleteUserID   uuid.UUID          `json:"athlete_user_id"`
-	AthleteName     string             `json:"athlete_name"`
-	PlanID          uuid.UUID          `json:"plan_id"`
-	PlanTitle       string             `json:"plan_title"`
-	WeekStart       pgtype.Date        `json:"week_start"`
-	SeasonName      string             `json:"season_name"`
-	Revision        int32              `json:"revision"`
-	ChangeSummary   string             `json:"change_summary"`
-	PublishedAt     pgtype.Timestamptz `json:"published_at"`
-	PublishedByName string             `json:"published_by_name"`
-	Snapshot        []byte             `json:"snapshot"`
-	IsCurrent       bool               `json:"is_current"`
+	ID                    uuid.UUID          `json:"id"`
+	SessionID             uuid.UUID          `json:"session_id"`
+	AthleteUserID         uuid.UUID          `json:"athlete_user_id"`
+	AthleteName           string             `json:"athlete_name"`
+	PlanID                uuid.UUID          `json:"plan_id"`
+	PlanTitle             string             `json:"plan_title"`
+	WeekStart             pgtype.Date        `json:"week_start"`
+	SeasonName            string             `json:"season_name"`
+	Revision              int32              `json:"revision"`
+	ChangeSummary         string             `json:"change_summary"`
+	PublishedAt           pgtype.Timestamptz `json:"published_at"`
+	PublishedByName       string             `json:"published_by_name"`
+	Snapshot              []byte             `json:"snapshot"`
+	IsCurrent             bool               `json:"is_current"`
+	OutcomeStatus         interface{}        `json:"outcome_status"`
+	DistanceMetres        *int32             `json:"distance_metres"`
+	ActualDurationMinutes *int32             `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16             `json:"perceived_exertion"`
+	RecoveryFeeling       *int16             `json:"recovery_feeling"`
+	PerceptionNote        *string            `json:"perception_note"`
+	OutcomeUpdatedAt      pgtype.Timestamptz `json:"outcome_updated_at"`
+	OutcomeVersion        int32              `json:"outcome_version"`
 }
 
 func (q *Queries) ListTrainingPrescriptionsForViewer(ctx context.Context, arg ListTrainingPrescriptionsForViewerParams) ([]ListTrainingPrescriptionsForViewerRow, error) {
@@ -2507,6 +2545,14 @@ func (q *Queries) ListTrainingPrescriptionsForViewer(ctx context.Context, arg Li
 			&i.PublishedByName,
 			&i.Snapshot,
 			&i.IsCurrent,
+			&i.OutcomeStatus,
+			&i.DistanceMetres,
+			&i.ActualDurationMinutes,
+			&i.PerceivedExertion,
+			&i.RecoveryFeeling,
+			&i.PerceptionNote,
+			&i.OutcomeUpdatedAt,
+			&i.OutcomeVersion,
 		); err != nil {
 			return nil, err
 		}

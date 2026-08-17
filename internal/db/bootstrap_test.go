@@ -1,6 +1,7 @@
 package db
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -304,5 +305,39 @@ func TestTrainingPrescriptionPublicationExistsInBaselineAndForwardMigration(t *t
 		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
 			t.Errorf("publication migration contains prohibited statement %q", prohibited)
 		}
+	}
+}
+
+func TestTrainingFeedbackExistsInBaselineAndForwardMigration(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202608170001_training_feedback.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"actual_duration_minutes", "perceived_exertion", "recovery_feeling", "perception_note", "version integer NOT NULL DEFAULT 1", "training_outcomes_feedback_valid"} {
+		if !strings.Contains(baselineSchema, expected) {
+			t.Errorf("baseline does not contain %q", expected)
+		}
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("feedback migration does not contain %q", expected)
+		}
+	}
+	for _, prohibited := range []string{"DROP TABLE", "TRUNCATE", "DELETE FROM training_"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Errorf("feedback migration contains prohibited statement %q", prohibited)
+		}
+	}
+}
+
+func TestResetBaselineIncludesEveryBundledMigration(t *testing.T) {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no embedded migrations")
+	}
+	latest := migrationVersion(entries[len(entries)-1])
+	if baselineIncludesThrough != latest {
+		t.Fatalf("baseline cutoff = %q, latest migration = %q; update the complete reset baseline and cutoff together", baselineIncludesThrough, latest)
 	}
 }

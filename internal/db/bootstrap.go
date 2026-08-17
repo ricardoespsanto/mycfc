@@ -20,7 +20,10 @@ var migrationFiles embed.FS
 
 var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
-const baselineVersion = "reset-baseline-v1"
+const (
+	baselineVersion         = "reset-baseline-v1"
+	baselineIncludesThrough = "202608170001_training_feedback"
+)
 
 type RoleCredentials struct {
 	AppUsername       string
@@ -117,11 +120,36 @@ func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
 	if _, err := tx.Exec(ctx, "INSERT INTO mycfc_meta.schema_migrations (version) VALUES ($1)", baselineVersion); err != nil {
 		return fmt.Errorf("record baseline migration: %w", err)
 	}
+	if err := recordBaselineMigrations(ctx, tx); err != nil {
+		return err
+	}
 	if err := applyIncrementalMigrations(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit baseline migration: %w", err)
+	}
+	return nil
+}
+
+func recordBaselineMigrations(ctx context.Context, tx pgx.Tx) error {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		return fmt.Errorf("list baseline migrations: %w", err)
+	}
+	foundCutoff := false
+	for _, name := range entries {
+		version := migrationVersion(name)
+		if version > baselineIncludesThrough {
+			break
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO mycfc_meta.schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version); err != nil {
+			return fmt.Errorf("record baseline migration %s: %w", version, err)
+		}
+		foundCutoff = foundCutoff || version == baselineIncludesThrough
+	}
+	if !foundCutoff {
+		return fmt.Errorf("baseline migration cutoff %s is not embedded", baselineIncludesThrough)
 	}
 	return nil
 }

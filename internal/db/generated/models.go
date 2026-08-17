@@ -2054,15 +2054,20 @@ type TrainingSessionActivityMatch struct {
 }
 
 type TrainingSessionOutcome struct {
-	SessionID            uuid.UUID             `json:"session_id"`
-	UserID               uuid.UUID             `json:"user_id"`
-	PrescriptionID       *uuid.UUID            `json:"prescription_id"`
-	Status               TrainingOutcomeStatus `json:"status"`
-	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
-	ReplacementReason    *string               `json:"replacement_reason"`
-	DistanceMetres       *int32                `json:"distance_metres"`
-	ReportedAt           pgtype.Timestamptz    `json:"reported_at"`
-	UpdatedAt            pgtype.Timestamptz    `json:"updated_at"`
+	SessionID             uuid.UUID             `json:"session_id"`
+	UserID                uuid.UUID             `json:"user_id"`
+	PrescriptionID        *uuid.UUID            `json:"prescription_id"`
+	Status                TrainingOutcomeStatus `json:"status"`
+	ReplacementSessionID  *uuid.UUID            `json:"replacement_session_id"`
+	ReplacementReason     *string               `json:"replacement_reason"`
+	DistanceMetres        *int32                `json:"distance_metres"`
+	ActualDurationMinutes *int32                `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16                `json:"perceived_exertion"`
+	RecoveryFeeling       *int16                `json:"recovery_feeling"`
+	PerceptionNote        *string               `json:"perception_note"`
+	Version               int32                 `json:"version"`
+	ReportedAt            pgtype.Timestamptz    `json:"reported_at"`
+	UpdatedAt             pgtype.Timestamptz    `json:"updated_at"`
 }
 
 type TrainingSessionSegment struct {

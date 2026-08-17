@@ -931,7 +931,7 @@ func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing
 		return encoded
 	}
 	rows := []dbgen.ListTrainingPrescriptionsForViewerRow{
-		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água"), IsCurrent: true},
+		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água"), IsCurrent: true, OutcomeStatus: "COMPLETED", ActualDurationMinutes: int32Ptr(72), PerceivedExertion: int16Ptr(7), RecoveryFeeling: int16Ptr(4), PerceptionNote: stringPtr("Boa sessão"), OutcomeUpdatedAt: publishedAt},
 		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(secondSessionID, "Ginásio"), IsCurrent: true},
 		{ID: uuid.New(), AthleteName: "Ana", Revision: 1, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água anterior")},
 		{ID: uuid.New(), AthleteName: "Ignorada", Snapshot: []byte(`{"schema_version":99}`)},
@@ -946,6 +946,10 @@ func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing
 	}
 	if audiences[0].Weeks[0].Sessions[0].PrescriptionID != rows[0].ID.String() {
 		t.Fatalf("prescription id = %q", audiences[0].Weeks[0].Sessions[0].PrescriptionID)
+	}
+	feedback := audiences[0].Weeks[0].Sessions[0]
+	if feedback.Outcome != "COMPLETED" || feedback.ActualDuration != "72 min" || feedback.PerceivedEffort != "7/10" || feedback.RecoveryFeeling != "bem" || feedback.PerceptionNote != "Boa sessão" || feedback.FeedbackUpdatedAt == "" {
+		t.Fatalf("feedback = %#v", feedback)
 	}
 }
 
@@ -999,10 +1003,13 @@ func TestPrescriptionDetailRendersAuthorizedPublishedSnapshot(t *testing.T) {
 	store := &structuredTrainingStoreStub{prescriptionRow: dbgen.GetTrainingPrescriptionForViewerRow{
 		ID: prescriptionID, SessionID: sessionID, AthleteUserID: uuid.New(), AthleteName: "Ana", PlanID: planID, PlanTitle: "M42",
 		Revision: 3, PublishedAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 14, 10, 30, 0, 0, time.UTC), Valid: true}, PublishedByName: "Treinador", Snapshot: snapshot, IsCurrent: true,
+		OutcomeStatus: "COMPLETED", ActualDurationMinutes: int32Ptr(71), PerceivedExertion: int16Ptr(8), RecoveryFeeling: int16Ptr(3), PerceptionNote: stringPtr("Vento lateral"), OutcomeUpdatedAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC), Valid: true},
 	}}
 	handler := StructuredTraining{Store: store, System: System{}, Location: time.UTC}
 	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodGet, "/treinos/prescricoes/"+prescriptionID.String(), nil, "id", prescriptionID.String(), handler.PrescriptionDetail)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Água R4") || !strings.Contains(response.Body.String(), "revisão 3") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Água R4") || !strings.Contains(response.Body.String(), "revisão 3") || !strings.Contains(response.Body.String(), "Vento lateral") || !strings.Contains(response.Body.String(), "8/10") {
 		t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
 	}
 }
+
+func int16Ptr(value int16) *int16 { return &value }

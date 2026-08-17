@@ -556,7 +556,9 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres,
+       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status,
+       o.distance_metres, o.actual_duration_minutes, o.perceived_exertion, o.recovery_feeling,
+       o.perception_note, o.updated_at AS outcome_updated_at, COALESCE(o.version, 0)::integer AS outcome_version,
        EXISTS (
          SELECT 1 FROM training_prescriptions prescription
          JOIN training_plan_publications publication ON publication.id = prescription.publication_id
@@ -593,6 +595,12 @@ type ListTrainingSessionsForAthleteRow struct {
 	CancellationReason    *string            `json:"cancellation_reason"`
 	OutcomeStatus         interface{}        `json:"outcome_status"`
 	DistanceMetres        *int32             `json:"distance_metres"`
+	ActualDurationMinutes *int32             `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16             `json:"perceived_exertion"`
+	RecoveryFeeling       *int16             `json:"recovery_feeling"`
+	PerceptionNote        *string            `json:"perception_note"`
+	OutcomeUpdatedAt      pgtype.Timestamptz `json:"outcome_updated_at"`
+	OutcomeVersion        int32              `json:"outcome_version"`
 	PrescriptionAvailable bool               `json:"prescription_available"`
 }
 
@@ -617,6 +625,12 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.CancellationReason,
 			&i.OutcomeStatus,
 			&i.DistanceMetres,
+			&i.ActualDurationMinutes,
+			&i.PerceivedExertion,
+			&i.RecoveryFeeling,
+			&i.PerceptionNote,
+			&i.OutcomeUpdatedAt,
+			&i.OutcomeVersion,
 			&i.PrescriptionAvailable,
 		); err != nil {
 			return nil, err
@@ -705,9 +719,14 @@ func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, 
 }
 
 const saveTrainingSessionOutcome = `-- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason, distance_metres)
+INSERT INTO training_session_outcomes (
+    session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason,
+    distance_metres, actual_duration_minutes, perceived_exertion, recovery_feeling, perception_note
+)
 SELECT $1, $2, current_prescription.id,
-       $3::training_outcome_status, $4, $5, $6
+       $3::training_outcome_status, $4, $5,
+       $6, $7, $8,
+       $9, $10
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN LATERAL (
@@ -749,16 +768,27 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
     distance_metres = EXCLUDED.distance_metres,
-    updated_at = now()
+    actual_duration_minutes = EXCLUDED.actual_duration_minutes,
+    perceived_exertion = EXCLUDED.perceived_exertion,
+    recovery_feeling = EXCLUDED.recovery_feeling,
+    perception_note = EXCLUDED.perception_note,
+    version = training_session_outcomes.version + 1,
+    updated_at = clock_timestamp()
+WHERE training_session_outcomes.version = $11
 `
 
 type SaveTrainingSessionOutcomeParams struct {
-	SessionID            uuid.UUID             `json:"session_id"`
-	UserID               uuid.UUID             `json:"user_id"`
-	Status               TrainingOutcomeStatus `json:"status"`
-	ReplacementSessionID *uuid.UUID            `json:"replacement_session_id"`
-	ReplacementReason    *string               `json:"replacement_reason"`
-	DistanceMetres       *int32                `json:"distance_metres"`
+	SessionID             uuid.UUID             `json:"session_id"`
+	UserID                uuid.UUID             `json:"user_id"`
+	Status                TrainingOutcomeStatus `json:"status"`
+	ReplacementSessionID  *uuid.UUID            `json:"replacement_session_id"`
+	ReplacementReason     *string               `json:"replacement_reason"`
+	DistanceMetres        *int32                `json:"distance_metres"`
+	ActualDurationMinutes *int32                `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16                `json:"perceived_exertion"`
+	RecoveryFeeling       *int16                `json:"recovery_feeling"`
+	PerceptionNote        *string               `json:"perception_note"`
+	ExpectedVersion       int32                 `json:"expected_version"`
 }
 
 func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error) {
@@ -769,6 +799,11 @@ func (q *Queries) SaveTrainingSessionOutcome(ctx context.Context, arg SaveTraini
 		arg.ReplacementSessionID,
 		arg.ReplacementReason,
 		arg.DistanceMetres,
+		arg.ActualDurationMinutes,
+		arg.PerceivedExertion,
+		arg.RecoveryFeeling,
+		arg.PerceptionNote,
+		arg.ExpectedVersion,
 	)
 	if err != nil {
 		return 0, err
@@ -787,23 +822,44 @@ func (q *Queries) TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, e
 	return exists, err
 }
 
-const updateOwnCompletedSessionDistance = `-- name: UpdateOwnCompletedSessionDistance :execrows
+const updateOwnCompletedSessionFeedback = `-- name: UpdateOwnCompletedSessionFeedback :execrows
 UPDATE training_session_outcomes
-SET distance_metres = $1, updated_at = now()
-WHERE session_id = $2
-  AND user_id = $3
+SET distance_metres = $1,
+    actual_duration_minutes = $2,
+    perceived_exertion = $3,
+    recovery_feeling = $4,
+    perception_note = $5,
+    version = version + 1,
+    updated_at = clock_timestamp()
+WHERE session_id = $6
+  AND user_id = $7
   AND status = 'COMPLETED'
+  AND version = $8
   AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE')
 `
 
-type UpdateOwnCompletedSessionDistanceParams struct {
-	DistanceMetres *int32    `json:"distance_metres"`
-	SessionID      uuid.UUID `json:"session_id"`
-	UserID         uuid.UUID `json:"user_id"`
+type UpdateOwnCompletedSessionFeedbackParams struct {
+	DistanceMetres        *int32    `json:"distance_metres"`
+	ActualDurationMinutes *int32    `json:"actual_duration_minutes"`
+	PerceivedExertion     *int16    `json:"perceived_exertion"`
+	RecoveryFeeling       *int16    `json:"recovery_feeling"`
+	PerceptionNote        *string   `json:"perception_note"`
+	SessionID             uuid.UUID `json:"session_id"`
+	UserID                uuid.UUID `json:"user_id"`
+	ExpectedVersion       int32     `json:"expected_version"`
 }
 
-func (q *Queries) UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateOwnCompletedSessionDistance, arg.DistanceMetres, arg.SessionID, arg.UserID)
+func (q *Queries) UpdateOwnCompletedSessionFeedback(ctx context.Context, arg UpdateOwnCompletedSessionFeedbackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateOwnCompletedSessionFeedback,
+		arg.DistanceMetres,
+		arg.ActualDurationMinutes,
+		arg.PerceivedExertion,
+		arg.RecoveryFeeling,
+		arg.PerceptionNote,
+		arg.SessionID,
+		arg.UserID,
+		arg.ExpectedVersion,
+	)
 	if err != nil {
 		return 0, err
 	}

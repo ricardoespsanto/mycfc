@@ -68,7 +68,24 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 				distanceInput = kilometreInput(*session.DistanceMetres)
 			}
 			cancelled := session.Status == "CANCELLED"
-			page.Sessions = append(page.Sessions, pages.TrainingSession{ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description, When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput, Cancelled: cancelled, CancellationReason: stringValue(session.CancellationReason), PrescriptionAvailable: session.PrescriptionAvailable})
+			actualDuration, durationInput := "", ""
+			if session.ActualDurationMinutes != nil {
+				actualDuration = fmt.Sprintf("%d min", *session.ActualDurationMinutes)
+				durationInput = strconv.Itoa(int(*session.ActualDurationMinutes))
+			}
+			feedbackUpdatedAt := ""
+			if session.OutcomeUpdatedAt.Valid {
+				feedbackUpdatedAt = session.OutcomeUpdatedAt.Time.In(h.location()).Format("02/01/2006 15:04")
+			}
+			page.Sessions = append(page.Sessions, pages.TrainingSession{
+				ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description,
+				When:     session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"),
+				Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput,
+				ActualDuration: actualDuration, DurationMinutes: durationInput,
+				PerceivedEffort: optionalInt16Input(session.PerceivedExertion), RecoveryFeeling: optionalInt16Input(session.RecoveryFeeling),
+				PerceptionNote: stringValue(session.PerceptionNote), FeedbackUpdatedAt: feedbackUpdatedAt, OutcomeVersion: int(session.OutcomeVersion),
+				Cancelled: cancelled, CancellationReason: stringValue(session.CancellationReason), PrescriptionAvailable: session.PrescriptionAvailable,
+			})
 			calendarTitle, calendarKind := session.Title, "Treino"
 			if cancelled {
 				calendarTitle, calendarKind = "Cancelada: "+session.Title, "Cancelada"
@@ -354,14 +371,25 @@ func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 	replacementSessionID, replacementErr := optionalUUID(r.PostForm.Get("replacement_session_id"))
 	replacementReason := strings.TrimSpace(r.PostForm.Get("replacement_reason"))
 	distanceMetres, distanceErr := parseKilometres(r.PostForm.Get("distance_km"))
-	if err != nil || replacementErr != nil || distanceErr != nil || !validTrainingOutcome(status, replacementSessionID, replacementReason) || (status != "COMPLETED" && distanceMetres != nil) {
+	actualDuration, durationErr := optionalBoundedInt32(r.PostForm.Get("actual_duration_minutes"), 1, 1440)
+	perceivedExertion, exertionErr := optionalBoundedInt16(r.PostForm.Get("perceived_exertion"), 0, 10)
+	recoveryFeeling, recoveryErr := optionalBoundedInt16(r.PostForm.Get("recovery_feeling"), 1, 5)
+	perceptionNote := strings.TrimSpace(r.PostForm.Get("perception_note"))
+	hasCompletedFeedback := distanceMetres != nil || actualDuration != nil || perceivedExertion != nil || recoveryFeeling != nil || perceptionNote != ""
+	if err != nil || replacementErr != nil || distanceErr != nil || durationErr != nil || exertionErr != nil || recoveryErr != nil || utf8.RuneCountInString(perceptionNote) > 500 || !validTrainingOutcome(status, replacementSessionID, replacementReason) || (status != "COMPLETED" && hasCompletedFeedback) {
 		http.Error(w, "Resultado da sessão inválido.", http.StatusUnprocessableEntity)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
-	n, err := h.Store.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: user.ID, Status: dbgen.TrainingOutcomeStatus(status), ReplacementSessionID: replacementSessionID, ReplacementReason: optionalString(replacementReason), DistanceMetres: distanceMetres})
+	n, err := h.Store.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{
+		SessionID: sessionID, UserID: user.ID, Status: dbgen.TrainingOutcomeStatus(status),
+		ExpectedVersion:      0,
+		ReplacementSessionID: replacementSessionID, ReplacementReason: optionalString(replacementReason),
+		DistanceMetres: distanceMetres, ActualDurationMinutes: actualDuration, PerceivedExertion: perceivedExertion,
+		RecoveryFeeling: recoveryFeeling, PerceptionNote: optionalString(perceptionNote),
+	})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -374,30 +402,39 @@ func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
-func (h Training) UpdateDistance(w http.ResponseWriter, r *http.Request) {
+func (h Training) UpdateFeedback(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Pedido inválido.", http.StatusBadRequest)
 		return
 	}
 	sessionID, sessionErr := uuid.Parse(r.PostForm.Get("session_id"))
 	distanceMetres, distanceErr := parseKilometres(r.PostForm.Get("distance_km"))
-	if sessionErr != nil || distanceErr != nil {
-		http.Error(w, "Distância inválida.", http.StatusUnprocessableEntity)
+	actualDuration, durationErr := optionalBoundedInt32(r.PostForm.Get("actual_duration_minutes"), 1, 1440)
+	perceivedExertion, exertionErr := optionalBoundedInt16(r.PostForm.Get("perceived_exertion"), 0, 10)
+	recoveryFeeling, recoveryErr := optionalBoundedInt16(r.PostForm.Get("recovery_feeling"), 1, 5)
+	perceptionNote := strings.TrimSpace(r.PostForm.Get("perception_note"))
+	expectedVersion, versionErr := strconv.ParseInt(r.PostForm.Get("expected_version"), 10, 32)
+	if sessionErr != nil || distanceErr != nil || durationErr != nil || exertionErr != nil || recoveryErr != nil || versionErr != nil || expectedVersion < 1 || utf8.RuneCountInString(perceptionNote) > 500 {
+		http.Error(w, "Dados reais ou perceção inválidos.", http.StatusUnprocessableEntity)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
-	n, err := h.Store.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: user.ID, DistanceMetres: distanceMetres})
+	n, err := h.Store.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{
+		SessionID: sessionID, UserID: user.ID, ExpectedVersion: int32(expectedVersion), DistanceMetres: distanceMetres,
+		ActualDurationMinutes: actualDuration, PerceivedExertion: perceivedExertion, RecoveryFeeling: recoveryFeeling,
+		PerceptionNote: optionalString(perceptionNote),
+	})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
 	if n != 1 {
-		http.Error(w, "A sessão concluída não está disponível.", http.StatusConflict)
+		http.Error(w, "A sessão foi alterada entretanto ou já não está disponível. Atualize a página antes de tentar novamente.", http.StatusConflict)
 		return
 	}
-	h.flash(r, "Distância atualizada.")
+	h.flash(r, "Dados reais e perceção atualizados.")
 	httpx.Redirect(w, r, "/treinos", http.StatusSeeOther)
 }
 
@@ -688,6 +725,56 @@ func parseKilometres(value string) (*int32, error) {
 	}
 	result := int32(metres)
 	return &result, nil
+}
+
+func optionalBoundedInt32(value string, minimum, maximum int32) (*int32, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || parsed < int64(minimum) || parsed > int64(maximum) {
+		return nil, errors.New("value outside allowed range")
+	}
+	result := int32(parsed)
+	return &result, nil
+}
+
+func optionalBoundedInt16(value string, minimum, maximum int16) (*int16, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 16)
+	if err != nil || parsed < int64(minimum) || parsed > int64(maximum) {
+		return nil, errors.New("value outside allowed range")
+	}
+	result := int16(parsed)
+	return &result, nil
+}
+
+func optionalInt16Input(value *int16) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.Itoa(int(*value))
+}
+
+func trainingFeelingText(value int16) string {
+	switch value {
+	case 1:
+		return "muito mal"
+	case 2:
+		return "mal"
+	case 3:
+		return "razoavelmente"
+	case 4:
+		return "bem"
+	case 5:
+		return "muito bem"
+	default:
+		return ""
+	}
 }
 
 func kilometreInput(metres int32) string {

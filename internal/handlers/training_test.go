@@ -180,12 +180,12 @@ func TestReportTrainingOutcomePersistsOnlyCompletedDistance(t *testing.T) {
 	userID := uuid.New()
 	store := &trainingOutcomeStore{saveRows: 1}
 	training := Training{Store: store}
-	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=COMPLETED&distance_km=12.34"))
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/resultados", strings.NewReader("session_id="+sessionID.String()+"&status=COMPLETED&distance_km=12.34&actual_duration_minutes=75&perceived_exertion=7&recovery_feeling=4&perception_note=Boa+sessao"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
 	response := httptest.NewRecorder()
 	training.ReportOutcome(response, request)
-	if response.Code != http.StatusSeeOther || store.saveParams.DistanceMetres == nil || *store.saveParams.DistanceMetres != 12340 {
+	if response.Code != http.StatusSeeOther || store.saveParams.DistanceMetres == nil || *store.saveParams.DistanceMetres != 12340 || store.saveParams.ActualDurationMinutes == nil || *store.saveParams.ActualDurationMinutes != 75 || store.saveParams.PerceivedExertion == nil || *store.saveParams.PerceivedExertion != 7 || store.saveParams.RecoveryFeeling == nil || *store.saveParams.RecoveryFeeling != 4 || store.saveParams.PerceptionNote == nil || *store.saveParams.PerceptionNote != "Boa sessao" {
 		t.Fatalf("response = %d, params = %+v", response.Code, store.saveParams)
 	}
 
@@ -200,24 +200,55 @@ func TestReportTrainingOutcomePersistsOnlyCompletedDistance(t *testing.T) {
 	}
 }
 
-func TestUpdateTrainingDistanceRequiresOwnCompletedOutcome(t *testing.T) {
+func TestUpdateTrainingFeedbackRequiresOwnFreshCompletedOutcome(t *testing.T) {
 	store := &trainingOutcomeStore{updateRows: 1}
 	training := Training{Store: store}
 	userID, sessionID := uuid.New(), uuid.New()
-	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/distancia", strings.NewReader("session_id="+sessionID.String()+"&distance_km=7.5"))
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/feedback", strings.NewReader("session_id="+sessionID.String()+"&expected_version=3&distance_km=7.5&actual_duration_minutes=62&perceived_exertion=6&recovery_feeling=3&perception_note=Corrente+forte"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
 	response := httptest.NewRecorder()
-	training.UpdateDistance(response, request)
-	if response.Code != http.StatusSeeOther || store.updateParams.UserID != userID || store.updateParams.DistanceMetres == nil || *store.updateParams.DistanceMetres != 7500 {
+	training.UpdateFeedback(response, request)
+	if response.Code != http.StatusSeeOther || store.updateParams.UserID != userID || store.updateParams.ExpectedVersion != 3 || store.updateParams.DistanceMetres == nil || *store.updateParams.DistanceMetres != 7500 || store.updateParams.ActualDurationMinutes == nil || *store.updateParams.ActualDurationMinutes != 62 || store.updateParams.PerceivedExertion == nil || *store.updateParams.PerceivedExertion != 6 || store.updateParams.RecoveryFeeling == nil || *store.updateParams.RecoveryFeeling != 3 || store.updateParams.PerceptionNote == nil || *store.updateParams.PerceptionNote != "Corrente forte" {
 		t.Fatalf("response = %d, params = %+v", response.Code, store.updateParams)
+	}
+}
+
+func TestUpdateTrainingFeedbackRejectsInvalidScalesAndStaleVersion(t *testing.T) {
+	userID, sessionID := uuid.New(), uuid.New()
+	for _, values := range []string{
+		"expected_version=1&perceived_exertion=11",
+		"expected_version=1&recovery_feeling=0",
+		"expected_version=1&actual_duration_minutes=2147483648",
+		"expected_version=1&perceived_exertion=32768",
+		"expected_version=0&perceived_exertion=5",
+	} {
+		store := &trainingOutcomeStore{updateRows: 1}
+		request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/feedback", strings.NewReader("session_id="+sessionID.String()+"&"+values))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+		response := httptest.NewRecorder()
+		(Training{Store: store}).UpdateFeedback(response, request)
+		if response.Code != http.StatusUnprocessableEntity || store.updateParams.SessionID != uuid.Nil {
+			t.Fatalf("values=%q response=%d params=%+v", values, response.Code, store.updateParams)
+		}
+	}
+
+	store := &trainingOutcomeStore{updateRows: 0}
+	request := httptest.NewRequest(http.MethodPost, "/treinos/sessoes/feedback", strings.NewReader("session_id="+sessionID.String()+"&expected_version=2&perceived_exertion=5"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	response := httptest.NewRecorder()
+	(Training{Store: store}).UpdateFeedback(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("stale response = %d", response.Code)
 	}
 }
 
 type trainingOutcomeStore struct {
 	dbgen.Querier
 	saveParams   dbgen.SaveTrainingSessionOutcomeParams
-	updateParams dbgen.UpdateOwnCompletedSessionDistanceParams
+	updateParams dbgen.UpdateOwnCompletedSessionFeedbackParams
 	saveRows     int64
 	updateRows   int64
 }
@@ -227,7 +258,7 @@ func (s *trainingOutcomeStore) SaveTrainingSessionOutcome(_ context.Context, par
 	return s.saveRows, nil
 }
 
-func (s *trainingOutcomeStore) UpdateOwnCompletedSessionDistance(_ context.Context, params dbgen.UpdateOwnCompletedSessionDistanceParams) (int64, error) {
+func (s *trainingOutcomeStore) UpdateOwnCompletedSessionFeedback(_ context.Context, params dbgen.UpdateOwnCompletedSessionFeedbackParams) (int64, error) {
 	s.updateParams = params
 	return s.updateRows, nil
 }

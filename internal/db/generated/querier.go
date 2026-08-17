@@ -246,7 +246,7 @@ type Querier interface {
 	UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIdentityParams) (pgtype.Timestamptz, error)
 	UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfileParams) (MemberProfile, error)
 	UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMemberProfilePhotoParams) (pgtype.Timestamptz, error)
-	UpdateOwnCompletedSessionDistance(ctx context.Context, arg UpdateOwnCompletedSessionDistanceParams) (int64, error)
+	UpdateOwnCompletedSessionFeedback(ctx context.Context, arg UpdateOwnCompletedSessionFeedbackParams) (int64, error)
 	UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)
 	UpdateSuggestionTriage(ctx context.Context, arg UpdateSuggestionTriageParams) (int64, error)

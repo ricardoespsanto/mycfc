@@ -40,9 +40,14 @@ WHERE id = sqlc.arg(id)
 RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
 -- name: SaveTrainingSessionOutcome :execrows
-INSERT INTO training_session_outcomes (session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason, distance_metres)
+INSERT INTO training_session_outcomes (
+    session_id, user_id, prescription_id, status, replacement_session_id, replacement_reason,
+    distance_metres, actual_duration_minutes, perceived_exertion, recovery_feeling, perception_note
+)
 SELECT sqlc.arg(session_id), sqlc.arg(user_id), current_prescription.id,
-       sqlc.arg(status)::training_outcome_status, sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason), sqlc.narg(distance_metres)
+       sqlc.arg(status)::training_outcome_status, sqlc.narg(replacement_session_id), sqlc.narg(replacement_reason),
+       sqlc.narg(distance_metres), sqlc.narg(actual_duration_minutes), sqlc.narg(perceived_exertion),
+       sqlc.narg(recovery_feeling), sqlc.narg(perception_note)
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN LATERAL (
@@ -84,11 +89,19 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
     replacement_session_id = EXCLUDED.replacement_session_id,
     replacement_reason = EXCLUDED.replacement_reason,
     distance_metres = EXCLUDED.distance_metres,
-    updated_at = now();
+    actual_duration_minutes = EXCLUDED.actual_duration_minutes,
+    perceived_exertion = EXCLUDED.perceived_exertion,
+    recovery_feeling = EXCLUDED.recovery_feeling,
+    perception_note = EXCLUDED.perception_note,
+    version = training_session_outcomes.version + 1,
+    updated_at = clock_timestamp()
+WHERE training_session_outcomes.version = sqlc.arg(expected_version);
 
 -- name: ListTrainingSessionsForAthlete :many
 SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
-       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status, o.distance_metres,
+       s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status,
+       o.distance_metres, o.actual_duration_minutes, o.perceived_exertion, o.recovery_feeling,
+       o.perception_note, o.updated_at AS outcome_updated_at, COALESCE(o.version, 0)::integer AS outcome_version,
        EXISTS (
          SELECT 1 FROM training_prescriptions prescription
          JOIN training_plan_publications publication ON publication.id = prescription.publication_id
@@ -133,12 +146,19 @@ WHERE s.ends_at >= sqlc.arg(from_time)
 ORDER BY s.starts_at, s.id
 LIMIT sqlc.arg(row_limit);
 
--- name: UpdateOwnCompletedSessionDistance :execrows
+-- name: UpdateOwnCompletedSessionFeedback :execrows
 UPDATE training_session_outcomes
-SET distance_metres = sqlc.narg(distance_metres), updated_at = now()
+SET distance_metres = sqlc.narg(distance_metres),
+    actual_duration_minutes = sqlc.narg(actual_duration_minutes),
+    perceived_exertion = sqlc.narg(perceived_exertion),
+    recovery_feeling = sqlc.narg(recovery_feeling),
+    perception_note = sqlc.narg(perception_note),
+    version = version + 1,
+    updated_at = clock_timestamp()
 WHERE session_id = sqlc.arg(session_id)
   AND user_id = sqlc.arg(user_id)
   AND status = 'COMPLETED'
+  AND version = sqlc.arg(expected_version)
   AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE');
 
 -- name: ListTrainingPlansForCoach :many

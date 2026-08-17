@@ -680,7 +680,7 @@ test.describe('authentication', () => {
     await expect(cancelledAthleteSession.getByRole('button')).toHaveCount(0);
     const athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
     await athleteSession.locator('summary').filter({ hasText: 'Marcar concluída' }).click();
-    await athleteSession.getByLabel('Distância (km)').fill('12.34');
+    await athleteSession.getByLabel('Distância real (km)').fill('12.34');
     await athleteSession.getByRole('button', { name: 'Concluir sessão' }).click();
     await expect(page.getByText('Resultado registado.', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]')).toContainText('12,34 km');
@@ -1050,11 +1050,54 @@ test.describe('authentication', () => {
     const publishedSession = page.getByRole('heading', { name: sessionTitle, exact: true }).locator('xpath=ancestor::article[1]');
     await expect(page.getByText(athleteName, { exact: true })).toBeVisible();
     await publishedSession.getByRole('link', { name: 'Abrir esta revisão da prescrição' }).click();
+    const prescriptionURL = page.url();
     await expect(page.getByText('Prescrição publicada · revisão 1', { exact: false })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
     await expect(page.getByRole('heading', { name: sessionTitle })).toBeVisible();
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(athleteEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto('/treinos');
+    let athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
+    await athleteSession.locator('summary').filter({ hasText: 'Marcar concluída' }).click();
+    await athleteSession.getByLabel('Duração real (minutos)').fill('58');
+    await athleteSession.getByLabel('Distância real (km)').fill('8.2');
+    await athleteSession.getByLabel('Esforço percebido (0–10)').selectOption('7');
+    await athleteSession.getByLabel('Como se sentiu no conjunto? (1–5)').selectOption('4');
+    await athleteSession.getByLabel('Nota sobre a sessão (opcional)').fill('Boa sessão, com vento lateral.');
+    await athleteSession.getByRole('button', { name: 'Concluir sessão' }).click();
+    await expect(page.getByText('Resultado registado.', { exact: true })).toBeVisible();
+    athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
+    await expect(athleteSession).toContainText('Duração real: 58 min');
+    await expect(athleteSession).toContainText('Distância real: 8,2 km');
+    await expect(athleteSession).toContainText('Esforço percebido: 7/10');
+    await expect(athleteSession).toContainText('Boa sessão, com vento lateral.');
+    await athleteSession.locator('summary').filter({ hasText: 'Registar ou corrigir dados reais e perceção' }).click();
+    await athleteSession.getByLabel('Duração real (minutos)').fill('61');
+    await athleteSession.getByLabel('Esforço percebido (0–10)').selectOption('8');
+    await athleteSession.getByLabel('Nota sobre a sessão (opcional)').fill('Correção: regresso contra a corrente.');
+    await athleteSession.getByRole('button', { name: 'Guardar dados reais e perceção' }).click();
+    await expect(page.getByText('Dados reais e perceção atualizados.', { exact: true })).toBeVisible();
+    athleteSession = page.getByRole('heading', { name: new RegExp(`${sessionTitle}$`) }).locator('xpath=ancestor::li[1]');
+    await expect(athleteSession).toContainText('Duração real: 61 min');
+    await expect(athleteSession).toContainText('Esforço percebido: 8/10');
+    await expect(athleteSession).toContainText('Correção: regresso contra a corrente.');
+    await expectNoSeriousAxeViolations(page);
+
+    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await page.getByLabel('Correio eletrónico').fill(adminEmail);
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.goto(prescriptionURL);
+    await expect(page.getByText('Resposta do atleta', { exact: false })).toBeVisible();
+    await expect(page.getByText('Correção: regresso contra a corrente.')).toBeVisible();
+    await expect(page.getByText('Esforço percebido: 8/10')).toBeVisible();
+    await expectNoSeriousAxeViolations(page);
   });
 
   test('administrator creates a private album and the scoped athlete can open it', async ({ page, browser }) => {

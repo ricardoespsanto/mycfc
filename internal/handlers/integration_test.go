@@ -755,8 +755,17 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	if publication1.Revision != 1 {
 		t.Fatalf("first revision = %d", publication1.Revision)
 	}
-	if rows, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: session.ID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); err != nil || rows != 1 {
+	duration, exertion, feeling, note := int32(64), int16(7), int16(4), "Boa resposta à carga"
+	if rows, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{
+		SessionID: session.ID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusCOMPLETED,
+		ActualDurationMinutes: &duration, PerceivedExertion: &exertion, RecoveryFeeling: &feeling, PerceptionNote: &note,
+	}); err != nil || rows != 1 {
 		t.Fatalf("save outcome rows=%d err=%v", rows, err)
+	}
+	for _, forbiddenActor := range []uuid.UUID{guardianID, actorID, outsiderID} {
+		if rows, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: session.ID, UserID: forbiddenActor, Status: dbgen.TrainingOutcomeStatusCOMPLETED, PerceivedExertion: &exertion}); err != nil || rows != 0 {
+			t.Fatalf("non-athlete %s saved feedback rows=%d err=%v", forbiddenActor, rows, err)
+		}
 	}
 	var firstPrescriptionID, outcomePrescriptionID uuid.UUID
 	if err := pool.QueryRow(ctx, `SELECT id FROM training_prescriptions WHERE publication_id = $1`, publication1.ID).Scan(&firstPrescriptionID); err != nil {
@@ -764,6 +773,16 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	}
 	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
 		t.Fatalf("outcome prescription=%s want=%s err=%v", outcomePrescriptionID, firstPrescriptionID, err)
+	}
+	correctedDuration, correctedExertion, correctedFeeling, correctedNote := int32(69), int16(8), int16(3), "Corrente mais forte no regresso"
+	if rows, err := queries.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{
+		SessionID: session.ID, UserID: athleteID, ExpectedVersion: 1, ActualDurationMinutes: &correctedDuration,
+		PerceivedExertion: &correctedExertion, RecoveryFeeling: &correctedFeeling, PerceptionNote: &correctedNote,
+	}); err != nil || rows != 1 {
+		t.Fatalf("correct feedback rows=%d err=%v", rows, err)
+	}
+	if rows, err := queries.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: session.ID, UserID: athleteID, ExpectedVersion: 1, PerceivedExertion: &exertion}); err != nil || rows != 0 {
+		t.Fatalf("stale feedback rows=%d err=%v", rows, err)
 	}
 	staleSource := readSource()
 	if _, err := pool.Exec(ctx, `UPDATE training_sessions SET title = 'Água republicada' WHERE id = $1`, session.ID); err != nil {
@@ -797,8 +816,16 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 		}
 	}
 	oldRow, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false})
-	if err != nil || !strings.Contains(string(oldRow.Snapshot), `"Versão um"`) || oldRow.IsCurrent {
+	if err != nil || !strings.Contains(string(oldRow.Snapshot), `"Versão um"`) || oldRow.IsCurrent || oldRow.ActualDurationMinutes == nil || *oldRow.ActualDurationMinutes != correctedDuration || oldRow.PerceivedExertion == nil || *oldRow.PerceivedExertion != correctedExertion || oldRow.RecoveryFeeling == nil || *oldRow.RecoveryFeeling != correctedFeeling || oldRow.PerceptionNote == nil || *oldRow.PerceptionNote != correctedNote || oldRow.OutcomeVersion != 2 {
 		t.Fatalf("historical snapshot changed or hidden: row=%#v err=%v", oldRow, err)
+	}
+	var currentPrescriptionID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM training_prescriptions WHERE publication_id = $1`, publication2.ID).Scan(&currentPrescriptionID); err != nil {
+		t.Fatal(err)
+	}
+	currentRow, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: currentPrescriptionID, UserID: guardianID, IsAdmin: false})
+	if err != nil || currentRow.OutcomeStatus != "" || currentRow.PerceivedExertion != nil {
+		t.Fatalf("feedback leaked onto a prescription revision not performed: row=%#v err=%v", currentRow, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE training_prescriptions SET snapshot = '{"changed":true}' WHERE id = $1`, firstPrescriptionID); err == nil {
 		t.Fatal("immutable prescription accepted an update")
@@ -827,6 +854,12 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	}
 	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
 		t.Fatalf("outcome lineage moved after republish: %s err=%v", outcomePrescriptionID, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET guardian_id = $2 WHERE id = $1`, athleteID, outsiderID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("former guardian retained feedback access: %v", err)
 	}
 }
 

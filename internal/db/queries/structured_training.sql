@@ -815,13 +815,20 @@ SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, a
        publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
        publication.revision, publication.change_summary, publication.published_at,
        publisher.name AS published_by_name, prescription.snapshot,
-       publication.id = latest.id AS is_current
+       publication.id = latest.id AS is_current,
+       COALESCE(outcome.status::text, ''::text) AS outcome_status,
+       outcome.distance_metres, outcome.actual_duration_minutes, outcome.perceived_exertion,
+       outcome.recovery_feeling, outcome.perception_note, outcome.updated_at AS outcome_updated_at,
+       COALESCE(outcome.version, 0)::integer AS outcome_version
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN seasons season ON season.id = plan.season_id
 JOIN users athlete ON athlete.id = prescription.athlete_user_id
 JOIN users publisher ON publisher.id = publication.published_by_id
+LEFT JOIN training_session_outcomes outcome
+  ON outcome.prescription_id = prescription.id
+ AND outcome.user_id = prescription.athlete_user_id
 JOIN LATERAL (
  SELECT current_publication.id
  FROM training_plan_publications current_publication
@@ -859,13 +866,20 @@ SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, a
        publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
        publication.revision, publication.change_summary, publication.published_at,
        publisher.name AS published_by_name, prescription.snapshot,
-       publication.id = latest.id AS is_current
+       publication.id = latest.id AS is_current,
+       COALESCE(outcome.status::text, ''::text) AS outcome_status,
+       outcome.distance_metres, outcome.actual_duration_minutes, outcome.perceived_exertion,
+       outcome.recovery_feeling, outcome.perception_note, outcome.updated_at AS outcome_updated_at,
+       COALESCE(outcome.version, 0)::integer AS outcome_version
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN seasons season ON season.id = plan.season_id
 JOIN users athlete ON athlete.id = prescription.athlete_user_id
 JOIN users publisher ON publisher.id = publication.published_by_id
+LEFT JOIN training_session_outcomes outcome
+  ON outcome.prescription_id = prescription.id
+ AND outcome.user_id = prescription.athlete_user_id
 JOIN LATERAL (
  SELECT current_publication.id
  FROM training_plan_publications current_publication
