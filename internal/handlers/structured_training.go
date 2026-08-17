@@ -37,7 +37,7 @@ type StructuredTraining struct {
 
 type structuredTrainingRow struct {
 	athleteName, groupName, scope, planTitle, planDescription, seasonName, sessionTitle, sessionDescription string
-	athleteID, groupID, planID, sessionID, segmentID, blockID, exerciseID                                   *uuid.UUID
+	groupID, planID, sessionID, segmentID, blockID, exerciseID                                              *uuid.UUID
 	memberCount, segmentPosition, blockPosition, exercisePosition                                           int
 	plannedLoadPercentage                                                                                   *int16
 	weekStart                                                                                               time.Time
