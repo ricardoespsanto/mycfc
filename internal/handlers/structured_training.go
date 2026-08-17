@@ -238,6 +238,9 @@ func (h StructuredTraining) PrescriptionDetail(w http.ResponseWriter, r *http.Re
 		PlanID: row.PlanID, PlanTitle: row.PlanTitle, WeekStart: row.WeekStart, SeasonName: row.SeasonName,
 		Revision: row.Revision, ChangeSummary: row.ChangeSummary, PublishedAt: row.PublishedAt,
 		PublishedByName: row.PublishedByName, Snapshot: row.Snapshot, IsCurrent: row.IsCurrent,
+		OutcomeStatus: row.OutcomeStatus, DistanceMetres: row.DistanceMetres, ActualDurationMinutes: row.ActualDurationMinutes,
+		PerceivedExertion: row.PerceivedExertion, RecoveryFeeling: row.RecoveryFeeling, PerceptionNote: row.PerceptionNote,
+		OutcomeUpdatedAt: row.OutcomeUpdatedAt, OutcomeVersion: row.OutcomeVersion,
 	}}, h.location())}
 	page.Meta = h.meta(r, user, false)
 	page.Meta.Title = "Prescrição de treino"
@@ -2259,6 +2262,23 @@ func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewer
 			continue
 		}
 		snapshot.Session.PrescriptionID = row.ID.String()
+		snapshot.Session.Outcome, _ = row.OutcomeStatus.(string)
+		if row.DistanceMetres != nil {
+			snapshot.Session.ActualDistance = formatKilometres(int64(*row.DistanceMetres))
+		}
+		if row.ActualDurationMinutes != nil {
+			snapshot.Session.ActualDuration = fmt.Sprintf("%d min", *row.ActualDurationMinutes)
+		}
+		if row.PerceivedExertion != nil {
+			snapshot.Session.PerceivedEffort = fmt.Sprintf("%d/10", *row.PerceivedExertion)
+		}
+		if row.RecoveryFeeling != nil {
+			snapshot.Session.RecoveryFeeling = trainingFeelingText(*row.RecoveryFeeling)
+		}
+		snapshot.Session.PerceptionNote = stringValue(row.PerceptionNote)
+		if row.OutcomeUpdatedAt.Valid {
+			snapshot.Session.FeedbackUpdatedAt = row.OutcomeUpdatedAt.Time.In(location).Format("02/01/2006 15:04")
+		}
 		scope := fmt.Sprintf("Prescrição publicada · revisão %d · %s por %s", row.Revision, row.PublishedAt.Time.In(location).Format("02/01/2006 15:04"), row.PublishedByName)
 		if !row.IsCurrent {
 			scope = "Histórico · " + scope

@@ -1,12 +1,18 @@
 package pages
 
 import (
+	"fmt"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 )
 
 type TrainingChoice struct{ ID, Name string }
-type TrainingSession struct{ ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string; Cancelled, PrescriptionAvailable bool }
+type TrainingSession struct {
+	ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string
+	ActualDuration, DurationMinutes, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string
+	OutcomeVersion int
+	Cancelled, PrescriptionAvailable bool
+}
 type ManagedTrainingSession struct{ ID, Title, Description, When, Modality, CancellationReason, CancelledAt, CancelledBy string; Cancelled, Editable bool }
 type ManagedTrainingPlan struct {
 	ID, Title, Description string
@@ -88,20 +94,33 @@ templ trainingContent(page TrainingPage) {
 							<div class="record-item__actions">
 								@components.Badge(trainingOutcomeLabel(session.Outcome), trainingOutcomeTone(session.Outcome))
 								if session.Outcome == "COMPLETED" {
-									if session.Distance != "" {
-										<span>{ session.Distance }</span>
+									<p class="record-meta">
+										if session.ActualDuration != "" {
+											<span>Duração real: { session.ActualDuration }</span>
+										}
+										if session.Distance != "" {
+											<span> · Distância real: { session.Distance }</span>
+										}
+										if session.PerceivedEffort != "" {
+											<span> · Esforço percebido: { session.PerceivedEffort }/10</span>
+										}
+										if session.RecoveryFeeling != "" {
+											<span> · Sensação geral: { trainingFeelingLabel(session.RecoveryFeeling) }</span>
+										}
+									</p>
+									if session.PerceptionNote != "" {
+										<p><strong>Nota do atleta:</strong> { session.PerceptionNote }</p>
 									}
-									<details class="inline-disclosure"><summary>Registar ou corrigir distância</summary><form class="form-layout" method="post" action="/treinos/sessoes/distancia">@page.CSRFField
-										<input type="hidden" name="session_id" value={ session.ID }/>@components.FieldLabel("distance-update-"+session.ID, "Distância (km)", false)
-										<input id={ "distance-update-"+session.ID } name="distance_km" type="number" min="0.01" max="200" step="0.01" inputmode="decimal" value={ session.DistanceKM } aria-describedby={ "distance-update-help-"+session.ID }/>@components.FieldHelp("distance-update-help-"+session.ID, "Deixe vazio para remover a distância.")
-										@components.FormActions("/treinos") { <button type="submit">Guardar distância</button> }
-									</form></details>
+									if session.FeedbackUpdatedAt != "" {
+										<small>Última atualização: { session.FeedbackUpdatedAt }</small>
+									}
+									<details class="inline-disclosure"><summary>Registar ou corrigir dados reais e perceção</summary>@trainingFeedbackForm(page, session, true)</details>
 								}
 							</div>
 						} else {
 							<div class="record-item__actions">
 								<details class="inline-disclosure"><summary>Marcar concluída</summary><form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField
-	<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/>@components.FieldLabel("distance-"+session.ID, "Distância (km)", false)<input id={ "distance-"+session.ID } name="distance_km" type="number" min="0.01" max="200" step="0.01" inputmode="decimal" aria-describedby={ "distance-help-"+session.ID }/>@components.FieldHelp("distance-help-"+session.ID, "Opcional para sessões com distância.")<button type="submit">Concluir sessão</button></form></details>
+	<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/>@trainingFeedbackFields(session, false)<button type="submit">Concluir sessão</button></form></details>
 								<form method="post" action="/treinos/sessoes/resultados">@page.CSRFField
 <input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="MISSED"/><button class="action action--secondary" type="submit">Não realizada</button></form>
 							</div>
@@ -121,7 +140,8 @@ templ trainingContent(page TrainingPage) {
 									<input id={ "replacement-reason-" + session.ID } name="replacement_reason" minlength="2" maxlength="300" required/>@components.FormActions("/treinos") {
 	<button type="submit">Registar substituição</button>
 }
-								</form>
+
+									</form>
 							</details>
 						}
 					</li>
@@ -132,6 +152,59 @@ templ trainingContent(page TrainingPage) {
 	}
 	if page.Management {
 		@trainingAuthoring(page)
+	}
+}
+
+templ trainingFeedbackForm(page TrainingPage, session TrainingSession, correction bool) {
+	<form class="form-layout" method="post" action="/treinos/sessoes/feedback">@page.CSRFField
+		<input type="hidden" name="session_id" value={ session.ID }/>
+		<input type="hidden" name="expected_version" value={ fmt.Sprintf("%d", session.OutcomeVersion) }/>
+		@trainingFeedbackFields(session, correction)
+		@components.FormActions("/treinos") {
+			<button type="submit">Guardar dados reais e perceção</button>
+		}
+	</form>
+}
+
+templ trainingFeedbackFields(session TrainingSession, correction bool) {
+	@components.FieldLabel("duration-"+session.ID, "Duração real (minutos)", false)
+	<input id={ "duration-"+session.ID } name="actual_duration_minutes" type="number" min="1" max="1440" step="1" inputmode="numeric" value={ session.DurationMinutes }/>
+	@components.FieldLabel("distance-"+session.ID, "Distância real (km)", false)
+	<input id={ "distance-"+session.ID } name="distance_km" type="number" min="0.01" max="200" step="0.01" inputmode="decimal" value={ session.DistanceKM } aria-describedby={ "distance-help-"+session.ID }/>
+	@components.FieldHelp("distance-help-"+session.ID, "Opcional para sessões com distância; deixe vazio para remover numa correção.")
+	@components.FieldLabel("effort-"+session.ID, "Esforço percebido (0–10)", false)
+	<select id={ "effort-"+session.ID } name="perceived_exertion">
+		<option value="">Não responder</option>
+		for _, option := range []struct{ Value, Label string }{{"0", "0 — repouso"}, {"1", "1 — muito leve"}, {"2", "2 — leve"}, {"3", "3 — moderado"}, {"4", "4"}, {"5", "5 — intenso"}, {"6", "6"}, {"7", "7 — muito intenso"}, {"8", "8"}, {"9", "9 — quase máximo"}, {"10", "10 — máximo"}} {
+			<option value={ option.Value } selected?={ session.PerceivedEffort == option.Value }>{ option.Label }</option>
+		}
+	</select>
+	@components.FieldLabel("feeling-"+session.ID, "Como se sentiu no conjunto? (1–5)", false)
+	<select id={ "feeling-"+session.ID } name="recovery_feeling">
+		<option value="">Não responder</option>
+		for _, option := range []struct{ Value, Label string }{{"1", "1 — muito mal"}, {"2", "2 — mal"}, {"3", "3 — razoavelmente"}, {"4", "4 — bem"}, {"5", "5 — muito bem"}} {
+			<option value={ option.Value } selected?={ session.RecoveryFeeling == option.Value }>{ option.Label }</option>
+		}
+	</select>
+	@components.FieldLabel("perception-note-"+session.ID, "Nota sobre a sessão (opcional)", false)
+	<textarea id={ "perception-note-"+session.ID } name="perception_note" maxlength="500" aria-describedby={ "perception-help-"+session.ID }>{ session.PerceptionNote }</textarea>
+	@components.FieldHelp("perception-help-"+session.ID, "A perceção é do atleta. Pode ser lida pelo treinador atualmente responsável, pelo tutor atual enquanto o atleta for menor e por administradores; não gera diagnósticos nem altera a prescrição.")
+}
+
+func trainingFeelingLabel(value string) string {
+	switch value {
+	case "1":
+		return "muito mal"
+	case "2":
+		return "mal"
+	case "3":
+		return "razoavelmente"
+	case "4":
+		return "bem"
+	case "5":
+		return "muito bem"
+	default:
+		return "não indicada"
 	}
 }
 

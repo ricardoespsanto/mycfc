@@ -532,10 +532,10 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 	if len(rows) != 3 || rows[0].Position != 1 || rows[1].Position != 1 || rows[2].Position != 3 || rows[2].UserID != currentAthlete {
 		t.Fatalf("leaderboard rows = %#v", rows)
 	}
-	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: athleteA, DistanceMetres: int32PtrDB(2500)}); err != nil || n != 1 {
+	if n, err := queries.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: sessionID, UserID: athleteA, DistanceMetres: int32PtrDB(2500), ExpectedVersion: 1}); err != nil || n != 1 {
 		t.Fatalf("own correction rows = %d, err = %v", n, err)
 	}
-	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: uuid.New(), DistanceMetres: int32PtrDB(2500)}); err != nil || n != 0 {
+	if n, err := queries.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: sessionID, UserID: uuid.New(), DistanceMetres: int32PtrDB(2500), ExpectedVersion: 1}); err != nil || n != 0 {
 		t.Fatalf("foreign correction rows = %d, err = %v", n, err)
 	}
 	if n, err := queries.UpdateOwnLeaderboardVisibility(ctx, dbgen.UpdateOwnLeaderboardVisibilityParams{UserID: currentAthlete, LeaderboardVisible: false}); err != nil || n != 1 {
@@ -626,7 +626,7 @@ func TestTrainingSessionEditingAndCancellationLifecycle(t *testing.T) {
 	if n, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sessionID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusMISSED}); err != nil || n != 0 {
 		t.Fatalf("cancelled outcome rows = %d, err = %v", n, err)
 	}
-	if n, err := queries.UpdateOwnCompletedSessionDistance(ctx, dbgen.UpdateOwnCompletedSessionDistanceParams{SessionID: sessionID, UserID: athleteID, DistanceMetres: int32PtrDB(6000)}); err != nil || n != 0 {
+	if n, err := queries.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: sessionID, UserID: athleteID, DistanceMetres: int32PtrDB(6000), ExpectedVersion: 1}); err != nil || n != 0 {
 		t.Fatalf("cancelled distance rows = %d, err = %v", n, err)
 	}
 	if n, err := queries.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: sourceID, UserID: athleteID, Status: dbgen.TrainingOutcomeStatusREPLACED, ReplacementSessionID: &sessionID, ReplacementReason: stringPtrDB("Sessão cancelada")}); err != nil || n != 0 {

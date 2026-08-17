@@ -66,6 +66,7 @@ type StructuredTrainingSegment struct {
 }
 type StructuredTrainingSession struct {
 	ID, PrescriptionID, Title, Description, When, EntryKind string
+	Outcome, ActualDuration, ActualDistance, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string `json:"-"`
 	Modalities                              []string
 	Segments                                []StructuredTrainingSegment
 	Changes                                 []StructuredPrescriptionChange
@@ -225,6 +226,29 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 												}
 												if session.PrescriptionID != "" {
 													<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/" + session.PrescriptionID) }>Abrir esta revisão da prescrição</a></p>
+												}
+												if session.Outcome != "" {
+													<div class="notice notice--info" role="note">
+														<p><strong>Resposta do atleta</strong> · { trainingOutcomeLabel(session.Outcome) }</p>
+														if session.ActualDuration != "" {
+															<p>Duração real: { session.ActualDuration }</p>
+														}
+														if session.ActualDistance != "" {
+															<p>Distância real: { session.ActualDistance }</p>
+														}
+														if session.PerceivedEffort != "" {
+															<p>Esforço percebido: { session.PerceivedEffort }</p>
+														}
+														if session.RecoveryFeeling != "" {
+															<p>Sensação geral: { session.RecoveryFeeling }</p>
+														}
+														if session.PerceptionNote != "" {
+															<p><strong>Nota do atleta:</strong> { session.PerceptionNote }</p>
+														}
+														if session.FeedbackUpdatedAt != "" {
+															<small>Atualizada em { session.FeedbackUpdatedAt }.</small>
+														}
+													</div>
 												}
 												if page.Management {
 													<details class="training-action-menu"><summary class="action action--quiet">Ações da sessão</summary><div class="training-actions">@structuredSaveRoutineForm(page, "SESSION", session.ID)
