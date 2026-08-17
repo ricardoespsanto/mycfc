@@ -18,7 +18,7 @@ type ProfileForm struct {
 
 type ProfilePage struct {
 	Meta components.PageMeta
-	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ImageConsentURL string
+	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ActionPath, ReturnURL, ImageConsentURL string
 	FPCNationalHistoryURL, FPCInternationalHistoryURL string
 	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified bool
 	Form ProfileForm
@@ -73,13 +73,13 @@ templ profileContent(page ProfilePage) {
 }
 
 func profileActions(page ProfilePage) []components.PageAction {
-	if page.Admin { return []components.PageAction{{Label: "Voltar ao membro", Href: "/admin/membros/"+page.SubjectID, Variant: "secondary"}} }
+	if page.Admin { return []components.PageAction{{Label: "Voltar ao membro", Href: memberDetailURL(page.SubjectID, page.ReturnURL), Variant: "secondary"}} }
 	if !page.Self { return []components.PageAction{{Label: "Voltar aos menores", Href: "/dashboard/guardian", Variant: "secondary"}} }
 	return nil
 }
 
 templ profileEditForm(page ProfilePage) {
-	<form class="form-layout profile-form" method="post" action={ page.BasePath }>
+	<form class="form-layout profile-form" method="post" action={ page.ActionPath }>
 		@page.Meta.CSRFField
 		<input type="hidden" name="profile_updated_at" value={ page.Form.ProfileUpdatedAt }/>
 		<input type="hidden" name="identity_updated_at" value={ page.Form.IdentityUpdatedAt }/>
@@ -124,7 +124,7 @@ templ profileEditForm(page ProfilePage) {
 			@profileTextarea("profile-restrictions", "activity_restrictions", "Restrições ou adaptações", page.Form.ActivityRestrictions)
 			@profileTextarea("profile-medical-notes", "medical_notes", "Outras notas relevantes", page.Form.MedicalNotes)
 		</fieldset>
-		@components.FormActions(page.BasePath) { <button type="submit">Guardar perfil</button> }
+		@components.FormActions(page.ActionPath) { <button type="submit">Guardar perfil</button> }
 	</form>
 }
 
@@ -155,7 +155,7 @@ templ profileReadOnly(page ProfilePage) {
 templ profilePhoto(page ProfilePage) {
 	<section class="module"><h2>Fotografia de perfil</h2><p>A fotografia é privada e só fica visível com o consentimento de uso de imagem atual.</p>
 		@components.FieldErrorMessage("photo", page.Form.Errors["photo"])
-		<form class="form-layout" method="post" action={ page.BasePath + "/fotografia" } enctype="multipart/form-data">@page.Meta.CSRFField
+		<form class="form-layout" method="post" action={ profileSubpath(page, "/fotografia") } enctype="multipart/form-data">@page.Meta.CSRFField
 			@components.FieldLabel("profile-photo", "Fotografia JPEG, PNG ou WebP", true)<input id="profile-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-invalid?={ page.Form.Errors["photo"] != "" }/>
 			if !page.Admin {
 				<label class="consent-field"><input name="accept_image_use" type="checkbox" value="yes"/> Confirmo o <a href={ templ.SafeURL(page.ImageConsentURL) } target="_blank" rel="noopener">consentimento de uso de imagem</a> atual para esta pessoa.</label>
@@ -165,7 +165,7 @@ templ profilePhoto(page ProfilePage) {
 			<button type="submit">{ photoButtonLabel(page.HasPhoto) }</button>
 		</form>
 		if page.HasPhoto {
-			<form method="post" action={ page.BasePath + "/fotografia/remover" }>@page.Meta.CSRFField<button class="action action--danger" type="submit">Remover fotografia</button></form>
+			<form method="post" action={ profileSubpath(page, "/fotografia/remover") }>@page.Meta.CSRFField<button class="action action--danger" type="submit">Remover fotografia</button></form>
 		}
 	</section>
 }
@@ -190,4 +190,5 @@ func medicalLabel(value string) string { if value=="NONE_KNOWN" {return "Sem inf
 func profileAddress(form ProfileForm) string { return strings.Trim(strings.Join([]string{form.AddressLine1,form.AddressLine2,form.Postcode,form.Locality,form.CountryCode},", "),", ") }
 func profileEmergency(form ProfileForm) string { if form.EmergencyName=="" {return ""}; return form.EmergencyName+" · "+form.EmergencyRelationship+" · "+form.EmergencyPhone }
 func photoButtonLabel(hasPhoto bool) string { if hasPhoto {return "Substituir fotografia"}; return "Carregar fotografia" }
+func profileSubpath(page ProfilePage, suffix string) string { return strings.Replace(page.ActionPath, page.BasePath, page.BasePath+suffix, 1) }
 func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"federation_licence_number",Field:"profile-federation-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"}} }

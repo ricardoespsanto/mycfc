@@ -92,7 +92,7 @@ func photoAlbumsContent(page PhotoAlbumsPage) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if page.Management {
-			templ_7745c5c3_Err = components.PageHeader("Administração", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}}).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.PageHeader("Moderação", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}}).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -741,7 +741,7 @@ func photoAlbumIndexURL(management bool) string {
 }
 func photoAlbumArea(management bool) string {
 	if management {
-		return "Administração"
+		return "Moderação"
 	}
 	return "Atividade"
 }

@@ -14,6 +14,7 @@ type NavigationGroup struct {
 	Label        string
 	Items        []NavigationItem
 	Capabilities []string
+	Memberships  []string
 }
 
 templ Navigation(currentPath string, groups []NavigationGroup) {

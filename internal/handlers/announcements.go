@@ -385,11 +385,12 @@ func (h Announcements) renderIndex(w http.ResponseWriter, r *http.Request, statu
 			page.Authored = append(page.Authored, pages.AuthoredAnnouncement{ID: x.ID.String(), Title: x.Title, Status: x.Status})
 		}
 	}
-	currentPath := "/announcements"
+	currentPath, pageTitle := "/announcements", "Avisos"
 	if management {
 		currentPath = "/admin/avisos"
+		pageTitle = "Gerir avisos"
 	}
-	page.Meta = h.meta(r, user, currentPath, "Avisos")
+	page.Meta = h.meta(r, user, currentPath, pageTitle)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.Announcements(page).Render(r.Context(), w)
@@ -454,6 +455,12 @@ func (h Announcements) meta(r *http.Request, u CurrentUser, path, title string) 
 	m := h.PageMeta
 	m.Title = title + " | MyCFC"
 	m.CurrentPath = path
+	m.AreaLabel = "Atividade"
+	m.PageLabel = title
+	if strings.HasPrefix(path, "/admin/avisos") {
+		m.AreaLabel = "Coordenação"
+		m.PageLabel = "Gerir avisos"
+	}
 	m.CurrentUserName = u.Name
 	m.CurrentUserID = u.ID.String()
 	m.EmailVerificationPending = !u.IsDependent && !u.EmailVerified

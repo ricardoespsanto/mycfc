@@ -124,7 +124,7 @@ test.describe('representative page-state accessibility', () => {
 
     for (const [route, populatedSelector] of [
       ['/admin/membros', 'tbody tr'],
-      ['/admin/fleet', '#equipment-inventory tbody tr'],
+      ['/admin/fleet#equipment-inventory', '#equipment-inventory tbody tr'],
     ]) {
       await page.goto(route);
       await expect(page.locator(populatedSelector).first()).toBeVisible();

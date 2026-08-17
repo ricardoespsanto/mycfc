@@ -50,7 +50,7 @@ templ AnnouncementPanel(page AnnouncementPanelPage) {
 templ Announcements(page AnnouncementsPage) { @components.Base(page.Meta, announcementsContent(page)) }
 templ announcementsContent(page AnnouncementsPage) {
 	if page.Management {
-		@components.PageHeader("Administração", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page))
+		@components.PageHeader("Coordenação", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page))
 	} else {
 		@components.PageHeader("Atividade", "Avisos", "Comunicados relevantes para as suas inscrições e responsabilidades.", nil)
 	}

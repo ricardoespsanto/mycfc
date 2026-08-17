@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestValidateEventRejectsInvalidTimesAndCapacity(t *testing.T) {
@@ -139,4 +142,114 @@ func TestAdminDetailPagePaginatesResponses(t *testing.T) {
 	if page.ResponsesNextURL != "" {
 		t.Errorf("next URL = %q, want empty", page.ResponsesNextURL)
 	}
+}
+
+func TestResolveEventSubjectDefaultsToSelfThenAuthorizedDependent(t *testing.T) {
+	actorID, dependentID, eventID := uuid.New(), uuid.New(), uuid.New()
+	store := &eventSubjectStore{
+		dependents: []dbgen.ListDependentsByGuardianRow{{ID: dependentID, Name: "Leonor"}},
+		authorized: map[uuid.UUID]bool{actorID: true, dependentID: true},
+	}
+	h := Events{Store: store}
+	actor := CurrentUser{ID: actorID, Name: "Marta"}
+
+	selected, subjects, err := h.resolveEventSubject(context.Background(), actor, eventID, "")
+	if err != nil || selected.ID != actorID || len(subjects) != 2 {
+		t.Fatalf("self selection = %#v, subjects = %#v, err = %v", selected, subjects, err)
+	}
+
+	store.authorized[actorID] = false
+	selected, subjects, err = h.resolveEventSubject(context.Background(), actor, eventID, "")
+	if err != nil || selected.ID != dependentID || len(subjects) != 1 {
+		t.Fatalf("dependent fallback = %#v, subjects = %#v, err = %v", selected, subjects, err)
+	}
+	page := h.memberDetailPage(dbgen.GetEventDetailForMemberRow{ID: eventID}, selected, subjects, actorID)
+	if len(page.Subjects) != 1 || page.Subjects[0].Self || page.SelectedSubject.ID != dependentID.String() {
+		t.Fatalf("ineligible self leaked into page subjects: %#v", page.Subjects)
+	}
+}
+
+func TestResolveEventSubjectFailsClosedForMalformedOrForeignSubject(t *testing.T) {
+	actorID, dependentID, eventID := uuid.New(), uuid.New(), uuid.New()
+	h := Events{Store: &eventSubjectStore{
+		dependents: []dbgen.ListDependentsByGuardianRow{{ID: dependentID, Name: "Leonor"}},
+		authorized: map[uuid.UUID]bool{actorID: true, dependentID: true},
+	}}
+	actor := CurrentUser{ID: actorID, Name: "Marta"}
+	for _, requested := range []string{"not-a-uuid", uuid.NewString()} {
+		if _, _, err := h.resolveEventSubject(context.Background(), actor, eventID, requested); !errors.Is(err, errEventSubjectNotFound) {
+			t.Errorf("requested %q error = %v", requested, err)
+		}
+	}
+}
+
+func TestEventSubjectURLPreservesOnlyDependentContext(t *testing.T) {
+	actorID, dependentID, eventID := uuid.New(), uuid.New(), uuid.New()
+	if got, want := eventSubjectURL(eventID, actorID, actorID), "/events/"+eventID.String(); got != want {
+		t.Fatalf("self URL = %q, want %q", got, want)
+	}
+	if got, want := eventSubjectURL(eventID, dependentID, actorID), "/events/"+eventID.String()+"?subject_user_id="+dependentID.String(); got != want {
+		t.Fatalf("dependent URL = %q, want %q", got, want)
+	}
+}
+
+func TestEventDetailUsesSelectedAuthorizedSubjectForStatusAndContext(t *testing.T) {
+	actorID, dependentID, eventID := uuid.New(), uuid.New(), uuid.New()
+	store := &eventSubjectStore{
+		dependents: []dbgen.ListDependentsByGuardianRow{{ID: dependentID, Name: "Leonor"}},
+		authorized: map[uuid.UUID]bool{actorID: true, dependentID: true},
+		detail:     dbgen.GetEventDetailForMemberRow{ID: eventID, Title: "Convívio", Status: "ACTIVE", ResponseStatus: "Going"},
+	}
+	h := Events{Store: store, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/events/"+eventID.String()+"?subject_user_id="+dependentID.String(), nil)
+	r.SetPathValue("id", eventID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actorID, Name: "Marta"}))
+	w := httptest.NewRecorder()
+
+	h.Detail(w, r)
+
+	if w.Code != http.StatusOK || store.detailParams.UserID != dependentID || !strings.Contains(w.Body.String(), "A atuar sobre") || !strings.Contains(w.Body.String(), "Leonor") || !strings.Contains(w.Body.String(), "Vou") {
+		t.Fatalf("response = %d, params = %#v, body = %s", w.Code, store.detailParams, w.Body.String())
+	}
+}
+
+func TestMemberEventDetailModelsAuthorizedSubjectsAndSelectedStatus(t *testing.T) {
+	actorID, selectedID, otherID := uuid.New(), uuid.New(), uuid.New()
+	page := (Events{Location: time.UTC}).memberDetailPage(
+		dbgen.GetEventDetailForMemberRow{ID: uuid.New(), ResponseStatus: "Going"},
+		eventSubject{ID: selectedID, Name: "Leonor"},
+		[]eventSubject{{ID: actorID, Name: "Marta"}, {ID: otherID, Name: "Gonçalo"}, {ID: selectedID, Name: "Leonor"}},
+		actorID,
+	)
+	if page.Status != "Vou" || len(page.Subjects) != 3 || page.Subjects[0].ID != actorID.String() || !page.Subjects[0].Self || page.Subjects[0].Selected || page.Subjects[1].ID != otherID.String() || !page.Subjects[2].Selected || page.SelectedSubject.ID != selectedID.String() {
+		t.Fatalf("page = %#v", page)
+	}
+}
+
+type eventSubjectStore struct {
+	dbgen.Querier
+	dependents   []dbgen.ListDependentsByGuardianRow
+	authorized   map[uuid.UUID]bool
+	detail       dbgen.GetEventDetailForMemberRow
+	detailParams dbgen.GetEventDetailForMemberParams
+}
+
+func (s *eventSubjectStore) ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {
+	return s.dependents, nil
+}
+
+func (s *eventSubjectStore) GetRespondableEvent(_ context.Context, params dbgen.GetRespondableEventParams) (dbgen.Event, error) {
+	if !s.authorized[params.SubjectUserID] {
+		return dbgen.Event{}, pgx.ErrNoRows
+	}
+	return dbgen.Event{ID: params.EventID, Status: "ACTIVE"}, nil
+}
+
+func (s *eventSubjectStore) GetEventDetailForMember(_ context.Context, params dbgen.GetEventDetailForMemberParams) (dbgen.GetEventDetailForMemberRow, error) {
+	s.detailParams = params
+	return s.detail, nil
+}
+
+func (s *eventSubjectStore) ListCompetitionDocumentsForEvent(context.Context, *uuid.UUID) ([]dbgen.ListCompetitionDocumentsForEventRow, error) {
+	return nil, nil
 }

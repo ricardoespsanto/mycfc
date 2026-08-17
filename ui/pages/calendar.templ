@@ -21,7 +21,7 @@ type BasicCalendarEntry struct {
 }
 
 templ BasicCalendar(month BasicCalendarMonth, label, intro string) {
-	<section class="module calendar-month">
+	<section class="module calendar-month" role="region" aria-label={ label + " - " + month.Label } tabindex="0">
 		@components.SectionHeading("Calendário", label, intro) {
 			<span class="collection-count">{ month.Label }</span>
 		}

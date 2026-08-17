@@ -29,12 +29,12 @@ import (
 const equipmentAuditLimit = 100
 
 type equipmentForm struct {
-	ID, AssetTag, Name, Type, Status, Notes, ExpectedUpdatedAt string
-	PhotoURL, PhotoUnavailable                                 string
-	ImageObjectKey, ImageContentType                           *string
-	HasPhoto                                                   bool
-	Retired                                                    bool
-	Errors                                                     validation.FieldErrors
+	ID, AssetTag, Name, Type, Status, Notes, ExpectedUpdatedAt, ReturnURL string
+	PhotoURL, PhotoUnavailable                                            string
+	ImageObjectKey, ImageContentType                                      *string
+	HasPhoto                                                              bool
+	Retired                                                               bool
+	Errors                                                                validation.FieldErrors
 }
 
 type equipmentSnapshot struct {
@@ -85,7 +85,7 @@ func (h Dashboard) CreateEquipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.fleetFlash(r, "Equipamento adicionado.")
-	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+	httpx.Redirect(w, r, fleetCollectionReturn(r, "equipment-inventory"), http.StatusSeeOther)
 }
 
 func (h Dashboard) EditEquipment(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +149,7 @@ func (h Dashboard) UpdateEquipment(w http.ResponseWriter, r *http.Request) {
 	}
 	if equipmentUnchanged(current, form) && validated == nil {
 		h.fleetFlash(r, "Não existiam alterações para guardar.")
-		httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+		httpx.Redirect(w, r, fleetCollectionReturn(r, "equipment-"+id.String()), http.StatusSeeOther)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -190,18 +190,65 @@ func (h Dashboard) UpdateEquipment(w http.ResponseWriter, r *http.Request) {
 		h.deleteEquipmentObject(r, current.ImageObjectKey)
 	}
 	h.fleetFlash(r, "Equipamento atualizado.")
-	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+	httpx.Redirect(w, r, fleetCollectionReturn(r, "equipment-"+id.String()), http.StatusSeeOther)
+}
+
+func (h Dashboard) RetireEquipmentPage(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.equipmentID(w, r)
+	if !ok {
+		return
+	}
+	equipment, err := h.getEquipment(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if equipment.Status == "Retired" {
+		h.renderEquipmentRetire(w, r, http.StatusConflict, equipment, validation.FieldErrors{}, "Este equipamento já foi retirado. Reveja o inventário atual antes de continuar.")
+		return
+	}
+	h.renderEquipmentRetire(w, r, http.StatusOK, equipment, validation.FieldErrors{}, "")
 }
 
 func (h Dashboard) RetireEquipment(w http.ResponseWriter, r *http.Request) {
-	h.changeEquipmentLifecycle(w, r, true)
+	id, ok := h.equipmentID(w, r)
+	if !ok {
+		return
+	}
+	equipment, err := h.getEquipment(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	parseErr := r.ParseForm()
+	fieldErrors := validation.FieldErrors{}
+	if parseErr != nil || r.PostForm.Get("confirm_retirement") != "yes" {
+		fieldErrors.Add("confirmation", "Confirme que pretende retirar este equipamento da frota.")
+	}
+	expected, versionErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(r.PostForm.Get("expected_updated_at")))
+	if parseErr != nil || versionErr != nil {
+		fieldErrors.Add("version", "A confirmação expirou. Reveja os dados atuais e volte a confirmar a retirada.")
+	}
+	if !fieldErrors.Empty() {
+		h.renderEquipmentRetire(w, r, http.StatusUnprocessableEntity, equipment, fieldErrors, "")
+		return
+	}
+	h.changeEquipmentLifecycle(w, r, true, pgtype.Timestamptz{Time: expected, Valid: true})
 }
 
 func (h Dashboard) ReactivateEquipment(w http.ResponseWriter, r *http.Request) {
-	h.changeEquipmentLifecycle(w, r, false)
+	h.changeEquipmentLifecycle(w, r, false, pgtype.Timestamptz{})
 }
 
-func (h Dashboard) changeEquipmentLifecycle(w http.ResponseWriter, r *http.Request, retire bool) {
+func (h Dashboard) changeEquipmentLifecycle(w http.ResponseWriter, r *http.Request, retire bool, expectedUpdatedAt pgtype.Timestamptz) {
 	id, ok := h.equipmentID(w, r)
 	if !ok {
 		return
@@ -218,11 +265,20 @@ func (h Dashboard) changeEquipmentLifecycle(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 	var err error
 	if retire {
-		_, err = h.Equipment.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: id, ActorUserID: user.ID})
+		_, err = h.Equipment.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: expectedUpdatedAt, ActorUserID: user.ID})
 	} else {
 		_, err = h.Equipment.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: id, ActorUserID: user.ID})
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
+		if retire {
+			latest, latestErr := h.getEquipment(r.Context(), id)
+			if latestErr != nil {
+				h.System.InternalError(w, r)
+				return
+			}
+			h.renderEquipmentRetire(w, r, http.StatusConflict, latest, validation.FieldErrors{}, "O equipamento foi alterado entretanto. Reveja o estado atual antes de voltar a tentar.")
+			return
+		}
 		http.Error(w, "A alteração de estado já não é válida.", http.StatusConflict)
 		return
 	}
@@ -235,7 +291,7 @@ func (h Dashboard) changeEquipmentLifecycle(w http.ResponseWriter, r *http.Reque
 		message = "Equipamento reativado como operacional."
 	}
 	h.fleetFlash(r, message)
-	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+	httpx.Redirect(w, r, fleetCollectionReturn(r, "equipment-"+id.String()), http.StatusSeeOther)
 }
 
 func validateEquipmentForm(r *http.Request, allowRetired bool) equipmentForm {
@@ -379,11 +435,25 @@ func (h Dashboard) renderEquipmentEdit(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	form.PhotoURL, form.PhotoUnavailable = h.equipmentPhotoURL(ctx, r, form.ImageObjectKey, form.ImageContentType, id)
-	page := pages.EquipmentEditPage{Meta: h.equipmentMeta(r), Form: equipmentPageForm(form), Conflict: conflict, Audit: equipmentAuditItems(events, h.location())}
+	page := pages.EquipmentEditPage{Meta: h.equipmentMeta(r), Form: equipmentPageForm(form), Conflict: conflict, ReturnURL: fleetCollectionReturn(r, "equipment-"+id.String()), Audit: equipmentAuditItems(events, h.location())}
 	page.Form.CSRFField = page.Meta.CSRFField
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.EquipmentEdit(page).Render(r.Context(), w)
+}
+
+func (h Dashboard) renderEquipmentRetire(w http.ResponseWriter, r *http.Request, status int, equipment dbgen.Equipment, fieldErrors validation.FieldErrors, conflict string) {
+	meta := h.equipmentMeta(r)
+	meta.Title = "Retirar equipamento | MyCFC"
+	meta.PageLabel = "Retirar equipamento"
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Frota", Path: fleetCollectionReturn(r, "equipment-"+equipment.ID.String())}}
+	form := equipmentPageForm(equipmentFormFromModel(equipment))
+	form.CSRFField = meta.CSRFField
+	page := pages.EquipmentRetirePage{Meta: meta, Form: form, ReturnURL: fleetCollectionReturn(r, "equipment-"+equipment.ID.String()), Conflict: conflict, Errors: fieldErrors}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(status)
+	_ = pages.EquipmentRetire(page).Render(r.Context(), w)
 }
 
 func (h Dashboard) renderFleetEquipment(w http.ResponseWriter, r *http.Request, status int, form equipmentForm) {
@@ -397,6 +467,7 @@ func (h Dashboard) renderFleetEquipment(w http.ResponseWriter, r *http.Request, 
 	page.Meta = h.equipmentMeta(r)
 	page.Meta.CurrentPath = "/admin/fleet"
 	page.EquipmentForm = equipmentPageForm(form)
+	page.EquipmentForm.ReturnURL = fleetCollectionReturn(r, "equipment-inventory")
 	page.EquipmentForm.CSRFField = page.Meta.CSRFField
 	page.MaintenanceForm.CSRFField = page.Meta.CSRFField
 	page.RepairForm.CSRFField = page.Meta.CSRFField
@@ -406,7 +477,7 @@ func (h Dashboard) renderFleetEquipment(w http.ResponseWriter, r *http.Request, 
 }
 
 func equipmentPageForm(f equipmentForm) pages.EquipmentForm {
-	return pages.EquipmentForm{ID: f.ID, AssetTag: f.AssetTag, Name: f.Name, Type: f.Type, Status: f.Status, Notes: f.Notes, ExpectedUpdatedAt: f.ExpectedUpdatedAt, PhotoURL: f.PhotoURL, PhotoUnavailable: f.PhotoUnavailable, HasPhoto: f.HasPhoto, Retired: f.Retired, Errors: f.Errors}
+	return pages.EquipmentForm{ID: f.ID, AssetTag: f.AssetTag, Name: f.Name, Type: f.Type, Status: f.Status, Notes: f.Notes, ExpectedUpdatedAt: f.ExpectedUpdatedAt, ReturnURL: f.ReturnURL, PhotoURL: f.PhotoURL, PhotoUnavailable: f.PhotoUnavailable, HasPhoto: f.HasPhoto, Retired: f.Retired, Errors: f.Errors}
 }
 
 func (h Dashboard) equipmentPhotoURL(ctx context.Context, r *http.Request, key, contentType *string, id uuid.UUID) (string, string) {

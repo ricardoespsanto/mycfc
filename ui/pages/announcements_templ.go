@@ -232,7 +232,7 @@ func announcementsContent(page AnnouncementsPage) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if page.Management {
-			templ_7745c5c3_Err = components.PageHeader("Administração", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.PageHeader("Coordenação", "Avisos", "Crie, publique e retire comunicações dirigidas aos públicos do clube.", announcementPageActions(page)).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

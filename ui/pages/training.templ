@@ -55,7 +55,7 @@ templ Training(page TrainingPage) {
 
 templ trainingContent(page TrainingPage) {
 	if page.Management {
-		@components.PageHeader("Administração", "Treinos", "Organize planos e sessões para os grupos sob a sua responsabilidade.", trainingPageActions(page))
+		@components.PageHeader("Coordenação", "Treinos", "Organize planos e sessões para os grupos sob a sua responsabilidade.", trainingPageActions(page))
 	} else {
 		@components.PageHeader("Atividade", "Treinos", "Consulte as sessões do seu grupo e registe os respetivos resultados.", trainingPageActions(page))
 	}
@@ -323,7 +323,7 @@ templ TrainingSessionEdit(page TrainingSessionEditPage) {
 }
 
 templ trainingSessionEditContent(page TrainingSessionEditPage) {
-	@components.PageHeader("Administração · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}})
+	@components.PageHeader("Coordenação · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}})
 	@components.StatusMessage(page.Conflict, "error")
 	<section class="module">
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "state", Field: "training-session-edit-title"}, {Key: "plan_id", Field: "training-session-edit-plan"}, {Key: "title", Field: "training-session-edit-title"}, {Key: "description", Field: "training-session-edit-description"}, {Key: "starts_at", Field: "training-session-edit-start"}, {Key: "ends_at", Field: "training-session-edit-end"}, {Key: "modality_id", Field: "training-session-edit-modality"}}))

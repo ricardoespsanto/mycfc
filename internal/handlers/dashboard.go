@@ -362,16 +362,14 @@ func todayRepairStatus(status string) string {
 
 func todayShortcuts(user CurrentUser) []pages.TodayShortcut {
 	items := []pages.TodayShortcut{{Label: "Eventos", Detail: "Agenda e respostas", Path: "/events"}, {Label: "Treinos", Detail: "Planos e sessões", Path: "/treinos"}}
+
+programmeGroups:
 	for _, group := range dashboardNavigation(user) {
-		if group.Label == "Os meus espaços" && len(group.Items) > 0 {
-			for _, item := range group.Items {
-				if item.Path == "/dashboard/guardian" {
-					continue
-				}
+		for _, item := range group.Items {
+			if strings.HasPrefix(item.Path, "/dashboard/") && item.Path != "/dashboard/guardian" {
 				items = append(items, pages.TodayShortcut{Label: item.Label, Detail: "Abrir o meu espaço", Path: item.Path})
-				break
+				break programmeGroups
 			}
-			break
 		}
 	}
 	if user.IsAdmin {
@@ -402,9 +400,9 @@ func (h Dashboard) ReleasesPage(w http.ResponseWriter, r *http.Request) {
 }
 
 type fleetMaintenanceForm struct {
-	EquipmentID, ScheduledFor, Description, Success string
-	Errors                                          validation.FieldErrors
-	ActionErrorID, ActionError                      string
+	EquipmentID, ScheduledFor, Description, Success, ReturnURL string
+	Errors                                                     validation.FieldErrors
+	ActionErrorID, ActionError                                 string
 }
 
 func (h Dashboard) Maintenance(w http.ResponseWriter, r *http.Request) {
@@ -439,28 +437,28 @@ func (h Dashboard) Maintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("HX-Request") == "true" {
-		h.renderMaintenanceForm(w, r, http.StatusOK, fleetMaintenanceForm{Success: "Manutenção agendada."})
+		h.renderMaintenanceForm(w, r, http.StatusOK, fleetMaintenanceForm{Success: "Manutenção agendada.", ReturnURL: fleetCollectionReturn(r, "maintenance-schedule")})
 		return
 	}
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "fleet_flash", "Manutenção agendada.")
 	}
-	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+	httpx.Redirect(w, r, fleetCollectionReturn(r, "maintenance-schedule"), http.StatusSeeOther)
 }
 
 func (h Dashboard) RepairStatus(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderFleetActionError(w, r, http.StatusBadRequest, r.PostForm.Get("repair_id"), "Não foi possível processar o pedido.")
+		h.renderFleetActionError(w, r, http.StatusBadRequest, "repair", r.PostForm.Get("repair_id"), "Não foi possível processar o pedido.")
 		return
 	}
 	repairID, err := uuid.Parse(r.PostForm.Get("repair_id"))
 	if err != nil {
-		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("repair_id"), "Pedido de reparação inválido.")
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, "repair", r.PostForm.Get("repair_id"), "Pedido de reparação inválido.")
 		return
 	}
 	expectedStatus, status := r.PostForm.Get("expected_status"), r.PostForm.Get("status")
 	if !validRepairTransition(expectedStatus, status) {
-		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, repairID.String(), "A alteração de estado não é válida.")
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, "repair", repairID.String(), "A alteração de estado não é válida.")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
@@ -471,7 +469,7 @@ func (h Dashboard) RepairStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = h.Fleet.UpdateRepairStatus(ctx, dbgen.UpdateRepairStatusParams{ID: repairID, Status: status, ExpectedStatus: expectedStatus})
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.renderFleetActionError(w, r, http.StatusConflict, repairID.String(), "O pedido de reparação já foi atualizado. Atualize a página.")
+		h.renderFleetActionError(w, r, http.StatusConflict, "repair", repairID.String(), "O pedido de reparação já foi atualizado. Atualize a página.")
 		return
 	}
 	if err != nil {
@@ -482,17 +480,17 @@ func (h Dashboard) RepairStatus(w http.ResponseWriter, r *http.Request) {
 	if status == "Resolvido" {
 		message = "Pedido de reparação resolvido."
 	}
-	h.fleetActionSuccess(w, r, message)
+	h.fleetActionSuccess(w, r, "repair", repairID.String(), status, message)
 }
 
 func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderFleetActionError(w, r, http.StatusBadRequest, r.PostForm.Get("maintenance_id"), "Não foi possível processar o pedido.")
+		h.renderFleetActionError(w, r, http.StatusBadRequest, "maintenance", r.PostForm.Get("maintenance_id"), "Não foi possível processar o pedido.")
 		return
 	}
 	taskID, err := uuid.Parse(r.PostForm.Get("maintenance_id"))
 	if err != nil {
-		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, r.PostForm.Get("maintenance_id"), "Tarefa de manutenção inválida.")
+		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, "maintenance", r.PostForm.Get("maintenance_id"), "Tarefa de manutenção inválida.")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
@@ -503,37 +501,37 @@ func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = h.Fleet.CompleteMaintenanceTask(ctx, taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.renderFleetActionError(w, r, http.StatusConflict, taskID.String(), "A tarefa já foi concluída ou cancelada. Atualize a página.")
+		h.renderFleetActionError(w, r, http.StatusConflict, "maintenance", taskID.String(), "A tarefa já foi concluída ou cancelada. Atualize a página.")
 		return
 	}
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.fleetActionSuccess(w, r, "Manutenção concluída.")
+	h.fleetActionSuccess(w, r, "maintenance", taskID.String(), "Completed", "Manutenção concluída.")
 }
 
 func validRepairTransition(from, to string) bool {
 	return (from == "Pendente" && to == "Em_Analise") || (from == "Em_Analise" && to == "Resolvido")
 }
 
-func (h Dashboard) fleetActionSuccess(w http.ResponseWriter, r *http.Request, message string) {
+func (h Dashboard) fleetActionSuccess(w http.ResponseWriter, r *http.Request, kind, id, status, message string) {
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = pages.FleetActionFeedback(message, "").Render(r.Context(), w)
+		_ = pages.FleetMutationFeedback(kind, id, status, message, "", "").Render(r.Context(), w)
 		return
 	}
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "fleet_flash", message)
 	}
-	httpx.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+	httpx.Redirect(w, r, fleetCollectionReturn(r, kind+"-"+id), http.StatusSeeOther)
 }
 
-func (h Dashboard) renderFleetActionError(w http.ResponseWriter, r *http.Request, status int, id, message string) {
+func (h Dashboard) renderFleetActionError(w http.ResponseWriter, r *http.Request, status int, kind, id, message string) {
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
-		_ = pages.FleetActionFeedback("", message).Render(r.Context(), w)
+		_ = pages.FleetMutationFeedback(kind, id, "", "", message, fleetCollectionReturn(r, kind+"-"+id)).Render(r.Context(), w)
 		return
 	}
 	h.renderFleet(w, r, status, fleetMaintenanceForm{ActionErrorID: id, ActionError: message})
@@ -610,7 +608,7 @@ func (h Dashboard) renderMaintenanceForm(w http.ResponseWriter, r *http.Request,
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = pages.MaintenanceForm(pages.FleetMaintenanceForm{CSRFField: meta.CSRFField, Equipment: repairEquipment(equipment), Success: form.Success}).Render(r.Context(), w)
+	_ = pages.MaintenanceForm(pages.FleetMaintenanceForm{CSRFField: meta.CSRFField, Equipment: repairEquipment(equipment), Success: form.Success, ReturnURL: collectionReturnOr(form.ReturnURL, "/admin/fleet#maintenance-schedule")}).Render(r.Context(), w)
 }
 
 func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMaintenanceForm) (pages.FleetPage, error) {
@@ -621,26 +619,29 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	equipmentPage := fleetPageNumber(r.URL.Query().Get("equipment_page"))
+	query := fleetCollectionQuery(r)
+	equipmentPage := fleetPageNumber(query.Get("equipment_page"))
 	equipment, err := h.Fleet.ListEquipmentForAdmin(ctx, dbgen.ListEquipmentForAdminParams{RowLimit: fleetPageSize + 1, RowOffset: int32((equipmentPage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	repairsPage := fleetPageNumber(r.URL.Query().Get("repairs_page"))
+	repairsPage := fleetPageNumber(query.Get("repairs_page"))
 	repairs, err := h.Fleet.ListPendingRepairRequests(ctx, dbgen.ListPendingRepairRequestsParams{RowLimit: fleetPageSize + 1, RowOffset: int32((repairsPage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
 	now := h.now()
-	maintenancePage := fleetPageNumber(r.URL.Query().Get("maintenance_page"))
+	maintenancePage := fleetPageNumber(query.Get("maintenance_page"))
 	maintenance, err := h.Fleet.ListUpcomingMaintenance(ctx, dbgen.ListUpcomingMaintenanceParams{FromTime: pgtype.Timestamptz{Time: now, Valid: true}, ToTime: pgtype.Timestamptz{Time: now.AddDate(0, 0, 90), Valid: true}, RowLimit: fleetPageSize + 1, RowOffset: int32((maintenancePage - 1) * fleetPageSize)})
 	if err != nil {
 		return pages.FleetPage{}, err
 	}
-	page := pages.FleetPage{Counts: fleetStatusCounts(counts), EquipmentForm: pages.EquipmentForm{Type: "Boat", Status: "Operational", Errors: validation.FieldErrors{}}, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
-	page.EquipmentPreviousURL, page.EquipmentNextURL, equipment = fleetPaginationURLs(r.URL.Query(), "equipment_page", equipmentPage, equipment)
-	page.RepairsPreviousURL, page.RepairsNextURL, repairs = fleetPaginationURLs(r.URL.Query(), "repairs_page", repairsPage, repairs)
-	page.MaintenancePreviousURL, page.MaintenanceNextURL, maintenance = fleetPaginationURLs(r.URL.Query(), "maintenance_page", maintenancePage, maintenance)
+	page := pages.FleetPage{ReturnURL: fleetCollectionURL(query), Counts: fleetStatusCounts(counts), EquipmentForm: pages.EquipmentForm{Type: "Boat", Status: "Operational", Errors: validation.FieldErrors{}}, MaintenanceForm: pages.FleetMaintenanceForm{EquipmentID: form.EquipmentID, ScheduledFor: form.ScheduledFor, Description: form.Description, Errors: form.Errors, Success: form.Success}}
+	page.EquipmentForm.ReturnURL = collectionURLWithFragment(page.ReturnURL, "equipment-inventory")
+	page.MaintenanceForm.ReturnURL = collectionURLWithFragment(page.ReturnURL, "maintenance-schedule")
+	page.EquipmentPreviousURL, page.EquipmentNextURL, equipment = fleetPaginationURLs(query, "equipment_page", equipmentPage, "equipment-inventory", equipment)
+	page.RepairsPreviousURL, page.RepairsNextURL, repairs = fleetPaginationURLs(query, "repairs_page", repairsPage, "repair-requests", repairs)
+	page.MaintenancePreviousURL, page.MaintenanceNextURL, maintenance = fleetPaginationURLs(query, "maintenance_page", maintenancePage, "maintenance-schedule", maintenance)
 	page.Equipment = make([]pages.FleetEquipment, len(equipment))
 	for i, item := range equipment {
 		photoURL, photoUnavailable := h.equipmentPhotoURL(ctx, r, item.ImageObjectKey, item.ImageContentType, item.ID)
@@ -661,7 +662,7 @@ func (h Dashboard) fleetPage(ctx context.Context, r *http.Request, form fleetMai
 		return pages.FleetPage{}, err
 	}
 	page.MaintenanceForm.Equipment = repairEquipment(nonRetired)
-	page.RepairForm = components.RepairFormData{IdempotencyKey: uuid.NewString(), ReturnTo: "/admin/fleet", Equipment: repairChoices(nonRetired)}
+	page.RepairForm = components.RepairFormData{IdempotencyKey: uuid.NewString(), ReturnTo: collectionURLWithFragment(page.ReturnURL, "repair-requests"), Equipment: repairChoices(nonRetired)}
 	return page, nil
 }
 
@@ -697,16 +698,53 @@ func fleetPageNumber(value string) int {
 	return page
 }
 
-func fleetPaginationURLs[T any](query url.Values, parameter string, page int, items []T) (string, string, []T) {
+func fleetPaginationURLs[T any](query url.Values, parameter string, page int, fragment string, items []T) (string, string, []T) {
 	var previous, next string
 	if page > 1 {
-		previous = fleetPageURL(query, parameter, page-1)
+		previous = fleetPageURL(query, parameter, page-1) + "#" + fragment
 	}
 	if len(items) > fleetPageSize {
-		next = fleetPageURL(query, parameter, page+1)
+		next = fleetPageURL(query, parameter, page+1) + "#" + fragment
 		items = items[:fleetPageSize]
 	}
 	return previous, next, items
+}
+
+func fleetCollectionQuery(r *http.Request) url.Values {
+	raw := ""
+	if r.URL.Path == "/admin/fleet" {
+		raw = r.URL.RequestURI()
+	} else {
+		raw = r.URL.Query().Get("return_to")
+		if raw == "" && r.PostForm != nil {
+			raw = r.PostForm.Get("return_to")
+		}
+	}
+	safe := safeCollectionReturn(raw)
+	if !strings.HasPrefix(safe, "/admin/fleet") {
+		return url.Values{}
+	}
+	parsed, _ := url.Parse(safe)
+	return parsed.Query()
+}
+
+func fleetCollectionURL(query url.Values) string {
+	if encoded := query.Encode(); encoded != "" {
+		return "/admin/fleet?" + encoded
+	}
+	return "/admin/fleet"
+}
+
+func fleetCollectionReturn(r *http.Request, fallbackFragment string) string {
+	raw := r.URL.Query().Get("return_to")
+	if raw == "" && r.PostForm != nil {
+		raw = r.PostForm.Get("return_to")
+	}
+	safe := safeCollectionReturn(raw)
+	if strings.HasPrefix(safe, "/admin/fleet") {
+		return safe
+	}
+	return "/admin/fleet#" + fallbackFragment
 }
 
 func fleetPageURL(query url.Values, parameter string, page int) string {
@@ -1022,40 +1060,52 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		activity = append(activity, components.NavigationItem{Label: "Frota", Path: "/fleet"})
 	}
 
-	var programme []components.NavigationItem
+	var family []components.NavigationItem
 	if !user.IsDependent {
-		programme = append(programme, components.NavigationItem{Label: "Menores a cargo", Path: "/dashboard/guardian"})
+		family = append(family, components.NavigationItem{Label: "Menores a cargo", Path: "/dashboard/guardian"})
 	}
+	var memberships []components.NavigationItem
 	if user.Programmes["Leisure"] {
-		programme = append(programme, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
+		memberships = append(memberships, components.NavigationItem{Label: "Lazer", Path: "/dashboard/leisure"})
 	}
 	if user.Programmes["Initiation"] {
-		programme = append(programme, components.NavigationItem{Label: "Iniciação", Path: "/dashboard/initiation"})
+		memberships = append(memberships, components.NavigationItem{Label: "Iniciação", Path: "/dashboard/initiation"})
 	}
 	if user.Programmes["Competition"] {
-		programme = append(programme, components.NavigationItem{Label: "Competição", Path: "/dashboard/competition"})
+		memberships = append(memberships, components.NavigationItem{Label: "Competição", Path: "/dashboard/competition"})
 	}
 	if user.Programmes["Kayak_Polo"] {
-		programme = append(programme, components.NavigationItem{Label: "Kayak polo", Path: "/dashboard/kayak-polo"})
+		memberships = append(memberships, components.NavigationItem{Label: "Kayak polo", Path: "/dashboard/kayak-polo"})
 	}
 
-	var admin []components.NavigationItem
+	var coordination []components.NavigationItem
 	if user.IsAdmin || user.CanManageEvents {
-		admin = append(admin, components.NavigationItem{Label: "Eventos", Path: "/admin/eventos"}, components.NavigationItem{Label: "Treinos", Path: "/admin/treinos"}, components.NavigationItem{Label: "Avisos", Path: "/admin/avisos"})
+		coordination = append(coordination, components.NavigationItem{Label: "Gerir eventos", Path: "/admin/eventos"}, components.NavigationItem{Label: "Planear treinos", Path: "/admin/treinos"}, components.NavigationItem{Label: "Gerir avisos", Path: "/admin/avisos"})
 	}
-	if user.IsAdmin {
-		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
-	}
+	var moderation []components.NavigationItem
 	if user.IsAdmin || user.CanModerateContent {
-		admin = append(admin, components.NavigationItem{Label: "Álbuns", Path: "/admin/albuns"})
+		moderation = append(moderation, components.NavigationItem{Label: "Gerir álbuns", Path: "/admin/albuns"})
 		if featureflags.Available(user.FeatureModes, featureflags.Suggestions, user.IsAdmin) {
-			admin = append(admin, components.NavigationItem{Label: "Sugestões", Path: "/admin/sugestoes"})
+			moderation = append(moderation, components.NavigationItem{Label: "Triar sugestões", Path: "/admin/sugestoes"})
 		}
 	}
+	var admin []components.NavigationItem
+	if user.IsAdmin {
+		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Gerir frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
+	}
 
-	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user)}, {Label: "Atividade", Items: activity}}
-	if len(programme) > 0 {
-		groups = append(groups, components.NavigationGroup{Label: "Os meus espaços", Items: programme})
+	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user), Memberships: dashboardMemberships(user)}, {Label: "Atividade", Items: activity}}
+	if len(family) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Família", Items: family})
+	}
+	if len(memberships) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Inscrições", Items: memberships})
+	}
+	if len(coordination) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Coordenação", Items: coordination})
+	}
+	if len(moderation) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Moderação", Items: moderation})
 	}
 	if len(admin) > 0 {
 		groups = append(groups, components.NavigationGroup{Label: "Administração", Items: admin})
@@ -1068,11 +1118,6 @@ func dashboardCapabilities(user CurrentUser) []string {
 	if !user.IsDependent {
 		labels = append(labels, "Tutor")
 	}
-	for _, programme := range []struct{ key, label string }{{"Leisure", "Lazer"}, {"Initiation", "Iniciação"}, {"Competition", "Competição"}, {"Kayak_Polo", "Kayak polo"}} {
-		if user.Programmes[programme.key] {
-			labels = append(labels, programme.label)
-		}
-	}
 	if user.CanManageEvents {
 		labels = append(labels, "Treinador")
 	}
@@ -1081,6 +1126,16 @@ func dashboardCapabilities(user CurrentUser) []string {
 	}
 	if user.IsAdmin {
 		labels = append(labels, "Administrador")
+	}
+	return labels
+}
+
+func dashboardMemberships(user CurrentUser) []string {
+	labels := []string{}
+	for _, programme := range []struct{ key, label string }{{"Leisure", "Lazer"}, {"Initiation", "Iniciação"}, {"Competition", "Competição"}, {"Kayak_Polo", "Kayak polo"}} {
+		if user.Programmes[programme.key] {
+			labels = append(labels, programme.label)
+		}
 	}
 	return labels
 }

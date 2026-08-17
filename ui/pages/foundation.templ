@@ -11,6 +11,7 @@ templ foundationGalleryContent() {
 		@components.Surface("Estados", badgeGallery())
 		@components.Surface("Mensagens", calloutGallery())
 		@components.Surface("Formulários", formGallery())
+		@components.Surface("Resumo de estado", statusSummaryGallery())
 		@components.Surface("Conteúdo vazio", components.EmptyState("Sem resultados", "Altere os filtros ou crie o primeiro registo."))
 		@components.Surface("Divulgação", disclosureGallery())
 	</div>
@@ -19,5 +20,16 @@ templ foundationGalleryContent() {
 templ actionGallery() { <div class="cluster"><button class="action action--primary">Primária</button><button class="action action--secondary">Secundária</button><button class="action action--quiet">Discreta</button><button class="action action--danger">Destrutiva</button><button class="action action--primary" disabled>Desativada</button><button class="action action--primary is-pressed" aria-pressed="true">Premida</button></div> }
 templ badgeGallery() { <div class="cluster">@components.Badge("Confirmado", "success") @components.Badge("Pendente", "warning") @components.Badge("Não concluído", "error") @components.Badge("Selecionado", "selected")</div> }
 templ calloutGallery() { @components.Callout("Alterações guardadas", "A informação já está disponível.", "success") @components.Callout("Confirme os dados", "Falta rever uma escolha.", "warning") @components.Callout("Não foi possível concluir", "Corrija os campos assinalados.", "error") }
-templ formGallery() { <form class="form-layout"><div class="field-group"><label for="gallery-name">Nome</label><input id="gallery-name" value="Inês Atleta de Competição"/><p class="field-help">Use o nome completo do membro.</p></div><div class="field-group"><label for="gallery-email">Email</label><input id="gallery-email" value="valor inválido" aria-invalid="true" aria-describedby="gallery-email-error"/><p id="gallery-email-error" class="field-error">Introduza um email válido.</p></div></form> }
+templ formGallery() {
+	<form class="form-layout">
+		@components.FormSection("Identificação e contacto", "Dados usados para identificar a pessoa e devolver informação importante.") {
+			@components.FieldGrid() {
+				<div class="field-group"><label for="gallery-name">Nome completo da pessoa responsável pela inscrição</label><input id="gallery-name" value="Inês Atleta de Competição"/><p class="field-help">Use o nome completo do membro.</p></div>
+				<div class="field-group"><label for="gallery-email">Endereço de email principal para comunicações do clube</label><input id="gallery-email" value="valor inválido" aria-invalid="true" aria-describedby="gallery-email-error"/><p id="gallery-email-error" class="field-error">Introduza um email válido.</p></div>
+			}
+		}
+		<button type="submit">Guardar dados</button>
+	</form>
+}
+templ statusSummaryGallery() { @components.StatusSummary("Estado da conta", []components.StatusItem{{Label: "Conta", Value: "Ativa"}, {Label: "Verificação do endereço de email", Value: "Por concluir"}, {Label: "Programa e equipa atuais", Value: "Competição · Séniores de velocidade"}}) }
 templ disclosureGallery() { <details class="disclosure" open><summary>Detalhes da sessão</summary><div><p>Conteúdo expandido com controlo nativo e operação por teclado.</p></div></details> }

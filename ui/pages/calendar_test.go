@@ -19,7 +19,7 @@ func TestBasicCalendarRendersMonthGridAndEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := output.String()
-	for _, want := range []string{"calendar-month__grid", `class="calendar-month__row" role="row"`, `role="columnheader"`, `role="gridcell"`, "agosto 2026", "Prova regional", `href="/events/123"`} {
+	for _, want := range []string{`class="module calendar-month" role="region" aria-label="Calendário de eventos - agosto 2026" tabindex="0"`, "calendar-month__grid", `class="calendar-month__row" role="row"`, `role="columnheader"`, `role="gridcell"`, "agosto 2026", "Prova regional", `href="/events/123"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("calendar render does not contain %q: %q", want, body)
 		}

@@ -265,7 +265,10 @@ FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = $1
 WHERE e.id = $2
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
@@ -450,7 +453,10 @@ JOIN users subject ON subject.id = $1 AND subject.is_active
 WHERE e.id = $2
   AND (subject.id = $3 OR subject.guardian_id = $3)
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           WHERE a.event_id = e.id AND m.user_id = subject.id
@@ -729,7 +735,10 @@ FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = $1
 WHERE e.starts_at >= now()
   AND (
-      NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
        OR EXISTS (
            SELECT 1 FROM user_memberships m
            JOIN event_audiences a ON a.programme_id = m.programme_id
@@ -805,7 +814,10 @@ WHERE e.starts_at < $1
   AND e.ends_at >= $2
   AND (
       $3::boolean
-      OR NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+      OR (
+          NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = e.id)
+      )
       OR (
           EXISTS (
               SELECT 1

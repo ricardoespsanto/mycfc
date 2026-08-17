@@ -1,30 +1,36 @@
 package pages
 
 import (
+	"fmt"
+	"net/url"
+	"strings"
     "github.com/cfcoimbra/mycfc/internal/validation"
     "github.com/cfcoimbra/mycfc/ui/components"
 )
 
 type MemberListItem struct { ID, Name, Email, LoginID string; Dependent, Active bool }
 type MemberGuardian struct { ID, Name, Email string }
-type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID string; Dependent bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
-type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL, Success string; Members []MemberListItem; Form MemberCreateForm }
+type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID, Conflict, ReturnURL string; Dependent bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
+type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL, ReturnURL, Success string; Members []MemberListItem; Form MemberCreateForm }
 type MemberDetail struct { ID, Name, Email, LoginID, Guardian string; Dependent, Active bool }
 type MemberProgramme struct { ID, Name string; Active bool }
-type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Season, Success string; Programmes []MemberProgramme; Errors validation.FieldErrors }
+type MemberDetailPage struct { Meta components.PageMeta; Member MemberDetail; Season, Success, ReturnURL string; Programmes []MemberProgramme; Errors validation.FieldErrors }
 
 templ Members(page MembersPage) { @components.Base(page.Meta, membersContent(page)) }
 templ membersContent(page MembersPage) {
     <div class="collection-page">
-    @components.PageHeader("Administração", "Membros", "Encontre uma pessoa, confirme o estado e atue sem sair do diretório.", []components.PageAction{{Label: "Criar conta", Href: "#criar-conta", Variant: "primary"}})
+	    @components.PageHeader("Administração", "Membros", "Encontre uma pessoa, confirme o estado e atue sem sair do diretório.", []components.PageAction{{Label: "Criar conta", Href: memberMutationURL("/admin/membros/criar", page.ReturnURL), Variant: "primary", TaskID: "criar-conta"}})
     @components.StatusMessage(page.Success, "success")
     <section class="collection-view" aria-labelledby="member-directory-title">
-        <div class="collection-toolbar"><h2 id="member-directory-title" class="visually-hidden">Diretório de membros</h2><form class="search-form" method="get" action="/admin/membros"><label for="member-search">Pesquisar membros</label><div class="search-control"><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></div></form><span class="collection-count">{ len(page.Members) } nesta página</span></div>
+		@components.CollectionToolbar(components.CollectionToolbarData{TitleID: "member-directory-title", Title: "Diretório de membros", Count: memberPageCount(len(page.Members)), ClearHref: memberClearHref(page.Search), ClearLabel: "Limpar pesquisa"}) {
+			<form class="search-form" role="search" method="get" action="/admin/membros"><label for="member-search">Pesquisar membros</label><div class="search-control"><input id="member-search" name="q" value={ page.Search } placeholder="Nome, email ou identificador"/><button class="action action--secondary" type="submit">Procurar</button></div></form>
+		}
         if len(page.Members) == 0 {
             @components.EmptyState("Sem membros encontrados", "Altere a pesquisa ou crie uma nova conta.")
         }
         if len(page.Members) > 0 {
-            @components.DataRegion("Lista de membros", memberTable(page.Members))
+			<p id="members-comparison-help" class="comparison-region-hint">A tabela pode ser percorrida horizontalmente para comparar todas as colunas.</p>
+            @components.DataRegionDescribed("Lista de membros", "members-comparison-help", memberTable(page))
         }
         if page.PreviousURL != "" || page.NextURL != "" {
             <nav class="pagination" aria-label="Paginação de membros">
@@ -40,10 +46,10 @@ templ membersContent(page MembersPage) {
     @MemberCreate(page.Form)
     </div>
 }
-templ memberTable(members []MemberListItem) {
+templ memberTable(page MembersPage) {
     <table class="data-table"><thead><tr><th scope="col">Membro</th><th scope="col">Tipo</th><th scope="col">Contacto ou acesso</th><th scope="col">Estado</th><th scope="col" aria-label="Ação"></th></tr></thead><tbody>
-    for _, member := range members {
-		<tr><th scope="row"><a href={ "/admin/membros/" + member.ID }>@components.PersonName(member.ID, member.Name)</a></th><td>
+    for _, member := range page.Members {
+		<tr id={ "member-" + member.ID }><th scope="row"><a href={ memberDetailURL(member.ID, page.ReturnURL) }>@components.PersonName(member.ID, member.Name)</a></th><td>
             if member.Dependent {
                 Menor a cargo
             } else {
@@ -63,31 +69,75 @@ templ memberTable(members []MemberListItem) {
             } else {
                 @components.Badge("Desativada", "error")
             }
-        </td><td><a class="action action--quiet" href={ "/admin/membros/" + member.ID }>Abrir</a></td></tr>
+        </td><td><a class="action action--quiet" href={ memberDetailURL(member.ID, page.ReturnURL) }>Abrir</a></td></tr>
     }
     </tbody></table>
 }
 templ MemberCreate(form MemberCreateForm) {
-    <details id="criar-conta" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 }><summary><span><strong>Criar conta</strong><small>Adicione um adulto ou um menor a cargo.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content"><p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p><form class="form-layout" method="post" action="/admin/membros">@form.CSRFField
-        @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "name", Field: "member-name"}, {Key: "date_of_birth", Field: "member-birth"}, {Key: "email", Field: "member-email"}, {Key: "guardian_id", Field: "member-guardian"}, {Key: "password", Field: "member-password"}, {Key: "password_confirmation", Field: "member-password-confirmation"}}))
-        @components.RequiredNote()
-        <fieldset><legend>Tipo de conta</legend><label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label><label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label></fieldset>
-        @components.FieldLabel("member-name", "Nome", true)<input id="member-name" name="name" value={ form.Name } required aria-invalid?={ form.Errors["name"] != "" } aria-describedby="name-error"/>@components.FieldErrorMessage("name", form.Errors["name"])
-        @components.FieldLabel("member-birth", "Data de nascimento", true)<input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required aria-invalid?={ form.Errors["date_of_birth"] != "" } aria-describedby="date_of_birth-error"/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])
-        @components.FieldLabel("member-email", "Email (obrigatório para adultos)", false)<input id="member-email" type="email" name="email" value={ form.Email } aria-invalid?={ form.Errors["email"] != "" } aria-describedby="email-error"/>@components.FieldErrorMessage("email", form.Errors["email"])
-        @components.FieldLabel("member-guardian", "Tutor (obrigatório para menores)", false)<select id="member-guardian" name="guardian_id" aria-invalid?={ form.Errors["guardian_id"] != "" } aria-describedby="guardian_id-error"><option value="">Selecione</option>
-        for _, guardian := range form.Guardians {
-            <option value={ guardian.ID } selected?={ guardian.ID == form.GuardianID }>{ guardian.Name } ({ guardian.Email })</option>
-        }
-        </select>@components.FieldErrorMessage("guardian_id", form.Errors["guardian_id"])
-        @components.FieldLabel("member-password", "Palavra-passe (obrigatória para adultos)", false)<input id="member-password" type="password" name="password" autocomplete="new-password" aria-invalid?={ form.Errors["password"] != "" } aria-describedby="member-password-help password-error"/>@components.FieldHelp("member-password-help", "Por segurança, a palavra-passe não é reposta após erro.")@components.FieldErrorMessage("password", form.Errors["password"])
-        @components.FieldLabel("member-password-confirmation", "Confirmar palavra-passe", false)<input id="member-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" aria-invalid?={ form.Errors["password_confirmation"] != "" } aria-describedby="password_confirmation-error"/>@components.FieldErrorMessage("password_confirmation", form.Errors["password_confirmation"])
-        @components.FormActions("/admin/membros") { <button type="submit">Criar conta</button> }
-        </form></div></details>
+	@components.TaskDialog(memberCreateTaskConfig(form.ReturnURL)) {
+		@memberCreateForm(form)
+	}
+	@components.DiscardConfirmation()
+}
+
+templ MemberCreateView(page MembersPage) { @components.Base(page.Meta, memberCreateRouteContent(page.Form)) }
+
+templ memberCreateRouteContent(form MemberCreateForm) {
+	<div class="task-route-page">
+		@components.TaskRoute(memberCreateTaskConfig(form.ReturnURL)) {
+			@memberCreateForm(form)
+		}
+	</div>
+}
+
+templ memberCreateForm(form MemberCreateForm) {
+	<form class="form-layout task-form" method="post" action={ templ.SafeURL(memberMutationURL("/admin/membros/criar", form.ReturnURL)) } data-task-form novalidate>
+		@form.CSRFField
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "name", Field: "member-name"}, {Key: "date_of_birth", Field: "member-birth"}, {Key: "email", Field: "member-email"}, {Key: "guardian_id", Field: "member-guardian"}, {Key: "password", Field: "member-password"}, {Key: "password_confirmation", Field: "member-password-confirmation"}}))
+		@components.TaskConflict("Não foi possível concluir a tarefa", form.Conflict, "", form.ReturnURL, "Atualizar a lista")
+		<p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p>
+		@components.RequiredNote()
+		@components.FormSection("Tipo de conta", "Escolha quem vai usar a conta.") {
+			<div class="task-account-type" data-account-type>
+				<label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label>
+				<label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label>
+			</div>
+		}
+		@components.FormSection("Identificação", "Dados usados para identificar a pessoa.") {
+			@components.FieldGrid() {
+				<div class="field-group">@components.FieldLabel("member-name", "Nome", true)<input id="member-name" name="name" value={ form.Name } required data-task-initial-focus autofocus?={ len(form.Errors) == 0 && form.Conflict == "" } aria-invalid?={ form.Errors["name"] != "" } aria-describedby="name-error"/>@components.FieldErrorMessage("name", form.Errors["name"])</div>
+				<div class="field-group">@components.FieldLabel("member-birth", "Data de nascimento", true)<input id="member-birth" type="date" name="date_of_birth" value={ form.DateOfBirth } required aria-invalid?={ form.Errors["date_of_birth"] != "" } aria-describedby="date_of_birth-error"/>@components.FieldErrorMessage("date_of_birth", form.Errors["date_of_birth"])</div>
+			}
+		}
+		<div data-account-fields="adult">
+			@components.FormSection("Acesso do adulto", "O email identifica a conta; a palavra-passe nunca é reposta após um erro.") {
+				<div class="field-group">@components.FieldLabel("member-email", "Email (obrigatório para adultos)", false)<input id="member-email" type="email" name="email" value={ form.Email } aria-invalid?={ form.Errors["email"] != "" } aria-describedby="email-error"/>@components.FieldErrorMessage("email", form.Errors["email"])</div>
+				@components.FieldGrid() {
+					<div class="field-group">@components.FieldLabel("member-password", "Palavra-passe (obrigatória para adultos)", false)<input id="member-password" type="password" name="password" autocomplete="new-password" aria-invalid?={ form.Errors["password"] != "" } aria-describedby="member-password-help password-error"/>@components.FieldHelp("member-password-help", "Por segurança, a palavra-passe não é reposta após erro.")@components.FieldErrorMessage("password", form.Errors["password"])</div>
+					<div class="field-group">@components.FieldLabel("member-password-confirmation", "Confirmar palavra-passe (obrigatória para adultos)", false)<input id="member-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" aria-invalid?={ form.Errors["password_confirmation"] != "" } aria-describedby="password_confirmation-error"/>@components.FieldErrorMessage("password_confirmation", form.Errors["password_confirmation"])</div>
+				}
+			}
+		</div>
+		<div data-account-fields="dependent">
+			@components.FormSection("Responsabilidade", "Selecione a pessoa adulta responsável pelo menor.") {
+				<div class="field-group">@components.FieldLabel("member-guardian", "Tutor (obrigatório para menores)", false)<select id="member-guardian" name="guardian_id" aria-invalid?={ form.Errors["guardian_id"] != "" } aria-describedby="guardian_id-error"><option value="">Selecione</option>
+				for _, guardian := range form.Guardians {
+					<option value={ guardian.ID } selected?={ guardian.ID == form.GuardianID }>{ guardian.Name } ({ guardian.Email })</option>
+				}
+				</select>@components.FieldErrorMessage("guardian_id", form.Errors["guardian_id"])</div>
+			}
+		</div>
+		@components.TaskActions(form.ReturnURL) { <button class="action action--primary" type="submit" data-task-submit>Criar conta</button> }
+	</form>
+}
+
+func memberCreateTaskConfig(returnURL string) components.TaskSurfaceConfig {
+	if returnURL == "" { returnURL = "/admin/membros" }
+	return components.TaskSurfaceConfig{ID: "criar-conta", TitleID: "member-create-title", Eyebrow: "Tarefa contextual", Title: "Criar conta", Description: "Adicione um adulto ou um menor a cargo.", Variant: "sheet", URL: memberMutationURL("/admin/membros/criar", returnURL), ReturnURL: returnURL}
 }
 templ MemberDetailView(page MemberDetailPage) { @components.Base(page.Meta, memberDetailContent(page)) }
 templ memberDetailContent(page MemberDetailPage) {
-	@components.PageHeader("Administração · Membros", page.Member.Name, "Consulte a identidade, o acesso e as inscrições desta pessoa.", []components.PageAction{{Label: "Abrir perfil", Href: "/admin/membros/"+page.Member.ID+"/perfil", Variant: "primary"}, {Label: "Voltar aos membros", Href: "/admin/membros", Variant: "secondary"}})
+	@components.PageHeader("Administração · Membros", page.Member.Name, "Consulte a identidade, o acesso e as inscrições desta pessoa.", []components.PageAction{{Label: "Abrir perfil", Href: memberProfileURL(page.Member.ID, page.ReturnURL), Variant: "primary"}, {Label: "Voltar aos membros", Href: page.ReturnURL, Variant: "secondary"}})
     @components.StatusMessage(page.Success, "success")
     <section class="module">
         @components.SectionHeading("Conta", "Identidade e acesso", "Confirme a pessoa e o estado da conta antes de fazer alterações.")
@@ -117,7 +167,7 @@ templ memberDetailContent(page MemberDetailPage) {
         </ul>
     </section>
     if page.Member.Dependent && page.Member.Active {
-        <details class="module disclosure" open?={ page.Errors["password"] != "" }><summary><span><strong>Credencial individual</strong><small>Emitir ou recuperar o acesso deste menor.</small></span></summary><div class="disclosure__content"><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class="form-layout" method="post" action={ "/admin/membros/" + page.Member.ID + "/credencial-menor" }>@page.Meta.CSRFField
+        <details class="module disclosure" open?={ page.Errors["password"] != "" }><summary><span><strong>Credencial individual</strong><small>Emitir ou recuperar o acesso deste menor.</small></span></summary><div class="disclosure__content"><p>A emissão e a recuperação ficam registadas. Entregue a palavra-passe diretamente ao tutor.</p><form class="form-layout" method="post" action={ memberMutationURL("/admin/membros/" + page.Member.ID + "/credencial-menor", page.ReturnURL) }>@page.Meta.CSRFField
             @components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "password", Field: "minor-password"}, {Key: "password_confirmation", Field: "minor-password-confirmation"}}))
             @components.FieldLabel("minor-password", "Palavra-passe", true)<input id="minor-password" type="password" name="password" autocomplete="new-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-error"/>@components.FieldErrorMessage("password", page.Errors["password"])
             @components.FieldLabel("minor-password-confirmation", "Confirmar palavra-passe", true)<input id="minor-password-confirmation" type="password" name="password_confirmation" autocomplete="new-password" required aria-invalid?={ page.Errors["password_confirmation"] != "" } aria-describedby="password_confirmation-error"/>@components.FieldErrorMessage("password_confirmation", page.Errors["password_confirmation"])
@@ -125,15 +175,22 @@ templ memberDetailContent(page MemberDetailPage) {
         </form></div></details>
     }
     if page.Member.Active {
-        <details class="module disclosure" open?={ page.Errors["deactivation"] != "" }><summary><span><strong>Desativar conta</strong><small>Impedir o acesso desta pessoa aos espaços ativos.</small></span></summary><div class="disclosure__content"><form class="form-layout destructive-region" method="post" action={ "/admin/membros/" + page.Member.ID + "/desativar" }>@page.Meta.CSRFField<p>Esta pessoa deixa de poder iniciar sessão e usar os espaços ativos.</p>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "deactivation", Field: "confirm-deactivation"}}))<label for="confirm-deactivation"><input id="confirm-deactivation" type="checkbox" name="confirm_deactivation" value="yes" required aria-invalid?={ page.Errors["deactivation"] != "" } aria-describedby="deactivation-error"/> Confirmo que pretendo desativar a conta de { page.Member.Name }.</label>@components.FieldErrorMessage("deactivation", page.Errors["deactivation"])@components.FormActions("/admin/membros/" + page.Member.ID) { <button class="action action--danger" type="submit">Desativar conta de { page.Member.Name }</button> }</form></div></details>
+        <details class="module disclosure" open?={ page.Errors["deactivation"] != "" }><summary><span><strong>Desativar conta</strong><small>Impedir o acesso desta pessoa aos espaços ativos.</small></span></summary><div class="disclosure__content"><form class="form-layout destructive-region" method="post" action={ memberMutationURL("/admin/membros/" + page.Member.ID + "/desativar", page.ReturnURL) }>@page.Meta.CSRFField<p>Esta pessoa deixa de poder iniciar sessão e usar os espaços ativos.</p>@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "deactivation", Field: "confirm-deactivation"}}))<label for="confirm-deactivation"><input id="confirm-deactivation" type="checkbox" name="confirm_deactivation" value="yes" required aria-invalid?={ page.Errors["deactivation"] != "" } aria-describedby="deactivation-error"/> Confirmo que pretendo desativar a conta de { page.Member.Name }.</label>@components.FieldErrorMessage("deactivation", page.Errors["deactivation"])@components.FormActions(memberDetailURL(page.Member.ID, page.ReturnURL)) { <button class="action action--danger" type="submit">Desativar conta de { page.Member.Name }</button> }</form></div></details>
     }
     <details class="module disclosure" open?={ page.Errors["membership"] != "" }><summary><span><strong>Inscrições ativas · { page.Season }</strong><small>Gerir programas e espaços de trabalho disponíveis.</small></span></summary><div class="disclosure__content"><p>Estas inscrições controlam as personas e os painéis disponíveis; não alteram funções de plataforma.</p>@components.FieldErrorMessage("membership", page.Errors["membership"])
         <div class="record-list" role="list" aria-label="Programas disponíveis">
         for _, programme := range page.Programmes {
-            <form class="record-item inline-action" role="listitem" method="post" action={ "/admin/membros/" + page.Member.ID + "/inscricao" }>@page.Meta.CSRFField<input type="hidden" name="programme_id" value={ programme.ID }/><label><input type="checkbox" name="active" checked?={ programme.Active }/> { programme.Name }</label><button class="action action--secondary" type="submit">Guardar</button></form>
+            <form class="record-item inline-action" role="listitem" method="post" action={ memberMutationURL("/admin/membros/" + page.Member.ID + "/inscricao", page.ReturnURL) }>@page.Meta.CSRFField<input type="hidden" name="programme_id" value={ programme.ID }/><label><input type="checkbox" name="active" checked?={ programme.Active }/> { programme.Name }</label><button class="action action--secondary" type="submit">Guardar</button></form>
         }
         </div>
     </div></details>
 }
 
 templ memberDatum(label, value string) { <li class="record-item"><div class="record-item__copy"><h3>{ label }</h3><p class="record-meta">{ value }</p></div></li> }
+
+func memberPageCount(total int) string { return fmt.Sprintf("%d nesta página", total) }
+func memberClearHref(search string) string { if search != "" { return "/admin/membros" }; return "" }
+func memberDetailURL(id, returnURL string) string { return memberMutationURL("/admin/membros/"+id, memberItemReturn(id, returnURL)) }
+func memberProfileURL(id, returnURL string) string { return memberMutationURL("/admin/membros/"+id+"/perfil", memberItemReturn(id, returnURL)) }
+func memberMutationURL(path, returnURL string) string { if returnURL == "" || returnURL == "/admin/membros" { return path }; return path+"?return_to="+url.QueryEscape(returnURL) }
+func memberItemReturn(id, returnURL string) string { if strings.Contains(returnURL, "#") { return returnURL }; return returnURL+"#member-"+id }

@@ -37,6 +37,13 @@ func TestAnnouncementDocumentValidationAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManagedAnnouncementsMetadataUsesCoordinationWorkspace(t *testing.T) {
+	meta := (Announcements{}).meta(httptest.NewRequest(http.MethodGet, "/admin/avisos", nil), CurrentUser{Name: "Treinadora"}, "/admin/avisos", "Avisos")
+	if meta.AreaLabel != "Coordenação" || meta.PageLabel != "Gerir avisos" {
+		t.Fatalf("metadata = %#v", meta)
+	}
+}
+
 func TestAnnouncementDocumentRejectsUnsafeOrIncompleteMetadata(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/admin/announcements", strings.NewReader("title=Caderno&body=Consulte+o+documento.&document_url=http%3A%2F%2Fexample.org%2Fcaderno.pdf&document_source=&reviewed_on=2999-01-01"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")

@@ -76,7 +76,12 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.MembersPage{Search: search, Form: h.memberFormFromAdults(r, memberForm{Errors: validation.FieldErrors{}}, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
+	returnURL := safeCollectionReturn(r.URL.RequestURI())
+	if returnURL == "" {
+		returnURL = "/admin/membros"
+	}
+	page := pages.MembersPage{Search: search, ReturnURL: returnURL, Form: h.memberFormFromAdults(r, memberForm{Errors: validation.FieldErrors{}}, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
+	page.Form.ReturnURL = returnURL
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "members_flash")
 	}
@@ -91,6 +96,10 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 		page.Members = append(page.Members, pages.MemberListItem{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Dependent: member.IsDependent, Active: member.IsActive})
 	}
 	h.render(w, r, http.StatusOK, page)
+}
+
+func (h Members) CreatePage(w http.ResponseWriter, r *http.Request) {
+	h.renderCreateTask(w, r, http.StatusOK, memberForm{Errors: validation.FieldErrors{}}, "")
 }
 
 func membersPageNumber(value string) int {
@@ -155,7 +164,7 @@ func (h Members) Create(w http.ResponseWriter, r *http.Request) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "members_flash", "Conta criada.")
 	}
-	httpx.Redirect(w, r, "/admin/membros", http.StatusSeeOther)
+	httpx.Redirect(w, r, memberCollectionReturn(r), http.StatusSeeOther)
 }
 
 func (h Members) Detail(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +220,7 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/admin/membros/"+id.String(), http.StatusSeeOther)
+	httpx.Redirect(w, r, memberDetailPath(id, memberCollectionReturn(r)), http.StatusSeeOther)
 }
 
 func (h Members) Deactivate(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +244,7 @@ func (h Members) Deactivate(w http.ResponseWriter, r *http.Request) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "member_detail_flash", "Conta desativada.")
 	}
-	httpx.Redirect(w, r, "/admin/membros/"+id.String(), http.StatusSeeOther)
+	httpx.Redirect(w, r, memberDetailPath(id, memberCollectionReturn(r)), http.StatusSeeOther)
 }
 
 func deactivationConfirmed(r *http.Request) bool {
@@ -286,7 +295,7 @@ func (h Members) IssueMinorCredential(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/admin/membros/"+id.String(), http.StatusSeeOther)
+	httpx.Redirect(w, r, memberDetailPath(id, memberCollectionReturn(r)), http.StatusSeeOther)
 }
 
 func (h Members) validateCreate(r *http.Request) memberForm {
@@ -329,6 +338,10 @@ func (h Members) validateCreate(r *http.Request) memberForm {
 }
 
 func (h Members) renderCreateError(w http.ResponseWriter, r *http.Request, form memberForm) {
+	h.renderCreateTask(w, r, http.StatusUnprocessableEntity, form, "")
+}
+
+func (h Members) renderCreateTask(w http.ResponseWriter, r *http.Request, status int, form memberForm, conflict string) {
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
 	adults, err := h.Store.ListActiveAdultsForAdmin(ctx, 500)
@@ -336,8 +349,17 @@ func (h Members) renderCreateError(w http.ResponseWriter, r *http.Request, form 
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.MembersPage{Form: h.memberFormFromAdults(r, form, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
-	h.render(w, r, http.StatusUnprocessableEntity, page)
+	meta := h.meta(r, "Criar conta", "/admin/membros")
+	meta.PageLabel = "Criar conta"
+	meta.CurrentPath = r.URL.Path
+	viewForm := h.memberFormFromAdults(r, form, adults)
+	viewForm.Conflict = conflict
+	viewForm.ReturnURL = memberCollectionReturn(r)
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: viewForm.ReturnURL}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(status)
+	_ = pages.MemberCreateView(pages.MembersPage{Meta: meta, Form: viewForm}).Render(r.Context(), w)
 }
 
 func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int, fieldErrors validation.FieldErrors, _ string) {
@@ -378,8 +400,9 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	meta.Title = member.Name + " | MyCFC"
 	meta.SubjectContext = member.Name
 	meta.CurrentPath = r.URL.Path
-	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: "/admin/membros"}}
-	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, Errors: fieldErrors}
+	returnURL := memberCollectionReturn(r)
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: returnURL}}
+	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, ReturnURL: returnURL, Errors: fieldErrors}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "member_detail_flash")
 	}
@@ -428,6 +451,22 @@ func (h Members) renderDetailPage(w http.ResponseWriter, r *http.Request, status
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.MemberDetailView(page).Render(r.Context(), w)
+}
+
+func memberCollectionReturn(r *http.Request) string {
+	value := safeCollectionReturn(r.URL.Query().Get("return_to"))
+	if !strings.HasPrefix(value, "/admin/membros") {
+		return "/admin/membros"
+	}
+	return value
+}
+
+func memberDetailPath(id uuid.UUID, returnURL string) string {
+	path := "/admin/membros/" + id.String()
+	if returnURL == "" || returnURL == "/admin/membros" {
+		return path
+	}
+	return path + "?return_to=" + url.QueryEscape(returnURL)
 }
 func (h Members) meta(r *http.Request, title, path string) components.PageMeta {
 	user, _ := CurrentUserFromContext(r.Context())

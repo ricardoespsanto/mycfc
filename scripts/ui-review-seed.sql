@@ -20,6 +20,10 @@ INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES
 INSERT INTO user_platform_roles (user_id, role_id)
 SELECT '10000000-0000-0000-0000-000000000005', id FROM platform_roles WHERE code = 'ADMIN';
 
+UPDATE feature_flags
+SET mode = 'ENABLED', updated_by_id = '10000000-0000-0000-0000-000000000005', updated_at = now()
+WHERE feature_key = 'structured_training_planning';
+
 INSERT INTO seasons (id, code, name, starts_on, ends_on, is_current)
 VALUES ('20000000-0000-0000-0000-000000000001', 'UI_REVIEW', 'Época de revisão da experiência MyCFC', '2025-01-01', '2099-12-31', true);
 
@@ -34,6 +38,20 @@ INSERT INTO user_memberships (id, user_id, season_id, programme_id, starts_on)
 SELECT '40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', p.id, '2025-01-01' FROM programmes p WHERE p.code = 'Leisure';
 INSERT INTO user_memberships (id, user_id, season_id, programme_id, starts_on)
 SELECT '40000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000011', '20000000-0000-0000-0000-000000000001', p.id, '2025-01-01' FROM programmes p WHERE p.code = 'Initiation';
+INSERT INTO user_memberships (id, user_id, season_id, programme_id, starts_on)
+SELECT '40000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', p.id, '2025-01-01' FROM programmes p WHERE p.code = 'Initiation';
+
+-- Minimal reader fixture for subject switching: Marta can see her own plan and
+-- the plan assigned to the minor Leonor, without gaining management controls.
+INSERT INTO training_groups (id, name, programme_id, created_by_id)
+SELECT '74000000-0000-0000-0000-000000000001', 'Iniciação — família Rodrigues e Albuquerque', p.id, '10000000-0000-0000-0000-000000000005' FROM programmes p WHERE p.code = 'Initiation';
+INSERT INTO training_group_members (group_id, membership_id, added_by_id) VALUES
+  ('74000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000005'),
+  ('74000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000005');
+INSERT INTO training_plans (id, title, description, programme_id, training_group_id, season_id, week_start, created_by_id)
+SELECT '74100000-0000-0000-0000-000000000001', 'Semana familiar de iniciação', 'Plano estruturado determinístico para rever a troca de pessoa.', p.id, '74000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', date_trunc('week', CURRENT_DATE)::date, '10000000-0000-0000-0000-000000000005' FROM programmes p WHERE p.code = 'Initiation';
+INSERT INTO training_sessions (id, plan_id, title, description, starts_at, ends_at, created_by_id)
+VALUES ('74200000-0000-0000-0000-000000000001', '74100000-0000-0000-0000-000000000001', 'Técnica base em família', 'Sessão apenas de leitura para Marta e Leonor.', date_trunc('week', CURRENT_DATE) + interval '1 day 18 hours', date_trunc('week', CURRENT_DATE) + interval '1 day 19 hours', '10000000-0000-0000-0000-000000000005');
 
 INSERT INTO membership_modalities (membership_id, modality_id)
 SELECT '40000000-0000-0000-0000-000000000001', id FROM modalities WHERE code = 'K1';

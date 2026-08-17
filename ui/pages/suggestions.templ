@@ -32,7 +32,7 @@ templ Suggestions(page SuggestionsPage) {
 
 templ suggestionsContent(page SuggestionsPage) {
 	if page.Management {
-		@components.PageHeader("Administração", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil)
+		@components.PageHeader("Moderação", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil)
 	} else {
 		@components.PageHeader("Atividade", "Sugestões", "Partilhe uma ideia para melhorar a vida do clube e acompanhe a resposta.", []components.PageAction{{Label: "Nova sugestão", Href: "#nova-sugestao", Variant: "primary"}})
 	}

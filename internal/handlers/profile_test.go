@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -36,6 +38,42 @@ func TestProfileAuthorizationBoundaries(t *testing.T) {
 	if !canViewProfile(dependent, uuid.New(), true) || !canEditProfile(dependent, uuid.New(), true) {
 		t.Fatal("administrator cannot manage inactive profile")
 	}
+}
+
+func TestProfileDeepLinkMetadataNamesOwningArea(t *testing.T) {
+	actorID, subjectID := uuid.New(), uuid.New()
+	record := dbgen.GetMemberProfileRow{ID: subjectID, Name: "Leonor Rodrigues", IsDependent: true, IsActive: true}
+	for _, tc := range []struct {
+		name, base, area string
+		actor            CurrentUser
+		breadcrumbs      []string
+	}{
+		{name: "self", base: "/perfil", area: "Conta", actor: CurrentUser{ID: subjectID, Name: "Leonor"}},
+		{name: "guardian", base: "/perfil/dependentes/" + subjectID.String(), area: "Família", actor: CurrentUser{ID: actorID, Name: "Marta"}, breadcrumbs: []string{"Menores a cargo"}},
+		{name: "administrator", base: "/admin/membros/" + subjectID.String() + "/perfil", area: "Administração", actor: CurrentUser{ID: actorID, Name: "Beatriz", IsAdmin: true}, breadcrumbs: []string{"Membros", "Leonor Rodrigues"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := Profile{Store: profilePageStore{}}
+			page := h.page(httptest.NewRequest(http.MethodGet, tc.base, nil), tc.actor, tc.base, record, pages.ProfileForm{}, "")
+			if page.Meta.AreaLabel != tc.area || page.Meta.CurrentPath != tc.base || page.Meta.PageLabel != "Perfil" || len(page.Meta.Breadcrumbs) != len(tc.breadcrumbs) {
+				t.Fatalf("meta = %#v", page.Meta)
+			}
+			for i, label := range tc.breadcrumbs {
+				if page.Meta.Breadcrumbs[i].Label != label {
+					t.Fatalf("breadcrumb %d = %#v, want %q", i, page.Meta.Breadcrumbs[i], label)
+				}
+			}
+			if tc.actor.ID != subjectID && page.Meta.SubjectContext != record.Name {
+				t.Fatalf("subject context = %q", page.Meta.SubjectContext)
+			}
+		})
+	}
+}
+
+type profilePageStore struct{ ProfileStore }
+
+func (profilePageStore) Avatar(context.Context, dbgen.GetMemberAvatarParams) (dbgen.GetMemberAvatarRow, error) {
+	return dbgen.GetMemberAvatarRow{}, nil
 }
 
 func TestProfileValidationRequiresCompleteEmergencyAndMedicalDetails(t *testing.T) {

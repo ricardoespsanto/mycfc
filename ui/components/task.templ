@@ -1,0 +1,86 @@
+package components
+
+type TaskSurfaceConfig struct {
+	ID, TitleID, Eyebrow, Title, Description, Variant, URL, ReturnURL string
+}
+
+templ TaskDialog(config TaskSurfaceConfig) {
+	<dialog id={ config.ID } class={ taskSurfaceClass(config.Variant) } data-task-surface data-task-url={ config.URL } aria-labelledby={ config.TitleID }>
+		@taskHeader(config, true)
+		<div class="task-surface__body">{ children... }</div>
+	</dialog>
+}
+
+templ TaskRoute(config TaskSurfaceConfig) {
+	<section class={ taskRouteClass(config.Variant) } aria-labelledby={ config.TitleID }>
+		@taskHeader(config, false)
+		<div class="task-surface__body">{ children... }</div>
+	</section>
+}
+
+templ taskHeader(config TaskSurfaceConfig, modal bool) {
+	<header class="task-surface__header">
+		<div>
+			if config.Eyebrow != "" {
+				<p class="eyebrow">{ config.Eyebrow }</p>
+			}
+			if modal {
+				<h2 id={ config.TitleID }>{ config.Title }</h2>
+			} else {
+				<h1 id={ config.TitleID }>{ config.Title }</h1>
+			}
+			if config.Description != "" {
+				<p>{ config.Description }</p>
+			}
+		</div>
+		if modal {
+			<button class="action action--quiet task-surface__close" type="button" data-task-close>Fechar</button>
+		} else if config.ReturnURL != "" {
+			<a class="action action--quiet task-surface__close" href={ templ.SafeURL(config.ReturnURL) }>Fechar</a>
+		}
+	</header>
+}
+
+templ TaskActions(cancelHref string) {
+	<div class="task-surface__actions">
+		<a class="action action--quiet" href={ templ.SafeURL(cancelHref) } data-task-cancel>Cancelar</a>
+		{ children... }
+	</div>
+}
+
+templ TaskConflict(title, message, reviewField, recoveryHref, recoveryLabel string) {
+	if message != "" {
+		<section class="task-conflict" role="alert" tabindex="-1" autofocus data-task-feedback>
+			<h2>{ title }</h2>
+			<p>{ message }</p>
+			<div class="cluster">
+				if reviewField != "" {
+					<a href={ "#" + reviewField }>Rever dados</a>
+				}
+				if recoveryHref != "" && recoveryLabel != "" {
+					<a href={ templ.SafeURL(recoveryHref) }>{ recoveryLabel }</a>
+				}
+			</div>
+		</section>
+	}
+}
+
+templ DiscardConfirmation() {
+	<dialog class="task-confirmation" data-task-discard-confirmation aria-labelledby="task-discard-title" aria-describedby="task-discard-description">
+		<div class="task-confirmation__content">
+			<h2 id="task-discard-title">Descartar alterações?</h2>
+			<p id="task-discard-description">Os dados introduzidos nesta tarefa serão perdidos.</p>
+			<div class="task-surface__actions">
+				<button class="action action--quiet" type="button" data-task-keep-editing>Continuar a editar</button>
+				<button class="action action--danger" type="button" data-task-confirm-discard>Descartar alterações</button>
+			</div>
+		</div>
+	</dialog>
+}
+
+func taskSurfaceClass(variant string) string {
+	if variant != "modal" && variant != "confirmation" { variant = "sheet" }
+	return "task-surface task-surface--" + variant
+}
+
+func taskRouteClass(variant string) string { return taskSurfaceClass(variant) + " task-surface--route" }

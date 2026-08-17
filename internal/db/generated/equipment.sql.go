@@ -319,7 +319,9 @@ const retireEquipmentWithAudit = `-- name: RetireEquipmentWithAudit :one
 WITH previous AS MATERIALIZED (
     SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at
     FROM equipment
-    WHERE equipment.id = $1 AND equipment.status <> 'Retired'
+    WHERE equipment.id = $1
+      AND equipment.updated_at = $2
+      AND equipment.status <> 'Retired'
     FOR UPDATE
 ), updated AS (
     UPDATE equipment e SET status = 'Retired', updated_at = now()
@@ -334,7 +336,7 @@ WITH previous AS MATERIALIZED (
     SELECT COALESCE(array_agg(id), '{}'::uuid[]) AS ids FROM cancelled
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state, affected_maintenance_ids)
-    SELECT u.id, $2, 'RETIRED',
+    SELECT u.id, $3, 'RETIRED',
            jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'image_object_key', p.image_object_key, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
            jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'image_object_key', u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes), c.ids
     FROM updated u JOIN previous p ON p.id = u.id CROSS JOIN cancelled_ids c
@@ -344,8 +346,9 @@ FROM updated
 `
 
 type RetireEquipmentWithAuditParams struct {
-	EquipmentID uuid.UUID `json:"equipment_id"`
-	ActorUserID uuid.UUID `json:"actor_user_id"`
+	EquipmentID       uuid.UUID          `json:"equipment_id"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+	ActorUserID       uuid.UUID          `json:"actor_user_id"`
 }
 
 type RetireEquipmentWithAuditRow struct {
@@ -363,7 +366,7 @@ type RetireEquipmentWithAuditRow struct {
 }
 
 func (q *Queries) RetireEquipmentWithAudit(ctx context.Context, arg RetireEquipmentWithAuditParams) (RetireEquipmentWithAuditRow, error) {
-	row := q.db.QueryRow(ctx, retireEquipmentWithAudit, arg.EquipmentID, arg.ActorUserID)
+	row := q.db.QueryRow(ctx, retireEquipmentWithAudit, arg.EquipmentID, arg.ExpectedUpdatedAt, arg.ActorUserID)
 	var i RetireEquipmentWithAuditRow
 	err := row.Scan(
 		&i.ID,

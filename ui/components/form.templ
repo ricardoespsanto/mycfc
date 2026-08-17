@@ -28,6 +28,20 @@ templ FormActions(cancelHref string) {
 	</div>
 }
 
+templ FormSection(legend, summary string) {
+	<fieldset class="form-section">
+		<legend>{ legend }</legend>
+		if summary != "" {
+			<p class="form-section__summary">{ summary }</p>
+		}
+		{ children... }
+	</fieldset>
+}
+
+templ FieldGrid() {
+	<div class="field-grid">{ children... }</div>
+}
+
 templ StatusMessage(message, tone string) {
 	if message != "" {
 		<p class={ "status-message status-message--" + tone } role={ statusRole(tone) } tabindex="-1">{ message }</p>

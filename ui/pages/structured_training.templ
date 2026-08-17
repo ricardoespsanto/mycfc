@@ -88,6 +88,7 @@ type StructuredTrainingAudience struct {
 	MemberCount                            int
 	Weeks                                  []StructuredTrainingWeek
 }
+type StructuredTrainingSubjectChoice struct { ID, Name string; Selected, Self bool }
 
 type StructuredTrainingGroupForm struct {
 	Name, ProgrammeID, TeamID string
@@ -119,6 +120,8 @@ type StructuredTrainingPage struct {
 	Success, Error, OpenForm                                    string
 	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
 	Audiences                                                   []StructuredTrainingAudience
+	Subjects                                                    []StructuredTrainingSubjectChoice
+	AllSubjectsSelected                                         bool
 	Routines                                                    []StructuredTrainingRoutine
 	Memberships                                                 []StructuredTrainingMembershipChoice
 	Programmes, Teams, Groups, Weeks, Sessions, Segments        []StructuredTrainingChoice
@@ -143,12 +146,29 @@ templ StructuredTraining(page StructuredTrainingPage) {
 
 templ structuredTrainingContent(page StructuredTrainingPage) {
 	if page.Management {
-		@components.PageHeader("Administração · Treinos", "Planeamento semanal", "Organize grupos, semanas e sessões híbridas a partir de um só lugar.", structuredTrainingActions())
+		@components.PageHeader("Coordenação · Treinos", "Planeamento semanal", "Organize grupos, semanas e sessões híbridas a partir de um só lugar.", structuredTrainingActions())
 	} else {
 		@components.PageHeader("Atividade · Treinos", "Planeamento semanal", "Consulte as semanas e sessões destinadas a si ou aos menores pelos quais é responsável.", []components.PageAction{{Label: "Voltar aos treinos", Href: "/treinos", Variant: "quiet"}})
 	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Error, "error")
+	if !page.Management && len(page.Subjects) > 0 {
+		<nav class="subject-switcher" aria-label="Pessoa no planeamento">
+			<p><strong>Planeamento de</strong></p>
+			if page.AllSubjectsSelected {
+				<a class="action action--quiet" href="/treinos/estruturados" aria-current="page">Todas as pessoas</a>
+			} else {
+				<a class="action action--quiet" href="/treinos/estruturados">Todas as pessoas</a>
+			}
+			for _, subject := range page.Subjects {
+				if subject.Selected {
+					<a class="action action--quiet" href={ templ.SafeURL("/treinos/estruturados?subject_user_id=" + subject.ID) } aria-current="page">{ structuredSubjectLabel(subject) }</a>
+				} else {
+					<a class="action action--quiet" href={ templ.SafeURL("/treinos/estruturados?subject_user_id=" + subject.ID) }>{ structuredSubjectLabel(subject) }</a>
+				}
+			}
+		</nav>
+	}
 	<div class="training-workspace" data-tab-scope>
 		if page.Management {
 			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
@@ -523,6 +543,8 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 		</div>
 	</section>
 }
+
+func structuredSubjectLabel(subject StructuredTrainingSubjectChoice) string { if subject.Self { return subject.Name + " (eu)" }; return subject.Name }
 
 templ structuredVariationManagement(page StructuredTrainingPage) {
 	<section id="training-variations" class="module" aria-labelledby="training-variations-title" data-tab-panel>

@@ -222,7 +222,16 @@ func (h PhotoAlbums) renderDetail(w http.ResponseWriter, r *http.Request, status
 		return
 	}
 	management := strings.HasPrefix(r.URL.Path, "/admin/") && privileged
-	page := pages.PhotoAlbumDetailPage{Meta: h.meta(r, user, management), Management: management, CanManage: privileged, Conflict: conflict, Album: h.albumItem(row.ID, row.Title, row.Description, string(row.Status), row.ProgrammeNames, row.TeamNames, row.CreatedAt.Time, row.UpdatedAt.Time), CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
+	meta := h.meta(r, user, management)
+	meta.Title = row.Title + " | MyCFC"
+	meta.CurrentPath = r.URL.Path
+	meta.PageLabel = row.Title
+	breadcrumb := components.NavigationItem{Label: "Álbuns", Path: "/albuns"}
+	if management {
+		breadcrumb = components.NavigationItem{Label: "Gerir álbuns", Path: "/admin/albuns"}
+	}
+	meta.Breadcrumbs = []components.NavigationItem{breadcrumb}
+	page := pages.PhotoAlbumDetailPage{Meta: meta, Management: management, CanManage: privileged, Conflict: conflict, Album: h.albumItem(row.ID, row.Title, row.Description, string(row.Status), row.ProgrammeNames, row.TeamNames, row.CreatedAt.Time, row.UpdatedAt.Time), CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
 	if privileged {
 		events, err := h.Store.ListPhotoAlbumAuditEvents(ctx, id)
 		if err != nil {
@@ -263,10 +272,14 @@ func (h PhotoAlbums) meta(r *http.Request, user CurrentUser, management bool) co
 	meta.CurrentPath = "/albuns"
 	meta.AreaLabel = "Atividade"
 	if management {
+		meta.Title = "Gerir álbuns | MyCFC"
 		meta.CurrentPath = "/admin/albuns"
-		meta.AreaLabel = "Administração"
+		meta.AreaLabel = "Moderação"
+		meta.PageLabel = "Gerir álbuns"
 	}
-	meta.PageLabel = "Álbuns privados"
+	if !management {
+		meta.PageLabel = "Álbuns privados"
+	}
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
 	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified

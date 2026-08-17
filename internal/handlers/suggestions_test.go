@@ -29,6 +29,13 @@ func TestValidateSuggestionDefinesBoundedCategoriesAndContent(t *testing.T) {
 	}
 }
 
+func TestManagedSuggestionsMetadataUsesModerationWorkspace(t *testing.T) {
+	meta := (Suggestions{}).meta(httptest.NewRequest(http.MethodGet, "/admin/sugestoes", nil), CurrentUser{Name: "Moderadora"}, true)
+	if meta.AreaLabel != "Moderação" || meta.PageLabel != "Triar sugestões" {
+		t.Fatalf("metadata = %#v", meta)
+	}
+}
+
 func TestSuggestionCreateUsesAuthenticatedRequester(t *testing.T) {
 	requesterID := uuid.New()
 	store := &suggestionsStoreFake{}

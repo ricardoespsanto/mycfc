@@ -119,6 +119,33 @@ func TestPhotoAlbumDetailFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPhotoAlbumDetailExposesOwningCollectionInDeepLinkMetadata(t *testing.T) {
+	albumID := uuid.New()
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name, path, breadcrumb, area string
+		user                         CurrentUser
+	}{
+		{name: "reader", path: "/albuns/" + albumID.String(), breadcrumb: "Álbuns", area: "Atividade", user: CurrentUser{ID: uuid.New(), Name: "Membro"}},
+		{name: "manager", path: "/admin/albuns/" + albumID.String(), breadcrumb: "Gerir álbuns", area: "Moderação", user: CurrentUser{ID: uuid.New(), Name: "Moderadora", CanModerateContent: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &photoAlbumStoreFake{get: dbgen.GetVisiblePhotoAlbumRow{ID: albumID, Title: "Regata de verão", Status: dbgen.PhotoAlbumStatusOPEN, CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}
+			h := PhotoAlbums{Store: store, Location: time.UTC}
+			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			r.SetPathValue("id", albumID.String())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, tc.user))
+			w := httptest.NewRecorder()
+
+			h.Detail(w, r)
+
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.breadcrumb) || !strings.Contains(w.Body.String(), tc.area) || !strings.Contains(w.Body.String(), `aria-current="page">Regata de verão`) {
+				t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestParsePhotoAlbumIDsRejectsDuplicatesAndInvalidValues(t *testing.T) {
 	id := uuid.New()
 	errorsByField := validation.FieldErrors{}

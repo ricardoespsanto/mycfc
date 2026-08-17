@@ -59,6 +59,16 @@ func TestRepairPostFromAdminFleetRedirectsBackToAdminFleet(t *testing.T) {
 	}
 }
 
+func TestRepairPostPreservesValidatedAdminFleetContext(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
+	returnTo := "/admin/fleet?maintenance_page=3&repairs_page=2#repair-requests"
+	response := repairResponseTo(t, Repair{Store: store}, userID, equipmentID, nil, false, returnTo)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != returnTo {
+		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
 func TestRepairPostPhotoStoresValidatedMetadata(t *testing.T) {
 	userID, equipmentID := uuid.New(), uuid.New()
 	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}

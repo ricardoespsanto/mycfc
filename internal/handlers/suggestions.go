@@ -250,10 +250,14 @@ func (h Suggestions) meta(r *http.Request, user CurrentUser, management bool) co
 	meta.CurrentPath = "/sugestoes"
 	meta.AreaLabel = "Atividade"
 	if management {
+		meta.Title = "Triar sugestões | MyCFC"
 		meta.CurrentPath = "/admin/sugestoes"
-		meta.AreaLabel = "Administração"
+		meta.AreaLabel = "Moderação"
+		meta.PageLabel = "Triar sugestões"
 	}
-	meta.PageLabel = "Sugestões"
+	if !management {
+		meta.PageLabel = "Sugestões"
+	}
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
 	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified

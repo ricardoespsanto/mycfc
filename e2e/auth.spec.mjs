@@ -195,8 +195,9 @@ test.describe('authentication', () => {
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
-    const mobileMenu = page.locator('.mobile-app-menu');
-    await mobileMenu.locator('summary').click();
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
+    await expect(mobileMenu).toBeVisible();
     const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
     await logout.focus();
     await expect(logout).toBeFocused();
@@ -423,7 +424,7 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
 
     await expect(page).toHaveURL('/today');
-    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+    await page.getByRole('link', { name: 'Gerir frota', exact: true }).click();
     await expect(page).toHaveURL('/admin/fleet');
     await expect(page.getByRole('heading', { name: 'Frota', exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Agendar manutenção', exact: true }).click();
@@ -481,7 +482,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.getByRole('link', { name: 'Frota', exact: true }).click();
+    await page.getByRole('link', { name: 'Gerir frota', exact: true }).click();
 
     await page.getByRole('link', { name: 'Adicionar equipamento' }).click();
     const create = page.locator('#equipment-form');
@@ -498,7 +499,7 @@ test.describe('authentication', () => {
     await create.getByLabel('Notas (opcional)').fill('Registo inicial');
     await create.getByLabel('Fotografia (opcional)').setInputFiles({ name: 'embarcacao.png', mimeType: 'image/png', buffer: validPNG });
     await create.getByRole('button', { name: 'Adicionar equipamento' }).click();
-    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page).toHaveURL('/admin/fleet#equipment-inventory');
     await expect(page.getByRole('status')).toHaveText('Equipamento adicionado.');
 
     let equipment = page.getByRole('row', { name: new RegExp(assetTag) });
@@ -512,9 +513,10 @@ test.describe('authentication', () => {
     await page.getByLabel('Notas (opcional)').fill('Notas atualizadas');
     await page.getByLabel('Substituir fotografia (opcional)').setInputFiles({ name: 'pagaia.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Guardar alterações' }).click();
-    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page).toHaveURL(/\/admin\/fleet#equipment-[0-9a-f-]+$/);
     await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
 
+    await expect(page.getByRole('tab', { name: 'Equipamentos', exact: true })).toHaveAttribute('aria-selected', 'true');
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();
@@ -531,7 +533,7 @@ test.describe('authentication', () => {
     await maintenance.getByLabel('Data e hora').fill(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
     await maintenance.getByLabel('Descrição').fill(maintenanceDescription);
     await maintenance.getByRole('button', { name: 'Agendar manutenção' }).click();
-    await expect(page).toHaveURL('/admin/fleet');
+    await expect(page).toHaveURL('/admin/fleet#maintenance-schedule');
     await page.getByRole('tab', { name: /Manutenção/ }).click();
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
     await page.locator('#maintenance-form').getByRole('button', { name: 'Fechar' }).click();
@@ -539,7 +541,9 @@ test.describe('authentication', () => {
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
-    await equipment.getByRole('button', { name: 'Retirar da frota' }).click();
+    await equipment.getByRole('link', { name: 'Retirar da frota' }).click();
+    await page.getByLabel(/Confirmo que pretendo retirar/).check();
+    await page.getByRole('button', { name: 'Retirar equipamento da frota' }).click();
     await expect(page.getByRole('status')).toContainText('Equipamento retirado da frota');
     await expect(page.getByText(maintenanceDescription)).toHaveCount(0);
 
@@ -590,7 +594,7 @@ test.describe('authentication', () => {
 
     await page.getByRole('link', { name: athleteName }).click();
     const location = page.getByRole('navigation', { name: 'Localização atual' });
-    await expect(location.getByRole('link', { name: 'Membros' })).toHaveAttribute('href', '/admin/membros');
+    await expect(location.getByRole('link', { name: 'Membros' })).toHaveAttribute('href', /^\/admin\/membros\?q=.+#member-[0-9a-f-]+$/);
     await expect(location.getByText('Detalhe do membro')).toHaveAttribute('aria-current', 'page');
     await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
     const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
@@ -1056,7 +1060,7 @@ test.describe('authentication', () => {
 
     await page.goto('/treinos/estruturados');
     const publishedSession = page.getByRole('heading', { name: sessionTitle, exact: true }).locator('xpath=ancestor::article[1]');
-    await expect(page.getByText(athleteName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: athleteName, exact: true })).toBeVisible();
     await publishedSession.getByRole('link', { name: 'Abrir esta revisão da prescrição' }).click();
     const prescriptionURL = page.url();
     await expect(page.getByText('Prescrição publicada · revisão 1', { exact: false })).toBeVisible();

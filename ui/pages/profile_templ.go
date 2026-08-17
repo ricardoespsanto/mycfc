@@ -25,12 +25,12 @@ type ProfileForm struct {
 }
 
 type ProfilePage struct {
-	Meta                                                                                      components.PageMeta
-	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ImageConsentURL         string
-	FPCNationalHistoryURL, FPCInternationalHistoryURL                                         string
-	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified bool
-	Form                                                                                      ProfileForm
-	Success, Conflict                                                                         string
+	Meta                                                                                                     components.PageMeta
+	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ActionPath, ReturnURL, ImageConsentURL string
+	FPCNationalHistoryURL, FPCInternationalHistoryURL                                                        string
+	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified                bool
+	Form                                                                                                     ProfileForm
+	Success, Conflict                                                                                        string
 }
 
 func Profile(page ProfilePage) templ.Component {
@@ -268,7 +268,7 @@ func profileContent(page ProfilePage) templ.Component {
 
 func profileActions(page ProfilePage) []components.PageAction {
 	if page.Admin {
-		return []components.PageAction{{Label: "Voltar ao membro", Href: "/admin/membros/" + page.SubjectID, Variant: "secondary"}}
+		return []components.PageAction{{Label: "Voltar ao membro", Href: memberDetailURL(page.SubjectID, page.ReturnURL), Variant: "secondary"}}
 	}
 	if !page.Self {
 		return []components.PageAction{{Label: "Voltar aos menores", Href: "/dashboard/guardian", Variant: "secondary"}}
@@ -302,9 +302,9 @@ func profileEditForm(page ProfilePage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var10 templ.SafeURL
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(page.BasePath)
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(page.ActionPath)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 82, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 82, Col: 78}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -1028,7 +1028,7 @@ func profileEditForm(page ProfilePage) templ.Component {
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = components.FormActions(page.BasePath).Render(templ.WithChildren(ctx, templ_7745c5c3_Var34), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.FormActions(page.ActionPath).Render(templ.WithChildren(ctx, templ_7745c5c3_Var34), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1316,9 +1316,9 @@ func profilePhoto(page ProfilePage) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var51 templ.SafeURL
-		templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinURLErrs(page.BasePath + "/fotografia")
+		templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinURLErrs(profileSubpath(page, "/fotografia"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 158, Col: 80}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 158, Col: 86}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 		if templ_7745c5c3_Err != nil {
@@ -1397,9 +1397,9 @@ func profilePhoto(page ProfilePage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var54 templ.SafeURL
-			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinURLErrs(page.BasePath + "/fotografia/remover")
+			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinURLErrs(profileSubpath(page, "/fotografia/remover"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 168, Col: 69}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/profile.templ`, Line: 168, Col: 75}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 			if templ_7745c5c3_Err != nil {
@@ -1684,6 +1684,9 @@ func photoButtonLabel(hasPhoto bool) string {
 		return "Substituir fotografia"
 	}
 	return "Carregar fotografia"
+}
+func profileSubpath(page ProfilePage, suffix string) string {
+	return strings.Replace(page.ActionPath, page.BasePath, page.BasePath+suffix, 1)
 }
 func profileErrorFields() []components.FieldErrorRef {
 	return []components.FieldErrorRef{{Key: "form", Field: "profile-phone"}, {Key: "name", Field: "profile-name"}, {Key: "email", Field: "profile-email"}, {Key: "date_of_birth", Field: "profile-birth"}, {Key: "phone", Field: "profile-phone"}, {Key: "country_code", Field: "profile-country"}, {Key: "nationality_code", Field: "profile-nationality"}, {Key: "official_identifiers", Field: "profile-club-number"}, {Key: "federation_licence_number", Field: "profile-federation-number"}, {Key: "emergency_contact", Field: "profile-emergency-name"}, {Key: "emergency_contact_phone", Field: "profile-emergency-phone"}, {Key: "emergency_contact_alternate_phone", Field: "profile-emergency-alt"}, {Key: "medical_declaration", Field: "profile-medical-declaration"}}

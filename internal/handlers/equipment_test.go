@@ -96,11 +96,23 @@ func TestCreateEquipmentPersistsActorAndRedirects(t *testing.T) {
 	r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment", url.Values{"asset_tag": {"B-01"}, "name": {"K1 competição"}, "type": {"Boat"}, "status": {"Maintenance"}, "notes": {"Casco azul"}}, userID)
 	w := httptest.NewRecorder()
 	h.CreateEquipment(w, r)
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/fleet" {
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/fleet#equipment-inventory" {
 		t.Fatalf("response = %d %q", w.Code, w.Header().Get("Location"))
 	}
 	if store.createParams.ActorUserID != userID || store.createParams.AssetTag != "B-01" || store.createParams.Status != "Maintenance" {
 		t.Fatalf("params = %#v", store.createParams)
+	}
+}
+
+func TestCreateEquipmentPreservesValidatedFleetReturn(t *testing.T) {
+	store := &equipmentStoreFake{}
+	h := Dashboard{Equipment: store}
+	returnTo := "/admin/fleet?equipment_page=2&repairs_page=3#equipment-inventory"
+	r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment?return_to="+url.QueryEscape(returnTo), url.Values{"asset_tag": {"B-03"}, "name": {"K1 contexto"}, "type": {"Boat"}, "status": {"Operational"}}, uuid.New())
+	w := httptest.NewRecorder()
+	h.CreateEquipment(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != returnTo {
+		t.Fatalf("response = %d %q", w.Code, w.Header().Get("Location"))
 	}
 }
 
@@ -178,6 +190,7 @@ func TestUpdateEquipmentNoOpDoesNotWriteAudit(t *testing.T) {
 
 func TestEquipmentLifecycleUsesAuditedMutations(t *testing.T) {
 	id, actor := uuid.New(), uuid.New()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	for _, tc := range []struct {
 		name, path string
 		retire     bool
@@ -186,9 +199,14 @@ func TestEquipmentLifecycleUsesAuditedMutations(t *testing.T) {
 		{name: "reactivate", path: "/admin/fleet/equipment/" + id.String() + "/reactivate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id}}
+			store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}
 			h := Dashboard{Equipment: store}
-			r := equipmentRequest(http.MethodPost, tc.path, nil, actor)
+			values := url.Values{}
+			if tc.retire {
+				values.Set("confirm_retirement", "yes")
+				values.Set("expected_updated_at", now.Format(time.RFC3339Nano))
+			}
+			r := equipmentRequest(http.MethodPost, tc.path, values, actor)
 			r.SetPathValue("id", id.String())
 			w := httptest.NewRecorder()
 			if tc.retire {
@@ -199,7 +217,7 @@ func TestEquipmentLifecycleUsesAuditedMutations(t *testing.T) {
 			if w.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d", w.Code)
 			}
-			if tc.retire && (store.retireParams.EquipmentID != id || store.retireParams.ActorUserID != actor) {
+			if tc.retire && (store.retireParams.EquipmentID != id || store.retireParams.ActorUserID != actor || !store.retireParams.ExpectedUpdatedAt.Valid || !store.retireParams.ExpectedUpdatedAt.Time.Equal(now)) {
 				t.Fatalf("retire = %#v", store.retireParams)
 			}
 			if !tc.retire && (store.reactivateParams.EquipmentID != id || store.reactivateParams.ActorUserID != actor) {
@@ -211,14 +229,46 @@ func TestEquipmentLifecycleUsesAuditedMutations(t *testing.T) {
 
 func TestEquipmentLifecycleConflict(t *testing.T) {
 	id := uuid.New()
-	store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id}, retireErr: pgx.ErrNoRows}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, AssetTag: "K-01", Name: "Nome atualizado", UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}, retireErr: pgx.ErrNoRows}
 	h := Dashboard{Equipment: store}
-	r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String()+"/retire", nil, uuid.New())
+	r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String()+"/retire", url.Values{"confirm_retirement": {"yes"}, "expected_updated_at": {now.Add(-time.Minute).Format(time.RFC3339Nano)}}, uuid.New())
 	r.SetPathValue("id", id.String())
 	w := httptest.NewRecorder()
 	h.RetireEquipment(w, r)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("status = %d", w.Code)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alterado entretanto") || !strings.Contains(w.Body.String(), now.Format(time.RFC3339Nano)) {
+		t.Fatalf("response = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestEquipmentRetirementPreviewAndConfirmation(t *testing.T) {
+	id := uuid.New()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, AssetTag: "K-01", Name: "Kayak competição", Type: "Boat", Status: "Operational", UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}
+	h := Dashboard{Equipment: store}
+
+	request := equipmentRequest(http.MethodGet, "/admin/fleet/equipment/"+id.String()+"/retire?return_to=%2Fadmin%2Ffleet%3Fequipment_page%3D2%23equipment-"+id.String(), nil, uuid.New())
+	request.SetPathValue("id", id.String())
+	response := httptest.NewRecorder()
+	h.RetireEquipmentPage(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Retirar equipamento da frota") || !strings.Contains(response.Body.String(), "manutenções ativas") || !strings.Contains(response.Body.String(), `name="confirm_retirement"`) || !strings.Contains(response.Body.String(), `name="expected_updated_at" value="`+now.Format(time.RFC3339Nano)+`"`) || !strings.Contains(response.Body.String(), "equipment_page%3D2") {
+		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
+	}
+
+	request = equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String()+"/retire", url.Values{"expected_updated_at": {now.Format(time.RFC3339Nano)}}, uuid.New())
+	request.SetPathValue("id", id.String())
+	response = httptest.NewRecorder()
+	h.RetireEquipment(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "Confirme que pretende") {
+		t.Fatalf("confirmation = %d %s", response.Code, response.Body.String())
+	}
+
+	request = equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String()+"/retire", url.Values{"confirm_retirement": {"yes"}, "expected_updated_at": {"not-a-timestamp"}}, uuid.New())
+	request.SetPathValue("id", id.String())
+	response = httptest.NewRecorder()
+	h.RetireEquipment(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "confirmação expirou") || !strings.Contains(response.Body.String(), now.Format(time.RFC3339Nano)) || store.retireParams.EquipmentID != uuid.Nil {
+		t.Fatalf("version = %d params=%#v %s", response.Code, store.retireParams, response.Body.String())
 	}
 }
 

@@ -1,7 +1,106 @@
 document.documentElement.classList.add("js");
 
+const mobileNavigation = document.querySelector("[data-mobile-navigation]");
+const mobileNavigationTrigger = document.querySelector("[data-mobile-navigation-open]");
+const mobileNavigationFallback = document.querySelector("[data-mobile-navigation-fallback]");
+let mobileNavigationOpener = null;
+let mobileNavigationHistoryOwned = false;
+let mobileNavigationHistoryBackPending = false;
+let pendingMobileNavigationClose = null;
+
+function finishMobileNavigationClose(restoreFocus = true) {
+  if (!isDialog(mobileNavigation)) return;
+  if (mobileNavigation.open) mobileNavigation.close();
+  document.body.classList.remove("mobile-navigation-open");
+  mobileNavigationTrigger?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && mobileNavigationOpener?.isConnected) mobileNavigationOpener.focus();
+  mobileNavigationOpener = null;
+  mobileNavigationHistoryOwned = false;
+}
+
+function requestMobileNavigationClose({ restoreFocus = true, navigate = "", afterClose = null } = {}) {
+  if (!isDialog(mobileNavigation) || !mobileNavigation.open) {
+    if (navigate) window.location.assign(navigate);
+    else afterClose?.();
+    return;
+  }
+  if (mobileNavigationHistoryOwned) {
+    pendingMobileNavigationClose = { restoreFocus, navigate, afterClose };
+    mobileNavigationHistoryBackPending = true;
+    window.history.back();
+    return;
+  }
+  finishMobileNavigationClose(restoreFocus);
+  if (navigate) window.location.assign(navigate);
+  else afterClose?.();
+}
+
+function openMobileNavigation(opener) {
+  if (!isDialog(mobileNavigation) || mobileNavigation.open) return;
+  closeAnnouncementPanel(false);
+  mobileNavigationOpener = opener instanceof HTMLElement ? opener : null;
+  mobileNavigation.showModal();
+  document.body.classList.add("mobile-navigation-open");
+  mobileNavigationTrigger?.setAttribute("aria-expanded", "true");
+  window.history.pushState({ mycfcNavigation: true }, "", window.location.href);
+  mobileNavigationHistoryOwned = true;
+  mobileNavigationHistoryBackPending = false;
+  window.setTimeout(() => mobileNavigation.querySelector("[data-mobile-navigation-close]")?.focus(), 0);
+}
+
+if (isDialog(mobileNavigation) && mobileNavigationTrigger instanceof HTMLButtonElement && mobileNavigationFallback instanceof HTMLDetailsElement) {
+  mobileNavigationFallback.hidden = true;
+  mobileNavigationTrigger.hidden = false;
+  mobileNavigationTrigger.addEventListener("click", () => openMobileNavigation(mobileNavigationTrigger));
+  mobileNavigation.querySelector("[data-mobile-navigation-close]")?.addEventListener("click", () => requestMobileNavigationClose());
+  mobileNavigation.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    requestMobileNavigationClose();
+  });
+  mobileNavigation.addEventListener("click", (event) => {
+    if (event.target === mobileNavigation) {
+      requestMobileNavigationClose();
+      return;
+    }
+    const route = event.target.closest?.(".site-nav a[href]");
+    if (route instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      requestMobileNavigationClose({ restoreFocus: false, navigate: route.href });
+    }
+  });
+  mobileNavigation.addEventListener("keydown", (event) => containDialogFocus(mobileNavigation, event));
+
+  const mobileNavigationViewport = window.matchMedia("(max-width: 48rem)");
+  mobileNavigationViewport.addEventListener("change", (event) => {
+    if (event.matches || !mobileNavigation.open) return;
+    const shouldUnwindHistory = mobileNavigationHistoryOwned
+      && !mobileNavigationHistoryBackPending
+      && window.history.state?.mycfcNavigation === true;
+    finishMobileNavigationClose(false);
+    pendingMobileNavigationClose = null;
+    if (shouldUnwindHistory) {
+      mobileNavigationHistoryBackPending = true;
+      window.history.back();
+    }
+  });
+}
+
+window.addEventListener("popstate", () => {
+	const historyBackWasPending = mobileNavigationHistoryBackPending;
+	mobileNavigationHistoryBackPending = false;
+	if (!isDialog(mobileNavigation) || !mobileNavigation.open) {
+		if (historyBackWasPending) pendingMobileNavigationClose = null;
+		return;
+	}
+  const close = pendingMobileNavigationClose || { restoreFocus: true, navigate: "", afterClose: null };
+  pendingMobileNavigationClose = null;
+  finishMobileNavigationClose(close.restoreFocus);
+  if (close.navigate) window.location.assign(close.navigate);
+  else close.afterClose?.();
+});
+
 function focusReturnedFeedback(root = document) {
-  const target = root.querySelector?.(".error-summary, [role='status'][tabindex='-1'], [role='alert'][tabindex='-1']");
+  const target = root.querySelector?.(".error-summary, [data-task-feedback], [role='status'][tabindex='-1'], [role='alert'][tabindex='-1']");
   if (target instanceof HTMLElement) {
     target.focus({ preventScroll: true });
     target.scrollIntoView({ block: "nearest" });
@@ -50,9 +149,9 @@ function loadAnnouncementPanel() {
 }
 
 function openAnnouncementPanel(trigger) {
-  if (!(announcementPanel instanceof HTMLElement)) return;
-  announcementPanelOpener = trigger instanceof HTMLElement ? trigger : null;
-  document.querySelector(".mobile-app-menu[open]")?.removeAttribute("open");
+	if (!(announcementPanel instanceof HTMLElement)) return;
+	announcementPanelOpener = trigger instanceof HTMLElement ? trigger : null;
+	document.querySelector(".mobile-app-menu[open]")?.removeAttribute("open");
   announcementPanel.hidden = false;
   document.body.classList.add("announcement-panel-open");
   for (const candidate of announcementTriggers) candidate.setAttribute("aria-expanded", "true");
@@ -70,21 +169,28 @@ function closeAnnouncementPanel(restoreFocus = true) {
 
 if (announcementPanel && announcementTriggers.length > 0) {
   loadAnnouncementPanel().catch(() => {});
-  document.addEventListener("click", async (event) => {
-    const trigger = event.target.closest?.("[data-announcement-trigger]");
-    if (trigger instanceof HTMLAnchorElement) {
-      event.preventDefault();
-      if (!announcementPanel.hidden) {
-        closeAnnouncementPanel();
-        return;
-      }
-      try {
-        await loadAnnouncementPanel();
-        openAnnouncementPanel(trigger);
-      } catch {
-        window.location.assign(trigger.href);
-      }
-      return;
+	document.addEventListener("click", async (event) => {
+		const trigger = event.target.closest?.("[data-announcement-trigger]");
+		if (trigger instanceof HTMLAnchorElement) {
+			event.preventDefault();
+			const activate = async () => {
+				if (!announcementPanel.hidden) {
+					closeAnnouncementPanel();
+					return;
+				}
+				try {
+					await loadAnnouncementPanel();
+					openAnnouncementPanel(trigger);
+				} catch {
+					window.location.assign(trigger.href);
+				}
+			};
+			if (isDialog(mobileNavigation) && mobileNavigation.open) {
+				requestMobileNavigationClose({ restoreFocus: false, afterClose: () => { void activate(); } });
+				return;
+			}
+			await activate();
+			return;
     }
     if (event.target.closest?.("[data-announcement-close]")) {
       closeAnnouncementPanel();
@@ -152,6 +258,23 @@ function activateCollectionTab(link) {
   });
 }
 
+function collectionTabForHash(links, hash) {
+  const direct = links.find((link) => link.hash === hash && document.querySelector(link.hash)?.matches("[data-tab-panel]"));
+  if (direct) return direct;
+  if (!hash.startsWith("#")) return null;
+
+  let anchorID;
+  try {
+    anchorID = window.decodeURIComponent(hash.slice(1));
+  } catch {
+    return null;
+  }
+  const anchor = document.getElementById(anchorID);
+  const panel = anchor?.closest("[data-tab-panel]");
+  if (!(panel instanceof HTMLElement)) return null;
+  return links.find((link) => link.hash === `#${panel.id}`) || null;
+}
+
 for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
   navigation.setAttribute("role", "tablist");
   const links = [...navigation.querySelectorAll("a")];
@@ -165,7 +288,7 @@ for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
       panel.setAttribute("aria-labelledby", link.id);
     }
   }
-  const hashLink = links.find((link) => link.hash === window.location.hash && document.querySelector(link.hash)?.matches("[data-tab-panel]"));
+  const hashLink = collectionTabForHash(links, window.location.hash);
   const queryLink = [...new window.URLSearchParams(window.location.search).keys()].some((key) => key.startsWith("routine_"))
     ? links.find((link) => link.hash === "#training-routines")
     : null;
@@ -183,6 +306,116 @@ for (const navigation of document.querySelectorAll("[data-collection-tabs]")) {
     links[nextIndex].focus();
   });
 }
+
+function rowActionItems(menu) {
+  const panel = menu.querySelector("[data-row-action-menu-panel]");
+  if (!(panel instanceof HTMLElement)) return [];
+  return [...panel.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => element.getClientRects().length > 0);
+}
+
+function positionRowActionMenu(menu) {
+  const summary = menu.querySelector("summary");
+  const panel = menu.querySelector("[data-row-action-menu-panel]");
+  if (!(summary instanceof HTMLElement) || !(panel instanceof HTMLElement)) return;
+  const trigger = summary.getBoundingClientRect();
+  const width = Math.min(272, Math.max(208, window.innerWidth - 16));
+  const left = Math.max(8, Math.min(window.innerWidth - width - 8, trigger.right - width));
+  panel.style.setProperty("--row-action-inline-start", `${left}px`);
+  panel.style.setProperty("--row-action-block-start", `${Math.min(window.innerHeight - 64, trigger.bottom + 6)}px`);
+  panel.style.setProperty("--row-action-width", `${width}px`);
+}
+
+function closeRowActionMenu(menu, restoreFocus = false) {
+  if (!(menu instanceof HTMLDetailsElement)) return;
+  delete menu.dataset.opening;
+  const summary = menu.querySelector("summary");
+  const panel = menu.querySelector("[data-row-action-menu-panel]");
+  if (panel instanceof HTMLElement && panel.matches(":popover-open")) panel.hidePopover();
+  menu.open = false;
+  summary?.setAttribute("aria-expanded", "false");
+  if (restoreFocus) summary?.focus();
+}
+
+function openRowActionMenu(menu, focus = "") {
+  if (!(menu instanceof HTMLDetailsElement)) return;
+  document.querySelectorAll("details[data-row-action-menu][open]").forEach((candidate) => {
+    if (candidate !== menu) closeRowActionMenu(candidate);
+  });
+  menu.dataset.opening = "true";
+  window.requestAnimationFrame(() => {
+    if (menu.dataset.opening !== "true") return;
+    delete menu.dataset.opening;
+    const summary = menu.querySelector("summary");
+    const panel = menu.querySelector("[data-row-action-menu-panel]");
+    menu.open = true;
+    summary?.setAttribute("aria-expanded", "true");
+    positionRowActionMenu(menu);
+    if (panel instanceof HTMLElement && typeof panel.showPopover === "function") {
+      panel.setAttribute("popover", "manual");
+      if (!panel.matches(":popover-open")) panel.showPopover();
+    }
+    const items = rowActionItems(menu);
+    if (focus === "first") items[0]?.focus();
+    if (focus === "last") items.at(-1)?.focus();
+  });
+}
+
+for (const menu of document.querySelectorAll("details[data-row-action-menu]")) {
+  const summary = menu.querySelector("summary");
+  const panel = menu.querySelector("[data-row-action-menu-panel]");
+  summary?.setAttribute("aria-expanded", "false");
+  summary?.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (menu.open) closeRowActionMenu(menu, true);
+    else openRowActionMenu(menu);
+  });
+  summary?.addEventListener("keydown", (event) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    openRowActionMenu(menu, event.key === "ArrowUp" || event.key === "End" ? "last" : "first");
+  });
+  menu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeRowActionMenu(menu, true);
+      return;
+    }
+    if (event.key === "Tab") {
+      window.setTimeout(() => {
+        if (menu.open && !menu.contains(document.activeElement)) closeRowActionMenu(menu);
+      }, 0);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = rowActionItems(menu);
+    const index = items.indexOf(document.activeElement);
+    if (index < 0 || items.length === 0) return;
+    event.preventDefault();
+    let next = index;
+    if (event.key === "ArrowDown") next = (index + 1) % items.length;
+    if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+    if (event.key === "Home") next = 0;
+    if (event.key === "End") next = items.length - 1;
+    items[next].focus();
+  });
+  panel?.addEventListener("toggle", (event) => {
+    if (event.newState === "closed" && menu.open) {
+      menu.open = false;
+      summary?.setAttribute("aria-expanded", "false");
+    }
+  });
+}
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll("details[data-row-action-menu][open]").forEach((menu) => {
+    if (!menu.contains(event.target)) closeRowActionMenu(menu);
+  });
+});
+
+window.addEventListener("resize", () => document.querySelectorAll("details[data-row-action-menu][open]").forEach((menu) => closeRowActionMenu(menu)));
+window.addEventListener("scroll", () => document.querySelectorAll("details[data-row-action-menu][open]").forEach((menu) => closeRowActionMenu(menu)), { passive: true });
 
 for (const link of document.querySelectorAll('a[href^="#"]')) {
   const panel = document.querySelector(link.hash);
@@ -227,44 +460,227 @@ document.addEventListener("keydown", (event) => {
 const initialCreatePanel = window.location.hash ? document.querySelector(window.location.hash) : null;
 if (initialCreatePanel?.matches?.("[data-create-panel]")) openCreatePanel(initialCreatePanel, null);
 
-let taskDialogOpener = null;
+const taskStates = new WeakMap();
+let activeTaskDialog = null;
+let pendingDiscard = null;
 
-function openTaskDialog(dialog, opener) {
-  if (!(dialog instanceof HTMLElement) || typeof dialog.showModal !== "function") return;
-  taskDialogOpener = opener instanceof HTMLElement ? opener : null;
-  dialog.showModal();
-  const firstField = dialog.querySelector("input:not([type='hidden']), select, textarea");
-  (firstField || dialog.querySelector("[data-dialog-close]"))?.focus();
+function isDialog(element) {
+  return element instanceof HTMLElement && element.tagName === "DIALOG" && typeof element.showModal === "function";
 }
 
-function closeTaskDialog(dialog) {
-  if (!(dialog instanceof HTMLElement) || typeof dialog.close !== "function") return;
-  dialog.close();
-  taskDialogOpener?.focus();
-  taskDialogOpener = null;
+function taskState(dialog) {
+  let state = taskStates.get(dialog);
+  if (!state) {
+    state = { dirty: false, historyOwned: false, opener: null, restoringHistory: false };
+    taskStates.set(dialog, state);
+  }
+  return state;
+}
+
+function taskFocusTarget(dialog) {
+  for (const selector of [".error-summary", "[data-task-feedback]", "[data-task-initial-focus]", "input:not([type='hidden']):not([disabled])", "select:not([disabled])", "textarea:not([disabled])", "[data-task-close]", "[data-dialog-close]"]) {
+    const target = dialog.querySelector(selector);
+    if (target instanceof HTMLElement) return target;
+  }
+  return null;
+}
+
+function lockTaskDocument() {
+  document.body.classList.add("task-surface-open");
+}
+
+function unlockTaskDocument() {
+  if (!document.querySelector("dialog:modal")) document.body.classList.remove("task-surface-open");
+}
+
+function openTaskDialog(dialog, opener, updateHistory = true) {
+  if (!isDialog(dialog) || dialog.open) return;
+  const state = taskState(dialog);
+  state.opener = opener instanceof HTMLElement ? opener : null;
+  state.dirty = false;
+  state.historyOwned = false;
+  activeTaskDialog = dialog;
+  dialog.showModal();
+  lockTaskDocument();
+  if (updateHistory && dialog.dataset.taskUrl) {
+    window.history.pushState({ mycfcTask: dialog.id }, "", dialog.dataset.taskUrl);
+    state.historyOwned = true;
+  }
+  window.setTimeout(() => taskFocusTarget(dialog)?.focus(), 0);
+}
+
+function finishTaskClose(dialog, restoreFocus = true) {
+  if (!isDialog(dialog)) return;
+  const state = taskState(dialog);
+  if (dialog.open) dialog.close();
+  state.dirty = false;
+  state.historyOwned = false;
+  activeTaskDialog = activeTaskDialog === dialog ? null : activeTaskDialog;
+  unlockTaskDocument();
+  if (restoreFocus && state.opener?.isConnected) state.opener.focus();
+  state.opener = null;
+}
+
+function completeTaskClose(dialog) {
+  const state = taskState(dialog);
+  if (state.historyOwned) {
+    state.restoringHistory = true;
+    window.history.back();
+  } else {
+    finishTaskClose(dialog);
+  }
+}
+
+function closeDiscardConfirmation(restoreTaskFocus = true) {
+  const confirmation = document.querySelector("dialog[data-task-discard-confirmation]");
+  if (isDialog(confirmation) && confirmation.open) confirmation.close();
+  if (restoreTaskFocus && isDialog(pendingDiscard?.dialog)) {
+    const { dialog, previousFocus } = pendingDiscard;
+    const target = previousFocus instanceof HTMLElement && previousFocus.isConnected && dialog.contains(previousFocus)
+      ? previousFocus
+      : taskFocusTarget(dialog);
+    target?.focus();
+  }
+  pendingDiscard = null;
+}
+
+function confirmTaskDiscard(dialog, onDiscard = () => completeTaskClose(dialog)) {
+  const confirmation = document.querySelector("dialog[data-task-discard-confirmation]");
+  if (!isDialog(confirmation)) return;
+  const previousFocus = document.activeElement;
+  pendingDiscard = { dialog, onDiscard, previousFocus };
+  confirmation.showModal();
+  confirmation.querySelector("[data-task-keep-editing]")?.focus();
+}
+
+function resetTaskForm(dialog) {
+  const form = dialog.querySelector("form[data-task-form]");
+  if (!(form instanceof HTMLFormElement)) return;
+  form.reset();
+  for (const password of form.querySelectorAll("input[type='password']")) password.value = "";
+  syncTaskAccountFields(form);
+}
+
+function requestTaskClose(dialog) {
+  if (!isDialog(dialog)) return;
+  if (taskState(dialog).dirty) {
+    confirmTaskDiscard(dialog);
+    return;
+  }
+  completeTaskClose(dialog);
+}
+
+function containDialogFocus(dialog, event) {
+  if (event.key !== "Tab") return;
+  const modalDialogs = [...document.querySelectorAll("dialog:modal")];
+  if (modalDialogs.at(-1) !== dialog) return;
+  const focusable = [...dialog.querySelectorAll("a[href], button:not([disabled]), input:not([type='hidden']):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+    .filter((element) => element.getClientRects().length > 0);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  if (focusable.length === 1) {
+    event.preventDefault();
+    focusable[0].focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 document.addEventListener("click", (event) => {
-  const opener = event.target.closest?.("[data-dialog-open]");
-  if (opener instanceof HTMLButtonElement) {
-    const dialog = document.getElementById(opener.dataset.dialogOpen || "");
-    if (dialog instanceof HTMLElement && typeof dialog.showModal === "function") openTaskDialog(dialog, opener);
+  const opener = event.target.closest?.("[data-task-open], [data-dialog-open]");
+  if (opener instanceof HTMLElement) {
+    const dialogID = opener.dataset.taskOpen || opener.dataset.dialogOpen || "";
+    const dialog = document.getElementById(dialogID);
+    if (isDialog(dialog)) {
+      event.preventDefault();
+      openTaskDialog(dialog, opener);
+    }
     return;
   }
-  const closer = event.target.closest?.("[data-dialog-close]");
-  if (closer instanceof HTMLButtonElement) closeTaskDialog(closer.closest("dialog"));
+  const closer = event.target.closest?.("[data-task-close], [data-dialog-close], [data-task-cancel]");
+  const taskDialog = closer?.closest?.("dialog[data-task-surface], dialog[data-task-dialog]");
+  if (isDialog(taskDialog)) {
+    event.preventDefault();
+    requestTaskClose(taskDialog);
+    return;
+  }
+  if (event.target.closest?.("[data-task-keep-editing]")) {
+    closeDiscardConfirmation();
+    return;
+  }
+  if (event.target.closest?.("[data-task-confirm-discard]")) {
+    const decision = pendingDiscard;
+    closeDiscardConfirmation(false);
+    if (isDialog(decision?.dialog)) {
+      taskState(decision.dialog).dirty = false;
+      resetTaskForm(decision.dialog);
+      decision.onDiscard();
+    }
+  }
 });
 
-for (const dialog of document.querySelectorAll("dialog[data-task-dialog]")) {
+for (const dialog of document.querySelectorAll("dialog[data-task-surface], dialog[data-task-dialog]")) {
   dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) closeTaskDialog(dialog);
+    if (event.target === dialog) requestTaskClose(dialog);
   });
-  dialog.addEventListener("close", () => {
-    if (taskDialogOpener) {
-      taskDialogOpener.focus();
-      taskDialogOpener = null;
-    }
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    requestTaskClose(dialog);
   });
+  dialog.addEventListener("keydown", (event) => containDialogFocus(dialog, event));
+  dialog.querySelector("form[data-task-form]")?.addEventListener("input", () => { taskState(dialog).dirty = true; });
+  dialog.querySelector("form[data-task-form]")?.addEventListener("change", () => { taskState(dialog).dirty = true; });
+}
+
+document.querySelector("dialog[data-task-discard-confirmation]")?.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeDiscardConfirmation();
+});
+document.querySelector("dialog[data-task-discard-confirmation]")?.addEventListener("keydown", (event) => {
+  containDialogFocus(event.currentTarget, event);
+});
+
+window.addEventListener("popstate", () => {
+  if (!isDialog(activeTaskDialog) || !activeTaskDialog.open) return;
+  const dialog = activeTaskDialog;
+  const state = taskState(dialog);
+  if (state.restoringHistory || !state.dirty) {
+    state.restoringHistory = false;
+    finishTaskClose(dialog);
+    return;
+  }
+  window.history.pushState({ mycfcTask: dialog.id }, "", dialog.dataset.taskUrl || window.location.href);
+  state.historyOwned = true;
+  confirmTaskDiscard(dialog, () => {
+    state.restoringHistory = true;
+    window.history.back();
+  });
+});
+
+function syncTaskAccountFields(form) {
+  const selected = form?.querySelector("[data-account-type] input[type='radio']:checked")?.value;
+  for (const group of form?.querySelectorAll("[data-account-fields]") || []) {
+    const active = group.dataset.accountFields === selected;
+    group.hidden = !active;
+    for (const field of group.querySelectorAll("input, select, textarea")) field.disabled = !active;
+  }
+}
+
+for (const form of document.querySelectorAll("form[data-task-form]:has([data-account-type])")) {
+  for (const control of form.querySelectorAll("[data-account-type] input[type='radio']")) {
+    control.addEventListener("change", () => syncTaskAccountFields(form));
+  }
+  syncTaskAccountFields(form);
 }
 
 for (const card of document.querySelectorAll("[data-training-card]")) {
@@ -399,9 +815,151 @@ document.addEventListener("htmx:afterSwap", (event) => {
 	initRepairDuplicateWarnings(event.detail?.target || document);
 });
 
+const submittingTaskForms = new WeakSet();
+const submittingLocalForms = new WeakSet();
+
+function setPendingSubmitter(form, submitter) {
+  if (!(submitter instanceof HTMLElement) || !submitter.matches("button, input")) return;
+  submitter.dataset.idleLabel = submitter.textContent || submitter.value;
+  if (submitter.tagName === "INPUT") submitter.value = "A processar…";
+  else submitter.textContent = "A processar…";
+  submitter.disabled = true;
+  form.dataset.pendingSubmitter = "true";
+}
+
+function resetPendingForm(form) {
+  if (!(form instanceof HTMLFormElement)) return;
+  submittingTaskForms.delete(form);
+  submittingLocalForms.delete(form);
+  delete form.dataset.localSubmitting;
+  form.removeAttribute("aria-busy");
+  form.querySelector("[data-pending-status]")?.remove();
+  for (const submitter of form.querySelectorAll("[data-idle-label], [data-task-submit][disabled]")) {
+    const idleLabel = submitter.dataset.idleLabel;
+    if (submitter.tagName === "INPUT") submitter.value = idleLabel || submitter.value;
+    else if (idleLabel) submitter.textContent = idleLabel;
+    delete submitter.dataset.idleLabel;
+    submitter.disabled = false;
+  }
+  delete form.dataset.pendingSubmitter;
+}
+
+function showLocalMutationError(form, message) {
+  resetPendingForm(form);
+  let feedback = form.parentElement?.querySelector("[data-local-network-error]");
+  if (!(feedback instanceof HTMLElement)) {
+    feedback = document.createElement("p");
+    feedback.dataset.localNetworkError = "true";
+    feedback.className = "status-message";
+    feedback.setAttribute("role", "alert");
+    feedback.setAttribute("tabindex", "-1");
+    form.before(feedback);
+  }
+  feedback.textContent = message;
+  feedback.focus();
+}
+
+function clearLocalMutationFeedback(form) {
+  const target = form.closest("[data-local-action]");
+  if (!(target instanceof HTMLElement)) return;
+  for (const feedback of target.querySelectorAll("[data-local-network-error], [data-local-response-feedback]")) {
+    feedback.remove();
+  }
+}
+
+async function submitLocalMutation(form) {
+  const targetSelector = form.getAttribute("hx-target");
+  const target = targetSelector ? document.querySelector(targetSelector) : null;
+  try {
+    const action = new window.URL(form.getAttribute("hx-post") || form.action, window.location.href);
+    if (action.origin !== window.location.origin) {
+      showLocalMutationError(form, "A ação não pôde ser validada. Atualize a página e tente novamente.");
+      return;
+    }
+    const body = new window.URLSearchParams();
+    for (const [key, value] of new FormData(form)) {
+      if (typeof value === "string") body.append(key, value);
+    }
+    const response = await fetch(action, {
+      method: "POST",
+      body,
+      headers: { "HX-Request": "true" },
+      credentials: "same-origin",
+    });
+    const responseURL = new window.URL(response.url);
+    if (response.redirected) {
+      if (responseURL.origin === window.location.origin) window.location.assign(responseURL.href);
+      else showLocalMutationError(form, "A sessão mudou. Atualize a página e tente novamente.");
+      return;
+    }
+    const contentType = response.headers.get("Content-Type") || "";
+    const html = await response.text();
+    if (responseURL.origin !== window.location.origin || responseURL.pathname !== action.pathname || !contentType.toLowerCase().includes("text/html") || ![200, 409, 422].includes(response.status) || /<!doctype|<html[\s>]|<body[\s>]/i.test(html)) {
+      showLocalMutationError(form, "A resposta não pôde ser aplicada. Atualize a página e tente novamente.");
+      return;
+    }
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const primary = template.content.firstElementChild;
+    if (!(target instanceof HTMLElement) || !(primary instanceof HTMLElement) || primary.id !== target.id || !primary.matches("[data-local-action]")) {
+      showLocalMutationError(form, "A resposta não pôde ser aplicada. Atualize a página e tente novamente.");
+      return;
+    }
+    const expectedStatusID = target.id.replace("-action-", "-status-");
+    for (const replacement of template.content.querySelectorAll("[hx-swap-oob]")) {
+      if (replacement.id !== expectedStatusID || !replacement.matches("[data-local-status]")) continue;
+      const current = document.getElementById(expectedStatusID);
+      replacement.removeAttribute("hx-swap-oob");
+      if (current) current.replaceWith(replacement);
+    }
+    if (response.ok) {
+      target.replaceWith(primary);
+      const feedback = primary.querySelector('[role="alert"], [role="status"]');
+      if (feedback instanceof HTMLElement) feedback.focus();
+    } else {
+      target.querySelector("[data-local-response-feedback]")?.remove();
+      const responseFeedback = primary.querySelector("[data-local-response-feedback]");
+      const responseAlert = responseFeedback?.querySelector('[role="alert"]');
+      if (!(responseFeedback instanceof HTMLElement) || !(responseAlert instanceof HTMLElement)) {
+        showLocalMutationError(form, "A resposta não pôde ser aplicada. Atualize a página e tente novamente.");
+        return;
+      }
+      target.prepend(responseFeedback);
+      resetPendingForm(form);
+      responseAlert.focus();
+    }
+  } catch {
+    showLocalMutationError(form, "Não foi possível concluir a ação. Tente novamente.");
+  }
+}
+
 document.addEventListener("submit", (event) => {
   const form = event.target;
-  if (form instanceof HTMLFormElement && form.matches("form[hx-post]")) {
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.matches("form[data-task-form]")) {
+    if (submittingTaskForms.has(form)) {
+      event.preventDefault();
+      return;
+    }
+    submittingTaskForms.add(form);
+    taskState(form.closest("dialog") || form).dirty = false;
+    form.setAttribute("aria-busy", "true");
+    setPendingSubmitter(form, event.submitter);
+  }
+  if (form.matches("form[data-local-mutation]")) {
+    if (submittingLocalForms.has(form) || form.dataset.localSubmitting === "true") {
+      event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    clearLocalMutationFeedback(form);
+    submittingLocalForms.add(form);
+    form.dataset.localSubmitting = "true";
+    setPendingSubmitter(form, event.submitter);
+    form.setAttribute("aria-busy", "true");
+    void submitLocalMutation(form);
+  }
+  if (form.matches("form[hx-post], form[data-task-form]")) {
     form.setAttribute("aria-busy", "true");
     if (!form.querySelector("[data-pending-status]")) {
       const pending = document.createElement("span");
@@ -417,7 +975,15 @@ document.addEventListener("submit", (event) => {
 for (const eventName of ["htmx:responseError", "htmx:sendError"]) {
   document.addEventListener(eventName, (event) => {
     const form = event.detail?.elt?.closest?.("form[hx-post]");
-    form?.removeAttribute("aria-busy");
-    form?.querySelector("[data-pending-status]")?.remove();
+    resetPendingForm(form);
   });
 }
+
+window.addEventListener("pageshow", () => {
+	for (const form of document.querySelectorAll("form[data-task-form], form[data-local-mutation]")) {
+    for (const password of form.querySelectorAll("input[type='password']")) password.value = "";
+		if (form.matches("form[data-task-form]")) syncTaskAccountFields(form);
+    if (form.getAttribute("aria-busy") !== "true") continue;
+		resetPendingForm(form);
+  }
+});
