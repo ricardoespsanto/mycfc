@@ -541,7 +541,9 @@ test.describe('authentication', () => {
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
-    await equipment.getByRole('button', { name: 'Retirar da frota' }).click();
+    await equipment.getByRole('link', { name: 'Retirar da frota' }).click();
+    await page.getByLabel(/Confirmo que pretendo retirar/).check();
+    await page.getByRole('button', { name: 'Retirar equipamento da frota' }).click();
     await expect(page.getByRole('status')).toContainText('Equipamento retirado da frota');
     await expect(page.getByText(maintenanceDescription)).toHaveCount(0);
 
