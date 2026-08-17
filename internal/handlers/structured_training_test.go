@@ -566,7 +566,7 @@ func TestUpdateStructuredWeekLoadRequiresScopedCoachAndValidPercentage(t *testin
 func int16Pointer(value int16) *int16 { return &value }
 
 func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) {
-	userID, programmeID, membershipID := uuid.New(), uuid.New(), uuid.New()
+	userID, programmeID, membershipID, groupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	planID, sessionID, segmentID, blockID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	store := &structuredTrainingStoreStub{manageable: true, weekOK: true, planID: planID}
 	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
@@ -584,6 +584,7 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 
 	sessionValues := url.Values{
 		"plan_id":     {planID.String()},
+		"return_to":   {structuredPlannerURL(groupID.String(), planID.String(), "")},
 		"title":       {"Ginásio + água"},
 		"description": {"Sessão híbrida"},
 		"starts_at":   {"2026-08-18T17:00"},
@@ -593,6 +594,9 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/sessoes", sessionValues, "", "", handler.CreateSession)
 	if response.Code != http.StatusSeeOther || len(store.sessions) != 1 || store.sessions[0].PlanID != planID || store.sessions[0].EntryKind != dbgen.TrainingEntryKindTRAINING {
 		t.Fatalf("session response=%d inputs=%#v", response.Code, store.sessions)
+	}
+	if location := response.Header().Get("Location"); !strings.Contains(location, "group_id="+groupID.String()) || !strings.Contains(location, "week_id="+planID.String()) || !strings.Contains(location, "session_id=") {
+		t.Fatalf("session redirect lost planner context: %q", location)
 	}
 
 	segmentValues := url.Values{
@@ -839,6 +843,25 @@ func TestStructuredPlannerSelectionKeepsAValidDeepLinkedContext(t *testing.T) {
 	}
 	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "unknown", "unknown", "unknown"); groupID != "group-a" || weekID != "week-a" || sessionID != "session-a" {
 		t.Fatalf("invalid selection should fall back to the first available context, got %q, %q, %q", groupID, weekID, sessionID)
+	}
+}
+
+func TestStructuredPlannerReturnRejectsForeignOrMalformedContext(t *testing.T) {
+	groupID, weekID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	valid := structuredPlannerURL(groupID.String(), weekID.String(), sessionID.String())
+	if got := structuredPlannerReturn(valid); got != valid {
+		t.Fatalf("valid planner return = %q, want %q", got, valid)
+	}
+	if got := structuredPlannerWeekReturn(valid, weekID.String()); got != valid {
+		t.Fatalf("week return = %q, want %q", got, valid)
+	}
+	if got := structuredPlannerSessionReturn(valid, weekID.String(), uuid.New().String()); !strings.Contains(got, "session_id=") {
+		t.Fatalf("session return did not retain the selected context: %q", got)
+	}
+	for _, raw := range []string{"https://example.test/admin/treinos/estruturados", "/admin/treinos/estruturados?group_id=" + groupID.String(), "/admin/treinos/estruturados?group_id=" + groupID.String() + "&unknown=value#training-plan", "/admin/treinos/estruturados?group_id=invalid#training-plan"} {
+		if got := structuredPlannerReturn(raw); got != "" {
+			t.Fatalf("unsafe return %q normalized to %q", raw, got)
+		}
 	}
 }
 

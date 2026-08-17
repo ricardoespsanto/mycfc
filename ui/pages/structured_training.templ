@@ -134,6 +134,7 @@ type StructuredTrainingPage struct {
 	Publications                                               []StructuredPublicationState
 	CrewModalities, CompetitionEvents                          []StructuredTrainingChoice
 	SelectedGroupID, SelectedWeekID, SelectedSessionID         string
+	PlannerReturnURL                                            string
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
 	SessionForm                                                 StructuredTrainingSessionForm
@@ -625,6 +626,7 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 }
 
 func structuredSubjectLabel(subject StructuredTrainingSubjectChoice) string { if subject.Self { return subject.Name + " (eu)" }; return subject.Name }
+func structuredPlannerReturnURL(page StructuredTrainingPage) string { if page.PlannerReturnURL != "" { return page.PlannerReturnURL }; return "/admin/treinos/estruturados#training-plan" }
 
 templ structuredVariationManagement(page StructuredTrainingPage) {
 	<section id="training-variations" class="module" aria-labelledby="training-variations-title" data-tab-panel>
@@ -916,6 +918,7 @@ templ structuredWeekLoadForm(page StructuredTrainingPage, week StructuredTrainin
 		<div class="task-dialog__header"><div><p class="eyebrow">{ week.DateRange }</p><h3 id={ "week-load-title-" + week.ID }>Carga planeada · { week.Title }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + week.ID + "/carga") }>
 			@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			@components.FieldLabel("week-load-input-" + week.ID, "Carga planeada (%)", false)
 			<input id={ "week-load-input-" + week.ID } name="planned_load_percentage" type="number" min="0" max="100" value={ strings.TrimSuffix(week.PlannedLoad, "%") } aria-describedby={ "week-load-help-" + week.ID }/>
 			<small id={ "week-load-help-" + week.ID }>Distribuição de carga definida pelo treinador. Não é uma medição do atleta, %1RM, esforço percebido nem uma recomendação automática.</small>
@@ -993,6 +996,7 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas">
 				@page.CSRFField
+				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-week-group", "Grupo", true)
 				<select id="structured-week-group" name="group_id" required>
@@ -1010,7 +1014,7 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 				<small id="structured-week-load-help">Distribuição de carga definida pelo treinador. Não é %1RM, esforço percebido nem uma recomendação automática.</small>
 				@components.FieldLabel("structured-week-description", "Notas (opcional)", false)
 				<textarea id="structured-week-description" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>
-				@components.FormActions("/admin/treinos/estruturados") {
+				@components.FormActions(structuredPlannerReturnURL(page)) {
 					<button type="submit">Criar semana</button>
 				}
 			</form>
@@ -1025,6 +1029,7 @@ templ structuredSessionForm(page StructuredTrainingPage) {
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes">
 				@page.CSRFField
+				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-session-week", "Semana", true)
 				<select id="structured-session-week" name="plan_id" required>
@@ -1047,7 +1052,7 @@ templ structuredSessionForm(page StructuredTrainingPage) {
 				<input id="structured-session-end" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
 				@components.FieldLabel("structured-session-description", "Instruções gerais (opcional)", false)
 				<textarea id="structured-session-description" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>
-				@components.FormActions("/admin/treinos/estruturados") {
+				@components.FormActions(structuredPlannerReturnURL(page)) {
 					<button type="submit">Criar sessão</button>
 				}
 			</form>

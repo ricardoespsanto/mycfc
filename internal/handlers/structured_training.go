@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,12 +182,17 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	}
 	page.Meta = h.meta(r, user, page.Management)
 	if page.Management {
+		requestedGroupID, requestedWeekID, requestedSessionID := r.URL.Query().Get("group_id"), r.URL.Query().Get("week_id"), r.URL.Query().Get("session_id")
+		if returnGroupID, returnWeekID, returnSessionID := structuredPlannerContextFromReturn(page.PlannerReturnURL); returnGroupID != "" {
+			requestedGroupID, requestedWeekID, requestedSessionID = returnGroupID, returnWeekID, returnSessionID
+		}
 		page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID = structuredPlannerSelection(
 			page.Audiences,
-			r.URL.Query().Get("group_id"),
-			r.URL.Query().Get("week_id"),
-			r.URL.Query().Get("session_id"),
+			requestedGroupID,
+			requestedWeekID,
+			requestedSessionID,
 		)
+		page.PlannerReturnURL = structuredPlannerURL(page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID)
 	}
 	page.Meta.PageLabel = "Planeamento semanal"
 	if page.Management {
@@ -204,6 +210,75 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.StructuredTraining(page).Render(r.Context(), w)
+}
+
+const structuredPlannerPath = "/admin/treinos/estruturados"
+
+func structuredPlannerURL(groupID, weekID, sessionID string) string {
+	values := url.Values{}
+	if groupID != "" {
+		values.Set("group_id", groupID)
+	}
+	if weekID != "" {
+		values.Set("week_id", weekID)
+	}
+	if sessionID != "" {
+		values.Set("session_id", sessionID)
+	}
+	if len(values) == 0 {
+		return structuredPlannerPath + "#training-plan"
+	}
+	return structuredPlannerPath + "?" + values.Encode() + "#training-plan"
+}
+
+func structuredPlannerReturn(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil || parsed.Path != structuredPlannerPath || parsed.Fragment != "training-plan" {
+		return ""
+	}
+	values := parsed.Query()
+	for key, entries := range values {
+		if (key != "group_id" && key != "week_id" && key != "session_id") || len(entries) != 1 {
+			return ""
+		}
+	}
+	for _, key := range []string{"group_id", "week_id", "session_id"} {
+		if value := values.Get(key); value != "" {
+			id, parseErr := uuid.Parse(value)
+			if parseErr != nil || id.String() != value {
+				return ""
+			}
+		}
+	}
+	if values.Get("group_id") == "" {
+		return ""
+	}
+	return structuredPlannerURL(values.Get("group_id"), values.Get("week_id"), values.Get("session_id"))
+}
+
+func structuredPlannerContextFromReturn(raw string) (groupID, weekID, sessionID string) {
+	normalized := structuredPlannerReturn(raw)
+	if normalized == "" {
+		return "", "", ""
+	}
+	parsed, _ := url.Parse(normalized)
+	return parsed.Query().Get("group_id"), parsed.Query().Get("week_id"), parsed.Query().Get("session_id")
+}
+
+func structuredPlannerSessionReturn(raw, weekID, sessionID string) string {
+	groupID, selectedWeekID, _ := structuredPlannerContextFromReturn(raw)
+	if selectedWeekID != weekID {
+		return ""
+	}
+	return structuredPlannerURL(groupID, weekID, sessionID)
+}
+
+func structuredPlannerWeekReturn(raw, weekID string) string {
+	groupID, selectedWeekID, sessionID := structuredPlannerContextFromReturn(raw)
+	if selectedWeekID != weekID {
+		return ""
+	}
+	return structuredPlannerURL(groupID, weekID, sessionID)
 }
 
 func structuredPlannerSelection(audiences []pages.StructuredTrainingAudience, requestedGroupID, requestedWeekID, requestedSessionID string) (groupID, weekID, sessionID string) {
@@ -409,6 +484,7 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
 	form := pages.StructuredTrainingWeekForm{GroupID: r.PostForm.Get("group_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), WeekStart: r.PostForm.Get("week_start"), PlannedLoad: strings.TrimSpace(r.PostForm.Get("planned_load_percentage")), Errors: validation.FieldErrors{}}
 	groupID, groupErr := uuid.Parse(form.GroupID)
 	weekStart, dateErr := time.ParseInLocation("2006-01-02", form.WeekStart, h.location())
@@ -434,13 +510,13 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form})
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form, PlannerReturnURL: returnTo})
 		return
 	}
-	_, err := h.Store.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: form.Title, Description: form.Description, WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: plannedLoad, CreatedByID: user.ID, GroupID: groupID})
+	created, err := h.Store.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: form.Title, Description: form.Description, WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: plannedLoad, CreatedByID: user.ID, GroupID: groupID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		form.Errors.Add("week_start", "A semana tem de pertencer a uma época registada.")
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form})
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form, PlannerReturnURL: returnTo})
 		return
 	}
 	if err != nil {
@@ -448,7 +524,7 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Semana de treino criada.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	httpx.Redirect(w, r, structuredPlannerURL(form.GroupID, created.ID.String(), ""), http.StatusSeeOther)
 }
 
 func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Request) {
@@ -456,6 +532,7 @@ func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Reques
 		h.renderIndex(w, r, http.StatusBadRequest, pages.StructuredTrainingPage{Error: "Não foi possível ler o formulário."})
 		return
 	}
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
 	weekID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)
@@ -463,7 +540,7 @@ func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Reques
 	}
 	load, err := optionalBoundedInt16(strings.TrimSpace(r.PostForm.Get("planned_load_percentage")), 0, 100)
 	if err != nil {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{Error: "Indique uma percentagem entre 0 e 100 ou deixe em branco."})
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{Error: "Indique uma percentagem entre 0 e 100 ou deixe em branco.", PlannerReturnURL: returnTo})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -482,7 +559,11 @@ func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.flash(r, "Carga planeada da semana atualizada.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if destination := structuredPlannerWeekReturn(returnTo, weekID.String()); destination != "" {
+		httpx.Redirect(w, r, destination, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-plan", http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +572,7 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
 	form := pages.StructuredTrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), EntryKind: r.PostForm.Get("entry_kind"), Errors: validation.FieldErrors{}}
 	planID, planErr := uuid.Parse(form.PlanID)
 	startsAt, startErr := time.ParseInLocation("2006-01-02T15:04", form.StartsAt, h.location())
@@ -522,13 +604,13 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "session", SessionForm: form})
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "session", SessionForm: form, PlannerReturnURL: returnTo})
 		return
 	}
-	_, err := h.Store.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{Title: form.Title, Description: form.Description, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: endsAt, Valid: true}, EntryKind: entryKind, CreatedByID: user.ID, PlanID: planID})
+	created, err := h.Store.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{Title: form.Title, Description: form.Description, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: endsAt, Valid: true}, EntryKind: entryKind, CreatedByID: user.ID, PlanID: planID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		form.Errors.Add("starts_at", "A sessão tem de ficar inteiramente dentro da semana selecionada.")
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "session", SessionForm: form})
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "session", SessionForm: form, PlannerReturnURL: returnTo})
 		return
 	}
 	if err != nil {
@@ -536,7 +618,11 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.flash(r, "Sessão estruturada criada.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if destination := structuredPlannerSessionReturn(returnTo, form.PlanID, created.ID.String()); destination != "" {
+		httpx.Redirect(w, r, destination, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-plan", http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request) {
