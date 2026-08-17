@@ -513,7 +513,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Notas (opcional)').fill('Notas atualizadas');
     await page.getByLabel('Substituir fotografia (opcional)').setInputFiles({ name: 'pagaia.png', mimeType: 'image/png', buffer: validPNG });
     await page.getByRole('button', { name: 'Guardar alterações' }).click();
-    await expect(page).toHaveURL(/^\/admin\/fleet#equipment-[0-9a-f-]+$/);
+    await expect(page).toHaveURL(/\/admin\/fleet#equipment-[0-9a-f-]+$/);
     await expect(page.getByRole('status')).toHaveText('Equipamento atualizado.');
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
