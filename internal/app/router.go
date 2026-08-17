@@ -127,6 +127,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /admin/treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.Index))))
 	mux.Handle("POST /admin/treinos/estruturados/grupos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateGroup))))
 	mux.Handle("POST /admin/treinos/estruturados/semanas", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateWeek))))
+	mux.Handle("POST /admin/treinos/estruturados/semanas/{id}/carga", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.UpdateWeekLoad))))
 	mux.Handle("POST /admin/treinos/estruturados/sessoes", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSession))))
 	mux.Handle("POST /admin/treinos/estruturados/sessoes/{id}/segmentos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSegment))))
 	mux.Handle("POST /admin/treinos/estruturados/segmentos/{id}/blocos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateBlock))))

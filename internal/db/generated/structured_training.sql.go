@@ -299,9 +299,9 @@ func (q *Queries) CreateStructuredTrainingSession(ctx context.Context, arg Creat
 }
 
 const createStructuredTrainingWeek = `-- name: CreateStructuredTrainingWeek :one
-INSERT INTO training_plans (title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id)
+INSERT INTO training_plans (title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id)
 SELECT $1, $2, group_row.programme_id, group_row.team_id,
-       group_row.id, season.id, $3, $4
+       group_row.id, season.id, $3, $4, $5
 FROM training_groups group_row
 JOIN LATERAL (
     SELECT season_row.id
@@ -310,16 +310,17 @@ JOIN LATERAL (
     ORDER BY season_row.is_current DESC, season_row.starts_on DESC, season_row.id
     LIMIT 1
 ) season ON true
-WHERE group_row.id = $5
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id, created_at, updated_at
+WHERE group_row.id = $6
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at
 `
 
 type CreateStructuredTrainingWeekParams struct {
-	Title       string      `json:"title"`
-	Description string      `json:"description"`
-	WeekStart   pgtype.Date `json:"week_start"`
-	CreatedByID uuid.UUID   `json:"created_by_id"`
-	GroupID     uuid.UUID   `json:"group_id"`
+	Title                 string      `json:"title"`
+	Description           string      `json:"description"`
+	WeekStart             pgtype.Date `json:"week_start"`
+	PlannedLoadPercentage *int16      `json:"planned_load_percentage"`
+	CreatedByID           uuid.UUID   `json:"created_by_id"`
+	GroupID               uuid.UUID   `json:"group_id"`
 }
 
 func (q *Queries) CreateStructuredTrainingWeek(ctx context.Context, arg CreateStructuredTrainingWeekParams) (TrainingPlan, error) {
@@ -327,6 +328,7 @@ func (q *Queries) CreateStructuredTrainingWeek(ctx context.Context, arg CreateSt
 		arg.Title,
 		arg.Description,
 		arg.WeekStart,
+		arg.PlannedLoadPercentage,
 		arg.CreatedByID,
 		arg.GroupID,
 	)
@@ -340,6 +342,7 @@ func (q *Queries) CreateStructuredTrainingWeek(ctx context.Context, arg CreateSt
 		&i.TrainingGroupID,
 		&i.SeasonID,
 		&i.WeekStart,
+		&i.PlannedLoadPercentage,
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -573,7 +576,7 @@ SELECT $1, COALESCE(max(segment.position), 0) + 1,
 FROM training_sessions session
 LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
-WHERE session.id = $1 AND session.entry_kind = 'TRAINING'
+WHERE session.id = $1 AND session.entry_kind IN ('TRAINING', 'COMPETITION')
 GROUP BY session.id
 RETURNING id
 `
@@ -1096,18 +1099,19 @@ func (q *Queries) GetStructuredBlockPlanID(ctx context.Context, blockID uuid.UUI
 }
 
 const getStructuredPlanCopySource = `-- name: GetStructuredPlanCopySource :one
-SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.updated_at
+SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.planned_load_percentage, plan.updated_at
 FROM training_plans plan
 WHERE plan.id = $1 AND plan.training_group_id IS NOT NULL
 `
 
 type GetStructuredPlanCopySourceRow struct {
-	ID              uuid.UUID          `json:"id"`
-	TrainingGroupID *uuid.UUID         `json:"training_group_id"`
-	Title           string             `json:"title"`
-	Description     string             `json:"description"`
-	WeekStart       pgtype.Date        `json:"week_start"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                    uuid.UUID          `json:"id"`
+	TrainingGroupID       *uuid.UUID         `json:"training_group_id"`
+	Title                 string             `json:"title"`
+	Description           string             `json:"description"`
+	WeekStart             pgtype.Date        `json:"week_start"`
+	PlannedLoadPercentage *int16             `json:"planned_load_percentage"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) GetStructuredPlanCopySource(ctx context.Context, planID uuid.UUID) (GetStructuredPlanCopySourceRow, error) {
@@ -1119,6 +1123,7 @@ func (q *Queries) GetStructuredPlanCopySource(ctx context.Context, planID uuid.U
 		&i.Title,
 		&i.Description,
 		&i.WeekStart,
+		&i.PlannedLoadPercentage,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -1847,7 +1852,7 @@ const listStructuredTrainingOverviewForManager = `-- name: ListStructuredTrainin
 SELECT group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
-       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start,
+       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
@@ -1926,6 +1931,7 @@ type ListStructuredTrainingOverviewForManagerRow struct {
 	PlanDescription              *string                   `json:"plan_description"`
 	SeasonName                   *string                   `json:"season_name"`
 	WeekStart                    pgtype.Date               `json:"week_start"`
+	PlannedLoadPercentage        *int16                    `json:"planned_load_percentage"`
 	SessionID                    *uuid.UUID                `json:"session_id"`
 	SessionTitle                 *string                   `json:"session_title"`
 	SessionDescription           *string                   `json:"session_description"`
@@ -2014,6 +2020,7 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 			&i.PlanDescription,
 			&i.SeasonName,
 			&i.WeekStart,
+			&i.PlannedLoadPercentage,
 			&i.SessionID,
 			&i.SessionTitle,
 			&i.SessionDescription,
@@ -2094,7 +2101,7 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 const listStructuredTrainingOverviewForSubject = `-- name: ListStructuredTrainingOverviewForSubject :many
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        group_row.id AS group_id, group_row.name AS group_name,
-       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start,
+       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
@@ -2165,6 +2172,7 @@ type ListStructuredTrainingOverviewForSubjectRow struct {
 	PlanDescription              string                    `json:"plan_description"`
 	SeasonName                   string                    `json:"season_name"`
 	WeekStart                    pgtype.Date               `json:"week_start"`
+	PlannedLoadPercentage        *int16                    `json:"planned_load_percentage"`
 	SessionID                    *uuid.UUID                `json:"session_id"`
 	SessionTitle                 *string                   `json:"session_title"`
 	SessionDescription           *string                   `json:"session_description"`
@@ -2252,6 +2260,7 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 			&i.PlanDescription,
 			&i.SeasonName,
 			&i.WeekStart,
+			&i.PlannedLoadPercentage,
 			&i.SessionID,
 			&i.SessionTitle,
 			&i.SessionDescription,
@@ -2982,6 +2991,45 @@ type RetireTrainingVariationParams struct {
 
 func (q *Queries) RetireTrainingVariation(ctx context.Context, arg RetireTrainingVariationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, retireTrainingVariation, arg.RetiredByID, arg.ID, arg.Version)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateStructuredTrainingWeekLoad = `-- name: UpdateStructuredTrainingWeekLoad :execrows
+UPDATE training_plans plan
+SET planned_load_percentage = $1,
+    updated_at = clock_timestamp()
+WHERE plan.id = $2
+  AND plan.training_group_id IS NOT NULL
+  AND (
+      $3::boolean
+      OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          JOIN training_groups group_row ON group_row.id = plan.training_group_id
+          WHERE grant_row.user_id = $4
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+  )
+`
+
+type UpdateStructuredTrainingWeekLoadParams struct {
+	PlannedLoadPercentage *int16    `json:"planned_load_percentage"`
+	PlanID                uuid.UUID `json:"plan_id"`
+	IsAdmin               bool      `json:"is_admin"`
+	UserID                uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) UpdateStructuredTrainingWeekLoad(ctx context.Context, arg UpdateStructuredTrainingWeekLoadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateStructuredTrainingWeekLoad,
+		arg.PlannedLoadPercentage,
+		arg.PlanID,
+		arg.IsAdmin,
+		arg.UserID,
+	)
 	if err != nil {
 		return 0, err
 	}

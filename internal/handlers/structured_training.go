@@ -39,6 +39,7 @@ type structuredTrainingRow struct {
 	athleteName, groupName, scope, planTitle, planDescription, seasonName, sessionTitle, sessionDescription string
 	groupID, planID, sessionID, segmentID, blockID, exerciseID                                              *uuid.UUID
 	memberCount, segmentPosition, blockPosition, exercisePosition                                           int
+	plannedLoadPercentage                                                                                   *int16
 	weekStart                                                                                               time.Time
 	startsAt, endsAt                                                                                        time.Time
 	entryKind, modality, segmentTitle, segmentLocation, blockPurpose, blockTitle, instructions              string
@@ -50,6 +51,8 @@ type structuredTrainingRow struct {
 	exerciseName, exercisePrescription, exerciseResistance, exerciseIntent, exerciseTempo, exerciseNotes    string
 	exerciseSets, exerciseRepetitions, exerciseDuration, exerciseDistance, exerciseRecovery                 int
 	waterMethod, waterTarget, waterProfile                                                                  string
+	waterTargetDistance                                                                                     int
+	waterTargetCertainty                                                                                    string
 	waterStepID, waterParentStepID                                                                          *uuid.UUID
 	waterStepPosition, waterStepRepeats, waterStepRecovery                                                  int
 	waterStepKind, waterStepName, waterStepPrescription, waterStepIntensity, waterStepDrill, waterStepNotes string
@@ -68,6 +71,7 @@ type structuredPrescriptionSnapshot struct {
 	WeekDescription string                          `json:"week_description"`
 	Season          string                          `json:"season"`
 	DateRange       string                          `json:"date_range"`
+	PlannedLoad     string                          `json:"planned_load"`
 	Session         pages.StructuredTrainingSession `json:"session"`
 }
 
@@ -334,9 +338,10 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
-	form := pages.StructuredTrainingWeekForm{GroupID: r.PostForm.Get("group_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), WeekStart: r.PostForm.Get("week_start"), Errors: validation.FieldErrors{}}
+	form := pages.StructuredTrainingWeekForm{GroupID: r.PostForm.Get("group_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), WeekStart: r.PostForm.Get("week_start"), PlannedLoad: strings.TrimSpace(r.PostForm.Get("planned_load_percentage")), Errors: validation.FieldErrors{}}
 	groupID, groupErr := uuid.Parse(form.GroupID)
 	weekStart, dateErr := time.ParseInLocation("2006-01-02", form.WeekStart, h.location())
+	plannedLoad, loadErr := optionalBoundedInt16(form.PlannedLoad, 0, 100)
 	if groupErr != nil {
 		form.Errors.Add("group_id", "Selecione um grupo válido.")
 	}
@@ -349,6 +354,9 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 	if dateErr != nil || weekStart.Weekday() != time.Monday {
 		form.Errors.Add("week_start", "Escolha a segunda-feira desta semana.")
 	}
+	if loadErr != nil {
+		form.Errors.Add("planned_load_percentage", "Indique uma percentagem entre 0 e 100 ou deixe em branco.")
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
 	if groupErr == nil && !h.canManageGroup(ctx, user, groupID, w, r) {
@@ -358,7 +366,7 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form})
 		return
 	}
-	_, err := h.Store.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: form.Title, Description: form.Description, WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: user.ID, GroupID: groupID})
+	_, err := h.Store.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: form.Title, Description: form.Description, WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: plannedLoad, CreatedByID: user.ID, GroupID: groupID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		form.Errors.Add("week_start", "A semana tem de pertencer a uma época registada.")
 		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form})
@@ -369,6 +377,40 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Semana de treino criada.")
+	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderIndex(w, r, http.StatusBadRequest, pages.StructuredTrainingPage{Error: "Não foi possível ler o formulário."})
+		return
+	}
+	weekID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	load, err := optionalBoundedInt16(strings.TrimSpace(r.PostForm.Get("planned_load_percentage")), 0, 100)
+	if err != nil {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{Error: "Indique uma percentagem entre 0 e 100 ou deixe em branco."})
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageWeek(ctx, user, weekID, w, r) {
+		return
+	}
+	updated, err := h.Store.UpdateStructuredTrainingWeekLoad(ctx, dbgen.UpdateStructuredTrainingWeekLoadParams{PlanID: weekID, PlannedLoadPercentage: load, IsAdmin: user.IsAdmin, UserID: user.ID})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if updated == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	h.flash(r, "Carga planeada da semana atualizada.")
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
@@ -2028,7 +2070,7 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 		if err = resolveStructuredPrescription(&session, matches, planID, recipient.SessionID, recipient.MembershipID); err != nil {
 			return nil, err
 		}
-		snapshot := structuredPrescriptionSnapshot{SchemaVersion: structuredPrescriptionSchemaVersion, PlanID: planID.String(), PlanTitle: week.Title, GroupName: audience.GroupName, WeekTitle: week.Title, WeekDescription: week.Description, Season: week.Season, DateRange: week.DateRange, Session: session}
+		snapshot := structuredPrescriptionSnapshot{SchemaVersion: structuredPrescriptionSchemaVersion, PlanID: planID.String(), PlanTitle: week.Title, GroupName: audience.GroupName, WeekTitle: week.Title, WeekDescription: week.Description, Season: week.Season, DateRange: week.DateRange, PlannedLoad: week.PlannedLoad, Session: session}
 		encoded, err = json.Marshal(snapshot)
 		if err != nil {
 			return nil, err
@@ -2264,9 +2306,11 @@ func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewer
 		snapshot.Session.PrescriptionID = row.ID.String()
 		snapshot.Session.Outcome, _ = row.OutcomeStatus.(string)
 		if row.DistanceMetres != nil {
+			snapshot.Session.ActualDistanceMetres = int(*row.DistanceMetres)
 			snapshot.Session.ActualDistance = formatKilometres(int64(*row.DistanceMetres))
 		}
 		if row.ActualDurationMinutes != nil {
+			snapshot.Session.ActualDurationMinutes = int(*row.ActualDurationMinutes)
 			snapshot.Session.ActualDuration = fmt.Sprintf("%d min", *row.ActualDurationMinutes)
 		}
 		if row.PerceivedExertion != nil {
@@ -2302,10 +2346,15 @@ func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewer
 			}
 		}
 		if weekIndex < 0 {
-			result[audienceIndex].Weeks = append(result[audienceIndex].Weeks, pages.StructuredTrainingWeek{ID: snapshot.PlanID, Title: snapshot.WeekTitle, Description: snapshot.WeekDescription, Season: snapshot.Season, DateRange: snapshot.DateRange})
+			result[audienceIndex].Weeks = append(result[audienceIndex].Weeks, pages.StructuredTrainingWeek{ID: snapshot.PlanID, Title: snapshot.WeekTitle, Description: snapshot.WeekDescription, Season: snapshot.Season, DateRange: snapshot.DateRange, PlannedLoad: snapshot.PlannedLoad})
 			weekIndex = len(result[audienceIndex].Weeks) - 1
 		}
 		result[audienceIndex].Weeks[weekIndex].Sessions = append(result[audienceIndex].Weeks[weekIndex].Sessions, snapshot.Session)
+	}
+	for audienceIndex := range result {
+		for weekIndex := range result[audienceIndex].Weeks {
+			result[audienceIndex].Weeks[weekIndex].Summary = calculateStructuredWeekSummary(result[audienceIndex].Weeks[weekIndex].Sessions)
+		}
 	}
 	return result
 }
@@ -2330,7 +2379,11 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 			continue
 		}
 		if len(audience.Weeks) == 0 || audience.Weeks[len(audience.Weeks)-1].ID != row.planID.String() {
-			audience.Weeks = append(audience.Weeks, pages.StructuredTrainingWeek{ID: row.planID.String(), Title: row.planTitle, Description: row.planDescription, Season: row.seasonName, DateRange: fmt.Sprintf("%s–%s", row.weekStart.In(location).Format("02/01/2006"), row.weekStart.AddDate(0, 0, 6).In(location).Format("02/01/2006"))})
+			plannedLoad := ""
+			if row.plannedLoadPercentage != nil {
+				plannedLoad = fmt.Sprintf("%d%%", *row.plannedLoadPercentage)
+			}
+			audience.Weeks = append(audience.Weeks, pages.StructuredTrainingWeek{ID: row.planID.String(), Title: row.planTitle, Description: row.planDescription, Season: row.seasonName, DateRange: fmt.Sprintf("%s–%s", row.weekStart.In(location).Format("02/01/2006"), row.weekStart.AddDate(0, 0, 6).In(location).Format("02/01/2006")), PlannedLoad: plannedLoad})
 		}
 		week := &audience.Weeks[len(audience.Weeks)-1]
 		if row.sessionID == nil {
@@ -2361,7 +2414,7 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 		segment := &session.Segments[len(session.Segments)-1]
 		if row.blockID != nil {
 			if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
-				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget, WaterProfile: row.waterProfile})
+				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget, WaterTargetDistanceMetres: row.waterTargetDistance, WaterTargetCertainty: row.waterTargetCertainty, WaterProfile: row.waterProfile})
 			}
 			block := &segment.Blocks[len(segment.Blocks)-1]
 			if row.exerciseID != nil {
@@ -2386,6 +2439,7 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 					}
 				}
 			}
+			audiences[audienceIndex].Weeks[weekIndex].Summary = calculateStructuredWeekSummary(audiences[audienceIndex].Weeks[weekIndex].Sessions)
 		}
 	}
 	return audiences
@@ -2503,6 +2557,95 @@ func waterTotalView(label string, total waterMeasureTotal, format func(int64) st
 	return pages.StructuredWaterTotal{Label: label, Value: format(total.value), Certainty: certainty}
 }
 
+func calculateStructuredWeekSummary(sessions []pages.StructuredTrainingSession) pages.StructuredTrainingWeekSummary {
+	waterSteps := []pages.StructuredWaterStep{}
+	supporting := map[string]int{}
+	waterMethods := map[string]int{}
+	waterTargets := []pages.StructuredTrainingSummaryItem{}
+	actualDuration, actualDistance := int64(0), int64(0)
+	durationCount, distanceCount := 0, 0
+	for _, session := range sessions {
+		if session.EntryKind == "REST" || session.EntryKind == "LOGISTICS" {
+			continue
+		}
+		if session.ActualDurationMinutes > 0 {
+			actualDuration += int64(session.ActualDurationMinutes)
+			durationCount++
+		}
+		if session.ActualDistanceMetres > 0 {
+			actualDistance += int64(session.ActualDistanceMetres)
+			distanceCount++
+		}
+		for _, segment := range session.Segments {
+			if segment.Modality != "WATER" {
+				if segment.Modality == "GYM" {
+					foundObjective := false
+					for _, block := range segment.Blocks {
+						if block.GymObjective != "" {
+							supporting["Ginásio · "+structuredTrainingObjectiveName(block.GymObjective)]++
+							foundObjective = true
+						}
+					}
+					if !foundObjective {
+						supporting["Ginásio"]++
+					}
+				} else {
+					supporting[structuredModalityName(segment.Modality)]++
+				}
+				continue
+			}
+			for _, block := range segment.Blocks {
+				waterSteps = append(waterSteps, block.WaterSteps...)
+				if block.WaterMethod != "" {
+					waterMethods[block.WaterMethod]++
+				}
+				if block.WaterTargetDistanceMetres > 0 {
+					certainty := "exata"
+					if block.WaterTargetCertainty == "ESTIMATED" {
+						certainty = "estimada"
+					}
+					waterTargets = append(waterTargets, pages.StructuredTrainingSummaryItem{Label: "Meta de distância", Value: formatKilometres(int64(block.WaterTargetDistanceMetres)), Certainty: certainty + "; total da sessão, não somada aos blocos"})
+				}
+			}
+		}
+	}
+	summary := pages.StructuredTrainingWeekSummary{}
+	for _, total := range calculateWaterTotals(waterSteps) {
+		summary.PlannedWater = append(summary.PlannedWater, pages.StructuredTrainingSummaryItem(total))
+	}
+	summary.PlannedWater = append(summary.PlannedWater, waterTargets...)
+	methodLabels := make([]string, 0, len(waterMethods))
+	for label := range waterMethods {
+		methodLabels = append(methodLabels, label)
+	}
+	sort.Strings(methodLabels)
+	for _, label := range methodLabels {
+		summary.PlannedWater = append(summary.PlannedWater, pages.StructuredTrainingSummaryItem{Label: "Método · " + label, Value: pluralTrainingCount(waterMethods[label], "bloco", "blocos"), Certainty: "planeados"})
+	}
+	labels := make([]string, 0, len(supporting))
+	for label := range supporting {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		summary.SupportingWork = append(summary.SupportingWork, pages.StructuredTrainingSummaryItem{Label: label, Value: pluralTrainingCount(supporting[label], "segmento", "segmentos"), Certainty: "planeados"})
+	}
+	if durationCount > 0 {
+		summary.Actual = append(summary.Actual, pages.StructuredTrainingSummaryItem{Label: "Duração real", Value: formatTrainingDuration(actualDuration * 60), Certainty: "registada em " + pluralTrainingCount(durationCount, "sessão", "sessões")})
+	}
+	if distanceCount > 0 {
+		summary.Actual = append(summary.Actual, pages.StructuredTrainingSummaryItem{Label: "Distância real", Value: formatKilometres(actualDistance), Certainty: "registada em " + pluralTrainingCount(distanceCount, "sessão", "sessões")})
+	}
+	return summary
+}
+
+func pluralTrainingCount(count int, singular, plural string) string {
+	if count == 1 {
+		return "1 " + singular
+	}
+	return fmt.Sprintf("%d %s", count, plural)
+}
+
 func formatTrainingDuration(seconds int64) string {
 	if seconds%3600 == 0 && seconds >= 3600 {
 		return fmt.Sprintf("%d h", seconds/3600)
@@ -2597,6 +2740,29 @@ func structuredModalityName(value string) string {
 	}
 }
 
+func structuredTrainingObjectiveName(value string) string {
+	switch value {
+	case "MOBILITY":
+		return "Mobilidade"
+	case "ACTIVATION":
+		return "Ativação"
+	case "MAX_STRENGTH_HYPERTROPHY":
+		return "Força máxima e hipertrofia"
+	case "MAX_STRENGTH_NEURAL":
+		return "Força máxima neural"
+	case "EXPLOSIVE_STRENGTH":
+		return "Força explosiva"
+	case "STRENGTH_ENDURANCE":
+		return "Força-resistência"
+	case "TECHNIQUE":
+		return "Técnica"
+	case "CORE":
+		return "Core"
+	default:
+		return "Personalizado"
+	}
+}
+
 func parseTrainingRoutineTags(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return []string{}, nil
@@ -2648,7 +2814,7 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 		if row.TeamName != nil {
 			scope += " · " + *row.TeamName
 		}
-		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
+		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, plannedLoadPercentage: row.PlannedLoadPercentage, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
 		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterProfileName, row.WaterProfileRevision, row.WaterProfileCraft, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterZoneLabel, row.WaterZoneCadenceMin, row.WaterZoneCadenceMax, row.WaterZoneMeaning, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result
@@ -2669,6 +2835,7 @@ func structuredRowFromValues(row structuredTrainingRow, structure *dbgen.GymBloc
 func structuredWaterRow(row structuredTrainingRow, method *dbgen.WaterWorkMethod, targetDistance *int32, targetCertainty *dbgen.TrainingMeasureCertainty, profileName *string, profileRevision *int32, profileCraft *dbgen.PaddlingCraft, stepID, parentID *uuid.UUID, position *int32, kind *dbgen.WaterStepKind, name *string, repeats, duration *int32, durationCertainty *dbgen.TrainingMeasureCertainty, distance *int32, distanceCertainty *dbgen.TrainingMeasureCertainty, recovery *int32, intensity *string, cadence *int32, zoneLabel *string, zoneCadenceMin, zoneCadenceMax *int32, zoneMeaning *string, focus, format, roles, notes *string) structuredTrainingRow {
 	row.waterMethod = waterMethodLabel(enumString(method))
 	if targetDistance != nil {
+		row.waterTargetDistance, row.waterTargetCertainty = int(*targetDistance), enumString(targetCertainty)
 		row.waterTarget = fmt.Sprintf("Continuar até a sessão atingir %s (%s)", formatKilometres(int64(*targetDistance)), trainingMeasureCertaintyLabel(enumString(targetCertainty)))
 	}
 	if profileName != nil && profileRevision != nil {

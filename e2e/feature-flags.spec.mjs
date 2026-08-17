@@ -39,8 +39,8 @@ test('administrator controls registered feature availability with an audited acc
     await setPhotoAvailability(page, 'Ativa', 'Ativa');
 
     const audit = page.getByRole('list', { name: 'Alterações recentes às funcionalidades' });
-    await expect(audit.getByText('Desativada → Só administradores')).toBeVisible();
-    await expect(audit.getByText('Só administradores → Ativa')).toBeVisible();
+    await expect(audit.getByText('Desativada → Só administradores').first()).toBeVisible();
+    await expect(audit.getByText('Só administradores → Ativa').first()).toBeVisible();
     const violations = (await new AxeBuilder({ page }).analyze()).violations
       .filter(({ impact }) => impact === 'serious' || impact === 'critical');
     expect(violations).toEqual([]);

@@ -54,6 +54,8 @@ type StructuredWaterZone struct{ Code, Label, Cadence, Meaning string }
 type StructuredWaterTotal struct{ Label, Value, Certainty string }
 type StructuredTrainingBlock struct {
 	ID, Purpose, Title, Instructions, GymStructure, GymObjective, WaterMethod, WaterTarget, WaterProfile string
+	WaterTargetDistanceMetres                                                             int
+	WaterTargetCertainty                                                                  string
 	Position, GymRounds, GymRoundRecovery                                                  int
 	Exercises                                                                              []StructuredGymExercise
 	WaterSteps                                                                             []StructuredWaterStep
@@ -68,12 +70,18 @@ type StructuredTrainingSession struct {
 	ID, PrescriptionID, Title, Description, When, EntryKind string
 	Outcome, ActualDuration, ActualDistance, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string `json:"-"`
 	Modalities                              []string
+	ActualDurationMinutes, ActualDistanceMetres int
 	Segments                                []StructuredTrainingSegment
 	Changes                                 []StructuredPrescriptionChange
 }
 type StructuredTrainingWeek struct {
-	ID, Title, Description, Season, DateRange string
-	Sessions                                  []StructuredTrainingSession
+	ID, Title, Description, Season, DateRange, PlannedLoad string
+	Sessions                                               []StructuredTrainingSession
+	Summary                                                StructuredTrainingWeekSummary
+}
+type StructuredTrainingSummaryItem struct{ Label, Value, Certainty string }
+type StructuredTrainingWeekSummary struct {
+	PlannedWater, SupportingWork, Actual []StructuredTrainingSummaryItem
 }
 type StructuredTrainingAudience struct {
 	AthleteName, GroupID, GroupName, Scope string
@@ -87,8 +95,8 @@ type StructuredTrainingGroupForm struct {
 	Errors                    validation.FieldErrors
 }
 type StructuredTrainingWeekForm struct {
-	GroupID, Title, Description, WeekStart string
-	Errors                                 validation.FieldErrors
+	GroupID, Title, Description, WeekStart, PlannedLoad string
+	Errors                                              validation.FieldErrors
 }
 type StructuredTrainingSessionForm struct {
 	PlanID, Title, Description, StartsAt, EndsAt, EntryKind string
@@ -185,8 +193,40 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 									if week.Description != "" {
 										<p>{ week.Description }</p>
 									}
+									if week.PlannedLoad != "" {
+										<p class="record-meta"><strong>Carga planeada:</strong> { week.PlannedLoad } <span>— distribuição definida pelo treinador; não é uma medição do atleta.</span></p>
+									}
+									if len(week.Summary.PlannedWater) > 0 || len(week.Summary.SupportingWork) > 0 || len(week.Summary.Actual) > 0 {
+										<section class="nested-record" aria-label="Resumo semanal">
+											<h5>Resumo semanal</h5>
+											if len(week.Summary.PlannedWater) > 0 {
+												<p><strong>Água planeada</strong></p>
+												<dl class="training-totals" aria-label="Totais de água planeados na semana">
+													for _, total := range week.Summary.PlannedWater {
+														<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
+													}
+												</dl>
+											}
+											if len(week.Summary.SupportingWork) > 0 {
+												<p><strong>Trabalho complementar planeado</strong></p>
+												<ul class="record-list">
+													for _, item := range week.Summary.SupportingWork {
+														<li>{ item.Label }: { item.Value } <span class="record-meta">{ item.Certainty }</span></li>
+													}
+												</ul>
+											}
+											if len(week.Summary.Actual) > 0 {
+												<p><strong>Registo real do atleta</strong></p>
+												<dl class="training-totals" aria-label="Dados reais registados pelo atleta">
+													for _, total := range week.Summary.Actual {
+														<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
+													}
+												</dl>
+											}
+										</section>
+									}
 									if page.Management {
-										<div class="training-actions">@structuredCopyWeekForm(page, week)
+										<div class="training-actions">@structuredWeekLoadForm(page, week) @structuredCopyWeekForm(page, week)
 </div>
 									}
 									if len(week.Sessions) == 0 {
@@ -254,8 +294,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 													<details class="training-action-menu"><summary class="action action--quiet">Ações da sessão</summary><div class="training-actions">@structuredSaveRoutineForm(page, "SESSION", session.ID)
 @structuredCopySessionForm(page, session.ID)
 </div></details>
+													<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/sessoes/" + session.ID) }>Ver prescrições e respostas dos atletas</a></p>
 												}
-												if len(session.Segments) == 0 && session.EntryKind == "TRAINING" {
+												if len(session.Segments) == 0 && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
 													<p class="record-meta">Sessão ainda sem segmentos.</p>
 												}
 												for _, segment := range session.Segments {
@@ -413,7 +454,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 														}
 													</section>
 												}
-												if page.Management && session.EntryKind == "TRAINING" {
+												if page.Management && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
 													<div class="training-actions">@structuredSegmentForm(page, session.ID)
 </div>
 												}
@@ -767,6 +808,20 @@ templ structuredCopyWeekForm(page StructuredTrainingPage, week StructuredTrainin
 <input id={ "copy-week-start-" + week.ID } name="week_start" type="date" required/><button type="submit">Criar cópia da semana</button></form></dialog>
 }
 
+templ structuredWeekLoadForm(page StructuredTrainingPage, week StructuredTrainingWeek) {
+	<button class="action action--quiet" type="button" data-dialog-open={ "week-load-" + week.ID }>Atualizar carga planeada</button>
+	<dialog id={ "week-load-" + week.ID } class="task-dialog" data-task-dialog aria-labelledby={ "week-load-title-" + week.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">{ week.DateRange }</p><h3 id={ "week-load-title-" + week.ID }>Carga planeada · { week.Title }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + week.ID + "/carga") }>
+			@page.CSRFField
+			@components.FieldLabel("week-load-input-" + week.ID, "Carga planeada (%)", false)
+			<input id={ "week-load-input-" + week.ID } name="planned_load_percentage" type="number" min="0" max="100" value={ strings.TrimSuffix(week.PlannedLoad, "%") } aria-describedby={ "week-load-help-" + week.ID }/>
+			<small id={ "week-load-help-" + week.ID }>Distribuição de carga definida pelo treinador. Não é uma medição do atleta, %1RM, esforço percebido nem uma recomendação automática.</small>
+			<button type="submit">Guardar carga planeada</button>
+		</form>
+	</dialog>
+}
+
 templ structuredCopyDayForm(page StructuredTrainingPage) {
 	<section id="training-copy-tools" class="module" data-tab-panel>
 		@components.SectionHeading("", "Copiar conteúdo", "Repita um dia completo entre semanas. Para copiar uma semana, sessão ou bloco, use o menu de ações junto ao respetivo conteúdo.")
@@ -848,6 +903,9 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 				<input id="structured-week-name" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
 				@components.FieldLabel("structured-week-start", "Segunda-feira da semana", true)
 				<input id="structured-week-start" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
+				@components.FieldLabel("structured-week-load", "Carga planeada (%)", false)
+				<input id="structured-week-load" name="planned_load_percentage" type="number" min="0" max="100" value={ page.WeekForm.PlannedLoad } aria-describedby="structured-week-load-help"/>@components.FieldErrorMessage("planned_load_percentage", page.WeekForm.Errors["planned_load_percentage"])
+				<small id="structured-week-load-help">Distribuição de carga definida pelo treinador. Não é %1RM, esforço percebido nem uma recomendação automática.</small>
 				@components.FieldLabel("structured-week-description", "Notas (opcional)", false)
 				<textarea id="structured-week-description" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>
 				@components.FormActions("/admin/treinos/estruturados") {
