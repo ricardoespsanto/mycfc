@@ -56,21 +56,19 @@ jobs:
       - id: ecr-login
         # aws-actions/amazon-ecr-login v2.1.6
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
-      - name: Build and push the immutable image
+      - name: Build and publish the immutable image
         id: image
         run: |
           set -Eeuo pipefail
           SHA="$(git rev-parse HEAD)"
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           REPOSITORY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mycfc-production"
-          IMAGE="$REPOSITORY:git-$SHA"
-          docker build --label "org.opencontainers.image.revision=$SHA" -t "$IMAGE" .
-          docker push "$IMAGE"
-          DIGEST="$(aws ecr describe-images --repository-name mycfc-production --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)"
-          RELEASE_TAG="release-$(date -u +%Y%m%d%H%M%S)-$SHA"
-          docker tag "$IMAGE" "$REPOSITORY:$RELEASE_TAG"
-          docker push "$REPOSITORY:$RELEASE_TAG"
-          printf 'image=%s@%s\nregistry=%s\nrelease_tag=%s\nsha=%s\n' "$REPOSITORY" "$DIGEST" "${REPOSITORY%%/*}" "$RELEASE_TAG" "$SHA" >> "$GITHUB_OUTPUT"
+          AWS_REGION="$AWS_REGION" \
+            ECR_REPOSITORY="$REPOSITORY" \
+            ECR_REPOSITORY_NAME=mycfc-production \
+            GIT_SHA="$SHA" \
+            GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+            sh deployment/publish-release-image.sh
       - name: Promote the tested image for production pickup
         env:
           RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
