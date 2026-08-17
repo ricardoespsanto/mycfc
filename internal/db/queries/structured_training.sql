@@ -53,9 +53,9 @@ SELECT EXISTS (
 );
 
 -- name: CreateStructuredTrainingWeek :one
-INSERT INTO training_plans (title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id)
+INSERT INTO training_plans (title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id)
 SELECT sqlc.arg(title), sqlc.arg(description), group_row.programme_id, group_row.team_id,
-       group_row.id, season.id, sqlc.arg(week_start), sqlc.arg(created_by_id)
+       group_row.id, season.id, sqlc.arg(week_start), sqlc.narg(planned_load_percentage), sqlc.arg(created_by_id)
 FROM training_groups group_row
 JOIN LATERAL (
     SELECT season_row.id
@@ -65,7 +65,7 @@ JOIN LATERAL (
     LIMIT 1
 ) season ON true
 WHERE group_row.id = sqlc.arg(group_id)
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, created_by_id, created_at, updated_at;
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at;
 
 -- name: CanManageStructuredTrainingWeek :one
 SELECT EXISTS (
@@ -84,6 +84,24 @@ SELECT EXISTS (
           )
       )
 );
+
+-- name: UpdateStructuredTrainingWeekLoad :execrows
+UPDATE training_plans plan
+SET planned_load_percentage = sqlc.narg(planned_load_percentage),
+    updated_at = clock_timestamp()
+WHERE plan.id = sqlc.arg(plan_id)
+  AND plan.training_group_id IS NOT NULL
+  AND (
+      sqlc.arg(is_admin)::boolean
+      OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          JOIN training_groups group_row ON group_row.id = plan.training_group_id
+          WHERE grant_row.user_id = sqlc.arg(user_id)
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+  );
 
 -- name: CreateStructuredTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, entry_kind, created_by_id)
@@ -106,7 +124,7 @@ SELECT sqlc.arg(session_id), COALESCE(max(segment.position), 0) + 1,
 FROM training_sessions session
 LEFT JOIN training_session_segments segment ON segment.session_id = session.id
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
-WHERE session.id = sqlc.arg(session_id) AND session.entry_kind = 'TRAINING'
+WHERE session.id = sqlc.arg(session_id) AND session.entry_kind IN ('TRAINING', 'COMPETITION')
 GROUP BY session.id
 RETURNING id;
 
@@ -228,7 +246,7 @@ SELECT move_gym_exercise(sqlc.arg(exercise_id), sqlc.arg(direction));
 SELECT group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
-       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start,
+       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
@@ -293,7 +311,7 @@ ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
 -- name: ListStructuredTrainingOverviewForSubject :many
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        group_row.id AS group_id, group_row.name AS group_name,
-       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start,
+       plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
@@ -471,7 +489,7 @@ VALUES (sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(source_updated_at),
         sqlc.arg(destination_id), sqlc.arg(copied_by_id));
 
 -- name: GetStructuredPlanCopySource :one
-SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.updated_at
+SELECT plan.id, plan.training_group_id, plan.title, plan.description, plan.week_start, plan.planned_load_percentage, plan.updated_at
 FROM training_plans plan
 WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL;
 

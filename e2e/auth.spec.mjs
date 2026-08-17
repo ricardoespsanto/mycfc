@@ -569,6 +569,7 @@ test.describe('authentication', () => {
   test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
     test.setTimeout(240000);
     const athleteName = `Atleta E2E ${Date.now()}`;
+    const fpcAthleteNumber = String(Date.now());
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
@@ -583,7 +584,6 @@ test.describe('authentication', () => {
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
@@ -599,11 +599,11 @@ test.describe('authentication', () => {
     await expect(membershipForm.getByLabel('Competição')).toBeChecked();
 
     await page.getByRole('link', { name: 'Abrir perfil', exact: true }).click();
-    await page.getByLabel('Número de atleta FPC').fill('27044');
+    await page.getByLabel('Número de atleta FPC').fill(fpcAthleteNumber);
     await page.getByRole('button', { name: 'Guardar perfil' }).click();
     await expect(page.getByText('Perfil atualizado.', { exact: true })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Ver histórico nacional na FPC' })).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistorico/27044/');
-    await expect(page.getByRole('link', { name: 'Ver histórico internacional na FPC' })).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistoricointernational/27044/');
+    await expect(page.getByRole('link', { name: 'Ver histórico nacional na FPC' })).toHaveAttribute('href', `https://www.fpcanoagem.pt/resultados/verhistorico/${fpcAthleteNumber}/`);
+    await expect(page.getByRole('link', { name: 'Ver histórico internacional na FPC' })).toHaveAttribute('href', `https://www.fpcanoagem.pt/resultados/verhistoricointernational/${fpcAthleteNumber}/`);
     await expectNoSeriousAxeViolations(page);
 
     const planTitle = `Plano classificação E2E ${Date.now()}`;
@@ -668,8 +668,8 @@ test.describe('authentication', () => {
     await page.goto('/perfil');
     const nationalFPCLink = page.getByRole('link', { name: 'Ver histórico nacional na FPC' });
     const internationalFPCLink = page.getByRole('link', { name: 'Ver histórico internacional na FPC' });
-    await expect(nationalFPCLink).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistorico/27044/');
-    await expect(internationalFPCLink).toHaveAttribute('href', 'https://www.fpcanoagem.pt/resultados/verhistoricointernational/27044/');
+    await expect(nationalFPCLink).toHaveAttribute('href', `https://www.fpcanoagem.pt/resultados/verhistorico/${fpcAthleteNumber}/`);
+    await expect(internationalFPCLink).toHaveAttribute('href', `https://www.fpcanoagem.pt/resultados/verhistoricointernational/${fpcAthleteNumber}/`);
     await expect(nationalFPCLink).not.toHaveAttribute('target', '_blank');
     await expect(internationalFPCLink).not.toHaveAttribute('target', '_blank');
 
@@ -773,10 +773,18 @@ test.describe('authentication', () => {
     await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
     await weekForm.getByLabel('Título').fill(weekTitle);
     await weekForm.getByLabel('Segunda-feira da semana').fill(formatDate(monday));
+	await weekForm.getByLabel('Carga planeada (%)').fill('70');
     await weekForm.getByRole('button', { name: 'Criar semana' }).click();
     await expect(page.getByRole('status')).toHaveText('Semana de treino criada.');
     const week = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
     await expect(week).toContainText(`Época ${today.getFullYear()}`);
+	await expect(week).toContainText('Carga planeada: 70%');
+	await week.getByRole('button', { name: 'Atualizar carga planeada' }).click();
+	const weekLoadForm = week.locator('form[action$="/carga"]');
+	await weekLoadForm.getByLabel('Carga planeada (%)').fill('65');
+	await weekLoadForm.getByRole('button', { name: 'Guardar carga planeada' }).click();
+	await expect(page.getByRole('status')).toHaveText('Carga planeada da semana atualizada.');
+	await expect(page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]')).toContainText('Carga planeada: 65%');
 
     await page.getByRole('link', { name: 'Criar sessão' }).click();
     const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');

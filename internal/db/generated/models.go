@@ -1955,17 +1955,18 @@ type TrainingLog struct {
 }
 
 type TrainingPlan struct {
-	ID              uuid.UUID          `json:"id"`
-	Title           string             `json:"title"`
-	Description     string             `json:"description"`
-	ProgrammeID     *uuid.UUID         `json:"programme_id"`
-	TeamID          *uuid.UUID         `json:"team_id"`
-	TrainingGroupID *uuid.UUID         `json:"training_group_id"`
-	SeasonID        *uuid.UUID         `json:"season_id"`
-	WeekStart       pgtype.Date        `json:"week_start"`
-	CreatedByID     uuid.UUID          `json:"created_by_id"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                    uuid.UUID          `json:"id"`
+	Title                 string             `json:"title"`
+	Description           string             `json:"description"`
+	ProgrammeID           *uuid.UUID         `json:"programme_id"`
+	TeamID                *uuid.UUID         `json:"team_id"`
+	TrainingGroupID       *uuid.UUID         `json:"training_group_id"`
+	SeasonID              *uuid.UUID         `json:"season_id"`
+	WeekStart             pgtype.Date        `json:"week_start"`
+	PlannedLoadPercentage *int16             `json:"planned_load_percentage"`
+	CreatedByID           uuid.UUID          `json:"created_by_id"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TrainingPlanPublication struct {

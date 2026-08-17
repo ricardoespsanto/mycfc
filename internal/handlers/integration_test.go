@@ -135,9 +135,12 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, actorID)
 	})
-	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M41", Description: "Semana fonte", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID, GroupID: group.ID})
+	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M41", Description: "Semana fonte", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: int16Ptr(70), CreatedByID: actorID, GroupID: group.ID})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if updated, err := queries.UpdateStructuredTrainingWeekLoad(ctx, dbgen.UpdateStructuredTrainingWeekLoadParams{PlanID: week.ID, PlannedLoadPercentage: int16Ptr(65), IsAdmin: true, UserID: actorID}); err != nil || updated != 1 {
+		t.Fatalf("updated load rows=%d err=%v", updated, err)
 	}
 	startsAt := weekStart.Add(17 * time.Hour)
 	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{PlanID: week.ID, Title: "Ginásio fonte", StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID})
@@ -178,7 +181,7 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 
 	copiedWeekStart := weekStart.AddDate(0, 0, 7)
 	copiedWeek, err := store.CopyStructuredTrainingWeek(ctx, StructuredWeekCopyInput{SourcePlanID: week.ID, WeekStart: copiedWeekStart, Title: "M42", ActorID: actorID})
-	if err != nil || copiedWeek.Description != "Semana fonte" {
+	if err != nil || copiedWeek.Description != "Semana fonte" || copiedWeek.PlannedLoadPercentage == nil || *copiedWeek.PlannedLoadPercentage != 65 {
 		t.Fatalf("copy week=%#v err=%v", copiedWeek, err)
 	}
 	count, err := store.CopyStructuredTrainingDay(ctx, StructuredDayCopyInput{SourcePlanID: week.ID, TargetPlanID: copiedWeek.ID, SourceDate: weekStart, TargetDate: copiedWeekStart.AddDate(0, 0, 1), ActorID: actorID})

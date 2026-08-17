@@ -249,6 +249,7 @@ type Querier interface {
 	UpdateOwnCompletedSessionFeedback(ctx context.Context, arg UpdateOwnCompletedSessionFeedbackParams) (int64, error)
 	UpdateOwnLeaderboardVisibility(ctx context.Context, arg UpdateOwnLeaderboardVisibilityParams) (int64, error)
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)
+	UpdateStructuredTrainingWeekLoad(ctx context.Context, arg UpdateStructuredTrainingWeekLoadParams) (int64, error)
 	UpdateSuggestionTriage(ctx context.Context, arg UpdateSuggestionTriageParams) (int64, error)
 	UpdateTrainingSession(ctx context.Context, arg UpdateTrainingSessionParams) (TrainingSession, error)
 	UpsertActivityConnection(ctx context.Context, arg UpsertActivityConnectionParams) (ActivityConnection, error)

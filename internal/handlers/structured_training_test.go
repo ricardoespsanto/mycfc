@@ -25,6 +25,7 @@ type structuredTrainingStoreStub struct {
 	manageable        bool
 	manageArgs        []dbgen.CanManageStructuredTrainingGroupParams
 	created           []dbgen.CreateStructuredTrainingWeekParams
+	updatedLoads      []dbgen.UpdateStructuredTrainingWeekLoadParams
 	groups            []StructuredTrainingGroupInput
 	weekOK            bool
 	sessions          []dbgen.CreateStructuredTrainingSessionParams
@@ -77,6 +78,11 @@ func (s *structuredTrainingStoreStub) CreateStructuredTrainingWeek(_ context.Con
 
 func (s *structuredTrainingStoreStub) CanManageStructuredTrainingWeek(_ context.Context, _ dbgen.CanManageStructuredTrainingWeekParams) (bool, error) {
 	return s.weekOK, nil
+}
+
+func (s *structuredTrainingStoreStub) UpdateStructuredTrainingWeekLoad(_ context.Context, params dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error) {
+	s.updatedLoads = append(s.updatedLoads, params)
+	return 1, nil
 }
 
 func (s *structuredTrainingStoreStub) CreateStructuredTrainingSession(_ context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
@@ -141,6 +147,42 @@ func (s *structuredTrainingStoreStub) CreateWaterIntensityZone(_ context.Context
 }
 
 func (s *structuredTrainingStoreStub) ListActiveWaterIntensityProfiles(context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListVisibleTrainingRoutines(context.Context, dbgen.ListVisibleTrainingRoutinesParams) ([]dbgen.ListVisibleTrainingRoutinesRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListEligibleTrainingGroupMemberships(context.Context, dbgen.ListEligibleTrainingGroupMembershipsParams) ([]dbgen.ListEligibleTrainingGroupMembershipsRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedTrainingGroupMembers(context.Context, dbgen.ListManagedTrainingGroupMembersParams) ([]dbgen.ListManagedTrainingGroupMembersRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListStructuredCrewModalities(context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedStructuredCompetitionEvents(context.Context, dbgen.ListManagedStructuredCompetitionEventsParams) ([]dbgen.ListManagedStructuredCompetitionEventsRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedTrainingVariationGroups(context.Context, dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListTrainingVariationMatchesForManager(context.Context, dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error) {
+	return nil, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedTrainingPublicationStates(context.Context, dbgen.ListManagedTrainingPublicationStatesParams) ([]dbgen.ListManagedTrainingPublicationStatesRow, error) {
 	return nil, nil
 }
 
@@ -405,7 +447,7 @@ func TestCreateStructuredTrainingVariationRechecksWeekAuthorization(t *testing.T
 
 func TestCreateStructuredWeekEnforcesGroupAuthorization(t *testing.T) {
 	groupID, userID := uuid.New(), uuid.New()
-	body := "group_id=" + groupID.String() + "&title=Microciclo+41&week_start=2026-08-17"
+	body := "group_id=" + groupID.String() + "&title=Microciclo+41&week_start=2026-08-17&planned_load_percentage=70"
 	for _, tc := range []struct {
 		name       string
 		user       CurrentUser
@@ -439,9 +481,58 @@ func TestCreateStructuredWeekEnforcesGroupAuthorization(t *testing.T) {
 			if tc.wantCreate && (!store.created[0].WeekStart.Valid || !store.created[0].WeekStart.Time.Equal(time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC))) {
 				t.Fatalf("week start = %#v", store.created[0].WeekStart)
 			}
+			if tc.wantCreate && (store.created[0].PlannedLoadPercentage == nil || *store.created[0].PlannedLoadPercentage != 70) {
+				t.Fatalf("planned load = %#v", store.created[0].PlannedLoadPercentage)
+			}
 		})
 	}
 }
+
+func TestCreateStructuredWeekRejectsInvalidPlannedLoadPercentage(t *testing.T) {
+	store := &structuredTrainingStoreStub{manageable: true}
+	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+	groupID := uuid.New()
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New()}, http.MethodPost, "/admin/treinos/estruturados/semanas", url.Values{
+		"group_id": {groupID.String()}, "title": {"Microciclo 41"}, "week_start": {"2026-08-17"}, "planned_load_percentage": {"101"},
+	}, "", "", handler.CreateWeek)
+	if response.Code != http.StatusUnprocessableEntity || len(store.created) != 0 || !strings.Contains(response.Body.String(), "percentagem entre 0 e 100") {
+		t.Fatalf("response=%d created=%d body=%q", response.Code, len(store.created), response.Body.String())
+	}
+}
+
+func TestUpdateStructuredWeekLoadRequiresScopedCoachAndValidPercentage(t *testing.T) {
+	weekID, userID := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name       string
+		weekOK     bool
+		value      string
+		wantStatus int
+		wantLoad   *int16
+	}{
+		{name: "scoped coach updates", weekOK: true, value: "65", wantStatus: http.StatusSeeOther, wantLoad: int16Pointer(65)},
+		{name: "unrelated coach denied", value: "65", wantStatus: http.StatusForbidden},
+		{name: "invalid percentage", weekOK: true, value: "101", wantStatus: http.StatusUnprocessableEntity},
+		{name: "blank clears percentage", weekOK: true, wantStatus: http.StatusSeeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &structuredTrainingStoreStub{weekOK: tc.weekOK}
+			handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
+			response := performStructuredTrainingRequest(t, CurrentUser{ID: userID}, http.MethodPost, "/admin/treinos/estruturados/semanas/"+weekID.String()+"/carga", url.Values{"planned_load_percentage": {tc.value}}, "id", weekID.String(), handler.UpdateWeekLoad)
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusSeeOther {
+				if len(store.updatedLoads) != 1 || store.updatedLoads[0].PlanID != weekID || !reflect.DeepEqual(store.updatedLoads[0].PlannedLoadPercentage, tc.wantLoad) {
+					t.Fatalf("updated loads = %#v, want %#v", store.updatedLoads, tc.wantLoad)
+				}
+			} else if len(store.updatedLoads) != 0 {
+				t.Fatalf("updated loads = %#v", store.updatedLoads)
+			}
+		})
+	}
+}
+
+func int16Pointer(value int16) *int16 { return &value }
 
 func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) {
 	userID, programmeID, membershipID := uuid.New(), uuid.New(), uuid.New()
@@ -841,6 +932,28 @@ func TestCalculateWaterTotalsDoesNotInventMissingPace(t *testing.T) {
 	}
 }
 
+func TestCalculateStructuredWeekSummaryKeepsPlannedActualAndTargetsDistinct(t *testing.T) {
+	summary := calculateStructuredWeekSummary([]pages.StructuredTrainingSession{
+		{EntryKind: "TRAINING", ActualDurationMinutes: 70, ActualDistanceMetres: 9800, Segments: []pages.StructuredTrainingSegment{
+			{Modality: "GYM"},
+			{Modality: "WATER", Blocks: []pages.StructuredTrainingBlock{{
+				WaterTargetDistanceMetres: 12000, WaterTargetCertainty: "EXACT",
+				WaterSteps: []pages.StructuredWaterStep{{ID: "warmup", Kind: "EFFORT", DurationSeconds: 600, DurationCertainty: "EXACT", DistanceMetres: 2000, DistanceCertainty: "EXACT", Intensity: "R2"}},
+			}}},
+		}},
+		{EntryKind: "LOGISTICS", ActualDurationMinutes: 50, ActualDistanceMetres: 1000, Segments: []pages.StructuredTrainingSegment{{Modality: "RUN"}}},
+	})
+	if len(summary.PlannedWater) != 5 || summary.PlannedWater[2].Value != "2 km" || summary.PlannedWater[4].Value != "12 km" || !strings.Contains(summary.PlannedWater[4].Certainty, "não somada") {
+		t.Fatalf("planned water = %#v", summary.PlannedWater)
+	}
+	if len(summary.SupportingWork) != 1 || summary.SupportingWork[0].Label != "Ginásio" || summary.SupportingWork[0].Value != "1 segmento" {
+		t.Fatalf("supporting = %#v", summary.SupportingWork)
+	}
+	if len(summary.Actual) != 2 || summary.Actual[0].Value != "70 min" || summary.Actual[1].Value != "9,8 km" || !strings.Contains(summary.Actual[0].Certainty, "1 sessão") {
+		t.Fatalf("actual = %#v", summary.Actual)
+	}
+}
+
 func TestResolveStructuredPrescriptionAppliesAthleteOverrideAndPreservesGymValues(t *testing.T) {
 	planID, sessionID, membershipID := uuid.New(), uuid.New(), uuid.New()
 	segmentID, exerciseID := uuid.New(), uuid.New()
@@ -892,7 +1005,7 @@ func TestApplyStructuredPrescriptionVariationOmitsOnlyTargetedElement(t *testing
 func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownSession(t *testing.T) {
 	planID, sessionID, membershipID, athleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	week := pages.StructuredTrainingWeek{
-		ID: planID.String(), Title: "M42", Description: "Transformação", Season: "2025/2026", DateRange: "15–21 junho",
+		ID: planID.String(), Title: "M42", Description: "Transformação", Season: "2025/2026", DateRange: "15–21 junho", PlannedLoad: "70%",
 		Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água", Modalities: []string{"WATER"}}},
 	}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
@@ -911,7 +1024,7 @@ func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownS
 	if err := json.Unmarshal(inputs[0].Snapshot, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SchemaVersion != structuredPrescriptionSchemaVersion || snapshot.PlanID != planID.String() || snapshot.GroupName != "Cadetes" || snapshot.Session.ID != sessionID.String() {
+	if snapshot.SchemaVersion != structuredPrescriptionSchemaVersion || snapshot.PlanID != planID.String() || snapshot.GroupName != "Cadetes" || snapshot.PlannedLoad != "70%" || snapshot.Session.ID != sessionID.String() {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -922,7 +1035,7 @@ func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing
 	snapshot := func(sessionID uuid.UUID, title string) []byte {
 		encoded, err := json.Marshal(structuredPrescriptionSnapshot{
 			SchemaVersion: structuredPrescriptionSchemaVersion,
-			PlanID:        planID.String(), GroupName: "Cadetes", WeekTitle: "M42", WeekDescription: "Transformação", Season: "2025/2026", DateRange: "15–21 junho",
+			PlanID:        planID.String(), GroupName: "Cadetes", WeekTitle: "M42", WeekDescription: "Transformação", Season: "2025/2026", DateRange: "15–21 junho", PlannedLoad: "70%",
 			Session: pages.StructuredTrainingSession{ID: sessionID.String(), Title: title},
 		})
 		if err != nil {
@@ -943,6 +1056,9 @@ func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing
 	}
 	if audiences[0].GroupName != "Cadetes" || !strings.Contains(audiences[0].Scope, "revisão 2") || !strings.HasPrefix(audiences[1].Scope, "Histórico") {
 		t.Fatalf("scopes = %q / %q", audiences[0].Scope, audiences[1].Scope)
+	}
+	if audiences[0].Weeks[0].PlannedLoad != "70%" {
+		t.Fatalf("planned load = %q", audiences[0].Weeks[0].PlannedLoad)
 	}
 	if audiences[0].Weeks[0].Sessions[0].PrescriptionID != rows[0].ID.String() {
 		t.Fatalf("prescription id = %q", audiences[0].Weeks[0].Sessions[0].PrescriptionID)

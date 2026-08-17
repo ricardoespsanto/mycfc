@@ -100,6 +100,7 @@ type StructuredTrainingStore interface {
 	CanManageStructuredTrainingGroup(context.Context, dbgen.CanManageStructuredTrainingGroupParams) (bool, error)
 	CreateStructuredTrainingWeek(context.Context, dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error)
 	CanManageStructuredTrainingWeek(context.Context, dbgen.CanManageStructuredTrainingWeekParams) (bool, error)
+	UpdateStructuredTrainingWeekLoad(context.Context, dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error)
 	CreateStructuredTrainingSession(context.Context, dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error)
 	CreateSegment(context.Context, StructuredTrainingSegmentInput) (uuid.UUID, error)
 	CreateTrainingSegmentBlock(context.Context, dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error)
@@ -262,6 +263,10 @@ func (s PostgresStructuredTrainingStore) CreateStructuredTrainingWeek(ctx contex
 
 func (s PostgresStructuredTrainingStore) CanManageStructuredTrainingWeek(ctx context.Context, params dbgen.CanManageStructuredTrainingWeekParams) (bool, error) {
 	return s.queries().CanManageStructuredTrainingWeek(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) UpdateStructuredTrainingWeekLoad(ctx context.Context, params dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error) {
+	return s.queries().UpdateStructuredTrainingWeekLoad(ctx, params)
 }
 
 func (s PostgresStructuredTrainingStore) CreateStructuredTrainingSession(ctx context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
@@ -542,7 +547,7 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.
 	if description == "" {
 		description = source.Description
 	}
-	plan, err = queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: input.Title, Description: description, WeekStart: pgtype.Date{Time: input.WeekStart, Valid: true}, CreatedByID: input.ActorID, GroupID: *source.TrainingGroupID})
+	plan, err = queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: input.Title, Description: description, WeekStart: pgtype.Date{Time: input.WeekStart, Valid: true}, PlannedLoadPercentage: source.PlannedLoadPercentage, CreatedByID: input.ActorID, GroupID: *source.TrainingGroupID})
 	if err != nil {
 		return plan, err
 	}
