@@ -828,6 +828,169 @@ func (h StructuredTraining) CreateWaterBlock(w http.ResponseWriter, r *http.Requ
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
+var (
+	errStructuredWaterTaskNotFound = errors.New("structured water task not found")
+	errStructuredWaterTaskForbidden = errors.New("structured water task forbidden")
+)
+
+type structuredWaterTaskContext struct {
+	group pages.StructuredTrainingAudience
+	week pages.StructuredTrainingWeek
+	session pages.StructuredTrainingSession
+	segment pages.StructuredTrainingSegment
+}
+
+func (h StructuredTraining) WaterBlockTask(w http.ResponseWriter, r *http.Request) {
+	h.renderWaterBlockTask(w, r, http.StatusOK, structuredWaterBlockTaskForm(r.PostForm, nil))
+}
+
+func (h StructuredTraining) CreateWaterBlockTask(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	form := structuredWaterBlockTaskForm(r.PostForm, nil)
+	sessionID, segmentID, err := structuredWaterTaskIDs(r)
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	task, err := h.structuredWaterTaskContext(ctx, user, sessionID, segmentID)
+	if h.writeStructuredWaterTaskContextError(w, r, err) {
+		return
+	}
+	block, prescription, step, err := parseStructuredWaterForm(r, segmentID, true)
+	if err != nil {
+		form.Errors = structuredWaterTaskErrors(r, err)
+		h.renderWaterBlockTask(w, r, http.StatusUnprocessableEntity, form)
+		return
+	}
+	if _, err := h.Store.CreateWaterBlock(ctx, StructuredWaterBlockInput{Block: block, Prescription: prescription, Step: step}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
+			form.Errors = validation.FieldErrors{"form": "Este segmento foi alterado. Reveja o plano antes de tentar novamente."}
+			h.renderWaterBlockTask(w, r, http.StatusConflict, form)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Bloco de água adicionado.")
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
+	if returnTo == "" {
+		returnTo = structuredPlannerURL(task.group.GroupID, task.week.ID, task.session.ID)
+	}
+	httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+}
+
+func (h StructuredTraining) renderWaterBlockTask(w http.ResponseWriter, r *http.Request, status int, form pages.StructuredWaterBlockTaskForm) {
+	sessionID, segmentID, err := structuredWaterTaskIDs(r)
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	task, err := h.structuredWaterTaskContext(ctx, user, sessionID, segmentID)
+	if h.writeStructuredWaterTaskContextError(w, r, err) {
+		return
+	}
+	profiles, err := h.Store.ListActiveWaterIntensityProfiles(ctx)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	returnTo := structuredPlannerReturn(r.Form.Get("return_to"))
+	if returnTo == "" {
+		returnTo = structuredPlannerURL(task.group.GroupID, task.week.ID, task.session.ID)
+	}
+	meta := h.meta(r, user, true)
+	meta.Title = "Adicionar bloco de água | MyCFC"
+	meta.PageLabel = "Adicionar bloco de água"
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: returnTo}}
+	page := pages.StructuredWaterBlockTaskPage{
+		Meta: meta, CSRFField: templ.Raw(string(csrf.TemplateField(r))),
+		ActionURL: structuredWaterTaskPath(sessionID, segmentID), ReturnURL: returnTo,
+		GroupName: task.group.GroupName, WeekTitle: task.week.Title, SessionTitle: task.session.Title,
+		SegmentTitle: structuredSegmentTaskTitle(task.segment), SegmentModality: task.segment.Modality,
+		WaterProfiles: structuredWaterProfiles(profiles), Form: form,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.StructuredWaterBlockTask(page).Render(r.Context(), w)
+}
+
+func structuredWaterTaskIDs(r *http.Request) (uuid.UUID, uuid.UUID, error) {
+	sessionID, err := uuid.Parse(r.PathValue("session_id"))
+	if err != nil { return uuid.Nil, uuid.Nil, err }
+	segmentID, err := uuid.Parse(r.PathValue("segment_id"))
+	if err != nil { return uuid.Nil, uuid.Nil, err }
+	return sessionID, segmentID, nil
+}
+
+func structuredWaterTaskPath(sessionID, segmentID uuid.UUID) string {
+	return "/admin/treinos/estruturados/sessoes/" + sessionID.String() + "/segmentos/" + segmentID.String() + "/agua"
+}
+
+func (h StructuredTraining) structuredWaterTaskContext(ctx context.Context, user CurrentUser, sessionID, segmentID uuid.UUID) (structuredWaterTaskContext, error) {
+	rows, err := h.Store.ListStructuredTrainingOverviewForManager(ctx, dbgen.ListStructuredTrainingOverviewForManagerParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+	if err != nil { return structuredWaterTaskContext{}, err }
+	for _, group := range assembleStructuredTraining(managerStructuredRows(rows), h.location()) {
+		for _, week := range group.Weeks {
+			for _, session := range week.Sessions {
+				if session.ID != sessionID.String() { continue }
+				for _, segment := range session.Segments {
+					if segment.ID == segmentID.String() {
+						planID, err := h.Store.GetStructuredSegmentPlanID(ctx, segmentID)
+						if errors.Is(err, pgx.ErrNoRows) { return structuredWaterTaskContext{}, errStructuredWaterTaskNotFound }
+						if err != nil { return structuredWaterTaskContext{}, err }
+						allowed, err := h.Store.CanManageStructuredTrainingWeek(ctx, dbgen.CanManageStructuredTrainingWeekParams{PlanID: planID, IsAdmin: user.IsAdmin, UserID: user.ID})
+						if err != nil { return structuredWaterTaskContext{}, err }
+						if !allowed { return structuredWaterTaskContext{}, errStructuredWaterTaskForbidden }
+						return structuredWaterTaskContext{group: group, week: week, session: session, segment: segment}, nil
+					}
+				}
+			}
+		}
+	}
+	return structuredWaterTaskContext{}, errStructuredWaterTaskNotFound
+}
+
+func (h StructuredTraining) writeStructuredWaterTaskContextError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil { return false }
+	if errors.Is(err, errStructuredWaterTaskNotFound) || errors.Is(err, pgx.ErrNoRows) { h.System.NotFound(w, r); return true }
+	if errors.Is(err, errStructuredWaterTaskForbidden) { h.System.Forbidden(w, r); return true }
+	h.System.InternalError(w, r)
+	return true
+}
+
+func structuredSegmentTaskTitle(segment pages.StructuredTrainingSegment) string {
+	if segment.Title != "" { return segment.Title }
+	return segment.Modality
+}
+
+func structuredWaterBlockTaskForm(values url.Values, fieldErrors validation.FieldErrors) pages.StructuredWaterBlockTaskForm {
+	form := pages.StructuredWaterBlockTaskForm{Errors: fieldErrors}
+	if form.Errors == nil { form.Errors = validation.FieldErrors{} }
+	form.Purpose, form.Title, form.Instructions, form.Method = values.Get("purpose"), values.Get("title"), values.Get("instructions"), values.Get("method")
+	form.IntensityProfileID, form.TargetDistanceMetres, form.TargetDistanceCertainty = values.Get("intensity_profile_id"), values.Get("target_distance_metres"), values.Get("target_distance_certainty")
+	form.StepKind, form.StepName, form.Repeats, form.DurationSeconds = values.Get("step_kind"), values.Get("step_name"), values.Get("repeats"), values.Get("duration_seconds")
+	form.DurationCertainty, form.DistanceMetres, form.DistanceCertainty = values.Get("duration_certainty"), values.Get("distance_metres"), values.Get("distance_certainty")
+	form.RecoverySeconds, form.IntensityCode, form.CadenceSPM = values.Get("recovery_seconds"), values.Get("intensity_code"), values.Get("cadence_spm")
+	form.DrillFocus, form.DrillFormat, form.RoleNotes, form.StepInstructions = values.Get("drill_focus"), values.Get("drill_format"), values.Get("role_notes"), values.Get("step_instructions")
+	return form
+}
+
+func structuredWaterTaskErrors(r *http.Request, err error) validation.FieldErrors {
+	message := "Revise os campos obrigatórios e as medidas do primeiro esforço."
+	if strings.Contains(err.Error(), "step") { return validation.FieldErrors{"step_name": message} }
+	if strings.Contains(err.Error(), "water block") { return validation.FieldErrors{"title": message} }
+	return validation.FieldErrors{"form": message}
+}
+
 func (h StructuredTraining) CreateWaterWorkStep(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
 	blockID, err := uuid.Parse(r.PathValue("id"))

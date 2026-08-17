@@ -2,6 +2,7 @@ package pages
 
 import (
 	"fmt"
+	"net/url"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"strings"
@@ -472,7 +473,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 																		@structuredGymBlockForm(page, segment.ID)
 																	}
 																	if segment.Modality == "WATER" {
-																		@structuredWaterBlockForm(page, segment.ID)
+																					@structuredWaterBlockForm(page, session.ID, segment)
 																	}
 																</div>
 															</details>
@@ -1188,30 +1189,8 @@ templ structuredGymExerciseFields(id string) {
 	<textarea id={ "gym-exercise-notes-" + id } name="exercise_notes" maxlength="1000"></textarea>
 }
 
-templ structuredWaterBlockForm(page StructuredTrainingPage, segmentID string) {
-	<button class="action action--quiet" type="button" data-dialog-open={ "add-water-block-" + segmentID }>Adicionar treino de água</button>
-	<dialog id={ "add-water-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-title-" + segmentID }>
-		<div class="task-dialog__header"><div><p class="eyebrow">Água</p><h3 id={ "add-water-title-" + segmentID }>Adicionar bloco estruturado</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/agua") }>
-			@page.CSRFField
-			@components.FieldLabel("water-purpose-"+segmentID, "Fase", true)<select id={ "water-purpose-" + segmentID } name="purpose" required>@gymPurposeOptions()</select>
-			@components.FieldLabel("water-title-"+segmentID, "Título", true)<input id={ "water-title-" + segmentID } name="title" required minlength="2" maxlength="120"/>
-			@components.FieldLabel("water-instructions-"+segmentID, "Instruções gerais", true)<textarea id={ "water-instructions-" + segmentID } name="instructions" required minlength="2" maxlength="4000"></textarea>
-			@components.FieldLabel("water-method-"+segmentID, "Método", true)<select id={ "water-method-" + segmentID } name="method" required>@waterMethodOptions()</select>
-			@components.FieldLabel("water-profile-"+segmentID, "Perfil de intensidade (opcional)", false)
-			<select id={ "water-profile-" + segmentID } name="intensity_profile_id">
-				<option value="">Sem perfil associado</option>
-				for _, profile := range page.WaterProfiles {
-					<option value={ profile.ID }>{ profile.Name } · { profile.Craft } · revisão { fmt.Sprintf("%d", profile.Revision) }</option>
-				}
-			</select>
-			@components.FieldHelp("water-profile-help-"+segmentID, "A revisão escolhida fica ligada a este bloco, mesmo quando for criado um perfil mais recente.")
-			<div class="form-grid form-grid--three"><div>@components.FieldLabel("water-target-"+segmentID, "Distância total alvo da sessão (m)", false)<input id={ "water-target-" + segmentID } name="target_distance_metres" type="number" min="1" max="200000"/></div><div>@components.FieldLabel("water-target-certainty-"+segmentID, "Precisão", false)<select id={ "water-target-certainty-" + segmentID } name="target_distance_certainty"><option value="">Sem distância alvo</option><option value="EXACT">Exata</option><option value="ESTIMATED">Estimada</option></select></div></div>
-			@components.FieldHelp("water-target-help-"+segmentID, "Num retorno à calma, permite prescrever: continuar até a sessão atingir esta distância. Não é usada para inventar a distância dos passos anteriores.")
-			@structuredWaterStepFields(segmentID, nil)
-			<button type="submit">Adicionar bloco de água</button>
-		</form>
-	</dialog>
+templ structuredWaterBlockForm(page StructuredTrainingPage, sessionID string, segment StructuredTrainingSegment) {
+	<a class="action action--quiet" href={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos/" + segment.ID + "/agua?return_to=" + url.QueryEscape(structuredPlannerReturnURL(page))) }>Adicionar treino de água</a>
 }
 
 templ structuredWaterProfileManagement(page StructuredTrainingPage) {
