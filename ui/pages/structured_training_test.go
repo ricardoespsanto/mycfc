@@ -14,6 +14,9 @@ func TestStructuredTrainingRendersAdminIntensityProfilesAndPlannedTotals(t *test
 		Management:             true,
 		CanManageWaterProfiles: true,
 		CSRFField:              templ.Raw(""),
+		SelectedGroupID:        "group-1",
+		SelectedWeekID:         "week-1",
+		SelectedSessionID:      "session-1",
 		WaterProfiles: []StructuredWaterProfile{{
 			ID: "profile-1", Name: "Perfil do clube", Craft: "Kayak", Revision: 2,
 			Zones: []StructuredWaterZone{{Code: "R7", Label: "Ritmo de prova", Cadence: "Sem cadência fixa", Meaning: "Ritmo sustentável para a duração prescrita"}},
@@ -25,10 +28,13 @@ func TestStructuredTrainingRendersAdminIntensityProfilesAndPlannedTotals(t *test
 		t.Fatal(err)
 	}
 	html := output.String()
-	for _, expected := range []string{"Perfis de intensidade", "Ritmo sustentável", "O limite inferior de R5", "Esforço planeado", "27 min", "revisão 2", "Resumo semanal", "Carga planeada", "70%", "Registo real do atleta", "Ver prescrições e respostas dos atletas"} {
+	for _, expected := range []string{"Perfis de intensidade", "Ritmo sustentável", "O limite inferior de R5", "Esforço planeado", "27 min", "revisão 2", "Resumo semanal", "Carga planeada", "70%", "Registo real do atleta", "Ver prescrições e respostas dos atletas", "Contexto de edição", "Plano selecionado", "Sessões da semana selecionada"} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("rendered page missing %q", expected)
 		}
+	}
+	if !strings.Contains(html, "name=\"group_id\"") || !strings.Contains(html, "aria-current=\"page\"") {
+		t.Fatalf("planner context did not retain its selected group/session: %s", html)
 	}
 }
 

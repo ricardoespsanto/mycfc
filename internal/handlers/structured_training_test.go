@@ -825,6 +825,23 @@ func TestStructuredTrainingViewHelpersBuildReadableChoicesAndRoutines(t *testing
 	}
 }
 
+func TestStructuredPlannerSelectionKeepsAValidDeepLinkedContext(t *testing.T) {
+	audiences := []pages.StructuredTrainingAudience{
+		{GroupID: "group-a", GroupName: "Cadetes", Weeks: []pages.StructuredTrainingWeek{{ID: "week-a", Sessions: []pages.StructuredTrainingSession{{ID: "session-a"}}}}},
+		{GroupID: "group-b", GroupName: "Seniores", Weeks: []pages.StructuredTrainingWeek{{ID: "week-b", Sessions: []pages.StructuredTrainingSession{{ID: "session-b"}, {ID: "session-c"}}}}},
+	}
+
+	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "group-b", "week-b", "session-c"); groupID != "group-b" || weekID != "week-b" || sessionID != "session-c" {
+		t.Fatalf("deep-linked selection = %q, %q, %q", groupID, weekID, sessionID)
+	}
+	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "group-b", "week-a", "session-a"); groupID != "group-b" || weekID != "week-b" || sessionID != "session-b" {
+		t.Fatalf("cross-group selection should fall back within its selected group, got %q, %q, %q", groupID, weekID, sessionID)
+	}
+	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "unknown", "unknown", "unknown"); groupID != "group-a" || weekID != "week-a" || sessionID != "session-a" {
+		t.Fatalf("invalid selection should fall back to the first available context, got %q, %q, %q", groupID, weekID, sessionID)
+	}
+}
+
 func TestStructuredTrainingFormattingHelpersCoverSupportedPrescriptions(t *testing.T) {
 	if got := gymExercisePrescription(3, 8, 45, 500, 60); got != "3 séries · 8 repetições · 45 s · 500 m · recuperação 60 s" {
 		t.Fatalf("prescription = %q", got)

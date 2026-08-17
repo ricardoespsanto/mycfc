@@ -133,6 +133,7 @@ type StructuredTrainingPage struct {
 	VariationPreviews                                          []StructuredVariationPreview
 	Publications                                               []StructuredPublicationState
 	CrewModalities, CompetitionEvents                          []StructuredTrainingChoice
+	SelectedGroupID, SelectedWeekID, SelectedSessionID         string
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
 	SessionForm                                                 StructuredTrainingSessionForm
@@ -183,6 +184,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			</nav>
 		}
 		<section id="training-plan" class="module training-plan" data-tab-panel>
+			if page.Management {
+				@structuredPlannerContext(page)
+			}
 			@components.SectionHeading("", "Semanas de treino", "Os horários são exatos; manhã e tarde são apenas agrupamentos visuais.")
 			if len(page.Audiences) == 0 {
 				@components.EmptyState("Ainda sem planeamento estruturado", "Quando existir uma semana no seu âmbito, ela aparece aqui.")
@@ -503,6 +507,82 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		@structuredWeekForm(page)
 		@structuredSessionForm(page)
 	}
+}
+
+templ structuredPlannerContext(page StructuredTrainingPage) {
+	<section class="structured-planner" aria-labelledby="structured-planner-title">
+		<div class="structured-planner__heading">
+			<div>
+				<p class="eyebrow">Contexto de edição</p>
+				<h2 id="structured-planner-title">Plano selecionado</h2>
+				<p>Escolha o grupo, a semana e a sessão antes de editar. Esta seleção fica no endereço para poder retomar o trabalho.</p>
+			</div>
+			<span class="badge">Rascunho</span>
+		</div>
+		<form class="structured-planner__selector" method="get" action="/admin/treinos/estruturados">
+			<div>
+				@components.FieldLabel("planner-group", "Grupo", true)
+				<select id="planner-group" name="group_id" required>
+					for _, audience := range page.Audiences {
+						<option value={ audience.GroupID } selected?={ audience.GroupID == page.SelectedGroupID }>{ audience.GroupName }</option>
+					}
+				</select>
+			</div>
+			<div>
+				@components.FieldLabel("planner-week", "Semana", true)
+				<select id="planner-week" name="week_id" required>
+					for _, audience := range page.Audiences {
+						if audience.GroupID == page.SelectedGroupID {
+							for _, week := range audience.Weeks {
+								<option value={ week.ID } selected?={ week.ID == page.SelectedWeekID }>{ week.Title } · { week.DateRange }</option>
+							}
+						}
+					}
+				</select>
+			</div>
+			<div>
+				@components.FieldLabel("planner-session", "Sessão", false)
+				<select id="planner-session" name="session_id">
+					<option value="">Todas as sessões da semana</option>
+					for _, audience := range page.Audiences {
+						if audience.GroupID == page.SelectedGroupID {
+							for _, week := range audience.Weeks {
+								if week.ID == page.SelectedWeekID {
+									for _, session := range week.Sessions {
+										<option value={ session.ID } selected?={ session.ID == page.SelectedSessionID }>{ session.When } · { session.Title }</option>
+									}
+								}
+							}
+						}
+					}
+				</select>
+			</div>
+			<button type="submit">Abrir contexto</button>
+		</form>
+		if page.SelectedWeekID != "" {
+			<nav class="structured-planner__sessions" aria-label="Sessões da semana selecionada">
+				for _, audience := range page.Audiences {
+					if audience.GroupID == page.SelectedGroupID {
+						for _, week := range audience.Weeks {
+							if week.ID == page.SelectedWeekID {
+								for _, session := range week.Sessions {
+									if session.ID == page.SelectedSessionID {
+										<a class="structured-planner__session" href={ templ.SafeURL("/admin/treinos/estruturados?group_id=" + audience.GroupID + "&week_id=" + week.ID + "&session_id=" + session.ID + "#training-plan") } aria-current="page">
+											<span>{ session.When }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
+										</a>
+									} else {
+										<a class="structured-planner__session" href={ templ.SafeURL("/admin/treinos/estruturados?group_id=" + audience.GroupID + "&week_id=" + week.ID + "&session_id=" + session.ID + "#training-plan") }>
+											<span>{ session.When }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
+										</a>
+									}
+								}
+							}
+						}
+					}
+				}
+			</nav>
+		}
+	</section>
 }
 
 templ structuredPublicationManagement(page StructuredTrainingPage) {

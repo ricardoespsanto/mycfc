@@ -180,6 +180,14 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	page.Meta = h.meta(r, user, page.Management)
+	if page.Management {
+		page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID = structuredPlannerSelection(
+			page.Audiences,
+			r.URL.Query().Get("group_id"),
+			r.URL.Query().Get("week_id"),
+			r.URL.Query().Get("session_id"),
+		)
+	}
 	page.Meta.PageLabel = "Planeamento semanal"
 	if page.Management {
 		page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
@@ -196,6 +204,42 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.StructuredTraining(page).Render(r.Context(), w)
+}
+
+func structuredPlannerSelection(audiences []pages.StructuredTrainingAudience, requestedGroupID, requestedWeekID, requestedSessionID string) (groupID, weekID, sessionID string) {
+	if len(audiences) == 0 {
+		return "", "", ""
+	}
+	selectedAudience := audiences[0]
+	for _, audience := range audiences {
+		if audience.GroupID == requestedGroupID {
+			selectedAudience = audience
+			break
+		}
+	}
+	groupID = selectedAudience.GroupID
+	if len(selectedAudience.Weeks) == 0 {
+		return groupID, "", ""
+	}
+	selectedWeek := selectedAudience.Weeks[0]
+	for _, week := range selectedAudience.Weeks {
+		if week.ID == requestedWeekID {
+			selectedWeek = week
+			break
+		}
+	}
+	weekID = selectedWeek.ID
+	if len(selectedWeek.Sessions) == 0 {
+		return groupID, weekID, ""
+	}
+	sessionID = selectedWeek.Sessions[0].ID
+	for _, session := range selectedWeek.Sessions {
+		if session.ID == requestedSessionID {
+			sessionID = session.ID
+			break
+		}
+	}
+	return groupID, weekID, sessionID
 }
 
 func (h StructuredTraining) PublishPlan(w http.ResponseWriter, r *http.Request) {
