@@ -8,7 +8,7 @@ COPY scripts/build-assets.mjs scripts/build-assets.mjs
 COPY ui/static/src ui/static/src
 RUN npm run build
 
-FROM golang:1.26.5-alpine3.24 AS build
+FROM golang:1.26.6-alpine3.24 AS build
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum* ./
