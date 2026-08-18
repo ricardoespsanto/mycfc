@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -148,6 +149,20 @@ func (s *structuredTrainingStoreStub) CreateWaterIntensityZone(_ context.Context
 
 func (s *structuredTrainingStoreStub) ListActiveWaterIntensityProfiles(context.Context) ([]dbgen.ListActiveWaterIntensityProfilesRow, error) {
 	return nil, nil
+}
+
+func TestStructuredWaterBlockTaskFormPreservesSafeValuesAndMapsErrors(t *testing.T) {
+	form := structuredWaterBlockTaskForm(url.Values{
+		"purpose": {"MAIN"}, "title": {"Intervalos"}, "instructions": {"Manter ritmo"}, "method": {"INTERVALS"},
+		"step_kind": {"EFFORT"}, "step_name": {"500 m"}, "distance_metres": {"500"}, "distance_certainty": {"EXACT"},
+		"intensity_code": {"R7"}, "step_instructions": {"Sair rápido"},
+	}, validation.FieldErrors{"step_name": "Indique um esforço válido."})
+	if form.Title != "Intervalos" || form.StepName != "500 m" || form.DistanceMetres != "500" || form.IntensityCode != "R7" || form.Errors["step_name"] == "" {
+		t.Fatalf("safe values or validation feedback were not preserved: %#v", form)
+	}
+	if errors := structuredWaterTaskErrors(httptest.NewRequest(http.MethodPost, "/", nil), errors.New("invalid water step")); errors["step_name"] == "" {
+		t.Fatalf("water-step validation did not target the task field: %#v", errors)
+	}
 }
 
 func (s *structuredTrainingStoreStub) ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error) {

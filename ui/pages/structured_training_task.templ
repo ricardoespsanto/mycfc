@@ -1,0 +1,99 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type StructuredWaterBlockTaskForm struct {
+	Purpose, Title, Instructions, Method, IntensityProfileID string
+	TargetDistanceMetres, TargetDistanceCertainty            string
+	StepKind, StepName, Repeats, DurationSeconds             string
+	DurationCertainty, DistanceMetres, DistanceCertainty     string
+	RecoverySeconds, IntensityCode, CadenceSPM                string
+	DrillFocus, DrillFormat, RoleNotes, StepInstructions     string
+	Errors                                                    validation.FieldErrors
+}
+
+type StructuredWaterBlockTaskPage struct {
+	Meta                                      components.PageMeta
+	CSRFField                                 templ.Component
+	ActionURL, ReturnURL                      string
+	GroupName, WeekTitle, SessionTitle        string
+	SegmentTitle, SegmentModality              string
+	WaterProfiles                             []StructuredWaterProfile
+	Form                                      StructuredWaterBlockTaskForm
+}
+
+templ StructuredWaterBlockTask(page StructuredWaterBlockTaskPage) {
+	@components.Base(page.Meta, structuredWaterBlockTaskContent(page))
+}
+
+templ structuredWaterBlockTaskContent(page StructuredWaterBlockTaskPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{
+		ID: "water-block-task",
+		TitleID: "water-block-task-title",
+		Eyebrow: "Plano · " + page.GroupName + " · " + page.WeekTitle,
+		Title: "Adicionar bloco de água",
+		Description: "Sessão " + page.SessionTitle + " · segmento " + page.SegmentTitle + ". O bloco e o primeiro passo serão independentes de outros treinos.",
+		ReturnURL: page.ReturnURL,
+	}) {
+		<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
+			@page.CSRFField
+			<input type="hidden" name="return_to" value={ page.ReturnURL }/>
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "form", Field: "water-task-title"}, {Key: "title", Field: "water-task-title"}, {Key: "instructions", Field: "water-task-instructions"}, {Key: "method", Field: "water-task-method"}, {Key: "step_name", Field: "water-task-step-name"}}))
+			@components.FieldLabel("water-task-purpose", "Fase", true)
+			<select id="water-task-purpose" name="purpose" required aria-invalid?={ page.Form.Errors["form"] != "" }>
+				<option value="WARM_UP" selected?={ page.Form.Purpose == "WARM_UP" }>Aquecimento</option>
+				<option value="MAIN" selected?={ page.Form.Purpose == "MAIN" }>Principal</option>
+				<option value="COOL_DOWN" selected?={ page.Form.Purpose == "COOL_DOWN" }>Retorno à calma</option>
+				<option value="TECHNIQUE" selected?={ page.Form.Purpose == "TECHNIQUE" }>Técnica</option>
+				<option value="CUSTOM" selected?={ page.Form.Purpose == "CUSTOM" }>Personalizado</option>
+			</select>
+			@components.FieldLabel("water-task-title", "Título", true)
+			<input id="water-task-title" name="title" required minlength="2" maxlength="120" value={ page.Form.Title } aria-invalid?={ page.Form.Errors["title"] != "" }/>
+			@components.FieldErrorMessage("title", page.Form.Errors["title"])
+			@components.FieldLabel("water-task-instructions", "Instruções gerais", true)
+			<textarea id="water-task-instructions" name="instructions" required minlength="2" maxlength="4000" aria-invalid?={ page.Form.Errors["instructions"] != "" }>{ page.Form.Instructions }</textarea>
+			@components.FieldErrorMessage("instructions", page.Form.Errors["instructions"])
+			@components.FieldLabel("water-task-method", "Método", true)
+			<select id="water-task-method" name="method" required aria-invalid?={ page.Form.Errors["method"] != "" }>
+				<option value="CONTINUOUS" selected?={ page.Form.Method == "CONTINUOUS" }>Contínuo</option>
+				<option value="INTERVALS" selected?={ page.Form.Method == "INTERVALS" }>Intervalado</option>
+				<option value="FARTLEK" selected?={ page.Form.Method == "FARTLEK" }>Fartlek</option>
+				<option value="TECHNIQUE" selected?={ page.Form.Method == "TECHNIQUE" }>Técnica</option>
+				<option value="STARTS" selected?={ page.Form.Method == "STARTS" }>Partidas</option>
+				<option value="RACE_SIMULATION" selected?={ page.Form.Method == "RACE_SIMULATION" }>Simulação de prova</option>
+				<option value="TACTICAL_DRILL" selected?={ page.Form.Method == "TACTICAL_DRILL" }>Tático</option>
+				<option value="CUSTOM" selected?={ page.Form.Method == "CUSTOM" }>Personalizado</option>
+			</select>
+			@components.FieldLabel("water-task-profile", "Perfil de intensidade (opcional)", false)
+			<select id="water-task-profile" name="intensity_profile_id">
+				<option value="">Sem perfil associado</option>
+				for _, profile := range page.WaterProfiles {
+					<option value={ profile.ID } selected?={ page.Form.IntensityProfileID == profile.ID }>{ profile.Name } · { profile.Craft } · revisão { fmt.Sprintf("%d", profile.Revision) }</option>
+				}
+			</select>
+			@components.FieldHelp("water-task-profile-help", "A revisão escolhida fica ligada a este bloco, mesmo quando for criado um perfil mais recente.")
+			<div class="field-grid"><div class="field-group">
+				@components.FieldLabel("water-task-target", "Distância total alvo da sessão (m)", false)
+				<input id="water-task-target" name="target_distance_metres" type="number" min="1" max="200000" value={ page.Form.TargetDistanceMetres }/>
+			</div><div class="field-group">
+				@components.FieldLabel("water-task-target-certainty", "Precisão", false)
+				<select id="water-task-target-certainty" name="target_distance_certainty"><option value="">Sem distância alvo</option><option value="EXACT" selected?={ page.Form.TargetDistanceCertainty == "EXACT" }>Exata</option><option value="ESTIMATED" selected?={ page.Form.TargetDistanceCertainty == "ESTIMATED" }>Estimada</option></select>
+			</div></div>
+			<section class="form-section" aria-labelledby="water-task-step-heading"><h2 id="water-task-step-heading">Primeiro esforço ou grupo</h2>
+				@components.FieldLabel("water-task-step-kind", "Tipo", true)<select id="water-task-step-kind" name="step_kind" required><option value="EFFORT" selected?={ page.Form.StepKind == "EFFORT" }>Esforço ou exercício</option><option value="REPEAT_GROUP" selected?={ page.Form.StepKind == "REPEAT_GROUP" }>Grupo de repetições</option></select>
+				@components.FieldLabel("water-task-step-name", "Nome", true)<input id="water-task-step-name" name="step_name" required minlength="2" maxlength="180" value={ page.Form.StepName } aria-invalid?={ page.Form.Errors["step_name"] != "" }/>@components.FieldErrorMessage("step_name", page.Form.Errors["step_name"])
+				<div class="field-grid"><div class="field-group">@components.FieldLabel("water-task-repeats", "Repetições (para grupo)", false)<input id="water-task-repeats" name="repeats" type="number" min="1" max="100" value={ page.Form.Repeats }/></div><div class="field-group">@components.FieldLabel("water-task-duration", "Duração (s)", false)<input id="water-task-duration" name="duration_seconds" type="number" min="1" max="86400" value={ page.Form.DurationSeconds }/></div><div class="field-group">@components.FieldLabel("water-task-distance", "Distância (m)", false)<input id="water-task-distance" name="distance_metres" type="number" min="1" max="200000" value={ page.Form.DistanceMetres }/></div><div class="field-group">@components.FieldLabel("water-task-recovery", "Recuperação (s)", false)<input id="water-task-recovery" name="recovery_seconds" type="number" min="1" max="86400" value={ page.Form.RecoverySeconds }/></div></div>
+				<div class="field-grid"><div class="field-group">@components.FieldLabel("water-task-duration-certainty", "Precisão da duração", false)<select id="water-task-duration-certainty" name="duration_certainty"><option value="">Sem duração</option><option value="EXACT" selected?={ page.Form.DurationCertainty == "EXACT" }>Exata</option><option value="ESTIMATED" selected?={ page.Form.DurationCertainty == "ESTIMATED" }>Estimada</option></select></div><div class="field-group">@components.FieldLabel("water-task-distance-certainty", "Precisão da distância", false)<select id="water-task-distance-certainty" name="distance_certainty"><option value="">Sem distância</option><option value="EXACT" selected?={ page.Form.DistanceCertainty == "EXACT" }>Exata</option><option value="ESTIMATED" selected?={ page.Form.DistanceCertainty == "ESTIMATED" }>Estimada</option></select></div><div class="field-group">@components.FieldLabel("water-task-intensity", "Intensidade", false)<input id="water-task-intensity" name="intensity_code" maxlength="20" value={ page.Form.IntensityCode }/></div><div class="field-group">@components.FieldLabel("water-task-cadence", "Cadência (remadas/min)", false)<input id="water-task-cadence" name="cadence_spm" type="number" min="1" max="300" value={ page.Form.CadenceSPM }/></div></div>
+				@components.FieldLabel("water-task-focus", "Foco técnico/tático", false)<input id="water-task-focus" name="drill_focus" maxlength="180" value={ page.Form.DrillFocus }/>
+				@components.FieldLabel("water-task-format", "Formato", false)<input id="water-task-format" name="drill_format" maxlength="180" value={ page.Form.DrillFormat }/>
+				@components.FieldLabel("water-task-roles", "Papéis", false)<input id="water-task-roles" name="role_notes" maxlength="500" value={ page.Form.RoleNotes }/>
+				@components.FieldLabel("water-task-step-instructions", "Instruções (opcional)", false)<textarea id="water-task-step-instructions" name="step_instructions" maxlength="1000">{ page.Form.StepInstructions }</textarea>
+			</section>
+			@components.TaskActions(page.ReturnURL) { <button class="action action--primary" type="submit">Adicionar bloco de água</button> }
+		</form>
+	}
+}
