@@ -868,10 +868,17 @@ test.describe('authentication', () => {
 
     let structuredWaterSegment = session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ }).locator('xpath=ancestor::section[1]');
     await structuredWaterSegment.getByText('Ações do segmento', { exact: true }).click();
-    await structuredWaterSegment.getByRole('button', { name: 'Adicionar treino de água' }).click();
-    const waterBlockForm = structuredWaterSegment.locator('form[action$="/agua"]');
-    await waterBlockForm.locator('select[name="purpose"]').selectOption('MAIN');
+    await structuredWaterSegment.getByRole('link', { name: 'Adicionar treino de água' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Adicionar bloco de água' })).toBeVisible();
+    await expect(page.getByText(`Sessão ${sessionTitle} · segmento Ataque 3 e defesa 2-2.`)).toBeVisible();
+    let waterBlockForm = page.locator('form[action$="/agua"]');
     await waterBlockForm.locator('input[name="title"]').fill('Série intervalada');
+    await waterBlockForm.evaluate((form) => { form.noValidate = true; });
+    await waterBlockForm.getByRole('button', { name: 'Adicionar bloco de água' }).click();
+    await expect(page.getByRole('heading', { name: 'Corrija os seguintes campos' })).toBeVisible();
+    waterBlockForm = page.locator('form[action$="/agua"]');
+    await expect(waterBlockForm.locator('input[name="title"]')).toHaveValue('Série intervalada');
+    await waterBlockForm.locator('select[name="purpose"]').selectOption('MAIN');
     await waterBlockForm.locator('textarea[name="instructions"]').fill('Estrutura aninhada com recuperação ao nível certo');
     await waterBlockForm.locator('select[name="method"]').selectOption('INTERVALS');
     await waterBlockForm.getByLabel('Perfil de intensidade (opcional)').selectOption({ label: `${intensityProfileName} · Kayak · revisão 1` });
