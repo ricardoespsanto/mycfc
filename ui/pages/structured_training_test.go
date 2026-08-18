@@ -53,7 +53,7 @@ func TestStructuredTrainingHidesProfileAdministrationFromCoach(t *testing.T) {
 
 func TestStructuredWaterBlockTaskRendersAFullTaskWithRecoverableErrors(t *testing.T) {
 	page := StructuredWaterBlockTaskPage{
-		Meta: components.PageMeta{Title: "Adicionar bloco de água | MyCFC"},
+		Meta:      components.PageMeta{Title: "Adicionar bloco de água | MyCFC"},
 		CSRFField: templ.Raw(""),
 		ActionURL: "/admin/treinos/estruturados/sessoes/session-1/segmentos/segment-1/agua",
 		ReturnURL: "/admin/treinos/estruturados?group_id=group-1&week_id=week-1&session_id=session-1#training-plan",
@@ -61,10 +61,16 @@ func TestStructuredWaterBlockTaskRendersAFullTaskWithRecoverableErrors(t *testin
 		Form: StructuredWaterBlockTaskForm{Title: "Intervalos", StepName: "500 m", Errors: validation.FieldErrors{"step_name": "Indique um esforço válido."}},
 	}
 	var output bytes.Buffer
-	if err := StructuredWaterBlockTask(page).Render(context.Background(), &output); err != nil { t.Fatal(err) }
+	if err := StructuredWaterBlockTask(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
 	html := output.String()
 	for _, expected := range []string{"<h1 id=\"water-block-task-title\">Adicionar bloco de água", "Plano · Seniores · Semana 41", "Sessão Série de manhã", "value=\"Intervalos\"", "value=\"500 m\"", "Indique um esforço válido.", "return_to"} {
-		if !strings.Contains(html, expected) { t.Fatalf("water task missing %q: %s", expected, html) }
+		if !strings.Contains(html, expected) {
+			t.Fatalf("water task missing %q: %s", expected, html)
+		}
 	}
-	if strings.Contains(html, "<dialog") { t.Fatalf("complex water authoring must not render as a nested modal: %s", html) }
+	if strings.Contains(html, "<dialog") {
+		t.Fatalf("complex water authoring must not render as a nested modal: %s", html)
+	}
 }
