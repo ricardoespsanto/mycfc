@@ -1,0 +1,67 @@
+name: Feature story
+description: Propose an approved, testable MyCFC product change
+title: "[Feature]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Complete this after product discovery. Do not use the issue to hide unresolved product decisions.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: User outcome and problem
+      description: Who needs what outcome, and why is the current behavior insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Describe the smallest complete vertical slice.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: State what this issue deliberately does not deliver.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable, testable behaviors including empty, error, permission, and lifecycle states where applicable.
+      placeholder: |
+        - [ ] Given ..., when ..., then ...
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: UX, content, and accessibility
+      description: Cover responsive behavior, pt-PT content, keyboard/focus, no-JavaScript behavior, and design references when applicable.
+    validations:
+      required: false
+  - type: textarea
+    id: technical
+    attributes:
+      label: Technical and operational constraints
+      description: Record authorization, privacy, schema/migration, integration, observability, rollout, and rollback constraints.
+    validations:
+      required: false
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification plan
+      description: Identify required unit, integration, browser/axe, manual, infrastructure, or release evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Open decisions and dependencies
+      description: Link blockers and identify the human owner of each unresolved decision.
+    validations:
+      required: false
+
