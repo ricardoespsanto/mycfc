@@ -56,14 +56,20 @@ func (h Events) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, eventForm{Errors: validation.FieldErrors{}})
 }
 
+// CreatePage keeps the conditional authoring form on a stable, guarded URL so
+// browser refresh, Back, and validation recovery do not lose safe input.
+func (h Events) CreatePage(w http.ResponseWriter, r *http.Request) {
+	h.renderCreate(w, r, http.StatusOK, eventForm{EventType: "GENERAL", Errors: validation.FieldErrors{}})
+}
+
 func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderIndex(w, r, http.StatusBadRequest, eventForm{Errors: validation.FieldErrors{}})
+		h.renderCreate(w, r, http.StatusBadRequest, eventForm{EventType: "GENERAL", Errors: validation.FieldErrors{}})
 		return
 	}
 	form := h.validateEvent(r)
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, form)
+		h.renderCreate(w, r, http.StatusUnprocessableEntity, form)
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -115,7 +121,7 @@ func (h Events) Create(w http.ResponseWriter, r *http.Request) {
 		form.Errors.Add("audience", "Selecione pelo menos um destinatário.")
 	}
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, form)
+		h.renderCreate(w, r, http.StatusUnprocessableEntity, form)
 		return
 	}
 	err = db.WithinTx(ctx, h.DB, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -847,6 +853,33 @@ func (h Events) eventFormFromRecord(ctx context.Context, event dbgen.GetEventFor
 	return form, nil
 }
 
+func (h Events) renderCreate(w http.ResponseWriter, r *http.Request, status int, form eventForm) {
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
+	defer cancel()
+	pageForm := pages.EventForm{
+		Title: form.Title, Description: form.Description, EventType: form.EventType, StartsAt: form.StartsAt,
+		EndsAt: form.EndsAt, Deadline: form.Deadline, Capacity: form.Capacity,
+		DocumentTitle: form.DocumentTitle, DocumentURL: form.DocumentURL, DocumentSource: form.DocumentSource,
+		DocumentReviewedOn: form.DocumentReviewedOn, Errors: form.Errors,
+		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
+	}
+	if pageForm.EventType == "" {
+		pageForm.EventType = "GENERAL"
+	}
+	if !h.populateEventAudience(ctx, user, &pageForm, form.ProgrammeIDs, form.TeamIDs) {
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.EventCreatePage{Meta: h.meta(r, user, "/admin/eventos", "Criar evento"), Form: pageForm}
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = "Criar evento"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Gerir eventos", Path: "/admin/eventos"}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.EventCreate(page).Render(r.Context(), w)
+}
+
 func (h Events) renderEdit(w http.ResponseWriter, r *http.Request, status int, eventID uuid.UUID, form eventForm, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), eventQueryTimeout)
@@ -857,33 +890,9 @@ func (h Events) renderEdit(w http.ResponseWriter, r *http.Request, status int, e
 		Editing: true, AudienceLocked: form.AudienceLocked, HasDocument: form.HasDocument, Errors: form.Errors,
 		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
 	}
-	selectedProgrammes := make(map[uuid.UUID]bool, len(form.ProgrammeIDs))
-	for _, id := range form.ProgrammeIDs {
-		selectedProgrammes[id] = true
-	}
-	programmes, err := h.Store.ListProgrammes(ctx)
-	if err != nil {
+	if !h.populateEventAudience(ctx, user, &pageForm, form.ProgrammeIDs, form.TeamIDs) {
 		h.System.InternalError(w, r)
 		return
-	}
-	for _, programme := range programmes {
-		if user.IsAdmin || user.CoachProgrammeIDs[programme.ID] {
-			pageForm.Programmes = append(pageForm.Programmes, pages.EventProgramme{ID: programme.ID.String(), Name: programme.NamePt, Selected: selectedProgrammes[programme.ID]})
-		}
-	}
-	selectedTeams := make(map[uuid.UUID]bool, len(form.TeamIDs))
-	for _, id := range form.TeamIDs {
-		selectedTeams[id] = true
-	}
-	teams, err := h.Store.ListTeamsForEventAuthoring(ctx)
-	if err != nil {
-		h.System.InternalError(w, r)
-		return
-	}
-	for _, team := range teams {
-		if user.IsAdmin || user.CoachTeamIDs[team.ID] || user.CoachProgrammeIDs[team.ProgrammeID] {
-			pageForm.Teams = append(pageForm.Teams, pages.EventTeam{ID: team.ID.String(), Name: team.Name, Selected: selectedTeams[team.ID]})
-		}
 	}
 	page := pages.EventEditPage{
 		Meta: h.meta(r, user, "/admin/eventos", "Editar evento"), EventID: eventID.String(), Form: pageForm,
@@ -894,6 +903,36 @@ func (h Events) renderEdit(w http.ResponseWriter, r *http.Request, status int, e
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.EventEdit(page).Render(r.Context(), w)
+}
+
+func (h Events) populateEventAudience(ctx context.Context, user CurrentUser, pageForm *pages.EventForm, programmeIDs, teamIDs []uuid.UUID) bool {
+	selectedProgrammes := make(map[uuid.UUID]bool, len(programmeIDs))
+	for _, id := range programmeIDs {
+		selectedProgrammes[id] = true
+	}
+	programmes, err := h.Store.ListProgrammes(ctx)
+	if err != nil {
+		return false
+	}
+	for _, programme := range programmes {
+		if user.IsAdmin || user.CoachProgrammeIDs[programme.ID] {
+			pageForm.Programmes = append(pageForm.Programmes, pages.EventProgramme{ID: programme.ID.String(), Name: programme.NamePt, Selected: selectedProgrammes[programme.ID]})
+		}
+	}
+	selectedTeams := make(map[uuid.UUID]bool, len(teamIDs))
+	for _, id := range teamIDs {
+		selectedTeams[id] = true
+	}
+	teams, err := h.Store.ListTeamsForEventAuthoring(ctx)
+	if err != nil {
+		return false
+	}
+	for _, team := range teams {
+		if user.IsAdmin || user.CoachTeamIDs[team.ID] || user.CoachProgrammeIDs[team.ProgrammeID] {
+			pageForm.Teams = append(pageForm.Teams, pages.EventTeam{ID: team.ID.String(), Name: team.Name, Selected: selectedTeams[team.ID]})
+		}
+	}
+	return true
 }
 
 func eventDeadline(value string, location *time.Location) pgtype.Timestamptz {

@@ -76,7 +76,7 @@ func TestPhotoAlbumCreateRequiresExplicitAudience(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Selecione pelo menos um programa ou equipa") {
 		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `data-create-panel open`) {
+	if !strings.Contains(w.Body.String(), `data-task-surface`) {
 		t.Fatal("invalid form did not reopen the authoring panel")
 	}
 }
@@ -100,6 +100,30 @@ func TestPhotoAlbumArchiveUsesAuthenticatedActorAndVersion(t *testing.T) {
 	}
 	if store.archiveParams.ID != albumID || store.archiveParams.ArchivedByID == nil || *store.archiveParams.ArchivedByID != actorID || !store.archiveParams.ExpectedUpdatedAt.Time.Equal(expected) {
 		t.Fatalf("archive params = %#v", store.archiveParams)
+	}
+}
+
+func TestPhotoAlbumArchivePageNamesAlbumAndRecoversConflictInTask(t *testing.T) {
+	actorID, albumID := uuid.New(), uuid.New()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	store := &photoAlbumStoreFake{get: dbgen.GetVisiblePhotoAlbumRow{ID: albumID, Title: "Regata de verão", Status: dbgen.PhotoAlbumStatusOPEN, ProgrammeNames: "Competição", CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}
+	h := PhotoAlbums{Store: store, Location: time.UTC}
+	request := httptest.NewRequest(http.MethodGet, "/admin/albuns/"+albumID.String()+"/arquivar?return_to=%2Fadmin%2Falbuns", nil)
+	request.SetPathValue("id", albumID.String())
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: actorID, Name: "Moderadora", CanModerateContent: true}))
+	response := httptest.NewRecorder()
+
+	h.ArchivePage(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Regata de verão") || !strings.Contains(response.Body.String(), `action="/admin/albuns/`+albumID.String()+`/arquivar"`) || !strings.Contains(response.Body.String(), `name="updated_at" value="`+now.Format(time.RFC3339Nano)+`"`) {
+		t.Fatalf("response = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	store.get.Status = dbgen.PhotoAlbumStatusARCHIVED
+	response = httptest.NewRecorder()
+	h.ArchivePage(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já está arquivado") {
+		t.Fatalf("archived album = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

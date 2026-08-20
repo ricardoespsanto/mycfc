@@ -657,10 +657,14 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 		t.Fatalf("gym block response=%d inputs=%#v", response.Code, store.gymBlocks)
 	}
 
-	exerciseValues := url.Values{"exercise_name": {"Prancha"}, "duration_seconds": {"45"}, "resistance_kind": {"BODY_WEIGHT"}, "execution_intent": {"ISOMETRIC"}}
+	returnTo := structuredPlannerURL(uuid.New().String(), uuid.New().String(), uuid.New().String())
+	exerciseValues := url.Values{"exercise_name": {"Prancha"}, "duration_seconds": {"45"}, "resistance_kind": {"BODY_WEIGHT"}, "execution_intent": {"ISOMETRIC"}, "return_to": {returnTo}}
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/exercicios", exerciseValues, "id", blockID.String(), handler.CreateGymExercise)
 	if response.Code != http.StatusSeeOther || len(store.gymExercises) != 1 || store.gymExercises[0].BlockID != blockID || store.gymExercises[0].DurationSeconds == nil || *store.gymExercises[0].DurationSeconds != 45 {
 		t.Fatalf("gym exercise response=%d inputs=%#v", response.Code, store.gymExercises)
+	}
+	if got := response.Header().Get("Location"); got != returnTo {
+		t.Fatalf("gym exercise return location = %q, want %q", got, returnTo)
 	}
 
 	exerciseID := uuid.New()
@@ -762,7 +766,8 @@ func TestStructuredTrainingRoutineHandlersPreserveScopeAndRequireTargetAuthoriza
 	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
 	user := CurrentUser{ID: userID}
 
-	values := url.Values{"source_kind": {"SEGMENT"}, "source_id": {sourceID.String()}, "name": {"Mobilidade habitual"}, "visibility": {"SHARED"}, "method": {"Ativação"}, "tags": {"ginásio, aquecimento, Ginásio"}}
+	returnTo := structuredPlannerURL(uuid.New().String(), uuid.New().String(), uuid.New().String())
+	values := url.Values{"source_kind": {"SEGMENT"}, "source_id": {sourceID.String()}, "name": {"Mobilidade habitual"}, "visibility": {"SHARED"}, "method": {"Ativação"}, "tags": {"ginásio, aquecimento, Ginásio"}, "return_to": {returnTo}}
 	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas", values, "", "", handler.CreateRoutine)
 	if response.Code != http.StatusSeeOther || len(store.createdRoutines) != 1 {
 		t.Fatalf("create routine response=%d routines=%#v", response.Code, store.createdRoutines)
@@ -771,11 +776,17 @@ func TestStructuredTrainingRoutineHandlersPreserveScopeAndRequireTargetAuthoriza
 	if created.ProgrammeID == nil || *created.ProgrammeID != programmeID || created.TeamID != nil || len(created.Tags) != 2 || created.Snapshot == nil {
 		t.Fatalf("created routine scope/tags = %#v", created)
 	}
+	if got := response.Header().Get("Location"); got != returnTo {
+		t.Fatalf("create routine return location = %q, want %q", got, returnTo)
+	}
 
 	store.visibleRoutine = dbgen.TrainingRoutine{ID: uuid.New(), Kind: dbgen.TrainingRoutineKindBLOCK, Snapshot: []byte(`{"purpose":"MAIN","instructions":"3x5"}`), UpdatedAt: sourceUpdatedAt}
-	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas/"+store.visibleRoutine.ID.String()+"/inserir", url.Values{"target_id": {targetID.String()}}, "id", store.visibleRoutine.ID.String(), handler.InsertRoutine)
+	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/rotinas/"+store.visibleRoutine.ID.String()+"/inserir", url.Values{"target_id": {targetID.String()}, "return_to": {returnTo}}, "id", store.visibleRoutine.ID.String(), handler.InsertRoutine)
 	if response.Code != http.StatusSeeOther || len(store.insertedRoutines) != 1 || store.insertedRoutines[0].TargetID != targetID || store.insertedRoutines[0].ActorID != userID {
 		t.Fatalf("insert routine response=%d inputs=%#v", response.Code, store.insertedRoutines)
+	}
+	if got := response.Header().Get("Location"); got != returnTo {
+		t.Fatalf("insert routine return location = %q, want %q", got, returnTo)
 	}
 }
 
@@ -858,6 +869,21 @@ func TestStructuredPlannerSelectionKeepsAValidDeepLinkedContext(t *testing.T) {
 	}
 	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "unknown", "unknown", "unknown"); groupID != "group-a" || weekID != "week-a" || sessionID != "session-a" {
 		t.Fatalf("invalid selection should fall back to the first available context, got %q, %q, %q", groupID, weekID, sessionID)
+	}
+}
+
+func TestStructuredPlannerContextAudienceBoundsRenderedWorkspace(t *testing.T) {
+	audiences := []pages.StructuredTrainingAudience{
+		{GroupID: "group-a", Weeks: []pages.StructuredTrainingWeek{{ID: "week-a", Sessions: []pages.StructuredTrainingSession{{ID: "session-a"}, {ID: "session-b"}}}}},
+		{GroupID: "group-b", Weeks: []pages.StructuredTrainingWeek{{ID: "week-b", Sessions: []pages.StructuredTrainingSession{{ID: "session-c"}}}}},
+	}
+
+	got := structuredPlannerContextAudience(audiences, "group-a", "week-a", "session-b")
+	if len(got) != 1 || got[0].GroupID != "group-a" || len(got[0].Weeks) != 1 || got[0].Weeks[0].ID != "week-a" || len(got[0].Weeks[0].Sessions) != 1 || got[0].Weeks[0].Sessions[0].ID != "session-b" {
+		t.Fatalf("bounded context = %#v", got)
+	}
+	if got := structuredPlannerContextAudience(audiences, "missing", "week-a", "session-a"); got != nil {
+		t.Fatalf("missing context = %#v, want nil", got)
 	}
 }
 
@@ -957,11 +983,12 @@ func TestStructuredWaterAuthoringPreservesNestedRecoveryAndTacticalMetadata(t *t
 		t.Fatalf("water block lost structured semantics: %+v", got)
 	}
 
+	returnTo := structuredPlannerURL(uuid.New().String(), uuid.New().String(), uuid.New().String())
 	stepValues := url.Values{
 		"parent_step_id": {parentID.String()}, "step_kind": {"EFFORT"}, "step_name": {"Ataque 3 contra 2"},
 		"duration_seconds": {"120"}, "duration_certainty": {"EXACT"}, "recovery_seconds": {"60"},
 		"intensity_code": {"R7"}, "drill_focus": {"Ataque"}, "drill_format": {"3 contra 2"},
-		"role_notes": {"GR e pivot"}, "step_instructions": {"Ritmo de uma prova de dois minutos"},
+		"role_notes": {"GR e pivot"}, "step_instructions": {"Ritmo de uma prova de dois minutos"}, "return_to": {returnTo},
 	}
 	response = performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/blocos/"+blockID.String()+"/agua/passos", stepValues, "id", blockID.String(), handler.CreateWaterWorkStep)
 	if response.Code != http.StatusSeeOther || len(store.waterSteps) != 1 {
@@ -969,6 +996,9 @@ func TestStructuredWaterAuthoringPreservesNestedRecoveryAndTacticalMetadata(t *t
 	}
 	if got := store.waterSteps[0]; got.ParentStepID == nil || *got.ParentStepID != parentID || got.IntensityCode == nil || *got.IntensityCode != "R7" || got.DrillFormat == nil || *got.DrillFormat != "3 contra 2" || got.RecoverySeconds == nil || *got.RecoverySeconds != 60 {
 		t.Fatalf("water step lost nesting or drill metadata: %+v", got)
+	}
+	if got := response.Header().Get("Location"); got != returnTo {
+		t.Fatalf("water step return location = %q, want %q", got, returnTo)
 	}
 }
 

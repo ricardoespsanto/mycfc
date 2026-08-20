@@ -11,6 +11,8 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestNewsValidation(t *testing.T) {
@@ -81,6 +83,39 @@ func TestNewsStatusRejectsInvalidTransition(t *testing.T) {
 	}
 }
 
+func TestNewsStatusPagesNameTheNewsAndRejectInvalidLifecycle(t *testing.T) {
+	id := uuid.New()
+	store := &newsStoreFake{item: dbgen.NewsItem{ID: id, TitlePt: "Regata do Mondego", PublishedAt: pgtype.Timestamptz{Time: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC), Valid: true}}}
+	h := News{Store: store, Location: time.UTC}
+	request := httptest.NewRequest(http.MethodGet, "/admin/noticias/"+id.String()+"/publicar?return_to=%2Fadmin%2Fnoticias%3Fpage%3D2", nil)
+	request.SetPathValue("id", id.String())
+	response := httptest.NewRecorder()
+
+	h.PublishPage(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Regata do Mondego") || !strings.Contains(response.Body.String(), `action="/admin/noticias/`+id.String()+`/publicar"`) || !strings.Contains(response.Body.String(), `href="/admin/noticias?page=2"`) {
+		t.Fatalf("response = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	store.item.IsPublished = true
+	request = httptest.NewRequest(http.MethodGet, "/admin/noticias/"+id.String()+"/publicar", nil)
+	request.SetPathValue("id", id.String())
+	response = httptest.NewRecorder()
+	h.PublishPage(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já está publicada") {
+		t.Fatalf("invalid lifecycle = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	store.itemErr = pgx.ErrNoRows
+	request = httptest.NewRequest(http.MethodGet, "/admin/noticias/"+id.String()+"/expirar", nil)
+	request.SetPathValue("id", id.String())
+	response = httptest.NewRecorder()
+	h.ExpirePage(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing news = %d", response.Code)
+	}
+}
+
 func TestNewsIndexPaginates(t *testing.T) {
 	store := &newsStoreFake{}
 	for i := 0; i < newsPageSize+1; i++ {
@@ -108,12 +143,17 @@ type newsStoreFake struct {
 	id         uuid.UUID
 	published  bool
 	items      []dbgen.NewsItem
+	item       dbgen.NewsItem
+	itemErr    error
 	listParams dbgen.ListNewsForAdminParams
 }
 
 func (s *newsStoreFake) ListNewsForAdmin(_ context.Context, params dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error) {
 	s.listParams = params
 	return s.items, nil
+}
+func (s *newsStoreFake) GetNewsForAdmin(context.Context, uuid.UUID) (dbgen.NewsItem, error) {
+	return s.item, s.itemErr
 }
 func (s *newsStoreFake) CreateNews(context.Context, dbgen.CreateNewsParams) (dbgen.NewsItem, error) {
 	return dbgen.NewsItem{}, nil

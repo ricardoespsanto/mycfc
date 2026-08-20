@@ -339,7 +339,7 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 		errs.Add("state", "O formulário deixou de ser válido. Atualize a página.")
 	}
 	if !errs.Empty() {
-		h.renderSessionEdit(w, r, http.StatusUnprocessableEntity, sessionID, h.trainingSessionFormFromRecord(current), "", reason, errs)
+		h.renderSessionCancel(w, r, http.StatusUnprocessableEntity, sessionID, current, "", reason, errs)
 		return
 	}
 	now := h.now()
@@ -350,7 +350,7 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 			h.System.InternalError(w, r)
 			return
 		}
-		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, h.trainingSessionFormFromRecord(latest), "A sessão foi alterada entretanto, já começou ou já foi cancelada.", reason, validation.FieldErrors{})
+		h.renderSessionCancel(w, r, http.StatusConflict, sessionID, latest, "A sessão foi alterada entretanto, já começou ou já foi cancelada.", reason, validation.FieldErrors{})
 		return
 	}
 	if err != nil {
@@ -359,6 +359,35 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.flash(r, "Sessão cancelada.")
 	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
+}
+
+func (h Training) CancelSessionPage(w http.ResponseWriter, r *http.Request) {
+	sessionID, ok := h.trainingSessionID(w, r)
+	if !ok {
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	session, err := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageTrainingPlan(ctx, user, session.PlanID, w, r) {
+		return
+	}
+	conflict := ""
+	status := http.StatusOK
+	if session.Status != "ACTIVE" || !session.StartsAt.Time.After(h.now()) {
+		status = http.StatusConflict
+		conflict = "A sessão já não pode ser cancelada. As sessões canceladas ou já iniciadas continuam disponíveis para consulta."
+	}
+	h.renderSessionCancel(w, r, status, sessionID, session, conflict, "", validation.FieldErrors{})
 }
 
 func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
@@ -550,6 +579,23 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.TrainingSessionEdit(page).Render(r.Context(), w)
+}
+
+func (h Training) renderSessionCancel(w http.ResponseWriter, r *http.Request, status int, sessionID uuid.UUID, session dbgen.GetTrainingSessionForEditRow, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
+	user, _ := CurrentUserFromContext(r.Context())
+	page := pages.TrainingSessionCancelPage{
+		Meta: h.meta(r, user, true), SessionID: sessionID.String(), Title: session.Title,
+		When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano),
+		Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors,
+		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
+	}
+	page.Meta.Title = "Cancelar sessão | MyCFC"
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = "Cancelar sessão"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}, {Label: session.Title, Path: "/admin/treinos/sessoes/" + sessionID.String() + "/editar"}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.TrainingSessionCancel(page).Render(r.Context(), w)
 }
 
 func (h Training) now() time.Time {

@@ -85,6 +85,10 @@ func (announcementStoreFake) GetAnnouncementAuthor(context.Context, uuid.UUID) (
 	return uuid.Nil, nil
 }
 
+func (announcementStoreFake) GetAnnouncementForStatus(context.Context, uuid.UUID) (dbgen.GetAnnouncementForStatusRow, error) {
+	return dbgen.GetAnnouncementForStatusRow{}, nil
+}
+
 func TestAnnouncementPaginationURLsAreIndependent(t *testing.T) {
 	if got, want := announcementsPageURL(2, 3), "/announcements?authored_page=3&page=2"; got != want {
 		t.Fatalf("URL = %q, want %q", got, want)
@@ -177,6 +181,38 @@ func TestAnnouncementPanelRendersUnreadCountAndRecentItems(t *testing.T) {
 	}
 }
 
+func TestAnnouncementPublishTaskNamesAndGuardsTheCurrentDraft(t *testing.T) {
+	userID, announcementID := uuid.New(), uuid.New()
+	store := &announcementStatusStore{item: dbgen.GetAnnouncementForStatusRow{ID: announcementID, Title: "Alteração de horário", Status: "DRAFT", AuthorID: userID}}
+	h := Announcements{Store: store}
+	r := httptest.NewRequest(http.MethodGet, "/admin/announcements/"+announcementID.String()+"/publicar", nil)
+	r.SetPathValue("id", announcementID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Treinadora"}))
+	w := httptest.NewRecorder()
+
+	h.PublishPage(w, r)
+
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Alteração de horário") {
+		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAnnouncementStatusTaskRejectsStaleLifecycle(t *testing.T) {
+	userID, announcementID := uuid.New(), uuid.New()
+	store := &announcementStatusStore{item: dbgen.GetAnnouncementForStatusRow{ID: announcementID, Title: "Alteração de horário", Status: "PUBLISHED", AuthorID: userID}}
+	h := Announcements{Store: store}
+	r := httptest.NewRequest(http.MethodGet, "/admin/announcements/"+announcementID.String()+"/publicar", nil)
+	r.SetPathValue("id", announcementID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	w := httptest.NewRecorder()
+
+	h.PublishPage(w, r)
+
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "já não está disponível") {
+		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
 type paginatedAnnouncementStore struct {
 	announcementStoreFake
 	visibleParams  dbgen.ListVisibleAnnouncementsParams
@@ -187,6 +223,15 @@ type paginatedAnnouncementStore struct {
 	visible        []dbgen.ListVisibleAnnouncementsRow
 	authored       []dbgen.ListAnnouncementsForAuthorRow
 	detailErr      error
+}
+
+type announcementStatusStore struct {
+	announcementStoreFake
+	item dbgen.GetAnnouncementForStatusRow
+}
+
+func (s *announcementStatusStore) GetAnnouncementForStatus(context.Context, uuid.UUID) (dbgen.GetAnnouncementForStatusRow, error) {
+	return s.item, nil
 }
 
 func (s *paginatedAnnouncementStore) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {

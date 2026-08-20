@@ -478,6 +478,8 @@ type dashboardStoreFake struct {
 	adminEquipment            []dbgen.Equipment
 	repairs                   []dbgen.ListPendingRepairRequestsRow
 	maintenance               []dbgen.ListUpcomingMaintenanceRow
+	maintenanceDetail         dbgen.GetMaintenanceForAdminRow
+	maintenanceDetailErr      error
 	upcomingEvents            []dbgen.ListEventsForMemberRow
 	upcomingTraining          []dbgen.ListUpcomingTrainingSessionsForDashboardRow
 	adminParams               dbgen.ListEquipmentForAdminParams
@@ -511,6 +513,10 @@ func (f *dashboardStoreFake) ListPendingRepairRequests(_ context.Context, params
 func (f *dashboardStoreFake) ListUpcomingMaintenance(_ context.Context, params dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error) {
 	f.maintenanceParams = params
 	return f.maintenance, nil
+}
+
+func (f *dashboardStoreFake) GetMaintenanceForAdmin(context.Context, uuid.UUID) (dbgen.GetMaintenanceForAdminRow, error) {
+	return f.maintenanceDetail, f.maintenanceDetailErr
 }
 
 func (f *dashboardStoreFake) ScheduleMaintenanceTask(_ context.Context, params dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error) {
@@ -644,6 +650,41 @@ func TestCompleteMaintenanceSupportsHTMXAndNormalForms(t *testing.T) {
 	}
 }
 
+func TestMaintenanceCompletionPageNamesTaskAndBindsPostToRouteID(t *testing.T) {
+	taskID := uuid.New()
+	now := time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC)
+	store := &dashboardStoreFake{maintenanceDetail: dbgen.GetMaintenanceForAdminRow{ID: taskID, AssetTag: "K-01", EquipmentName: "K1 Escola", Description: "Substituir a pega danificada", Status: "Scheduled", ScheduledFor: pgtype.Timestamptz{Time: now, Valid: true}}}
+	dashboard := Dashboard{Store: store, Fleet: store, Location: time.UTC}
+	request := httptest.NewRequest(http.MethodGet, "/admin/maintenance/"+taskID.String()+"/complete?return_to=%2Fadmin%2Ffleet%23maintenance-"+taskID.String(), nil)
+	request.SetPathValue("id", taskID.String())
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Administradora", IsAdmin: true}))
+	response := httptest.NewRecorder()
+
+	dashboard.CompleteMaintenancePage(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "K-01 - K1 Escola") || !strings.Contains(response.Body.String(), `name="maintenance_id" value="`+taskID.String()+`"`) || !strings.Contains(response.Body.String(), `action="/admin/maintenance/`+taskID.String()+`/complete?return_to=`) {
+		t.Fatalf("response = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/admin/maintenance/"+taskID.String()+"/complete", strings.NewReader("maintenance_id="+uuid.NewString()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetPathValue("id", taskID.String())
+	response = httptest.NewRecorder()
+	dashboard.CompleteMaintenance(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "não corresponde") || store.completeID != uuid.Nil {
+		t.Fatalf("mismatched task = %d, complete id = %s, body = %s", response.Code, store.completeID, response.Body.String())
+	}
+
+	store.maintenanceDetail.Status = "Completed"
+	request = httptest.NewRequest(http.MethodGet, "/admin/maintenance/"+taskID.String()+"/complete", nil)
+	request.SetPathValue("id", taskID.String())
+	response = httptest.NewRecorder()
+	dashboard.CompleteMaintenancePage(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já foi concluída") {
+		t.Fatalf("completed task = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	key, contentType := "repairs/2026/07/photo.jpg", "image/jpeg"
@@ -656,7 +697,7 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Admin, uuid.New())
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2#equipment-inventory"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet#repair-requests"`) || !strings.Contains(response.Body.String(), `data-row-action-menu`) {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2#equipment-inventory"`) || !strings.Contains(response.Body.String(), `data-task-open="maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet#repair-requests"`) || !strings.Contains(response.Body.String(), `data-row-action-menu`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
 	body := response.Body.String()

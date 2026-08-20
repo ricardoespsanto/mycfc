@@ -10,6 +10,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -95,6 +96,25 @@ func TestEventCapacityParsesOptionalPositiveInteger(t *testing.T) {
 		if _, ok := eventCapacity(value); ok {
 			t.Errorf("eventCapacity(%q) accepted", value)
 		}
+	}
+}
+
+func TestEventCreateTaskRendersSafeFormValuesAfterValidationFailure(t *testing.T) {
+	programmeID, teamID := uuid.New(), uuid.New()
+	h := Events{Store: eventCreateStore{programmeID: programmeID, teamID: teamID}, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodPost, "/admin/events", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), IsAdmin: true, Name: "Direção"}))
+	w := httptest.NewRecorder()
+
+	h.renderCreate(w, r, http.StatusUnprocessableEntity, eventForm{Title: "Regata regional", EventType: "COMPETITION", ProgrammeIDs: []uuid.UUID{programmeID}, TeamIDs: []uuid.UUID{teamID}, Errors: validation.FieldErrors{"ends_at": "O fim tem de ser posterior ao início."}})
+
+	for _, want := range []string{"Regata regional", "COMPETITION", "O fim tem de ser posterior ao início.", programmeID.String(), teamID.String()} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("body does not contain %q: %s", want, w.Body.String())
+		}
+	}
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", w.Code)
 	}
 }
 
@@ -232,6 +252,20 @@ type eventSubjectStore struct {
 	authorized   map[uuid.UUID]bool
 	detail       dbgen.GetEventDetailForMemberRow
 	detailParams dbgen.GetEventDetailForMemberParams
+}
+
+type eventCreateStore struct {
+	dbgen.Querier
+	programmeID uuid.UUID
+	teamID      uuid.UUID
+}
+
+func (s eventCreateStore) ListProgrammes(context.Context) ([]dbgen.Programme, error) {
+	return []dbgen.Programme{{ID: s.programmeID, NamePt: "Competição"}}, nil
+}
+
+func (s eventCreateStore) ListTeamsForEventAuthoring(context.Context) ([]dbgen.ListTeamsForEventAuthoringRow, error) {
+	return []dbgen.ListTeamsForEventAuthoringRow{{ID: s.teamID, ProgrammeID: s.programmeID, Name: "Juniores"}}, nil
 }
 
 func (s *eventSubjectStore) ListDependentsByGuardian(context.Context, dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {

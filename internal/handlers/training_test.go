@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -152,6 +153,22 @@ func TestTrainingSessionEditDeepLinkMetadataUsesPlanningWorkspace(t *testing.T) 
 	w := httptest.NewRecorder()
 	h.renderSessionEdit(w, r, http.StatusOK, sessionID, pages.TrainingSessionForm{Title: "Técnica de água"}, "", "", nil)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Planear treinos") || !strings.Contains(w.Body.String(), "Coordenação · Treinos") || !strings.Contains(w.Body.String(), `aria-current="page">Editar sessão`) {
+		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTrainingSessionCancelTaskNamesTheSessionAndPreservesVersion(t *testing.T) {
+	sessionID := uuid.New()
+	starts := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	h := Training{Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/admin/treinos/sessoes/"+sessionID.String()+"/cancelar", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Treinadora"}))
+	w := httptest.NewRecorder()
+
+	h.renderSessionCancel(w, r, http.StatusOK, sessionID, dbgen.GetTrainingSessionForEditRow{ID: sessionID, Title: "Técnica de água", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}, "", "", validation.FieldErrors{})
+
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Técnica de água") || !strings.Contains(w.Body.String(), updated.Format(time.RFC3339Nano)) {
 		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
 	}
 }
