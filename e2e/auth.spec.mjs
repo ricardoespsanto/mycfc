@@ -98,6 +98,9 @@ test.describe('authentication', () => {
     await register.focus();
     await expect(register).toBeFocused();
     await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const landingIntroWidth = await page.locator('.landing-intro').evaluate((section) => section.getBoundingClientRect().width);
+    expect(landingIntroWidth).toBeGreaterThan(1200);
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
@@ -618,14 +621,22 @@ test.describe('authentication', () => {
     await page.goto('/admin/treinos');
     await expect(page.getByRole('link', { name: 'Publicar documento de competição', exact: true })).toHaveCount(0);
     await expect(page.locator('#criar-plano')).not.toHaveAttribute('open', '');
-    await page.getByRole('link', { name: 'Criar plano', exact: true }).click();
+    const createPlan = page.getByRole('link', { name: 'Criar plano', exact: true });
+    await expect(createPlan).toHaveAttribute('href', '/admin/treinos/planos/criar');
+    await createPlan.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/planos\/criar$/);
+    await expect(page.locator('#criar-plano')).toHaveAttribute('open', '');
     const planForm = page.locator('form[action="/admin/treinos/planos"]');
     await planForm.getByLabel('Título').fill(planTitle);
     await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await planForm.getByRole('button', { name: 'Criar plano' }).click();
     await expect(page.getByText('Plano criado.', { exact: true })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
+    const createSession = page.getByRole('link', { name: 'Criar sessão', exact: true });
+    await expect(createSession).toHaveAttribute('href', '/admin/treinos/sessoes/criar');
+    await createSession.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/sessoes\/criar$/);
+    await expect(page.locator('#criar-sessao')).toHaveAttribute('open', '');
     const sessionForm = page.locator('form[action="/admin/treinos/sessoes"]');
     const sessionStart = new Date(Date.now() - 6 * 60 * 60 * 1000);
     const sessionEnd = new Date(Date.now() - 5 * 60 * 60 * 1000);
@@ -636,7 +647,8 @@ test.describe('authentication', () => {
     await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
     await expect(page.getByText('Sessão criada.', { exact: true })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
+    await createSession.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/sessoes\/criar$/);
     const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const futureEnd = new Date(futureStart.getTime() + 90 * 60 * 1000);
     await sessionForm.getByLabel('Plano').selectOption({ label: planTitle });
