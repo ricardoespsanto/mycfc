@@ -43,6 +43,7 @@ type AnnouncementStore interface {
 	CountUnreadVisibleAnnouncements(context.Context, uuid.UUID) (int64, error)
 	GetVisibleAnnouncement(context.Context, dbgen.GetVisibleAnnouncementParams) (dbgen.GetVisibleAnnouncementRow, error)
 	GetAnnouncementAuthor(context.Context, uuid.UUID) (uuid.UUID, error)
+	GetAnnouncementForStatus(context.Context, uuid.UUID) (dbgen.GetAnnouncementForStatusRow, error)
 	CanCoachManageEvent(context.Context, dbgen.CanCoachManageEventParams) (bool, error)
 }
 
@@ -155,6 +156,14 @@ func (h Announcements) Create(w http.ResponseWriter, r *http.Request) {
 }
 func (h Announcements) Publish(w http.ResponseWriter, r *http.Request) { h.changeStatus(w, r, true) }
 func (h Announcements) Expire(w http.ResponseWriter, r *http.Request)  { h.changeStatus(w, r, false) }
+
+func (h Announcements) PublishPage(w http.ResponseWriter, r *http.Request) {
+	h.renderStatusPage(w, r, true, "")
+}
+func (h Announcements) ExpirePage(w http.ResponseWriter, r *http.Request) {
+	h.renderStatusPage(w, r, false, "")
+}
+
 func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publish bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -164,7 +173,7 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
 	defer cancel()
-	author, err := h.Store.GetAnnouncementAuthor(ctx, id)
+	announcement, err := h.Store.GetAnnouncementForStatus(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			h.System.NotFound(w, r)
@@ -173,7 +182,7 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 		}
 		return
 	}
-	if !user.IsAdmin && author != user.ID {
+	if !user.IsAdmin && announcement.AuthorID != user.ID {
 		h.System.Forbidden(w, r)
 		return
 	}
@@ -188,7 +197,7 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 		return
 	}
 	if n == 0 {
-		http.Error(w, "A operação não é válida para este aviso.", http.StatusConflict)
+		h.renderStatusPage(w, r, publish, "O aviso foi alterado entretanto ou esta ação já não está disponível.")
 		return
 	}
 	if h.Sessions != nil {
@@ -199,6 +208,49 @@ func (h Announcements) changeStatus(w http.ResponseWriter, r *http.Request, publ
 		}
 	}
 	httpx.Redirect(w, r, "/admin/avisos", http.StatusSeeOther)
+}
+
+func (h Announcements) renderStatusPage(w http.ResponseWriter, r *http.Request, publish bool, conflict string) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), announcementQueryTimeout)
+	defer cancel()
+	announcement, err := h.Store.GetAnnouncementForStatus(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !user.IsAdmin && announcement.AuthorID != user.ID {
+		h.System.Forbidden(w, r)
+		return
+	}
+	action, expectedStatus := "expire", "PUBLISHED"
+	if publish {
+		action, expectedStatus = "publish", "DRAFT"
+	}
+	if announcement.Status != expectedStatus && conflict == "" {
+		conflict = "Esta ação já não está disponível para o estado atual do aviso."
+	}
+	page := pages.AnnouncementStatusPage{
+		Meta: h.meta(r, user, "/admin/avisos", "Confirmar aviso"), ID: announcement.ID.String(), Title: announcement.Title,
+		Status: announcement.Status, Action: action, Conflict: conflict, CSRFField: templ.Raw(string(csrf.TemplateField(r))),
+	}
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = "Confirmar aviso"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Gerir avisos", Path: "/admin/avisos"}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if conflict != "" {
+		w.WriteHeader(http.StatusConflict)
+	}
+	_ = pages.AnnouncementStatus(page).Render(r.Context(), w)
 }
 func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))

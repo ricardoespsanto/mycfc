@@ -52,6 +52,7 @@ type FleetStore interface {
 	ListEquipmentForAdmin(context.Context, dbgen.ListEquipmentForAdminParams) ([]dbgen.Equipment, error)
 	ListPendingRepairRequests(context.Context, dbgen.ListPendingRepairRequestsParams) ([]dbgen.ListPendingRepairRequestsRow, error)
 	ListUpcomingMaintenance(context.Context, dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error)
+	GetMaintenanceForAdmin(context.Context, uuid.UUID) (dbgen.GetMaintenanceForAdminRow, error)
 	ScheduleMaintenanceTask(context.Context, dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error)
 	UpdateRepairStatus(context.Context, dbgen.UpdateRepairStatusParams) (dbgen.RepairRequest, error)
 	CompleteMaintenanceTask(context.Context, uuid.UUID) (dbgen.MaintenanceTask, error)
@@ -485,12 +486,16 @@ func (h Dashboard) RepairStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderFleetActionError(w, r, http.StatusBadRequest, "maintenance", r.PostForm.Get("maintenance_id"), "Não foi possível processar o pedido.")
+		h.renderMaintenanceCompletionError(w, r, http.StatusBadRequest, "Não foi possível processar o pedido. Reveja os dados atuais e volte a confirmar.")
 		return
 	}
 	taskID, err := uuid.Parse(r.PostForm.Get("maintenance_id"))
 	if err != nil {
-		h.renderFleetActionError(w, r, http.StatusUnprocessableEntity, "maintenance", r.PostForm.Get("maintenance_id"), "Tarefa de manutenção inválida.")
+		h.renderMaintenanceCompletionError(w, r, http.StatusUnprocessableEntity, "A confirmação não corresponde à tarefa de manutenção. Reveja os dados atuais e volte a confirmar.")
+		return
+	}
+	if pathID := r.PathValue("id"); pathID != "" && pathID != taskID.String() {
+		h.renderMaintenanceCompletionError(w, r, http.StatusUnprocessableEntity, "A confirmação não corresponde à tarefa de manutenção. Reveja os dados atuais e volte a confirmar.")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
@@ -501,7 +506,7 @@ func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = h.Fleet.CompleteMaintenanceTask(ctx, taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.renderFleetActionError(w, r, http.StatusConflict, "maintenance", taskID.String(), "A tarefa já foi concluída ou cancelada. Atualize a página.")
+		h.renderMaintenanceCompletionError(w, r, http.StatusConflict, "A tarefa já foi concluída ou cancelada. Reveja o estado atual antes de voltar a confirmar.")
 		return
 	}
 	if err != nil {
@@ -509,6 +514,62 @@ func (h Dashboard) CompleteMaintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.fleetActionSuccess(w, r, "maintenance", taskID.String(), "Completed", "Manutenção concluída.")
+}
+
+func (h Dashboard) CompleteMaintenancePage(w http.ResponseWriter, r *http.Request) {
+	h.renderMaintenanceCompletionPage(w, r, http.StatusOK, "")
+}
+
+func (h Dashboard) renderMaintenanceCompletionError(w http.ResponseWriter, r *http.Request, status int, conflict string) {
+	if r.Header.Get("HX-Request") == "true" {
+		h.renderFleetActionError(w, r, status, "maintenance", r.PathValue("id"), conflict)
+		return
+	}
+	h.renderMaintenanceCompletionPage(w, r, status, conflict)
+}
+
+func (h Dashboard) renderMaintenanceCompletionPage(w http.ResponseWriter, r *http.Request, status int, conflict string) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	if h.Fleet == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
+	defer cancel()
+	task, err := h.Fleet.GetMaintenanceForAdmin(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if conflict == "" && task.Status != "Scheduled" && task.Status != "In_Progress" {
+		conflict = "A tarefa já foi concluída ou cancelada. Reveja o estado atual antes de continuar."
+		status = http.StatusConflict
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	meta := h.PageMeta
+	meta.Title = "Concluir manutenção | MyCFC"
+	meta.CurrentPath = r.URL.Path
+	meta.PageLabel = "Concluir manutenção"
+	meta.CurrentUserName = user.Name
+	meta.CurrentUserID = user.ID.String()
+	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
+	meta.Navigation = dashboardNavigation(user)
+	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	returnURL := fleetCollectionReturn(r, "maintenance-"+id.String())
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Frota", Path: returnURL}}
+	page := pages.MaintenanceCompletionPage{Meta: meta, Task: pages.FleetMaintenance{ID: task.ID.String(), Equipment: task.AssetTag + " - " + task.EquipmentName, Description: task.Description, Status: task.Status, ScheduledFor: task.ScheduledFor.Time.In(h.location()).Format("02/01/2006 15:04")}, CSRFField: meta.CSRFField, ReturnURL: returnURL, Conflict: conflict}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(status)
+	_ = pages.MaintenanceCompletion(page).Render(r.Context(), w)
 }
 
 func validRepairTransition(from, to string) bool {

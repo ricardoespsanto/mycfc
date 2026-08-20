@@ -150,6 +150,31 @@ func (q *Queries) GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid
 	return author_id, err
 }
 
+const getAnnouncementForStatus = `-- name: GetAnnouncementForStatus :one
+SELECT id, title, status::text AS status, author_id
+FROM announcements
+WHERE id = $1
+`
+
+type GetAnnouncementForStatusRow struct {
+	ID       uuid.UUID `json:"id"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	AuthorID uuid.UUID `json:"author_id"`
+}
+
+func (q *Queries) GetAnnouncementForStatus(ctx context.Context, id uuid.UUID) (GetAnnouncementForStatusRow, error) {
+	row := q.db.QueryRow(ctx, getAnnouncementForStatus, id)
+	var i GetAnnouncementForStatusRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.AuthorID,
+	)
+	return i, err
+}
+
 const getVisibleAnnouncement = `-- name: GetVisibleAnnouncement :one
 SELECT DISTINCT a.id, a.title, a.body, a.published_at, a.expires_at, d.read_at
 FROM announcements a

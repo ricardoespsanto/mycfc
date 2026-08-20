@@ -65,7 +65,7 @@ func TestSuggestionMemberPageUsesRequesterScopedQuery(t *testing.T) {
 
 	h.Index(w, r)
 
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Ideia privada") || !strings.Contains(w.Body.String(), "visível apenas para si") || !strings.Contains(w.Body.String(), "data-create-panel") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Ideia privada") || !strings.Contains(w.Body.String(), "visível apenas para si") || !strings.Contains(w.Body.String(), `data-task-surface`) {
 		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
 	}
 	if store.ownParams.RequesterID != requesterID || store.triageCalled {
@@ -82,7 +82,7 @@ func TestSuggestionValidationReopensCreatePanel(t *testing.T) {
 
 	h.Create(w, r)
 
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `<details id="nova-sugestao" class="module disclosure create-panel" data-create-panel open`) {
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `<dialog id="nova-sugestao"`) || !strings.Contains(w.Body.String(), `data-task-open-on-load`) {
 		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
 	}
 }
