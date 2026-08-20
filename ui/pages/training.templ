@@ -45,7 +45,7 @@ type TrainingPage struct {
 	Meta                                         components.PageMeta
 	CSRFField                                    templ.Component
 	Management, CanManage, StructuredAvailable   bool
-	Success, Error, OpenForm                     string
+	Success, Error                               string
 	Sessions                                     []TrainingSession
 	Calendar                                     BasicCalendarMonth
 	ManagedPlans                                 []ManagedTrainingPlan
@@ -274,12 +274,25 @@ templ trainingAuthoring(page TrainingPage) {
 }
 
 templ trainingPlanForm(page TrainingPage) {
-	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-plano", TitleID: "training-plan-authoring-title", Eyebrow: "Coordenação", Title: "Criar plano", Description: "Defina o plano e o respetivo âmbito.", Variant: "sheet", URL: "/admin/treinos", Open: page.OpenForm == "plan"}) {
-	<div class="task-form">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
-<form class="form-layout" method="post" action="/admin/treinos/planos" data-task-form>@page.CSRFField
+	@components.TaskDialog(trainingPlanTaskConfig()) {
+		@trainingPlanTaskForm(page)
+	}
+	@components.DiscardConfirmation()
+}
+
+templ TrainingPlanCreateView(page TrainingPage) { @components.Base(page.Meta, trainingPlanCreateContent(page)) }
+
+templ trainingPlanCreateContent(page TrainingPage) {
+	<div class="task-route-page">@components.TaskRoute(trainingPlanTaskConfig()) { @trainingPlanTaskForm(page) }</div>
+}
+
+templ trainingPlanTaskForm(page TrainingPage) {
+	<div class="task-form">@components.StatusMessage(page.Error, "error")
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.PlanForm.Errors), []components.FieldErrorRef{{Key: "title", Field: "training-plan-title"}, {Key: "description", Field: "training-plan-description"}, {Key: "scope", Field: "training-plan-scope"}}))
+		<form class="form-layout" method="post" action="/admin/treinos/planos" data-task-form>@page.CSRFField
 @components.RequiredNote()
 @components.FieldLabel("training-plan-title", "Título", true)
-<input id="training-plan-title" name="title" value={ page.PlanForm.Title } required aria-invalid?={ page.PlanForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.PlanForm.Errors["title"])
+			<input id="training-plan-title" name="title" value={ page.PlanForm.Title } required data-task-initial-focus autofocus?={ len(page.PlanForm.Errors) == 0 } aria-invalid?={ page.PlanForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.PlanForm.Errors["title"])
 @components.FieldLabel("training-plan-description", "Descrição (opcional)", false)
 <textarea id="training-plan-description" name="description" aria-invalid?={ page.PlanForm.Errors["description"] != "" } aria-describedby="description-error">{ page.PlanForm.Description }</textarea>@components.FieldErrorMessage("description", page.PlanForm.Errors["description"])
 <fieldset id="training-plan-scope"><legend>Âmbito</legend>@trainingScopeChoices(page, "training-plan", page.PlanForm.ProgrammeID, page.PlanForm.TeamID)
@@ -287,14 +300,25 @@ templ trainingPlanForm(page TrainingPage) {
 @components.TaskActions("/admin/treinos") {
 	<button class="action action--primary" type="submit" data-task-submit>Criar plano</button>
 }
-</form></div>
+		</form></div>
+}
+
+templ trainingSessionForm(page TrainingPage) {
+	@components.TaskDialog(trainingSessionTaskConfig()) {
+		@trainingSessionTaskForm(page)
 	}
 	@components.DiscardConfirmation()
 }
 
-templ trainingSessionForm(page TrainingPage) {
-	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-sessao", TitleID: "training-session-authoring-title", Eyebrow: "Coordenação", Title: "Criar sessão", Description: "Associe uma sessão a um plano existente.", Variant: "sheet", URL: "/admin/treinos", Open: page.OpenForm == "session"}) {
-		<div class="task-form">@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
+templ TrainingSessionCreateView(page TrainingPage) { @components.Base(page.Meta, trainingSessionCreateContent(page)) }
+
+templ trainingSessionCreateContent(page TrainingPage) {
+	<div class="task-route-page">@components.TaskRoute(trainingSessionTaskConfig()) { @trainingSessionTaskForm(page) }</div>
+}
+
+templ trainingSessionTaskForm(page TrainingPage) {
+	<div class="task-form">@components.StatusMessage(page.Error, "error")
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "training-session-plan"}, {Key: "title", Field: "training-session-title"}, {Key: "description", Field: "training-session-description"}, {Key: "starts_at", Field: "training-session-start"}, {Key: "ends_at", Field: "training-session-end"}, {Key: "modality_id", Field: "training-session-modality"}}))
 		<form class="form-layout" method="post" action="/admin/treinos/sessoes" data-task-form>
 			@page.CSRFField
 			@components.RequiredNote()
@@ -306,7 +330,7 @@ templ trainingSessionForm(page TrainingPage) {
 				}
 			</select>@components.FieldErrorMessage("plan_id", page.SessionForm.Errors["plan_id"])
 			@components.FieldLabel("training-session-title", "Título", true)
-			<input id="training-session-title" name="title" value={ page.SessionForm.Title } required aria-invalid?={ page.SessionForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
+			<input id="training-session-title" name="title" value={ page.SessionForm.Title } required data-task-initial-focus autofocus?={ len(page.SessionForm.Errors) == 0 } aria-invalid?={ page.SessionForm.Errors["title"] != "" } aria-describedby="title-error"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
 			@components.FieldLabel("training-session-description", "Descrição (opcional)", false)
 			<textarea id="training-session-description" name="description" aria-invalid?={ page.SessionForm.Errors["description"] != "" } aria-describedby="description-error">{ page.SessionForm.Description }</textarea>@components.FieldErrorMessage("description", page.SessionForm.Errors["description"])
 			@components.FieldLabel("training-session-start", "Início", true)
@@ -323,9 +347,8 @@ templ trainingSessionForm(page TrainingPage) {
 			@components.TaskActions("/admin/treinos") {
 				<button class="action action--primary" type="submit" data-task-submit>Criar sessão</button>
 			}
-		</form></div>
-	}
-	@components.DiscardConfirmation()
+		</form>
+	</div>
 }
 
 templ TrainingSessionEdit(page TrainingSessionEditPage) {
@@ -433,7 +456,7 @@ func trainingOutcomeTone(status string) string {
 
 func trainingPageActions(page TrainingPage) []components.PageAction {
 	if page.CanManage {
-		actions := []components.PageAction{{Label: "Criar plano", Href: "#criar-plano", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "#criar-sessao", Variant: "secondary", TaskID: "criar-sessao"}}
+		actions := []components.PageAction{{Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "secondary", TaskID: "criar-sessao"}}
 		if page.StructuredAvailable {
 			actions = append(actions, components.PageAction{Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"})
 		}
@@ -443,4 +466,12 @@ func trainingPageActions(page TrainingPage) []components.PageAction {
 		return []components.PageAction{{Label: "Planeamento semanal", Href: "/treinos/estruturados", Variant: "secondary"}}
 	}
 	return nil
+}
+
+func trainingPlanTaskConfig() components.TaskSurfaceConfig {
+	return components.TaskSurfaceConfig{ID: "criar-plano", TitleID: "training-plan-authoring-title", Eyebrow: "Coordenação", Title: "Criar plano", Description: "Defina o plano e o respetivo âmbito.", Variant: "sheet", URL: "/admin/treinos/planos/criar", ReturnURL: "/admin/treinos"}
+}
+
+func trainingSessionTaskConfig() components.TaskSurfaceConfig {
+	return components.TaskSurfaceConfig{ID: "criar-sessao", TitleID: "training-session-authoring-title", Eyebrow: "Coordenação", Title: "Criar sessão", Description: "Associe uma sessão a um plano existente.", Variant: "sheet", URL: "/admin/treinos/sessoes/criar", ReturnURL: "/admin/treinos"}
 }
