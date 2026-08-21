@@ -42,6 +42,11 @@ func TestSecretsAndSealedCredentialsDoNotFormatPlaintext(t *testing.T) {
 	if err := sealed.Validate(); err == nil {
 		t.Fatal("empty ciphertext was accepted")
 	}
+	bytes := secret.Bytes()
+	bytes[0] = 'X'
+	if string(secret.Bytes()) != "access-token refresh-token" {
+		t.Fatal("secret bytes exposed mutable credential storage")
+	}
 }
 
 func TestNormalizedActivityValidation(t *testing.T) {

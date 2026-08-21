@@ -53,6 +53,9 @@ jobs:
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The coverage gate compares the tested change with its PR/push base.
+          fetch-depth: 0
       # actions/setup-go v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -66,6 +69,9 @@ jobs:
       - name: Lint application, templates, workflows, containers, and Terraform
         run: make lint
       - name: Run unit coverage gate
+        env:
+          COVERAGE_CHANGED_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_REQUIRE_CHANGED_BASE: "1"
         run: make test-coverage
       - name: Upload unit coverage report
         if: always()

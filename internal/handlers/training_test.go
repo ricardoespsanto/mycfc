@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -52,6 +55,19 @@ func TestCompetitionDocumentModalityNeedsAnAudienceScope(t *testing.T) {
 	programmeID := uuid.New()
 	if !validCompetitionDocumentInput("Caderno", "https://example.org/caderno.pdf", "Federação", reviewed, nil, &modalityID, &programmeID, nil) {
 		t.Fatal("a scoped modality document should be valid")
+	}
+}
+
+func TestTrainingFeedbackDisplayHelpersCoverEveryRecoveryScaleValue(t *testing.T) {
+	for value, want := range map[int16]string{1: "muito mal", 2: "mal", 3: "razoavelmente", 4: "bem", 5: "muito bem", 0: ""} {
+		if got := trainingFeelingText(value); got != want {
+			t.Errorf("trainingFeelingText(%d)=%q, want %q", value, got, want)
+		}
+	}
+	for metres, want := range map[int32]string{0: "0", 10: "0.01", 12500: "12.5", 12340: "12.34", 12000: "12"} {
+		if got := kilometreInput(metres); got != want {
+			t.Errorf("kilometreInput(%d)=%q, want %q", metres, got, want)
+		}
 	}
 }
 
@@ -275,15 +291,500 @@ func TestUpdateTrainingFeedbackRejectsInvalidScalesAndStaleVersion(t *testing.T)
 	}
 }
 
+func TestTrainingOutcomeAndFeedbackMapPersistenceFailuresWithoutReportingSuccess(t *testing.T) {
+	userID, sessionID := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name    string
+		handler func(Training, http.ResponseWriter, *http.Request)
+		values  string
+		store   *trainingOutcomeStore
+	}{
+		{"outcome", Training.ReportOutcome, "session_id=" + sessionID.String() + "&status=COMPLETED", &trainingOutcomeStore{saveErr: errors.New("database unavailable")}},
+		{"feedback", Training.UpdateFeedback, "session_id=" + sessionID.String() + "&expected_version=1", &trainingOutcomeStore{updateErr: errors.New("database unavailable")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/treinos", strings.NewReader(tc.values))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+			response := httptest.NewRecorder()
+			tc.handler(Training{Store: tc.store, System: System{}}, response, request)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("response=%d", response.Code)
+			}
+		})
+	}
+}
+
+func TestTrainingIndexRendersAthleteSessionsAndCancelledState(t *testing.T) {
+	userID, sessionID := uuid.New(), uuid.New()
+	modality, reason := "Velocidade", "Vento forte"
+	distance, duration := int32(12500), int32(75)
+	exertion, feeling := int16(7), int16(4)
+	starts := time.Date(2026, 9, 4, 9, 0, 0, 0, time.UTC)
+	store := &trainingWorkflowStore{athleteSessions: []dbgen.ListTrainingSessionsForAthleteRow{{
+		ID: sessionID, PlanTitle: "Preparação", Title: "Série", Description: "500 m", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, ModalityName: &modality, Status: "CANCELLED", CancellationReason: &reason, OutcomeStatus: "COMPLETED", DistanceMetres: &distance, ActualDurationMinutes: &duration, PerceivedExertion: &exertion, RecoveryFeeling: &feeling,
+	}}}
+	r := httptest.NewRequest(http.MethodGet, "/treinos", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Atleta", EmailVerified: true}))
+	w := httptest.NewRecorder()
+	(Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts }}).Index(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Série") || !strings.Contains(w.Body.String(), "Cancelada") || !strings.Contains(w.Body.String(), "Vento forte") {
+		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTrainingAuthoringCreatesPlanSessionAndRendersEditableSession(t *testing.T) {
+	userID, planID, sessionID, programmeID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 4, 9, 0, 0, 0, time.UTC)
+	store := &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", Description: "Saída", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: starts, Valid: true}}, plans: []dbgen.ListTrainingPlansForCoachRow{{ID: planID, Title: "Plano"}}}
+	admin := CurrentUser{ID: userID, Name: "Admin", IsAdmin: true, EmailVerified: true}
+
+	planRequest := httptest.NewRequest(http.MethodPost, "/admin/treinos/planos", strings.NewReader("title=Plano+novo&description=Preparação&programme_id="+programmeID.String()))
+	planRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	planRequest = planRequest.WithContext(context.WithValue(planRequest.Context(), currentUserKey{}, admin))
+	planResponse := httptest.NewRecorder()
+	(Training{Store: store}).CreatePlan(planResponse, planRequest)
+	if planResponse.Code != http.StatusSeeOther || store.createdPlan.Title != "Plano novo" || store.createdPlan.ProgrammeID == nil || *store.createdPlan.ProgrammeID != programmeID {
+		t.Fatalf("plan response=%d params=%+v", planResponse.Code, store.createdPlan)
+	}
+
+	sessionRequest := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes", strings.NewReader("plan_id="+planID.String()+"&title=Série&description=500m&starts_at=2026-09-04T09%3A00&ends_at=2026-09-04T10%3A00"))
+	sessionRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sessionRequest = sessionRequest.WithContext(context.WithValue(sessionRequest.Context(), currentUserKey{}, admin))
+	sessionResponse := httptest.NewRecorder()
+	(Training{Store: store, Location: time.UTC}).CreateSession(sessionResponse, sessionRequest)
+	if sessionResponse.Code != http.StatusSeeOther || store.createdSession.PlanID != planID || store.createdSession.Title != "Série" {
+		t.Fatalf("session response=%d params=%+v", sessionResponse.Code, store.createdSession)
+	}
+
+	editRequest := httptest.NewRequest(http.MethodGet, "/admin/treinos/sessoes/"+sessionID.String()+"/editar", nil)
+	editRequest.SetPathValue("id", sessionID.String())
+	editRequest = editRequest.WithContext(context.WithValue(editRequest.Context(), currentUserKey{}, admin))
+	editResponse := httptest.NewRecorder()
+	(Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).EditSession(editResponse, editRequest)
+	if editResponse.Code != http.StatusOK || !strings.Contains(editResponse.Body.String(), "Técnica") {
+		t.Fatalf("edit response=%d body=%s", editResponse.Code, editResponse.Body.String())
+	}
+}
+
+func TestTrainingPlanCreationAndAthleteIndexMapPersistenceFailures(t *testing.T) {
+	actorID, programmeID := uuid.New(), uuid.New()
+	t.Run("plan write failure", func(t *testing.T) {
+		store := &trainingWorkflowStore{createPlanErr: errors.New("database unavailable")}
+		values := url.Values{"title": {"Plano de competição"}, "description": {"Preparação semanal"}, "programme_id": {programmeID.String()}}
+		response := performTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/planos", values, "", "", (Training{Store: store, Location: time.UTC}).CreatePlan)
+		if response.Code != http.StatusInternalServerError || store.createdPlan.ProgrammeID == nil || *store.createdPlan.ProgrammeID != programmeID {
+			t.Fatalf("response=%d params=%#v", response.Code, store.createdPlan)
+		}
+	})
+
+	t.Run("athlete session read failure", func(t *testing.T) {
+		store := &trainingWorkflowStore{athleteSessionsErr: errors.New("database unavailable")}
+		request := httptest.NewRequest(http.MethodGet, "/treinos", nil)
+		request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: actorID}))
+		response := httptest.NewRecorder()
+		(Training{Store: store, Location: time.UTC}).Index(response, request)
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("response=%d", response.Code)
+		}
+	})
+}
+
+func TestTrainingCancellationRejectsUnconfirmedOrStaleRequestsBeforeMutation(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	store := &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: starts.Add(-time.Hour), Valid: true}}, plans: []dbgen.ListTrainingPlansForCoachRow{{ID: planID, Title: "Plano"}}}
+	h := Training{Store: store, Location: time.UTC}
+	for _, body := range []string{"cancellation_reason=x", "cancellation_reason=Cheia+prevista&confirm_cancellation=yes&expected_updated_at=stale"} {
+		r := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String()+"/cancelar", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("id", sessionID.String())
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
+		w := httptest.NewRecorder()
+		h.CancelSession(w, r)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body=%q response=%d output=%s", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestTrainingAuthoringAndCancellationPagesRenderCurrentTaskRoutes(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	store := &trainingWorkflowStore{
+		programmes:  []dbgen.Programme{{ID: uuid.New(), NamePt: "Competição"}},
+		plans:       []dbgen.ListTrainingPlansForCoachRow{{ID: planID, Title: "Plano de competição"}},
+		editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: starts.Add(-time.Hour), Valid: true}},
+	}
+	h := Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-24 * time.Hour) }}
+	user := CurrentUser{ID: userID, IsAdmin: true}
+	for _, tc := range []struct {
+		name string
+		path string
+		hit  func(http.ResponseWriter, *http.Request)
+		want string
+	}{
+		{"plan create", "/admin/treinos/planos/criar", h.CreatePlanPage, "Criar plano"},
+		{"session create", "/admin/treinos/sessoes/criar", h.CreateSessionPage, "Criar sessão"},
+		{"cancel session", "/admin/treinos/sessoes/" + sessionID.String() + "/cancelar", h.CancelSessionPage, "Cancelar sessão"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.name == "cancel session" {
+				r.SetPathValue("id", sessionID.String())
+			}
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, user))
+			w := httptest.NewRecorder()
+			tc.hit(w, r)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("response=%d cache=%q body=%s", w.Code, w.Header().Get("Cache-Control"), w.Body.String())
+			}
+		})
+	}
+}
+
+func TestTrainingCancellationPersistsConfirmedFutureSession(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	store := &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}}
+	now := starts.Add(-24 * time.Hour)
+	h := Training{Store: store, Location: time.UTC, Now: func() time.Time { return now }}
+	r := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String()+"/cancelar", strings.NewReader("cancellation_reason=Cheia+prevista&confirm_cancellation=yes&expected_updated_at="+updated.Format(time.RFC3339Nano)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("id", sessionID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
+	w := httptest.NewRecorder()
+	h.CancelSession(w, r)
+	if w.Code != http.StatusSeeOther || store.cancelled.ID != sessionID || store.cancelled.CancelledByID == nil || *store.cancelled.CancelledByID != userID || store.cancelled.CancellationReason == nil || *store.cancelled.CancellationReason != "Cheia prevista" {
+		t.Fatalf("response=%d cancellation=%+v", w.Code, store.cancelled)
+	}
+}
+
+func TestTrainingSessionAuthoringAndCancellationMapPersistenceFailures(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	base := dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica atual", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}
+
+	t.Run("session creation service failure", func(t *testing.T) {
+		store := &trainingWorkflowStore{createSessionErr: errors.New("database unavailable")}
+		values := url.Values{"plan_id": {planID.String()}, "title": {"Série"}, "description": {"500 m"}, "starts_at": {"2026-09-08T09:00"}, "ends_at": {"2026-09-08T10:00"}}
+		response := performTrainingRequest(t, CurrentUser{ID: userID, IsAdmin: true}, http.MethodPost, "/admin/treinos/sessoes", values, "", "", (Training{Store: store, Location: time.UTC}).CreateSession)
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("status=%d", response.Code)
+		}
+	})
+
+	values := url.Values{"cancellation_reason": {"Cheia prevista"}, "confirm_cancellation": {"yes"}, "expected_updated_at": {updated.Format(time.RFC3339Nano)}}
+	for _, tc := range []struct {
+		name      string
+		editErr   error
+		cancelErr error
+		want      int
+		body      string
+	}{
+		{name: "missing session", editErr: pgx.ErrNoRows, want: http.StatusNotFound},
+		{name: "session read failure", editErr: errors.New("database unavailable"), want: http.StatusInternalServerError},
+		{name: "stale cancellation", cancelErr: pgx.ErrNoRows, want: http.StatusConflict, body: "já começou ou já foi cancelada"},
+		{name: "cancellation service failure", cancelErr: errors.New("database unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &trainingWorkflowStore{editSession: base, editErr: tc.editErr, cancelErr: tc.cancelErr}
+			response := performTrainingRequest(t, CurrentUser{ID: userID, IsAdmin: true}, http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String()+"/cancelar", values, "id", sessionID.String(), (Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-24 * time.Hour) }}).CancelSession)
+			if response.Code != tc.want || (tc.body != "" && !strings.Contains(response.Body.String(), tc.body)) {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestTrainingSessionAuthoringAndEditEnforceAuthorizationAndLifecycle(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	values := url.Values{"plan_id": {planID.String()}, "title": {"Série"}, "description": {"500 m"}, "starts_at": {"2026-09-08T09:00"}, "ends_at": {"2026-09-08T10:00"}}
+
+	for _, tc := range []struct {
+		name  string
+		store *trainingWorkflowStore
+		want  int
+	}{
+		{"coach lookup failure", &trainingWorkflowStore{manageErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"coach lacks plan scope", &trainingWorkflowStore{manageAllowed: false}, http.StatusForbidden},
+	} {
+		t.Run("create "+tc.name, func(t *testing.T) {
+			response := performTrainingRequest(t, CurrentUser{ID: userID}, http.MethodPost, "/admin/treinos/sessoes", values, "", "", (Training{Store: tc.store, Location: time.UTC}).CreateSession)
+			if response.Code != tc.want || tc.store.createdSession.PlanID != uuid.Nil {
+				t.Fatalf("response=%d session=%#v", response.Code, tc.store.createdSession)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		store *trainingWorkflowStore
+		want  int
+	}{
+		{"missing session", &trainingWorkflowStore{editErr: pgx.ErrNoRows}, http.StatusNotFound},
+		{"read failure", &trainingWorkflowStore{editErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"coach lacks plan scope", &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID}, manageAllowed: false}, http.StatusForbidden},
+		{"already started", &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Status: "ACTIVE", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}}, manageAllowed: true}, http.StatusConflict},
+		{"cancelled", &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Status: "CANCELLED", StartsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}}, manageAllowed: true}, http.StatusConflict},
+	} {
+		t.Run("edit "+tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/admin/treinos/sessoes/"+sessionID.String()+"/editar", nil)
+			r.SetPathValue("id", sessionID.String())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+			w := httptest.NewRecorder()
+			(Training{Store: tc.store, Location: time.UTC, Now: func() time.Time { return starts }}).EditSession(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrainingSessionUpdatePersistsFreshManagedEdit(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	store := &trainingWorkflowStore{editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}}
+	now := starts.Add(-24 * time.Hour)
+	h := Training{Store: store, Location: time.UTC, Now: func() time.Time { return now }}
+	values := url.Values{"plan_id": {planID.String()}, "title": {"Técnica de viragem"}, "description": {"Foco na saída"}, "starts_at": {"2026-09-08T10:00"}, "ends_at": {"2026-09-08T11:30"}, "expected_updated_at": {updated.Format(time.RFC3339Nano)}}
+	r := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String(), strings.NewReader(values.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("id", sessionID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
+	w := httptest.NewRecorder()
+
+	h.UpdateSession(w, r)
+
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/treinos" {
+		t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
+	}
+	p := store.updated
+	if p.ID != sessionID || p.PlanID != planID || p.Title != "Técnica de viragem" || p.Description != "Foco na saída" || !p.StartsAt.Time.Equal(time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)) || !p.EndsAt.Time.Equal(time.Date(2026, 9, 8, 11, 30, 0, 0, time.UTC)) || !p.AsOf.Time.Equal(now) || !p.ExpectedUpdatedAt.Time.Equal(updated) {
+		t.Fatalf("update params=%#v", p)
+	}
+}
+
+func TestTrainingSessionUpdateProtectsOutcomeLockedPlansAndStaleWrites(t *testing.T) {
+	userID, planID, otherPlanID, sessionID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	base := dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Sessão atual", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}
+	request := func(target uuid.UUID) *http.Request {
+		values := url.Values{"plan_id": {target.String()}, "title": {"Sessão alterada"}, "starts_at": {"2026-09-08T10:00"}, "ends_at": {"2026-09-08T11:00"}, "expected_updated_at": {updated.Format(time.RFC3339Nano)}}
+		r := httptest.NewRequest(http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String(), strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("id", sessionID.String())
+		return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
+	}
+
+	t.Run("outcome locks plan move", func(t *testing.T) {
+		store := &trainingWorkflowStore{editSession: func() dbgen.GetTrainingSessionForEditRow { row := base; row.HasOutcomes = true; return row }()}
+		w := httptest.NewRecorder()
+		(Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).UpdateSession(w, request(otherPlanID))
+		if w.Code != http.StatusUnprocessableEntity || store.updated.ID != uuid.Nil || !strings.Contains(w.Body.String(), "não pode ser alterado") {
+			t.Fatalf("response=%d update=%#v body=%q", w.Code, store.updated, w.Body.String())
+		}
+	})
+
+	t.Run("stale write reloads current session", func(t *testing.T) {
+		store := &trainingWorkflowStore{editSession: base, updateErr: pgx.ErrNoRows}
+		w := httptest.NewRecorder()
+		(Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).UpdateSession(w, request(planID))
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alterada entretanto") || !strings.Contains(w.Body.String(), "Sessão atual") {
+			t.Fatalf("response=%d body=%q", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestTrainingSessionUpdateMapsDependentReadAndWriteFailures(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	updated := starts.Add(-time.Hour)
+	base := dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Sessão atual", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}
+	values := url.Values{"plan_id": {planID.String()}, "title": {"Sessão alterada"}, "starts_at": {"2026-09-08T10:00"}, "ends_at": {"2026-09-08T11:00"}, "expected_updated_at": {updated.Format(time.RFC3339Nano)}}
+	for _, tc := range []struct {
+		name          string
+		editErr       error
+		planExistsErr error
+		updateErr     error
+		want          int
+	}{
+		{name: "missing session", editErr: pgx.ErrNoRows, want: http.StatusNotFound},
+		{name: "session read failure", editErr: errors.New("database unavailable"), want: http.StatusInternalServerError},
+		{name: "plan lookup failure", planExistsErr: errors.New("database unavailable"), want: http.StatusInternalServerError},
+		{name: "write failure", updateErr: errors.New("database unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &trainingWorkflowStore{editSession: base, editErr: tc.editErr, planExistsErr: tc.planExistsErr, updateErr: tc.updateErr}
+			response := performTrainingRequest(t, CurrentUser{ID: userID, IsAdmin: true}, http.MethodPost, "/admin/treinos/sessoes/"+sessionID.String(), values, "id", sessionID.String(), (Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-24 * time.Hour) }}).UpdateSession)
+			if response.Code != tc.want {
+				t.Fatalf("status=%d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrainingAuthoringFiltersCoachScopeAndPaginatesManagedPlans(t *testing.T) {
+	allowedProgramme, deniedProgramme, allowedTeam, deniedTeam, modalityID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	managed := make([]dbgen.ListTrainingPlansForAuthoringRow, managedTrainingPlansPageSize+1)
+	for index := range managed {
+		managed[index] = dbgen.ListTrainingPlansForAuthoringRow{PlanID: uuid.New(), PlanTitle: "Plano " + string(rune('A'+index))}
+	}
+	store := &trainingWorkflowStore{
+		programmes:   []dbgen.Programme{{ID: allowedProgramme, NamePt: "Competição"}, {ID: deniedProgramme, NamePt: "Lazer"}},
+		teams:        []dbgen.ListTeamsForEventAuthoringRow{{ID: allowedTeam, ProgrammeID: deniedProgramme, Name: "K2"}, {ID: deniedTeam, ProgrammeID: deniedProgramme, Name: "C4"}},
+		modalities:   []dbgen.ListAnnouncementModalitiesRow{{ID: modalityID, NamePt: "Canoagem"}},
+		plans:        []dbgen.ListTrainingPlansForCoachRow{{ID: uuid.New(), Title: "Plano autorizado"}},
+		managedPlans: managed,
+	}
+	page := &pages.TrainingPage{}
+	user := CurrentUser{ID: uuid.New(), CoachProgrammeIDs: map[uuid.UUID]bool{allowedProgramme: true}, CoachTeamIDs: map[uuid.UUID]bool{allowedTeam: true}}
+	(Training{Store: store, Location: time.UTC, Now: func() time.Time { return time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC) }}).authoring(context.Background(), user, page, 1)
+
+	if len(page.Programmes) != 1 || page.Programmes[0].ID != allowedProgramme.String() || len(page.Teams) != 1 || page.Teams[0].ID != allowedTeam.String() {
+		t.Fatalf("scoped choices programmes=%#v teams=%#v", page.Programmes, page.Teams)
+	}
+	if len(page.Modalities) != 1 || page.Modalities[0].ID != modalityID.String() || len(page.Plans) != 1 || page.Plans[0].Name != "Plano autorizado" {
+		t.Fatalf("authoring choices modalities=%#v plans=%#v", page.Modalities, page.Plans)
+	}
+	if len(page.ManagedPlans) != managedTrainingPlansPageSize || page.ManagedPlansNextURL != "/admin/treinos?managed_page=2" || page.ManagedPlansPreviousURL != "" {
+		t.Fatalf("managed plans=%d next=%q previous=%q", len(page.ManagedPlans), page.ManagedPlansNextURL, page.ManagedPlansPreviousURL)
+	}
+}
+
+func TestCanManageTrainingPlanHonoursAdminAndFailsClosed(t *testing.T) {
+	planID, userID := uuid.New(), uuid.New()
+	request := httptest.NewRequest(http.MethodGet, "/admin/treinos", nil)
+
+	t.Run("administrator", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		if !(Training{Store: &trainingWorkflowStore{}}).canManageTrainingPlan(context.Background(), CurrentUser{ID: userID, IsAdmin: true}, planID, w, request) || w.Code != http.StatusOK {
+			t.Fatalf("allowed=%t response=%d", false, w.Code)
+		}
+	})
+
+	for name, store := range map[string]*trainingWorkflowStore{
+		"denied": {manageAllowed: false},
+		"failed": {manageErr: errors.New("database unavailable")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			if (Training{Store: store}).canManageTrainingPlan(context.Background(), CurrentUser{ID: userID}, planID, w, request) {
+				t.Fatal("unmanaged plan was accepted")
+			}
+			want := http.StatusForbidden
+			if name == "failed" {
+				want = http.StatusInternalServerError
+			}
+			if w.Code != want {
+				t.Fatalf("response=%d want=%d", w.Code, want)
+			}
+		})
+	}
+}
+
 type trainingOutcomeStore struct {
 	dbgen.Querier
 	saveParams   dbgen.SaveTrainingSessionOutcomeParams
 	updateParams dbgen.UpdateOwnCompletedSessionFeedbackParams
 	saveRows     int64
 	updateRows   int64
+	saveErr      error
+	updateErr    error
 }
 
 type trainingEditStore struct{ dbgen.Querier }
+
+type trainingWorkflowStore struct {
+	dbgen.Querier
+	athleteSessions    []dbgen.ListTrainingSessionsForAthleteRow
+	athleteSessionsErr error
+	programmes         []dbgen.Programme
+	teams              []dbgen.ListTeamsForEventAuthoringRow
+	modalities         []dbgen.ListAnnouncementModalitiesRow
+	managedPlans       []dbgen.ListTrainingPlansForAuthoringRow
+	manageAllowed      bool
+	manageErr          error
+	createdPlan        dbgen.CreateTrainingPlanParams
+	createPlanErr      error
+	createdSession     dbgen.CreateTrainingSessionParams
+	editSession        dbgen.GetTrainingSessionForEditRow
+	cancelled          dbgen.CancelTrainingSessionParams
+	updated            dbgen.UpdateTrainingSessionParams
+	updateErr          error
+	createSessionErr   error
+	editErr            error
+	cancelErr          error
+	planExistsErr      error
+	planMissing        bool
+	plans              []dbgen.ListTrainingPlansForCoachRow
+}
+
+func (s *trainingWorkflowStore) ListTrainingSessionsForAthlete(context.Context, dbgen.ListTrainingSessionsForAthleteParams) ([]dbgen.ListTrainingSessionsForAthleteRow, error) {
+	return s.athleteSessions, s.athleteSessionsErr
+}
+
+func (s *trainingWorkflowStore) CreateTrainingPlan(_ context.Context, params dbgen.CreateTrainingPlanParams) (dbgen.TrainingPlan, error) {
+	s.createdPlan = params
+	return dbgen.TrainingPlan{ID: uuid.New()}, s.createPlanErr
+}
+
+func (s *trainingWorkflowStore) CreateTrainingSession(_ context.Context, params dbgen.CreateTrainingSessionParams) (dbgen.TrainingSession, error) {
+	s.createdSession = params
+	return dbgen.TrainingSession{ID: uuid.New()}, s.createSessionErr
+}
+
+func (s *trainingWorkflowStore) GetTrainingSessionForEdit(context.Context, uuid.UUID) (dbgen.GetTrainingSessionForEditRow, error) {
+	return s.editSession, s.editErr
+}
+func (s *trainingWorkflowStore) CancelTrainingSession(_ context.Context, params dbgen.CancelTrainingSessionParams) (dbgen.TrainingSession, error) {
+	s.cancelled = params
+	return dbgen.TrainingSession{ID: params.ID}, s.cancelErr
+}
+func (s *trainingWorkflowStore) TrainingPlanExists(context.Context, uuid.UUID) (bool, error) {
+	return !s.planMissing, s.planExistsErr
+}
+func (s *trainingWorkflowStore) UpdateTrainingSession(_ context.Context, params dbgen.UpdateTrainingSessionParams) (dbgen.TrainingSession, error) {
+	s.updated = params
+	return dbgen.TrainingSession{ID: params.ID}, s.updateErr
+}
+
+func (s *trainingWorkflowStore) ListTrainingPlansForCoach(context.Context, dbgen.ListTrainingPlansForCoachParams) ([]dbgen.ListTrainingPlansForCoachRow, error) {
+	return s.plans, nil
+}
+
+func (s *trainingWorkflowStore) ListProgrammes(context.Context) ([]dbgen.Programme, error) {
+	return s.programmes, nil
+}
+
+func (s *trainingWorkflowStore) ListTeamsForEventAuthoring(context.Context) ([]dbgen.ListTeamsForEventAuthoringRow, error) {
+	return s.teams, nil
+}
+
+func (s *trainingWorkflowStore) ListTrainingPlansForAdmin(context.Context, int32) ([]dbgen.ListTrainingPlansForAdminRow, error) {
+	plans := make([]dbgen.ListTrainingPlansForAdminRow, len(s.plans))
+	for i, plan := range s.plans {
+		plans[i] = dbgen.ListTrainingPlansForAdminRow{ID: plan.ID, Title: plan.Title}
+	}
+	return plans, nil
+}
+
+func (s *trainingWorkflowStore) ListAnnouncementModalities(context.Context) ([]dbgen.ListAnnouncementModalitiesRow, error) {
+	return s.modalities, nil
+}
+
+func (s *trainingWorkflowStore) ListTrainingPlansForAuthoring(context.Context, dbgen.ListTrainingPlansForAuthoringParams) ([]dbgen.ListTrainingPlansForAuthoringRow, error) {
+	return s.managedPlans, nil
+}
+
+func (s *trainingWorkflowStore) CanCoachManageTrainingPlan(context.Context, dbgen.CanCoachManageTrainingPlanParams) (bool, error) {
+	return s.manageAllowed, s.manageErr
+}
 
 func (*trainingEditStore) ListTrainingPlansForCoach(context.Context, dbgen.ListTrainingPlansForCoachParams) ([]dbgen.ListTrainingPlansForCoachRow, error) {
 	return nil, nil
@@ -295,12 +796,25 @@ func (*trainingEditStore) ListAnnouncementModalities(context.Context) ([]dbgen.L
 
 func (s *trainingOutcomeStore) SaveTrainingSessionOutcome(_ context.Context, params dbgen.SaveTrainingSessionOutcomeParams) (int64, error) {
 	s.saveParams = params
-	return s.saveRows, nil
+	return s.saveRows, s.saveErr
 }
 
 func (s *trainingOutcomeStore) UpdateOwnCompletedSessionFeedback(_ context.Context, params dbgen.UpdateOwnCompletedSessionFeedbackParams) (int64, error) {
 	s.updateParams = params
-	return s.updateRows, nil
+	return s.updateRows, s.updateErr
+}
+
+func performTrainingRequest(t *testing.T, user CurrentUser, method, target string, values url.Values, pathKey, pathValue string, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, target, strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if pathKey != "" {
+		request.SetPathValue(pathKey, pathValue)
+	}
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, user))
+	response := httptest.NewRecorder()
+	handler(response, request)
+	return response
 }
 
 func int32Ptr(value int32) *int32 { return &value }

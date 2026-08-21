@@ -182,6 +182,28 @@ func TestCompatibilityRedirectPreservesQueryParameters(t *testing.T) {
 	}
 }
 
+func TestAssetHandlerServesEmbeddedAssetsWithAppropriateCaching(t *testing.T) {
+	manifest, err := loadAssetManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := assetHandler()
+	for _, tc := range []struct {
+		path, cache string
+		status      int
+	}{
+		{manifest["app.js"], "public, max-age=31536000, immutable", http.StatusOK},
+		{"/assets/manifest.json", "no-cache", http.StatusOK},
+		{"/assets/does-not-exist.js", "", http.StatusNotFound},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if response.Code != tc.status || (tc.cache != "" && response.Header().Get("Cache-Control") != tc.cache) {
+			t.Fatalf("%s status=%d cache=%q", tc.path, response.Code, response.Header().Get("Cache-Control"))
+		}
+	}
+}
+
 func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 	called := false
 	handler := csrfProtection(make([]byte, 32), handlers.System{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +34,18 @@ func TestManagedSuggestionsMetadataUsesModerationWorkspace(t *testing.T) {
 	meta := (Suggestions{}).meta(httptest.NewRequest(http.MethodGet, "/admin/sugestoes", nil), CurrentUser{Name: "Moderadora"}, true)
 	if meta.AreaLabel != "Moderação" || meta.PageLabel != "Triar sugestões" {
 		t.Fatalf("metadata = %#v", meta)
+	}
+}
+
+func TestSuggestionPaginationURLsPreserveOnlyRecognizedFilters(t *testing.T) {
+	if got := suggestionsPageURL(3); got != "/sugestoes?page=3" {
+		t.Fatalf("member url=%q", got)
+	}
+	if got := adminSuggestionsURL(url.Values{"status": {"SUBMITTED"}, "category": {"EQUIPMENT"}}, 2); got != "/admin/sugestoes?category=EQUIPMENT&page=2&status=SUBMITTED" {
+		t.Fatalf("admin url=%q", got)
+	}
+	if got := adminSuggestionsURL(url.Values{"status": {"BROKEN"}, "category": {"UNKNOWN"}}, 1); got != "/admin/sugestoes?page=1" {
+		t.Fatalf("invalid filter url=%q", got)
 	}
 }
 
@@ -123,6 +136,43 @@ func TestAdminSuggestionsURLRetainsOnlyValidFilters(t *testing.T) {
 	}
 }
 
+func TestSuggestionsReturnSafeErrorsWhenPersistenceFails(t *testing.T) {
+	user := CurrentUser{ID: uuid.New(), Name: "Membro"}
+	for _, tc := range []struct {
+		name  string
+		store *suggestionsStoreFake
+		run   func(Suggestions, *http.Request, *httptest.ResponseRecorder)
+	}{
+		{"create", &suggestionsStoreFake{createErr: errors.New("write unavailable")}, func(h Suggestions, r *http.Request, w *httptest.ResponseRecorder) { h.Create(w, r) }},
+		{"member list", &suggestionsStoreFake{ownErr: errors.New("read unavailable")}, func(h Suggestions, r *http.Request, w *httptest.ResponseRecorder) { h.Index(w, r) }},
+		{"triage list", &suggestionsStoreFake{triageErr: errors.New("read unavailable")}, func(h Suggestions, r *http.Request, w *httptest.ResponseRecorder) { h.Index(w, r) }},
+		{"triage update", &suggestionsStoreFake{updateErr: errors.New("write unavailable")}, func(h Suggestions, r *http.Request, w *httptest.ResponseRecorder) { h.Update(w, r) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/sugestoes"
+			values := url.Values{"category": {"EQUIPMENT"}, "subject": {"Mais suportes"}, "description": {"Precisamos de mais suportes para os barcos."}}
+			if strings.Contains(tc.name, "triage") {
+				path = "/admin/sugestoes/" + uuid.NewString()
+				values = url.Values{"status": {"PLANNED"}, "staff_response": {"Incluída no próximo plano."}, "updated_at": {time.Now().UTC().Format(time.RFC3339Nano)}}
+				user.CanModerateContent = true
+			}
+			r := suggestionRequest(http.MethodPost, path, values)
+			if tc.name == "member list" || tc.name == "triage list" {
+				r = httptest.NewRequest(http.MethodGet, path, nil)
+			}
+			if strings.Contains(tc.name, "update") {
+				r.SetPathValue("id", strings.TrimPrefix(path, "/admin/sugestoes/"))
+			}
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, user))
+			w := httptest.NewRecorder()
+			tc.run(Suggestions{Store: tc.store}, r, w)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("response=%d body=%q", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func suggestionRequest(method, target string, values url.Values) *http.Request {
 	r := httptest.NewRequest(method, target, strings.NewReader(values.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -138,21 +188,25 @@ type suggestionsStoreFake struct {
 	triage       []dbgen.ListSuggestionsForTriageRow
 	updatedRows  int64
 	triageCalled bool
+	createErr    error
+	ownErr       error
+	triageErr    error
+	updateErr    error
 }
 
 func (s *suggestionsStoreFake) CreateSuggestion(_ context.Context, input dbgen.CreateSuggestionParams) (dbgen.CreateSuggestionRow, error) {
 	s.created = input
-	return dbgen.CreateSuggestionRow{}, nil
+	return dbgen.CreateSuggestionRow{}, s.createErr
 }
 func (s *suggestionsStoreFake) ListSuggestionsForRequester(_ context.Context, input dbgen.ListSuggestionsForRequesterParams) ([]dbgen.ListSuggestionsForRequesterRow, error) {
 	s.ownParams = input
-	return s.own, nil
+	return s.own, s.ownErr
 }
 func (s *suggestionsStoreFake) ListSuggestionsForTriage(_ context.Context, _ dbgen.ListSuggestionsForTriageParams) ([]dbgen.ListSuggestionsForTriageRow, error) {
 	s.triageCalled = true
-	return s.triage, nil
+	return s.triage, s.triageErr
 }
 func (s *suggestionsStoreFake) UpdateSuggestionTriage(_ context.Context, input dbgen.UpdateSuggestionTriageParams) (int64, error) {
 	s.updated = input
-	return s.updatedRows, nil
+	return s.updatedRows, s.updateErr
 }

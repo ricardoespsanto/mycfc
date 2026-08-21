@@ -28,7 +28,7 @@ exist.
 | --- | ---: | --- | --- |
 | CI correctness and reproducibility | 8/10 | Parallel generated, foundation, quality, integration, and E2E gates; pinned Ubuntu, Go and Node versions; concurrency cancellation; explicit aggregate result gate | Confirm the aggregate and Infrastructure checks are required by branch protection; add a scheduled full-pipeline run to catch external image/service drift |
 | Static analysis and formatting | 8/10 | gofmt, vet, Staticcheck, ESLint, Stylelint, HTMX/templ checks, ShellCheck, actionlint, Hadolint, Terraform fmt/validate and TFLint | Remove the documented Staticcheck CSRF/package-comment exceptions over time; consider SQL linting and a rendered-HTML conformance checker if their signal justifies maintenance |
-| Unit tests and coverage | 6/10 | Atomic Go profile, text and browsable HTML reports, 14-day CI artifact, GitHub summary, UI Go tests, and overall plus per-package regression floors over hand-written source | Baseline is only about 50%; add diff coverage, JavaScript unit tests, and targeted tests for `internal/app`, `internal/handlers`, `internal/locale`, `internal/storage`, and server startup paths before ratcheting toward 60–70% |
+| Unit tests and coverage | 8/10 | Atomic Go profile, text and browsable HTML reports, per-file and changed-executable-line evidence, 14-day CI artifact, GitHub summary, UI Go tests, and overall plus per-package regression floors over hand-written source | The primary hand-written Go floor is 85%; maintain risk-focused behavioural coverage and add JavaScript unit tests where they provide useful signal |
 | Integration and browser assurance | 8/10 | PostgreSQL/MinIO integration suites, deployment-script tests, Playwright flows, and axe accessibility coverage run as separate gates | Coverage from integration tests is not merged into the report; only the pinned Chromium environment is evidenced; add selected failure/upgrade-path tests rather than broad browser duplication |
 | Workflow trust boundaries | 9/10 | Read-only default permissions, deployment-only OIDC, production environment, tested-SHA verification, immutable digest lookup, and non-cancelling deploy concurrency | Verify production environment reviewers/rules in GitHub settings; consider a dedicated reusable build workflow to remove any residual divergence between tested and published builds |
 | Dependency and supply-chain security | 6/10 | Dependabot covers Actions, Go, npm and Docker; direct dependencies are exact; Actions use commit SHAs; ECR tags are immutable and scan on push | Add `govulncheck`, npm audit, filesystem/container scanning, SBOM generation, provenance/attestation, and image signing with a deployment verification policy |
@@ -47,6 +47,12 @@ exist.
 - Added a deterministic unit-coverage gate and downloadable text, profile, and
   HTML reports. Generated sqlc and templ Go wrappers are excluded; their
   behavior remains covered by integration, rendering, and browser gates.
+- Ratcheted the hand-written-Go unit-coverage floor to 85.0%. The same filtered
+  atomic profile is used locally and in CI; CI fetches the comparison commit and
+  records aggregate, package, file, largest-uncovered and changed-executable-line
+  evidence. Every changed hand-written Go source line must meet the 85% coverage
+  expectation. Integration coverage remains a separate gate and is never merged
+  into this unit denominator.
 - Fixed defects exposed by the new linters: a discarded login value, dead Go
   helpers, shell portability/quoting issues, and retired Terraform variables.
 - Made Terraform validation cover `bootstrap`, `hetzner`, and `production`, and
@@ -61,10 +67,9 @@ exist.
 
 ## Recommended next increments
 
-1. Raise hand-written Go coverage from its approximately 50% baseline to 60%
-   through focused tests of
-   startup/configuration, HTMX request helpers, storage adapters, and currently
-   untested training/profile paths; then raise the CI floor.
+1. Maintain the 85% hand-written-Go floor with focused behavioural tests for
+   identity, event/communication, training, and operational handlers; raise
+   package floors only when their measured baseline supports the ratchet.
 2. Add vulnerability, secret, IaC-security and container scanning with pinned
    tools, followed by SBOM/provenance generation and signed-image verification.
 3. Harden production Compose services with measured resource limits,
