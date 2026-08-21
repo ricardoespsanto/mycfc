@@ -1,0 +1,21 @@
+# Build only the files required to compile the production binary and assets.
+**
+!Dockerfile
+!go.mod
+!go.sum
+!package.json
+!package-lock.json
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!scripts/
+!scripts/build-assets.mjs
+!ui/
+!ui/**
+
+# Generated Go and browser assets are the production inputs. Tests and templ
+# sources are validated before deployment and do not affect the compiled image.
+**/*_test.go
+**/*.templ
+ui/static/dist/
