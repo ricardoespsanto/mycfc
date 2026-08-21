@@ -14,21 +14,39 @@ SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6fe
 HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b8c1ad7588c8bd1e04f4866b34ad3cac50335198552
 TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f
 
-.PHONY: help tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci terraform-fmt terraform-validate terraform-lint terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci terraform-fmt terraform-validate terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 tools: ## Install pinned Go development tools into ./bin
-	@mkdir -p $(BIN_DIR)
-	GOBIN=$(BIN_DIR) go install github.com/a-h/templ/cmd/templ@v0.3.1020
-	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+	$(MAKE) ci-generate-tools
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@v1.67.1
 
-lint-tools: ## Install pinned static-analysis tools into ./bin
+ci-generate-tools: ## Install or validate the pinned CI generation tools in ./bin
 	@mkdir -p $(BIN_DIR)
-	GOBIN=$(BIN_DIR) go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-	GOBIN=$(BIN_DIR) go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+	@if $(TEMPL) version 2>/dev/null | grep -qx 'v0.3.1020' && $(SQLC) version 2>/dev/null | grep -qx 'v1.31.1'; then \
+		echo 'validated cached generation tools'; \
+	else \
+		GOBIN=$(BIN_DIR) go install github.com/a-h/templ/cmd/templ@v0.3.1020; \
+		GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1; \
+		$(TEMPL) version | grep -qx 'v0.3.1020'; \
+		$(SQLC) version | grep -qx 'v1.31.1'; \
+	fi
+
+lint-tools: ## Install pinned static-analysis tools into ./bin
+	$(MAKE) ci-lint-tools
+
+ci-lint-tools: ## Install or validate the pinned CI lint tools in ./bin
+	@mkdir -p $(BIN_DIR)
+	@if $(STATICCHECK) -version 2>/dev/null | grep -Fq '(v0.7.0)' && $(ACTIONLINT) -version 2>/dev/null | grep -qx 'v1.7.12'; then \
+		echo 'validated cached lint tools'; \
+	else \
+		GOBIN=$(BIN_DIR) go install honnef.co/go/tools/cmd/staticcheck@v0.7.0; \
+		GOBIN=$(BIN_DIR) go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12; \
+		$(STATICCHECK) -version | grep -Fq '(v0.7.0)'; \
+		$(ACTIONLINT) -version | grep -qx 'v1.7.12'; \
+	fi
 
 lint: lint-tools ## Run source, workflow, shell, Dockerfile, and Terraform linters
 	npm ci
