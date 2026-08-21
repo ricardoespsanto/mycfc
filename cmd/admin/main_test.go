@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,15 @@ type fakeAdminStore struct {
 	revocation      dbgen.RevokeStaffGrantParams
 	revoked         int64
 	minorCredential dbgen.IssueMinorCredentialParams
+	createErr       error
+	grantRoleErr    error
+	passwordErr     error
+	deactivateErr   error
+	programmeErr    error
+	teamErr         error
+	staffGrantErr   error
+	revokeErr       error
+	minorErr        error
 }
 
 func (s *fakeAdminStore) GetAccountByEmail(_ context.Context, email *string) (dbgen.GetAccountByEmailRow, error) {
@@ -39,37 +50,37 @@ func (s *fakeAdminStore) GetAccountByEmail(_ context.Context, email *string) (db
 }
 func (s *fakeAdminStore) GrantPlatformRoleByCode(_ context.Context, input dbgen.GrantPlatformRoleByCodeParams) error {
 	s.granted = input
-	return nil
+	return s.grantRoleErr
 }
 func (s *fakeAdminStore) CreateAdultUser(_ context.Context, input dbgen.CreateAdultUserParams) (dbgen.CreateAdultUserRow, error) {
 	s.created = input
-	return dbgen.CreateAdultUserRow{}, nil
+	return dbgen.CreateAdultUserRow{}, s.createErr
 }
 func (s *fakeAdminStore) SetUserPasswordHash(_ context.Context, input dbgen.SetUserPasswordHashParams) error {
 	s.password = input
-	return nil
+	return s.passwordErr
 }
 func (s *fakeAdminStore) DeactivateUser(_ context.Context, id uuid.UUID) error {
 	s.deactivated = id
-	return nil
+	return s.deactivateErr
 }
 func (s *fakeAdminStore) GetProgrammeByCode(context.Context, string) (dbgen.Programme, error) {
-	return s.programme, nil
+	return s.programme, s.programmeErr
 }
 func (s *fakeAdminStore) GetTeamByID(context.Context, uuid.UUID) (dbgen.Team, error) {
-	return s.team, nil
+	return s.team, s.teamErr
 }
 func (s *fakeAdminStore) GrantStaffCapability(_ context.Context, input dbgen.GrantStaffCapabilityParams) (dbgen.GrantStaffCapabilityRow, error) {
 	s.staffGrant = input
-	return dbgen.GrantStaffCapabilityRow{ID: uuid.New()}, nil
+	return dbgen.GrantStaffCapabilityRow{ID: uuid.New()}, s.staffGrantErr
 }
 func (s *fakeAdminStore) RevokeStaffGrant(_ context.Context, input dbgen.RevokeStaffGrantParams) (int64, error) {
 	s.revocation = input
-	return s.revoked, nil
+	return s.revoked, s.revokeErr
 }
 func (s *fakeAdminStore) IssueMinorCredential(_ context.Context, input dbgen.IssueMinorCredentialParams) (uuid.UUID, error) {
 	s.minorCredential = input
-	return input.MinorUserID, nil
+	return input.MinorUserID, s.minorErr
 }
 
 func TestCreateAdminUsesValidatedInputAndPasswordFile(t *testing.T) {
@@ -115,6 +126,24 @@ func TestIssueMinorLoginRequiresGuardianAndAuditsActor(t *testing.T) {
 	}
 }
 
+func TestRecoverMinorLoginRecordsRecoveryAction(t *testing.T) {
+	passwordFile := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(passwordFile, []byte("correct horse 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guardianID, actorID, minorID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{
+		"guardian@example.com": {ID: guardianID, IsActive: true},
+		"admin@example.com":    {ID: actorID, IsActive: true, IsAdmin: true},
+	}}
+	if err := run(context.Background(), []string{"recover-minor-login", "--minor-id", minorID.String(), "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, store, os.Stdin, passwordFile, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if store.minorCredential.MinorUserID != minorID || store.minorCredential.Action != "RECOVERED" || store.minorCredential.PasswordHash == nil {
+		t.Fatalf("credential=%#v", store.minorCredential)
+	}
+}
+
 func TestSetPasswordUsesPasswordFile(t *testing.T) {
 	passwordFile := filepath.Join(t.TempDir(), "password")
 	if err := os.WriteFile(passwordFile, []byte("another horse 8\n"), 0o600); err != nil {
@@ -150,6 +179,24 @@ func TestAdminCommandsAreIdempotentWhereSafe(t *testing.T) {
 	}
 }
 
+func TestCreateAdminGrantsRoleToAnExistingAdultAndMapsGrantFailures(t *testing.T) {
+	userID := uuid.New()
+	store := &fakeAdminStore{user: dbgen.User{ID: userID, IsActive: true}}
+	var output bytes.Buffer
+	if err := run(t.Context(), []string{"create", "--email", "adult@example.com", "--name", "Adult Member", "--date-of-birth", "1990-01-01"}, store, os.Stdin, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if store.granted.UserID != userID || store.granted.RoleCode != "ADMIN" || !strings.Contains(output.String(), "role granted") {
+		t.Fatalf("grant=%#v output=%q", store.granted, output.String())
+	}
+
+	store.grantRoleErr = errors.New("database unavailable")
+	err := run(t.Context(), []string{"create", "--email", "adult@example.com", "--name", "Adult Member", "--date-of-birth", "1990-01-01"}, store, os.Stdin, "", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "grant administrator role") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestReadPasswordRejectsNonTerminalWithoutFile(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -159,6 +206,30 @@ func TestReadPasswordRejectsNonTerminalWithoutFile(t *testing.T) {
 	defer writer.Close()
 	if _, err := readPassword(reader, ""); err == nil || !strings.Contains(err.Error(), "non-terminal") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAdminCLIRejectsMalformedCommandsAndUnauthorizedAccounts(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		store *fakeAdminStore
+		want  string
+	}{
+		{"no command", nil, &fakeAdminStore{}, "usage: admin"},
+		{"unknown command", []string{"unknown"}, &fakeAdminStore{}, "unknown subcommand"},
+		{"malformed create flags", []string{"create", "--email", "admin@example.com", "unexpected"}, &fakeAdminStore{}, "usage: admin create"},
+		{"invalid minor identifier", []string{"issue-minor-login", "--minor-id", "invalid", "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, &fakeAdminStore{}, "minor-id must be a UUID"},
+		{"inactive guardian", []string{"issue-minor-login", "--minor-id", uuid.NewString(), "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"guardian@example.com": {ID: uuid.New(), IsActive: false}}}, "guardian account must be an active adult"},
+		{"inactive administrator", []string{"revoke-staff", "--grant-id", uuid.NewString(), "--actor-email", "admin@example.com", "--reason", "role changed"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": {ID: uuid.New(), IsActive: false, IsAdmin: true}}}, "actor account must be an active adult"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := run(ctx, tc.args, tc.store, os.Stdin, "", io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want=%q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -224,5 +295,65 @@ func TestRevokeStaffRequiresActiveGrantAndReason(t *testing.T) {
 	store.revoked = 0
 	if err := run(context.Background(), []string{"revoke-staff", "--grant-id", grantID.String(), "--actor-email", "admin@example.com", "--reason", "No longer needed"}, store, os.Stdin, "", &output); err == nil || !strings.Contains(err.Error(), "active staff grant") {
 		t.Fatalf("inactive grant error = %v", err)
+	}
+}
+
+func TestAdminCommandsWrapPersistenceFailures(t *testing.T) {
+	passwordFile := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(passwordFile, []byte("correct horse 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	admin := dbgen.GetAccountByEmailRow{ID: uuid.New(), IsActive: true, IsAdmin: true}
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		store *fakeAdminStore
+		want  string
+	}{
+		{"create lookup", []string{"create", "--email", "admin@example.com", "--name", "Admin User", "--date-of-birth", "1990-01-01"}, &fakeAdminStore{lookupErr: errors.New("database unavailable")}, "look up administrator"},
+		{"create write", []string{"create", "--email", "admin@example.com", "--name", "Admin User", "--date-of-birth", "1990-01-01"}, &fakeAdminStore{lookupErr: pgx.ErrNoRows, createErr: errors.New("database unavailable")}, "create administrator"},
+		{"password write", []string{"set-password", "--email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": admin}, passwordErr: errors.New("database unavailable")}, "set administrator password"},
+		{"deactivate write", []string{"deactivate", "--email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": admin}, deactivateErr: errors.New("database unavailable")}, "deactivate administrator"},
+		{"grant programme lookup", []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--programme", "Competition"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"coach@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": admin}, programmeErr: errors.New("database unavailable")}, "look up programme"},
+		{"revoke write", []string{"revoke-staff", "--grant-id", uuid.NewString(), "--actor-email", "admin@example.com", "--reason", "no longer needed"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": admin}, revokeErr: errors.New("database unavailable")}, "revoke staff grant"},
+		{"minor credential write", []string{"issue-minor-login", "--minor-id", uuid.NewString(), "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"guardian@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": admin}, minorErr: errors.New("database unavailable")}, "issue-minor-login"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := run(t.Context(), tc.args, tc.store, os.Stdin, passwordFile, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want=%q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdministratorCommandsRejectInvalidAccountAndResourceStates(t *testing.T) {
+	adminID := uuid.New()
+	activeAdmin := dbgen.GetAccountByEmailRow{ID: adminID, IsActive: true, IsAdmin: true}
+	passwordFile := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(passwordFile, []byte("correct horse 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		store *fakeAdminStore
+		want  string
+	}{
+		{"set-password missing", []string{"set-password", "--email", "admin@example.com"}, &fakeAdminStore{lookupErr: pgx.ErrNoRows}, "administrator not found"},
+		{"set-password member", []string{"set-password", "--email", "member@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"member@example.com": {ID: uuid.New(), IsActive: true}}}, "does not belong"},
+		{"deactivate missing", []string{"deactivate", "--email", "admin@example.com"}, &fakeAdminStore{lookupErr: pgx.ErrNoRows}, "administrator not found"},
+		{"deactivate dependent", []string{"deactivate", "--email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"admin@example.com": {ID: adminID, IsActive: true, IsAdmin: true, IsDependent: true}}}, "does not belong"},
+		{"grant unknown programme", []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--programme", "Missing"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"coach@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": activeAdmin}, programmeErr: pgx.ErrNoRows}, "programme not found"},
+		{"grant malformed team", []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "coach", "--team-id", "bad"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"coach@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": activeAdmin}}, "team-id must be a UUID"},
+		{"grant write", []string{"grant-staff", "--email", "coach@example.com", "--actor-email", "admin@example.com", "--capability", "moderator"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"coach@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": activeAdmin}, staffGrantErr: errors.New("database unavailable")}, "grant staff capability"},
+		{"minor authorization", []string{"issue-minor-login", "--minor-id", uuid.NewString(), "--guardian-email", "guardian@example.com", "--actor-email", "admin@example.com"}, &fakeAdminStore{accounts: map[string]dbgen.GetAccountByEmailRow{"guardian@example.com": {ID: uuid.New(), IsActive: true}, "admin@example.com": activeAdmin}, minorErr: pgx.ErrNoRows}, "guardian relationship"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := run(t.Context(), tc.args, tc.store, os.Stdin, passwordFile, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want=%q", err, tc.want)
+			}
+		})
 	}
 }

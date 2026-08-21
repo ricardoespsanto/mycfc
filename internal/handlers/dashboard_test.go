@@ -376,6 +376,53 @@ func TestDependentLeaderboardPrivacyUsesGuardianRelationship(t *testing.T) {
 	}
 }
 
+func TestLeaderboardPrivacyFailsClosedForUnauthorizedStaleAndUnavailableWrites(t *testing.T) {
+	userID, dependentID := uuid.New(), uuid.New()
+	t.Run("member preference requires a programme membership", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/leaderboard/privacy", strings.NewReader("leaderboard_visible=on"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		(Dashboard{Store: &dashboardStoreFake{visibilityRows: 1}}).LeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID})))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("response=%d", response.Code)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		store *dashboardStoreFake
+		want  int
+	}{
+		{"member stale preference", &dashboardStoreFake{visibilityRows: 0}, http.StatusConflict},
+		{"member write failure", &dashboardStoreFake{visibilityErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"guardian relationship missing", &dashboardStoreFake{visibilityRows: 0}, http.StatusForbidden},
+		{"guardian write failure", &dashboardStoreFake{visibilityErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/leaderboard/privacy", strings.NewReader("leaderboard_visible=on"))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			response := httptest.NewRecorder()
+			if strings.HasPrefix(tc.name, "guardian") {
+				request.SetPathValue("id", dependentID.String())
+				(Dashboard{Store: tc.store}).DependentLeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID})))
+			} else {
+				(Dashboard{Store: tc.store}).LeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Programmes: map[string]bool{"Competition": true}})))
+			}
+			if response.Code != tc.want {
+				t.Fatalf("response=%d want=%d", response.Code, tc.want)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/dashboard/guardian/dependents/not-a-uuid/leaderboard-privacy", nil)
+	request.SetPathValue("id", "not-a-uuid")
+	response := httptest.NewRecorder()
+	(Dashboard{Store: &dashboardStoreFake{}}).DependentLeaderboardPrivacy(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid dependent response=%d", response.Code)
+	}
+}
+
 func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	memberID := uuid.New()
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
@@ -415,6 +462,27 @@ func TestDashboardLeisureRendersDatabaseContent(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q: %q", want, body)
 		}
+	}
+}
+
+func TestDashboardRoleViewsRenderTheirDistinctMemberAndAthleteContexts(t *testing.T) {
+	store := &dashboardStoreFake{}
+	dashboard := Dashboard{Store: store, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	for _, tc := range []struct {
+		name, want string
+		handler    http.HandlerFunc
+	}{
+		{"member", "Área de membro", dashboard.Member},
+		{"moderator", "Área de moderador", dashboard.Moderator},
+		{"initiation", "Iniciação", dashboard.Initiation},
+		{"kayak polo", "Kayak polo", dashboard.KayakPolo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := dashboardResponse(t, tc.handler, uuid.New())
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+				t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -571,6 +639,64 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 	dashboard.Maintenance(response, request)
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet#maintenance-schedule" {
 		t.Fatalf("normal response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestFleetMutationsMapMissingStaleAndUnexpectedPersistenceFailures(t *testing.T) {
+	actor, equipmentID, repairID, taskID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	maintenanceValues := "equipment_id=" + equipmentID.String() + "&scheduled_for=2026-09-10T10%3A00&description=Substituir a peça danificada"
+
+	t.Run("maintenance requires fleet store", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader(maintenanceValues))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, IsAdmin: true}))
+		w := httptest.NewRecorder()
+		(Dashboard{Store: &dashboardStoreFake{}, Location: time.UTC}).Maintenance(w, r)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("response=%d", w.Code)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"maintenance missing equipment", pgx.ErrNoRows, http.StatusUnprocessableEntity},
+		{"maintenance write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+		{"repair write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+		{"completion write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &dashboardStoreFake{}
+			h := Dashboard{Store: store, Fleet: store, Location: time.UTC}
+			var r *http.Request
+			switch {
+			case strings.HasPrefix(tc.name, "maintenance"):
+				store.scheduleErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader(maintenanceValues))
+			case strings.HasPrefix(tc.name, "repair"):
+				store.repairErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/repairs/status", strings.NewReader("repair_id="+repairID.String()+"&expected_status=Pendente&status=Em_Analise"))
+			default:
+				store.completeErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/maintenance/complete", strings.NewReader("maintenance_id="+taskID.String()))
+			}
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.Header.Set("HX-Request", "true")
+			w := httptest.NewRecorder()
+			switch {
+			case strings.HasPrefix(tc.name, "maintenance"):
+				h.Maintenance(w, r)
+			case strings.HasPrefix(tc.name, "repair"):
+				h.RepairStatus(w, r)
+			default:
+				h.CompleteMaintenance(w, r)
+			}
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,8 +42,15 @@ type Application struct {
 	Server       *http.Server
 }
 
+var (
+	loadApplicationConfig = config.Load
+	openApplicationPool   = pgxpool.NewWithConfig
+	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
+	loadApplicationAWS    = awsconfig.LoadDefaultConfig
+)
+
 func New(ctx context.Context) (*Application, error) {
-	cfg, err := config.Load(ctx)
+	cfg, err := loadApplicationConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -69,13 +77,13 @@ func New(ctx context.Context) (*Application, error) {
 	poolConfig.MaxConnIdleTime = cfg.DBMaxConnIdleTime
 	poolConfig.HealthCheckPeriod = cfg.DBHealthCheckPeriod
 
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	pool, err := openApplicationPool(ctx, poolConfig)
 	if err != nil {
 		return nil, errors.New("open database pool")
 	}
 	pingContext, cancelPing := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelPing()
-	if err := pool.Ping(pingContext); err != nil {
+	if err := pingApplicationPool(pingContext, pool); err != nil {
 		pool.Close()
 		return nil, errors.New("database ping failed")
 	}
@@ -92,7 +100,7 @@ func New(ctx context.Context) (*Application, error) {
 	sessions.Cookie.Secure = cfg.IsProduction()
 	sessions.Cookie.Domain = cfg.CookieDomain
 
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.AWSRegion))
+	awsCfg, err := loadApplicationAWS(ctx, awsconfig.WithRegion(cfg.AWSRegion))
 	if err != nil {
 		sessionStore.StopCleanup()
 		pool.Close()
@@ -215,25 +223,7 @@ func New(ctx context.Context) (*Application, error) {
 		return nil, err
 	}
 
-	handler := httpx.Chain(
-		router,
-		httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)),
-		httpx.RequestIDMiddleware(),
-		httpx.TrustedProxyMiddleware(trusted),
-		httpx.SecurityHeadersMiddleware(cfg.IsProduction()),
-		httpx.AccessLogMiddleware(logger),
-		func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) },
-		func(next http.Handler) http.Handler { return csrfMiddleware(next) },
-	)
-
-	server := &http.Server{
-		Addr:              cfg.HTTPAddress(),
-		Handler:           handler,
-		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
-		ReadTimeout:       cfg.HTTPReadTimeout,
-		WriteTimeout:      cfg.HTTPWriteTimeout,
-		IdleTimeout:       cfg.HTTPIdleTimeout,
-	}
+	server := newHTTPServer(cfg, logger, sessions, system, csrfMiddleware, trusted, router)
 
 	return &Application{
 		Config:       cfg,
@@ -246,6 +236,11 @@ func New(ctx context.Context) (*Application, error) {
 		EmailWorker:  emailWorker,
 		Server:       server,
 	}, nil
+}
+
+func newHTTPServer(cfg config.Config, logger *slog.Logger, sessions *scs.SessionManager, system handlers.System, csrfMiddleware func(http.Handler) http.Handler, trusted []netip.Prefix, router http.Handler) *http.Server {
+	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction()), httpx.AccessLogMiddleware(logger), func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
+	return &http.Server{Addr: cfg.HTTPAddress(), Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout, WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout}
 }
 
 func csrfProtection(authKey []byte, system handlers.System) func(http.Handler) http.Handler {

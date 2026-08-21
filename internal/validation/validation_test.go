@@ -89,3 +89,30 @@ func TestSafeNext(t *testing.T) {
 		}
 	}
 }
+
+func TestValidationHelpersRejectMalformedInputAndPreserveFirstFieldError(t *testing.T) {
+	fields := FieldErrors{}
+	fields.Add("email", "first")
+	fields.Add("email", "second")
+	if !fields.Has("email") || fields.Empty() || fields["email"] != "first" {
+		t.Fatalf("field errors=%#v", fields)
+	}
+	for _, tc := range []struct {
+		name  string
+		check func() error
+	}{
+		{"short name", func() error { _, err := NormalizeName("x"); return err }},
+		{"malformed email", func() error { _, err := NormalizeEmail("bad\\n@example.com"); return err }},
+		{"invalid date", func() error { _, err := ParseISODate("2026-02-30"); return err }},
+		{"invalid UTF-8 password", func() error { return ValidatePassword(string([]byte{0xff})) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.check(); err == nil {
+				t.Fatal("invalid input accepted")
+			}
+		})
+	}
+	if !(FieldErrors{}).Empty() {
+		t.Fatal("empty field errors reported entries")
+	}
+}

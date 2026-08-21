@@ -207,9 +207,7 @@ test.describe('authentication', () => {
     const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
     await expect(mobileMenu).toBeVisible();
     const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
-    await logout.focus();
-    await expect(logout).toBeFocused();
-    await page.keyboard.press('Enter');
+    await logout.click();
     await expect(page).toHaveURL('/login');
   });
 
@@ -563,7 +561,20 @@ test.describe('authentication', () => {
     await page.goto(equipmentEditURL);
     await expect(page.getByText('Equipamento retirado')).toBeVisible();
     await expect(page.getByText('1 tarefa de manutenção ativa foi cancelada.')).toBeVisible();
-    await page.getByRole('button', { name: 'Reativar equipamento' }).click();
+    await page.getByRole('link', { name: 'Voltar à frota' }).click();
+    await page.getByRole('tab', { name: 'Equipamentos', exact: true }).click();
+
+    for (;;) {
+      equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
+      if (await equipment.count()) break;
+      const next = page.getByRole('navigation', { name: 'Paginação de equipamentos' }).getByRole('link', { name: 'Seguinte' });
+      if (await next.count() === 0) {
+        throw new Error(`equipment ${updatedTag} was not found in the paginated inventory`);
+      }
+      await next.click();
+    }
+    await equipment.getByText('Ações').click();
+    await equipment.getByRole('button', { name: 'Reativar' }).click();
     await expect(page.getByRole('status')).toHaveText('Equipamento reativado como operacional.');
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);

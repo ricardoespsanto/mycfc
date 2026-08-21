@@ -260,6 +260,16 @@ func TestAuthDashboardSelection(t *testing.T) {
 	}
 }
 
+func TestAuthLogoutDestroysSessionAndRedirectsToLogin(t *testing.T) {
+	auth := Auth{Sessions: scs.New()}
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	w := httptest.NewRecorder()
+	auth.Sessions.LoadAndSave(http.HandlerFunc(auth.Logout)).ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+		t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
+	}
+}
+
 func TestAuthReturnsInternalErrorForLookupFailure(t *testing.T) {
 	auth := Auth{Users: currentUserLookup{err: errors.New("database unavailable")}, Sessions: scs.New()}
 	if response := authenticatedRequest(t, auth.Sessions, uuid.NewString(), auth.Load(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))); response.Code != http.StatusInternalServerError {

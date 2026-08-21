@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -65,6 +66,62 @@ func TestNewsStatusTransitions(t *testing.T) {
 			}
 			if store.id != id || store.published != tc.publish {
 				t.Fatalf("store = %#v", store)
+			}
+		})
+	}
+}
+
+func TestNewsCreatePersistsScheduledDraft(t *testing.T) {
+	store := &newsStoreFake{}
+	h := News{Store: store, Location: time.UTC}
+	values := url.Values{
+		"title":        {"  Regata do Mondego  "},
+		"summary":      {"  Inscrições abertas para a regata.  "},
+		"url":          {"https://example.com/regata"},
+		"published_at": {"2026-07-30T10:00"},
+	}
+	r := httptest.NewRequest(http.MethodPost, "/admin/noticias", strings.NewReader(values.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.Create(w, r)
+
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/noticias" {
+		t.Fatalf("response = %d %q", w.Code, w.Header().Get("Location"))
+	}
+	p := store.created
+	if p.TitlePt != "Regata do Mondego" || p.SummaryPt != "Inscrições abertas para a regata." || p.Url == nil || *p.Url != "https://example.com/regata" {
+		t.Fatalf("created = %#v", p)
+	}
+	if !p.PublishedAt.Valid || !p.PublishedAt.Time.Equal(time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("published_at = %#v", p.PublishedAt)
+	}
+}
+
+func TestNewsCreateRejectsInvalidDraftAndHandlesStoreFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		values    url.Values
+		createErr error
+		want      int
+	}{
+		{"validation error", url.Values{"title": {"x"}, "summary": {"x"}, "published_at": {"invalid"}}, nil, http.StatusUnprocessableEntity},
+		{"store error", url.Values{"title": {"Notícia"}, "summary": {"Resumo válido"}, "published_at": {"2026-07-30T10:00"}}, errors.New("database unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &newsStoreFake{createErr: tc.createErr}
+			h := News{Store: store, Location: time.UTC}
+			r := httptest.NewRequest(http.MethodPost, "/admin/noticias", strings.NewReader(tc.values.Encode()))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+
+			h.Create(w, r)
+
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+			if tc.createErr == nil && store.created.TitlePt != "" {
+				t.Fatalf("invalid draft was created: %#v", store.created)
 			}
 		})
 	}
@@ -146,6 +203,8 @@ type newsStoreFake struct {
 	item       dbgen.NewsItem
 	itemErr    error
 	listParams dbgen.ListNewsForAdminParams
+	created    dbgen.CreateNewsParams
+	createErr  error
 }
 
 func (s *newsStoreFake) ListNewsForAdmin(_ context.Context, params dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error) {
@@ -155,8 +214,9 @@ func (s *newsStoreFake) ListNewsForAdmin(_ context.Context, params dbgen.ListNew
 func (s *newsStoreFake) GetNewsForAdmin(context.Context, uuid.UUID) (dbgen.NewsItem, error) {
 	return s.item, s.itemErr
 }
-func (s *newsStoreFake) CreateNews(context.Context, dbgen.CreateNewsParams) (dbgen.NewsItem, error) {
-	return dbgen.NewsItem{}, nil
+func (s *newsStoreFake) CreateNews(_ context.Context, params dbgen.CreateNewsParams) (dbgen.NewsItem, error) {
+	s.created = params
+	return dbgen.NewsItem{}, s.createErr
 }
 func (s *newsStoreFake) PublishNews(_ context.Context, id uuid.UUID) (int64, error) {
 	s.id, s.published = id, true

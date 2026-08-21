@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var errStructuredTrainingMembershipScope = errors.New("membership is outside the training group scope")
@@ -146,9 +145,12 @@ type StructuredTrainingStore interface {
 	ListTrainingPrescriptionLinksForSessionViewer(context.Context, dbgen.ListTrainingPrescriptionLinksForSessionViewerParams) ([]dbgen.ListTrainingPrescriptionLinksForSessionViewerRow, error)
 }
 
-type PostgresStructuredTrainingStore struct {
-	Pool *pgxpool.Pool
+type structuredTrainingDB interface {
+	dbgen.DBTX
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
+
+type PostgresStructuredTrainingStore struct{ Pool structuredTrainingDB }
 
 func (s PostgresStructuredTrainingStore) queries() *dbgen.Queries { return dbgen.New(s.Pool) }
 
