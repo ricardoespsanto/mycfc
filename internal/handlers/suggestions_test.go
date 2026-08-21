@@ -37,6 +37,18 @@ func TestManagedSuggestionsMetadataUsesModerationWorkspace(t *testing.T) {
 	}
 }
 
+func TestSuggestionPaginationURLsPreserveOnlyRecognizedFilters(t *testing.T) {
+	if got := suggestionsPageURL(3); got != "/sugestoes?page=3" {
+		t.Fatalf("member url=%q", got)
+	}
+	if got := adminSuggestionsURL(url.Values{"status": {"SUBMITTED"}, "category": {"EQUIPMENT"}}, 2); got != "/admin/sugestoes?category=EQUIPMENT&page=2&status=SUBMITTED" {
+		t.Fatalf("admin url=%q", got)
+	}
+	if got := adminSuggestionsURL(url.Values{"status": {"BROKEN"}, "category": {"UNKNOWN"}}, 1); got != "/admin/sugestoes?page=1" {
+		t.Fatalf("invalid filter url=%q", got)
+	}
+}
+
 func TestSuggestionCreateUsesAuthenticatedRequester(t *testing.T) {
 	requesterID := uuid.New()
 	store := &suggestionsStoreFake{}

@@ -808,7 +808,8 @@ func TestProfilePhotoUploadRemovalAndAvatarFallbackArePrivate(t *testing.T) {
 		}
 	})
 
-	remove := httptest.NewRequest(http.MethodPost, "/perfil/foto/remover", nil)
+	remove := httptest.NewRequest(http.MethodPost, "/perfil/foto/remover", strings.NewReader("confirm_removal=yes"))
+	remove.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	remove = remove.WithContext(context.WithValue(remove.Context(), currentUserKey{}, actor))
 	removeResponse := httptest.NewRecorder()
 	h.RemovePhoto(removeResponse, remove)
@@ -895,7 +896,8 @@ func TestProfilePhotoMutationsMapStorageAndPersistenceFailures(t *testing.T) {
 	} {
 		t.Run("remove "+tc.name, func(t *testing.T) {
 			h := Profile{Store: &profileWorkflowStore{removeErr: tc.err}, Objects: &profileObjectStoreFake{}}
-			r := httptest.NewRequest(http.MethodPost, "/perfil/foto/remover", nil)
+			r := httptest.NewRequest(http.MethodPost, "/perfil/foto/remover", strings.NewReader("confirm_removal=yes"))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, actor))
 			w := httptest.NewRecorder()
 			h.RemovePhoto(w, r)
@@ -903,6 +905,62 @@ func TestProfilePhotoMutationsMapStorageAndPersistenceFailures(t *testing.T) {
 				t.Fatalf("response=%d want=%d", w.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestProfileRemovePhotoPageRendersConfirmedDestructiveTask(t *testing.T) {
+	userID := uuid.New()
+	key := "profiles/current.png"
+	h := Profile{Store: &profileWorkflowStore{record: dbgen.GetMemberProfileRow{ID: userID, Name: "Ana Silva", IsActive: true, PhotoObjectKey: &key}}, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/perfil/fotografia/remover", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, Name: "Ana Silva", EmailVerified: true}))
+	w := httptest.NewRecorder()
+
+	h.RemovePhotoPage(w, r)
+
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(w.Body.String(), "Remover fotografia") || !strings.Contains(w.Body.String(), "confirm_removal") {
+		t.Fatalf("response=%d headers=%v body=%s", w.Code, w.Header(), w.Body.String())
+	}
+}
+
+func TestProfileRemovePhotoPageFailsClosedForMissingAndUnauthorizedPhotos(t *testing.T) {
+	actorID, subjectID := uuid.New(), uuid.New()
+	key := "profiles/current.png"
+	for _, tc := range []struct {
+		name   string
+		record dbgen.GetMemberProfileRow
+		err    error
+		want   int
+	}{
+		{"missing photo", dbgen.GetMemberProfileRow{ID: actorID, IsActive: true}, nil, http.StatusNotFound},
+		{"unavailable profile", dbgen.GetMemberProfileRow{ID: actorID, IsActive: true, PhotoObjectKey: &key}, errors.New("database unavailable"), http.StatusInternalServerError},
+		{"unrelated actor", dbgen.GetMemberProfileRow{ID: subjectID, IsActive: true, PhotoObjectKey: &key}, nil, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/perfil/dependentes/"+subjectID.String()+"/fotografia/remover", nil)
+			r.SetPathValue("id", subjectID.String())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actorID}))
+			w := httptest.NewRecorder()
+			(Profile{Store: &profileWorkflowStore{record: tc.record, viewErr: tc.err}}).RemovePhotoPage(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestProfileAvatarFallsBackToPrivateInitialsWithoutAnEligiblePhoto(t *testing.T) {
+	userID := uuid.New()
+	h := Profile{Store: &profileWorkflowStore{avatar: dbgen.GetMemberAvatarRow{Name: "Ana Silva"}}}
+	r := httptest.NewRequest(http.MethodGet, "/membros/"+userID.String()+"/foto", nil)
+	r.SetPathValue("id", userID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+	w := httptest.NewRecorder()
+
+	h.Avatar(w, r)
+
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml; charset=utf-8" || w.Header().Get("Cache-Control") != "private, no-store" || !strings.Contains(w.Body.String(), "AS") {
+		t.Fatalf("response=%d headers=%v body=%s", w.Code, w.Header(), w.Body.String())
 	}
 }
 

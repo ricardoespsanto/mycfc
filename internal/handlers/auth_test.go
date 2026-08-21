@@ -78,6 +78,54 @@ func TestAuthRejectsInvalidAndInactiveAccounts(t *testing.T) {
 	}
 }
 
+func TestAnonymousOnlyRedirectsSignedInUsersAndAllowsGuests(t *testing.T) {
+	auth := Auth{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name string
+		user *CurrentUser
+		want int
+	}{
+		{"guest", nil, http.StatusNoContent},
+		{"signed in", &CurrentUser{ID: uuid.New()}, http.StatusSeeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/login", nil)
+			if tc.user != nil {
+				r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, *tc.user))
+			}
+			w := httptest.NewRecorder()
+			auth.AnonymousOnly(next).ServeHTTP(w, r)
+			if w.Code != tc.want || (tc.user != nil && w.Header().Get("Location") != "/dashboard") {
+				t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+func TestRequireGuardianRejectsDependentAndAllowsGuardian(t *testing.T) {
+	auth := Auth{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name string
+		user CurrentUser
+		want int
+	}{
+		{"dependent", CurrentUser{ID: uuid.New(), IsDependent: true}, http.StatusForbidden},
+		{"guardian", CurrentUser{ID: uuid.New()}, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/dashboard/guardian", nil)
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, tc.user))
+			w := httptest.NewRecorder()
+			auth.RequireGuardian(next).ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestAuthRejectsSessionsFromOlderCredentialVersions(t *testing.T) {
 	id := uuid.New()
 	sessions := scs.New()

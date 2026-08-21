@@ -302,7 +302,7 @@ func TestAnnouncementStatusChangesRequireAuthorAndValidLifecycleTransition(t *te
 		h := Announcements{Store: &paginatedAnnouncementStore{author: userID}, DB: announcementActionDB{tag: pgconn.NewCommandTag("UPDATE 0")}}
 		w := httptest.NewRecorder()
 		h.Expire(w, request())
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "operação não é válida") {
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "já não está disponível") {
 			t.Fatalf("response=%d body=%s", w.Code, w.Body.String())
 		}
 	})
@@ -331,6 +331,31 @@ func TestAnnouncementStatusChangesMapAuthorAndWriteFailures(t *testing.T) {
 			h.Publish(response, request())
 			if response.Code != tc.want {
 				t.Fatalf("status=%d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestAnnouncementExpirePageRendersConflictAndMissingStates(t *testing.T) {
+	id, authorID := uuid.New(), uuid.New()
+	request := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/admin/avisos/"+id.String()+"/expirar", nil)
+		r.SetPathValue("id", id.String())
+		return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: authorID}))
+	}
+	for _, tc := range []struct {
+		name  string
+		store AnnouncementStore
+		want  int
+	}{
+		{"active notice", &announcementStatusStore{item: dbgen.GetAnnouncementForStatusRow{ID: id, AuthorID: authorID, Title: "Alteração de treino", Status: "PUBLISHED"}}, http.StatusOK},
+		{"missing notice", announcementStatusErrorStore{err: pgx.ErrNoRows}, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			(Announcements{Store: tc.store}).ExpirePage(w, request())
+			if w.Code != tc.want {
+				t.Fatalf("response=%d body=%s", w.Code, w.Body.String())
 			}
 		})
 	}
@@ -426,9 +451,21 @@ func (s *announcementStatusStore) GetAnnouncementForStatus(context.Context, uuid
 	return s.item, nil
 }
 
+type announcementStatusErrorStore struct {
+	announcementStoreFake
+	err error
+}
+
+func (s announcementStatusErrorStore) GetAnnouncementForStatus(context.Context, uuid.UUID) (dbgen.GetAnnouncementForStatusRow, error) {
+	return dbgen.GetAnnouncementForStatusRow{}, s.err
+}
+
 func (s *paginatedAnnouncementStore) ListVisibleAnnouncements(_ context.Context, params dbgen.ListVisibleAnnouncementsParams) ([]dbgen.ListVisibleAnnouncementsRow, error) {
 	s.visibleParams = params
 	return s.visible, s.visibleErr
+}
+func (s *paginatedAnnouncementStore) GetAnnouncementForStatus(context.Context, uuid.UUID) (dbgen.GetAnnouncementForStatusRow, error) {
+	return dbgen.GetAnnouncementForStatusRow{AuthorID: s.author}, s.authorErr
 }
 
 func (s *paginatedAnnouncementStore) CountUnreadVisibleAnnouncements(_ context.Context, userID uuid.UUID) (int64, error) {

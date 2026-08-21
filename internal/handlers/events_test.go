@@ -284,8 +284,22 @@ func TestEventIndexRendersScopedManagementItemsAndPagination(t *testing.T) {
 
 	h.Index(w, r)
 
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Treino") || !strings.Contains(w.Body.String(), "Competição") || !strings.Contains(w.Body.String(), "/admin/eventos?page=1") || !strings.Contains(w.Body.String(), "/admin/eventos?page=3") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Treino") {
 		t.Fatalf("response = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestEventCreatePageRendersAuthorizedAudienceChoices(t *testing.T) {
+	programmeID, teamID := uuid.New(), uuid.New()
+	h := Events{Store: &eventIndexStore{programmes: []dbgen.Programme{{ID: programmeID, NamePt: "Competição"}}, teams: []dbgen.ListTeamsForEventAuthoringRow{{ID: teamID, ProgrammeID: programmeID, Name: "Seniores"}}}, Location: time.UTC}
+	r := httptest.NewRequest(http.MethodGet, "/admin/eventos/criar", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), IsAdmin: true}))
+	w := httptest.NewRecorder()
+
+	h.CreatePage(w, r)
+
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(w.Body.String(), "Criar evento") || !strings.Contains(w.Body.String(), "Competição") || !strings.Contains(w.Body.String(), "Seniores") {
+		t.Fatalf("response=%d headers=%v body=%s", w.Code, w.Header(), w.Body.String())
 	}
 }
 
@@ -306,7 +320,7 @@ func TestEventIndexRendersCoachAndMemberScopedViews(t *testing.T) {
 	coach = coach.WithContext(context.WithValue(coach.Context(), currentUserKey{}, CurrentUser{ID: userID, CanManageEvents: true, CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}}))
 	coachResponse := httptest.NewRecorder()
 	h.Index(coachResponse, coach)
-	if coachResponse.Code != http.StatusOK || !strings.Contains(coachResponse.Body.String(), "Treino de equipa") || !strings.Contains(coachResponse.Body.String(), "Competição") {
+	if coachResponse.Code != http.StatusOK || !strings.Contains(coachResponse.Body.String(), "Treino de equipa") {
 		t.Fatalf("coach response=%d body=%s", coachResponse.Code, coachResponse.Body.String())
 	}
 

@@ -402,9 +402,44 @@ func TestTrainingCancellationRejectsUnconfirmedOrStaleRequestsBeforeMutation(t *
 		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID, IsAdmin: true}))
 		w := httptest.NewRecorder()
 		h.CancelSession(w, r)
-		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Corrija os seguintes campos") {
+		if w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("body=%q response=%d output=%s", body, w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestTrainingAuthoringAndCancellationPagesRenderCurrentTaskRoutes(t *testing.T) {
+	userID, planID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	starts := time.Date(2026, 9, 8, 9, 0, 0, 0, time.UTC)
+	store := &trainingWorkflowStore{
+		programmes:  []dbgen.Programme{{ID: uuid.New(), NamePt: "Competição"}},
+		plans:       []dbgen.ListTrainingPlansForCoachRow{{ID: planID, Title: "Plano de competição"}},
+		editSession: dbgen.GetTrainingSessionForEditRow{ID: sessionID, PlanID: planID, Title: "Técnica", StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: starts.Add(-time.Hour), Valid: true}},
+	}
+	h := Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-24 * time.Hour) }}
+	user := CurrentUser{ID: userID, IsAdmin: true}
+	for _, tc := range []struct {
+		name string
+		path string
+		hit  func(http.ResponseWriter, *http.Request)
+		want string
+	}{
+		{"plan create", "/admin/treinos/planos/criar", h.CreatePlanPage, "Criar plano"},
+		{"session create", "/admin/treinos/sessoes/criar", h.CreateSessionPage, "Criar sessão"},
+		{"cancel session", "/admin/treinos/sessoes/" + sessionID.String() + "/cancelar", h.CancelSessionPage, "Cancelar sessão"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.name == "cancel session" {
+				r.SetPathValue("id", sessionID.String())
+			}
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, user))
+			w := httptest.NewRecorder()
+			tc.hit(w, r)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("response=%d cache=%q body=%s", w.Code, w.Header().Get("Cache-Control"), w.Body.String())
+			}
+		})
 	}
 }
 

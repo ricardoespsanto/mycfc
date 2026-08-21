@@ -173,6 +173,31 @@ func TestNewsStatusPagesNameTheNewsAndRejectInvalidLifecycle(t *testing.T) {
 	}
 }
 
+func TestNewsExpireChangesStatusAndMapsWriteFailure(t *testing.T) {
+	id := uuid.New()
+	request := func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/admin/noticias/"+id.String()+"/expirar", nil)
+		r.SetPathValue("id", id.String())
+		return r
+	}
+	t.Run("expires", func(t *testing.T) {
+		store := &newsStoreFake{changed: 1}
+		w := httptest.NewRecorder()
+		(News{Store: store}).Expire(w, request())
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/noticias" || store.id != id || store.published {
+			t.Fatalf("response=%d location=%q store=%#v", w.Code, w.Header().Get("Location"), store)
+		}
+	})
+	t.Run("write failure", func(t *testing.T) {
+		store := &newsStoreFake{changed: 1, expireErr: errors.New("database unavailable")}
+		w := httptest.NewRecorder()
+		(News{Store: store}).Expire(w, request())
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("response=%d", w.Code)
+		}
+	})
+}
+
 func TestNewsIndexPaginates(t *testing.T) {
 	store := &newsStoreFake{}
 	for i := 0; i < newsPageSize+1; i++ {
@@ -205,6 +230,7 @@ type newsStoreFake struct {
 	listParams dbgen.ListNewsForAdminParams
 	created    dbgen.CreateNewsParams
 	createErr  error
+	expireErr  error
 }
 
 func (s *newsStoreFake) ListNewsForAdmin(_ context.Context, params dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error) {
@@ -224,5 +250,5 @@ func (s *newsStoreFake) PublishNews(_ context.Context, id uuid.UUID) (int64, err
 }
 func (s *newsStoreFake) ExpireNews(_ context.Context, id uuid.UUID) (int64, error) {
 	s.id, s.published = id, false
-	return s.changed, nil
+	return s.changed, s.expireErr
 }

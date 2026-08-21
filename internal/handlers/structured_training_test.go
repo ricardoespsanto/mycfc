@@ -1745,7 +1745,7 @@ func TestStructuredTrainingSegmentAndBlockMapLookupAndPersistenceFailures(t *tes
 	}{
 		{name: "segment source removed", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateSegment }, values: segmentValues, pathID: sessionID, mutate: func(s *structuredTrainingStoreStub) { s.getSessionPlanErr = pgx.ErrNoRows }, want: http.StatusNotFound},
 		{name: "segment source failure", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateSegment }, values: segmentValues, pathID: sessionID, mutate: func(s *structuredTrainingStoreStub) { s.getSessionPlanErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
-		{name: "segment stale write", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateSegment }, values: segmentValues, pathID: sessionID, mutate: func(s *structuredTrainingStoreStub) { s.createSegmentErr = pgx.ErrNoRows }, want: http.StatusForbidden},
+		{name: "segment stale write", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateSegment }, values: segmentValues, pathID: sessionID, mutate: func(s *structuredTrainingStoreStub) { s.createSegmentErr = pgx.ErrNoRows }, want: http.StatusUnprocessableEntity},
 		{name: "segment write failure", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateSegment }, values: segmentValues, pathID: sessionID, mutate: func(s *structuredTrainingStoreStub) { s.createSegmentErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
 		{name: "block source removed", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateBlock }, values: blockValues, pathID: segmentID, mutate: func(s *structuredTrainingStoreStub) { s.getSegmentPlanErr = pgx.ErrNoRows }, want: http.StatusNotFound},
 		{name: "block source failure", handler: func(h StructuredTraining) http.HandlerFunc { return h.CreateBlock }, values: blockValues, pathID: segmentID, mutate: func(s *structuredTrainingStoreStub) { s.getSegmentPlanErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
@@ -2533,6 +2533,100 @@ func TestCreateStructuredWaterBlockTaskReturnsToItsPlannerContext(t *testing.T) 
 
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != structuredPlannerURL(groupID.String(), planID.String(), sessionID.String()) || len(store.waterBlocks) != 1 || store.waterBlocks[0].Block.SegmentID != segmentID {
 		t.Fatalf("response=%d location=%q blocks=%#v", w.Code, w.Header().Get("Location"), store.waterBlocks)
+	}
+}
+
+func TestGymBlockTaskRendersStructuredPlannerContext(t *testing.T) {
+	groupID, planID, sessionID, segmentID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	weekTitle, sessionTitle, segmentTitle := "Semana 1", "Força", "Ginásio principal"
+	modality := dbgen.TrainingSegmentModalityGYM
+	startsAt := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
+	store := &structuredTrainingStoreStub{planID: planID, weekOK: true, overviewRows: []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: groupID, GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &weekTitle, WeekStart: pgtype.Date{Time: startsAt, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, SegmentID: &segmentID, SegmentModality: &modality, SegmentTitle: &segmentTitle}}}
+	r := httptest.NewRequest(http.MethodGet, "/admin/treinos/estruturados/sessoes/"+sessionID.String()+"/segmentos/"+segmentID.String()+"/ginasio", nil)
+	r.SetPathValue("session_id", sessionID.String())
+	r.SetPathValue("segment_id", segmentID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actorID, IsAdmin: true}))
+	w := httptest.NewRecorder()
+
+	(StructuredTraining{Store: store, Location: time.UTC}).GymBlockTask(w, r)
+
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(w.Body.String(), "Adicionar bloco de ginásio") || !strings.Contains(w.Body.String(), "Ginásio principal") {
+		t.Fatalf("response=%d headers=%v body=%s", w.Code, w.Header(), w.Body.String())
+	}
+}
+
+func TestCreateGymBlockTaskPersistsValidatedExerciseInPlannerContext(t *testing.T) {
+	groupID, planID, sessionID, segmentID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	weekTitle, sessionTitle, segmentTitle := "Semana 1", "Força", "Ginásio principal"
+	modality := dbgen.TrainingSegmentModalityGYM
+	startsAt := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
+	store := &structuredTrainingStoreStub{planID: planID, weekOK: true, overviewRows: []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: groupID, GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &weekTitle, WeekStart: pgtype.Date{Time: startsAt, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, EndsAt: pgtype.Timestamptz{Time: startsAt.Add(time.Hour), Valid: true}, SegmentID: &segmentID, SegmentModality: &modality, SegmentTitle: &segmentTitle}}}
+	values := url.Values{"purpose": {"MAIN"}, "title": {"Força geral"}, "instructions": {"Movimentos controlados"}, "structure": {"STRAIGHT_SETS"}, "objective": {"MAX_STRENGTH_HYPERTROPHY"}, "rounds": {"3"}, "exercise_name": {"Agachamento"}, "sets": {"3"}, "repetitions": {"8"}, "resistance_kind": {"KILOGRAMS"}, "resistance_value": {"60"}, "execution_intent": {"CONTROLLED"}}
+	r := httptest.NewRequest(http.MethodPost, "/admin/treinos/estruturados/sessoes/"+sessionID.String()+"/segmentos/"+segmentID.String()+"/ginasio", strings.NewReader(values.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("session_id", sessionID.String())
+	r.SetPathValue("segment_id", segmentID.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actorID, IsAdmin: true}))
+	w := httptest.NewRecorder()
+
+	(StructuredTraining{Store: store, Location: time.UTC}).CreateGymBlockTask(w, r)
+
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != structuredPlannerPath || len(store.gymBlocks) != 1 {
+		t.Fatalf("response=%d location=%q blocks=%#v", w.Code, w.Header().Get("Location"), store.gymBlocks)
+	}
+	input := store.gymBlocks[0]
+	if input.Block.SegmentID != segmentID || input.Block.Purpose != dbgen.TrainingBlockPurposeMAIN || input.Prescription.Rounds != 3 || input.Exercise.Name != "Agachamento" || input.Exercise.Repetitions == nil || *input.Exercise.Repetitions != 8 || input.Exercise.ResistanceValue == nil || *input.Exercise.ResistanceValue != 60 {
+		t.Fatalf("input=%#v", input)
+	}
+}
+
+func TestParseGymExerciseValidatesResistanceModes(t *testing.T) {
+	newRequest := func(values url.Values) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/admin/treinos/estruturados", strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name    string
+		values  url.Values
+		wantErr bool
+	}{
+		{"bodyweight", url.Values{"exercise_name": {"Prancha"}, "duration_seconds": {"45"}, "resistance_kind": {"BODY_WEIGHT"}}, false},
+		{"band instruction", url.Values{"exercise_name": {"Remada"}, "repetitions": {"12"}, "resistance_kind": {"BAND"}, "resistance_text": {"Banda média"}}, false},
+		{"invalid resistance payload", url.Values{"exercise_name": {"Agachamento"}, "repetitions": {"8"}, "resistance_kind": {"KILOGRAMS"}, "resistance_text": {"pesado"}}, true},
+		{"missing measurable work", url.Values{"exercise_name": {"Agachamento"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseGymExercise(newRequest(tc.values))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v wantErr=%t", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestGymValidationAcceptsDocumentedObjectiveAndResistanceRanges(t *testing.T) {
+	for _, objective := range []dbgen.TrainingObjective{
+		dbgen.TrainingObjectiveMOBILITY, dbgen.TrainingObjectiveACTIVATION, dbgen.TrainingObjectiveMAXSTRENGTHHYPERTROPHY,
+		dbgen.TrainingObjectiveMAXSTRENGTHNEURAL, dbgen.TrainingObjectiveEXPLOSIVESTRENGTH, dbgen.TrainingObjectiveSTRENGTHENDURANCE,
+		dbgen.TrainingObjectiveTECHNIQUE, dbgen.TrainingObjectiveCORE, dbgen.TrainingObjectiveCUSTOM,
+	} {
+		if !validTrainingObjective(objective) {
+			t.Fatalf("objective %q rejected", objective)
+		}
+	}
+	for _, tc := range []struct {
+		kind  dbgen.GymResistanceKind
+		value float64
+	}{
+		{dbgen.GymResistanceKindPERCENT1RM, 85}, {dbgen.GymResistanceKindRPE, 8}, {dbgen.GymResistanceKindRIR, 2},
+	} {
+		if !validGymResistanceValue(tc.kind, tc.value) {
+			t.Fatalf("resistance %q=%v rejected", tc.kind, tc.value)
+		}
 	}
 }
 
