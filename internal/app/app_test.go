@@ -66,7 +66,7 @@ func TestApplicationNewReturnsConfigurationErrorsBeforeStartingResources(t *test
 }
 
 func TestNewHTTPServerAppliesSecurityAndTrustedProxyMiddleware(t *testing.T) {
-	cfg := config.Config{AppEnv: "production", Port: 8443, HTTPReadHeaderTimeout: time.Second, HTTPReadTimeout: 2 * time.Second, HTTPWriteTimeout: 3 * time.Second, HTTPIdleTimeout: 4 * time.Second}
+	cfg := config.Config{AppEnv: "production", Port: 8443, AWSRegion: "eu-west-1", S3BucketName: "mycfc-production-repairs", HTTPReadHeaderTimeout: time.Second, HTTPReadTimeout: 2 * time.Second, HTTPWriteTimeout: 3 * time.Second, HTTPIdleTimeout: 4 * time.Second}
 	server := newHTTPServer(cfg, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), scs.New(), handlers.System{}, func(next http.Handler) http.Handler { return next }, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Forwarded-For") == "10.1.2.3" {
 			w.Header().Set("X-Trusted-Proxy", "yes")
@@ -80,6 +80,9 @@ func TestNewHTTPServerAppliesSecurityAndTrustedProxyMiddleware(t *testing.T) {
 	server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || response.Header().Get("X-Content-Type-Options") != "nosniff" || response.Header().Get("X-Trusted-Proxy") != "yes" || server.Addr != ":8443" || server.IdleTimeout != 4*time.Second {
 		t.Fatalf("response=%d headers=%v server=%#v", response.Code, response.Header(), server)
+	}
+	if csp := response.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data: blob: https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com;") {
+		t.Fatalf("Content-Security-Policy = %q", csp)
 	}
 }
 

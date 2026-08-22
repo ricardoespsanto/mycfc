@@ -217,6 +217,52 @@ func validConfig() Config {
 	}
 }
 
+func TestObjectStorageOriginUsesOnlyTheConfiguredBrowserOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "local endpoint strips path query and fragment",
+			cfg:  Config{S3Endpoint: "http://127.0.0.1:9000/storage?ignored=yes#fragment"},
+			want: "http://127.0.0.1:9000",
+		},
+		{
+			name: "production regional bucket",
+			cfg:  Config{S3BucketName: "mycfc-production-repairs", AWSRegion: "eu-west-1"},
+			want: "https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
+		},
+		{
+			name: "regional path style",
+			cfg:  Config{S3BucketName: "mycfc-local", AWSRegion: "eu-west-1", S3ForcePathStyle: true},
+			want: "https://s3.eu-west-1.amazonaws.com",
+		},
+		{
+			name: "endpoint with credentials fails closed",
+			cfg:  Config{S3Endpoint: "https://user:secret@objects.example.test"},
+		},
+		{
+			name: "invalid region fails closed",
+			cfg:  Config{S3BucketName: "mycfc-production-repairs", AWSRegion: "eu-west-1; img-src *"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ObjectStorageOrigin(); got != tc.want {
+				t.Fatalf("ObjectStorageOrigin() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsafeAWSRegionName(t *testing.T) {
+	cfg := validConfig()
+	cfg.AWSRegion = "eu-west-1; img-src *"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "AWS_REGION") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateAcceptsLocalConfiguration(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {

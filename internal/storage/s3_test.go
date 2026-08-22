@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,28 @@ func TestS3StorePresignsInlineContentWithOptionalType(t *testing.T) {
 	}
 	if !strings.Contains(url, "/private-photos/avatars/one.png") || !strings.Contains(url, "response-content-disposition=inline") || !strings.Contains(url, "response-content-type=image%2Fpng") {
 		t.Fatalf("presigned URL = %q", url)
+	}
+}
+
+func TestS3StorePresignsTheConfiguredRegionalBucketOrigin(t *testing.T) {
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion("eu-west-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewS3Store(s3.NewFromConfig(cfg), "mycfc-production-repairs")
+	signed, err := store.PresignGet(context.Background(), "equipment/one.png", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet() error = %v", err)
+	}
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parse presigned URL: %v", err)
+	}
+	if got := u.Scheme + "://" + u.Host; got != "https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com" {
+		t.Fatalf("presigned origin = %q", got)
 	}
 }
 

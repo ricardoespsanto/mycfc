@@ -239,7 +239,7 @@ func New(ctx context.Context) (*Application, error) {
 }
 
 func newHTTPServer(cfg config.Config, logger *slog.Logger, sessions *scs.SessionManager, system handlers.System, csrfMiddleware func(http.Handler) http.Handler, trusted []netip.Prefix, router http.Handler) *http.Server {
-	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction()), httpx.AccessLogMiddleware(logger), func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
+	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction(), cfg.ObjectStorageOrigin()), httpx.AccessLogMiddleware(logger), func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
 	return &http.Server{Addr: cfg.HTTPAddress(), Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout, WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout}
 }
 
