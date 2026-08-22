@@ -138,10 +138,13 @@ single-owner topology, the ruleset must instead require pull requests with zero
 mandatory approvals and bind the aggregate `summary` check to GitHub Actions.
 Enable code-owner approval if a second trusted collaborator is added later.
 
-The repository's `main` branch had no protection rule requiring `summary` when
-checked on 2026-08-22. Adoption therefore requires a separately authorized
-repository-ruleset change that requires only the `summary` check from GitHub
-Actions and requires pull requests before the route is adopted.
+The separately approved `main delivery` repository ruleset 21204965 was
+activated on 2026-08-22. It targets only `refs/heads/main`, requires pull
+requests with zero mandatory approvals for the current single-owner topology,
+requires branches to be current, and binds only `summary` to the GitHub Actions
+app (integration id 15368). It has no bypass actors. The pre-existing `basic`
+ruleset remains active and unchanged, preserving its deletion,
+non-fast-forward, and signature controls.
 Do not require conditional jobs individually because their intentional skipped
 state would make the other mode unmergeable.
 
@@ -153,7 +156,10 @@ base branch, a temporary PR targeted the reviewed feature branch to exercise the
 other route. [PR #222 CI](https://github.com/ricardoespsanto/mycfc/actions/runs/32581356965)
 ran only classifier, documentation, and `summary` successfully while all five
 heavy gates were intentionally skipped. The complete hosted matrix is proven;
-main-branch adoption still requires the approved ruleset write and merge.
+GitHub reports the active pull-request and required-status-check rules on
+`main`, and PR #221 remains mergeable with its Actions-origin `summary` result.
+Main-branch adoption now requires only merging the reviewed source; after that,
+observe a real documentation-only PR targeting `main` before closing #182.
 
 ## Terraform provider cache (#183)
 
@@ -225,7 +231,7 @@ median. Do not declare the publication target met until five representative
 image-changing main publications establish it; retain a separately observed
 cache miss for correctness and cold timing.
 
-Epic completion still requires the approved ruleset/adoption step for #182,
-merge of the reviewed source, the approved production timer rollout and live
-#181 observations, and the missing publication window. Targets remain
+Epic completion still requires merge of the reviewed source, a real
+documentation-only PR against `main`, the approved production timer rollout and
+live #181 observations, and the missing publication window. Targets remain
 measurement goals and do not authorize weaker delivery gates when missed.
