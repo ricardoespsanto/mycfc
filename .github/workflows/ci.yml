@@ -13,7 +13,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.changes.outputs.mode }}
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Pull-request classification compares the exact base and tested SHAs.
+          fetch-depth: 0
+      # Run classification code from the reviewed base, never from the PR.
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted-base
+      - name: Classify the change conservatively
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" = pull_request && -x .ci-trusted-base/scripts/classify-ci-change.sh ]]; then
+            .ci-trusted-base/scripts/classify-ci-change.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo 'mode=full' >> "$GITHUB_OUTPUT"
+          fi
+
+  documentation:
+    needs: classify
+    if: needs.classify.result == 'success' && needs.classify.outputs.mode == 'docs'
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Check documentation changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --check "$BASE_SHA...$HEAD_SHA"
+          ./scripts/classify-ci-change_test.sh
+
   generated-and-format:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -39,6 +88,8 @@ jobs:
       - run: git diff --exit-code
 
   foundation:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -55,6 +106,8 @@ jobs:
       - run: make verify-foundation
 
   quality:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -96,6 +149,8 @@ jobs:
           retention-days: 14
 
   integration:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -108,6 +163,8 @@ jobs:
       - run: CI=true make test-integration
 
   e2e:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -120,19 +177,33 @@ jobs:
 
   summary:
     if: always()
-    needs: [generated-and-format, foundation, quality, integration, e2e]
+    needs: [classify, documentation, generated-and-format, foundation, quality, integration, e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: Require all CI gates
         env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          CHANGE_MODE: ${{ needs.classify.outputs.mode }}
+          DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
           GENERATED_RESULT: ${{ needs.generated-and-format.result }}
           FOUNDATION_RESULT: ${{ needs.foundation.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
-          test "$GENERATED_RESULT" = success
-          test "$FOUNDATION_RESULT" = success
-          test "$QUALITY_RESULT" = success
-          test "$INTEGRATION_RESULT" = success
-          test "$E2E_RESULT" = success
+          test "$CLASSIFY_RESULT" = success
+          if [[ "$CHANGE_MODE" = docs ]]; then
+            test "$DOCUMENTATION_RESULT" = success
+            test "$GENERATED_RESULT" = skipped
+            test "$FOUNDATION_RESULT" = skipped
+            test "$QUALITY_RESULT" = skipped
+            test "$INTEGRATION_RESULT" = skipped
+            test "$E2E_RESULT" = skipped
+          else
+            test "$DOCUMENTATION_RESULT" = skipped
+            test "$GENERATED_RESULT" = success
+            test "$FOUNDATION_RESULT" = success
+            test "$QUALITY_RESULT" = success
+            test "$INTEGRATION_RESULT" = success
+            test "$E2E_RESULT" = success
+          fi

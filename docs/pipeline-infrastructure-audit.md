@@ -26,7 +26,7 @@ exist.
 
 | Aspect | Completion | Evidence in the repository | What is still missing |
 | --- | ---: | --- | --- |
-| CI correctness and reproducibility | 8/10 | Parallel generated, foundation, quality, integration, and E2E gates; pinned Ubuntu, Go and Node versions; concurrency cancellation; explicit aggregate result gate | Confirm the aggregate and Infrastructure checks are required by branch protection; add a scheduled full-pipeline run to catch external image/service drift |
+| CI correctness and reproducibility | 8/10 | Parallel generated, foundation, quality, integration, and E2E gates; pinned Ubuntu, Go and Node versions; concurrency cancellation; explicit aggregate result gate | Require the aggregate `summary` check in branch protection; keep the path-filtered Infrastructure workflow outside the global required set; add a scheduled full-pipeline run to catch external image/service drift |
 | Static analysis and formatting | 8/10 | gofmt, vet, Staticcheck, ESLint, Stylelint, HTMX/templ checks, ShellCheck, actionlint, Hadolint, Terraform fmt/validate and TFLint | Remove the documented Staticcheck CSRF/package-comment exceptions over time; consider SQL linting and a rendered-HTML conformance checker if their signal justifies maintenance |
 | Unit tests and coverage | 8/10 | Atomic Go profile, text and browsable HTML reports, per-file and changed-executable-line evidence, 14-day CI artifact, GitHub summary, UI Go tests, and overall plus per-package regression floors over hand-written source | The primary hand-written Go floor is 85%; maintain risk-focused behavioural coverage and add JavaScript unit tests where they provide useful signal |
 | Integration and browser assurance | 8/10 | PostgreSQL/MinIO integration suites, deployment-script tests, Playwright flows, and axe accessibility coverage run as separate gates | Coverage from integration tests is not merged into the report; only the pinned Chromium environment is evidenced; add selected failure/upgrade-path tests rather than broad browser duplication |
@@ -80,3 +80,13 @@ exist.
 5. Verify repository settings: required checks, approval rules, signed/linear
    merge policy, production reviewers, secret scanning/push protection, and
    private vulnerability reporting.
+
+## 2026-08-22 delivery-performance follow-up
+
+Epic #184's repository-side CI routing, Playwright worker-trial harness,
+digest-associated release timeline, shorter source timer, and Terraform provider
+cache are documented in `docs/delivery-performance.md`. The live repository had
+no required `summary` protection rule at the time of inspection, so the
+documentation-only route must not be considered adopted until that separately
+approved setting and representative PR evidence exist. Production timer rollout
+and operational observation also remain separate release-authority decisions.
