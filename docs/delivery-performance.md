@@ -193,10 +193,39 @@ reviewed source.
 
 ## Epic aggregate (#184)
 
-After all P0 and accepted P1/P2 source changes are present, collect five
-representative successful CI and image-publication runs. Record elapsed
-critical-path time and summed job duration separately. Epic acceptance requires
-a full-CI median at or below 145 seconds, p90 at or below 180 seconds, at least
-20% fewer runner-minutes, and warm image publication median at or below 55
-seconds, without removed tests, new skips, weakened required checks, or changed
-deployment safety semantics.
+Five representative full-CI observations from PR #221 produced the following
+post-change evidence. Critical path is measured from the earliest full-gate job
+start to the latest full-gate completion; summed job duration excludes the
+intentionally skipped documentation job.
+
+| Run | Critical path | Summed job duration |
+| --- | ---: | ---: |
+| [32580194688](https://github.com/ricardoespsanto/mycfc/actions/runs/32580194688) | 152s | 438s |
+| [32580528607](https://github.com/ricardoespsanto/mycfc/actions/runs/32580528607) | 185s | 394s |
+| [32580748020 attempt 1](https://github.com/ricardoespsanto/mycfc/actions/runs/32580748020/attempts/1) | 175s | 405s |
+| [32580748020 attempt 2](https://github.com/ricardoespsanto/mycfc/actions/runs/32580748020/attempts/2) | 184s | 389s |
+| [32580748020 attempt 3](https://github.com/ricardoespsanto/mycfc/actions/runs/32580748020/attempts/3) | 181s | 393s |
+
+The critical-path median was 181 seconds and nearest-rank p90 was 185 seconds,
+so the 145/180-second goals were not met. Median summed job duration was 393
+seconds against the approximately 390-second baseline, so representative full
+CI also did not demonstrate the 20% runner-use reduction. No check was removed
+or weakened in response to this miss. The documentation-only route provides a
+large saving for its deliberately narrow workload, but must not be used to
+claim that full-CI target.
+
+Production-publication evidence is also incomplete. The only main publication
+after #179 merged was [run
+32534925487](https://github.com/ricardoespsanto/mycfc/actions/runs/32534925487).
+It imported a BuildKit cache manifest, but source changes required substantial
+rebuilding; the Buildx step took 112 seconds, including 54.4 seconds exporting
+the updated cache. One cache-using run is neither a cold no-cache observation
+nor the required five-run warm window, and it does not prove the 55-second warm
+median. Do not declare the publication target met until five representative
+image-changing main publications establish it; retain a separately observed
+cache miss for correctness and cold timing.
+
+Epic completion still requires the approved ruleset/adoption step for #182,
+merge of the reviewed source, the approved production timer rollout and live
+#181 observations, and the missing publication window. Targets remain
+measurement goals and do not authorize weaker delivery gates when missed.
