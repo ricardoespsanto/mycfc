@@ -67,6 +67,12 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			return
 		}
 		user, err := a.Users.GetActiveAccountByID(r.Context(), id)
+		// Migration-window fallback: a live database that has not yet applied
+		// 202608050002_member_profiles.sql cannot resolve the LEFT JOIN against
+		// member_profiles, so load the account without profile status rather than
+		// failing every authenticated request until the migration lands. Delete
+		// this fallback and GetActiveAccountByIDWithoutProfile once every live
+		// database has applied that migration.
 		if profileSchemaUnavailable(err) {
 			fallback, fallbackErr := a.Users.GetActiveAccountByIDWithoutProfile(r.Context(), id)
 			if fallbackErr == nil {
@@ -145,8 +151,12 @@ func (a Auth) Load(next http.Handler) http.Handler {
 }
 
 func profileSchemaUnavailable(err error) bool {
+	// Only an undefined member_profiles table (42P01) is the migration-window
+	// case worth falling back on. An insufficient-privilege error (42501) is a
+	// real configuration failure (missing grant) and must surface as a 500
+	// instead of silently degrading to ProfileComplete=true.
 	var postgresErr *pgconn.PgError
-	return errors.As(err, &postgresErr) && (postgresErr.Code == "42P01" || postgresErr.Code == "42501")
+	return errors.As(err, &postgresErr) && postgresErr.Code == "42P01"
 }
 
 func (a Auth) RequireGuardian(next http.Handler) http.Handler {
