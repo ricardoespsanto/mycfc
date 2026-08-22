@@ -117,14 +117,17 @@ For pull requests, the workflow executes the classifier from a separate checkout
 of the exact reviewed base SHA; a PR cannot replace the classifier it is asking
 CI to trust. If that trusted classifier is absent or unavailable, CI runs the
 full gate. `CODEOWNERS` assigns the classifier, every workflow, and the ownership
-file to the repository owner. The ruleset must require code-owner review for those
-paths as well as the aggregate status check before the route is adopted.
+file to the repository owner. The repository currently has only that one
+collaborator, who authors its pull requests; enforcing code-owner approval would
+therefore create an unmergeable self-review requirement. For the current
+single-owner topology, the ruleset must instead require pull requests with zero
+mandatory approvals and bind the aggregate `summary` check to GitHub Actions.
+Enable code-owner approval if a second trusted collaborator is added later.
 
 The repository's `main` branch had no protection rule requiring `summary` when
 checked on 2026-08-22. Adoption therefore requires a separately authorized
 repository-ruleset change that requires only the `summary` check from GitHub
-Actions and requires code-owner review for protected CI paths, followed by one
-observed documentation-only PR and one mixed/code PR.
+Actions and requires pull requests before the route is adopted.
 Do not require conditional jobs individually because their intentional skipped
 state would make the other mode unmergeable.
 
@@ -132,7 +135,11 @@ The mixed/code half of that observation is recorded by [PR #221 CI attempt
 32580194688](https://github.com/ricardoespsanto/mycfc/actions/runs/32580194688):
 classification and every full gate succeeded, documentation was skipped, and
 `summary` succeeded. Because the trusted classifier is not yet present on the
-base branch, the required documentation-only observation remains post-merge.
+base branch, a temporary PR targeted the reviewed feature branch to exercise the
+other route. [PR #222 CI](https://github.com/ricardoespsanto/mycfc/actions/runs/32581356965)
+ran only classifier, documentation, and `summary` successfully while all five
+heavy gates were intentionally skipped. The complete hosted matrix is proven;
+main-branch adoption still requires the approved ruleset write and merge.
 
 ## Terraform provider cache (#183)
 
