@@ -76,7 +76,8 @@ durations deliberately include the promotion interval and therefore overstate,
 rather than understate, pickup time.
 
 Installing or restarting this timer on production is a separate release gate.
-After explicit approval, use an agreed observation window and record:
+If a future operational need justifies that rollout, use an agreed observation
+window and record:
 
 - at least one observed release, followed by enough releases to calculate the
   publication-to-agent-start p90;
@@ -94,8 +95,13 @@ the prior timer, running `systemctl daemon-reload`, and restarting the timer; th
 release agent's digest verification, quarantine, migration, blue-green checks,
 traffic switch, and rollback semantics do not change.
 
-As of 2026-08-22, the source and tests are present, but no production timer
-change or live observation has been authorized or claimed.
+On 2026-08-22, the production rollout was explicitly declined after review.
+Reducing a normally infrequent release pickup by roughly one minute did not
+justify changing operator access, quadrupling the polling rate, or adding its
+API, host-wakeup, and observation cost. Production therefore retains the
+existing two-minute interval and up-to-30-second jitter. Issue #181 is closed as
+not planned; the source implementation and tests remain available but no live
+latency or cost improvement is claimed.
 
 ## Documentation-only pull requests (#182)
 
@@ -239,12 +245,15 @@ was published under the tested SHA and release tag, and the complete job took 28
 seconds with authoritative publication time `2026-08-22T18:17:30Z`.
 
 This first fully warm observation is below 55 seconds, but it is not the
-required five-run window; it also is not a cold no-cache observation. Do not
-declare the publication target met until four further representative
-image-changing main publications establish the warm median, and retain a
-separately observed cache miss for correctness and cold timing.
+required five-run window; it also is not a cold no-cache observation. Four
+further image-changing publications and a deliberate cache miss will not be
+forced merely to manufacture measurements. The five-run warm median and cold
+publication target therefore remain unproven and are not claimed.
 
-Epic completion still requires the approved production timer rollout and live
-#181 observations, four further representative warm publications, and the
-separate cold-miss observation. Targets remain measurement goals and do not
-authorize weaker delivery gates when missed.
+The delivery-performance initiative is concluded as partially achieved. The
+documentation-only and Terraform cache routes were adopted, Playwright scaling
+was rejected from 60 stable samples, and the Buildx path produced one strong
+warm result. Full-CI time and runner-use targets were measured and missed; the
+production polling change was declined; and the remaining publication sample
+window was intentionally stopped. No test, required check, or deployment safety
+gate was weakened in response to those outcomes.
