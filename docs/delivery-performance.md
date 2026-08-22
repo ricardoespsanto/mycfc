@@ -156,10 +156,15 @@ base branch, a temporary PR targeted the reviewed feature branch to exercise the
 other route. [PR #222 CI](https://github.com/ricardoespsanto/mycfc/actions/runs/32581356965)
 ran only classifier, documentation, and `summary` successfully while all five
 heavy gates were intentionally skipped. The complete hosted matrix is proven;
-GitHub reports the active pull-request and required-status-check rules on
-`main`, and PR #221 remains mergeable with its Actions-origin `summary` result.
-Main-branch adoption now requires only merging the reviewed source; after that,
-observe a real documentation-only PR targeting `main` before closing #182.
+GitHub reported the active pull-request and required-status-check rules on
+`main`, and PR #221 was mergeable with its Actions-origin `summary` result. It
+subsequently merged as verified commit
+`ba324a61c33b774fc1cf85f147d4685d9e0dadef`. Its [main CI
+run](https://github.com/ricardoespsanto/mycfc/actions/runs/32590137486)
+classified the push as full, passed every heavy gate and `summary`, and skipped
+only the documentation job. A follow-up containing only this Markdown evidence
+provides the final real documentation-only observation against protected
+`main`; do not merge that evidence PR merely to prove routing.
 
 ## Terraform provider cache (#183)
 
@@ -220,18 +225,26 @@ or weakened in response to this miss. The documentation-only route provides a
 large saving for its deliberately narrow workload, but must not be used to
 claim that full-CI target.
 
-Production-publication evidence is also incomplete. The only main publication
-after #179 merged was [run
-32534925487](https://github.com/ricardoespsanto/mycfc/actions/runs/32534925487).
-It imported a BuildKit cache manifest, but source changes required substantial
+Production-publication evidence remains incomplete but now includes one fully
+warm observation. [Run
+32534925487](https://github.com/ricardoespsanto/mycfc/actions/runs/32534925487)
+imported a BuildKit cache manifest, but source changes required substantial
 rebuilding; the Buildx step took 112 seconds, including 54.4 seconds exporting
-the updated cache. One cache-using run is neither a cold no-cache observation
-nor the required five-run warm window, and it does not prove the 55-second warm
-median. Do not declare the publication target met until five representative
-image-changing main publications establish it; retain a separately observed
-cache miss for correctness and cold timing.
+the updated cache. After #221 merged, [run
+32590277418](https://github.com/ricardoespsanto/mycfc/actions/runs/32590277418)
+reused every application build layer. Its Buildx step took four seconds, cache
+export took one second, immutable digest
+`sha256:0a91fb6253a13b6c8d9cb5a3c26db44323ee07f936eabe5ac6828e9c355c0bad`
+was published under the tested SHA and release tag, and the complete job took 28
+seconds with authoritative publication time `2026-08-22T18:17:30Z`.
 
-Epic completion still requires merge of the reviewed source, a real
-documentation-only PR against `main`, the approved production timer rollout and
-live #181 observations, and the missing publication window. Targets remain
-measurement goals and do not authorize weaker delivery gates when missed.
+This first fully warm observation is below 55 seconds, but it is not the
+required five-run window; it also is not a cold no-cache observation. Do not
+declare the publication target met until four further representative
+image-changing main publications establish the warm median, and retain a
+separately observed cache miss for correctness and cold timing.
+
+Epic completion still requires the approved production timer rollout and live
+#181 observations, four further representative warm publications, and the
+separate cold-miss observation. Targets remain measurement goals and do not
+authorize weaker delivery gates when missed.
