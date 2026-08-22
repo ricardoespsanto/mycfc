@@ -128,6 +128,12 @@ observed documentation-only PR and one mixed/code PR.
 Do not require conditional jobs individually because their intentional skipped
 state would make the other mode unmergeable.
 
+The mixed/code half of that observation is recorded by [PR #221 CI attempt
+32580194688](https://github.com/ricardoespsanto/mycfc/actions/runs/32580194688):
+classification and every full gate succeeded, documentation was skipped, and
+`summary` succeeded. Because the trusted classifier is not yet present on the
+base branch, the required documentation-only observation remains post-merge.
+
 ## Terraform provider cache (#183)
 
 The Infrastructure workflow caches only Terraform's shared provider plugin
@@ -145,13 +151,24 @@ pre-change Terraform-step baseline of 49, 49, 49, 47, 44, 49, and 55 seconds
 (median 49 seconds), and retain the cache only if the improvement is material
 without reduced reliability.
 
-As of 2026-08-22, source support is present; authoritative cold/warm GitHub-run
-evidence is still required. A local empty-cache check completed in 27 seconds;
-the immediate warm check completed in 12 seconds and logged shared-cache reuse
-for every locked provider in all three roots. Inspection found only provider
-binaries and their vendor documentation/licenses in the cache—no state, plan,
-backend, variable, or credential files. These local numbers validate behavior
-but are not substituted for GitHub-hosted acceptance evidence.
+Hosted evidence on 2026-08-22 satisfies the cache experiment:
+
+- [cold attempt 1](https://github.com/ricardoespsanto/mycfc/actions/runs/32580194638/attempts/1)
+  missed the exact key, passed every root in 35 seconds, and saved a 193,055,402
+  byte cache;
+- [warm attempt 2](https://github.com/ricardoespsanto/mycfc/actions/runs/32580194638/attempts/2)
+  restored that exact key and passed in 28 seconds, 43% below the 49-second
+  baseline despite four seconds of restore overhead;
+- a [lock-file change](https://github.com/ricardoespsanto/mycfc/actions/runs/32580481258)
+  and a [Terraform-version change](https://github.com/ricardoespsanto/mycfc/actions/runs/32580570325)
+  each produced a distinct confirmed miss and passed every root.
+
+A local empty-cache check completed in 27 seconds and the immediate warm check
+in 12 seconds. Inspection found only provider binaries and their vendor
+documentation/licenses—no state, plan, backend, variable, or credential files.
+The cache therefore meets #183's correctness, invalidation, boundary, and
+material-improvement criteria; adoption remains contingent only on merging the
+reviewed source.
 
 ## Epic aggregate (#184)
 
