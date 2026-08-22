@@ -1,0 +1,51 @@
+name: E2E worker trial
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Consecutive successful samples per worker count.
+        required: true
+        default: '20'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-worker-trial
+  cancel-in-progress: false
+
+jobs:
+  trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate sample count
+        env:
+          E2E_RUNS: ${{ inputs.runs }}
+        run: |
+          case "$E2E_RUNS" in
+            ''|*[!0-9]*|0) exit 2 ;;
+          esac
+      - name: Run two, three, and four worker trials
+        env:
+          E2E_RUNS: ${{ inputs.runs }}
+        run: |
+          set -Eeuo pipefail
+          for workers in 2 3 4; do
+            E2E_WORKERS="$workers" \
+              E2E_TRIAL_OUTPUT_DIR="$PWD/artifacts/e2e-worker-trials/workers-$workers" \
+              make test-e2e-workers
+          done
+      - name: Upload trial evidence
+        if: always()
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: e2e-worker-trial-${{ github.sha }}
+          path: artifacts/e2e-worker-trials/
+          if-no-files-found: error
+          retention-days: 30

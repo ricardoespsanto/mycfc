@@ -21,6 +21,7 @@ exit 0
 EOF
 cat >"$fake_bin/logger" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"$TEST_EVENT_LOG"
 exit 0
 EOF
 cat >"$fake_bin/flock" <<'EOF'
@@ -40,7 +41,7 @@ fi
 printf '%s|%s\n' "${AWS_PROFILE:-}" "${AWS_SHARED_CREDENTIALS_FILE:-}" >>"$TEST_AWS_LOG"
 case "$*" in
 	*get-login-password*) printf 'password\n' ;;
-	*imageDetails*imageTags*) printf 'release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\n' ;;
+	*imageDetails*imageTags*) printf '%s\n' "${TEST_RELEASE_TAG:-release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}" ;;
 	*imageDigest*) printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 	*) printf 'unexpected aws invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
@@ -66,7 +67,12 @@ case "$1" in
 			*) exit 1 ;;
 		esac
 		;;
-	compose|logs) ;;
+	compose)
+		if [ "${TEST_POST_SWITCH_FAILURE:-}" = true ] && printf '%s\n' "$*" | grep -q 'exec -T caddy wget'; then
+			exit 1
+		fi
+		;;
+	logs) ;;
 	*) printf 'unexpected docker invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
 EOF
@@ -114,6 +120,7 @@ reverse_proxy app:8080 {
 EOF
 	: >"$case_dir/docker.log"
 	: >"$case_dir/aws.log"
+	: >"$case_dir/events.log"
 }
 
 run_release() {
@@ -123,6 +130,7 @@ run_release() {
 		PATH="$fake_bin:$PATH" \
 		TEST_DOCKER_LOG="$case_dir/docker.log" \
 		TEST_AWS_LOG="$case_dir/aws.log" \
+		TEST_EVENT_LOG="$case_dir/events.log" \
 		MYCFC_ENV_FILE="$case_dir/mycfc.env" \
 		MYCFC_DEPLOYMENT_STATE_DIR="$case_dir/state" \
 		MYCFC_RUNTIME_DIR="$case_dir/runtime" \
@@ -139,6 +147,22 @@ chmod 0600 "$success_case/mycfc.env"
 run_release "$success_case" TEST_ACTIVE_IMAGE=registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 test "$(cat "$success_case/state/active-slot")" = blue
 test "$(cat "$success_case/state/last-attempt-result")" = succeeded
+grep -q "^sha256:bbbb.*succeeded" "$success_case/state/last-attempt"
+test "$(cat "$success_case/state/release-timeline-digest")" = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+test "$(cat "$success_case/state/release-published-at")" = '2026-08-10T18:37:43Z'
+for milestone in agent-started detected image-pulled migration-completed candidate-ready traffic-switched deployment-completed; do
+	test -s "$success_case/state/release-$milestone-at"
+done
+awk '
+	/release_agent-started/ { agent = NR }
+	/release_detected/ { detected = NR }
+	/release_image-pulled/ { pulled = NR }
+	/release_migration-completed/ { migrated = NR }
+	/release_candidate-ready/ { ready = NR }
+	/release_traffic-switched/ { switched = NR }
+	/release_deployment-completed/ { completed = NR }
+	END { exit !(agent < detected && detected < pulled && pulled < migrated && migrated < ready && ready < switched && switched < completed) }
+' "$success_case/events.log"
 grep -q 'reverse_proxy app-blue:8080' "$success_case/state/caddy-upstream.caddy"
 grep -q '^MYCFC_IMAGE=.*bbbbbbbb' "$success_case/mycfc.env"
 grep -q -- '--profile blue up -d --no-deps --force-recreate app-blue' "$success_case/docker.log"
@@ -160,13 +184,49 @@ grep -q 'reverse_proxy app:8080' "$failure_case/state/caddy-upstream.caddy"
 grep -q '^MYCFC_IMAGE=.*aaaaaaaa' "$failure_case/mycfc.env"
 test "$(cat "$failure_case/state/failed-release-digest")" = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 test "$(cat "$failure_case/state/last-attempt-result")" = failed
+test -s "$failure_case/state/release-image-pulled-at"
+test -s "$failure_case/state/release-migration-completed-at"
+test ! -f "$failure_case/state/release-candidate-ready-at"
 grep -q -- '--profile blue stop app-blue' "$failure_case/docker.log"
 
+post_switch_case="$work_dir/post-switch-failure"
+setup_case "$post_switch_case"
+if run_release "$post_switch_case" TEST_POST_SWITCH_FAILURE=true; then
+	printf '%s\n' 'release with a failed post-switch check unexpectedly succeeded' >&2
+	exit 1
+fi
+test "$(cat "$post_switch_case/state/active-slot")" = legacy
+grep -q 'reverse_proxy app:8080' "$post_switch_case/state/caddy-upstream.caddy"
+grep -q '^MYCFC_IMAGE=.*aaaaaaaa' "$post_switch_case/mycfc.env"
+test "$(cat "$post_switch_case/state/failed-release-digest")" = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+awk -F '\t' '$2 == "failed" { found = 1 } END { exit !found }' "$post_switch_case/state/last-attempt"
+test -s "$post_switch_case/state/release-traffic-switched-at"
+test ! -f "$post_switch_case/state/release-deployment-completed-at"
+grep -q -- '--profile blue stop app-blue' "$post_switch_case/docker.log"
+test "$(grep -c 'exec -T caddy caddy reload' "$post_switch_case/docker.log")" -ge 2
+
 : >"$failure_case/docker.log"
+detected_before=$(cat "$failure_case/state/release-detected-at")
 run_release "$failure_case"
 test "$(cat "$failure_case/state/last-attempt-result")" = quarantined
+test "$(cat "$failure_case/state/release-detected-at")" = "$detected_before"
 if grep -Eq 'pull registry|up -d|run --rm|force-recreate' "$failure_case/docker.log"; then
 	printf '%s\n' 'quarantined digest was retried' >&2
+	exit 1
+fi
+
+# A new release tag for the same digest is a distinct publication timeline.
+old_timeline_tag=$(cat "$failure_case/state/release-timeline-tag")
+run_release "$failure_case" TEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4
+test "$(cat "$failure_case/state/release-timeline-tag")" != "$old_timeline_tag"
+test "$(cat "$failure_case/state/release-published-at")" = '2026-08-10T19:00:00Z'
+test -s "$failure_case/state/release-agent-started-at"
+test -s "$failure_case/state/release-detected-at"
+test ! -f "$failure_case/state/release-image-pulled-at"
+awk -F '\t' '$2 == "quarantined" { found = 1 } END { exit !found }' "$failure_case/state/last-attempt"
+
+if grep -q 'application-secret\|release-secret' "$success_case/events.log" "$failure_case/events.log" "$post_switch_case/events.log"; then
+	printf '%s\n' 'release timeline leaked a credential' >&2
 	exit 1
 fi
 

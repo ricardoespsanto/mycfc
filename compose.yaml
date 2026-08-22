@@ -133,6 +133,8 @@ services:
     environment:
       E2E_BASE_URL: http://e2e-app:8080
       MAILPIT_API_BASE: http://mailpit:8025
+      PLAYWRIGHT_WORKERS: ${PLAYWRIGHT_WORKERS:-2}
+      E2E_JSON_OUTPUT: ${E2E_JSON_OUTPUT:-}
       CI: "true"
     command:
       - /bin/sh

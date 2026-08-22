@@ -26,6 +26,7 @@ go.work.sum
 
 /bin
 /tmp
+/.cache
 /node_modules
 **/.terraform/
 **/*.tfstate
@@ -49,3 +50,4 @@ go.work.sum
 /test-results
 /artifacts/ui-review
 /artifacts/coverage
+/artifacts/e2e-worker-trials

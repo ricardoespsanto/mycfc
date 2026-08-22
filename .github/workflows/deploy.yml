@@ -75,12 +75,19 @@ jobs:
           push: true
           tags: |
             ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.git_tag }}
-            ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.release_tag }}
           labels: |
             org.opencontainers.image.revision=${{ steps.image-refs.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+      - name: Prepare release promotion
+        id: release-ref
+        env:
+          GIT_SHA: ${{ steps.image-refs.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "${#GIT_SHA}" -eq 40
+          echo "release_tag=release-$(date -u +%Y%m%d%H%M%S)-$GIT_SHA" >> "$GITHUB_OUTPUT"
       - name: Verify and promote the immutable image
         id: image
         env:
@@ -88,14 +95,16 @@ jobs:
           ECR_REPOSITORY_NAME: mycfc-production
           GIT_SHA: ${{ steps.image-refs.outputs.sha }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
-          RELEASE_TAG: ${{ steps.image-refs.outputs.release_tag }}
+          RELEASE_TAG: ${{ steps.release-ref.outputs.release_tag }}
         run: sh deployment/publish-release-image.sh
       - name: Promote the tested image for production pickup
+        id: publication
         env:
           RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
           test -n "$RELEASE_TAG"
+          echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Write deployment summary
         run: |
           {
@@ -104,5 +113,6 @@ jobs:
             echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
             echo "- Release tag: \`${{ steps.image.outputs.release_tag }}\`"
+            echo "- Publication completed: \`${{ steps.publication.outputs.published_at }}\`"
             echo "- The Hetzner pull-release timer will deploy this immutable release."
           } >> "$GITHUB_STEP_SUMMARY"
