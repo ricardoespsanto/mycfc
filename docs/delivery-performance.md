@@ -41,9 +41,23 @@ replace the harness's initial failure class with the reviewed classification.
 Do not use Playwright `--repeat-each`: the suite contains deliberately ordered,
 stateful journeys.
 
-As of 2026-08-22, the worker override and evidence harness exist, but the
-required 20-run comparison has not been performed. Two workers therefore remain
-the default and no scaling result is accepted yet.
+The representative hosted comparison completed successfully on 2026-08-22 in
+[GitHub Actions run 32580529387](https://github.com/ricardoespsanto/mycfc/actions/runs/32580529387).
+All 20 samples at each worker count used the same Linux X64 Ubuntu 24 runner,
+tested merge SHA `4e17694707eeb9d08081242af11314c1349e397d`, and inventory
+hash. Every one of the 60 rows recorded 51 discovered tests, 20 passes, 31
+expected skips, and zero unexpected results, flakes, or retries. Browser-time
+results were:
+
+| Workers | Median | p90 | Change from two workers |
+| --- | ---: | ---: | ---: |
+| 2 | 79.819s | 80.744s | baseline |
+| 3 | 74.488s | 75.697s | 6.7% faster |
+| 4 | 73.306s | 73.940s | 8.2% faster |
+
+Four workers were fastest but did not reach the required 20% median reduction.
+Two workers therefore remain the accepted CI default; the evidence does not
+justify adopting either candidate.
 
 ## Release pickup latency (#181)
 
