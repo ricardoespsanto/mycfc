@@ -531,7 +531,9 @@ test.describe('authentication', () => {
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();
-    await expect(page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' })).toBeVisible();
+    const equipmentPhoto = page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' });
+    await expect(equipmentPhoto).toBeVisible();
+    await expect.poll(() => equipmentPhoto.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
     await expect(page.getByRole('heading', { name: 'Histórico do equipamento' })).toBeVisible();
     await expect(page.getByText('Equipamento atualizado')).toBeVisible();
     await expect(page.getByText('Fotografia atualizada')).toBeVisible();

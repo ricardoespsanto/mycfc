@@ -80,7 +80,11 @@ func TestTrustedProxyUsesRightmostUntrustedForwardedAddress(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	handler := SecurityHeadersMiddleware(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := SecurityHeadersMiddleware(true,
+		"https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com/private?signature=secret",
+		"https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
+		"https://attacker.example; script-src *",
+	)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
@@ -98,10 +102,26 @@ func TestSecurityHeaders(t *testing.T) {
 	for _, directive := range []string{
 		"script-src 'self' https://challenges.cloudflare.com",
 		"frame-src https://challenges.cloudflare.com",
+		"img-src 'self' data: blob: https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
 	} {
 		if !strings.Contains(csp, directive) {
 			t.Errorf("production CSP does not allow Turnstile: missing %q", directive)
 		}
+	}
+	if strings.Contains(csp, "signature=secret") || strings.Contains(csp, "attacker.example") || strings.Count(csp, "mycfc-production-repairs.s3.eu-west-1.amazonaws.com") != 1 {
+		t.Fatalf("production CSP contains an unsafe or duplicate image source: %q", csp)
+	}
+}
+
+func TestSecurityHeadersAllowsTheConfiguredLocalObjectOriginOnly(t *testing.T) {
+	handler := SecurityHeadersMiddleware(false, "http://127.0.0.1:9000/mycfc-local", "data:text/html,ignored")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin/fleet", nil))
+	csp := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' data: blob: http://127.0.0.1:9000;") || strings.Contains(csp, "ignored") {
+		t.Fatalf("local CSP = %q", csp)
 	}
 }
 
