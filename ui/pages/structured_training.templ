@@ -84,6 +84,18 @@ type StructuredTrainingSummaryItem struct{ Label, Value, Certainty string }
 type StructuredTrainingWeekSummary struct {
 	PlannedWater, SupportingWork, Actual []StructuredTrainingSummaryItem
 }
+type StructuredTrainingCycleWeek struct {
+	ID, Title, DateRange, PlannedLoad, PlannerURL string
+	Modalities                                  []string
+	MissingLoad, MissingModalities, Direct       bool
+}
+type StructuredTrainingCycleTarget struct { ID, Label, Status string }
+type StructuredTrainingCycle struct {
+	ID, GroupID, GroupName, Season, ParentID, ParentName, Name, LevelLabel, Goals, Focus, DateRange, Warning string
+	Version                                                                                                   int32
+	Weeks                                                                                                     []StructuredTrainingCycleWeek
+	Targets                                                                                                   []StructuredTrainingCycleTarget
+}
 type StructuredTrainingAudience struct {
 	AthleteName, GroupID, GroupName, Scope string
 	MemberCount                            int
@@ -99,6 +111,15 @@ type StructuredTrainingGroupForm struct {
 type StructuredTrainingWeekForm struct {
 	GroupID, Title, Description, WeekStart, PlannedLoad string
 	Errors                                              validation.FieldErrors
+}
+type StructuredTrainingCycleForm struct {
+	CycleID, GroupID, Name, LevelLabel, Goals, Focus, Version string
+	WeekIDs, ChildCycleIDs, TargetEventIDs                    map[string]bool
+	Errors                                                                    validation.FieldErrors
+}
+type StructuredTrainingCycleCopyForm struct {
+	CycleID, Name, FirstMonday string
+	Errors                     validation.FieldErrors
 }
 type StructuredTrainingSessionForm struct {
 	PlanID, Title, Description, StartsAt, EndsAt, EntryKind string
@@ -121,6 +142,7 @@ type StructuredTrainingPage struct {
 	Success, Error, OpenForm                                    string
 	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
 	Audiences, PlannerAudiences                                 []StructuredTrainingAudience
+	Cycles                                                       []StructuredTrainingCycle
 	Subjects                                                    []StructuredTrainingSubjectChoice
 	AllSubjectsSelected                                         bool
 	Routines                                                    []StructuredTrainingRoutine
@@ -138,6 +160,8 @@ type StructuredTrainingPage struct {
 	PlannerReturnURL                                            string
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
+	CycleForm                                                   StructuredTrainingCycleForm
+	CycleCopyForm                                               StructuredTrainingCycleCopyForm
 	SessionForm                                                 StructuredTrainingSessionForm
 	SegmentForm                                                 StructuredTrainingSegmentForm
 	BlockForm                                                   StructuredTrainingBlockForm
@@ -176,6 +200,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		if page.Management {
 			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
 				<a href="#training-plan">Plano semanal</a>
+				<a href="#training-cycles">Ciclos</a>
 				<a href="#training-variations">Variações</a>
 				<a href="#training-publication">Publicar</a>
 				<a href="#training-routines">Rotinas</a>
@@ -495,6 +520,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			}
 		</section>
 		if page.Management {
+			@structuredCycleManagement(page)
 			@structuredVariationManagement(page)
 			@structuredPublicationManagement(page)
 			@structuredRoutineLibrary(page)
@@ -635,6 +661,176 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 
 func structuredSubjectLabel(subject StructuredTrainingSubjectChoice) string { if subject.Self { return subject.Name + " (eu)" }; return subject.Name }
 func structuredPlannerReturnURL(page StructuredTrainingPage) string { if page.PlannerReturnURL != "" { return page.PlannerReturnURL }; return "/admin/treinos/estruturados#training-plan" }
+
+templ structuredCycleManagement(page StructuredTrainingPage) {
+	<section id="training-cycles" class="module" data-tab-panel>
+		@components.SectionHeading("Horizonte alargado", "Ciclos de treino", "Agrupe semanas sem alterar os seus rascunhos, publicações ou prescrições históricas.")
+		<div class="training-actions">
+			<button class="action action--primary" type="button" data-dialog-open="create-training-cycle">Criar ciclo</button>
+		</div>
+		if len(page.Cycles) == 0 {
+			@components.EmptyState("Ainda sem ciclos", "O planeamento semanal continua disponível. Crie um ciclo apenas quando precisar de organizar várias semanas.")
+		}
+		for _, cycle := range page.Cycles {
+			<article class="record-item record-item--stacked" aria-labelledby={ "training-cycle-" + cycle.ID }>
+				<div class="record-item__copy">
+					if cycle.LevelLabel != "" {
+						<p class="eyebrow">{ cycle.LevelLabel }</p>
+					}
+					<h3 id={ "training-cycle-" + cycle.ID }>{ cycle.Name }</h3>
+					<p class="record-meta">{ cycle.GroupName } · { cycle.Season }
+						if cycle.DateRange != "" {
+							<span> · { cycle.DateRange }</span>
+						}
+					</p>
+					if cycle.ParentName != "" {
+						<p><strong>Estrutura superior:</strong> { cycle.ParentName }</p>
+					}
+					if cycle.Goals != "" {
+						<p class="preserve-lines"><strong>Objetivos:</strong> { cycle.Goals }</p>
+					}
+					if cycle.Focus != "" {
+						<p class="preserve-lines"><strong>Fase ou foco:</strong> { cycle.Focus }</p>
+					}
+					if len(cycle.Targets) > 0 {
+						<p><strong>Competições-alvo</strong></p>
+						<ul class="record-list">
+							for _, target := range cycle.Targets {
+								<li>{ target.Label }
+									if target.Status == "CANCELLED" {
+										<span class="status-badge status-badge--muted">Cancelada</span>
+									}
+								</li>
+							}
+						</ul>
+					}
+					if cycle.Warning != "" {
+						<div class="notice notice--info" role="status"><p>{ cycle.Warning }</p></div>
+					}
+					<ol class="record-list" aria-label={ "Semanas de " + cycle.Name }>
+						for _, week := range cycle.Weeks {
+							<li class="nested-record">
+								<p><a href={ templ.SafeURL(week.PlannerURL) }><strong>{ week.Title }</strong></a> · { week.DateRange }</p>
+								<p class="record-meta">
+									if week.PlannedLoad != "" {
+										<span>Carga planeada: { week.PlannedLoad }</span>
+									} else {
+										<span>Carga planeada não definida</span>
+									}
+									if len(week.Modalities) > 0 {
+										<span> · Modalidades: { strings.Join(week.Modalities, ", ") }</span>
+									} else {
+										<span> · Modalidades ainda não definidas</span>
+									}
+								</p>
+							</li>
+						}
+					</ol>
+					<div class="training-actions">
+						<button class="action action--quiet" type="button" data-dialog-open={ "edit-training-cycle-" + cycle.ID }>Editar ciclo</button>
+						<button class="action action--quiet" type="button" data-dialog-open={ "copy-training-cycle-" + cycle.ID }>Copiar ciclo</button>
+					</div>
+				</div>
+			</article>
+			@structuredCycleEditDialog(page, cycle)
+			@structuredCycleCopyDialog(page, cycle)
+		}
+		@structuredCycleCreateDialog(page)
+	</section>
+}
+
+templ structuredCycleFields(page StructuredTrainingPage, form StructuredTrainingCycleForm, prefix string, editing bool) {
+	@components.RequiredNote()
+	if !editing {
+		@components.FieldLabel(prefix+"-group", "Grupo", true)
+		<select id={ prefix+"-group" } name="group_id" required><option value="">Selecione</option>
+			for _, choice := range page.Groups {
+				<option value={ choice.ID } selected?={ choice.ID == form.GroupID }>{ choice.Name }</option>
+			}
+		</select>
+		@components.FieldErrorMessage("group_id", form.Errors["group_id"])
+	}
+	@components.FieldLabel(prefix+"-name", "Nome", true)
+	<input id={ prefix+"-name" } name="name" value={ form.Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", form.Errors["name"])
+	@components.FieldLabel(prefix+"-level", "Designação usada pela equipa (opcional)", false)
+	<input id={ prefix+"-level" } name="level_label" value={ form.LevelLabel } maxlength="80" aria-describedby={ prefix+"-level-help" }/>
+	<small id={ prefix+"-level-help" }>Por exemplo, mesociclo ou bloco. MyCFC não impõe uma metodologia.</small>
+	@components.FieldLabel(prefix+"-goals", "Objetivos (opcional)", false)
+	<textarea id={ prefix+"-goals" } name="goals" maxlength="4000">{ form.Goals }</textarea>
+	@components.FieldLabel(prefix+"-focus", "Fase ou foco (opcional)", false)
+	<textarea id={ prefix+"-focus" } name="phase_focus_notes" maxlength="4000">{ form.Focus }</textarea>
+	<fieldset id={ prefix+"-weeks" }><legend>Semanas diretas do ciclo (opcional)</legend><p class="field-help">Selecione semanas do mesmo grupo e época. Agrupar uma semana não altera o seu rascunho nem a publicação.</p>
+		for _, choice := range page.Weeks {
+			<label class="check-row"><input type="checkbox" name="week_id" value={ choice.ID } checked?={ form.WeekIDs[choice.ID] }/> <span>{ choice.Name }</span></label>
+		}
+		@components.FieldErrorMessage("week_id", form.Errors["week_id"])
+	</fieldset>
+	<fieldset id={ prefix+"-children" }><legend>Estruturas incluídas (opcional)</legend><p class="field-help">Uma estrutura superior pode agregar ciclos do mesmo grupo e época sem retirar as semanas aos ciclos inferiores.</p>
+		for _, candidate := range page.Cycles {
+			if candidate.ID != form.CycleID && (candidate.ParentID == "" || candidate.ParentID == form.CycleID) {
+				<label class="check-row"><input type="checkbox" name="child_cycle_id" value={ candidate.ID } checked?={ form.ChildCycleIDs[candidate.ID] }/> <span>{ candidate.GroupName } · { candidate.Season } · { candidate.Name }</span></label>
+			}
+		}
+		@components.FieldErrorMessage("child_cycle_id", form.Errors["child_cycle_id"])
+	</fieldset>
+	<p class="field-help">Selecione pelo menos uma semana direta ou uma estrutura incluída.</p>
+	if len(page.CompetitionEvents) > 0 {
+		<fieldset><legend>Competições-alvo (opcional)</legend>
+			for _, choice := range page.CompetitionEvents {
+				<label class="check-row"><input type="checkbox" name="target_event_id" value={ choice.ID } checked?={ form.TargetEventIDs[choice.ID] }/> <span>{ choice.Name }</span></label>
+			}
+		</fieldset>
+	}
+}
+
+templ structuredCycleCreateDialog(page StructuredTrainingPage) {
+	<dialog id="create-training-cycle" class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle" } aria-labelledby="create-training-cycle-title" open?={ page.OpenForm == "cycle" }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Planeamento opcional</p><h3 id="create-training-cycle-title">Criar ciclo</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CycleForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "create-cycle-group"}, {Key: "name", Field: "create-cycle-name"}, {Key: "week_id", Field: "create-cycle-weeks"}, {Key: "child_cycle_id", Field: "create-cycle-children"}}))
+		<form class="form-layout" method="post" action="/admin/treinos/estruturados/ciclos">@page.CSRFField
+			@structuredCycleFields(page, page.CycleForm, "create-cycle", false)
+			<button type="submit">Criar ciclo</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCycleEditDialog(page StructuredTrainingPage, cycle StructuredTrainingCycle) {
+	<dialog id={ "edit-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-" + cycle.ID } aria-labelledby={ "edit-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-" + cycle.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">{ cycle.GroupName } · { cycle.Season }</p><h3 id={ "edit-training-cycle-title-" + cycle.ID }>Editar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		@components.FieldErrorMessage("form", structuredCycleEditForm(page, cycle).Errors["form"])
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID) }>@page.CSRFField<input type="hidden" name="version" value={ structuredCycleEditForm(page, cycle).Version }/>
+			@structuredCycleFields(page, structuredCycleEditForm(page, cycle), "edit-cycle-"+cycle.ID, true)
+			<button type="submit">Guardar ciclo</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCycleCopyDialog(page StructuredTrainingPage, cycle StructuredTrainingCycle) {
+	<dialog id={ "copy-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-copy-" + cycle.ID } aria-labelledby={ "copy-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-copy-" + cycle.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Cópia independente</p><h3 id={ "copy-training-cycle-title-" + cycle.ID }>Copiar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID + "/copiar") }>@page.CSRFField
+			<p class="field-help">Cria semanas e sessões editáveis com novos identificadores. Publicações, respostas de atletas e competições-alvo não são copiadas.</p>
+			@components.FieldErrorMessage("form", structuredCycleCopyForm(page, cycle).Errors["form"])
+			@components.FieldLabel("copy-cycle-name-"+cycle.ID, "Nome do novo ciclo", true)<input id={ "copy-cycle-name-"+cycle.ID } name="name" value={ structuredCycleCopyForm(page, cycle).Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", structuredCycleCopyForm(page, cycle).Errors["name"])
+			@components.FieldLabel("copy-cycle-start-"+cycle.ID, "Primeira segunda-feira", true)<input id={ "copy-cycle-start-"+cycle.ID } name="first_monday" type="date" value={ structuredCycleCopyForm(page, cycle).FirstMonday } required/>@components.FieldErrorMessage("first_monday", structuredCycleCopyForm(page, cycle).Errors["first_monday"])
+			<button type="submit">Criar cópia do ciclo</button>
+		</form>
+	</dialog>
+}
+
+func structuredCycleEditForm(page StructuredTrainingPage, cycle StructuredTrainingCycle) StructuredTrainingCycleForm {
+	if page.CycleForm.CycleID == cycle.ID { return page.CycleForm }
+	form := StructuredTrainingCycleForm{CycleID: cycle.ID, GroupID: cycle.GroupID, Name: cycle.Name, LevelLabel: cycle.LevelLabel, Goals: cycle.Goals, Focus: cycle.Focus, Version: fmt.Sprintf("%d", cycle.Version), WeekIDs: map[string]bool{}, ChildCycleIDs: map[string]bool{}, TargetEventIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
+	for _, week := range cycle.Weeks { if week.Direct { form.WeekIDs[week.ID] = true } }
+	for _, candidate := range page.Cycles { if candidate.ParentID == cycle.ID { form.ChildCycleIDs[candidate.ID] = true } }
+	for _, target := range cycle.Targets { form.TargetEventIDs[target.ID] = true }
+	return form
+}
+
+func structuredCycleCopyForm(page StructuredTrainingPage, cycle StructuredTrainingCycle) StructuredTrainingCycleCopyForm {
+	if page.CycleCopyForm.CycleID == cycle.ID { return page.CycleCopyForm }
+	return StructuredTrainingCycleCopyForm{CycleID: cycle.ID, Name: cycle.Name, Errors: validation.FieldErrors{}}
+}
 
 templ structuredVariationManagement(page StructuredTrainingPage) {
 	<section id="training-variations" class="module" aria-labelledby="training-variations-title" data-tab-panel>

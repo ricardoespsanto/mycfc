@@ -679,7 +679,13 @@ for (const dialog of document.querySelectorAll("dialog[data-task-surface], dialo
   dialog.addEventListener("keydown", (event) => containDialogFocus(dialog, event));
   dialog.querySelector("form[data-task-form]")?.addEventListener("input", () => { taskState(dialog).dirty = true; });
   dialog.querySelector("form[data-task-form]")?.addEventListener("change", () => { taskState(dialog).dirty = true; });
-	if (openOnLoad) openTaskDialog(dialog, null, false);
+	if (openOnLoad) {
+		const panel = dialog.closest("[data-tab-panel]");
+		const navigation = panel?.closest("[data-tab-scope]")?.querySelector("[data-collection-tabs]");
+		const tab = panel && navigation ? [...navigation.querySelectorAll("a")].find((link) => link.hash === `#${panel.id}`) : null;
+		if (tab) activateCollectionTab(tab);
+		openTaskDialog(dialog, null, false);
+	}
 }
 
 document.querySelector("dialog[data-task-discard-confirmation]")?.addEventListener("cancel", (event) => {

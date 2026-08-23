@@ -1,7 +1,7 @@
 -- name: CreateTrainingPlan :one
 INSERT INTO training_plans (title, description, programme_id, team_id, created_by_id)
 VALUES (sqlc.arg(title), sqlc.arg(description), sqlc.narg(programme_id), sqlc.narg(team_id), sqlc.arg(created_by_id))
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at;
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, cycle_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at;
 
 -- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)

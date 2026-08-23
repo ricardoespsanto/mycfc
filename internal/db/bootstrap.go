@@ -23,7 +23,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202608170002_training_week_load_percentage"
+	baselineIncludesThrough = "202608230001_training_cycles"
 )
 
 type RoleCredentials struct {

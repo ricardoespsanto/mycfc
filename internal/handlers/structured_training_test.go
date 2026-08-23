@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,14 @@ type structuredTrainingStoreStub struct {
 	manageArgs         []dbgen.CanManageStructuredTrainingGroupParams
 	created            []dbgen.CreateStructuredTrainingWeekParams
 	updatedLoads       []dbgen.UpdateStructuredTrainingWeekLoadParams
+	cycleRows          []dbgen.ListManagedTrainingCyclesRow
+	cycleWeekRows      []dbgen.ListManagedTrainingCycleWeeksRow
+	cycleTargetRows    []dbgen.ListManagedTrainingCycleTargetsRow
+	cycleInput         StructuredTrainingCycleInput
+	cycleCopyInput     StructuredTrainingCycleCopyInput
+	cycleManageable    bool
+	cycleSaveErr       error
+	cycleCopyErr       error
 	groups             []StructuredTrainingGroupInput
 	weekOK             bool
 	sessions           []dbgen.CreateStructuredTrainingSessionParams
@@ -291,6 +300,32 @@ func (s *structuredTrainingStoreStub) UpdateStructuredTrainingWeekLoad(_ context
 	return 1, s.updateWeekLoadErr
 }
 
+func (s *structuredTrainingStoreStub) ListManagedTrainingCycles(context.Context, dbgen.ListManagedTrainingCyclesParams) ([]dbgen.ListManagedTrainingCyclesRow, error) {
+	return s.cycleRows, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedTrainingCycleWeeks(context.Context, dbgen.ListManagedTrainingCycleWeeksParams) ([]dbgen.ListManagedTrainingCycleWeeksRow, error) {
+	return s.cycleWeekRows, nil
+}
+
+func (s *structuredTrainingStoreStub) ListManagedTrainingCycleTargets(context.Context, dbgen.ListManagedTrainingCycleTargetsParams) ([]dbgen.ListManagedTrainingCycleTargetsRow, error) {
+	return s.cycleTargetRows, nil
+}
+
+func (s *structuredTrainingStoreStub) CanManageTrainingCycle(_ context.Context, params dbgen.CanManageTrainingCycleParams) (bool, error) {
+	return s.cycleManageable || params.IsAdmin, nil
+}
+
+func (s *structuredTrainingStoreStub) SaveTrainingCycle(_ context.Context, input StructuredTrainingCycleInput) (dbgen.TrainingCycle, error) {
+	s.cycleInput = input
+	return dbgen.TrainingCycle{ID: uuid.New(), TrainingGroupID: input.TrainingGroupID}, s.cycleSaveErr
+}
+
+func (s *structuredTrainingStoreStub) CopyStructuredTrainingCycle(_ context.Context, input StructuredTrainingCycleCopyInput) (dbgen.TrainingCycle, error) {
+	s.cycleCopyInput = input
+	return dbgen.TrainingCycle{ID: uuid.New()}, s.cycleCopyErr
+}
+
 func (s *structuredTrainingStoreStub) CreateStructuredTrainingSession(_ context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
 	s.sessions = append(s.sessions, params)
 	return dbgen.TrainingSession{ID: uuid.New(), PlanID: params.PlanID, Title: params.Title}, s.createSessionErr
@@ -468,6 +503,66 @@ func TestCopyStructuredTrainingWeekAcceptsOnlyMondayAndPersistsCopyIntent(t *tes
 	h.CopyWeek(w, request("2026-09-08"))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("non-Monday response=%d", w.Code)
+	}
+}
+
+func TestCreateTrainingCycleCapturesScopedWeeksAndTargets(t *testing.T) {
+	groupID, weekOneID, weekTwoID, eventID, parentID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{manageable: true}
+	values := url.Values{
+		"group_id": {groupID.String()}, "child_cycle_id": {parentID.String()}, "name": {"Preparação nacional"},
+		"level_label": {"Mesociclo"}, "goals": {"Consolidar a técnica"}, "phase_focus_notes": {"Transformação"},
+		"week_id": {weekOneID.String(), weekTwoID.String()}, "target_event_id": {eventID.String()},
+	}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID}, http.MethodPost, "/admin/treinos/estruturados/ciclos", values, "", "", (StructuredTraining{Store: store, Location: time.UTC}).CreateCycle)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != structuredPlannerPath+"#training-cycles" {
+		t.Fatalf("response=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	input := store.cycleInput
+	if input.TrainingGroupID != groupID || input.ActorID != actorID || input.Name != "Preparação nacional" || input.LevelLabel != "Mesociclo" || len(input.ChildCycleIDs) != 1 || input.ChildCycleIDs[0] != parentID || len(input.WeekIDs) != 2 || len(input.TargetEventIDs) != 1 || input.TargetEventIDs[0] != eventID {
+		t.Fatalf("cycle input=%#v", input)
+	}
+}
+
+func TestUpdateTrainingCyclePreservesStaleVersionFeedback(t *testing.T) {
+	cycleID, weekID, actorID := uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{cycleManageable: true, cycleSaveErr: errStructuredTrainingCycleConflict}
+	values := url.Values{"version": {"3"}, "name": {"Bloco corrigido"}, "week_id": {weekID.String()}}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID}, http.MethodPost, "/admin/treinos/estruturados/ciclos/"+cycleID.String(), values, "id", cycleID.String(), (StructuredTraining{Store: store, Location: time.UTC}).UpdateCycle)
+	if response.Code != http.StatusConflict || store.cycleInput.ExpectedVersion != 3 || store.cycleInput.CycleID != cycleID || !strings.Contains(response.Body.String(), "alterado por outra pessoa") {
+		t.Fatalf("response=%d input=%#v body=%s", response.Code, store.cycleInput, response.Body.String())
+	}
+}
+
+func TestCopyTrainingCycleRequiresMondayAndCapturesIndependentCopy(t *testing.T) {
+	cycleID, actorID := uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{cycleManageable: true, cycleRows: []dbgen.ListManagedTrainingCyclesRow{{ID: cycleID, TrainingGroupID: uuid.New(), TrainingGroupName: "Competição", SeasonName: "2026", Name: "Preparação fonte", Version: 1}}}
+	values := url.Values{"name": {"Preparação seguinte"}, "first_monday": {"2026-09-07"}}
+	response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID}, http.MethodPost, "/admin/treinos/estruturados/ciclos/"+cycleID.String()+"/copiar", values, "id", cycleID.String(), (StructuredTraining{Store: store, Location: time.UTC}).CopyCycle)
+	if response.Code != http.StatusSeeOther || store.cycleCopyInput.SourceCycleID != cycleID || store.cycleCopyInput.ActorID != actorID || store.cycleCopyInput.Name != "Preparação seguinte" || !store.cycleCopyInput.FirstMonday.Equal(time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("response=%d input=%#v", response.Code, store.cycleCopyInput)
+	}
+	values.Set("first_monday", "2026-09-08")
+	response = performStructuredTrainingRequest(t, CurrentUser{ID: actorID}, http.MethodPost, "/admin/treinos/estruturados/ciclos/"+cycleID.String()+"/copiar", values, "id", cycleID.String(), (StructuredTraining{Store: store, Location: time.UTC}).CopyCycle)
+	body := response.Body.String()
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `data-task-open-on-load`) || !strings.Contains(body, `value="Preparação seguinte"`) || !strings.Contains(body, `value="2026-09-08"`) || !strings.Contains(body, "Selecione uma segunda-feira válida") {
+		t.Fatalf("Tuesday copy status=%d body=%s", response.Code, body)
+	}
+}
+
+func TestStructuredTrainingCyclesExposeHonestLoadAndModalityCoverage(t *testing.T) {
+	cycleID, groupID, weekOneID, weekTwoID, eventID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	load := int16(70)
+	cycles := structuredTrainingCycles(
+		[]dbgen.ListManagedTrainingCyclesRow{{ID: cycleID, TrainingGroupID: groupID, TrainingGroupName: "Cadetes", SeasonName: "2026/2027", Name: "Transformação", LevelLabel: "Mesociclo", Version: 2}},
+		[]dbgen.ListManagedTrainingCycleWeeksRow{{CycleID: cycleID, PlanID: weekOneID}, {CycleID: cycleID, PlanID: weekTwoID}},
+		[]dbgen.ListManagedTrainingCycleTargetsRow{{CycleID: cycleID, EventID: eventID, Title: "Taça", StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC), Valid: true}, Status: "ACTIVE"}},
+		[]pages.StructuredTrainingAudience{{GroupID: groupID.String(), GroupName: "Cadetes", Weeks: []pages.StructuredTrainingWeek{
+			{ID: weekOneID.String(), Title: "M41", DateRange: "05/10/2026–11/10/2026", PlannedLoad: fmt.Sprintf("%d%%", load), Sessions: []pages.StructuredTrainingSession{{Modalities: []string{"WATER", "GYM"}}}},
+			{ID: weekTwoID.String(), Title: "M42", DateRange: "12/10/2026–18/10/2026"},
+		}}}, time.UTC)
+	if len(cycles) != 1 || len(cycles[0].Weeks) != 2 || !strings.Contains(cycles[0].Warning, "1 de 2 semanas sem carga") || !strings.Contains(cycles[0].Warning, "1 de 2 semanas sem modalidades") || strings.Join(cycles[0].Weeks[0].Modalities, ",") != "Água,Ginásio" || len(cycles[0].Targets) != 1 {
+		t.Fatalf("cycles=%#v", cycles)
 	}
 }
 
