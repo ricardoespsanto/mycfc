@@ -19,12 +19,16 @@ type Querier interface {
 	AddPhotoAlbumProgrammeAudience(ctx context.Context, arg AddPhotoAlbumProgrammeAudienceParams) error
 	AddPhotoAlbumTeamAudience(ctx context.Context, arg AddPhotoAlbumTeamAudienceParams) error
 	AddStructuredTrainingGroupMember(ctx context.Context, arg AddStructuredTrainingGroupMemberParams) (int64, error)
+	AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCycleTargetParams) (int64, error)
 	AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error)
 	ArchivePhotoAlbum(ctx context.Context, arg ArchivePhotoAlbumParams) (PhotoAlbum, error)
+	AssignTrainingCycleChild(ctx context.Context, arg AssignTrainingCycleChildParams) (int64, error)
+	AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error)
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)
 	CanManageStructuredTrainingGroup(ctx context.Context, arg CanManageStructuredTrainingGroupParams) (bool, error)
 	CanManageStructuredTrainingWeek(ctx context.Context, arg CanManageStructuredTrainingWeekParams) (bool, error)
+	CanManageTrainingCycle(ctx context.Context, arg CanManageTrainingCycleParams) (bool, error)
 	CancelEvent(ctx context.Context, arg CancelEventParams) (Event, error)
 	CancelMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CancelTrainingSession(ctx context.Context, arg CancelTrainingSessionParams) (TrainingSession, error)
@@ -32,7 +36,10 @@ type Querier interface {
 	CheckInEventResponse(ctx context.Context, arg CheckInEventResponseParams) (int64, error)
 	ClaimEmailOutbox(ctx context.Context, arg ClaimEmailOutboxParams) (ClaimEmailOutboxRow, error)
 	ClaimNextActivitySyncJob(ctx context.Context, startedAt pgtype.Timestamptz) (ActivitySyncJob, error)
+	ClearManageableTrainingCycleTargets(ctx context.Context, arg ClearManageableTrainingCycleTargetsParams) error
 	ClearMemberProfilePhoto(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
+	ClearTrainingCycleChildren(ctx context.Context, cycleID uuid.UUID) error
+	ClearTrainingCycleWeeks(ctx context.Context, cycleID uuid.UUID) error
 	CompleteActivitySyncJob(ctx context.Context, arg CompleteActivitySyncJobParams) (ActivitySyncJob, error)
 	CompleteEmailOutbox(ctx context.Context, arg CompleteEmailOutboxParams) (int64, error)
 	CompleteMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
@@ -68,6 +75,7 @@ type Querier interface {
 	CreateSuggestion(ctx context.Context, arg CreateSuggestionParams) (CreateSuggestionRow, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	CreateTrainingCopyEvent(ctx context.Context, arg CreateTrainingCopyEventParams) error
+	CreateTrainingCycle(ctx context.Context, arg CreateTrainingCycleParams) (TrainingCycle, error)
 	CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlanParams) (TrainingPlan, error)
 	CreateTrainingPlanPublication(ctx context.Context, arg CreateTrainingPlanPublicationParams) (TrainingPlanPublication, error)
 	CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (TrainingPrescription, error)
@@ -133,6 +141,8 @@ type Querier interface {
 	GetStructuredSessionPlanID(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error)
 	GetSyncedActivityByProviderID(ctx context.Context, arg GetSyncedActivityByProviderIDParams) (SyncedActivity, error)
 	GetTeamByID(ctx context.Context, id uuid.UUID) (Team, error)
+	GetTrainingCycleCopySource(ctx context.Context, cycleID uuid.UUID) (TrainingCycle, error)
+	GetTrainingCycleWeekScope(ctx context.Context, planID uuid.UUID) (GetTrainingCycleWeekScopeRow, error)
 	GetTrainingPrescriptionForViewer(ctx context.Context, arg GetTrainingPrescriptionForViewerParams) (GetTrainingPrescriptionForViewerRow, error)
 	GetTrainingSessionForEdit(ctx context.Context, id uuid.UUID) (GetTrainingSessionForEditRow, error)
 	GetTrainingVariationPlanID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
@@ -176,6 +186,9 @@ type Querier interface {
 	ListFeatureFlags(ctx context.Context) ([]ListFeatureFlagsRow, error)
 	ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error)
 	ListManagedStructuredCompetitionEvents(ctx context.Context, arg ListManagedStructuredCompetitionEventsParams) ([]ListManagedStructuredCompetitionEventsRow, error)
+	ListManagedTrainingCycleTargets(ctx context.Context, arg ListManagedTrainingCycleTargetsParams) ([]ListManagedTrainingCycleTargetsRow, error)
+	ListManagedTrainingCycleWeeks(ctx context.Context, arg ListManagedTrainingCycleWeeksParams) ([]ListManagedTrainingCycleWeeksRow, error)
+	ListManagedTrainingCycles(ctx context.Context, arg ListManagedTrainingCyclesParams) ([]ListManagedTrainingCyclesRow, error)
 	ListManagedTrainingGroupMembers(ctx context.Context, arg ListManagedTrainingGroupMembersParams) ([]ListManagedTrainingGroupMembersRow, error)
 	ListManagedTrainingPublicationStates(ctx context.Context, arg ListManagedTrainingPublicationStatesParams) ([]ListManagedTrainingPublicationStatesRow, error)
 	ListManagedTrainingVariationGroups(ctx context.Context, arg ListManagedTrainingVariationGroupsParams) ([]ListManagedTrainingVariationGroupsRow, error)
@@ -202,6 +215,7 @@ type Querier interface {
 	ListSuggestionsForRequester(ctx context.Context, arg ListSuggestionsForRequesterParams) ([]ListSuggestionsForRequesterRow, error)
 	ListSuggestionsForTriage(ctx context.Context, arg ListSuggestionsForTriageParams) ([]ListSuggestionsForTriageRow, error)
 	ListTeamsForEventAuthoring(ctx context.Context) ([]ListTeamsForEventAuthoringRow, error)
+	ListTrainingCycleWeekCopySources(ctx context.Context, cycleID uuid.UUID) ([]ListTrainingCycleWeekCopySourcesRow, error)
 	ListTrainingPlansForAdmin(ctx context.Context, rowLimit int32) ([]ListTrainingPlansForAdminRow, error)
 	ListTrainingPlansForAuthoring(ctx context.Context, arg ListTrainingPlansForAuthoringParams) ([]ListTrainingPlansForAuthoringRow, error)
 	ListTrainingPlansForCoach(ctx context.Context, arg ListTrainingPlansForCoachParams) ([]ListTrainingPlansForCoachRow, error)
@@ -217,6 +231,7 @@ type Querier interface {
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	LockStructuredTrainingPlanForPublication(ctx context.Context, planID uuid.UUID) (LockStructuredTrainingPlanForPublicationRow, error)
+	LockTrainingCycles(ctx context.Context, cycleIds []uuid.UUID) ([]TrainingCycle, error)
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
 	MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedActivityDeletedParams) (SyncedActivity, error)
 	MoveGymExercise(ctx context.Context, arg MoveGymExerciseParams) (bool, error)
@@ -254,6 +269,7 @@ type Querier interface {
 	UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatusParams) (RepairRequest, error)
 	UpdateStructuredTrainingWeekLoad(ctx context.Context, arg UpdateStructuredTrainingWeekLoadParams) (int64, error)
 	UpdateSuggestionTriage(ctx context.Context, arg UpdateSuggestionTriageParams) (int64, error)
+	UpdateTrainingCycle(ctx context.Context, arg UpdateTrainingCycleParams) (TrainingCycle, error)
 	UpdateTrainingSession(ctx context.Context, arg UpdateTrainingSessionParams) (TrainingSession, error)
 	UpsertActivityConnection(ctx context.Context, arg UpsertActivityConnectionParams) (ActivityConnection, error)
 	UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error)

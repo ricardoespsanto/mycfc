@@ -1927,6 +1927,30 @@ type TrainingCopyEvent struct {
 	CopiedAt        pgtype.Timestamptz `json:"copied_at"`
 }
 
+type TrainingCycle struct {
+	ID              uuid.UUID          `json:"id"`
+	TrainingGroupID uuid.UUID          `json:"training_group_id"`
+	SeasonID        uuid.UUID          `json:"season_id"`
+	ParentCycleID   *uuid.UUID         `json:"parent_cycle_id"`
+	Name            string             `json:"name"`
+	LevelLabel      string             `json:"level_label"`
+	Goals           string             `json:"goals"`
+	PhaseFocusNotes string             `json:"phase_focus_notes"`
+	Version         int32              `json:"version"`
+	CreatedByID     uuid.UUID          `json:"created_by_id"`
+	UpdatedByID     uuid.UUID          `json:"updated_by_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrainingCycleCompetitionTarget struct {
+	CycleID   uuid.UUID          `json:"cycle_id"`
+	EventID   uuid.UUID          `json:"event_id"`
+	Notes     string             `json:"notes"`
+	AddedByID uuid.UUID          `json:"added_by_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type TrainingGroup struct {
 	ID          uuid.UUID          `json:"id"`
 	Name        string             `json:"name"`
@@ -1962,6 +1986,7 @@ type TrainingPlan struct {
 	TeamID                *uuid.UUID         `json:"team_id"`
 	TrainingGroupID       *uuid.UUID         `json:"training_group_id"`
 	SeasonID              *uuid.UUID         `json:"season_id"`
+	CycleID               *uuid.UUID         `json:"cycle_id"`
 	WeekStart             pgtype.Date        `json:"week_start"`
 	PlannedLoadPercentage *int16             `json:"planned_load_percentage"`
 	CreatedByID           uuid.UUID          `json:"created_by_id"`

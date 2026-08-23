@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
@@ -16,6 +17,8 @@ var errStructuredVariationMemberScope = errors.New("variation member is outside 
 var errStructuredVariationCrewCapacity = errors.New("variation crew does not match the craft capacity")
 var errStructuredTrainingPublicationConflict = errors.New("structured training plan changed before publication")
 var errStructuredTrainingPublicationVariationConflict = errors.New("structured training variation conflict prevents publication")
+var errStructuredTrainingCycleScope = errors.New("training cycle weeks must share one group and season")
+var errStructuredTrainingCycleConflict = errors.New("training cycle changed before update")
 
 type StructuredTrainingGroupInput struct {
 	Params        dbgen.CreateStructuredTrainingGroupParams
@@ -69,6 +72,28 @@ type StructuredWeekCopyInput struct {
 	ActorID      uuid.UUID
 }
 
+type StructuredTrainingCycleInput struct {
+	CycleID         uuid.UUID
+	TrainingGroupID uuid.UUID
+	ExpectedVersion int32
+	Name            string
+	LevelLabel      string
+	Goals           string
+	PhaseFocusNotes string
+	WeekIDs         []uuid.UUID
+	ChildCycleIDs   []uuid.UUID
+	TargetEventIDs  []uuid.UUID
+	ActorID         uuid.UUID
+	IsAdmin         bool
+}
+
+type StructuredTrainingCycleCopyInput struct {
+	SourceCycleID uuid.UUID
+	FirstMonday   time.Time
+	Name          string
+	ActorID       uuid.UUID
+}
+
 type StructuredDayCopyInput struct {
 	SourcePlanID, TargetPlanID uuid.UUID
 	SourceDate, TargetDate     time.Time
@@ -100,6 +125,12 @@ type StructuredTrainingStore interface {
 	CreateStructuredTrainingWeek(context.Context, dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error)
 	CanManageStructuredTrainingWeek(context.Context, dbgen.CanManageStructuredTrainingWeekParams) (bool, error)
 	UpdateStructuredTrainingWeekLoad(context.Context, dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error)
+	ListManagedTrainingCycles(context.Context, dbgen.ListManagedTrainingCyclesParams) ([]dbgen.ListManagedTrainingCyclesRow, error)
+	ListManagedTrainingCycleWeeks(context.Context, dbgen.ListManagedTrainingCycleWeeksParams) ([]dbgen.ListManagedTrainingCycleWeeksRow, error)
+	ListManagedTrainingCycleTargets(context.Context, dbgen.ListManagedTrainingCycleTargetsParams) ([]dbgen.ListManagedTrainingCycleTargetsRow, error)
+	CanManageTrainingCycle(context.Context, dbgen.CanManageTrainingCycleParams) (bool, error)
+	SaveTrainingCycle(context.Context, StructuredTrainingCycleInput) (dbgen.TrainingCycle, error)
+	CopyStructuredTrainingCycle(context.Context, StructuredTrainingCycleCopyInput) (dbgen.TrainingCycle, error)
 	CreateStructuredTrainingSession(context.Context, dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error)
 	CreateSegment(context.Context, StructuredTrainingSegmentInput) (uuid.UUID, error)
 	CreateTrainingSegmentBlock(context.Context, dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error)
@@ -150,7 +181,45 @@ type structuredTrainingDB interface {
 	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
 
-type PostgresStructuredTrainingStore struct{ Pool structuredTrainingDB }
+type structuredTrainingCycleTx interface {
+	Commit(context.Context) error
+	Rollback(context.Context) error
+}
+
+type structuredTrainingCycleQueries interface {
+	LockTrainingCycles(context.Context, []uuid.UUID) ([]dbgen.TrainingCycle, error)
+	GetTrainingCycleWeekScope(context.Context, uuid.UUID) (dbgen.GetTrainingCycleWeekScopeRow, error)
+	CreateTrainingCycle(context.Context, dbgen.CreateTrainingCycleParams) (dbgen.TrainingCycle, error)
+	UpdateTrainingCycle(context.Context, dbgen.UpdateTrainingCycleParams) (dbgen.TrainingCycle, error)
+	ClearTrainingCycleChildren(context.Context, uuid.UUID) error
+	AssignTrainingCycleChild(context.Context, dbgen.AssignTrainingCycleChildParams) (int64, error)
+	ClearTrainingCycleWeeks(context.Context, uuid.UUID) error
+	AssignTrainingWeekToCycle(context.Context, dbgen.AssignTrainingWeekToCycleParams) (int64, error)
+	ClearManageableTrainingCycleTargets(context.Context, dbgen.ClearManageableTrainingCycleTargetsParams) error
+	AddTrainingCycleTarget(context.Context, dbgen.AddTrainingCycleTargetParams) (int64, error)
+	GetTrainingCycleCopySource(context.Context, uuid.UUID) (dbgen.TrainingCycle, error)
+	ListTrainingCycleWeekCopySources(context.Context, uuid.UUID) ([]dbgen.ListTrainingCycleWeekCopySourcesRow, error)
+	CreateStructuredTrainingWeek(context.Context, dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error)
+	ListStructuredSessionSnapshotsForPlan(context.Context, uuid.UUID) ([]dbgen.ListStructuredSessionSnapshotsForPlanRow, error)
+	RestoreTrainingSession(context.Context, dbgen.RestoreTrainingSessionParams) (uuid.UUID, error)
+	CreateTrainingCopyEvent(context.Context, dbgen.CreateTrainingCopyEventParams) error
+}
+
+type PostgresStructuredTrainingStore struct {
+	Pool         structuredTrainingDB
+	beginCycleTx func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error)
+}
+
+func (s PostgresStructuredTrainingStore) cycleTransaction(ctx context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+	if s.beginCycleTx != nil {
+		return s.beginCycleTx(ctx)
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return tx, dbgen.New(tx), nil
+}
 
 func (s PostgresStructuredTrainingStore) queries() *dbgen.Queries { return dbgen.New(s.Pool) }
 
@@ -269,6 +338,249 @@ func (s PostgresStructuredTrainingStore) CanManageStructuredTrainingWeek(ctx con
 
 func (s PostgresStructuredTrainingStore) UpdateStructuredTrainingWeekLoad(ctx context.Context, params dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error) {
 	return s.queries().UpdateStructuredTrainingWeekLoad(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingCycles(ctx context.Context, params dbgen.ListManagedTrainingCyclesParams) ([]dbgen.ListManagedTrainingCyclesRow, error) {
+	return s.queries().ListManagedTrainingCycles(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingCycleWeeks(ctx context.Context, params dbgen.ListManagedTrainingCycleWeeksParams) ([]dbgen.ListManagedTrainingCycleWeeksRow, error) {
+	return s.queries().ListManagedTrainingCycleWeeks(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) ListManagedTrainingCycleTargets(ctx context.Context, params dbgen.ListManagedTrainingCycleTargetsParams) ([]dbgen.ListManagedTrainingCycleTargetsRow, error) {
+	return s.queries().ListManagedTrainingCycleTargets(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) CanManageTrainingCycle(ctx context.Context, params dbgen.CanManageTrainingCycleParams) (bool, error) {
+	return s.queries().CanManageTrainingCycle(ctx, params)
+}
+
+func (s PostgresStructuredTrainingStore) SaveTrainingCycle(ctx context.Context, input StructuredTrainingCycleInput) (cycle dbgen.TrainingCycle, err error) {
+	if len(input.WeekIDs) == 0 && len(input.ChildCycleIDs) == 0 {
+		return cycle, errStructuredTrainingCycleScope
+	}
+	tx, queries, err := s.cycleTransaction(ctx)
+	if err != nil {
+		return cycle, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	sort.Slice(input.ChildCycleIDs, func(left, right int) bool {
+		return input.ChildCycleIDs[left].String() < input.ChildCycleIDs[right].String()
+	})
+	sort.Slice(input.WeekIDs, func(left, right int) bool { return input.WeekIDs[left].String() < input.WeekIDs[right].String() })
+	cycleIDsToLock := append([]uuid.UUID{}, input.ChildCycleIDs...)
+	if input.CycleID != uuid.Nil {
+		cycleIDsToLock = append(cycleIDsToLock, input.CycleID)
+	}
+	sort.Slice(cycleIDsToLock, func(left, right int) bool { return cycleIDsToLock[left].String() < cycleIDsToLock[right].String() })
+	lockedCycles, err := queries.LockTrainingCycles(ctx, cycleIDsToLock)
+	if err != nil {
+		return cycle, err
+	}
+	lockedByID := make(map[uuid.UUID]dbgen.TrainingCycle, len(lockedCycles))
+	for _, locked := range lockedCycles {
+		lockedByID[locked.ID] = locked
+	}
+	if len(lockedByID) != len(cycleIDsToLock) {
+		return cycle, errStructuredTrainingCycleScope
+	}
+	if input.CycleID != uuid.Nil && lockedByID[input.CycleID].Version != input.ExpectedVersion {
+		return cycle, errStructuredTrainingCycleConflict
+	}
+	var groupID, seasonID uuid.UUID
+	seenChildren := make(map[uuid.UUID]bool, len(input.ChildCycleIDs))
+	for _, childID := range input.ChildCycleIDs {
+		if childID == input.CycleID || seenChildren[childID] {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		seenChildren[childID] = true
+		child, found := lockedByID[childID]
+		if !found || (child.ParentCycleID != nil && (input.CycleID == uuid.Nil || *child.ParentCycleID != input.CycleID)) {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		if groupID == uuid.Nil {
+			groupID, seasonID = child.TrainingGroupID, child.SeasonID
+		} else if child.TrainingGroupID != groupID || child.SeasonID != seasonID {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	seenWeeks := make(map[uuid.UUID]bool, len(input.WeekIDs))
+	for _, weekID := range input.WeekIDs {
+		if seenWeeks[weekID] {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		seenWeeks[weekID] = true
+		week, scopeErr := queries.GetTrainingCycleWeekScope(ctx, weekID)
+		if scopeErr != nil || week.TrainingGroupID == nil || week.SeasonID == nil {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		if week.CycleID != nil && (input.CycleID == uuid.Nil || *week.CycleID != input.CycleID) {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		if groupID == uuid.Nil {
+			groupID, seasonID = *week.TrainingGroupID, *week.SeasonID
+		} else if *week.TrainingGroupID != groupID || *week.SeasonID != seasonID {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	if input.CycleID == uuid.Nil {
+		if input.TrainingGroupID == uuid.Nil || input.TrainingGroupID != groupID {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		cycle, err = queries.CreateTrainingCycle(ctx, dbgen.CreateTrainingCycleParams{
+			TrainingGroupID: groupID, SeasonID: seasonID,
+			Name: input.Name, LevelLabel: input.LevelLabel, Goals: input.Goals,
+			PhaseFocusNotes: input.PhaseFocusNotes, CreatedByID: input.ActorID,
+		})
+	} else {
+		cycle, err = queries.UpdateTrainingCycle(ctx, dbgen.UpdateTrainingCycleParams{
+			Name: input.Name, LevelLabel: input.LevelLabel, Goals: input.Goals,
+			PhaseFocusNotes: input.PhaseFocusNotes, UpdatedByID: input.ActorID,
+			CycleID: input.CycleID, ExpectedVersion: input.ExpectedVersion,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cycle, errStructuredTrainingCycleConflict
+		}
+	}
+	if err != nil {
+		return cycle, err
+	}
+	if cycle.TrainingGroupID != groupID || cycle.SeasonID != seasonID {
+		return cycle, errStructuredTrainingCycleScope
+	}
+	if err = queries.ClearTrainingCycleChildren(ctx, cycle.ID); err != nil {
+		return cycle, err
+	}
+	for _, childID := range input.ChildCycleIDs {
+		rows, assignErr := queries.AssignTrainingCycleChild(ctx, dbgen.AssignTrainingCycleChildParams{ParentCycleID: cycle.ID, ChildCycleID: childID})
+		if assignErr != nil {
+			return cycle, assignErr
+		}
+		if rows != 1 {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	if err = queries.ClearTrainingCycleWeeks(ctx, cycle.ID); err != nil {
+		return cycle, err
+	}
+	for _, weekID := range input.WeekIDs {
+		rows, assignErr := queries.AssignTrainingWeekToCycle(ctx, dbgen.AssignTrainingWeekToCycleParams{CycleID: cycle.ID, PlanID: weekID})
+		if assignErr != nil {
+			return cycle, assignErr
+		}
+		if rows != 1 {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	if err = queries.ClearManageableTrainingCycleTargets(ctx, dbgen.ClearManageableTrainingCycleTargetsParams{CycleID: cycle.ID, IsAdmin: input.IsAdmin, UserID: input.ActorID}); err != nil {
+		return cycle, err
+	}
+	seenTargets := make(map[uuid.UUID]bool, len(input.TargetEventIDs))
+	for _, eventID := range input.TargetEventIDs {
+		if seenTargets[eventID] {
+			continue
+		}
+		seenTargets[eventID] = true
+		rows, targetErr := queries.AddTrainingCycleTarget(ctx, dbgen.AddTrainingCycleTargetParams{
+			AddedByID: input.ActorID, EventID: eventID, CycleID: cycle.ID,
+			IsAdmin: input.IsAdmin, UserID: input.ActorID,
+		})
+		if targetErr != nil {
+			return cycle, targetErr
+		}
+		if rows != 1 {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return cycle, err
+	}
+	return cycle, nil
+}
+
+func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context.Context, input StructuredTrainingCycleCopyInput) (cycle dbgen.TrainingCycle, err error) {
+	tx, queries, err := s.cycleTransaction(ctx)
+	if err != nil {
+		return cycle, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	source, err := queries.GetTrainingCycleCopySource(ctx, input.SourceCycleID)
+	if err != nil {
+		return cycle, err
+	}
+	weeks, err := queries.ListTrainingCycleWeekCopySources(ctx, input.SourceCycleID)
+	if err != nil || len(weeks) == 0 || !weeks[0].WeekStart.Valid || weeks[0].TrainingGroupID == nil {
+		return cycle, errStructuredTrainingCycleScope
+	}
+	sourceStart := weeks[0].WeekStart.Time
+	sourceStartUTC := time.Date(sourceStart.Year(), sourceStart.Month(), sourceStart.Day(), 0, 0, 0, 0, time.UTC)
+	targetStartUTC := time.Date(input.FirstMonday.Year(), input.FirstMonday.Month(), input.FirstMonday.Day(), 0, 0, 0, 0, time.UTC)
+	shiftDays := int(targetStartUTC.Sub(sourceStartUTC).Hours() / 24)
+	createdPlans := make([]dbgen.TrainingPlan, 0, len(weeks))
+	for _, sourceWeek := range weeks {
+		if !sourceWeek.WeekStart.Valid || sourceWeek.TrainingGroupID == nil {
+			return cycle, errStructuredTrainingCycleScope
+		}
+		sourceWeekUTC := time.Date(sourceWeek.WeekStart.Time.Year(), sourceWeek.WeekStart.Time.Month(), sourceWeek.WeekStart.Time.Day(), 0, 0, 0, 0, time.UTC)
+		days := int(sourceWeekUTC.Sub(sourceStartUTC).Hours() / 24)
+		targetStart := input.FirstMonday.AddDate(0, 0, days)
+		created, createErr := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{
+			Title: sourceWeek.Title, Description: sourceWeek.Description,
+			WeekStart:             pgtype.Date{Time: targetStart, Valid: true},
+			PlannedLoadPercentage: sourceWeek.PlannedLoadPercentage,
+			CreatedByID:           input.ActorID, GroupID: *sourceWeek.TrainingGroupID,
+		})
+		if createErr != nil {
+			return cycle, createErr
+		}
+		snapshots, snapshotErr := queries.ListStructuredSessionSnapshotsForPlan(ctx, sourceWeek.ID)
+		if snapshotErr != nil {
+			return cycle, snapshotErr
+		}
+		for _, row := range snapshots {
+			destinationID, restoreErr := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{
+				Snapshot: row.Snapshot, PlanID: created.ID,
+				StartsAt:    pgtype.Timestamptz{Time: row.StartsAt.Time.AddDate(0, 0, shiftDays), Valid: true},
+				CreatedByID: input.ActorID,
+			})
+			if restoreErr != nil {
+				return cycle, restoreErr
+			}
+			if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+				return cycle, err
+			}
+		}
+		if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: sourceWeek.ID, SourceUpdatedAt: sourceWeek.UpdatedAt, DestinationKind: "WEEK", DestinationID: created.ID, CopiedByID: input.ActorID}); err != nil {
+			return cycle, err
+		}
+		createdPlans = append(createdPlans, created)
+	}
+	first := createdPlans[0]
+	if first.TrainingGroupID == nil || first.SeasonID == nil {
+		return cycle, errStructuredTrainingCycleScope
+	}
+	cycle, err = queries.CreateTrainingCycle(ctx, dbgen.CreateTrainingCycleParams{
+		TrainingGroupID: *first.TrainingGroupID, SeasonID: *first.SeasonID, Name: input.Name,
+		LevelLabel: source.LevelLabel, Goals: source.Goals, PhaseFocusNotes: source.PhaseFocusNotes,
+		CreatedByID: input.ActorID,
+	})
+	if err != nil {
+		return cycle, err
+	}
+	for _, plan := range createdPlans {
+		rows, assignErr := queries.AssignTrainingWeekToCycle(ctx, dbgen.AssignTrainingWeekToCycleParams{CycleID: cycle.ID, PlanID: plan.ID})
+		if assignErr != nil || rows != 1 {
+			return cycle, errStructuredTrainingCycleScope
+		}
+	}
+	if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: source.ID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "CYCLE", DestinationID: cycle.ID, CopiedByID: input.ActorID}); err != nil {
+		return cycle, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return cycle, err
+	}
+	return cycle, nil
 }
 
 func (s PostgresStructuredTrainingStore) CreateStructuredTrainingSession(ctx context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
