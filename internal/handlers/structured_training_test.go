@@ -34,8 +34,12 @@ type structuredTrainingStoreStub struct {
 	cycleInput         StructuredTrainingCycleInput
 	cycleCopyInput     StructuredTrainingCycleCopyInput
 	cycleManageable    bool
+	cycleManageErr     error
 	cycleSaveErr       error
 	cycleCopyErr       error
+	cycleRowsErr       error
+	cycleWeekRowsErr   error
+	cycleTargetRowsErr error
 	groups             []StructuredTrainingGroupInput
 	weekOK             bool
 	sessions           []dbgen.CreateStructuredTrainingSessionParams
@@ -185,6 +189,124 @@ func (tx *structuredTrainingSuccessTransactionFake) Commit(context.Context) erro
 	return nil
 }
 
+type structuredTrainingCycleQueriesFake struct {
+	cycles           []dbgen.TrainingCycle
+	weekScopes       map[uuid.UUID]dbgen.GetTrainingCycleWeekScopeRow
+	copySource       dbgen.TrainingCycle
+	copyWeeks        []dbgen.ListTrainingCycleWeekCopySourcesRow
+	snapshots        map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow
+	createdCycle     dbgen.TrainingCycle
+	createdPlans     []dbgen.TrainingPlan
+	createdPlanIndex int
+	assignedKids     []uuid.UUID
+	assignedWeeks    []uuid.UUID
+	targets          []uuid.UUID
+	copyEvents       []dbgen.CreateTrainingCopyEventParams
+	restored         []dbgen.RestoreTrainingSessionParams
+	updated          bool
+	failAt           string
+}
+
+func (q *structuredTrainingCycleQueriesFake) failure(operation string) error {
+	if q.failAt == operation {
+		return errors.New("database unavailable")
+	}
+	return nil
+}
+
+func (q *structuredTrainingCycleQueriesFake) LockTrainingCycles(context.Context, []uuid.UUID) ([]dbgen.TrainingCycle, error) {
+	return q.cycles, q.failure("lock cycles")
+}
+func (q *structuredTrainingCycleQueriesFake) GetTrainingCycleWeekScope(_ context.Context, id uuid.UUID) (dbgen.GetTrainingCycleWeekScopeRow, error) {
+	row, ok := q.weekScopes[id]
+	if err := q.failure("week scope"); err != nil {
+		return row, err
+	}
+	if !ok {
+		return row, pgx.ErrNoRows
+	}
+	return row, nil
+}
+func (q *structuredTrainingCycleQueriesFake) CreateTrainingCycle(_ context.Context, params dbgen.CreateTrainingCycleParams) (dbgen.TrainingCycle, error) {
+	q.createdCycle.TrainingGroupID, q.createdCycle.SeasonID = params.TrainingGroupID, params.SeasonID
+	q.createdCycle.Name, q.createdCycle.LevelLabel = params.Name, params.LevelLabel
+	q.createdCycle.Goals, q.createdCycle.PhaseFocusNotes = params.Goals, params.PhaseFocusNotes
+	return q.createdCycle, q.failure("create cycle")
+}
+func (q *structuredTrainingCycleQueriesFake) UpdateTrainingCycle(_ context.Context, params dbgen.UpdateTrainingCycleParams) (dbgen.TrainingCycle, error) {
+	q.updated = true
+	q.createdCycle.Name = params.Name
+	if q.failAt == "update missing" {
+		return dbgen.TrainingCycle{}, pgx.ErrNoRows
+	}
+	return q.createdCycle, q.failure("update cycle")
+}
+func (q *structuredTrainingCycleQueriesFake) ClearTrainingCycleChildren(context.Context, uuid.UUID) error {
+	return q.failure("clear children")
+}
+func (q *structuredTrainingCycleQueriesFake) AssignTrainingCycleChild(_ context.Context, params dbgen.AssignTrainingCycleChildParams) (int64, error) {
+	q.assignedKids = append(q.assignedKids, params.ChildCycleID)
+	if err := q.failure("assign child"); err != nil {
+		return 0, err
+	}
+	if q.failAt == "assign child rows" {
+		return 0, nil
+	}
+	return 1, nil
+}
+func (q *structuredTrainingCycleQueriesFake) ClearTrainingCycleWeeks(context.Context, uuid.UUID) error {
+	return q.failure("clear weeks")
+}
+func (q *structuredTrainingCycleQueriesFake) AssignTrainingWeekToCycle(_ context.Context, params dbgen.AssignTrainingWeekToCycleParams) (int64, error) {
+	q.assignedWeeks = append(q.assignedWeeks, params.PlanID)
+	if err := q.failure("assign week"); err != nil {
+		return 0, err
+	}
+	if q.failAt == "assign week rows" {
+		return 0, nil
+	}
+	return 1, nil
+}
+func (q *structuredTrainingCycleQueriesFake) ClearManageableTrainingCycleTargets(context.Context, dbgen.ClearManageableTrainingCycleTargetsParams) error {
+	return q.failure("clear targets")
+}
+func (q *structuredTrainingCycleQueriesFake) AddTrainingCycleTarget(_ context.Context, params dbgen.AddTrainingCycleTargetParams) (int64, error) {
+	q.targets = append(q.targets, params.EventID)
+	if err := q.failure("add target"); err != nil {
+		return 0, err
+	}
+	if q.failAt == "add target rows" {
+		return 0, nil
+	}
+	return 1, nil
+}
+func (q *structuredTrainingCycleQueriesFake) GetTrainingCycleCopySource(context.Context, uuid.UUID) (dbgen.TrainingCycle, error) {
+	return q.copySource, q.failure("copy source")
+}
+func (q *structuredTrainingCycleQueriesFake) ListTrainingCycleWeekCopySources(context.Context, uuid.UUID) ([]dbgen.ListTrainingCycleWeekCopySourcesRow, error) {
+	return q.copyWeeks, q.failure("copy weeks")
+}
+func (q *structuredTrainingCycleQueriesFake) CreateStructuredTrainingWeek(_ context.Context, params dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error) {
+	if err := q.failure("create week"); err != nil {
+		return dbgen.TrainingPlan{}, err
+	}
+	plan := q.createdPlans[q.createdPlanIndex]
+	q.createdPlanIndex++
+	plan.Title, plan.Description, plan.WeekStart = params.Title, params.Description, params.WeekStart
+	return plan, nil
+}
+func (q *structuredTrainingCycleQueriesFake) ListStructuredSessionSnapshotsForPlan(_ context.Context, id uuid.UUID) ([]dbgen.ListStructuredSessionSnapshotsForPlanRow, error) {
+	return q.snapshots[id], q.failure("snapshots")
+}
+func (q *structuredTrainingCycleQueriesFake) RestoreTrainingSession(_ context.Context, params dbgen.RestoreTrainingSessionParams) (uuid.UUID, error) {
+	q.restored = append(q.restored, params)
+	return uuid.New(), q.failure("restore session")
+}
+func (q *structuredTrainingCycleQueriesFake) CreateTrainingCopyEvent(_ context.Context, params dbgen.CreateTrainingCopyEventParams) error {
+	q.copyEvents = append(q.copyEvents, params)
+	return q.failure("copy event")
+}
+
 type structuredTrainingSuccessRowFake struct{}
 
 func (structuredTrainingSuccessRowFake) Scan(dest ...any) error {
@@ -301,19 +423,19 @@ func (s *structuredTrainingStoreStub) UpdateStructuredTrainingWeekLoad(_ context
 }
 
 func (s *structuredTrainingStoreStub) ListManagedTrainingCycles(context.Context, dbgen.ListManagedTrainingCyclesParams) ([]dbgen.ListManagedTrainingCyclesRow, error) {
-	return s.cycleRows, nil
+	return s.cycleRows, s.cycleRowsErr
 }
 
 func (s *structuredTrainingStoreStub) ListManagedTrainingCycleWeeks(context.Context, dbgen.ListManagedTrainingCycleWeeksParams) ([]dbgen.ListManagedTrainingCycleWeeksRow, error) {
-	return s.cycleWeekRows, nil
+	return s.cycleWeekRows, s.cycleWeekRowsErr
 }
 
 func (s *structuredTrainingStoreStub) ListManagedTrainingCycleTargets(context.Context, dbgen.ListManagedTrainingCycleTargetsParams) ([]dbgen.ListManagedTrainingCycleTargetsRow, error) {
-	return s.cycleTargetRows, nil
+	return s.cycleTargetRows, s.cycleTargetRowsErr
 }
 
 func (s *structuredTrainingStoreStub) CanManageTrainingCycle(_ context.Context, params dbgen.CanManageTrainingCycleParams) (bool, error) {
-	return s.cycleManageable || params.IsAdmin, nil
+	return s.cycleManageable || params.IsAdmin, s.cycleManageErr
 }
 
 func (s *structuredTrainingStoreStub) SaveTrainingCycle(_ context.Context, input StructuredTrainingCycleInput) (dbgen.TrainingCycle, error) {
@@ -547,6 +669,51 @@ func TestCopyTrainingCycleRequiresMondayAndCapturesIndependentCopy(t *testing.T)
 	body := response.Body.String()
 	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `data-task-open-on-load`) || !strings.Contains(body, `value="Preparação seguinte"`) || !strings.Contains(body, `value="2026-09-08"`) || !strings.Contains(body, "Selecione uma segunda-feira válida") {
 		t.Fatalf("Tuesday copy status=%d body=%s", response.Code, body)
+	}
+}
+
+func TestTrainingCycleHandlersFailClosedAndPreserveValidationFeedback(t *testing.T) {
+	cycleID, groupID, weekID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	validCycle := url.Values{"group_id": {groupID.String()}, "name": {"Preparação"}, "week_id": {weekID.String()}}
+	validUpdate := url.Values{"version": {"2"}, "name": {"Preparação revista"}, "week_id": {weekID.String()}}
+	validCopy := url.Values{"name": {"Preparação seguinte"}, "first_monday": {"2026-09-07"}}
+	for _, tc := range []struct {
+		name    string
+		handler func(StructuredTraining) http.HandlerFunc
+		values  url.Values
+		pathID  string
+		store   structuredTrainingStoreStub
+		want    int
+	}{
+		{"create invalid group", func(h StructuredTraining) http.HandlerFunc { return h.CreateCycle }, url.Values{"group_id": {"invalid"}, "name": {"x"}}, "", structuredTrainingStoreStub{}, http.StatusUnprocessableEntity},
+		{"create forbidden", func(h StructuredTraining) http.HandlerFunc { return h.CreateCycle }, validCycle, "", structuredTrainingStoreStub{}, http.StatusForbidden},
+		{"create scope", func(h StructuredTraining) http.HandlerFunc { return h.CreateCycle }, validCycle, "", structuredTrainingStoreStub{manageable: true, cycleSaveErr: errStructuredTrainingCycleScope}, http.StatusUnprocessableEntity},
+		{"create service", func(h StructuredTraining) http.HandlerFunc { return h.CreateCycle }, validCycle, "", structuredTrainingStoreStub{manageable: true, cycleSaveErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"update invalid id", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, "invalid", structuredTrainingStoreStub{}, http.StatusForbidden},
+		{"update forbidden", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, cycleID.String(), structuredTrainingStoreStub{}, http.StatusForbidden},
+		{"update manage service", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, cycleID.String(), structuredTrainingStoreStub{cycleManageErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"update invalid version", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, url.Values{"version": {"bad"}, "name": {"Preparação"}, "week_id": {weekID.String()}}, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true}, http.StatusUnprocessableEntity},
+		{"update scope", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true, cycleSaveErr: errStructuredTrainingCycleScope}, http.StatusUnprocessableEntity},
+		{"update service", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true, cycleSaveErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"update success", func(h StructuredTraining) http.HandlerFunc { return h.UpdateCycle }, validUpdate, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true}, http.StatusSeeOther},
+		{"copy invalid id", func(h StructuredTraining) http.HandlerFunc { return h.CopyCycle }, validCopy, "invalid", structuredTrainingStoreStub{}, http.StatusForbidden},
+		{"copy forbidden", func(h StructuredTraining) http.HandlerFunc { return h.CopyCycle }, validCopy, cycleID.String(), structuredTrainingStoreStub{}, http.StatusForbidden},
+		{"copy manage service", func(h StructuredTraining) http.HandlerFunc { return h.CopyCycle }, validCopy, cycleID.String(), structuredTrainingStoreStub{cycleManageErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"copy scope", func(h StructuredTraining) http.HandlerFunc { return h.CopyCycle }, validCopy, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true, cycleCopyErr: errStructuredTrainingCycleScope}, http.StatusUnprocessableEntity},
+		{"copy service", func(h StructuredTraining) http.HandlerFunc { return h.CopyCycle }, validCopy, cycleID.String(), structuredTrainingStoreStub{cycleManageable: true, cycleCopyErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/admin/treinos/estruturados/ciclos"
+			pathKey := ""
+			if tc.pathID != "" {
+				path += "/" + tc.pathID
+				pathKey = "id"
+			}
+			response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID}, http.MethodPost, path, tc.values, pathKey, tc.pathID, tc.handler(StructuredTraining{Store: &tc.store, Location: time.UTC}))
+			if response.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.want, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -824,6 +991,9 @@ func TestStructuredTrainingManagerIndexFailsClosedForEveryRequiredRead(t *testin
 		{"variation groups", structuredTrainingStoreStub{variationGroupsErr: errors.New("database unavailable")}},
 		{"variation matches", structuredTrainingStoreStub{variationMatchesErr: errors.New("database unavailable")}},
 		{"publication states", structuredTrainingStoreStub{publicationStatesErr: errors.New("database unavailable")}},
+		{"training cycles", structuredTrainingStoreStub{cycleRowsErr: errors.New("database unavailable")}},
+		{"training cycle weeks", structuredTrainingStoreStub{cycleWeekRowsErr: errors.New("database unavailable")}},
+		{"training cycle targets", structuredTrainingStoreStub{cycleTargetRowsErr: errors.New("database unavailable")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/admin/treinos/estruturados", nil)
@@ -886,6 +1056,22 @@ func TestPostgresStructuredTrainingStorePropagatesDirectDatabaseFailures(t *test
 		}},
 		{"manage week", func() error {
 			_, err := store.CanManageStructuredTrainingWeek(ctx, dbgen.CanManageStructuredTrainingWeekParams{})
+			return err
+		}},
+		{"managed cycles", func() error {
+			_, err := store.ListManagedTrainingCycles(ctx, dbgen.ListManagedTrainingCyclesParams{})
+			return err
+		}},
+		{"managed cycle weeks", func() error {
+			_, err := store.ListManagedTrainingCycleWeeks(ctx, dbgen.ListManagedTrainingCycleWeeksParams{})
+			return err
+		}},
+		{"managed cycle targets", func() error {
+			_, err := store.ListManagedTrainingCycleTargets(ctx, dbgen.ListManagedTrainingCycleTargetsParams{})
+			return err
+		}},
+		{"manage cycle", func() error {
+			_, err := store.CanManageTrainingCycle(ctx, dbgen.CanManageTrainingCycleParams{})
 			return err
 		}},
 		{"update week load", func() error {
@@ -1000,10 +1186,169 @@ func TestPostgresStructuredTrainingStorePropagatesTransactionStartFailures(t *te
 			_, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{})
 			return err
 		}},
+		{"save cycle", func() error {
+			_, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{WeekIDs: []uuid.UUID{id}})
+			return err
+		}},
+		{"copy cycle", func() error {
+			_, err := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: id})
+			return err
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.call(); !errors.Is(err, want) {
 				t.Fatalf("error=%v want=%v", err, want)
+			}
+		})
+	}
+}
+
+func TestPostgresStructuredTrainingStoreSavesCyclesAtomically(t *testing.T) {
+	ctx := context.Background()
+	groupID, seasonID, weekID, cycleID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	targetID := uuid.New()
+	for _, tc := range []struct {
+		name   string
+		input  StructuredTrainingCycleInput
+		cycles []dbgen.TrainingCycle
+		update bool
+	}{
+		{
+			name:  "create",
+			input: StructuredTrainingCycleInput{TrainingGroupID: groupID, WeekIDs: []uuid.UUID{weekID}, TargetEventIDs: []uuid.UUID{targetID, targetID}, ActorID: actorID, Name: "Base", LevelLabel: "Sub-18", Goals: "Técnica", PhaseFocusNotes: "Acumulação"},
+		},
+		{
+			name:   "update",
+			input:  StructuredTrainingCycleInput{CycleID: cycleID, ExpectedVersion: 3, WeekIDs: []uuid.UUID{weekID}, ActorID: actorID, Name: "Revisto"},
+			cycles: []dbgen.TrainingCycle{{ID: cycleID, TrainingGroupID: groupID, SeasonID: seasonID, Version: 3}},
+			update: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cycleRef := tc.input.CycleID
+			var assignedCycle *uuid.UUID
+			if cycleRef != uuid.Nil {
+				assignedCycle = &cycleRef
+			}
+			queries := &structuredTrainingCycleQueriesFake{
+				cycles:       tc.cycles,
+				weekScopes:   map[uuid.UUID]dbgen.GetTrainingCycleWeekScopeRow{weekID: {ID: weekID, TrainingGroupID: &groupID, SeasonID: &seasonID, CycleID: assignedCycle}},
+				createdCycle: dbgen.TrainingCycle{ID: cycleID, TrainingGroupID: groupID, SeasonID: seasonID, Version: 4},
+			}
+			tx := &structuredTrainingSuccessTransactionFake{}
+			store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+				return tx, queries, nil
+			}}
+			cycle, err := store.SaveTrainingCycle(ctx, tc.input)
+			if err != nil || cycle.ID != cycleID || !tx.committed {
+				t.Fatalf("cycle=%+v committed=%v error=%v", cycle, tx.committed, err)
+			}
+			if queries.updated != tc.update || !reflect.DeepEqual(queries.assignedWeeks, []uuid.UUID{weekID}) {
+				t.Fatalf("updated=%v weeks=%v", queries.updated, queries.assignedWeeks)
+			}
+			if tc.name == "create" && !reflect.DeepEqual(queries.targets, []uuid.UUID{targetID}) {
+				t.Fatalf("targets=%v", queries.targets)
+			}
+		})
+	}
+}
+
+func TestPostgresStructuredTrainingStoreCopiesCyclesAtomically(t *testing.T) {
+	ctx := context.Background()
+	groupID, seasonID, sourceID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	weekOneID, weekTwoID, planOneID, planTwoID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	sessionID := uuid.New()
+	start := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	queries := &structuredTrainingCycleQueriesFake{
+		copySource: dbgen.TrainingCycle{ID: sourceID, TrainingGroupID: groupID, SeasonID: seasonID, LevelLabel: "Sénior", Goals: "Pico", PhaseFocusNotes: "Competição", UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
+		copyWeeks: []dbgen.ListTrainingCycleWeekCopySourcesRow{
+			{ID: weekOneID, Title: "Semana 1", TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
+			{ID: weekTwoID, Title: "Semana 2", TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start.AddDate(0, 0, 7), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
+		},
+		snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekOneID: {{ID: sessionID, StartsAt: pgtype.Timestamptz{Time: start.Add(9 * time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}, Snapshot: []byte(`{}`)}}},
+		createdPlans: []dbgen.TrainingPlan{{ID: planOneID, TrainingGroupID: &groupID, SeasonID: &seasonID}, {ID: planTwoID, TrainingGroupID: &groupID, SeasonID: &seasonID}},
+		createdCycle: dbgen.TrainingCycle{ID: uuid.New()},
+	}
+	tx := &structuredTrainingSuccessTransactionFake{}
+	store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+		return tx, queries, nil
+	}}
+	targetMonday := start.AddDate(0, 0, 28)
+	cycle, err := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: sourceID, FirstMonday: targetMonday, Name: "Cópia", ActorID: actorID})
+	if err != nil || cycle.ID == uuid.Nil || !tx.committed {
+		t.Fatalf("cycle=%+v committed=%v error=%v", cycle, tx.committed, err)
+	}
+	if !reflect.DeepEqual(queries.assignedWeeks, []uuid.UUID{planOneID, planTwoID}) || len(queries.restored) != 1 || len(queries.copyEvents) != 4 {
+		t.Fatalf("weeks=%v restored=%d events=%d", queries.assignedWeeks, len(queries.restored), len(queries.copyEvents))
+	}
+	if got := queries.restored[0].StartsAt.Time; !got.Equal(targetMonday.Add(9 * time.Hour)) {
+		t.Fatalf("restored start=%s", got)
+	}
+}
+
+func TestPostgresStructuredTrainingStoreRollsBackCycleSaveFailures(t *testing.T) {
+	ctx := context.Background()
+	groupID, seasonID, weekID, childID, actorID, targetID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, operation := range []string{"lock cycles", "week scope", "create cycle", "clear children", "assign child", "assign child rows", "clear weeks", "assign week", "assign week rows", "clear targets", "add target", "add target rows"} {
+		t.Run(operation, func(t *testing.T) {
+			queries := &structuredTrainingCycleQueriesFake{
+				failAt:       operation,
+				cycles:       []dbgen.TrainingCycle{{ID: childID, TrainingGroupID: groupID, SeasonID: seasonID}},
+				weekScopes:   map[uuid.UUID]dbgen.GetTrainingCycleWeekScopeRow{weekID: {ID: weekID, TrainingGroupID: &groupID, SeasonID: &seasonID}},
+				createdCycle: dbgen.TrainingCycle{ID: uuid.New(), TrainingGroupID: groupID, SeasonID: seasonID},
+			}
+			tx := &structuredTrainingSuccessTransactionFake{}
+			store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+				return tx, queries, nil
+			}}
+			_, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{TrainingGroupID: groupID, WeekIDs: []uuid.UUID{weekID}, ChildCycleIDs: []uuid.UUID{childID}, TargetEventIDs: []uuid.UUID{targetID}, ActorID: actorID})
+			if err == nil || tx.committed {
+				t.Fatalf("committed=%v error=%v", tx.committed, err)
+			}
+		})
+	}
+
+	t.Run("empty content", func(t *testing.T) {
+		store := PostgresStructuredTrainingStore{}
+		if _, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{}); !errors.Is(err, errStructuredTrainingCycleScope) {
+			t.Fatalf("error=%v", err)
+		}
+	})
+
+	t.Run("stale update", func(t *testing.T) {
+		cycleID := uuid.New()
+		queries := &structuredTrainingCycleQueriesFake{cycles: []dbgen.TrainingCycle{{ID: cycleID, TrainingGroupID: groupID, SeasonID: seasonID, Version: 2}}}
+		store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+			return &structuredTrainingSuccessTransactionFake{}, queries, nil
+		}}
+		_, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{CycleID: cycleID, ExpectedVersion: 1, WeekIDs: []uuid.UUID{weekID}})
+		if !errors.Is(err, errStructuredTrainingCycleConflict) {
+			t.Fatalf("error=%v", err)
+		}
+	})
+}
+
+func TestPostgresStructuredTrainingStoreRollsBackCycleCopyFailures(t *testing.T) {
+	ctx := context.Background()
+	groupID, seasonID, sourceID, weekID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	start := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	for _, operation := range []string{"copy source", "copy weeks", "create week", "snapshots", "restore session", "copy event", "create cycle", "assign week", "assign week rows"} {
+		t.Run(operation, func(t *testing.T) {
+			queries := &structuredTrainingCycleQueriesFake{
+				failAt:       operation,
+				copySource:   dbgen.TrainingCycle{ID: sourceID, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
+				copyWeeks:    []dbgen.ListTrainingCycleWeekCopySourcesRow{{ID: weekID, TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}}},
+				snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekID: {{ID: uuid.New(), StartsAt: pgtype.Timestamptz{Time: start, Valid: true}}}},
+				createdPlans: []dbgen.TrainingPlan{{ID: uuid.New(), TrainingGroupID: &groupID, SeasonID: &seasonID}},
+				createdCycle: dbgen.TrainingCycle{ID: uuid.New()},
+			}
+			tx := &structuredTrainingSuccessTransactionFake{}
+			store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+				return tx, queries, nil
+			}}
+			_, err := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: sourceID, FirstMonday: start, Name: "Cópia"})
+			if err == nil || tx.committed {
+				t.Fatalf("committed=%v error=%v", tx.committed, err)
 			}
 		})
 	}

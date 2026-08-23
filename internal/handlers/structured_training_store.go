@@ -181,7 +181,45 @@ type structuredTrainingDB interface {
 	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
 
-type PostgresStructuredTrainingStore struct{ Pool structuredTrainingDB }
+type structuredTrainingCycleTx interface {
+	Commit(context.Context) error
+	Rollback(context.Context) error
+}
+
+type structuredTrainingCycleQueries interface {
+	LockTrainingCycles(context.Context, []uuid.UUID) ([]dbgen.TrainingCycle, error)
+	GetTrainingCycleWeekScope(context.Context, uuid.UUID) (dbgen.GetTrainingCycleWeekScopeRow, error)
+	CreateTrainingCycle(context.Context, dbgen.CreateTrainingCycleParams) (dbgen.TrainingCycle, error)
+	UpdateTrainingCycle(context.Context, dbgen.UpdateTrainingCycleParams) (dbgen.TrainingCycle, error)
+	ClearTrainingCycleChildren(context.Context, uuid.UUID) error
+	AssignTrainingCycleChild(context.Context, dbgen.AssignTrainingCycleChildParams) (int64, error)
+	ClearTrainingCycleWeeks(context.Context, uuid.UUID) error
+	AssignTrainingWeekToCycle(context.Context, dbgen.AssignTrainingWeekToCycleParams) (int64, error)
+	ClearManageableTrainingCycleTargets(context.Context, dbgen.ClearManageableTrainingCycleTargetsParams) error
+	AddTrainingCycleTarget(context.Context, dbgen.AddTrainingCycleTargetParams) (int64, error)
+	GetTrainingCycleCopySource(context.Context, uuid.UUID) (dbgen.TrainingCycle, error)
+	ListTrainingCycleWeekCopySources(context.Context, uuid.UUID) ([]dbgen.ListTrainingCycleWeekCopySourcesRow, error)
+	CreateStructuredTrainingWeek(context.Context, dbgen.CreateStructuredTrainingWeekParams) (dbgen.TrainingPlan, error)
+	ListStructuredSessionSnapshotsForPlan(context.Context, uuid.UUID) ([]dbgen.ListStructuredSessionSnapshotsForPlanRow, error)
+	RestoreTrainingSession(context.Context, dbgen.RestoreTrainingSessionParams) (uuid.UUID, error)
+	CreateTrainingCopyEvent(context.Context, dbgen.CreateTrainingCopyEventParams) error
+}
+
+type PostgresStructuredTrainingStore struct {
+	Pool         structuredTrainingDB
+	beginCycleTx func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error)
+}
+
+func (s PostgresStructuredTrainingStore) cycleTransaction(ctx context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+	if s.beginCycleTx != nil {
+		return s.beginCycleTx(ctx)
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return tx, dbgen.New(tx), nil
+}
 
 func (s PostgresStructuredTrainingStore) queries() *dbgen.Queries { return dbgen.New(s.Pool) }
 
@@ -322,12 +360,11 @@ func (s PostgresStructuredTrainingStore) SaveTrainingCycle(ctx context.Context, 
 	if len(input.WeekIDs) == 0 && len(input.ChildCycleIDs) == 0 {
 		return cycle, errStructuredTrainingCycleScope
 	}
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, queries, err := s.cycleTransaction(ctx)
 	if err != nil {
 		return cycle, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
 	sort.Slice(input.ChildCycleIDs, func(left, right int) bool {
 		return input.ChildCycleIDs[left].String() < input.ChildCycleIDs[right].String()
 	})
@@ -463,12 +500,11 @@ func (s PostgresStructuredTrainingStore) SaveTrainingCycle(ctx context.Context, 
 }
 
 func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context.Context, input StructuredTrainingCycleCopyInput) (cycle dbgen.TrainingCycle, err error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, queries, err := s.cycleTransaction(ctx)
 	if err != nil {
 		return cycle, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
 	source, err := queries.GetTrainingCycleCopySource(ctx, input.SourceCycleID)
 	if err != nil {
 		return cycle, err
