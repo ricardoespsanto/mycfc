@@ -344,6 +344,21 @@ func TestAuthFallsBackWhenProfileSchemaIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestAuthDoesNotFallbackWhenProfileSchemaAccessIsForbidden(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{Users: currentUserLookup{
+		account:         dbgen.GetActiveAccountByIDRow{ID: id, Name: "Athlete", IsActive: true},
+		err:             &pgconn.PgError{Code: "42501"},
+		profileFallback: true,
+	}, Sessions: scs.New()}
+	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("protected handler called")
+	})))
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
 func authenticatedRequest(t *testing.T, sessions *scs.SessionManager, userID string, handler http.Handler) *httptest.ResponseRecorder {
 	return authenticatedRequestVersion(t, sessions, userID, 1, handler)
 }
