@@ -139,6 +139,55 @@ func TestRepairPostHTMXSuccessReplacesForm(t *testing.T) {
 	}
 }
 
+func TestRepairReturnsSafeErrorsForUnavailableDependencies(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name    string
+		store   *repairStoreFake
+		request func(Repair) *httptest.ResponseRecorder
+	}{
+		{"fleet equipment list", &repairStoreFake{listEquipmentErr: errors.New("equipment unavailable")}, func(h Repair) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(http.MethodGet, "/fleet", nil).WithContext(context.WithValue(context.Background(), currentUserKey{}, CurrentUser{ID: userID}))
+			w := httptest.NewRecorder()
+			h.Index(w, r)
+			return w
+		}},
+		{"fleet repair list", &repairStoreFake{listRepairsErr: errors.New("repairs unavailable")}, func(h Repair) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(http.MethodGet, "/fleet", nil).WithContext(context.WithValue(context.Background(), currentUserKey{}, CurrentUser{ID: userID}))
+			w := httptest.NewRecorder()
+			h.Index(w, r)
+			return w
+		}},
+		{"idempotency lookup", &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}, existingErr: errors.New("lookup unavailable")}, func(h Repair) *httptest.ResponseRecorder {
+			return repairResponse(t, h, userID, equipmentID, nil, false)
+		}},
+		{"equipment lookup", &repairStoreFake{equipmentErr: errors.New("equipment unavailable")}, func(h Repair) *httptest.ResponseRecorder {
+			return repairResponse(t, h, userID, equipmentID, nil, false)
+		}},
+		{"validation render", &repairStoreFake{listEquipmentErr: errors.New("equipment unavailable")}, func(h Repair) *httptest.ResponseRecorder {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			_ = writer.WriteField("idempotency_key", uuid.NewString())
+			_ = writer.WriteField("equipment_id", equipmentID.String())
+			_ = writer.WriteField("issue_description", "curta")
+			_ = writer.Close()
+			r := httptest.NewRequest(http.MethodPost, "/repairs", &body)
+			r.Header.Set("Content-Type", writer.FormDataContentType())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: userID}))
+			w := httptest.NewRecorder()
+			h.Post(w, r)
+			return w
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := tc.request(Repair{Store: tc.store})
+			if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Não foi possível concluir o pedido") {
+				t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func repairResponse(t *testing.T, handler Repair, userID, equipmentID uuid.UUID, photo []byte, htmx bool) *httptest.ResponseRecorder {
 	return repairResponseTo(t, handler, userID, equipmentID, photo, htmx, "")
 }
@@ -186,22 +235,29 @@ func pngPhoto(t *testing.T) []byte {
 }
 
 type repairStoreFake struct {
-	existing      *dbgen.RepairRequest
-	equipment     dbgen.Equipment
-	memberRepairs []dbgen.ListRepairRequestsForMembersRow
-	createErr     error
-	created       dbgen.CreateRepairRequestParams
-	creates       int
+	existing         *dbgen.RepairRequest
+	equipment        dbgen.Equipment
+	memberRepairs    []dbgen.ListRepairRequestsForMembersRow
+	createErr        error
+	existingErr      error
+	equipmentErr     error
+	listEquipmentErr error
+	listRepairsErr   error
+	created          dbgen.CreateRepairRequestParams
+	creates          int
 }
 
 func (s *repairStoreFake) GetRepairByIdempotencyKey(context.Context, uuid.UUID) (dbgen.RepairRequest, error) {
+	if s.existingErr != nil {
+		return dbgen.RepairRequest{}, s.existingErr
+	}
 	if s.existing != nil {
 		return *s.existing, nil
 	}
 	return dbgen.RepairRequest{}, pgx.ErrNoRows
 }
 func (s *repairStoreFake) GetEquipmentByID(context.Context, uuid.UUID) (dbgen.Equipment, error) {
-	return s.equipment, nil
+	return s.equipment, s.equipmentErr
 }
 func (s *repairStoreFake) CreateRepairRequest(_ context.Context, input dbgen.CreateRepairRequestParams) (dbgen.RepairRequest, error) {
 	s.creates++
@@ -212,10 +268,10 @@ func (s *repairStoreFake) CreateRepairRequest(_ context.Context, input dbgen.Cre
 	return dbgen.RepairRequest{ID: uuid.New(), ReportedByID: input.ReportedByID}, nil
 }
 func (s *repairStoreFake) ListOperationalEquipment(context.Context, int32) ([]dbgen.Equipment, error) {
-	return []dbgen.Equipment{s.equipment}, nil
+	return []dbgen.Equipment{s.equipment}, s.listEquipmentErr
 }
 func (s *repairStoreFake) ListRepairRequestsForMembers(context.Context, dbgen.ListRepairRequestsForMembersParams) ([]dbgen.ListRepairRequestsForMembersRow, error) {
-	return s.memberRepairs, nil
+	return s.memberRepairs, s.listRepairsErr
 }
 
 type repairObjectStoreFake struct{ puts, deletes int }

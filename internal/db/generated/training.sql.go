@@ -127,7 +127,7 @@ func (q *Queries) CreateCompetitionDocument(ctx context.Context, arg CreateCompe
 const createTrainingPlan = `-- name: CreateTrainingPlan :one
 INSERT INTO training_plans (title, description, programme_id, team_id, created_by_id)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, cycle_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at
 `
 
 type CreateTrainingPlanParams struct {
@@ -155,6 +155,7 @@ func (q *Queries) CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlan
 		&i.TeamID,
 		&i.TrainingGroupID,
 		&i.SeasonID,
+		&i.CycleID,
 		&i.WeekStart,
 		&i.PlannedLoadPercentage,
 		&i.CreatedByID,

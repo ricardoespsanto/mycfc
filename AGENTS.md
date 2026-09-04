@@ -1,5 +1,12 @@
 # Repository Guidance
 
+## Default Delivery Workflow
+
+- For every new MyCFC interaction, load and follow the project skill at `.agents/skills/mycfc-delivery/SKILL.md` as the default orchestration workflow. Treat the primary agent as delivery lead and the human as product and release authority.
+- Classify the request as discovery, refinement, implementation, review, release, or a direct question, then apply only the relevant workflow phases. Simple factual answers, status checks, and narrow read-only diagnostics do not require spawning the full team.
+- Use the named project agents in `.codex/agents` for bounded specialist work when their expertise materially improves the result. Do not activate every role by default, and do not let multiple agents write the same checkout.
+- Preserve the skill's separate human approval gates for GitHub writes, implementation, merging, deployment, and live-system changes. Approval at one gate never implies approval at a later gate.
+
 ## Current Scope
 
 - This is an implemented Go server-rendered application with authentication, membership and guardian workflows, programme dashboards, events, announcements, training, repairs, fleet operations, and administrator tooling. Treat `docs/implementation-status.md` as the concise source of truth for the remaining partial or deferred scope.

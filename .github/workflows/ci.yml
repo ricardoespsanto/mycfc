@@ -13,13 +13,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.changes.outputs.mode }}
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Pull-request classification compares the exact base and tested SHAs.
+          fetch-depth: 0
+      # Run classification code from the reviewed base, never from the PR.
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted-base
+      - name: Classify the change conservatively
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" = pull_request && -x .ci-trusted-base/scripts/classify-ci-change.sh ]]; then
+            .ci-trusted-base/scripts/classify-ci-change.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo 'mode=full' >> "$GITHUB_OUTPUT"
+          fi
+
+  documentation:
+    needs: classify
+    if: needs.classify.result == 'success' && needs.classify.outputs.mode == 'docs'
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Check documentation changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --check "$BASE_SHA...$HEAD_SHA"
+          ./scripts/classify-ci-change_test.sh
+
   generated-and-format:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       # actions/setup-go v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        id: setup-go
         with:
           go-version: 1.26.5
       # actions/setup-node v7.0.0
@@ -27,12 +77,19 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      - run: make tools
+      # actions/cache v5.0.5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: bin
+          key: ci-generation-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('Makefile') }}
+      - run: make ci-generate-tools
       - run: make generate
       - run: make fmt-check
       - run: git diff --exit-code
 
   foundation:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -49,12 +106,18 @@ jobs:
       - run: make verify-foundation
 
   quality:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The coverage gate compares the tested change with its PR/push base.
+          fetch-depth: 0
       # actions/setup-go v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        id: setup-go
         with:
           go-version: 1.26.5
           cache: true
@@ -63,9 +126,17 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      # actions/cache v5.0.5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: bin
+          key: ci-lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('Makefile') }}
       - name: Lint application, templates, workflows, containers, and Terraform
         run: make lint
       - name: Run unit coverage gate
+        env:
+          COVERAGE_CHANGED_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_REQUIRE_CHANGED_BASE: "1"
         run: make test-coverage
       - name: Upload unit coverage report
         if: always()
@@ -78,6 +149,8 @@ jobs:
           retention-days: 14
 
   integration:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -90,6 +163,8 @@ jobs:
       - run: CI=true make test-integration
 
   e2e:
+    needs: classify
+    if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.1
@@ -98,28 +173,37 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: 1.26.5
-      # actions/setup-node v7.0.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version-file: .node-version
-          cache: npm
       - run: CI=true make test-e2e-ci
 
   summary:
     if: always()
-    needs: [generated-and-format, foundation, quality, integration, e2e]
+    needs: [classify, documentation, generated-and-format, foundation, quality, integration, e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: Require all CI gates
         env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          CHANGE_MODE: ${{ needs.classify.outputs.mode }}
+          DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
           GENERATED_RESULT: ${{ needs.generated-and-format.result }}
           FOUNDATION_RESULT: ${{ needs.foundation.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
-          test "$GENERATED_RESULT" = success
-          test "$FOUNDATION_RESULT" = success
-          test "$QUALITY_RESULT" = success
-          test "$INTEGRATION_RESULT" = success
-          test "$E2E_RESULT" = success
+          test "$CLASSIFY_RESULT" = success
+          if [[ "$CHANGE_MODE" = docs ]]; then
+            test "$DOCUMENTATION_RESULT" = success
+            test "$GENERATED_RESULT" = skipped
+            test "$FOUNDATION_RESULT" = skipped
+            test "$QUALITY_RESULT" = skipped
+            test "$INTEGRATION_RESULT" = skipped
+            test "$E2E_RESULT" = skipped
+          else
+            test "$DOCUMENTATION_RESULT" = skipped
+            test "$GENERATED_RESULT" = success
+            test "$FOUNDATION_RESULT" = success
+            test "$QUALITY_RESULT" = success
+            test "$INTEGRATION_RESULT" = success
+            test "$E2E_RESULT" = success
+          fi

@@ -5,11 +5,13 @@ on:
     paths:
       - infra/**
       - Makefile
+      - .github/workflows/infra.yml
   push:
     branches: [main]
     paths:
       - infra/**
       - Makefile
+      - .github/workflows/infra.yml
   workflow_dispatch:
 
 permissions:
@@ -21,5 +23,17 @@ jobs:
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Resolve the pinned Terraform version
+        id: terraform
+        run: |
+          version=$(awk '$1 == "TERRAFORM_VERSION" && $2 == ":=" { print $3 }' Makefile)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # actions/cache v6.1.0
+      - name: Restore Terraform provider cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: .cache/terraform/plugin-cache
+          key: terraform-providers-${{ runner.os }}-${{ runner.arch }}-${{ steps.terraform.outputs.version }}-${{ hashFiles('infra/**/.terraform.lock.hcl') }}
       - name: Format, validate, and lint every Terraform root module
         run: make terraform-check

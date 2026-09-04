@@ -16,7 +16,7 @@ type EventForm struct {
     ID, Title, Description, EventType, StartsAt, EndsAt, Deadline, Capacity string
     DocumentTitle, DocumentURL, DocumentSource, DocumentReviewedOn string
 	ExpectedUpdatedAt string
-	Editing, AudienceLocked, HasDocument bool
+	Editing, Open, TaskRoute, AudienceLocked, HasDocument bool
     Programmes []EventProgramme
     Teams []EventTeam
     Errors validation.FieldErrors
@@ -27,6 +27,7 @@ type EventEditPage struct {
 	Form EventForm
 	CancellationErrors validation.FieldErrors
 }
+type EventCreatePage struct { Meta components.PageMeta; Form EventForm }
 type EventsPage struct {
     Meta components.PageMeta
     Management, CanManageEvents bool
@@ -92,14 +93,20 @@ templ eventsContent(page EventsPage) {
     if !page.Management {
         @eventDocumentsSection(page.Documents)
     }
-    if page.Management {
-        @EventAuthoringForm(page.Form)
-    }
     </div>
 }
 
+templ EventCreate(page EventCreatePage) { @components.Base(page.Meta, eventCreateContent(page)) }
+templ eventCreateContent(page EventCreatePage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "event-create-task", TitleID: "event-create-route-title", Eyebrow: "Coordenação · Eventos", Title: "Criar evento", Description: "Defina a data, os destinatários e a informação que será visível antes de publicar.", Variant: "sheet", ReturnURL: "/admin/eventos"}) {
+			@EventAuthoringForm(eventCreateForm(page.Form))
+		}
+	</div>
+}
+
 templ EventAuthoringForm(form EventForm) {
-    <details id={ eventFormDisclosureID(form) } class="module disclosure create-panel" data-create-panel open?={ form.Editing || len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">{ eventFormTitle(form) }</strong><small>{ eventFormSummary(form) }</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
+    <details id={ eventFormDisclosureID(form) } class={ eventFormClass(form) } data-create-panel?={ !form.TaskRoute } open?={ form.Open || form.Editing || len(form.Errors) > 0 } aria-labelledby="event-authoring-title"><summary><span><strong id="event-authoring-title">{ eventFormTitle(form) }</strong><small>{ eventFormSummary(form) }</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
         @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "state", Field: "event-title"}, {Key: "title", Field: "event-title"}, {Key: "description", Field: "event-description"}, {Key: "event_type", Field: "event-type"}, {Key: "starts_at", Field: "event-starts-at"}, {Key: "ends_at", Field: "event-ends-at"}, {Key: "response_deadline", Field: "event-deadline"}, {Key: "capacity", Field: "event-capacity"}, {Key: "document", Field: "event-document"}, {Key: "document_title", Field: "event-document-title"}, {Key: "document_url", Field: "event-document-url"}, {Key: "document_source", Field: "event-document-source"}, {Key: "document_reviewed_on", Field: "event-document-reviewed-on"}, {Key: "programme_id", Field: "event-audience"}, {Key: "team_id", Field: "event-audience"}, {Key: "audience", Field: "event-audience"}}))
         <form class="form-layout" method="post" action={ templ.SafeURL(eventFormAction(form)) }>@form.CSRFField
 			if form.Editing {
@@ -174,6 +181,8 @@ templ eventEditContent(page EventEditPage) {
 }
 
 func eventFormDisclosureID(form EventForm) string { if form.Editing { return "editar-evento" }; return "criar-evento" }
+func eventFormClass(form EventForm) string { if form.TaskRoute { return "module disclosure" }; return "module disclosure create-panel" }
+func eventCreateForm(form EventForm) EventForm { form.Open = true; form.TaskRoute = true; return form }
 func eventFormTitle(form EventForm) string { if form.Editing { return "Dados do evento" }; return "Criar evento" }
 func eventFormSummary(form EventForm) string { if form.Editing { return "Atualize data, lotação e participantes." }; return "Defina data, lotação e participantes." }
 func eventFormAction(form EventForm) string { if form.Editing { return "/admin/events/" + form.ID }; return "/admin/events" }
@@ -299,7 +308,7 @@ templ eventDocumentsSection(documents []EventDocument) {
 
 func eventPageActions(page EventsPage) []components.PageAction {
     if page.Management {
-        return []components.PageAction{{Label: "Criar evento", Href: "#criar-evento", Variant: "primary"}}
+        return []components.PageAction{{Label: "Criar evento", Href: "/admin/eventos/criar", Variant: "primary"}}
     }
     return nil
 }

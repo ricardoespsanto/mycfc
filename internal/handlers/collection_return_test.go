@@ -29,3 +29,20 @@ func TestSafeCollectionReturn(t *testing.T) {
 		}
 	}
 }
+
+func TestAdminCollectionReturn(t *testing.T) {
+	for _, tc := range []struct {
+		raw, path, want string
+	}{
+		{"/admin/noticias?page=2", "/admin/noticias", "/admin/noticias?page=2"},
+		{"/admin/albuns", "/admin/albuns", "/admin/albuns"},
+		{"/admin/noticias?page=01", "/admin/noticias", ""},
+		{"/admin/noticias?return_to=%2Fadmin%2Fnoticias", "/admin/noticias", ""},
+		{"https://example.test/admin/noticias", "/admin/noticias", ""},
+		{"/admin/fleet", "/admin/noticias", ""},
+	} {
+		if got := adminCollectionReturn(tc.raw, tc.path); got != tc.want {
+			t.Errorf("adminCollectionReturn(%q, %q) = %q, want %q", tc.raw, tc.path, got, tc.want)
+		}
+	}
+}

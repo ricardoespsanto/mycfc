@@ -41,3 +41,14 @@ func TestRegistryDefaultsAndUnknownValuesFailClosed(t *testing.T) {
 		t.Fatal("unknown feature should fail closed")
 	}
 }
+
+func TestRegistryReturnsAnIndependentCompleteDefinitionList(t *testing.T) {
+	definitions := Registry()
+	if len(definitions) != 3 || definitions[0].Key != Suggestions || definitions[2].Key != StructuredTrainingPlanning {
+		t.Fatalf("definitions=%#v", definitions)
+	}
+	definitions[0].Label = "changed"
+	if Registry()[0].Label == "changed" {
+		t.Fatal("registry caller must not mutate shared definitions")
+	}
+}

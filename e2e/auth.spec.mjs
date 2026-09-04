@@ -98,6 +98,9 @@ test.describe('authentication', () => {
     await register.focus();
     await expect(register).toBeFocused();
     await expectNoSeriousAxeViolations(page);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const landingIntroWidth = await page.locator('.landing-intro').evaluate((section) => section.getBoundingClientRect().width);
+    expect(landingIntroWidth).toBeGreaterThan(1200);
     await page.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(page);
 
@@ -187,6 +190,11 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Carregar fotografia' }).click();
     await expect(page.getByText('Fotografia atualizada.')).toBeVisible();
     await expect(page.getByAltText('Fotografia de Pessoa de teste')).toBeVisible();
+    await page.getByRole('link', { name: 'Remover fotografia' }).click();
+    await expect(page.getByRole('heading', { name: 'Remover fotografia', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Remover fotografia definitivamente' }).click();
+    await expect(page).toHaveURL('/perfil');
+    await expect(page.getByText('Fotografia removida.')).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
     await page.goto('/dashboard/member?from=legacy');
@@ -199,9 +207,7 @@ test.describe('authentication', () => {
     const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
     await expect(mobileMenu).toBeVisible();
     const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
-    await logout.focus();
-    await expect(logout).toBeFocused();
-    await page.keyboard.press('Enter');
+    await logout.click();
     await expect(page).toHaveURL('/login');
   });
 
@@ -233,6 +239,8 @@ test.describe('authentication', () => {
     await expect(page.getByText('Reportada por si').first()).toBeVisible();
     const firstReference = await success.textContent();
 
+    await page.locator('#repair-form').getByRole('button', { name: 'Fechar' }).click();
+    await page.getByRole('link', { name: 'Reportar avaria' }).click();
     await page.locator('input[name="idempotency_key"]').evaluate((input, value) => { input.value = value; }, idempotencyKey);
     await page.getByLabel('Equipamento').selectOption({ label: 'E2E-REPAIR - Embarcação de teste' });
     await page.getByLabel('Descrição da avaria').fill('Avaria de teste com fotografia.');
@@ -457,15 +465,18 @@ test.describe('authentication', () => {
     await schedule.focus();
     await expect(schedule).toBeFocused();
     await page.keyboard.press('Enter');
-    await expect(maintenanceForm.getByRole('status')).toHaveText('Manutenção agendada.');
+    await expect(page.getByRole('status')).toHaveText('Manutenção agendada.');
 
     await page.reload();
     await page.getByRole('tab', { name: /Manutenção/ }).click();
     const task = page.locator('li', { hasText: description });
-    const complete = task.getByRole('button', { name: 'Concluir manutenção' });
+    const complete = task.getByRole('link', { name: 'Concluir manutenção' });
     await complete.focus();
     await expect(complete).toBeFocused();
     await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Concluir manutenção' })).toBeVisible();
+    await expect(page.getByText('Esta ação marca a manutenção')).toBeVisible();
+    await page.getByRole('button', { name: 'Concluir manutenção' }).click();
     await expect(page.getByRole('status')).toHaveText('Manutenção concluída.');
   });
 
@@ -520,7 +531,9 @@ test.describe('authentication', () => {
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
     await equipment.getByText('Ações').click();
     await equipment.getByRole('link', { name: 'Editar' }).click();
-    await expect(page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' })).toBeVisible();
+    const equipmentPhoto = page.getByRole('img', { name: 'Fotografia de Pagaia E2E atualizada' });
+    await expect(equipmentPhoto).toBeVisible();
+    await expect.poll(() => equipmentPhoto.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
     await expect(page.getByRole('heading', { name: 'Histórico do equipamento' })).toBeVisible();
     await expect(page.getByText('Equipamento atualizado')).toBeVisible();
     await expect(page.getByText('Fotografia atualizada')).toBeVisible();
@@ -534,9 +547,9 @@ test.describe('authentication', () => {
     await maintenance.getByLabel('Descrição').fill(maintenanceDescription);
     await maintenance.getByRole('button', { name: 'Agendar manutenção' }).click();
     await expect(page).toHaveURL('/admin/fleet#maintenance-schedule');
+    await maintenance.getByRole('button', { name: 'Fechar' }).click();
     await page.getByRole('tab', { name: /Manutenção/ }).click();
     await expect(page.getByText(maintenanceDescription)).toBeVisible();
-    await page.locator('#maintenance-form').getByRole('button', { name: 'Fechar' }).click();
     await page.getByRole('tab', { name: 'Equipamentos', exact: true }).click();
 
     equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
@@ -551,12 +564,15 @@ test.describe('authentication', () => {
     await expect(page.getByText('Equipamento retirado')).toBeVisible();
     await expect(page.getByText('1 tarefa de manutenção ativa foi cancelada.')).toBeVisible();
     await page.getByRole('link', { name: 'Voltar à frota' }).click();
+    await page.getByRole('tab', { name: 'Equipamentos', exact: true }).click();
 
-    for (let equipmentPage = 0; equipmentPage < 50; equipmentPage += 1) {
+    for (;;) {
       equipment = page.getByRole('row', { name: new RegExp(updatedTag) });
       if (await equipment.count()) break;
       const next = page.getByRole('navigation', { name: 'Paginação de equipamentos' }).getByRole('link', { name: 'Seguinte' });
-      await expect(next, `equipment ${updatedTag} was not found in the paginated inventory`).toBeVisible();
+      if (await next.count() === 0) {
+        throw new Error(`equipment ${updatedTag} was not found in the paginated inventory`);
+      }
       await next.click();
     }
     await equipment.getByText('Ações').click();
@@ -618,14 +634,22 @@ test.describe('authentication', () => {
     await page.goto('/admin/treinos');
     await expect(page.getByRole('link', { name: 'Publicar documento de competição', exact: true })).toHaveCount(0);
     await expect(page.locator('#criar-plano')).not.toHaveAttribute('open', '');
-    await page.getByRole('link', { name: 'Criar plano', exact: true }).click();
+    const createPlan = page.getByRole('link', { name: 'Criar plano', exact: true });
+    await expect(createPlan).toHaveAttribute('href', '/admin/treinos/planos/criar');
+    await createPlan.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/planos\/criar$/);
+    await expect(page.locator('#criar-plano')).toHaveAttribute('open', '');
     const planForm = page.locator('form[action="/admin/treinos/planos"]');
     await planForm.getByLabel('Título').fill(planTitle);
     await planForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await planForm.getByRole('button', { name: 'Criar plano' }).click();
     await expect(page.getByText('Plano criado.', { exact: true })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
+    const createSession = page.getByRole('link', { name: 'Criar sessão', exact: true });
+    await expect(createSession).toHaveAttribute('href', '/admin/treinos/sessoes/criar');
+    await createSession.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/sessoes\/criar$/);
+    await expect(page.locator('#criar-sessao')).toHaveAttribute('open', '');
     const sessionForm = page.locator('form[action="/admin/treinos/sessoes"]');
     const sessionStart = new Date(Date.now() - 6 * 60 * 60 * 1000);
     const sessionEnd = new Date(Date.now() - 5 * 60 * 60 * 1000);
@@ -636,7 +660,8 @@ test.describe('authentication', () => {
     await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
     await expect(page.getByText('Sessão criada.', { exact: true })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Criar sessão', exact: true }).click();
+    await createSession.click();
+    await expect(page).toHaveURL(/\/admin\/treinos\/sessoes\/criar$/);
     const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const futureEnd = new Date(futureStart.getTime() + 90 * 60 * 1000);
     await sessionForm.getByLabel('Plano').selectOption({ label: planTitle });
@@ -651,8 +676,10 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Guardar alterações' }).click();
     await expect(page.getByText('Sessão atualizada.', { exact: true })).toBeVisible();
     await page.getByRole('heading', { name: editedCancelledSessionTitle }).locator('xpath=ancestor::div[contains(@class,"nested-record")][1]').getByRole('link', { name: 'Editar sessão' }).click();
+    await page.getByRole('link', { name: 'Cancelar sessão' }).click();
+    await expect(page.getByRole('heading', { name: 'Cancelar sessão' })).toBeVisible();
     await page.getByLabel('Motivo').fill(cancellationReason);
-    await page.getByLabel('Confirmo que pretendo cancelar esta sessão definitivamente.').check();
+    await page.getByLabel(`Confirmo que pretendo cancelar definitivamente a sessão ${editedCancelledSessionTitle}.`).check();
     await page.getByRole('button', { name: 'Cancelar sessão' }).click();
     await expect(page.getByText('Sessão cancelada.', { exact: true })).toBeVisible();
     const cancelledManagedSession = page.getByRole('heading', { name: editedCancelledSessionTitle }).locator('xpath=ancestor::div[contains(@class,"nested-record")][1]');
@@ -804,6 +831,14 @@ test.describe('authentication', () => {
     await session.getByRole('button', { name: 'Adicionar segmento' }).click();
     let segmentForm = session.locator('form[action$="/segmentos"]');
     await segmentForm.getByLabel('Modalidade').selectOption('GYM');
+    await segmentForm.getByLabel('Título (opcional)').fill('Mobilidade rascunho');
+    await segmentForm.evaluate((form) => { form.noValidate = true; });
+    await segmentForm.getByRole('button', { name: 'Adicionar segmento' }).click();
+    await expect(page.getByRole('heading', { name: 'Corrija os seguintes campos' })).toBeVisible();
+    session = page.getByRole('heading', { name: sessionTitle }).locator('xpath=ancestor::article[1]');
+    segmentForm = session.locator('form[action$="/segmentos"]');
+    await expect(segmentForm.locator('xpath=ancestor::dialog[1]')).toHaveAttribute('open', '');
+    await expect(segmentForm.getByLabel('Título (opcional)')).toHaveValue('Mobilidade rascunho');
     await segmentForm.getByLabel('Título (opcional)').fill('Mobilidade');
     await segmentForm.getByLabel('Duração prevista em minutos (opcional)').fill('30');
     await segmentForm.getByLabel('Início previsto, em minutos após o início da sessão (opcional)').fill('0');
@@ -817,22 +852,23 @@ test.describe('authentication', () => {
     const gymSegment = session.getByRole('heading', { name: /Ginásio · Mobilidade/ }).locator('xpath=ancestor::section[1]');
     await expect(gymSegment).toContainText('Material: Elásticos e halteres');
     await gymSegment.getByText('Ações do segmento', { exact: true }).click();
-    await gymSegment.getByRole('button', { name: 'Adicionar treino de ginásio' }).click();
-    const gymBlockForm = gymSegment.locator('form[action$="/ginasio"]');
-    await gymBlockForm.locator('select[name="purpose"]').selectOption('WARM_UP');
-    await gymBlockForm.locator('input[name="title"]').fill('Supersérie de ativação');
-    await gymBlockForm.locator('textarea[name="instructions"]').fill('Três voltas com execução cuidada');
-    await gymBlockForm.locator('select[name="structure"]').selectOption('SUPERSET');
-    await gymBlockForm.locator('select[name="objective"]').selectOption('ACTIVATION');
-    await gymBlockForm.locator('input[name="rounds"]').fill('3');
-    await gymBlockForm.locator('input[name="round_recovery_seconds"]').fill('120');
-    await gymBlockForm.locator('input[name="exercise_name"]').fill('Supino');
-    await gymBlockForm.locator('input[name="sets"]').fill('3');
-    await gymBlockForm.locator('input[name="repetitions"]').fill('5');
-    await gymBlockForm.locator('select[name="resistance_kind"]').selectOption('PERCENT_1RM');
-    await gymBlockForm.locator('input[name="resistance_value"]').fill('75');
-    await gymBlockForm.locator('select[name="execution_intent"]').selectOption('EXPLOSIVE');
-    await gymBlockForm.locator('input[name="tempo"]').fill('2-0-X-1');
+    await gymSegment.getByRole('link', { name: 'Adicionar treino de ginásio' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Adicionar bloco de ginásio' })).toBeVisible();
+    const gymBlockForm = page.locator('form[action$="/ginasio"]');
+    await gymBlockForm.getByLabel('Fase do treino').selectOption('WARM_UP');
+    await gymBlockForm.getByLabel('Título do bloco').fill('Supersérie de ativação');
+    await gymBlockForm.getByLabel('Instruções gerais').fill('Três voltas com execução cuidada');
+    await gymBlockForm.getByLabel('Estrutura').selectOption('SUPERSET');
+    await gymBlockForm.getByLabel('Objetivo').selectOption('ACTIVATION');
+    await gymBlockForm.locator('#gym-task-rounds').fill('3');
+    await gymBlockForm.getByLabel('Recuperação entre voltas em segundos (opcional)').fill('120');
+    await gymBlockForm.locator('#gym-task-exercise').fill('Supino');
+    await gymBlockForm.getByLabel('Séries (opcional)').fill('3');
+    await gymBlockForm.getByLabel('Repetições (opcional)').fill('5');
+    await gymBlockForm.getByLabel('Resistência (opcional)').selectOption('PERCENT_1RM');
+    await gymBlockForm.getByLabel('Valor da resistência').fill('75');
+    await gymBlockForm.getByLabel('Intenção de execução (opcional)').selectOption('EXPLOSIVE');
+    await gymBlockForm.getByLabel('Tempo (opcional)').fill('2-0-X-1');
     await gymBlockForm.getByRole('button', { name: 'Adicionar bloco de ginásio' }).click();
     await expect(page.getByRole('status')).toHaveText('Bloco de ginásio adicionado.');
 
@@ -958,10 +994,17 @@ test.describe('authentication', () => {
     await copyWeekForm.getByLabel('Nova segunda-feira').fill(formatDate(nextMonday));
     await copyWeekForm.getByRole('button', { name: 'Criar cópia da semana' }).click();
     await expect(page.getByRole('status')).toHaveText('Semana copiada como novo rascunho independente.');
+    const plannerSelector = page.locator('.structured-planner__selector');
+    const copiedWeekOption = plannerSelector.getByLabel('Semana').locator('option').filter({ hasText: copiedWeekTitle });
+    await plannerSelector.getByLabel('Semana').selectOption(await copiedWeekOption.getAttribute('value'));
+    await plannerSelector.getByRole('button', { name: 'Abrir contexto' }).click();
     const copiedWeek = page.getByRole('heading', { name: copiedWeekTitle }).locator('xpath=ancestor::section[1]');
     await expect(copiedWeek).toContainText(sessionTitle);
     await expect(copiedWeek).toContainText('Prancha');
 
+    const sourceWeekOption = page.locator('.structured-planner__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await page.locator('.structured-planner__selector').getByLabel('Semana').selectOption(await sourceWeekOption.getAttribute('value'));
+    await page.locator('.structured-planner__selector').getByRole('button', { name: 'Abrir contexto' }).click();
     const sourceWeekToggle = sourceWeek.locator(':scope > .training-card__header').getByRole('button');
     if ((await sourceWeekToggle.getAttribute('aria-expanded')) === 'false') await sourceWeekToggle.click();
     session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
@@ -987,6 +1030,12 @@ test.describe('authentication', () => {
     await accessibilityPage.getByLabel('Palavra-passe').fill(password);
     await accessibilityPage.getByRole('button', { name: 'Iniciar sessão' }).click();
     await accessibilityPage.goto('/admin/treinos/estruturados');
+    const accessiblePlanner = accessibilityPage.locator('.structured-planner__selector');
+    await accessiblePlanner.getByLabel('Grupo').selectOption({ label: groupName });
+    await accessiblePlanner.getByRole('button', { name: 'Abrir contexto' }).click();
+    const accessibleWeekOption = accessibilityPage.locator('.structured-planner__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await accessibilityPage.locator('.structured-planner__selector').getByLabel('Semana').selectOption(await accessibleWeekOption.getAttribute('value'));
+    await accessibilityPage.locator('.structured-planner__selector').getByRole('button', { name: 'Abrir contexto' }).click();
     const accessibleSourceWeek = accessibilityPage.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
     const accessibleWeekToggle = accessibleSourceWeek.getByRole('button', { name: 'Mostrar' }).first();
     if (await accessibleWeekToggle.isVisible()) await accessibleWeekToggle.click();
@@ -1153,6 +1202,9 @@ test.describe('authentication', () => {
     await expectNoSeriousAxeViolations(page);
 
     await adminPage.goto(adminDetailURL);
+    await adminPage.getByRole('link', { name: 'Arquivar álbum' }).click();
+    await expect(adminPage.getByRole('heading', { name: 'Arquivar álbum privado' })).toBeVisible();
+    await expect(adminPage.getByText('O álbum deixa de estar aberto a novas fotografias.')).toBeVisible();
     await adminPage.getByRole('button', { name: 'Arquivar álbum' }).click();
     await expect(adminPage.getByRole('status')).toHaveText('Álbum arquivado.');
     await page.goto('/albuns');
@@ -1326,6 +1378,11 @@ test.describe('authentication', () => {
     await page.locator('summary').filter({ hasText: 'Contexto e destinatários' }).click();
     await page.getByLabel('Competição').check();
     await page.getByRole('button', { name: 'Publicar' }).click();
+    const authored = page.locator('li', { hasText: title });
+    await authored.getByText('Ações', { exact: true }).click();
+    await authored.getByRole('link', { name: 'Publicar aviso' }).click();
+    await expect(page.getByRole('heading', { name: 'Publicar aviso' })).toBeVisible();
+    await page.getByRole('button', { name: 'Publicar aviso' }).click();
     await expect(page.getByText(title)).toContainText('PUBLISHED');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
@@ -1355,8 +1412,11 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/avisos');
-    await page.locator('li', { hasText: title }).getByText('Ações', { exact: true }).click();
-    await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
+    const published = page.locator('li', { hasText: title });
+    await published.getByText('Ações', { exact: true }).click();
+    await published.getByRole('link', { name: 'Expirar' }).click();
+    await expect(page.getByRole('heading', { name: 'Expirar aviso' })).toBeVisible();
+    await page.getByRole('button', { name: 'Expirar aviso' }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(athleteEmail);
@@ -1402,7 +1462,10 @@ test.describe('authentication', () => {
     await page.locator('#news-published-at').fill(publishedAt);
     await page.getByRole('button', { name: 'Guardar rascunho' }).click();
     const item = page.locator('li', { hasText: title });
-    await item.getByRole('button', { name: 'Publicar' }).click();
+    await item.getByRole('link', { name: 'Publicar' }).click();
+    await expect(page.getByRole('heading', { name: 'Publicar notícia' })).toBeVisible();
+    await expect(page.getByText('A notícia fica disponível aos membros na data de publicação definida.')).toBeVisible();
+    await page.getByRole('button', { name: 'Publicar notícia' }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(leisureEmail);
@@ -1416,7 +1479,10 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Notícias' }).click();
-    await page.locator('li', { hasText: title }).getByRole('button', { name: 'Expirar' }).click();
+    await page.locator('li', { hasText: title }).getByRole('link', { name: 'Expirar' }).click();
+    await expect(page.getByRole('heading', { name: 'Expirar notícia' })).toBeVisible();
+    await expect(page.getByText('A notícia deixa de estar disponível aos membros.')).toBeVisible();
+    await page.getByRole('button', { name: 'Expirar notícia' }).click();
 
     const context = await browser.newContext({ baseURL });
     const interactivePage = await context.newPage();

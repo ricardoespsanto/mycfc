@@ -84,6 +84,18 @@ type StructuredTrainingSummaryItem struct{ Label, Value, Certainty string }
 type StructuredTrainingWeekSummary struct {
 	PlannedWater, SupportingWork, Actual []StructuredTrainingSummaryItem
 }
+type StructuredTrainingCycleWeek struct {
+	ID, Title, DateRange, PlannedLoad, PlannerURL string
+	Modalities                                  []string
+	MissingLoad, MissingModalities, Direct       bool
+}
+type StructuredTrainingCycleTarget struct { ID, Label, Status string }
+type StructuredTrainingCycle struct {
+	ID, GroupID, GroupName, Season, ParentID, ParentName, Name, LevelLabel, Goals, Focus, DateRange, Warning string
+	Version                                                                                                   int32
+	Weeks                                                                                                     []StructuredTrainingCycleWeek
+	Targets                                                                                                   []StructuredTrainingCycleTarget
+}
 type StructuredTrainingAudience struct {
 	AthleteName, GroupID, GroupName, Scope string
 	MemberCount                            int
@@ -100,13 +112,22 @@ type StructuredTrainingWeekForm struct {
 	GroupID, Title, Description, WeekStart, PlannedLoad string
 	Errors                                              validation.FieldErrors
 }
+type StructuredTrainingCycleForm struct {
+	CycleID, GroupID, Name, LevelLabel, Goals, Focus, Version string
+	WeekIDs, ChildCycleIDs, TargetEventIDs                    map[string]bool
+	Errors                                                                    validation.FieldErrors
+}
+type StructuredTrainingCycleCopyForm struct {
+	CycleID, Name, FirstMonday string
+	Errors                     validation.FieldErrors
+}
 type StructuredTrainingSessionForm struct {
 	PlanID, Title, Description, StartsAt, EndsAt, EntryKind string
 	Errors                                                  validation.FieldErrors
 }
 type StructuredTrainingSegmentForm struct {
-	SessionID, Modality, Title, Location, Duration, Purpose, BlockTitle, Instructions string
-	Errors                                                                            validation.FieldErrors
+	SessionID, Modality, Title, Location, Duration, StartOffset, Transition, EquipmentNotes, Purpose, BlockTitle, Instructions string
+	Errors                                                                                                      validation.FieldErrors
 }
 type StructuredTrainingBlockForm struct {
 	SegmentID, Purpose, Title, Instructions string
@@ -120,7 +141,8 @@ type StructuredTrainingPage struct {
 	CanManageWaterProfiles                                      bool
 	Success, Error, OpenForm                                    string
 	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
-	Audiences                                                   []StructuredTrainingAudience
+	Audiences, PlannerAudiences                                 []StructuredTrainingAudience
+	Cycles                                                       []StructuredTrainingCycle
 	Subjects                                                    []StructuredTrainingSubjectChoice
 	AllSubjectsSelected                                         bool
 	Routines                                                    []StructuredTrainingRoutine
@@ -138,6 +160,8 @@ type StructuredTrainingPage struct {
 	PlannerReturnURL                                            string
 	GroupForm                                                   StructuredTrainingGroupForm
 	WeekForm                                                    StructuredTrainingWeekForm
+	CycleForm                                                   StructuredTrainingCycleForm
+	CycleCopyForm                                               StructuredTrainingCycleCopyForm
 	SessionForm                                                 StructuredTrainingSessionForm
 	SegmentForm                                                 StructuredTrainingSegmentForm
 	BlockForm                                                   StructuredTrainingBlockForm
@@ -176,6 +200,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 		if page.Management {
 			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
 				<a href="#training-plan">Plano semanal</a>
+				<a href="#training-cycles">Ciclos</a>
 				<a href="#training-variations">Variações</a>
 				<a href="#training-publication">Publicar</a>
 				<a href="#training-routines">Rotinas</a>
@@ -468,9 +493,9 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 																<div class="training-actions">
 																	@structuredMoveSegment(page, segment)
 																	@structuredSaveRoutineForm(page, "SEGMENT", segment.ID)
-																	@structuredBlockForm(page, segment.ID)
-																	if segment.Modality == "GYM" {
-																		@structuredGymBlockForm(page, segment.ID)
+											@structuredBlockForm(page, segment.ID)
+											if segment.Modality == "GYM" {
+												@structuredGymBlockTaskLink(page, session.ID, segment.ID)
 																	}
 																	if segment.Modality == "WATER" {
 																					@structuredWaterBlockForm(page, session.ID, segment)
@@ -495,6 +520,7 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			}
 		</section>
 		if page.Management {
+			@structuredCycleManagement(page)
 			@structuredVariationManagement(page)
 			@structuredPublicationManagement(page)
 			@structuredRoutineLibrary(page)
@@ -525,7 +551,7 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 			<div>
 				@components.FieldLabel("planner-group", "Grupo", true)
 				<select id="planner-group" name="group_id" required>
-					for _, audience := range page.Audiences {
+					for _, audience := range structuredPlannerAudiences(page) {
 						<option value={ audience.GroupID } selected?={ audience.GroupID == page.SelectedGroupID }>{ audience.GroupName }</option>
 					}
 				</select>
@@ -533,7 +559,7 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 			<div>
 				@components.FieldLabel("planner-week", "Semana", true)
 				<select id="planner-week" name="week_id" required>
-					for _, audience := range page.Audiences {
+					for _, audience := range structuredPlannerAudiences(page) {
 						if audience.GroupID == page.SelectedGroupID {
 							for _, week := range audience.Weeks {
 								<option value={ week.ID } selected?={ week.ID == page.SelectedWeekID }>{ week.Title } · { week.DateRange }</option>
@@ -546,7 +572,7 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 				@components.FieldLabel("planner-session", "Sessão", false)
 				<select id="planner-session" name="session_id">
 					<option value="">Todas as sessões da semana</option>
-					for _, audience := range page.Audiences {
+					for _, audience := range structuredPlannerAudiences(page) {
 						if audience.GroupID == page.SelectedGroupID {
 							for _, week := range audience.Weeks {
 								if week.ID == page.SelectedWeekID {
@@ -563,7 +589,7 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 		</form>
 		if page.SelectedWeekID != "" {
 			<nav class="structured-planner__sessions" aria-label="Sessões da semana selecionada">
-				for _, audience := range page.Audiences {
+				for _, audience := range structuredPlannerAudiences(page) {
 					if audience.GroupID == page.SelectedGroupID {
 						for _, week := range audience.Weeks {
 							if week.ID == page.SelectedWeekID {
@@ -585,6 +611,13 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 			</nav>
 		}
 	</section>
+}
+
+func structuredPlannerAudiences(page StructuredTrainingPage) []StructuredTrainingAudience {
+	if len(page.PlannerAudiences) > 0 {
+		return page.PlannerAudiences
+	}
+	return page.Audiences
 }
 
 templ structuredPublicationManagement(page StructuredTrainingPage) {
@@ -628,6 +661,176 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 
 func structuredSubjectLabel(subject StructuredTrainingSubjectChoice) string { if subject.Self { return subject.Name + " (eu)" }; return subject.Name }
 func structuredPlannerReturnURL(page StructuredTrainingPage) string { if page.PlannerReturnURL != "" { return page.PlannerReturnURL }; return "/admin/treinos/estruturados#training-plan" }
+
+templ structuredCycleManagement(page StructuredTrainingPage) {
+	<section id="training-cycles" class="module" data-tab-panel>
+		@components.SectionHeading("Horizonte alargado", "Ciclos de treino", "Agrupe semanas sem alterar os seus rascunhos, publicações ou prescrições históricas.")
+		<div class="training-actions">
+			<button class="action action--primary" type="button" data-dialog-open="create-training-cycle">Criar ciclo</button>
+		</div>
+		if len(page.Cycles) == 0 {
+			@components.EmptyState("Ainda sem ciclos", "O planeamento semanal continua disponível. Crie um ciclo apenas quando precisar de organizar várias semanas.")
+		}
+		for _, cycle := range page.Cycles {
+			<article class="record-item record-item--stacked" aria-labelledby={ "training-cycle-" + cycle.ID }>
+				<div class="record-item__copy">
+					if cycle.LevelLabel != "" {
+						<p class="eyebrow">{ cycle.LevelLabel }</p>
+					}
+					<h3 id={ "training-cycle-" + cycle.ID }>{ cycle.Name }</h3>
+					<p class="record-meta">{ cycle.GroupName } · { cycle.Season }
+						if cycle.DateRange != "" {
+							<span> · { cycle.DateRange }</span>
+						}
+					</p>
+					if cycle.ParentName != "" {
+						<p><strong>Estrutura superior:</strong> { cycle.ParentName }</p>
+					}
+					if cycle.Goals != "" {
+						<p class="preserve-lines"><strong>Objetivos:</strong> { cycle.Goals }</p>
+					}
+					if cycle.Focus != "" {
+						<p class="preserve-lines"><strong>Fase ou foco:</strong> { cycle.Focus }</p>
+					}
+					if len(cycle.Targets) > 0 {
+						<p><strong>Competições-alvo</strong></p>
+						<ul class="record-list">
+							for _, target := range cycle.Targets {
+								<li>{ target.Label }
+									if target.Status == "CANCELLED" {
+										<span class="status-badge status-badge--muted">Cancelada</span>
+									}
+								</li>
+							}
+						</ul>
+					}
+					if cycle.Warning != "" {
+						<div class="notice notice--info" role="status"><p>{ cycle.Warning }</p></div>
+					}
+					<ol class="record-list" aria-label={ "Semanas de " + cycle.Name }>
+						for _, week := range cycle.Weeks {
+							<li class="nested-record">
+								<p><a href={ templ.SafeURL(week.PlannerURL) }><strong>{ week.Title }</strong></a> · { week.DateRange }</p>
+								<p class="record-meta">
+									if week.PlannedLoad != "" {
+										<span>Carga planeada: { week.PlannedLoad }</span>
+									} else {
+										<span>Carga planeada não definida</span>
+									}
+									if len(week.Modalities) > 0 {
+										<span> · Modalidades: { strings.Join(week.Modalities, ", ") }</span>
+									} else {
+										<span> · Modalidades ainda não definidas</span>
+									}
+								</p>
+							</li>
+						}
+					</ol>
+					<div class="training-actions">
+						<button class="action action--quiet" type="button" data-dialog-open={ "edit-training-cycle-" + cycle.ID }>Editar ciclo</button>
+						<button class="action action--quiet" type="button" data-dialog-open={ "copy-training-cycle-" + cycle.ID }>Copiar ciclo</button>
+					</div>
+				</div>
+			</article>
+			@structuredCycleEditDialog(page, cycle)
+			@structuredCycleCopyDialog(page, cycle)
+		}
+		@structuredCycleCreateDialog(page)
+	</section>
+}
+
+templ structuredCycleFields(page StructuredTrainingPage, form StructuredTrainingCycleForm, prefix string, editing bool) {
+	@components.RequiredNote()
+	if !editing {
+		@components.FieldLabel(prefix+"-group", "Grupo", true)
+		<select id={ prefix+"-group" } name="group_id" required><option value="">Selecione</option>
+			for _, choice := range page.Groups {
+				<option value={ choice.ID } selected?={ choice.ID == form.GroupID }>{ choice.Name }</option>
+			}
+		</select>
+		@components.FieldErrorMessage("group_id", form.Errors["group_id"])
+	}
+	@components.FieldLabel(prefix+"-name", "Nome", true)
+	<input id={ prefix+"-name" } name="name" value={ form.Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", form.Errors["name"])
+	@components.FieldLabel(prefix+"-level", "Designação usada pela equipa (opcional)", false)
+	<input id={ prefix+"-level" } name="level_label" value={ form.LevelLabel } maxlength="80" aria-describedby={ prefix+"-level-help" }/>
+	<small id={ prefix+"-level-help" }>Por exemplo, mesociclo ou bloco. MyCFC não impõe uma metodologia.</small>
+	@components.FieldLabel(prefix+"-goals", "Objetivos (opcional)", false)
+	<textarea id={ prefix+"-goals" } name="goals" maxlength="4000">{ form.Goals }</textarea>
+	@components.FieldLabel(prefix+"-focus", "Fase ou foco (opcional)", false)
+	<textarea id={ prefix+"-focus" } name="phase_focus_notes" maxlength="4000">{ form.Focus }</textarea>
+	<fieldset id={ prefix+"-weeks" }><legend>Semanas diretas do ciclo (opcional)</legend><p class="field-help">Selecione semanas do mesmo grupo e época. Agrupar uma semana não altera o seu rascunho nem a publicação.</p>
+		for _, choice := range page.Weeks {
+			<label class="check-row"><input type="checkbox" name="week_id" value={ choice.ID } checked?={ form.WeekIDs[choice.ID] }/> <span>{ choice.Name }</span></label>
+		}
+		@components.FieldErrorMessage("week_id", form.Errors["week_id"])
+	</fieldset>
+	<fieldset id={ prefix+"-children" }><legend>Estruturas incluídas (opcional)</legend><p class="field-help">Uma estrutura superior pode agregar ciclos do mesmo grupo e época sem retirar as semanas aos ciclos inferiores.</p>
+		for _, candidate := range page.Cycles {
+			if candidate.ID != form.CycleID && (candidate.ParentID == "" || candidate.ParentID == form.CycleID) {
+				<label class="check-row"><input type="checkbox" name="child_cycle_id" value={ candidate.ID } checked?={ form.ChildCycleIDs[candidate.ID] }/> <span>{ candidate.GroupName } · { candidate.Season } · { candidate.Name }</span></label>
+			}
+		}
+		@components.FieldErrorMessage("child_cycle_id", form.Errors["child_cycle_id"])
+	</fieldset>
+	<p class="field-help">Selecione pelo menos uma semana direta ou uma estrutura incluída.</p>
+	if len(page.CompetitionEvents) > 0 {
+		<fieldset><legend>Competições-alvo (opcional)</legend>
+			for _, choice := range page.CompetitionEvents {
+				<label class="check-row"><input type="checkbox" name="target_event_id" value={ choice.ID } checked?={ form.TargetEventIDs[choice.ID] }/> <span>{ choice.Name }</span></label>
+			}
+		</fieldset>
+	}
+}
+
+templ structuredCycleCreateDialog(page StructuredTrainingPage) {
+	<dialog id="create-training-cycle" class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle" } aria-labelledby="create-training-cycle-title" open?={ page.OpenForm == "cycle" }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Planeamento opcional</p><h3 id="create-training-cycle-title">Criar ciclo</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CycleForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "create-cycle-group"}, {Key: "name", Field: "create-cycle-name"}, {Key: "week_id", Field: "create-cycle-weeks"}, {Key: "child_cycle_id", Field: "create-cycle-children"}}))
+		<form class="form-layout" method="post" action="/admin/treinos/estruturados/ciclos">@page.CSRFField
+			@structuredCycleFields(page, page.CycleForm, "create-cycle", false)
+			<button type="submit">Criar ciclo</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCycleEditDialog(page StructuredTrainingPage, cycle StructuredTrainingCycle) {
+	<dialog id={ "edit-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-" + cycle.ID } aria-labelledby={ "edit-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-" + cycle.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">{ cycle.GroupName } · { cycle.Season }</p><h3 id={ "edit-training-cycle-title-" + cycle.ID }>Editar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		@components.FieldErrorMessage("form", structuredCycleEditForm(page, cycle).Errors["form"])
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID) }>@page.CSRFField<input type="hidden" name="version" value={ structuredCycleEditForm(page, cycle).Version }/>
+			@structuredCycleFields(page, structuredCycleEditForm(page, cycle), "edit-cycle-"+cycle.ID, true)
+			<button type="submit">Guardar ciclo</button>
+		</form>
+	</dialog>
+}
+
+templ structuredCycleCopyDialog(page StructuredTrainingPage, cycle StructuredTrainingCycle) {
+	<dialog id={ "copy-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-copy-" + cycle.ID } aria-labelledby={ "copy-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-copy-" + cycle.ID }>
+		<div class="task-dialog__header"><div><p class="eyebrow">Cópia independente</p><h3 id={ "copy-training-cycle-title-" + cycle.ID }>Copiar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID + "/copiar") }>@page.CSRFField
+			<p class="field-help">Cria semanas e sessões editáveis com novos identificadores. Publicações, respostas de atletas e competições-alvo não são copiadas.</p>
+			@components.FieldErrorMessage("form", structuredCycleCopyForm(page, cycle).Errors["form"])
+			@components.FieldLabel("copy-cycle-name-"+cycle.ID, "Nome do novo ciclo", true)<input id={ "copy-cycle-name-"+cycle.ID } name="name" value={ structuredCycleCopyForm(page, cycle).Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", structuredCycleCopyForm(page, cycle).Errors["name"])
+			@components.FieldLabel("copy-cycle-start-"+cycle.ID, "Primeira segunda-feira", true)<input id={ "copy-cycle-start-"+cycle.ID } name="first_monday" type="date" value={ structuredCycleCopyForm(page, cycle).FirstMonday } required/>@components.FieldErrorMessage("first_monday", structuredCycleCopyForm(page, cycle).Errors["first_monday"])
+			<button type="submit">Criar cópia do ciclo</button>
+		</form>
+	</dialog>
+}
+
+func structuredCycleEditForm(page StructuredTrainingPage, cycle StructuredTrainingCycle) StructuredTrainingCycleForm {
+	if page.CycleForm.CycleID == cycle.ID { return page.CycleForm }
+	form := StructuredTrainingCycleForm{CycleID: cycle.ID, GroupID: cycle.GroupID, Name: cycle.Name, LevelLabel: cycle.LevelLabel, Goals: cycle.Goals, Focus: cycle.Focus, Version: fmt.Sprintf("%d", cycle.Version), WeekIDs: map[string]bool{}, ChildCycleIDs: map[string]bool{}, TargetEventIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
+	for _, week := range cycle.Weeks { if week.Direct { form.WeekIDs[week.ID] = true } }
+	for _, candidate := range page.Cycles { if candidate.ParentID == cycle.ID { form.ChildCycleIDs[candidate.ID] = true } }
+	for _, target := range cycle.Targets { form.TargetEventIDs[target.ID] = true }
+	return form
+}
+
+func structuredCycleCopyForm(page StructuredTrainingPage, cycle StructuredTrainingCycle) StructuredTrainingCycleCopyForm {
+	if page.CycleCopyForm.CycleID == cycle.ID { return page.CycleCopyForm }
+	return StructuredTrainingCycleCopyForm{CycleID: cycle.ID, Name: cycle.Name, Errors: validation.FieldErrors{}}
+}
 
 templ structuredVariationManagement(page StructuredTrainingPage) {
 	<section id="training-variations" class="module" aria-labelledby="training-variations-title" data-tab-panel>
@@ -756,6 +959,15 @@ templ structuredRoutineLibrary(page StructuredTrainingPage) {
 	<section id="training-routines" class="module" aria-labelledby="routine-library-title" data-tab-panel>
 		@components.SectionHeading("", "Biblioteca de rotinas", "Pesquise, pré-visualize e insira uma cópia independente no plano de destino.")
 		<form class="filter-bar" method="get" action="/admin/treinos/estruturados">
+			if page.SelectedGroupID != "" {
+				<input type="hidden" name="group_id" value={ page.SelectedGroupID }/>
+			}
+			if page.SelectedWeekID != "" {
+				<input type="hidden" name="week_id" value={ page.SelectedWeekID }/>
+			}
+			if page.SelectedSessionID != "" {
+				<input type="hidden" name="session_id" value={ page.SelectedSessionID }/>
+			}
 			@components.FieldLabel("routine-query", "Pesquisar", false)
 			<input id="routine-query" name="routine_query" value={ page.RoutineQuery } maxlength="180"/>
 			@components.FieldLabel("routine-modality", "Modalidade", false)
@@ -821,6 +1033,7 @@ templ structuredSaveRoutineForm(page StructuredTrainingPage, kind, sourceID stri
 		<div class="task-dialog__header"><div><p class="eyebrow">Biblioteca</p><h3 id={ "save-routine-title-" + sourceID }>Guardar como rotina</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action="/admin/treinos/estruturados/rotinas">
 			@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			<input type="hidden" name="source_kind" value={ kind }/><input type="hidden" name="source_id" value={ sourceID }/>
 			@components.FieldLabel("routine-name-"+sourceID, "Nome da rotina", true)
 			<input id={ "routine-name-" + sourceID } name="name" required minlength="2" maxlength="180"/>
@@ -843,6 +1056,7 @@ templ structuredInsertRoutineForm(page StructuredTrainingPage, routine Structure
 		<div class="task-dialog__header"><div><p class="eyebrow">{ trainingRoutineKindLabel(routine.Kind) }</p><h3 id={ "insert-routine-title-" + routine.ID }>Usar { routine.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/rotinas/" + routine.ID + "/inserir") }>
 			@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			@components.FieldLabel("routine-target-"+routine.ID, trainingRoutineTargetLabel(routine.Kind), true)
 			<select id={ "routine-target-" + routine.ID } name="target_id" required>
 				<option value="">Selecione</option>
@@ -908,6 +1122,7 @@ templ structuredCopySessionForm(page StructuredTrainingPage, sessionID string) {
 
 templ structuredCopyWeekForm(page StructuredTrainingPage, week StructuredTrainingWeek) {
 	<button class="action action--quiet" type="button" data-dialog-open={ "copy-week-" + week.ID }>Copiar semana</button><dialog id={ "copy-week-" + week.ID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-week-title-dialog-" + week.ID }><div class="task-dialog__header"><div><p class="eyebrow">{ week.DateRange }</p><h3 id={ "copy-week-title-dialog-" + week.ID }>Copiar { week.Title }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div><form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + week.ID + "/copiar") }>@page.CSRFField
+	<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 @components.FieldLabel("copy-week-title-"+week.ID, "Título da nova semana", true)
 <input id={ "copy-week-title-" + week.ID } name="title" value={ week.Title } required minlength="2" maxlength="180"/>@components.FieldLabel("copy-week-start-"+week.ID, "Nova segunda-feira", true)
 <input id={ "copy-week-start-" + week.ID } name="week_start" type="date" required/><button type="submit">Criar cópia da semana</button></form></dialog>
@@ -951,11 +1166,10 @@ templ structuredCopyDayForm(page StructuredTrainingPage) {
 }
 
 templ structuredGroupForm(page StructuredTrainingPage) {
-	<details id="criar-grupo-treino" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "group" } aria-labelledby="structured-group-title">
-		<summary><span><strong id="structured-group-title">Criar grupo de treino</strong><small>Selecione um âmbito e os atletas atuais.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-grupo-treino", TitleID: "structured-group-title", Eyebrow: "Planeamento estruturado", Title: "Criar grupo de treino", Description: "Selecione um âmbito e os atletas atuais.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "group"}) {
+		<div class="task-form">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.GroupForm.Errors), []components.FieldErrorRef{{Key: "name", Field: "structured-group-name"}, {Key: "scope", Field: "structured-group-team"}, {Key: "members", Field: "structured-group-members"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos">
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos" data-task-form>
 				@page.CSRFField
 				@components.RequiredNote()
 				@components.FieldLabel("structured-group-name", "Nome", true)
@@ -987,15 +1201,14 @@ templ structuredGroupForm(page StructuredTrainingPage) {
 				}
 			</form>
 		</div>
-	</details>
+	}
 }
 
 templ structuredWeekForm(page StructuredTrainingPage) {
-	<details id="criar-semana-treino" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "week" } aria-labelledby="structured-week-title">
-		<summary><span><strong id="structured-week-title">Criar semana</strong><small>Associe uma semana datada a um grupo.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-semana-treino", TitleID: "structured-week-title", Eyebrow: "Planeamento estruturado", Title: "Criar semana", Description: "Associe uma semana datada a um grupo.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "week"}) {
+		<div class="task-form">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas">
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas" data-task-form>
 				@page.CSRFField
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
@@ -1020,15 +1233,14 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 				}
 			</form>
 		</div>
-	</details>
+	}
 }
 
 templ structuredSessionForm(page StructuredTrainingPage) {
-	<details id="criar-sessao-estruturada" class="module disclosure create-panel" data-create-panel open?={ page.OpenForm == "session" } aria-labelledby="structured-session-title">
-		<summary><span><strong id="structured-session-title">Criar sessão</strong><small>Adicione um horário exato à semana.</small></span></summary><button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-sessao-estruturada", TitleID: "structured-session-title", Eyebrow: "Planeamento estruturado", Title: "Criar sessão", Description: "Adicione um horário exato à semana.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "session"}) {
+		<div class="task-form">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes">
+			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes" data-task-form>
 				@page.CSRFField
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
@@ -1058,43 +1270,45 @@ templ structuredSessionForm(page StructuredTrainingPage) {
 				}
 			</form>
 		</div>
-	</details>
+	}
 }
 
 templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
 	<button class="action action--quiet" type="button" data-dialog-open={ "add-segment-" + sessionID }>Adicionar segmento</button>
-	<dialog id={ "add-segment-" + sessionID } class="task-dialog" data-task-dialog aria-labelledby={ "add-segment-title-" + sessionID }>
+	<dialog id={ "add-segment-" + sessionID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "segment-" + sessionID } data-task-url={ structuredPlannerReturnURL(page) } aria-labelledby={ "add-segment-title-" + sessionID }>
 		<div class="task-dialog__header"><h3 id={ "add-segment-title-" + sessionID }>Adicionar segmento</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos") }>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SegmentForm.Errors), []components.FieldErrorRef{{Key: "session", Field: "add-segment-title-" + sessionID}, {Key: "modality", Field: "segment-modality-" + sessionID}, {Key: "purpose", Field: "segment-purpose-" + sessionID}, {Key: "title", Field: "segment-title-" + sessionID}, {Key: "location", Field: "segment-location-" + sessionID}, {Key: "planned_duration_minutes", Field: "segment-duration-" + sessionID}, {Key: "planned_start_offset_minutes", Field: "segment-start-offset-" + sessionID}, {Key: "transition_duration_minutes", Field: "segment-transition-" + sessionID}, {Key: "equipment_notes", Field: "segment-equipment-" + sessionID}, {Key: "block_title", Field: "segment-block-title-" + sessionID}, {Key: "instructions", Field: "segment-instructions-" + sessionID}}))
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos") } data-task-form>
 			@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			@components.FieldLabel("segment-modality-"+sessionID, "Modalidade", true)
 			<select id={ "segment-modality-" + sessionID } name="modality" required>
 				for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
-					<option value={ value }>{ structuredModalityLabel(value) }</option>
+					<option value={ value } selected?={ page.SegmentForm.SessionID == sessionID && page.SegmentForm.Modality == value }>{ structuredModalityLabel(value) }</option>
 				}
 			</select>
 			@components.FieldLabel("segment-title-"+sessionID, "Título (opcional)", false)
-			<input id={ "segment-title-" + sessionID } name="title" maxlength="120"/>
+			<input id={ "segment-title-" + sessionID } name="title" maxlength="120" value={ page.SegmentForm.Title }/>@components.FieldErrorMessage("title", page.SegmentForm.Errors["title"])
 			@components.FieldLabel("segment-location-"+sessionID, "Local (opcional)", false)
-			<input id={ "segment-location-" + sessionID } name="location" maxlength="180"/>
+			<input id={ "segment-location-" + sessionID } name="location" maxlength="180" value={ page.SegmentForm.Location }/>@components.FieldErrorMessage("location", page.SegmentForm.Errors["location"])
 			@components.FieldLabel("segment-duration-"+sessionID, "Duração prevista em minutos (opcional)", false)
-			<input id={ "segment-duration-" + sessionID } name="planned_duration_minutes" type="number" min="1" max="1440"/>
+			<input id={ "segment-duration-" + sessionID } name="planned_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Duration }/>@components.FieldErrorMessage("planned_duration_minutes", page.SegmentForm.Errors["planned_duration_minutes"])
 			@components.FieldLabel("segment-start-offset-"+sessionID, "Início previsto, em minutos após o início da sessão (opcional)", false)
-			<input id={ "segment-start-offset-" + sessionID } name="planned_start_offset_minutes" type="number" min="0" max="1440"/>
+			<input id={ "segment-start-offset-" + sessionID } name="planned_start_offset_minutes" type="number" min="0" max="1440" value={ page.SegmentForm.StartOffset }/>@components.FieldErrorMessage("planned_start_offset_minutes", page.SegmentForm.Errors["planned_start_offset_minutes"])
 			@components.FieldLabel("segment-transition-"+sessionID, "Transição antes deste segmento, em minutos (opcional)", false)
-			<input id={ "segment-transition-" + sessionID } name="transition_duration_minutes" type="number" min="1" max="1440"/>
+			<input id={ "segment-transition-" + sessionID } name="transition_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Transition }/>@components.FieldErrorMessage("transition_duration_minutes", page.SegmentForm.Errors["transition_duration_minutes"])
 			@components.FieldLabel("segment-equipment-"+sessionID, "Material e preparação (opcional)", false)
-			<textarea id={ "segment-equipment-" + sessionID } name="equipment_notes" maxlength="1000"></textarea>
+			<textarea id={ "segment-equipment-" + sessionID } name="equipment_notes" maxlength="1000">{ page.SegmentForm.EquipmentNotes }</textarea>@components.FieldErrorMessage("equipment_notes", page.SegmentForm.Errors["equipment_notes"])
 			@components.FieldLabel("segment-purpose-"+sessionID, "Objetivo do primeiro bloco", true)
 			<select id={ "segment-purpose-" + sessionID } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
-					<option value={ value }>{ structuredPurposeLabel(value) }</option>
+					<option value={ value } selected?={ page.SegmentForm.SessionID == sessionID && page.SegmentForm.Purpose == value }>{ structuredPurposeLabel(value) }</option>
 				}
 			</select>
 			@components.FieldLabel("segment-block-title-"+sessionID, "Título do bloco (opcional)", false)
-			<input id={ "segment-block-title-" + sessionID } name="block_title" maxlength="120"/>
+			<input id={ "segment-block-title-" + sessionID } name="block_title" maxlength="120" value={ page.SegmentForm.BlockTitle }/>@components.FieldErrorMessage("block_title", page.SegmentForm.Errors["block_title"])
 			@components.FieldLabel("segment-instructions-"+sessionID, "Instruções", true)
-			<textarea id={ "segment-instructions-" + sessionID } name="instructions" minlength="2" maxlength="4000" required></textarea>
+			<textarea id={ "segment-instructions-" + sessionID } name="instructions" minlength="2" maxlength="4000" required>{ page.SegmentForm.Instructions }</textarea>@components.FieldErrorMessage("instructions", page.SegmentForm.Errors["instructions"])
 			<button type="submit">Adicionar segmento</button>
 		</form>
 	</dialog>
@@ -1102,20 +1316,22 @@ templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
 
 templ structuredBlockForm(page StructuredTrainingPage, segmentID string) {
 	<button class="action action--quiet" type="button" data-dialog-open={ "add-block-" + segmentID }>Adicionar bloco</button>
-	<dialog id={ "add-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-block-title-dialog-" + segmentID }>
+	<dialog id={ "add-block-" + segmentID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "block-" + segmentID } data-task-url={ structuredPlannerReturnURL(page) } aria-labelledby={ "add-block-title-dialog-" + segmentID }>
 		<div class="task-dialog__header"><h3 id={ "add-block-title-dialog-" + segmentID }>Adicionar bloco</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/blocos") }>
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.BlockForm.Errors), []components.FieldErrorRef{{Key: "segment", Field: "add-block-title-dialog-" + segmentID}, {Key: "purpose", Field: "block-purpose-" + segmentID}, {Key: "title", Field: "block-title-" + segmentID}, {Key: "instructions", Field: "block-instructions-" + segmentID}}))
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/blocos") } data-task-form>
 			@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			@components.FieldLabel("block-purpose-"+segmentID, "Objetivo", true)
 			<select id={ "block-purpose-" + segmentID } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
-					<option value={ value }>{ structuredPurposeLabel(value) }</option>
+					<option value={ value } selected?={ page.BlockForm.SegmentID == segmentID && page.BlockForm.Purpose == value }>{ structuredPurposeLabel(value) }</option>
 				}
-			</select>
+			</select>@components.FieldErrorMessage("purpose", page.BlockForm.Errors["purpose"])
 			@components.FieldLabel("block-title-"+segmentID, "Título (opcional)", false)
-			<input id={ "block-title-" + segmentID } name="title" maxlength="120"/>
+			<input id={ "block-title-" + segmentID } name="title" maxlength="120" value={ page.BlockForm.Title }/>@components.FieldErrorMessage("title", page.BlockForm.Errors["title"])
 			@components.FieldLabel("block-instructions-"+segmentID, "Instruções", true)
-			<textarea id={ "block-instructions-" + segmentID } name="instructions" minlength="2" maxlength="4000" required></textarea>
+			<textarea id={ "block-instructions-" + segmentID } name="instructions" minlength="2" maxlength="4000" required>{ page.BlockForm.Instructions }</textarea>@components.FieldErrorMessage("instructions", page.BlockForm.Errors["instructions"])
 			<button type="submit">Adicionar bloco</button>
 		</form>
 	</dialog>
@@ -1154,6 +1370,7 @@ templ structuredGymExerciseForm(page StructuredTrainingPage, blockID string) {
 	<dialog id={ "add-exercise-" + blockID } class="task-dialog" data-task-dialog aria-labelledby={ "add-exercise-title-" + blockID }>
 		<div class="task-dialog__header"><h3 id={ "add-exercise-title-" + blockID }>Adicionar exercício</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + blockID + "/exercicios") }>@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 @structuredGymExerciseFields(blockID)
 <button type="submit">Adicionar exercício</button></form>
 	</dialog>
@@ -1191,6 +1408,10 @@ templ structuredGymExerciseFields(id string) {
 
 templ structuredWaterBlockForm(page StructuredTrainingPage, sessionID string, segment StructuredTrainingSegment) {
 	<a class="action action--quiet" href={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos/" + segment.ID + "/agua?return_to=" + url.QueryEscape(structuredPlannerReturnURL(page))) }>Adicionar treino de água</a>
+}
+
+templ structuredGymBlockTaskLink(page StructuredTrainingPage, sessionID string, segmentID string) {
+	<a class="action action--quiet" href={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos/" + segmentID + "/ginasio?return_to=" + url.QueryEscape(structuredPlannerReturnURL(page))) }>Adicionar treino de ginásio</a>
 }
 
 templ structuredWaterProfileManagement(page StructuredTrainingPage) {
@@ -1251,7 +1472,9 @@ templ structuredWaterStepForm(page StructuredTrainingPage, block StructuredTrain
 	<button class="action action--quiet" type="button" data-dialog-open={ "add-water-step-" + block.ID }>Adicionar passo</button>
 	<dialog id={ "add-water-step-" + block.ID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-step-title-" + block.ID }>
 		<div class="task-dialog__header"><h3 id={ "add-water-step-title-" + block.ID }>Adicionar esforço ou grupo</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + block.ID + "/agua/passos") }>@page.CSRFField @structuredWaterStepFields(block.ID, block.WaterSteps)<button type="submit">Adicionar passo</button></form>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + block.ID + "/agua/passos") }>@page.CSRFField
+			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+			@structuredWaterStepFields(block.ID, block.WaterSteps)<button type="submit">Adicionar passo</button></form>
 	</dialog>
 }
 
@@ -1282,7 +1505,7 @@ templ structuredMoveSegment(page StructuredTrainingPage, segment StructuredTrain
 	<div class="record-item__actions" aria-label="Ordenar segmento">
 		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir segmento", "↑"}, {"down", "Descer segmento", "↓"}} {
 			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segment.ID + "/mover") }>@page.CSRFField
-<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
+	<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/><input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
 		}
 	</div>
 }
@@ -1291,7 +1514,7 @@ templ structuredMoveBlock(page StructuredTrainingPage, block StructuredTrainingB
 	<div class="record-item__actions" aria-label="Ordenar bloco">
 		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir bloco", "↑"}, {"down", "Descer bloco", "↓"}} {
 			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + block.ID + "/mover") }>@page.CSRFField
-<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
+	<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/><input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
 		}
 	</div>
 }
@@ -1300,7 +1523,7 @@ templ structuredMoveExercise(page StructuredTrainingPage, exercise StructuredGym
 	<div class="record-item__actions" aria-label="Ordenar exercício">
 		for _, move := range []struct{ Value, Label, Symbol string }{{"up", "Subir exercício", "↑"}, {"down", "Descer exercício", "↓"}} {
 			<form method="post" action={ templ.SafeURL("/admin/treinos/estruturados/exercicios/" + exercise.ID + "/mover") }>@page.CSRFField
-<input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
+	<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/><input type="hidden" name="direction" value={ move.Value }/><button class="action action--quiet action--icon" type="submit" aria-label={ move.Label } title={ move.Label }>{ move.Symbol }</button></form>
 		}
 	</div>
 }
@@ -1318,7 +1541,7 @@ templ gymObjectiveOptions() {
 }
 
 func structuredTrainingActions() []components.PageAction {
-	return []components.PageAction{{Label: "Criar grupo", Href: "#criar-grupo-treino", Variant: "primary"}, {Label: "Criar semana", Href: "#criar-semana-treino", Variant: "secondary"}, {Label: "Criar sessão", Href: "#criar-sessao-estruturada", Variant: "secondary"}, {Label: "Treinos atuais", Href: "/admin/treinos", Variant: "quiet"}}
+	return []components.PageAction{{Label: "Criar grupo", Href: "#criar-grupo-treino", Variant: "primary", TaskID: "criar-grupo-treino"}, {Label: "Criar semana", Href: "#criar-semana-treino", Variant: "secondary", TaskID: "criar-semana-treino"}, {Label: "Criar sessão", Href: "#criar-sessao-estruturada", Variant: "secondary", TaskID: "criar-sessao-estruturada"}, {Label: "Treinos atuais", Href: "/admin/treinos", Variant: "quiet"}}
 }
 func structuredEntryKindLabel(value string) string {
 	switch value {

@@ -30,6 +30,11 @@ ORDER BY published_at DESC, id DESC
 LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
 
+-- name: GetNewsForAdmin :one
+SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
+FROM news_items
+WHERE id = sqlc.arg(id);
+
 -- name: CreateNews :one
 INSERT INTO news_items (title_pt, summary_pt, url, published_at)
 VALUES (sqlc.arg(title_pt), sqlc.arg(summary_pt), sqlc.arg(url), sqlc.arg(published_at))
@@ -73,3 +78,21 @@ WHERE mt.status IN ('Scheduled', 'In_Progress')
 ORDER BY mt.scheduled_for ASC, mt.id ASC
 LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
+
+-- name: GetMaintenanceForAdmin :one
+SELECT
+    mt.id,
+    mt.equipment_id,
+    e.asset_tag,
+    e.name AS equipment_name,
+    e.type AS equipment_type,
+    mt.scheduled_for,
+    mt.description,
+    mt.status,
+    mt.created_by_id,
+    mt.completed_at,
+    mt.created_at,
+    mt.updated_at
+FROM maintenance_tasks mt
+JOIN equipment e ON e.id = mt.equipment_id
+WHERE mt.id = sqlc.arg(id);
