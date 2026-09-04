@@ -1,10 +1,150 @@
 package db
 
 import (
+	"context"
+	"errors"
 	"io/fs"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type bootstrapTransactionFake struct {
+	pgx.Tx
+	versions  []string
+	legacy    map[string]bool
+	execErr   error
+	rowErr    error
+	commitErr error
+	installed bool
+	objects   int
+}
+
+func (t *bootstrapTransactionFake) Exec(_ context.Context, _ string, args ...any) (pgconn.CommandTag, error) {
+	if t.execErr != nil {
+		return pgconn.CommandTag{}, t.execErr
+	}
+	if len(args) == 1 {
+		if version, ok := args[0].(string); ok {
+			t.versions = append(t.versions, version)
+		}
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+func (t *bootstrapTransactionFake) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	if t.rowErr != nil {
+		return bootstrapRow{err: t.rowErr}
+	}
+	if len(args) == 1 {
+		if table, ok := args[0].(string); ok && strings.HasPrefix(table, "public.") {
+			return bootstrapRow{exists: t.legacy[table]}
+		}
+	}
+	return bootstrapRow{exists: t.installed, integer: t.objects}
+}
+
+type bootstrapRow struct {
+	exists  bool
+	err     error
+	integer int
+}
+
+func (r bootstrapRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	switch value := dest[0].(type) {
+	case *bool:
+		*value = r.exists
+	case *int:
+		*value = r.integer
+	}
+	return nil
+}
+
+func (t *bootstrapTransactionFake) Rollback(context.Context) error { return nil }
+func (t *bootstrapTransactionFake) Commit(context.Context) error   { return t.commitErr }
+
+type bootstrapConnectionFake struct {
+	tx  pgx.Tx
+	err error
+}
+
+func (c bootstrapConnectionFake) Begin(context.Context) (pgx.Tx, error) { return c.tx, c.err }
+
+type bootstrapRoleConnectionFake struct {
+	err        error
+	statements []string
+}
+
+func (c *bootstrapRoleConnectionFake) Exec(_ context.Context, statement string, _ ...any) (pgconn.CommandTag, error) {
+	c.statements = append(c.statements, statement)
+	return pgconn.NewCommandTag("OK"), c.err
+}
+
+func TestMigrationHelpersPropagateDatabaseFailures(t *testing.T) {
+	databaseErr := errors.New("database unavailable")
+	for _, tc := range []struct {
+		name string
+		run  func(*bootstrapTransactionFake) error
+		fake bootstrapTransactionFake
+		want string
+	}{
+		{"record baseline", func(tx *bootstrapTransactionFake) error { return recordBaselineMigrations(t.Context(), tx) }, bootstrapTransactionFake{execErr: databaseErr}, "record baseline migration"},
+		{"inspect legacy table", func(tx *bootstrapTransactionFake) error { return verifyLegacyBaseline(t.Context(), tx) }, bootstrapTransactionFake{rowErr: databaseErr}, "inspect legacy baseline table"},
+		{"check incremental migration", func(tx *bootstrapTransactionFake) error { return applyIncrementalMigrations(t.Context(), tx) }, bootstrapTransactionFake{rowErr: databaseErr}, "check migration"},
+		{"apply incremental migration", func(tx *bootstrapTransactionFake) error { return applyIncrementalMigrations(t.Context(), tx) }, bootstrapTransactionFake{execErr: databaseErr}, "apply migration"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(&tc.fake)
+			if err == nil || !errors.Is(err, databaseErr) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q wrapping database error", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBootstrapRolesExecutesAllRoleHardeningStatementsAndStopsOnFailure(t *testing.T) {
+	credentials := RoleCredentials{AppUsername: "mycfc_app", AppPassword: "app-password", MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password"}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	if len(conn.statements) < 15 || !strings.Contains(conn.statements[0], "CREATE EXTENSION") || !strings.Contains(conn.statements[len(conn.statements)-1], "ALTER DEFAULT PRIVILEGES") {
+		t.Fatalf("bootstrap statements=%#v", conn.statements)
+	}
+	conn.err = errors.New("permission denied")
+	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); !errors.Is(err, conn.err) || !strings.Contains(err.Error(), "enable citext") {
+		t.Fatalf("BootstrapRoles() error=%v", err)
+	}
+}
+
+func TestApplyBaselineCoversTransactionAndInstalledMigrationOutcomes(t *testing.T) {
+	databaseErr := errors.New("database unavailable")
+	if err := ApplyBaseline(t.Context(), bootstrapConnectionFake{err: databaseErr}); !errors.Is(err, databaseErr) || !strings.Contains(err.Error(), "begin baseline") {
+		t.Fatalf("begin error=%v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		tx   bootstrapTransactionFake
+		want string
+	}{
+		{"lock failure", bootstrapTransactionFake{execErr: databaseErr}, "lock baseline"},
+		{"marker query failure", bootstrapTransactionFake{rowErr: databaseErr}, "check baseline"},
+		{"installed migration commit failure", bootstrapTransactionFake{installed: true, commitErr: databaseErr}, "database unavailable"},
+		{"legacy schema missing core table", bootstrapTransactionFake{objects: 1, legacy: map[string]bool{"public.users": true}}, "training_session_outcomes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ApplyBaseline(t.Context(), bootstrapConnectionFake{tx: &tc.tx})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want=%q", err, tc.want)
+			}
+		})
+	}
+}
 
 func TestValidateBootstrapInput(t *testing.T) {
 	valid := RoleCredentials{AppUsername: "mycfc_app", AppPassword: "app-password", MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password"}
@@ -35,6 +175,80 @@ func TestMigrationVersion(t *testing.T) {
 	version := migrationVersion("migrations/202608040001_leaderboard_distance.sql")
 	if version != "202608040001_leaderboard_distance" {
 		t.Fatalf("version = %q", version)
+	}
+}
+
+func TestRecordBaselineMigrationsRecordsEmbeddedHistoryThroughCutoff(t *testing.T) {
+	tx := &bootstrapTransactionFake{}
+	if err := recordBaselineMigrations(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.versions) == 0 || tx.versions[len(tx.versions)-1] != baselineIncludesThrough {
+		t.Fatalf("recorded versions=%#v cutoff=%q", tx.versions, baselineIncludesThrough)
+	}
+	seen := map[string]bool{}
+	for _, version := range tx.versions {
+		if version > baselineIncludesThrough || seen[version] {
+			t.Fatalf("invalid baseline migration history=%#v", tx.versions)
+		}
+		seen[version] = true
+	}
+	if !seen[baselineIncludesThrough] {
+		t.Fatalf("cutoff %q was not recorded", baselineIncludesThrough)
+	}
+}
+
+func TestVerifyLegacyBaselineRequiresCoreTablesBeforeAdoption(t *testing.T) {
+	t.Run("complete", func(t *testing.T) {
+		tx := &bootstrapTransactionFake{legacy: map[string]bool{"public.users": true, "public.training_session_outcomes": true, "public.sessions": true}}
+		if err := verifyLegacyBaseline(context.Background(), tx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("missing core table", func(t *testing.T) {
+		tx := &bootstrapTransactionFake{legacy: map[string]bool{"public.users": true, "public.training_session_outcomes": false, "public.sessions": true}}
+		err := verifyLegacyBaseline(context.Background(), tx)
+		if err == nil || !strings.Contains(err.Error(), "training_session_outcomes") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+}
+
+func TestApplyIncrementalMigrationsExecutesAndRecordsEveryUninstalledFile(t *testing.T) {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &bootstrapTransactionFake{}
+	if err := applyIncrementalMigrations(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.versions) != len(entries) {
+		t.Fatalf("recorded=%d migrations=%d versions=%#v", len(tx.versions), len(entries), tx.versions)
+	}
+	for index, name := range entries {
+		if tx.versions[index] != migrationVersion(name) {
+			t.Fatalf("recorded version %d=%q want=%q", index, tx.versions[index], migrationVersion(name))
+		}
+	}
+}
+
+func TestBootstrapSQLQuotesIdentifiersAndPasswordsWithoutInterpolationLeaks(t *testing.T) {
+	if got, want := quoteIdentifier(`role"name`), `"role""name"`; got != want {
+		t.Fatalf("quoted identifier=%q want=%q", got, want)
+	}
+	if got, want := quoteLiteral(`pa'ssword`), `'pa''ssword'`; got != want {
+		t.Fatalf("quoted literal=%q want=%q", got, want)
+	}
+	roleSQL := roleStatement("app_user", "pa'ssword")
+	if !strings.Contains(roleSQL, `CREATE ROLE "app_user"`) || !strings.Contains(roleSQL, `'pa''ssword'`) || strings.Contains(roleSQL, `pa'ssword`) {
+		t.Fatalf("role SQL=%q", roleSQL)
+	}
+	ownershipSQL := transferOwnershipStatement("migrator")
+	for _, expected := range []string{"ALTER TABLE", "ALTER FUNCTION", "ALTER TYPE", "'migrator'"} {
+		if !strings.Contains(ownershipSQL, expected) {
+			t.Errorf("ownership SQL missing %q", expected)
+		}
 	}
 }
 

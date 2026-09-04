@@ -118,7 +118,7 @@ test.describe('representative page-state accessibility', () => {
     await expectAccessiblePageState(page, 'GET /missing authenticated not found');
   });
 
-  test('covers administrator populated collections and authoring disclosures', async ({ page }) => {
+  test('covers administrator populated collections and authoring tasks', async ({ page }) => {
     test.setTimeout(240_000);
     await login(page, adminEmail);
 
@@ -131,17 +131,19 @@ test.describe('representative page-state accessibility', () => {
       await expectAccessiblePageState(page, `GET ${route} populated`);
     }
 
-    for (const [route, panelID] of [
-      ['/admin/eventos', 'criar-evento'],
-      ['/admin/albuns', 'novo-album'],
-    ]) {
-      await page.goto(route);
-      const panel = page.locator(`#${panelID}`);
-      await expect(panel).not.toHaveAttribute('open', '');
-      await expectAccessiblePageState(page, `GET ${route} authoring closed`);
-      await page.locator(`a[href="#${panelID}"]`).click();
-      await expect(panel).toHaveAttribute('open', '');
-      await expectAccessiblePageState(page, `GET ${route} authoring open`);
-    }
+    await page.goto('/admin/eventos');
+    await expectAccessiblePageState(page, 'GET /admin/eventos browse mode');
+    await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
+    await expect(page).toHaveURL('/admin/eventos/criar');
+    await expect(page.locator('form[action="/admin/events"]')).toBeVisible();
+    await expectAccessiblePageState(page, 'GET /admin/eventos/criar authoring task');
+
+    await page.goto('/admin/albuns');
+    const task = page.locator('#novo-album');
+    await expect(task).not.toHaveAttribute('open', '');
+    await expectAccessiblePageState(page, 'GET /admin/albuns browse mode');
+    await page.getByRole('link', { name: 'Novo álbum', exact: true }).click();
+    await expect(task).toHaveJSProperty('open', true);
+    await expectAccessiblePageState(page, 'GET /admin/albuns authoring task');
   });
 });

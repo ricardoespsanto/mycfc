@@ -36,18 +36,17 @@ type EquipmentRetirePage struct {
 }
 
 templ EquipmentCreateForm(form EquipmentForm) {
-	<details id="equipment-form" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 } aria-labelledby="equipment-form-title">
-		<summary><span><strong id="equipment-form-title">Adicionar equipamento</strong><small>Registe uma embarcação, pagaia ou veículo.</small></span></summary>
-		<button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "equipment-form", TitleID: "equipment-form-title", Eyebrow: "Frota", Title: "Adicionar equipamento", Description: "Registe uma embarcação, pagaia ou veículo.", Variant: "sheet", URL: form.ReturnURL, ReturnURL: form.ReturnURL, Open: len(form.Errors) > 0}) {
+		<div class="task-form">
 			@equipmentErrorSummary(form, "create")
-			<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment", form.ReturnURL)) } enctype="multipart/form-data">
+			<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment", form.ReturnURL)) } enctype="multipart/form-data" data-task-form>
 				@form.CSRFField
 				@equipmentFields(form, "create")
-				@components.FormActions(form.ReturnURL) { <button type="submit">Adicionar equipamento</button> }
+				@components.TaskActions(form.ReturnURL) { <button class="action action--primary" type="submit" data-task-submit>Adicionar equipamento</button> }
 			</form>
 		</div>
-	</details>
+	}
+	@components.DiscardConfirmation()
 }
 
 templ EquipmentEdit(page EquipmentEditPage) {
@@ -72,6 +71,12 @@ templ equipmentEditContent(page EquipmentEditPage) {
 			@equipmentFields(page.Form, "edit")
 			@components.FormActions(page.ReturnURL) { <button type="submit">Guardar alterações</button> }
 		</form>
+		if page.Form.Retired {
+			<form method="post" action={ templ.SafeURL(fleetActionURL("/admin/fleet/equipment/"+page.Form.ID+"/reactivate", page.ReturnURL)) }>
+				@page.Form.CSRFField
+				<button type="submit">Reativar equipamento</button>
+			</form>
+		}
 	</section>
 	<section class="module">
 		@components.SectionHeading("Auditoria", "Histórico do equipamento", "Alterações administrativas preservadas por ordem cronológica.")
@@ -142,7 +147,7 @@ templ equipmentFields(form EquipmentForm, prefix string) {
 	<textarea id={ "equipment-"+prefix+"-notes" } name="notes" maxlength="4000" aria-invalid?={ form.Errors["notes"] != "" } aria-describedby="notes-error">{ form.Notes }</textarea>@components.FieldErrorMessage("notes", form.Errors["notes"])
 	@components.FieldLabel("equipment-"+prefix+"-photo", equipmentPhotoLabel(form.HasPhoto), false)
 	<input id={ "equipment-"+prefix+"-photo" } name="photo" type="file" accept="image/jpeg,image/png,image/webp" aria-invalid?={ form.Errors["photo"] != "" } aria-describedby="photo-error"/>@components.FieldErrorMessage("photo", form.Errors["photo"])
-	<p class="field-hint">JPEG, PNG ou WebP. Máximo de 10 MB.</p>
+	<p class="field-hint">JPEG, PNG ou WebP. Máximo de 10 MB. O ficheiro selecionado não é reposto após um erro.</p>
 }
 
 func equipmentPhotoLabel(hasPhoto bool) string {

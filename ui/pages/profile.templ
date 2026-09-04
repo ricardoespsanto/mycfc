@@ -27,6 +27,26 @@ type ProfilePage struct {
 
 templ Profile(page ProfilePage) { @components.Base(page.Meta, profileContent(page)) }
 
+type ProfilePhotoRemovalPage struct {
+	Meta components.PageMeta
+	Name, ActionPath, ReturnURL string
+}
+
+templ ProfilePhotoRemoval(page ProfilePhotoRemovalPage) {
+	@components.Base(page.Meta, profilePhotoRemovalContent(page))
+}
+
+templ profilePhotoRemovalContent(page ProfilePhotoRemovalPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "remover-fotografia-perfil", TitleID: "remove-profile-photo-title", Eyebrow: "Confirmação", Title: "Remover fotografia", Description: page.Name, Variant: "confirmation", ReturnURL: page.ReturnURL}) {
+		<p>A fotografia de perfil será removida definitivamente e o avatar voltará às iniciais.</p>
+		<form method="post" action={ templ.SafeURL(page.ActionPath) }>
+			@page.Meta.CSRFField
+			<input type="hidden" name="confirm_removal" value="yes"/>
+			<button class="action action--danger" type="submit">Remover fotografia definitivamente</button>
+		</form>
+	}
+}
+
 templ profileContent(page ProfilePage) {
 	<div class="profile-page">
 		@components.PageHeader("Conta", "Perfil", "Mantenha os contactos e a informação relevante para uma participação segura no clube.", profileActions(page))
@@ -165,7 +185,7 @@ templ profilePhoto(page ProfilePage) {
 			<button type="submit">{ photoButtonLabel(page.HasPhoto) }</button>
 		</form>
 		if page.HasPhoto {
-			<form method="post" action={ profileSubpath(page, "/fotografia/remover") }>@page.Meta.CSRFField<button class="action action--danger" type="submit">Remover fotografia</button></form>
+			<a class="action action--danger" href={ templ.SafeURL(profileSubpath(page, "/fotografia/remover")) }>Remover fotografia</a>
 		}
 	</section>
 }

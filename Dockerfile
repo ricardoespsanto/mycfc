@@ -13,7 +13,9 @@ WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum* ./
 RUN go mod download
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY ui ./ui
 COPY --from=assets /src/ui/static/dist ./ui/static/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mycfc ./cmd/server
 

@@ -27,6 +27,7 @@ var (
 	lowerHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	lowerHex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	bucketName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
+	awsRegion  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
 const productionParameterPrefix = "/mycfc/production"
@@ -473,6 +474,29 @@ func (c Config) IsProduction() bool { return c.AppEnv == "production" }
 
 func (c Config) HTTPAddress() string { return fmt.Sprintf(":%d", c.Port) }
 
+// ObjectStorageOrigin returns the browser-visible origin used by presigned S3
+// object URLs. Configuration validation remains authoritative; an invalid or
+// incomplete value fails closed to an empty CSP source.
+func (c Config) ObjectStorageOrigin() string {
+	if endpoint := strings.TrimSpace(c.S3Endpoint); endpoint != "" {
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+			return ""
+		}
+		return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+	}
+	bucket := strings.TrimSpace(c.S3BucketName)
+	region := strings.TrimSpace(c.AWSRegion)
+	if validateBucketName(bucket) != nil || !awsRegion.MatchString(region) {
+		return ""
+	}
+	host := bucket + ".s3." + region + ".amazonaws.com"
+	if c.S3ForcePathStyle {
+		host = "s3." + region + ".amazonaws.com"
+	}
+	return (&url.URL{Scheme: "https", Host: host}).String()
+}
+
 // ResolvedDatabaseURL supports local URLs and production component secrets.
 func (c Config) ResolvedDatabaseURL() (string, error) {
 	if c.DatabaseURL.Value() != "" {
@@ -621,8 +645,8 @@ func (c Config) Validate() error {
 	if c.SMTPTimeout <= 0 {
 		problems.Add("SMTP_TIMEOUT", "must be greater than zero")
 	}
-	if strings.TrimSpace(c.AWSRegion) == "" {
-		problems.Add("AWS_REGION", "must not be empty")
+	if !awsRegion.MatchString(strings.TrimSpace(c.AWSRegion)) {
+		problems.Add("AWS_REGION", "must be a valid AWS region name")
 	}
 	if err := validateBucketName(c.S3BucketName); err != nil {
 		problems.Add("S3_BUCKET_NAME", err.Error())

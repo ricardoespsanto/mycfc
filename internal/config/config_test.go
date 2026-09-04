@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/caarlos0/env/v11"
@@ -18,6 +19,22 @@ import (
 type recordingParameterGetter struct {
 	mu      sync.Mutex
 	batches [][]string
+	err     error
+	invalid []string
+	empty   bool
+}
+
+type recordingSecretGetter struct {
+	output *secretsmanager.GetSecretValueOutput
+	err    error
+	secret string
+}
+
+func (g *recordingSecretGetter) GetSecretValue(_ context.Context, input *secretsmanager.GetSecretValueInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
+	if input.SecretId != nil {
+		g.secret = *input.SecretId
+	}
+	return g.output, g.err
 }
 
 func (g *recordingParameterGetter) GetParameters(_ context.Context, input *ssm.GetParametersInput, _ ...func(*ssm.Options)) (*ssm.GetParametersOutput, error) {
@@ -25,7 +42,13 @@ func (g *recordingParameterGetter) GetParameters(_ context.Context, input *ssm.G
 	g.batches = append(g.batches, append([]string(nil), input.Names...))
 	g.mu.Unlock()
 
-	output := &ssm.GetParametersOutput{Parameters: make([]types.Parameter, 0, len(input.Names))}
+	if g.err != nil {
+		return nil, g.err
+	}
+	output := &ssm.GetParametersOutput{InvalidParameters: g.invalid, Parameters: make([]types.Parameter, 0, len(input.Names))}
+	if g.empty {
+		return output, nil
+	}
 	for _, name := range input.Names {
 		name, value := name, "value-for-"+name
 		output.Parameters = append(output.Parameters, types.Parameter{Name: &name, Value: &value})
@@ -57,6 +80,54 @@ func TestLoadProductionParameterValuesBatchesRequests(t *testing.T) {
 	}
 }
 
+func TestLoadProductionParameterValuesRejectsFailedInvalidAndIncompleteResponses(t *testing.T) {
+	tests := []struct {
+		name   string
+		client recordingParameterGetter
+		want   string
+	}{
+		{name: "SSM failure", client: recordingParameterGetter{err: fmt.Errorf("access denied")}, want: "access denied"},
+		{name: "invalid parameter", client: recordingParameterGetter{invalid: []string{"/missing"}}, want: "parameters not found"},
+		{name: "incomplete response", client: recordingParameterGetter{empty: true}, want: "received 0"},
+	}
+	for index := range tests {
+		tc := &tests[index]
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadProductionParameterValues(t.Context(), &tc.client)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestLoadProductionSecretsValidatesAWSResponsesAndParsesJSON(t *testing.T) {
+	valid := `{"SMTP_PASSWORD":"smtp-pass","CSRF_AUTH_KEY_B64":"key"}`
+	for _, tc := range []struct {
+		name   string
+		getter recordingSecretGetter
+		want   string
+	}{
+		{name: "valid JSON", getter: recordingSecretGetter{output: &secretsmanager.GetSecretValueOutput{SecretString: &valid}}},
+		{name: "AWS failure", getter: recordingSecretGetter{err: fmt.Errorf("access denied")}, want: "access denied"},
+		{name: "empty secret", getter: recordingSecretGetter{output: &secretsmanager.GetSecretValueOutput{}}, want: "empty SecretString"},
+		{name: "malformed JSON", getter: recordingSecretGetter{output: &secretsmanager.GetSecretValueOutput{SecretString: awsString("{")}}, want: "JSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values, err := loadProductionSecrets(t.Context(), &tc.getter)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("error=%v", err)
+				}
+				return
+			}
+			if err != nil || values["SMTP_PASSWORD"] != "smtp-pass" || tc.getter.secret != productionSecretID {
+				t.Fatalf("values=%#v secret=%q error=%v", values, tc.getter.secret, err)
+			}
+		})
+	}
+}
+
 func TestProductionEnvironmentParseAllowsSSMSourcedGalleryURL(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("APP_VERSION", "release-test")
@@ -65,6 +136,32 @@ func TestProductionEnvironmentParseAllowsSSMSourcedGalleryURL(t *testing.T) {
 
 	if _, err := env.ParseAs[Config](); err != nil {
 		t.Fatalf("parse production bootstrap environment: %v", err)
+	}
+}
+
+func TestLoadRejectsMissingRequiredEnvironmentBeforeExternalConfiguration(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	if _, err := Load(t.Context()); err == nil || !strings.Contains(err.Error(), "parse configuration") {
+		t.Fatalf("Load() error=%v", err)
+	}
+}
+
+func TestLoadParsesAndValidatesCompleteLocalEnvironment(t *testing.T) {
+	for name, value := range map[string]string{
+		"APP_ENV": "local", "APP_VERSION": "test", "GIT_SHA": strings.Repeat("0", 40), "BASE_URL": "http://localhost:8080",
+		"DATABASE_URL": "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable", "DB_HOST": "", "DB_PORT": "", "DB_NAME": "", "DB_USER": "", "DB_PASSWORD": "", "DB_SSLMODE": "",
+		"CSRF_AUTH_KEY_B64": base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")), "EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
+		"SMTP_HOST": "localhost", "SMTP_PORT": "1025", "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM_ADDRESS": "mycfc@example.test", "SMTP_FROM_NAME": "MyCFC", "SMTP_TLS_MODE": "none",
+		"AWS_REGION": "eu-west-1", "S3_BUCKET_NAME": "mycfc-local", "S3_ENDPOINT": "http://localhost:9000", "S3_FORCE_PATH_STYLE": "true", "GALLERY_URL": "https://example.invalid/gallery",
+		"CONSENT_TERMS_VERSION": "dev-v1", "CONSENT_TERMS_SHA256": strings.Repeat("0", 64), "CONSENT_TERMS_URL": "http://localhost:8080/legal/termos",
+		"CONSENT_IMAGE_VERSION": "dev-v1", "CONSENT_IMAGE_SHA256": strings.Repeat("0", 64), "CONSENT_IMAGE_URL": "http://localhost:8080/legal/imagem",
+		"CONSENT_MINOR_VERSION": "dev-v1", "CONSENT_MINOR_SHA256": strings.Repeat("0", 64), "CONSENT_MINOR_URL": "http://localhost:8080/legal/menores", "TRUSTED_PROXY_CIDRS": "",
+	} {
+		t.Setenv(name, value)
+	}
+	cfg, err := Load(t.Context())
+	if err != nil || cfg.DatabaseURL.Value() == "" || cfg.Port != 8080 || cfg.DBMaxConns != 8 || cfg.SMTPTLSMode != "none" {
+		t.Fatalf("config=%#v error=%v", cfg, err)
 	}
 }
 
@@ -120,10 +217,90 @@ func validConfig() Config {
 	}
 }
 
+func TestObjectStorageOriginUsesOnlyTheConfiguredBrowserOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "local endpoint strips path query and fragment",
+			cfg:  Config{S3Endpoint: "http://127.0.0.1:9000/storage?ignored=yes#fragment"},
+			want: "http://127.0.0.1:9000",
+		},
+		{
+			name: "production regional bucket",
+			cfg:  Config{S3BucketName: "mycfc-production-repairs", AWSRegion: "eu-west-1"},
+			want: "https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
+		},
+		{
+			name: "regional path style",
+			cfg:  Config{S3BucketName: "mycfc-local", AWSRegion: "eu-west-1", S3ForcePathStyle: true},
+			want: "https://s3.eu-west-1.amazonaws.com",
+		},
+		{
+			name: "endpoint with credentials fails closed",
+			cfg:  Config{S3Endpoint: "https://user:secret@objects.example.test"},
+		},
+		{
+			name: "invalid region fails closed",
+			cfg:  Config{S3BucketName: "mycfc-production-repairs", AWSRegion: "eu-west-1; img-src *"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ObjectStorageOrigin(); got != tc.want {
+				t.Fatalf("ObjectStorageOrigin() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsafeAWSRegionName(t *testing.T) {
+	cfg := validConfig()
+	cfg.AWSRegion = "eu-west-1; img-src *"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "AWS_REGION") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateAcceptsLocalConfiguration(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestDatabaseRoleURLsAndHTTPAddressUseConfiguredComponents(t *testing.T) {
+	cfg := validConfig()
+	cfg.DatabaseURL = ""
+	cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBSSLMode = "db.example.test", 5433, "mycfc", "require"
+	cfg.DBUser, cfg.DBPassword = "mycfc_app", Secret("app:password")
+	cfg.PostgresUser, cfg.PostgresPassword = "postgres", Secret("bootstrap password")
+	cfg.MigrationDBUser, cfg.MigrationDBPassword = "mycfc_migrate", Secret("migration/password")
+	cfg.Port = 8443
+
+	if cfg.HTTPAddress() != ":8443" {
+		t.Fatalf("HTTPAddress=%q", cfg.HTTPAddress())
+	}
+	for name, build := range map[string]func() (string, error){
+		"application": cfg.ResolvedDatabaseURL,
+		"bootstrap":   cfg.BootstrapDatabaseURL,
+		"migration":   cfg.MigrationDatabaseURL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, err := urlpkg.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, passwordSet := u.User.Password()
+			if u.Scheme != "postgres" || u.Host != "db.example.test:5433" || u.Path != "/mycfc" || u.Query().Get("sslmode") != "require" || u.User.Username() == "" || !passwordSet {
+				t.Fatalf("database URL=%q", raw)
+			}
+		})
 	}
 }
 
@@ -461,5 +638,46 @@ func TestSecretIsRedacted(t *testing.T) {
 		if strings.Contains(rendered, "super-secret") {
 			t.Fatalf("secret leaked in %q", rendered)
 		}
+	}
+}
+
+func TestConfigurationValueHelpersValidateBoundaryCases(t *testing.T) {
+	var secret Secret
+	if err := secret.UnmarshalText([]byte("loaded-from-environment")); err != nil || secret.Value() != "loaded-from-environment" {
+		t.Fatalf("UnmarshalText() secret=%q error=%v", secret.Value(), err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		check func() error
+		want  string
+	}{
+		{"database URL empty", func() error { return validateDatabaseURL("") }, "must not be empty"},
+		{"database URL wrong scheme", func() error { return validateDatabaseURL("https://db.example.test/mycfc") }, "PostgreSQL"},
+		{"absolute URL user info", func() error { _, err := validateAbsoluteURL("https://user:pass@example.test", false, true); return err }, "user information"},
+		{"absolute URL unsupported scheme", func() error { _, err := validateAbsoluteURL("ftp://example.test", false, true); return err }, "HTTP or HTTPS"},
+		{"bucket IP address", func() error { return validateBucketName("127.0.0.1") }, "DNS-compatible"},
+		{"bucket repeated dot", func() error { return validateBucketName("my..bucket") }, "DNS-compatible"},
+		{"cookie domain unrelated", func() error { return validateCookieDomain("attacker.example", "app.mycfc.pt") }, "parent domain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.check()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	for _, raw := range []string{"postgres://db.example.test/mycfc", "postgresql://db.example.test/mycfc"} {
+		if err := validateDatabaseURL(raw); err != nil {
+			t.Fatalf("validateDatabaseURL(%q) error=%v", raw, err)
+		}
+	}
+	prefixes, err := (Config{TrustedProxyCIDRValues: []string{" 10.0.1.7/16 ", "", "2001:db8::1/64"}}).TrustedProxyCIDRs()
+	if err != nil || len(prefixes) != 2 || prefixes[0].String() != "10.0.0.0/16" || prefixes[1].String() != "2001:db8::/64" {
+		t.Fatalf("TrustedProxyCIDRs()=%v, %v", prefixes, err)
+	}
+	if _, err := (Config{TrustedProxyCIDRValues: []string{"not-a-cidr"}}).TrustedProxyCIDRs(); err == nil {
+		t.Fatal("TrustedProxyCIDRs() accepted invalid CIDR")
 	}
 }

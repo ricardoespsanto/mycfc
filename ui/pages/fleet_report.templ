@@ -20,7 +20,7 @@ templ FleetReport(page FleetReportPage) {
 
 templ fleetReportContent(page FleetReportPage) {
 	<div class="collection-page">
-		@components.PageHeader("Atividade", "Frota", "Consulte as avarias conhecidas e comunique novos problemas no equipamento do clube.", []components.PageAction{{Label: "Reportar avaria", Href: "#repair-form", Variant: "primary"}})
+		@components.PageHeader("Atividade", "Frota", "Consulte as avarias conhecidas e comunique novos problemas no equipamento do clube.", []components.PageAction{{Label: "Reportar avaria", Href: "#repair-form", Variant: "primary", TaskID: "repair-form"}})
 		<section class="collection-view">
 			@components.SectionHeading("Em acompanhamento", "Avarias abertas", "Consulte os problemas já reportados antes de comunicar uma nova avaria.") {
 				<span class="collection-count">{ len(page.OpenRepairs) } abertas</span>

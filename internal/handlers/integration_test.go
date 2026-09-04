@@ -224,6 +224,196 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	}
 }
 
+func TestPostgresStructuredTrainingCyclesRemainScopedVersionedAndCopyIndependentDrafts(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	store := PostgresStructuredTrainingStore{Pool: pool}
+	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leisureProgramme, err := queries.GetProgrammeByCode(ctx, "Leisure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorID, coachID, seasonID, eventID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for id, name := range map[uuid.UUID]string{actorID: "Treinadora ciclos", coachID: "Treinador limitado"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '1980-01-01')`, id, name, "cycle-store-"+uuid.NewString()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	today := time.Now().In(time.Local)
+	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.Local)
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época ciclos', $3, $4)`, seasonID, "CY_"+uuid.NewString()[:8], weekStart.AddDate(0, -2, 0), weekStart.AddDate(0, 6, 0)); err != nil {
+		t.Fatal(err)
+	}
+	group, err := queries.CreateStructuredTrainingGroup(ctx, dbgen.CreateStructuredTrainingGroupParams{Name: "Grupo ciclos " + uuid.NewString()[:8], ProgrammeID: &programme.ID, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO events (id, title, description, event_type, starts_at, ends_at, created_by_id) VALUES ($1, 'Taça dos ciclos', '', 'COMPETITION', $2, $3, $4)`, eventID, weekStart.AddDate(0, 1, 0), weekStart.AddDate(0, 1, 0).Add(time.Hour), actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO event_audiences (event_id, programme_id) VALUES ($1, $2), ($1, $3)`, eventID, programme.ID, leisureProgramme.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants (user_id, capability, programme_id, granted_by_id) VALUES ($1, 'COACH', $2, $3)`, coachID, programme.ID, actorID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `UPDATE training_cycles SET parent_cycle_id = NULL WHERE training_group_id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_cycles WHERE training_group_id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM events WHERE id = $1`, eventID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM training_groups WHERE id = $1`, group.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{actorID, coachID})
+	})
+	weekOne, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M41", Description: "Fonte um", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: int16Ptr(60), CreatedByID: actorID, GroupID: group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	weekTwo, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M42", Description: "Fonte dois", WeekStart: pgtype.Date{Time: weekStart.AddDate(0, 0, 7), Valid: true}, PlannedLoadPercentage: int16Ptr(80), CreatedByID: actorID, GroupID: group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := queries.CreateStructuredTrainingSession(ctx, dbgen.CreateStructuredTrainingSessionParams{PlanID: weekOne.ID, Title: "Água fonte", StartsAt: pgtype.Timestamptz{Time: weekStart.Add(9 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: weekStart.Add(10 * time.Hour), Valid: true}, EntryKind: dbgen.TrainingEntryKindTRAINING, CreatedByID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentID, err := queries.CreateTrainingSessionSegment(ctx, dbgen.CreateTrainingSessionSegmentParams{SessionID: session.ID, Modality: dbgen.TrainingSegmentModalityWATER, Title: "Técnica"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: segmentID, Purpose: dbgen.TrainingBlockPurposeMAIN, Title: "Principal", Instructions: "Executar a fonte"}); err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{
+		TrainingGroupID: group.ID, Name: "Transformação", LevelLabel: "Mesociclo", Goals: "Preparar a prova",
+		PhaseFocusNotes: "Técnica", WeekIDs: []uuid.UUID{weekOne.ID, weekTwo.ID}, TargetEventIDs: []uuid.UUID{eventID}, ActorID: actorID, IsAdmin: true,
+	})
+	if err != nil || cycle.Version != 1 {
+		t.Fatalf("create cycle=%#v err=%v", cycle, err)
+	}
+	coachEvents, err := queries.ListManagedStructuredCompetitionEvents(ctx, dbgen.ListManagedStructuredCompetitionEventsParams{IsAdmin: false, UserID: coachID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range coachEvents {
+		if candidate.ID == eventID {
+			t.Fatal("partially authorized multi-programme competition was exposed to coach")
+		}
+	}
+	managedCycles, err := queries.ListManagedTrainingCycles(ctx, dbgen.ListManagedTrainingCyclesParams{IsAdmin: false, UserID: coachID})
+	foundManagedCycle := false
+	for _, managed := range managedCycles {
+		foundManagedCycle = foundManagedCycle || managed.ID == cycle.ID
+	}
+	if err != nil || !foundManagedCycle {
+		t.Fatalf("coach cycle list=%#v err=%v", managedCycles, err)
+	}
+	managedTargets, err := queries.ListManagedTrainingCycleTargets(ctx, dbgen.ListManagedTrainingCycleTargetsParams{IsAdmin: false, UserID: coachID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range managedTargets {
+		if target.EventID == eventID {
+			t.Fatal("partially authorized target details were exposed to coach")
+		}
+	}
+	coachEdit, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{CycleID: cycle.ID, ExpectedVersion: 1, Name: "Transformação revista pelo treinador", WeekIDs: []uuid.UUID{weekOne.ID, weekTwo.ID}, ActorID: coachID})
+	if err != nil || coachEdit.Version != 2 {
+		t.Fatalf("ordinary coach edit=%#v err=%v", coachEdit, err)
+	}
+	var preservedTargets int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_cycle_competition_targets WHERE cycle_id = $1 AND event_id = $2`, cycle.ID, eventID).Scan(&preservedTargets); err != nil || preservedTargets != 1 {
+		t.Fatalf("hidden target preservation=%d err=%v", preservedTargets, err)
+	}
+	if _, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{CycleID: cycle.ID, ExpectedVersion: 2, Name: cycle.Name, WeekIDs: []uuid.UUID{weekOne.ID, weekTwo.ID}, TargetEventIDs: []uuid.UUID{eventID}, ActorID: coachID}); !errors.Is(err, errStructuredTrainingCycleScope) {
+		t.Fatalf("partially authorized target update err=%v", err)
+	}
+	if _, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{CycleID: cycle.ID, ExpectedVersion: 99, Name: cycle.Name, WeekIDs: []uuid.UUID{weekOne.ID, weekTwo.ID}, ActorID: actorID, IsAdmin: true}); !errors.Is(err, errStructuredTrainingCycleConflict) {
+		t.Fatalf("stale cycle update err=%v", err)
+	}
+	start := make(chan struct{})
+	concurrentErrors := make(chan error, 2)
+	go func() {
+		<-start
+		_, updateErr := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{CycleID: cycle.ID, ExpectedVersion: 2, Name: "Transformação revista", LevelLabel: cycle.LevelLabel, Goals: cycle.Goals, PhaseFocusNotes: cycle.PhaseFocusNotes, WeekIDs: []uuid.UUID{weekTwo.ID, weekOne.ID}, TargetEventIDs: []uuid.UUID{eventID}, ActorID: actorID, IsAdmin: true})
+		concurrentErrors <- updateErr
+	}()
+	go func() {
+		<-start
+		_, copyErr := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: cycle.ID, FirstMonday: weekStart.AddDate(0, 0, 42), Name: "Cópia concorrente", ActorID: actorID})
+		concurrentErrors <- copyErr
+	}()
+	close(start)
+	for range 2 {
+		if err := <-concurrentErrors; err != nil {
+			t.Fatalf("concurrent cycle operation err=%v", err)
+		}
+	}
+	copied, err := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: cycle.ID, FirstMonday: weekStart.AddDate(0, 0, 28), Name: "Transformação seguinte", ActorID: actorID})
+	if err != nil || copied.ID == cycle.ID || copied.Name != "Transformação seguinte" || copied.LevelLabel != "Mesociclo" {
+		t.Fatalf("copied cycle=%#v err=%v", copied, err)
+	}
+	var copiedWeeks, copiedSessions, copiedTargets, copiedPublications int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_plans WHERE cycle_id = $1`, copied.ID).Scan(&copiedWeeks); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_sessions session JOIN training_plans plan ON plan.id = session.plan_id WHERE plan.cycle_id = $1`, copied.ID).Scan(&copiedSessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_cycle_competition_targets WHERE cycle_id = $1`, copied.ID).Scan(&copiedTargets); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_plan_publications publication JOIN training_plans plan ON plan.id = publication.plan_id WHERE plan.cycle_id = $1`, copied.ID).Scan(&copiedPublications); err != nil {
+		t.Fatal(err)
+	}
+	if copiedWeeks != 2 || copiedSessions != 1 || copiedTargets != 0 || copiedPublications != 0 {
+		t.Fatalf("copy counts weeks=%d sessions=%d targets=%d publications=%d", copiedWeeks, copiedSessions, copiedTargets, copiedPublications)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE training_sessions SET title = 'Cópia alterada' WHERE id = (SELECT session.id FROM training_sessions session JOIN training_plans plan ON plan.id = session.plan_id WHERE plan.cycle_id = $1 LIMIT 1)`, copied.ID); err != nil {
+		t.Fatal(err)
+	}
+	var sourceTitle string
+	if err := pool.QueryRow(ctx, `SELECT title FROM training_sessions WHERE id = $1`, session.ID).Scan(&sourceTitle); err != nil || sourceTitle != "Água fonte" {
+		t.Fatalf("source title=%q err=%v", sourceTitle, err)
+	}
+	weekThree, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M43", Description: "Fonte três", WeekStart: pgtype.Date{Time: weekStart.AddDate(0, 0, 14), Valid: true}, PlannedLoadPercentage: int16Ptr(50), CreatedByID: actorID, GroupID: group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{TrainingGroupID: group.ID, Name: "Realização", LevelLabel: "Mesociclo", WeekIDs: []uuid.UUID{weekThree.ID}, ActorID: actorID, IsAdmin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.SaveTrainingCycle(ctx, StructuredTrainingCycleInput{TrainingGroupID: group.ID, Name: "Época principal", LevelLabel: "Macrociclo", ChildCycleIDs: []uuid.UUID{cycle.ID, secondChild.ID}, ActorID: actorID, IsAdmin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycleWeeks, err := queries.ListManagedTrainingCycleWeeks(ctx, dbgen.ListManagedTrainingCycleWeeksParams{IsAdmin: true, UserID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregatedWeeks := 0
+	for _, row := range cycleWeeks {
+		if row.CycleID == parent.ID {
+			aggregatedWeeks++
+		}
+	}
+	if aggregatedWeeks != 3 {
+		t.Fatalf("macrocycle aggregated weeks=%d", aggregatedWeeks)
+	}
+	rolledParent, err := store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: parent.ID, FirstMonday: weekStart.AddDate(0, 0, 70), Name: "Época seguinte", ActorID: actorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_plans WHERE cycle_id = $1`, rolledParent.ID).Scan(&copiedWeeks); err != nil || copiedWeeks != 3 {
+		t.Fatalf("copied macrocycle weeks=%d err=%v", copiedWeeks, err)
+	}
+}
+
 func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)

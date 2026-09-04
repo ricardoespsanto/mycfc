@@ -1,0 +1,52 @@
+name: Bug report
+description: Report reproducible incorrect MyCFC behavior
+title: "[Bug]: "
+labels: []
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened, for which actor, and where?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give the smallest reliable sequence, including relevant state or data.
+      placeholder: |
+        1. Sign in as ...
+        2. Navigate to ...
+        3. Perform ...
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and risk
+      description: Include frequency, affected users, privacy/security implications, and any workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add logs, screenshots, failing tests, browser/environment details, or related issues without including secrets or sensitive personal data.
+    validations:
+      required: false
+  - type: textarea
+    id: done
+    attributes:
+      label: Fix acceptance and regression coverage
+      description: State the observable corrected behavior and the regression test expected.
+    validations:
+      required: true
+
