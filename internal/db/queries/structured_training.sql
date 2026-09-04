@@ -65,7 +65,7 @@ JOIN LATERAL (
     LIMIT 1
 ) season ON true
 WHERE group_row.id = sqlc.arg(group_id)
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at;
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, cycle_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at;
 
 -- name: CanManageStructuredTrainingWeek :one
 SELECT EXISTS (
@@ -102,6 +102,250 @@ WHERE plan.id = sqlc.arg(plan_id)
             AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
       )
   );
+
+-- name: ListManagedTrainingCycles :many
+SELECT cycle.id, cycle.training_group_id, group_row.name AS training_group_name,
+       cycle.season_id, season.name AS season_name, cycle.parent_cycle_id,
+       parent.name AS parent_cycle_name, cycle.name, cycle.level_label, cycle.goals,
+       cycle.phase_focus_notes, cycle.version, cycle.created_by_id, cycle.updated_by_id,
+       cycle.created_at, cycle.updated_at
+FROM training_cycles cycle
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN seasons season ON season.id = cycle.season_id
+LEFT JOIN training_cycles parent ON parent.id = cycle.parent_cycle_id
+WHERE sqlc.arg(is_admin)::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = sqlc.arg(user_id)
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY season.starts_on DESC, group_row.name, cycle.updated_at DESC, cycle.id;
+
+-- name: ListManagedTrainingCycleWeeks :many
+WITH RECURSIVE cycle_tree AS (
+    SELECT cycle.id AS ancestor_id, cycle.id AS descendant_id
+    FROM training_cycles cycle
+    UNION ALL
+    SELECT tree.ancestor_id, child.id
+    FROM cycle_tree tree
+    JOIN training_cycles child ON child.parent_cycle_id = tree.descendant_id
+)
+SELECT tree.ancestor_id AS cycle_id, plan.id AS plan_id, plan.cycle_id = tree.ancestor_id AS direct
+FROM cycle_tree tree
+JOIN training_cycles cycle ON cycle.id = tree.ancestor_id
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN training_plans plan ON plan.cycle_id = tree.descendant_id
+WHERE sqlc.arg(is_admin)::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = sqlc.arg(user_id)
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY tree.ancestor_id, plan.week_start, plan.id;
+
+-- name: ListManagedTrainingCycleTargets :many
+SELECT target.cycle_id, event_row.id AS event_id, event_row.title, event_row.starts_at, event_row.status
+FROM training_cycle_competition_targets target
+JOIN training_cycles cycle ON cycle.id = target.cycle_id
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN events event_row ON event_row.id = target.event_id
+WHERE sqlc.arg(is_admin)::boolean
+   OR (EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = sqlc.arg(user_id)
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+   AND (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+        OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+   AND NOT EXISTS (
+       SELECT 1 FROM event_audiences audience
+       WHERE audience.event_id = event_row.id
+         AND NOT EXISTS (
+             SELECT 1 FROM staff_grants grant_row
+             WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+               AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+         )
+   )
+   AND NOT EXISTS (
+       SELECT 1 FROM event_team_audiences audience
+       JOIN teams audience_team ON audience_team.id = audience.team_id
+       WHERE audience.event_id = event_row.id
+         AND NOT EXISTS (
+             SELECT 1 FROM staff_grants grant_row
+             WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+               AND grant_row.revoked_at IS NULL
+               AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+         )
+   ))
+ORDER BY target.cycle_id, event_row.starts_at, event_row.id;
+
+-- name: CanManageTrainingCycle :one
+SELECT EXISTS (
+    SELECT 1 FROM training_cycles cycle
+    JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+    WHERE cycle.id = sqlc.arg(cycle_id)
+      AND (sqlc.arg(is_admin)::boolean OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = sqlc.arg(user_id)
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      ))
+);
+
+-- name: GetTrainingCycleWeekScope :one
+SELECT plan.id, plan.training_group_id, plan.season_id, plan.cycle_id, plan.week_start, plan.updated_at
+FROM training_plans plan
+WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL AND plan.season_id IS NOT NULL
+FOR UPDATE;
+
+-- name: LockTrainingCycles :many
+SELECT cycle.*
+FROM training_cycles cycle
+WHERE cycle.id = ANY(sqlc.arg(cycle_ids)::uuid[])
+ORDER BY cycle.id
+FOR UPDATE;
+
+-- name: CreateTrainingCycle :one
+INSERT INTO training_cycles (training_group_id, season_id, parent_cycle_id, name, level_label, goals,
+                             phase_focus_notes, created_by_id, updated_by_id)
+VALUES (sqlc.arg(training_group_id), sqlc.arg(season_id), sqlc.narg(parent_cycle_id), sqlc.arg(name),
+        sqlc.arg(level_label), sqlc.arg(goals), sqlc.arg(phase_focus_notes),
+        sqlc.arg(created_by_id), sqlc.arg(created_by_id))
+RETURNING *;
+
+-- name: UpdateTrainingCycle :one
+UPDATE training_cycles
+SET name = sqlc.arg(name), level_label = sqlc.arg(level_label), goals = sqlc.arg(goals),
+    phase_focus_notes = sqlc.arg(phase_focus_notes), updated_by_id = sqlc.arg(updated_by_id),
+    version = version + 1, updated_at = clock_timestamp()
+WHERE id = sqlc.arg(cycle_id) AND version = sqlc.arg(expected_version)
+RETURNING *;
+
+-- name: ClearTrainingCycleWeeks :exec
+UPDATE training_plans SET cycle_id = NULL WHERE cycle_id = sqlc.arg(cycle_id)::uuid;
+
+-- name: ClearTrainingCycleChildren :exec
+UPDATE training_cycles SET parent_cycle_id = NULL WHERE parent_cycle_id = sqlc.arg(cycle_id)::uuid;
+
+-- name: AssignTrainingWeekToCycle :execrows
+UPDATE training_plans plan
+SET cycle_id = cycle.id
+FROM training_cycles cycle
+WHERE cycle.id = sqlc.arg(cycle_id) AND plan.id = sqlc.arg(plan_id)
+  AND plan.training_group_id = cycle.training_group_id AND plan.season_id = cycle.season_id
+  AND (plan.cycle_id IS NULL OR plan.cycle_id = cycle.id);
+
+-- name: AssignTrainingCycleChild :execrows
+WITH RECURSIVE ancestors(id) AS (
+    SELECT parent_cycle_id FROM training_cycles WHERE id = sqlc.arg(parent_cycle_id)
+    UNION ALL
+    SELECT ancestor.parent_cycle_id
+    FROM training_cycles ancestor
+    JOIN ancestors previous ON ancestor.id = previous.id
+    WHERE ancestor.parent_cycle_id IS NOT NULL
+)
+UPDATE training_cycles child
+SET parent_cycle_id = parent.id
+FROM training_cycles parent
+WHERE parent.id = sqlc.arg(parent_cycle_id) AND child.id = sqlc.arg(child_cycle_id)
+  AND child.id <> parent.id
+  AND child.training_group_id = parent.training_group_id AND child.season_id = parent.season_id
+  AND (child.parent_cycle_id IS NULL OR child.parent_cycle_id = parent.id)
+  AND NOT EXISTS (SELECT 1 FROM ancestors WHERE id = child.id);
+
+-- name: ClearManageableTrainingCycleTargets :exec
+DELETE FROM training_cycle_competition_targets target
+USING events event_row
+WHERE target.cycle_id = sqlc.arg(cycle_id) AND event_row.id = target.event_id
+  AND (sqlc.arg(is_admin)::boolean OR (
+      (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+       OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+      AND NOT EXISTS (
+          SELECT 1 FROM event_audiences audience
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM event_team_audiences audience
+          JOIN teams audience_team ON audience_team.id = audience.team_id
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL
+                  AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+            )
+      )
+  ));
+
+-- name: AddTrainingCycleTarget :execrows
+INSERT INTO training_cycle_competition_targets (cycle_id, event_id, added_by_id)
+SELECT cycle.id, event_row.id, sqlc.arg(added_by_id)
+FROM training_cycles cycle
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN events event_row ON event_row.id = sqlc.arg(event_id) AND event_row.event_type = 'COMPETITION'
+WHERE cycle.id = sqlc.arg(cycle_id)
+  AND (sqlc.arg(is_admin)::boolean OR (
+      EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+      AND (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+           OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+      AND NOT EXISTS (
+          SELECT 1 FROM event_audiences audience
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM event_team_audiences audience
+          JOIN teams audience_team ON audience_team.id = audience.team_id
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL
+                  AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+            )
+      )
+  ))
+ON CONFLICT (cycle_id, event_id) DO NOTHING;
+
+-- name: GetTrainingCycleCopySource :one
+SELECT cycle.*
+FROM training_cycles cycle
+WHERE cycle.id = sqlc.arg(cycle_id)
+FOR UPDATE;
+
+-- name: ListTrainingCycleWeekCopySources :many
+WITH RECURSIVE descendants(id) AS (
+    SELECT sqlc.arg(cycle_id)::uuid
+    UNION ALL
+    SELECT child.id FROM training_cycles child JOIN descendants parent ON child.parent_cycle_id = parent.id
+)
+SELECT plan.id, plan.title, plan.description, plan.training_group_id, plan.season_id,
+       plan.week_start, plan.planned_load_percentage, plan.updated_at
+FROM training_plans plan
+WHERE plan.cycle_id IN (SELECT id FROM descendants)
+ORDER BY plan.week_start, plan.id
+FOR UPDATE;
 
 -- name: CreateStructuredTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, entry_kind, created_by_id)
@@ -539,17 +783,28 @@ WHERE event_row.event_type = 'COMPETITION'
   AND event_row.starts_at >= CURRENT_DATE
   AND (
       sqlc.arg(is_admin)::boolean
-      OR EXISTS (
-          SELECT 1
-          FROM event_audiences audience
-          JOIN staff_grants grant_row ON true
-          LEFT JOIN teams grant_team ON grant_team.id = grant_row.team_id
-          WHERE audience.event_id = event_row.id
-            AND grant_row.user_id = sqlc.arg(user_id)
-            AND grant_row.capability = 'COACH'
-            AND grant_row.revoked_at IS NULL
-            AND (grant_row.programme_id = audience.programme_id OR grant_team.programme_id = audience.programme_id)
-      )
+      OR ((EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+           OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+          AND NOT EXISTS (
+              SELECT 1 FROM event_audiences audience
+              WHERE audience.event_id = event_row.id
+                AND NOT EXISTS (
+                    SELECT 1 FROM staff_grants grant_row
+                    WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                      AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM event_team_audiences audience
+              JOIN teams audience_team ON audience_team.id = audience.team_id
+              WHERE audience.event_id = event_row.id
+                AND NOT EXISTS (
+                    SELECT 1 FROM staff_grants grant_row
+                    WHERE grant_row.user_id = sqlc.arg(user_id) AND grant_row.capability = 'COACH'
+                      AND grant_row.revoked_at IS NULL
+                      AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+                )
+          ))
   )
 ORDER BY event_row.starts_at, event_row.id;
 

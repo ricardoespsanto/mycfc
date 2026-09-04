@@ -19,6 +19,7 @@ type AnnouncementForm struct {
 type AnnouncementsPage struct { Meta components.PageMeta; Management, CanManage bool; VisiblePreviousURL, VisibleNextURL, AuthoredPreviousURL, AuthoredNextURL, Success string; Items []AnnouncementItem; Authored []AuthoredAnnouncement; Form AnnouncementForm }
 type AnnouncementDetailPage struct { Meta components.PageMeta; Title, Body, PublishedAt, DocumentURL, DocumentSource, DocumentReviewedOn string }
 type AnnouncementPanelPage struct { UnreadCount int64; Items []AnnouncementItem }
+type AnnouncementStatusPage struct { Meta components.PageMeta; ID, Title, Status, Action, Conflict string; CSRFField templ.Component }
 
 templ AnnouncementPanel(page AnnouncementPanelPage) {
     <div class="announcement-panel__content" data-announcement-count={ fmt.Sprint(page.UnreadCount) }>
@@ -108,10 +109,10 @@ templ authoredAnnouncementItems(page AnnouncementsPage) {
                     <details class="inline-disclosure"><summary>Ações</summary><div class="record-item__actions">
                     @components.Badge(announcementStatusLabel(item.Status), announcementStatusTone(item.Status))
                     if item.Status == "DRAFT" {
-                        <form method="post" action={ "/admin/announcements/" + item.ID + "/publish" }>@page.Form.CSRFField<button class="action action--secondary" type="submit">Publicar aviso</button></form>
+                        <a class="action action--secondary" href={ "/admin/announcements/" + item.ID + "/publicar" }>Publicar aviso</a>
                     }
                     if item.Status == "PUBLISHED" {
-                        <form method="post" action={ "/admin/announcements/" + item.ID + "/expire" }>@page.Form.CSRFField<button class="action action--secondary" type="submit">Expirar</button></form>
+                        <a class="action action--secondary" href={ "/admin/announcements/" + item.ID + "/expirar" }>Expirar</a>
                     }
                     </div></details>
                 </li>
@@ -129,10 +130,29 @@ templ authoredAnnouncementItems(page AnnouncementsPage) {
             </nav>
         }
 }
+templ AnnouncementStatus(page AnnouncementStatusPage) { @components.Base(page.Meta, announcementStatusContent(page)) }
+templ announcementStatusContent(page AnnouncementStatusPage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "announcement-status", TitleID: "announcement-status-title", Eyebrow: "Confirmação", Title: announcementStatusTitle(page.Action), Description: page.Title, Variant: "confirmation", ReturnURL: "/admin/avisos"}) {
+			<form class="form-layout task-form" method="post" action={ announcementStatusPostURL(page.ID, page.Action) } data-task-form>
+				@page.CSRFField
+				@components.TaskConflict("O aviso foi alterado", page.Conflict, "", "/admin/avisos", "Voltar aos avisos")
+				<p>{ announcementStatusEffect(page.Action) }</p>
+				<p>Confirme a alteração para <strong>{ page.Title }</strong>.</p>
+				@components.TaskActions("/admin/avisos") {
+					if page.Conflict == "" {
+						<button class={ "action action--" + announcementStatusVariant(page.Action) } type="submit" data-task-submit>{ announcementStatusTitle(page.Action) }</button>
+					}
+				}
+			</form>
+		}
+	</div>
+}
 templ AnnouncementAuthoringForm(form AnnouncementForm) {
-    <details id="criar-aviso" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 } aria-labelledby="announcement-authoring-title"><summary><span><strong id="announcement-authoring-title">Criar aviso</strong><small>Prepare uma comunicação para os públicos certos.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
+    @components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-aviso", TitleID: "announcement-authoring-title", Eyebrow: "Coordenação", Title: "Criar aviso", Description: "Prepare uma comunicação para os públicos certos.", Variant: "sheet", URL: "/admin/avisos", Open: len(form.Errors) > 0}) {
+    <div class="task-form">
     @components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "title", Field: "announcement-title"}, {Key: "body", Field: "announcement-body"}, {Key: "document_url", Field: "announcement-document-url"}, {Key: "document_source", Field: "announcement-document-source"}, {Key: "reviewed_on", Field: "announcement-reviewed-on"}, {Key: "expires_at", Field: "announcement-expires"}, {Key: "audience", Field: "announcement-audience"}}))
-    <form class="form-layout" method="post" action="/admin/announcements">@form.CSRFField
+    <form class="form-layout" method="post" action="/admin/announcements" data-task-form>@form.CSRFField
         @components.RequiredNote()
         @components.FieldLabel("announcement-title", "Título", true)<input id="announcement-title" name="title" value={ form.Title } required aria-invalid?={ form.Errors["title"] != "" } aria-describedby="announcement-title-help title-error"/>@components.FieldHelp("announcement-title-help", "Use um título curto que identifique claramente o assunto.")@components.FieldErrorMessage("title", form.Errors["title"])
         @components.FieldLabel("announcement-body", "Mensagem", true)<textarea id="announcement-body" name="body" required aria-invalid?={ form.Errors["body"] != "" } aria-describedby="announcement-body-help body-error">{ form.Body }</textarea>@components.FieldHelp("announcement-body-help", "Explique o que mudou e o que o destinatário precisa de fazer.")@components.FieldErrorMessage("body", form.Errors["body"])
@@ -160,11 +180,13 @@ templ AnnouncementAuthoringForm(form AnnouncementForm) {
                 <label><input type="checkbox" name="event_id" value={ item.ID } checked?={ item.Selected }/> { item.Name }</label>
             }
         </fieldset></details>@components.FieldErrorMessage("audience", form.Errors["audience"])
-		@components.FormActions("/admin/avisos") {
+		@components.TaskActions("/admin/avisos") {
             <button class="action action--primary" name="action" value="publish" type="submit">Publicar aviso</button>
             <button class="action action--secondary" name="action" value="draft" type="submit">Guardar rascunho</button>
         }
-    </form></div></details>
+    </form></div>
+    }
+    @components.DiscardConfirmation()
 }
 templ AnnouncementDetail(page AnnouncementDetailPage) { @components.Base(page.Meta, announcementDetailContent(page)) }
 templ announcementDetailContent(page AnnouncementDetailPage) {
@@ -180,10 +202,14 @@ templ announcementDetailContent(page AnnouncementDetailPage) {
 
 func announcementPageActions(page AnnouncementsPage) []components.PageAction {
     if page.Management {
-        return []components.PageAction{{Label: "Criar aviso", Href: "#criar-aviso", Variant: "primary"}}
+        return []components.PageAction{{Label: "Criar aviso", Href: "#criar-aviso", Variant: "primary", TaskID: "criar-aviso"}}
     }
     return nil
 }
+func announcementStatusPostURL(id, action string) string { if action == "expire" { return "/admin/announcements/" + id + "/expire" }; return "/admin/announcements/" + id + "/publish" }
+func announcementStatusTitle(action string) string { if action == "expire" { return "Expirar aviso" }; return "Publicar aviso" }
+func announcementStatusVariant(action string) string { if action == "expire" { return "danger" }; return "primary" }
+func announcementStatusEffect(action string) string { if action == "expire" { return "O aviso deixa de estar disponível aos destinatários." }; return "O aviso fica disponível aos destinatários selecionados." }
 
 func announcementStatusLabel(status string) string {
     switch status {

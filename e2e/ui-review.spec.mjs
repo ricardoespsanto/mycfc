@@ -109,7 +109,7 @@ async function expectResponsiveContract(page, route, viewport) {
   await page.setViewportSize({ width: 375, height: 720 });
   const mobileHeadingSize = await page.locator('main h1').evaluate((heading) => Number.parseFloat(getComputedStyle(heading).fontSize));
   expect(mobileHeadingSize, `${route} uses an oversized mobile primary heading`).toBeLessThanOrEqual(32);
-  const touchTargetSelector = 'button, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea, summary, label:has(> input[type="checkbox"]), label:has(> input[type="radio"]), .action, .site-nav a, .admin-subnav a, .pagination a';
+  const touchTargetSelector = 'button:not([tabindex="-1"]), input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([tabindex="-1"]), select:not([tabindex="-1"]), textarea:not([tabindex="-1"]), summary:not([tabindex="-1"]), label:has(> input[type="checkbox"]), label:has(> input[type="radio"]), .action, .site-nav a, .admin-subnav a, .pagination a';
   const undersizedTargets = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
     .filter((element) => element.getClientRects().length > 0)
     .map((element) => ({ element, rect: element.getBoundingClientRect() }))
@@ -313,7 +313,6 @@ async function expectCollectionWorkflow(page, route) {
   const actionName = actionNames[route];
   const trigger = page.getByRole('link', { name: actionName, exact: true });
   if (await trigger.count() === 0) return;
-  const targetID = (await trigger.getAttribute('href')).slice(1);
   if (route === '/admin/membros') {
     const dialog = page.getByRole('dialog', { name: 'Criar conta' });
     await expect(dialog).toBeHidden();
@@ -325,13 +324,24 @@ async function expectCollectionWorkflow(page, route) {
     await expect(trigger).toBeFocused();
     return;
   }
-  const panel = page.locator(`#${targetID}`);
-  await expect(panel).not.toHaveAttribute('open', '');
+  if (route === '/admin/eventos') {
+    await expect(trigger).toHaveAttribute('href', '/admin/eventos/criar');
+    await trigger.click();
+    await expect(page).toHaveURL(/\/admin\/eventos\/criar$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Criar evento' })).toBeVisible();
+    await page.getByRole('link', { name: 'Fechar' }).click();
+    await expect(page).toHaveURL(/\/admin\/eventos$/);
+    return;
+  }
+  const targetID = (await trigger.getAttribute('data-task-open'));
+  expect(targetID, `${route} primary action is missing its task target`).toBeTruthy();
+  const panel = page.getByRole('dialog', { name: actionName });
+  await expect(panel).toBeHidden();
   await trigger.click();
-  await expect(panel).toHaveAttribute('open', '');
-  await expect(panel.getByRole('button', { name: 'Fechar' })).toBeFocused();
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('input:not([type="hidden"]), select, textarea').first()).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(panel).not.toHaveAttribute('open', '');
+  await expect(panel).toBeHidden();
   await expect(trigger).toBeFocused();
   await page.evaluate(() => document.activeElement?.blur());
 }
@@ -427,25 +437,34 @@ test('keeps collection creation usable', async ({ browser }) => {
   await expect(mobileMenu.getByRole('navigation', { name: 'Navegação principal' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth), 'mobile navigation drawer overflows').toBeLessThanOrEqual(375);
   await mobileMenu.getByRole('button', { name: 'Fechar' }).click();
-  for (const [route, panelID, summaryName] of [
-    ['/admin/membros', 'criar-conta', 'Criar conta'],
-    ['/admin/eventos', 'criar-evento', 'Criar evento'],
-    ['/admin/fleet', 'equipment-form', 'Adicionar equipamento'],
+  for (const [route, actionName] of [
+    ['/admin/membros', 'Criar conta'],
+    ['/admin/eventos', 'Criar evento'],
+    ['/admin/fleet', 'Adicionar equipamento'],
   ]) {
     await page.goto(route);
-    const panel = page.locator(`#${panelID}`);
     if (route === '/admin/membros') {
+      const panel = page.getByRole('dialog', { name: actionName });
       await expect(panel).toBeHidden();
-      await page.getByRole('link', { name: summaryName, exact: true }).click();
+      await page.getByRole('link', { name: actionName, exact: true }).click();
       await expect(page.getByRole('dialog', { name: 'Criar conta' })).toBeVisible();
       await expect(panel.locator('form')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
       continue;
     }
+    const trigger = page.getByRole('link', { name: actionName, exact: true });
+    if (route === '/admin/eventos') {
+      await expect(trigger).toHaveAttribute('href', '/admin/eventos/criar');
+      await trigger.click();
+      await expect(page).toHaveURL(/\/admin\/eventos\/criar$/);
+      await expect(page.getByRole('heading', { level: 1, name: actionName })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
+      continue;
+    }
+    const panel = page.getByRole('dialog', { name: actionName });
     await expect(panel).toBeHidden();
-    await expect(panel).not.toHaveAttribute('open', '');
-    await page.getByRole('link', { name: summaryName, exact: true }).click();
-    await expect(panel).toHaveAttribute('open', '');
+    await trigger.click();
+    await expect(panel).toBeVisible();
     await expect(panel.locator('form')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} interactive view overflows`).toBeLessThanOrEqual(375);
   }

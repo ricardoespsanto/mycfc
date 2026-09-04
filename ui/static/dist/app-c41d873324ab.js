@@ -7,6 +7,36 @@ let mobileNavigationOpener = null;
 let mobileNavigationHistoryOwned = false;
 let mobileNavigationHistoryBackPending = false;
 let pendingMobileNavigationClose = null;
+let mobileLogoutPending = false;
+
+function submitMobileLogout(button) {
+  if (!(button instanceof HTMLButtonElement) || !(button.form instanceof HTMLFormElement)) return;
+  if (mobileLogoutPending) return;
+  mobileLogoutPending = true;
+  const form = button.form;
+  button.disabled = true;
+  fetch(form.action, { method: form.method || "post", body: new FormData(form), credentials: "same-origin", redirect: "follow" })
+    .then((response) => {
+      if (!response.ok) throw new Error("logout failed");
+      window.location.assign("/login");
+    })
+    .catch(() => {
+      mobileLogoutPending = false;
+      button.disabled = false;
+      form.requestSubmit(button);
+    });
+}
+
+function interceptMobileLogoutEnter(event) {
+  if (event.key !== "Enter" || !isDialog(mobileNavigation) || !mobileNavigation.open) return;
+  const logoutButton = [event.target, document.activeElement]
+    .find((candidate) => candidate instanceof HTMLElement && candidate.matches("button.logout-button[type='submit']"));
+  if (!(logoutButton instanceof HTMLButtonElement)) return;
+  event.preventDefault();
+  submitMobileLogout(logoutButton);
+}
+
+document.addEventListener("keydown", interceptMobileLogoutEnter, true);
 
 function finishMobileNavigationClose(restoreFocus = true) {
   if (!isDialog(mobileNavigation)) return;
@@ -45,7 +75,6 @@ function openMobileNavigation(opener) {
   window.history.pushState({ mycfcNavigation: true }, "", window.location.href);
   mobileNavigationHistoryOwned = true;
   mobileNavigationHistoryBackPending = false;
-  window.setTimeout(() => mobileNavigation.querySelector("[data-mobile-navigation-close]")?.focus(), 0);
 }
 
 if (isDialog(mobileNavigation) && mobileNavigationTrigger instanceof HTMLButtonElement && mobileNavigationFallback instanceof HTMLDetailsElement) {
@@ -69,6 +98,9 @@ if (isDialog(mobileNavigation) && mobileNavigationTrigger instanceof HTMLButtonE
     }
   });
   mobileNavigation.addEventListener("keydown", (event) => containDialogFocus(mobileNavigation, event));
+  mobileNavigation.addEventListener("keydown", (event) => {
+    interceptMobileLogoutEnter(event);
+  });
 
   const mobileNavigationViewport = window.matchMedia("(max-width: 48rem)");
   mobileNavigationViewport.addEventListener("change", (event) => {
@@ -512,12 +544,15 @@ function openTaskDialog(dialog, opener, updateHistory = true) {
 function finishTaskClose(dialog, restoreFocus = true) {
   if (!isDialog(dialog)) return;
   const state = taskState(dialog);
+  const opener = restoreFocus && state.opener?.isConnected ? state.opener : null;
   if (dialog.open) dialog.close();
   state.dirty = false;
   state.historyOwned = false;
   activeTaskDialog = activeTaskDialog === dialog ? null : activeTaskDialog;
   unlockTaskDocument();
-  if (restoreFocus && state.opener?.isConnected) state.opener.focus();
+  // Chromium restores focus after the native close event. Deferring this keeps
+  // the exact opener focused when a dialog is dismissed from a tabbed context.
+  if (opener) window.setTimeout(() => opener.focus(), 0);
   state.opener = null;
 }
 
@@ -630,7 +665,11 @@ document.addEventListener("click", (event) => {
 });
 
 for (const dialog of document.querySelectorAll("dialog[data-task-surface], dialog[data-task-dialog]")) {
-  dialog.addEventListener("click", (event) => {
+	// Keep task forms available to browsers without JavaScript. Once enhancement is
+	// running they become real modal tasks, reopening their owning task on errors.
+	const openOnLoad = dialog.hasAttribute("data-task-open-on-load");
+	if (dialog.open) dialog.close();
+	dialog.addEventListener("click", (event) => {
     if (event.target === dialog) requestTaskClose(dialog);
   });
   dialog.addEventListener("cancel", (event) => {
@@ -640,6 +679,13 @@ for (const dialog of document.querySelectorAll("dialog[data-task-surface], dialo
   dialog.addEventListener("keydown", (event) => containDialogFocus(dialog, event));
   dialog.querySelector("form[data-task-form]")?.addEventListener("input", () => { taskState(dialog).dirty = true; });
   dialog.querySelector("form[data-task-form]")?.addEventListener("change", () => { taskState(dialog).dirty = true; });
+	if (openOnLoad) {
+		const panel = dialog.closest("[data-tab-panel]");
+		const navigation = panel?.closest("[data-tab-scope]")?.querySelector("[data-collection-tabs]");
+		const tab = panel && navigation ? [...navigation.querySelectorAll("a")].find((link) => link.hash === `#${panel.id}`) : null;
+		if (tab) activateCollectionTab(tab);
+		openTaskDialog(dialog, null, false);
+	}
 }
 
 document.querySelector("dialog[data-task-discard-confirmation]")?.addEventListener("cancel", (event) => {

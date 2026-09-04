@@ -32,9 +32,13 @@ test('administrator controls registered feature availability with an audited acc
 
   await expect(page.getByRole('heading', { name: 'Sistema', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Funcionalidades', level: 2 })).toBeVisible();
-  await expect(photoFeature(page).getByLabel('Desativada', { exact: true })).toBeChecked();
 
   try {
+    // Local browser runs reuse their database. Establish the documented default
+    // explicitly so this test neither depends on nor leaks prior feature state.
+    if (await photoFeature(page).getByLabel('Desativada', { exact: true }).isChecked() === false) {
+      await setPhotoAvailability(page, 'Desativada', 'Desativada');
+    }
     await setPhotoAvailability(page, 'Só administradores', 'Só administradores');
     await setPhotoAvailability(page, 'Ativa', 'Ativa');
 

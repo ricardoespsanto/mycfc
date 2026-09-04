@@ -76,7 +76,7 @@ func fleetReportContent(page FleetReportPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = components.PageHeader("Atividade", "Frota", "Consulte as avarias conhecidas e comunique novos problemas no equipamento do clube.", []components.PageAction{{Label: "Reportar avaria", Href: "#repair-form", Variant: "primary"}}).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.PageHeader("Atividade", "Frota", "Consulte as avarias conhecidas e comunique novos problemas no equipamento do clube.", []components.PageAction{{Label: "Reportar avaria", Href: "#repair-form", Variant: "primary", TaskID: "repair-form"}}).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

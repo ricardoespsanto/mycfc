@@ -2,10 +2,11 @@ package components
 
 type TaskSurfaceConfig struct {
 	ID, TitleID, Eyebrow, Title, Description, Variant, URL, ReturnURL string
+	Open bool
 }
 
 templ TaskDialog(config TaskSurfaceConfig) {
-	<dialog id={ config.ID } class={ taskSurfaceClass(config.Variant) } data-task-surface data-task-url={ config.URL } aria-labelledby={ config.TitleID }>
+	<dialog id={ config.ID } class={ taskSurfaceClass(config.Variant) } data-task-surface data-task-url={ config.URL } data-task-open-on-load?={ config.Open } aria-labelledby={ config.TitleID } open>
 		@taskHeader(config, true)
 		<div class="task-surface__body">{ children... }</div>
 	</dialog>

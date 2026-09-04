@@ -741,7 +741,6 @@ body.task-surface-open { overflow: hidden; }
 .landing-secondary:hover { color: #082b45; background: #f9f6eb; }
 
 .landing-intro, .landing-paths, .landing-club-links, .landing-contact { padding: clamp(4rem, 10vw, 8rem) max(1rem, calc((100vw - 76rem) / 2)); }
-.landing-intro { max-width: 60rem; }
 .landing-intro .landing-kicker, .landing-club-links .landing-kicker { color: #075c68; }
 .landing-intro h2, .landing-paths h2, .landing-club-links h2, .landing-contact h2 { max-width: 15ch; font-size: clamp(2.2rem, 4vw, 4rem); }
 .landing-intro > p:not(.landing-kicker) { max-width: 44rem; font-size: 1.2rem; line-height: 1.75; }

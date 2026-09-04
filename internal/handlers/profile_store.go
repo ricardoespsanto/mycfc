@@ -53,11 +53,27 @@ type ProfilePhotoUpdate struct {
 
 type PostgresProfileStore struct {
 	Pool *pgxpool.Pool
+	DB   profileDB
 	Now  func() time.Time
 }
 
+type profileDB interface {
+	db.Beginner
+	dbgen.DBTX
+}
+
+func (s PostgresProfileStore) database() profileDB {
+	if s.DB != nil {
+		return s.DB
+	}
+	if s.Pool == nil {
+		return nil
+	}
+	return s.Pool
+}
+
 func (s PostgresProfileStore) View(ctx context.Context, actorID, subjectID uuid.UUID, isAdmin bool) (result dbgen.GetMemberProfileRow, err error) {
-	err = db.WithinTx(ctx, s.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = db.WithinTx(ctx, s.database(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		if err := q.EnsureMemberProfile(ctx, subjectID); err != nil {
 			return err
@@ -76,7 +92,7 @@ func (s PostgresProfileStore) View(ctx context.Context, actorID, subjectID uuid.
 }
 
 func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) error {
-	return db.WithinTx(ctx, s.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	return db.WithinTx(ctx, s.database(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		if err := q.EnsureMemberProfile(ctx, input.SubjectID); err != nil {
 			return err
@@ -122,7 +138,7 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 }
 
 func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoUpdate) (oldKey *string, err error) {
-	err = db.WithinTx(ctx, s.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = db.WithinTx(ctx, s.database(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		if err := q.EnsureMemberProfile(ctx, input.SubjectID); err != nil {
 			return err
@@ -164,7 +180,7 @@ func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoU
 }
 
 func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectID uuid.UUID, isAdmin bool) (oldKey *string, err error) {
-	err = db.WithinTx(ctx, s.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = db.WithinTx(ctx, s.database(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		q := dbgen.New(tx)
 		current, err := q.GetMemberProfile(ctx, subjectID)
 		if err != nil {
@@ -187,7 +203,7 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 }
 
 func (s PostgresProfileStore) Avatar(ctx context.Context, params dbgen.GetMemberAvatarParams) (dbgen.GetMemberAvatarRow, error) {
-	return dbgen.New(s.Pool).GetMemberAvatar(ctx, params)
+	return dbgen.New(s.database()).GetMemberAvatar(ctx, params)
 }
 
 func canViewProfile(profile dbgen.GetMemberProfileRow, actorID uuid.UUID, isAdmin bool) bool {

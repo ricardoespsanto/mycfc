@@ -1,0 +1,6 @@
+interface:
+  display_name: "MyCFC Delivery Team"
+  short_description: "Run discovery through reviewed delivery"
+  default_prompt: "Use $mycfc-delivery to refine this idea into an approved, testable MyCFC delivery plan."
+policy:
+  allow_implicit_invocation: true

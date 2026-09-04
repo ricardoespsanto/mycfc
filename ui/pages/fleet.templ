@@ -37,6 +37,12 @@ type FleetMaintenanceForm struct {
 	EquipmentID, ScheduledFor, Description, Success, ReturnURL string
 	Errors validation.FieldErrors
 }
+type MaintenanceCompletionPage struct {
+	Meta components.PageMeta
+	Task FleetMaintenance
+	CSRFField templ.Component
+	ReturnURL, Conflict string
+}
 
 templ Fleet(page FleetPage) {
 	@components.Base(page.Meta, fleetContent(page))
@@ -44,7 +50,7 @@ templ Fleet(page FleetPage) {
 
 templ fleetContent(page FleetPage) {
 	<div class="collection-page fleet-collection">
-	@components.PageHeader("Administração", "Frota", "Inventário, avarias e manutenção organizados por tarefa.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary"}, {Label: "Reportar avaria", Href: "#repair-form", Variant: "quiet"}})
+	@components.PageHeader("Administração", "Frota", "Inventário, avarias e manutenção organizados por tarefa.", []components.PageAction{{Label: "Adicionar equipamento", Href: "#equipment-form", Variant: "primary", TaskID: "equipment-form"}, {Label: "Agendar manutenção", Href: "#maintenance-form", Variant: "secondary", TaskID: "maintenance-form"}, {Label: "Reportar avaria", Href: "#repair-form", Variant: "quiet", TaskID: "repair-form"}})
 	@components.StatusMessage(page.Success, "success")
 	<section class="fleet-overview" aria-labelledby="fleet-overview-title"><h2 id="fleet-overview-title" class="visually-hidden">Estado da frota</h2><ul aria-label="Totais atuais por estado operacional">
 		for _, count := range page.Counts {
@@ -167,14 +173,24 @@ templ RepairStatusForm(repair FleetRepair, csrfField templ.Component, returnURL 
 
 templ MaintenanceCompletionForm(task FleetMaintenance, csrfField templ.Component, returnURL string) {
 	if task.Status == "Scheduled" || task.Status == "In_Progress" {
-		<form class="inline-action" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+task.ID+"/complete", returnURL)) } hx-post={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+task.ID+"/complete", returnURL)) } hx-target={ "#maintenance-action-" + task.ID } hx-swap="outerHTML" hx-target-422={ "#maintenance-action-" + task.ID } hx-swap-422="outerHTML" hx-target-409={ "#maintenance-action-" + task.ID } hx-swap-409="outerHTML" hx-disabled-elt="find button, find input[type='submit']" data-local-mutation>
-			@csrfField
-			<input type="hidden" name="maintenance_id" value={ task.ID }/><button type="submit">Concluir manutenção</button>
-			if task.ActionError != "" {
-				<p role="alert">{ task.ActionError }</p>
-			}
-		</form>
+		<a class="action action--secondary" href={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+task.ID+"/complete", returnURL)) }>Concluir manutenção</a>
 	}
+}
+
+templ MaintenanceCompletion(page MaintenanceCompletionPage) { @components.Base(page.Meta, maintenanceCompletionContent(page)) }
+
+templ maintenanceCompletionContent(page MaintenanceCompletionPage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "concluir-manutencao", TitleID: "maintenance-completion-title", Eyebrow: "Confirmação", Title: "Concluir manutenção", Description: page.Task.Equipment + " · " + page.Task.ScheduledFor, Variant: "confirmation", ReturnURL: page.ReturnURL}) {
+			<form class="form-layout task-form" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance/"+page.Task.ID+"/complete", page.ReturnURL)) } data-task-form>
+				@page.CSRFField
+				<input type="hidden" name="maintenance_id" value={ page.Task.ID }/>
+				@components.TaskConflict("A manutenção foi alterada", page.Conflict, "", page.ReturnURL, "Voltar à frota")
+				<p>Esta ação marca a manutenção de <strong>{ page.Task.Equipment }</strong> como concluída. A tarefa deixa de aparecer nas próximas manutenções.</p>
+				@components.TaskActions(page.ReturnURL) { <button class="action action--primary" type="submit" data-task-submit>Concluir manutenção</button> }
+			</form>
+		}
+	</div>
 }
 
 templ FleetActionFeedback(success, errorMessage string) {
@@ -207,13 +223,13 @@ templ FleetMutationFeedback(kind, id, status, success, errorMessage, recoveryURL
 }
 
 templ MaintenanceForm(form FleetMaintenanceForm) {
-	<details id="maintenance-form" class="module disclosure create-panel" data-create-panel open?={ len(form.Errors) > 0 || form.Success != "" } aria-labelledby="maintenance-title">
-		<summary><span><strong id="maintenance-title">Agendar manutenção</strong><small>Planeie uma intervenção para um equipamento.</small></span></summary><button class="create-panel__close" type="button">Fechar</button><div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "maintenance-form", TitleID: "maintenance-title", Eyebrow: "Frota", Title: "Agendar manutenção", Description: "Planeie uma intervenção para um equipamento.", Variant: "sheet", URL: form.ReturnURL, ReturnURL: form.ReturnURL, Open: len(form.Errors) > 0 || form.Success != ""}) {
+		<div class="task-form">
 		if form.Success != "" {
 			@components.StatusMessage(form.Success, "success")
 		}
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "equipment_id", Field: "maintenance-equipment"}, {Key: "scheduled_for", Field: "maintenance-scheduled-for"}, {Key: "description", Field: "maintenance-description"}}))
-		<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance", form.ReturnURL)) } hx-post={ templ.SafeURL(fleetActionURL("/admin/maintenance", form.ReturnURL)) } hx-target="#maintenance-form" hx-swap="outerHTML" hx-target-422="#maintenance-form" hx-swap-422="outerHTML" hx-disabled-elt="find button, find input[type='submit']">
+		<form class="form-layout" method="post" action={ templ.SafeURL(fleetActionURL("/admin/maintenance", form.ReturnURL)) } data-task-form>
 			@form.CSRFField
 			@components.RequiredNote()
 			@components.FieldLabel("maintenance-equipment", "Equipamento", true)
@@ -232,9 +248,11 @@ templ MaintenanceForm(form FleetMaintenanceForm) {
 			<textarea id="maintenance-description" name="description" required aria-invalid?={ form.Errors["description"] != "" } aria-describedby="maintenance-description-help description-error">{ form.Description }</textarea>
 			@components.FieldHelp("maintenance-description-help", "Descreva a intervenção prevista (10 a 2000 caracteres).")
 			@components.FieldErrorMessage("description", form.Errors["description"])
-			@components.FormActions(form.ReturnURL) { <button type="submit">Agendar manutenção</button> }
+			@components.TaskActions(form.ReturnURL) { <button class="action action--primary" type="submit" data-task-submit>Agendar manutenção</button> }
 		</form>
-	</div></details>
+		</div>
+	}
+	@components.DiscardConfirmation()
 }
 
 func fleetCountLabel(total int64) string { return fmt.Sprintf("%d", total) }

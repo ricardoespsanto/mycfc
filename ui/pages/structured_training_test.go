@@ -51,6 +51,80 @@ func TestStructuredTrainingHidesProfileAdministrationFromCoach(t *testing.T) {
 	}
 }
 
+func TestStructuredTrainingRendersOptionalCyclesWithTextualDistributionAndIndependentCopy(t *testing.T) {
+	cycleID := "00000000-0000-0000-0000-000000000166"
+	weekOneID := "00000000-0000-0000-0000-000000000167"
+	weekTwoID := "00000000-0000-0000-0000-000000000168"
+	page := StructuredTrainingPage{
+		Management: true, CSRFField: templ.Raw(""),
+		Groups: []StructuredTrainingChoice{{ID: "00000000-0000-0000-0000-000000000169", Name: "Cadetes"}},
+		Weeks:  []StructuredTrainingChoice{{ID: weekOneID, Name: "Cadetes · M41"}, {ID: weekTwoID, Name: "Cadetes · M42"}},
+		Cycles: []StructuredTrainingCycle{{
+			ID: cycleID, GroupID: "00000000-0000-0000-0000-000000000169", GroupName: "Cadetes", Season: "2026/2027",
+			Name: "Transformação", LevelLabel: "Mesociclo", Goals: "Preparar a Taça", Focus: "Técnica sob fadiga", Version: 4,
+			Warning: "Distribuição incompleta: 1 de 2 semanas sem carga planeada; 1 de 2 semanas sem modalidades estruturadas.",
+			Targets: []StructuredTrainingCycleTarget{{ID: "00000000-0000-0000-0000-000000000170", Label: "03/10/2026 · Taça"}},
+			Weeks: []StructuredTrainingCycleWeek{
+				{ID: weekOneID, Title: "M41", DateRange: "05/10/2026–11/10/2026", PlannedLoad: "70%", Modalities: []string{"Água", "Ginásio"}, PlannerURL: "/admin/treinos/estruturados?group_id=00000000-0000-0000-0000-000000000169&week_id=" + weekOneID + "#training-plan"},
+				{ID: weekTwoID, Title: "M42", DateRange: "12/10/2026–18/10/2026", PlannerURL: "/admin/treinos/estruturados?group_id=00000000-0000-0000-0000-000000000169&week_id=" + weekTwoID + "#training-plan"},
+			},
+		}},
+	}
+	var output bytes.Buffer
+	if err := structuredTrainingContent(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, expected := range []string{"Ciclos", "Transformação", "Mesociclo", "Preparar a Taça", "Técnica sob fadiga", "Carga planeada: 70%", "Modalidades: Água, Ginásio", "Distribuição incompleta", "Carga planeada não definida", "Publicações, respostas de atletas e competições-alvo não são copiadas", "Estruturas incluídas", "value=\"4\""} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("cycle UI missing %q: %s", expected, html)
+		}
+	}
+	if strings.Contains(html, "readiness") || strings.Contains(html, "recomendação automática para o ciclo") {
+		t.Fatalf("cycle UI invented load advice: %s", html)
+	}
+}
+
+func TestStructuredTrainingParentEditKeepsExistingChildSelectable(t *testing.T) {
+	parentID := "00000000-0000-0000-0000-000000000171"
+	childID := "00000000-0000-0000-0000-000000000172"
+	page := StructuredTrainingPage{
+		Management: true, CSRFField: templ.Raw(""),
+		Cycles: []StructuredTrainingCycle{
+			{ID: parentID, GroupID: "00000000-0000-0000-0000-000000000169", GroupName: "Competição", Season: "2026", Name: "Macrociclo", Version: 1},
+			{ID: childID, GroupID: "00000000-0000-0000-0000-000000000169", GroupName: "Competição", Season: "2026", Name: "Mesociclo", ParentID: parentID, ParentName: "Macrociclo", Version: 1},
+		},
+	}
+	var output bytes.Buffer
+	if err := structuredTrainingContent(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	needle := `name="child_cycle_id" value="` + childID + `" checked`
+	if !strings.Contains(html, needle) {
+		t.Fatalf("parent edit did not retain child checkbox: %s", html)
+	}
+}
+
+func TestStructuredTrainingCycleErrorDialogReopensAndPreservesCopyInput(t *testing.T) {
+	cycleID := "00000000-0000-0000-0000-000000000166"
+	page := StructuredTrainingPage{
+		Management: true, OpenForm: "cycle-copy-" + cycleID, CSRFField: templ.Raw(""),
+		CycleCopyForm: StructuredTrainingCycleCopyForm{CycleID: cycleID, Name: "Nome preservado", FirstMonday: "2026-09-08", Errors: validation.FieldErrors{"first_monday": "Selecione uma segunda-feira válida."}},
+		Cycles:        []StructuredTrainingCycle{{ID: cycleID, GroupID: "00000000-0000-0000-0000-000000000169", GroupName: "Competição", Season: "2026", Name: "Fonte", Version: 1}},
+	}
+	var output bytes.Buffer
+	if err := structuredTrainingContent(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, expected := range []string{`data-task-open-on-load`, `open`, `value="Nome preservado"`, `value="2026-09-08"`, "Selecione uma segunda-feira válida."} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("missing %q in cycle error dialog", expected)
+		}
+	}
+}
+
 func TestStructuredWaterBlockTaskRendersAFullTaskWithRecoverableErrors(t *testing.T) {
 	page := StructuredWaterBlockTaskPage{
 		Meta:      components.PageMeta{Title: "Adicionar bloco de água | MyCFC"},

@@ -20,20 +20,24 @@ type NewsPage struct {
 	Items                         []NewsItem
 	Form                          NewsForm
 }
+type NewsStatusPage struct {
+	Meta components.PageMeta
+	Item NewsItem
+	CSRFField templ.Component
+	ReturnURL, Action, Conflict string
+}
 
 templ News(page NewsPage) {
 	@components.Base(page.Meta, newsContent(page))
 }
 
 templ newsContent(page NewsPage) {
-	@components.PageHeader("Administração", "Notícias", "Prepare notícias do clube e publique-as na data definida.", []components.PageAction{{Label: "Criar notícia", Href: "#criar-noticia", Variant: "primary"}})
+	@components.PageHeader("Administração", "Notícias", "Prepare notícias do clube e publique-as na data definida.", []components.PageAction{{Label: "Criar notícia", Href: "#criar-noticia", Variant: "primary", TaskID: "criar-noticia"}})
 	@components.StatusMessage(page.Success, "success")
-	<details id="criar-noticia" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="news-authoring-title">
-		<summary><span><strong id="news-authoring-title">Criar notícia</strong><small>Prepare um rascunho para publicação programada.</small></span></summary>
-		<button class="create-panel__close" type="button">Fechar</button>
-		<div class="disclosure__content">
+	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-noticia", TitleID: "news-authoring-title", Eyebrow: "Administração", Title: "Criar notícia", Description: "Prepare um rascunho para publicação programada.", Variant: "sheet", URL: "/admin/noticias", Open: len(page.Form.Errors) > 0}) {
+		<div class="task-form">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "title", Field: "news-title"}, {Key: "summary", Field: "news-summary"}, {Key: "url", Field: "news-url"}, {Key: "published_at", Field: "news-published-at"}}))
-			<form class="form-layout" method="post" action="/admin/noticias">
+			<form class="form-layout" method="post" action="/admin/noticias" data-task-form>
 				@page.Form.CSRFField
 				@components.RequiredNote()
 				@components.FieldLabel("news-title", "Título", true)
@@ -44,12 +48,13 @@ templ newsContent(page NewsPage) {
 				<input id="news-url" type="url" name="url" value={ page.Form.URL } aria-invalid?={ page.Form.Errors["url"] != "" } aria-describedby="url-error"/>@components.FieldErrorMessage("url", page.Form.Errors["url"])
 				@components.FieldLabel("news-published-at", "Publicar em", true)
 				<input id="news-published-at" type="datetime-local" name="published_at" value={ page.Form.PublishedAt } required aria-invalid?={ page.Form.Errors["published_at"] != "" } aria-describedby="published_at-error"/>@components.FieldErrorMessage("published_at", page.Form.Errors["published_at"])
-				@components.FormActions("/admin/noticias") {
-					<button type="submit">Guardar rascunho</button>
+				@components.TaskActions("/admin/noticias") {
+					<button class="action action--primary" type="submit" data-task-submit>Guardar rascunho</button>
 				}
 			</form>
 		</div>
-	</details>
+	}
+	@components.DiscardConfirmation()
 	<section class="module">
 		@components.SectionHeading("Publicação", "Notícias do clube", "Rascunhos e conteúdos publicados para os membros.")
 		if len(page.Items) == 0 {
@@ -62,13 +67,11 @@ templ newsContent(page NewsPage) {
 						<div class="record-item__copy"><h3>{ item.Title }</h3><p class="record-meta">{ item.PublishedAt }</p></div>
 						if item.Published {
 							@components.Badge("Publicada", "success")
-							<div class="record-item__actions"><form method="post" action={ "/admin/noticias/" + item.ID + "/expirar" }>@page.Form.CSRFField
-<button class="action action--secondary" type="submit">Expirar</button></form></div>
+							<div class="record-item__actions"><a class="action action--secondary" href={ newsStatusURL(item.ID, "expire") }>Expirar</a></div>
 						}
 						if !item.Published {
 							@components.Badge("Rascunho", "warning")
-							<div class="record-item__actions"><form method="post" action={ "/admin/noticias/" + item.ID + "/publicar" }>@page.Form.CSRFField
-<button class="action action--secondary" type="submit">Publicar</button></form></div>
+							<div class="record-item__actions"><a class="action action--secondary" href={ newsStatusURL(item.ID, "publish") }>Publicar</a></div>
 						}
 					</li>
 				}
@@ -86,3 +89,27 @@ templ newsContent(page NewsPage) {
 		}
 	</section>
 }
+
+templ NewsStatus(page NewsStatusPage) { @components.Base(page.Meta, newsStatusContent(page)) }
+
+templ newsStatusContent(page NewsStatusPage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "news-status", TitleID: "news-status-title", Eyebrow: "Confirmação", Title: newsStatusTitle(page.Action), Description: page.Item.Title, Variant: "confirmation", ReturnURL: page.ReturnURL}) {
+			<form class="form-layout task-form" method="post" action={ newsStatusURL(page.Item.ID, page.Action) } data-task-form>
+				@page.CSRFField
+				@components.TaskConflict("A notícia foi alterada", page.Conflict, "", page.ReturnURL, "Voltar às notícias")
+				<p>{ newsStatusEffect(page.Action) }</p>
+				<p>Confirme a alteração para <strong>{ page.Item.Title }</strong>.</p>
+				@components.TaskActions(page.ReturnURL) {
+					<button class={ "action action--" + newsStatusVariant(page.Action) } type="submit" data-task-submit>{ newsStatusButton(page.Action) }</button>
+				}
+			</form>
+		}
+	</div>
+}
+
+func newsStatusURL(id, action string) string { if action == "expire" { return "/admin/noticias/" + id + "/expirar" }; return "/admin/noticias/" + id + "/publicar" }
+func newsStatusTitle(action string) string { if action == "expire" { return "Expirar notícia" }; return "Publicar notícia" }
+func newsStatusButton(action string) string { if action == "expire" { return "Expirar notícia" }; return "Publicar notícia" }
+func newsStatusVariant(action string) string { if action == "expire" { return "danger" }; return "primary" }
+func newsStatusEffect(action string) string { if action == "expire" { return "A notícia deixa de estar disponível aos membros." }; return "A notícia fica disponível aos membros na data de publicação definida." }

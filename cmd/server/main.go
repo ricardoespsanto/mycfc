@@ -13,6 +13,20 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+type databaseCommandConnection interface {
+	Close(context.Context) error
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+var (
+	connectDatabaseCommand = func(ctx context.Context, databaseURL string) (databaseCommandConnection, error) {
+		return pgx.Connect(ctx, databaseURL)
+	}
+	loadDatabaseCommandConfig = config.Load
 )
 
 func main() {
@@ -38,10 +52,13 @@ func main() {
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
+	if command != "bootstrap-db" && command != "migrate" {
+		return fmt.Errorf("unknown command %q", command)
+	}
 	if databaseURL, ok, err := databaseURLFromEnvironment(); err != nil {
 		return err
 	} else if ok {
-		conn, err := pgx.Connect(ctx, databaseURL)
+		conn, err := connectDatabaseCommand(ctx, databaseURL)
 		if err != nil {
 			return fmt.Errorf("connect to database: %w", err)
 		}
@@ -56,12 +73,10 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 			})
 		case "migrate":
 			return db.ApplyBaseline(ctx, conn)
-		default:
-			return fmt.Errorf("unknown command %q", command)
 		}
 	}
 
-	cfg, err := config.Load(ctx)
+	cfg, err := loadDatabaseCommandConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -71,13 +86,11 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		databaseURL, err = cfg.BootstrapDatabaseURL()
 	case "migrate":
 		databaseURL, err = cfg.MigrationDatabaseURL()
-	default:
-		return fmt.Errorf("unknown command %q", command)
 	}
 	if err != nil {
 		return err
 	}
-	conn, err := pgx.Connect(ctx, databaseURL)
+	conn, err := connectDatabaseCommand(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}

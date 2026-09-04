@@ -62,6 +62,10 @@ func (h PhotoAlbums) Detail(w http.ResponseWriter, r *http.Request) {
 	h.renderDetail(w, r, http.StatusOK, "")
 }
 
+func (h PhotoAlbums) ArchivePage(w http.ResponseWriter, r *http.Request) {
+	h.renderArchivePage(w, r, http.StatusOK, "")
+}
+
 func (h PhotoAlbums) Create(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		h.renderIndex(w, r, http.StatusBadRequest, photoAlbumForm{Errors: validation.FieldErrors{}})
@@ -147,7 +151,7 @@ func (h PhotoAlbums) Archive(w http.ResponseWriter, r *http.Request) {
 	}
 	expected, err := time.Parse(time.RFC3339Nano, r.PostForm.Get("updated_at"))
 	if err != nil {
-		h.renderDetail(w, r, http.StatusConflict, "O formulário deixou de ser válido. Atualize a página.")
+		h.renderArchivePage(w, r, http.StatusUnprocessableEntity, "O formulário deixou de ser válido. Reveja os dados atuais e volte a confirmar.")
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -156,7 +160,7 @@ func (h PhotoAlbums) Archive(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	_, err = h.Store.ArchivePhotoAlbum(ctx, dbgen.ArchivePhotoAlbumParams{ArchivedByID: &user.ID, ArchivedAt: pgtype.Timestamptz{Time: now, Valid: true}, ID: id, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}})
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.renderDetail(w, r, http.StatusConflict, "O álbum foi alterado entretanto. Reveja o estado atual.")
+		h.renderArchivePage(w, r, http.StatusConflict, "O álbum foi alterado entretanto. Reveja o estado atual antes de voltar a confirmar.")
 		return
 	}
 	if err != nil {
@@ -164,7 +168,42 @@ func (h PhotoAlbums) Archive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Álbum arquivado.")
-	httpx.Redirect(w, r, "/admin/albuns", http.StatusSeeOther)
+	httpx.Redirect(w, r, h.collectionReturn(r), http.StatusSeeOther)
+}
+
+func (h PhotoAlbums) renderArchivePage(w http.ResponseWriter, r *http.Request, status int, conflict string) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	privileged := user.IsAdmin || user.CanModerateContent
+	ctx, cancel := context.WithTimeout(r.Context(), photoAlbumQueryTimeout)
+	defer cancel()
+	row, err := h.Store.GetVisiblePhotoAlbum(ctx, dbgen.GetVisiblePhotoAlbumParams{ID: id, Privileged: privileged, UserID: user.ID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if conflict == "" && row.Status == dbgen.PhotoAlbumStatusARCHIVED {
+		conflict = "Este álbum já está arquivado. Reveja o estado atual antes de continuar."
+		status = http.StatusConflict
+	}
+	meta := h.meta(r, user, true)
+	meta.Title = "Arquivar álbum | MyCFC"
+	meta.CurrentPath = r.URL.Path
+	meta.PageLabel = "Arquivar álbum"
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Gerir álbuns", Path: h.collectionReturn(r)}}
+	page := pages.PhotoAlbumArchivePage{Meta: meta, Album: h.albumItem(row.ID, row.Title, row.Description, string(row.Status), row.ProgrammeNames, row.TeamNames, row.CreatedAt.Time, row.UpdatedAt.Time), CSRFField: templ.Raw(string(csrf.TemplateField(r))), ReturnURL: h.collectionReturn(r), Conflict: conflict}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(status)
+	_ = pages.PhotoAlbumArchive(page).Render(r.Context(), w)
 }
 
 func (h PhotoAlbums) renderIndex(w http.ResponseWriter, r *http.Request, status int, form photoAlbumForm) {
@@ -299,6 +338,17 @@ func (h PhotoAlbums) takeFlash(r *http.Request) string {
 		return ""
 	}
 	return h.Sessions.PopString(r.Context(), "photo_album_flash")
+}
+
+func (h PhotoAlbums) collectionReturn(r *http.Request) string {
+	raw := r.URL.Query().Get("return_to")
+	if raw == "" && r.PostForm != nil {
+		raw = r.PostForm.Get("return_to")
+	}
+	if safe := adminCollectionReturn(raw, "/admin/albuns"); safe != "" {
+		return safe
+	}
+	return "/admin/albuns"
 }
 
 func (h PhotoAlbums) now() time.Time {

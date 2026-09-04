@@ -2,9 +2,60 @@ package pages
 
 import (
 	"fmt"
+	"net/url"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 )
+
+type StructuredGymBlockTaskPage struct {
+	Meta components.PageMeta
+	CSRFField templ.Component
+	ActionURL, ReturnURL, GroupName, WeekTitle, SessionTitle, SegmentTitle string
+	Values url.Values
+	Error string
+}
+
+templ StructuredGymBlockTask(page StructuredGymBlockTaskPage) {
+	@components.Base(page.Meta, structuredGymBlockTaskContent(page))
+}
+
+templ structuredGymBlockTaskContent(page StructuredGymBlockTaskPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{
+		ID: "gym-block-task",
+		TitleID: "gym-block-task-title",
+		Eyebrow: "Plano · " + page.GroupName + " · " + page.WeekTitle,
+		Title: "Adicionar bloco de ginásio",
+		Description: "Sessão " + page.SessionTitle + " · segmento " + page.SegmentTitle + ".",
+		ReturnURL: page.ReturnURL,
+	}) {
+		<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
+			@page.CSRFField<input type="hidden" name="return_to" value={ page.ReturnURL }/>
+			if page.Error != "" {
+				<div class="error-summary" role="alert" tabindex="-1"><p>{ page.Error }</p></div>
+			}
+			@components.FieldLabel("gym-task-purpose", "Fase do treino", true)<select id="gym-task-purpose" name="purpose" required><option value="WARM_UP" selected?={ page.Values.Get("purpose") == "WARM_UP" }>Aquecimento</option><option value="MAIN" selected?={ page.Values.Get("purpose") == "MAIN" }>Principal</option><option value="COOL_DOWN" selected?={ page.Values.Get("purpose") == "COOL_DOWN" }>Retorno à calma</option><option value="TECHNIQUE" selected?={ page.Values.Get("purpose") == "TECHNIQUE" }>Técnica</option><option value="CUSTOM" selected?={ page.Values.Get("purpose") == "CUSTOM" }>Personalizado</option></select>
+			@components.FieldLabel("gym-task-title", "Título do bloco", true)<input id="gym-task-title" name="title" required minlength="2" maxlength="120" value={ page.Values.Get("title") }/>
+			@components.FieldLabel("gym-task-instructions", "Instruções gerais", true)<textarea id="gym-task-instructions" name="instructions" required minlength="2" maxlength="4000">{ page.Values.Get("instructions") }</textarea>
+			@components.FieldLabel("gym-task-structure", "Estrutura", true)<select id="gym-task-structure" name="structure" required><option value="STRAIGHT_SETS" selected?={ page.Values.Get("structure") == "STRAIGHT_SETS" }>Séries simples</option><option value="CIRCUIT" selected?={ page.Values.Get("structure") == "CIRCUIT" }>Circuito</option><option value="SUPERSET" selected?={ page.Values.Get("structure") == "SUPERSET" }>Supersérie</option></select>
+			@components.FieldLabel("gym-task-objective", "Objetivo", true)<select id="gym-task-objective" name="objective" required>@gymObjectiveOptions()</select>
+			@components.FieldLabel("gym-task-rounds", "Voltas", true)<input id="gym-task-rounds" name="rounds" type="number" min="1" max="100" required value={ page.Values.Get("rounds") }/>
+			@components.FieldLabel("gym-task-round-recovery", "Recuperação entre voltas em segundos (opcional)", false)<input id="gym-task-round-recovery" name="round_recovery_seconds" type="number" min="1" max="86400" value={ page.Values.Get("round_recovery_seconds") }/>
+			@components.FieldLabel("gym-task-exercise", "Exercício", true)<input id="gym-task-exercise" name="exercise_name" required minlength="2" maxlength="180" value={ page.Values.Get("exercise_name") }/>
+			@components.FieldLabel("gym-task-repetitions", "Repetições (opcional)", false)<input id="gym-task-repetitions" name="repetitions" type="number" min="1" max="10000" value={ page.Values.Get("repetitions") }/>
+			@components.FieldLabel("gym-task-duration", "Duração em segundos (opcional)", false)<input id="gym-task-duration" name="duration_seconds" type="number" min="1" max="86400" value={ page.Values.Get("duration_seconds") }/>
+			@components.FieldLabel("gym-task-distance", "Distância em metros (opcional)", false)<input id="gym-task-distance" name="distance_metres" type="number" min="1" max="100000" value={ page.Values.Get("distance_metres") }/>
+			@components.FieldLabel("gym-task-sets", "Séries (opcional)", false)<input id="gym-task-sets" name="sets" type="number" min="1" max="100" value={ page.Values.Get("sets") }/>
+			@components.FieldLabel("gym-task-recovery", "Recuperação em segundos (opcional)", false)<input id="gym-task-recovery" name="recovery_seconds" type="number" min="1" max="86400" value={ page.Values.Get("recovery_seconds") }/>
+			@components.FieldLabel("gym-task-resistance", "Resistência (opcional)", false)<select id="gym-task-resistance" name="resistance_kind"><option value="">Sem resistência indicada</option><option value="KILOGRAMS">Quilogramas</option><option value="PERCENT_1RM">Percentagem de 1RM</option><option value="BODY_WEIGHT">Peso corporal</option><option value="BAND">Banda ou elástico</option><option value="RPE">RPE</option><option value="RIR">RIR</option><option value="COACH_INSTRUCTION">Instrução do treinador</option></select>
+			@components.FieldLabel("gym-task-resistance-value", "Valor da resistência", false)<input id="gym-task-resistance-value" name="resistance_value" type="number" min="0" max="10000" step="0.01" value={ page.Values.Get("resistance_value") }/>
+			@components.FieldLabel("gym-task-resistance-text", "Descrição da banda ou instrução", false)<input id="gym-task-resistance-text" name="resistance_text" maxlength="180" value={ page.Values.Get("resistance_text") }/>
+			@components.FieldLabel("gym-task-intent", "Intenção de execução (opcional)", false)<select id="gym-task-intent" name="execution_intent"><option value="">Sem indicação</option><option value="CONTROLLED">Controlada</option><option value="EXPLOSIVE">Explosiva</option><option value="MAXIMUM_VELOCITY">Velocidade máxima</option><option value="ISOMETRIC">Isométrica</option><option value="CUSTOM">Outra</option></select>
+			@components.FieldLabel("gym-task-tempo", "Tempo (opcional)", false)<input id="gym-task-tempo" name="tempo" maxlength="30" value={ page.Values.Get("tempo") }/>
+			@components.FieldLabel("gym-task-notes", "Notas do exercício (opcional)", false)<textarea id="gym-task-notes" name="exercise_notes" maxlength="1000">{ page.Values.Get("exercise_notes") }</textarea>
+			@components.TaskActions(page.ReturnURL) { <button class="action action--primary" type="submit">Adicionar bloco de ginásio</button> }
+		</form>
+	}
+}
 
 type StructuredWaterBlockTaskForm struct {
 	Purpose, Title, Instructions, Method, IntensityProfileID string

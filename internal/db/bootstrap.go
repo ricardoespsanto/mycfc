@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 //go:embed schema.sql
@@ -22,7 +23,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202608170002_training_week_load_percentage"
+	baselineIncludesThrough = "202608230001_training_cycles"
 )
 
 type RoleCredentials struct {
@@ -32,7 +33,15 @@ type RoleCredentials struct {
 	MigrationPassword string
 }
 
-func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, credentials RoleCredentials) error {
+type bootstrapConnection interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type baselineConnection interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName string, credentials RoleCredentials) error {
 	if err := validateBootstrapInput(databaseName, credentials); err != nil {
 		return err
 	}
@@ -69,7 +78,7 @@ func BootstrapRoles(ctx context.Context, conn *pgx.Conn, databaseName string, cr
 	return nil
 }
 
-func ApplyBaseline(ctx context.Context, conn *pgx.Conn) error {
+func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin baseline migration: %w", err)
