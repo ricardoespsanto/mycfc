@@ -41,6 +41,11 @@ OFFSET sqlc.arg(row_offset);
 -- name: GetAnnouncementAuthor :one
 SELECT author_id FROM announcements WHERE id = sqlc.arg(id);
 
+-- name: GetAnnouncementForStatus :one
+SELECT id, title, status::text AS status, author_id
+FROM announcements
+WHERE id = sqlc.arg(id);
+
 -- name: ListVisibleAnnouncements :many
 SELECT DISTINCT a.id, a.title, a.body, a.published_at, a.expires_at, d.read_at
 FROM announcements a

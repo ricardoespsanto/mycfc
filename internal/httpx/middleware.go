@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -144,7 +145,18 @@ func isTrusted(address netip.Addr, trusted []netip.Prefix) bool {
 	return false
 }
 
-func SecurityHeadersMiddleware(production bool) Middleware {
+func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middleware {
+	imageSources := []string{"'self'", "data:", "blob:"}
+	seenImageSources := map[string]bool{"'self'": true, "data:": true, "blob:": true}
+	for _, raw := range imageOrigins {
+		origin, ok := normalizeCSPOrigin(raw)
+		if !ok || seenImageSources[origin] {
+			continue
+		}
+		seenImageSources[origin] = true
+		imageSources = append(imageSources, origin)
+	}
+	imageDirective := strings.Join(imageSources, " ")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !strings.HasPrefix(r.URL.Path, "/health/") {
@@ -159,7 +171,7 @@ func SecurityHeadersMiddleware(production bool) Middleware {
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
-				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'"
+				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src " + imageDirective + "; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'"
 				if production {
 					w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 					csp += "; upgrade-insecure-requests"
@@ -169,6 +181,14 @@ func SecurityHeadersMiddleware(production bool) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func normalizeCSPOrigin(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String(), true
 }
 
 func AccessLogMiddleware(logger *slog.Logger) Middleware {

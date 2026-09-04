@@ -80,7 +80,11 @@ func TestTrustedProxyUsesRightmostUntrustedForwardedAddress(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	handler := SecurityHeadersMiddleware(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := SecurityHeadersMiddleware(true,
+		"https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com/private?signature=secret",
+		"https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
+		"https://attacker.example; script-src *",
+	)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
@@ -98,10 +102,26 @@ func TestSecurityHeaders(t *testing.T) {
 	for _, directive := range []string{
 		"script-src 'self' https://challenges.cloudflare.com",
 		"frame-src https://challenges.cloudflare.com",
+		"img-src 'self' data: blob: https://mycfc-production-repairs.s3.eu-west-1.amazonaws.com",
 	} {
 		if !strings.Contains(csp, directive) {
 			t.Errorf("production CSP does not allow Turnstile: missing %q", directive)
 		}
+	}
+	if strings.Contains(csp, "signature=secret") || strings.Contains(csp, "attacker.example") || strings.Count(csp, "mycfc-production-repairs.s3.eu-west-1.amazonaws.com") != 1 {
+		t.Fatalf("production CSP contains an unsafe or duplicate image source: %q", csp)
+	}
+}
+
+func TestSecurityHeadersAllowsTheConfiguredLocalObjectOriginOnly(t *testing.T) {
+	handler := SecurityHeadersMiddleware(false, "http://127.0.0.1:9000/mycfc-local", "data:text/html,ignored")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin/fleet", nil))
+	csp := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' data: blob: http://127.0.0.1:9000;") || strings.Contains(csp, "ignored") {
+		t.Fatalf("local CSP = %q", csp)
 	}
 }
 
@@ -191,5 +211,29 @@ func TestMiddlewareOrder(t *testing.T) {
 	want := "outer:before,inner:before,handler,inner:after,outer:after"
 	if got != want {
 		t.Fatalf("order = %q, want %q", got, want)
+	}
+}
+
+func TestHTTPBoundaryHelpersHandleMalformedPeersAndResponseWriterCapabilities(t *testing.T) {
+	for _, raw := range []string{"203.0.113.9:1234", "2001:db8::1", "invalid"} {
+		_, _ = parseRemoteAddr(raw)
+	}
+	if got := forwardedClientIP("invalid, 10.0.0.2", netip.MustParseAddr("10.0.0.1"), []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}); got.String() != "10.0.0.2" {
+		t.Fatalf("forwarded client=%s", got)
+	}
+	base := httptest.NewRecorder()
+	writer := &statusWriter{ResponseWriter: base, status: http.StatusOK}
+	if _, err := writer.Write([]byte("body")); err != nil || writer.status != http.StatusOK || writer.bytes != 4 {
+		t.Fatalf("writer=%#v err=%v", writer, err)
+	}
+	writer.WriteHeader(http.StatusCreated)
+	if base.Code != http.StatusOK || writer.Unwrap() != base {
+		t.Fatalf("response=%d unwrap=%T", base.Code, writer.Unwrap())
+	}
+	if _, err := writer.ReadFrom(strings.NewReader(" more")); err != nil || writer.bytes != 9 {
+		t.Fatalf("bytes=%d err=%v", writer.bytes, err)
+	}
+	if _, _, err := writer.Hijack(); err == nil {
+		t.Fatal("non-hijacking recorder accepted Hijack")
 	}
 }

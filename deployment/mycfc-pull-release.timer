@@ -2,9 +2,10 @@
 Description=Poll for a MyCFC production release
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=2min
-RandomizedDelaySec=30s
+OnBootSec=30s
+OnUnitActiveSec=30s
+RandomizedDelaySec=10s
+AccuracySec=1s
 Persistent=true
 Unit=mycfc-pull-release.service
 

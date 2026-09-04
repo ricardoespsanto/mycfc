@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -148,6 +149,82 @@ func TestCreateEquipmentUploadsValidatedPhoto(t *testing.T) {
 	}
 }
 
+func TestEquipmentPhotoValidationRendersRecoverableCreateAndEditErrors(t *testing.T) {
+	id, actor := uuid.New(), uuid.New()
+	now := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	request := func(path string, values map[string]string) *http.Request {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		for key, value := range values {
+			if err := writer.WriteField(key, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		part, err := writer.CreateFormFile("photo", "not-an-image.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write([]byte("not an image")); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, path, &body)
+		r.Header.Set("Content-Type", writer.FormDataContentType())
+		return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, Name: "Administradora", IsAdmin: true}))
+	}
+
+	t.Run("create", func(t *testing.T) {
+		store, fleet := &equipmentStoreFake{}, &dashboardStoreFake{}
+		w := httptest.NewRecorder()
+		(Dashboard{Store: fleet, Fleet: fleet, Equipment: store}).CreateEquipment(w, request("/admin/fleet/equipment", map[string]string{"asset_tag": "B-04", "name": "K1 foto", "type": "Boat", "status": "Operational"}))
+		if w.Code != http.StatusUnprocessableEntity || store.createParams.AssetTag != "" || !strings.Contains(w.Body.String(), "Selecione a imagem novamente") {
+			t.Fatalf("response=%d create=%#v body=%s", w.Code, store.createParams, w.Body.String())
+		}
+	})
+
+	t.Run("edit", func(t *testing.T) {
+		store, fleet := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, AssetTag: "B-04", Name: "K1 foto", Type: "Boat", Status: "Operational", UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}, &dashboardStoreFake{}
+		w := httptest.NewRecorder()
+		r := request("/admin/fleet/equipment/"+id.String(), map[string]string{"asset_tag": "B-04", "name": "K1 foto", "type": "Boat", "status": "Operational", "expected_updated_at": now.Format(time.RFC3339Nano)})
+		r.SetPathValue("id", id.String())
+		(Dashboard{Store: fleet, Fleet: fleet, Equipment: store}).UpdateEquipment(w, r)
+		if w.Code != http.StatusUnprocessableEntity || store.updateParams.EquipmentID != uuid.Nil || !strings.Contains(w.Body.String(), "Selecione a imagem novamente") {
+			t.Fatalf("response=%d update=%#v body=%s", w.Code, store.updateParams, w.Body.String())
+		}
+	})
+}
+
+func TestEquipmentPhotoURLUsesOnlyValidSignedPrivateImages(t *testing.T) {
+	key, png, invalid := "equipment/k1.png", "image/png", "text/plain"
+	request := httptest.NewRequest(http.MethodGet, "/admin/fleet", nil)
+	for _, tc := range []struct {
+		name         string
+		key, content *string
+		objects      *profileObjectStoreFake
+		wantURL      string
+		unavailable  bool
+	}{
+		{name: "no photo"},
+		{name: "invalid content type", key: &key, content: &invalid, unavailable: true},
+		{name: "no object store", key: &key, content: &png, unavailable: true},
+		{name: "signed", key: &key, content: &png, objects: &profileObjectStoreFake{presignedURL: "https://storage.example/k1"}, wantURL: "https://storage.example/k1"},
+		{name: "signing failure", key: &key, content: &png, objects: &profileObjectStoreFake{presignErr: errors.New("storage unavailable")}, unavailable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := Dashboard{}
+			if tc.objects != nil {
+				h.Objects = tc.objects
+			}
+			url, notice := h.equipmentPhotoURL(context.Background(), request, tc.key, tc.content, uuid.New())
+			if url != tc.wantURL || (notice != "") != tc.unavailable {
+				t.Fatalf("url=%q notice=%q", url, notice)
+			}
+		})
+	}
+}
+
 func TestCreateEquipmentRendersDuplicateAssetTag(t *testing.T) {
 	store := &equipmentStoreFake{createErr: &pgconn.PgError{Code: "23505"}}
 	fleet := &dashboardStoreFake{}
@@ -185,6 +262,138 @@ func TestUpdateEquipmentNoOpDoesNotWriteAudit(t *testing.T) {
 	h.UpdateEquipment(w, r)
 	if w.Code != http.StatusSeeOther || store.updateParams.EquipmentID != uuid.Nil {
 		t.Fatalf("response=%d params=%#v", w.Code, store.updateParams)
+	}
+}
+
+func TestEquipmentEditAndUpdateRenderCurrentRecordAndWriteAuditedChange(t *testing.T) {
+	id, actor := uuid.New(), uuid.New()
+	now := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	store := &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, AssetTag: "B-01", Name: "K1 atual", Type: "Boat", Status: "Operational", Notes: "Casco azul", UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}}
+	h := Dashboard{Equipment: store, Location: time.UTC}
+
+	edit := equipmentRequest(http.MethodGet, "/admin/fleet/equipment/"+id.String(), nil, actor)
+	edit.SetPathValue("id", id.String())
+	editResponse := httptest.NewRecorder()
+	h.EditEquipment(editResponse, edit)
+	if editResponse.Code != http.StatusOK || !strings.Contains(editResponse.Body.String(), `value="B-01"`) || !strings.Contains(editResponse.Body.String(), "K1 atual") {
+		t.Fatalf("edit = %d %s", editResponse.Code, editResponse.Body.String())
+	}
+
+	update := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String(), url.Values{"asset_tag": {"B-01"}, "name": {"K1 revisto"}, "type": {"Boat"}, "status": {"Maintenance"}, "notes": {"Vistoria concluída"}, "expected_updated_at": {now.Format(time.RFC3339Nano)}}, actor)
+	update.SetPathValue("id", id.String())
+	updateResponse := httptest.NewRecorder()
+	h.UpdateEquipment(updateResponse, update)
+	if updateResponse.Code != http.StatusSeeOther || updateResponse.Header().Get("Location") != "/admin/fleet#equipment-"+id.String() {
+		t.Fatalf("update = %d %q", updateResponse.Code, updateResponse.Header().Get("Location"))
+	}
+	p := store.updateParams
+	if p.EquipmentID != id || p.ActorUserID != actor || p.Name != "K1 revisto" || p.Status != "Maintenance" || p.Notes != "Vistoria concluída" || !p.ExpectedUpdatedAt.Valid || !p.ExpectedUpdatedAt.Time.Equal(now) {
+		t.Fatalf("updated params = %#v", p)
+	}
+}
+
+func TestEquipmentEditUpdateAndRetirementMapPersistenceFailures(t *testing.T) {
+	id, actor := uuid.New(), uuid.New()
+	now := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	current := dbgen.Equipment{ID: id, AssetTag: "B-01", Name: "K1", Type: "Boat", Status: "Operational", UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"missing", pgx.ErrNoRows, http.StatusNotFound},
+		{"service failure", errors.New("database unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run("edit "+tc.name, func(t *testing.T) {
+			h := Dashboard{Equipment: &equipmentStoreFake{getErr: tc.err}}
+			r := equipmentRequest(http.MethodGet, "/admin/fleet/equipment/"+id.String(), nil, actor)
+			r.SetPathValue("id", id.String())
+			w := httptest.NewRecorder()
+			h.EditEquipment(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+		t.Run("update "+tc.name, func(t *testing.T) {
+			h := Dashboard{Equipment: &equipmentStoreFake{getErr: tc.err}, Location: time.UTC}
+			r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String(), url.Values{"asset_tag": {"B-01"}, "name": {"K1"}, "type": {"Boat"}, "status": {"Operational"}, "expected_updated_at": {now.Format(time.RFC3339Nano)}}, actor)
+			r.SetPathValue("id", id.String())
+			w := httptest.NewRecorder()
+			h.UpdateEquipment(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+		t.Run("retirement preview "+tc.name, func(t *testing.T) {
+			h := Dashboard{Equipment: &equipmentStoreFake{getErr: tc.err}}
+			r := equipmentRequest(http.MethodGet, "/admin/fleet/equipment/"+id.String()+"/retire", nil, actor)
+			r.SetPathValue("id", id.String())
+			w := httptest.NewRecorder()
+			h.RetireEquipmentPage(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+
+	t.Run("update duplicate and service failures retain user input", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			err  error
+			want int
+		}{
+			{"duplicate asset tag", &pgconn.PgError{Code: "23505"}, http.StatusUnprocessableEntity},
+			{"write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				store := &equipmentStoreFake{equipment: current, updateErr: tc.err}
+				h := Dashboard{Equipment: store, Location: time.UTC}
+				r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String(), url.Values{"asset_tag": {"B-02"}, "name": {"K1 revisto"}, "type": {"Boat"}, "status": {"Maintenance"}, "expected_updated_at": {now.Format(time.RFC3339Nano)}}, actor)
+				r.SetPathValue("id", id.String())
+				w := httptest.NewRecorder()
+				h.UpdateEquipment(w, r)
+				if w.Code != tc.want {
+					t.Fatalf("response=%d want=%d", w.Code, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("retired equipment cannot be previewed again", func(t *testing.T) {
+		h := Dashboard{Equipment: &equipmentStoreFake{equipment: dbgen.Equipment{ID: id, Status: "Retired"}}}
+		r := equipmentRequest(http.MethodGet, "/admin/fleet/equipment/"+id.String()+"/retire", nil, actor)
+		r.SetPathValue("id", id.String())
+		w := httptest.NewRecorder()
+		h.RetireEquipmentPage(w, r)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "já foi retirado") {
+			t.Fatalf("response=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestEquipmentLifecycleMapsMissingAndServiceFailures(t *testing.T) {
+	id, actor := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name  string
+		store *equipmentStoreFake
+		want  int
+	}{
+		{"missing equipment", &equipmentStoreFake{getErr: pgx.ErrNoRows}, http.StatusNotFound},
+		{"read failure", &equipmentStoreFake{getErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"reactivation conflict", &equipmentStoreFake{equipment: dbgen.Equipment{ID: id}, reactivateErr: pgx.ErrNoRows}, http.StatusConflict},
+		{"reactivation failure", &equipmentStoreFake{equipment: dbgen.Equipment{ID: id}, reactivateErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := Dashboard{Equipment: tc.store}
+			r := equipmentRequest(http.MethodPost, "/admin/fleet/equipment/"+id.String()+"/reactivate", nil, actor)
+			r.SetPathValue("id", id.String())
+			w := httptest.NewRecorder()
+			h.ReactivateEquipment(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
 	}
 }
 
@@ -269,6 +478,39 @@ func TestEquipmentRetirementPreviewAndConfirmation(t *testing.T) {
 	h.RetireEquipment(response, request)
 	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "confirmação expirou") || !strings.Contains(response.Body.String(), now.Format(time.RFC3339Nano)) || store.retireParams.EquipmentID != uuid.Nil {
 		t.Fatalf("version = %d params=%#v %s", response.Code, store.retireParams, response.Body.String())
+	}
+}
+
+func TestEquipmentAuditRenderingUsesReadableMetadataWithoutLosingChangeDetail(t *testing.T) {
+	beforeKey, afterKey := "equipment/before.png", "equipment/after.png"
+	before := []byte(`{"asset_tag":"B-01","name":"K1","type":"Boat","status":"Operational","notes":"Azul","image_object_key":"equipment/before.png"}`)
+	after := []byte(`{"asset_tag":"B-02","name":"K2","type":"Paddle","status":"Maintenance","notes":"Revisto","image_object_key":"equipment/after.png"}`)
+	rows := []dbgen.ListEquipmentAuditEventsRow{{Action: "UPDATED", ActorName: "Admin", OccurredAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC), Valid: true}, BeforeState: before, AfterState: after, AffectedMaintenanceIds: []uuid.UUID{uuid.New()}}}
+	items := equipmentAuditItems(rows, time.UTC)
+	if len(items) != 1 || items[0].Action != "Equipamento atualizado" || items[0].CancelledMaintenance != 1 || !strings.Contains(strings.Join(items[0].Changes, "|"), "Identificador: B-01 → B-02") || !strings.Contains(strings.Join(items[0].Changes, "|"), "Fotografia atualizada") {
+		t.Fatalf("items = %#v", items)
+	}
+	if !sameOptionalString(&beforeKey, &beforeKey) || sameOptionalString(&beforeKey, &afterKey) || equipmentTypeName("Vehicle") != "Veículo" || equipmentStatusName("Retired") != "Retirado" || equipmentAuditAction("UNKNOWN") != "UNKNOWN" {
+		t.Fatal("equipment audit display helpers returned an unexpected value")
+	}
+}
+
+func TestEquipmentObjectCleanupAndAuditActionLabels(t *testing.T) {
+	objects := &repairObjectStoreFake{}
+	request := httptest.NewRequest(http.MethodPost, "/admin/fleet/equipment", nil)
+	key := "equipment/2026/09/boat.png"
+	Dashboard{}.deleteEquipmentObject(request, &key)
+	(Dashboard{Objects: objects}).deleteEquipmentObject(request, nil)
+	(Dashboard{Objects: objects}).deleteEquipmentObject(request, &key)
+	if objects.deletes != 1 {
+		t.Fatalf("deletes=%d", objects.deletes)
+	}
+	for action, want := range map[string]string{
+		"CREATED": "Equipamento criado", "UPDATED": "Equipamento atualizado", "RETIRED": "Equipamento retirado", "REACTIVATED": "Equipamento reativado",
+	} {
+		if got := equipmentAuditAction(action); got != want {
+			t.Errorf("equipmentAuditAction(%q)=%q, want %q", action, got, want)
+		}
 	}
 }
 

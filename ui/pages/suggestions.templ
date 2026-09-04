@@ -34,18 +34,16 @@ templ suggestionsContent(page SuggestionsPage) {
 	if page.Management {
 		@components.PageHeader("Moderação", "Sugestões", "Reveja propostas dos membros e mantenha cada pessoa informada.", nil)
 	} else {
-		@components.PageHeader("Atividade", "Sugestões", "Partilhe uma ideia para melhorar a vida do clube e acompanhe a resposta.", []components.PageAction{{Label: "Nova sugestão", Href: "#nova-sugestao", Variant: "primary"}})
+		@components.PageHeader("Atividade", "Sugestões", "Partilhe uma ideia para melhorar a vida do clube e acompanhe a resposta.", []components.PageAction{{Label: "Nova sugestão", Href: "#nova-sugestao", Variant: "primary", TaskID: "nova-sugestao"}})
 	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Conflict, "warning")
 	@components.StatusMessage(suggestionTriageError(page.TriageErrors), "error")
 	if !page.Management {
-		<details id="nova-sugestao" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="suggestion-authoring-title">
-			<summary><span><strong id="suggestion-authoring-title">Nova sugestão</strong><small>Partilhe uma ideia para melhorar a vida do clube.</small></span></summary>
-			<button class="create-panel__close" type="button">Fechar</button>
-			<div class="disclosure__content">
+		@components.TaskDialog(components.TaskSurfaceConfig{ID: "nova-sugestao", TitleID: "suggestion-authoring-title", Eyebrow: "Atividade", Title: "Nova sugestão", Description: "Partilhe uma ideia para melhorar a vida do clube.", Variant: "sheet", URL: "/sugestoes", Open: len(page.Form.Errors) > 0}) {
+			<div class="task-form">
 				<p>A sugestão identifica a sua conta e fica visível apenas para si e para a equipa responsável.</p>
-				<form class="form-layout" method="post" action="/sugestoes">
+				<form class="form-layout" method="post" action="/sugestoes" data-task-form>
 					@page.Form.CSRFField
 					@components.RequiredNote()
 					@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "category", Field: "suggestion-category"}, {Key: "subject", Field: "suggestion-subject"}, {Key: "description", Field: "suggestion-description"}}))
@@ -62,12 +60,13 @@ templ suggestionsContent(page SuggestionsPage) {
 					<textarea id="suggestion-description" name="description" maxlength="3000" required aria-invalid?={ page.Form.Errors["description"] != "" } aria-describedby="suggestion-description-help description-error">{ page.Form.Description }</textarea>
 					@components.FieldHelp("suggestion-description-help", "Descreva a ideia e o benefício esperado. Para uma avaria use a área Frota; para responder a um evento use a página desse evento.")
 					@components.FieldErrorMessage("description", page.Form.Errors["description"])
-					@components.FormActions("/sugestoes") {
-						<button type="submit">Enviar sugestão</button>
+					@components.TaskActions("/sugestoes") {
+						<button class="action action--primary" type="submit" data-task-submit>Enviar sugestão</button>
 					}
 				</form>
 			</div>
-		</details>
+		}
+		@components.DiscardConfirmation()
 	}
 	if page.Management {
 		<section class="module">

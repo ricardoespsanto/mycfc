@@ -182,6 +182,52 @@ func TestRegistrationPostReportsDuplicateEmail(t *testing.T) {
 	}
 }
 
+func TestCloudflareTurnstileVerifierPostsTokenAndRemoteAddress(t *testing.T) {
+	remote := netip.MustParseAddr("203.0.113.8")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.PostForm.Get("secret") != "turnstile-secret" || r.PostForm.Get("response") != "response-token" || r.PostForm.Get("remoteip") != remote.String() {
+			t.Fatalf("form=%v", r.PostForm)
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer server.Close()
+
+	err := (CloudflareTurnstileVerifier{Secret: "turnstile-secret", Endpoint: server.URL, Client: server.Client()}).Verify(context.Background(), "response-token", &remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloudflareTurnstileVerifierRejectsMissingAndFailedResponses(t *testing.T) {
+	if err := (CloudflareTurnstileVerifier{}).Verify(context.Background(), "", nil); err == nil {
+		t.Fatal("missing response token was accepted")
+	}
+	for name, response := range map[string]string{
+		"unsuccessful": `{"success":false}`,
+		"malformed":    `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response)) }))
+			defer server.Close()
+			err := (CloudflareTurnstileVerifier{Endpoint: server.URL, Client: server.Client()}).Verify(context.Background(), "token", nil)
+			if err == nil {
+				t.Fatalf("%s response was accepted", name)
+			}
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer server.Close()
+	if err := (CloudflareTurnstileVerifier{Endpoint: server.URL, Client: server.Client()}).Verify(context.Background(), "token", nil); err == nil {
+		t.Fatal("non-200 response was accepted")
+	}
+}
+
 func registrationHandler(store RegistrationStore) Registration {
 	return Registration{
 		Store: store, Sessions: scs.New(), PageMeta: loginTestPageMeta(), Location: time.UTC,

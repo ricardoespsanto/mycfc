@@ -1,13 +1,24 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:18080';
+const requestedWorkers = process.env.PLAYWRIGHT_WORKERS || '2';
+const ciWorkers = Number.parseInt(requestedWorkers, 10);
+const trialReport = process.env.E2E_JSON_OUTPUT;
+
+if (!/^[1-9][0-9]*$/.test(requestedWorkers) || !Number.isSafeInteger(ciWorkers)) {
+  throw new Error('PLAYWRIGHT_WORKERS must be a positive integer');
+}
 
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
-  workers: process.env.CI ? 2 : 1,
+  workers: process.env.CI ? ciWorkers : 1,
   timeout: 60_000,
-  reporter: process.env.CI ? [['github'], ['line']] : 'list',
+  reporter: trialReport
+    ? [['json', { outputFile: trialReport }], ['line']]
+    : process.env.CI
+      ? [['github'], ['line']]
+      : 'list',
   use: {
     baseURL,
     trace: 'retain-on-failure',

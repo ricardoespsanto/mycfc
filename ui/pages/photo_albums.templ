@@ -29,22 +29,25 @@ type PhotoAlbumDetailPage struct {
 	Audit []PhotoAlbumAuditItem
 	CSRFField templ.Component
 }
+type PhotoAlbumArchivePage struct {
+	Meta components.PageMeta
+	Album PhotoAlbumItem
+	CSRFField templ.Component
+	ReturnURL, Conflict string
+}
 
 templ PhotoAlbums(page PhotoAlbumsPage) { @components.Base(page.Meta, photoAlbumsContent(page)) }
 
 templ photoAlbumsContent(page PhotoAlbumsPage) {
 	if page.Management {
-		@components.PageHeader("Moderação", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary"}})
+		@components.PageHeader("Moderação", "Álbuns privados", "Crie espaços privados para programas e equipas antes de aceitar fotografias.", []components.PageAction{{Label: "Novo álbum", Href: "#novo-album", Variant: "primary", TaskID: "novo-album"}})
 	} else {
 		@components.PageHeader("Atividade", "Álbuns privados", "Consulte os álbuns dos seus programas e equipas.", nil)
 	}
 	@components.StatusMessage(page.Success, "success")
 	if page.Management && page.CanManage {
-		<details id="novo-album" class="module disclosure create-panel" data-create-panel open?={ len(page.Form.Errors) > 0 } aria-labelledby="photo-album-authoring-title">
-			<summary><span><strong id="photo-album-authoring-title">Novo álbum privado</strong><small>Defina os destinatários antes de abrir o álbum.</small></span></summary>
-			<button class="create-panel__close" type="button">Fechar</button>
-			<div class="disclosure__content">
-				<form class="form-layout" method="post" action="/admin/albuns">
+		@components.TaskDialog(components.TaskSurfaceConfig{ID: "novo-album", TitleID: "photo-album-authoring-title", Eyebrow: "Moderação", Title: "Novo álbum privado", Description: "Defina os destinatários antes de abrir o álbum.", Variant: "sheet", URL: "/admin/albuns", Open: len(page.Form.Errors) > 0}) {
+			<form class="form-layout task-form" method="post" action="/admin/albuns" data-task-form>
 					@page.Form.CSRFField
 					@components.RequiredNote()
 					@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "title", Field: "photo-album-title"}, {Key: "description", Field: "photo-album-description"}, {Key: "audience", Field: "photo-album-audience"}, {Key: "programme_id", Field: "photo-album-audience"}, {Key: "team_id", Field: "photo-album-audience"}}))
@@ -69,12 +72,12 @@ templ photoAlbumsContent(page PhotoAlbumsPage) {
 						}
 					</fieldset>
 					@components.FieldErrorMessage("audience", photoAlbumAudienceError(page.Form.Errors))
-					@components.FormActions("/admin/albuns") {
-						<button type="submit">Criar álbum</button>
+					@components.TaskActions("/admin/albuns") {
+						<button class="action action--primary" type="submit" data-task-submit>Criar álbum</button>
 					}
-				</form>
-			</div>
-		</details>
+			</form>
+		}
+		@components.DiscardConfirmation()
 	}
 	<section class="module">
 		@components.SectionHeading("Partilha privada", photoAlbumListTitle(page.Management), photoAlbumListDescription(page.Management))
@@ -110,7 +113,7 @@ templ photoAlbumDetailContent(page PhotoAlbumDetailPage) {
 	if page.Management && page.CanManage {
 		<section class="module"><h2>Gestão</h2>
 			if page.Album.Status == "OPEN" {
-				<form method="post" action={ "/admin/albuns/" + page.Album.ID + "/arquivar" }>@page.CSRFField<input type="hidden" name="updated_at" value={ page.Album.UpdatedAt }/><button class="action action--danger" type="submit">Arquivar álbum</button></form>
+				<a class="action action--danger" href={ photoAlbumArchiveURL(page.Album.ID) }>Arquivar álbum</a>
 			} else {
 				<p>Este álbum está arquivado e permanece apenas para consulta da equipa responsável.</p>
 			}
@@ -125,6 +128,23 @@ templ photoAlbumDetailContent(page PhotoAlbumDetailPage) {
 	}
 }
 
+templ PhotoAlbumArchive(page PhotoAlbumArchivePage) { @components.Base(page.Meta, photoAlbumArchiveContent(page)) }
+
+templ photoAlbumArchiveContent(page PhotoAlbumArchivePage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "arquivar-album", TitleID: "photo-album-archive-title", Eyebrow: "Confirmação", Title: "Arquivar álbum privado", Description: page.Album.Title + " · " + page.Album.Audience, Variant: "confirmation", ReturnURL: page.ReturnURL}) {
+			<form class="form-layout task-form destructive-region" method="post" action={ "/admin/albuns/" + page.Album.ID + "/arquivar" } data-task-form>
+				@page.CSRFField
+				<input type="hidden" name="updated_at" value={ page.Album.UpdatedAt }/>
+				@components.TaskConflict("O álbum foi alterado", page.Conflict, "", page.ReturnURL, "Voltar ao álbum")
+				<p>O álbum deixa de estar aberto a novas fotografias. O histórico e as fotografias já publicadas permanecem disponíveis para consulta autorizada.</p>
+				<p>Confirme que pretende arquivar <strong>{ page.Album.Title }</strong>.</p>
+				@components.TaskActions(page.ReturnURL) { <button class="action action--danger" type="submit" data-task-submit>Arquivar álbum</button> }
+			</form>
+		}
+	</div>
+}
+
 func photoAlbumAudienceError(errors validation.FieldErrors) string { if errors["audience"] != "" { return errors["audience"] }; if errors["programme_id"] != "" { return errors["programme_id"] }; return errors["team_id"] }
 func photoAlbumListTitle(management bool) string { if management { return "Todos os álbuns" }; return "Os meus álbuns" }
 func photoAlbumListDescription(management bool) string { if management { return "Álbuns abertos e arquivados, sempre limitados aos destinatários definidos." }; return "A visibilidade acompanha as suas inscrições e relações de tutela atuais." }
@@ -132,6 +152,7 @@ func photoAlbumEmptyText(management bool) string { if management { return "Crie 
 func photoAlbumStatusLabel(status string) string { if status == "ARCHIVED" { return "Arquivado" }; return "Aberto" }
 func photoAlbumStatusTone(status string) string { if status == "ARCHIVED" { return "neutral" }; return "success" }
 func photoAlbumDetailURL(item PhotoAlbumItem, management bool) string { if management { return "/admin/albuns/" + item.ID }; return "/albuns/" + item.ID }
+func photoAlbumArchiveURL(id string) string { return "/admin/albuns/" + id + "/arquivar" }
 func photoAlbumIndexURL(management bool) string { if management { return "/admin/albuns" }; return "/albuns" }
 func photoAlbumArea(management bool) string { if management { return "Moderação" }; return "Atividade" }
 func photoAlbumAuditLabel(action string) string { if action == "ARCHIVED" { return "Álbum arquivado" }; return "Álbum criado" }

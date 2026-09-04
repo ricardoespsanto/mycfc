@@ -46,19 +46,27 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/admin/fleet", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet"},
 		{http.MethodGet, "/admin/fleet/equipment/00000000-0000-0000-0000-000000000000/edit", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet%2Fequipment%2F00000000-0000-0000-0000-000000000000%2Fedit"},
 		{http.MethodGet, "/admin/fleet/equipment/00000000-0000-0000-0000-000000000000/retire", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet%2Fequipment%2F00000000-0000-0000-0000-000000000000%2Fretire"},
+		{http.MethodGet, "/admin/maintenance/00000000-0000-0000-0000-000000000000/complete", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmaintenance%2F00000000-0000-0000-0000-000000000000%2Fcomplete"},
 		{http.MethodGet, "/admin/sistema", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fsistema"},
 		{http.MethodGet, "/admin/membros", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros"},
 		{http.MethodGet, "/admin/membros/criar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros%2Fcriar"},
 		{http.MethodPost, "/admin/membros/criar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fmembros%2Fcriar"},
 		{http.MethodGet, "/admin/noticias", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fnoticias"},
+		{http.MethodGet, "/admin/noticias/00000000-0000-0000-0000-000000000000/publicar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fnoticias%2F00000000-0000-0000-0000-000000000000%2Fpublicar"},
+		{http.MethodGet, "/admin/noticias/00000000-0000-0000-0000-000000000000/expirar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fnoticias%2F00000000-0000-0000-0000-000000000000%2Fexpirar"},
 		{http.MethodGet, "/sugestoes", http.StatusSeeOther, "", "/login?next=%2Fsugestoes"},
 		{http.MethodGet, "/admin/sugestoes", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fsugestoes"},
+		{http.MethodGet, "/admin/albuns/00000000-0000-0000-0000-000000000000/arquivar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Falbuns%2F00000000-0000-0000-0000-000000000000%2Farquivar"},
 		{http.MethodPost, "/admin/sugestoes/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fsugestoes%2F00000000-0000-0000-0000-000000000000"},
+		{http.MethodGet, "/admin/eventos/criar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Feventos%2Fcriar"},
 		{http.MethodGet, "/admin/eventos/00000000-0000-0000-0000-000000000000/editar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Feventos%2F00000000-0000-0000-0000-000000000000%2Feditar"},
 		{http.MethodPost, "/admin/events/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fevents%2F00000000-0000-0000-0000-000000000000"},
 		{http.MethodPost, "/admin/events/00000000-0000-0000-0000-000000000000/cancel", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fevents%2F00000000-0000-0000-0000-000000000000%2Fcancel"},
+		{http.MethodGet, "/admin/announcements/00000000-0000-0000-0000-000000000000/publicar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fannouncements%2F00000000-0000-0000-0000-000000000000%2Fpublicar"},
+		{http.MethodGet, "/admin/announcements/00000000-0000-0000-0000-000000000000/expirar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Fannouncements%2F00000000-0000-0000-0000-000000000000%2Fexpirar"},
 		{http.MethodGet, "/admin/treinos/sessoes/00000000-0000-0000-0000-000000000000/editar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Fsessoes%2F00000000-0000-0000-0000-000000000000%2Feditar"},
 		{http.MethodPost, "/admin/treinos/sessoes/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Fsessoes%2F00000000-0000-0000-0000-000000000000"},
+		{http.MethodGet, "/admin/treinos/sessoes/00000000-0000-0000-0000-000000000000/cancelar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Fsessoes%2F00000000-0000-0000-0000-000000000000%2Fcancelar"},
 		{http.MethodPost, "/admin/treinos/sessoes/00000000-0000-0000-0000-000000000000/cancelar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Fsessoes%2F00000000-0000-0000-0000-000000000000%2Fcancelar"},
 		{http.MethodGet, "/treinos/estruturados", http.StatusSeeOther, "", "/login?next=%2Ftreinos%2Festruturados"},
 		{http.MethodGet, "/treinos/prescricoes/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Ftreinos%2Fprescricoes%2F00000000-0000-0000-0000-000000000000"},
@@ -66,6 +74,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodGet, "/admin/treinos/estruturados", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados"},
 		{http.MethodPost, "/admin/treinos/estruturados/semanas/00000000-0000-0000-0000-000000000000/publicar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fsemanas%2F00000000-0000-0000-0000-000000000000%2Fpublicar"},
 		{http.MethodPost, "/admin/treinos/estruturados/semanas/00000000-0000-0000-0000-000000000000/carga", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fsemanas%2F00000000-0000-0000-0000-000000000000%2Fcarga"},
+		{http.MethodPost, "/admin/treinos/estruturados/ciclos", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fciclos"},
+		{http.MethodPost, "/admin/treinos/estruturados/ciclos/00000000-0000-0000-0000-000000000000", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fciclos%2F00000000-0000-0000-0000-000000000000"},
+		{http.MethodPost, "/admin/treinos/estruturados/ciclos/00000000-0000-0000-0000-000000000000/copiar", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fciclos%2F00000000-0000-0000-0000-000000000000%2Fcopiar"},
 		{http.MethodPost, "/admin/treinos/estruturados/sessoes/00000000-0000-0000-0000-000000000000/segmentos", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fsessoes%2F00000000-0000-0000-0000-000000000000%2Fsegmentos"},
 		{http.MethodPost, "/admin/treinos/estruturados/segmentos/00000000-0000-0000-0000-000000000000/ginasio", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fsegmentos%2F00000000-0000-0000-0000-000000000000%2Fginasio"},
 		{http.MethodPost, "/admin/treinos/estruturados/blocos/00000000-0000-0000-0000-000000000000/exercicios", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ftreinos%2Festruturados%2Fblocos%2F00000000-0000-0000-0000-000000000000%2Fexercicios"},
@@ -171,6 +182,28 @@ func TestCompatibilityRedirectPreservesQueryParameters(t *testing.T) {
 	compatibilityRedirect("/events").ServeHTTP(response, request)
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/events?scope=competition&return=%2Ftoday" {
 		t.Fatalf("response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestAssetHandlerServesEmbeddedAssetsWithAppropriateCaching(t *testing.T) {
+	manifest, err := loadAssetManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := assetHandler()
+	for _, tc := range []struct {
+		path, cache string
+		status      int
+	}{
+		{manifest["app.js"], "public, max-age=31536000, immutable", http.StatusOK},
+		{"/assets/manifest.json", "no-cache", http.StatusOK},
+		{"/assets/does-not-exist.js", "", http.StatusNotFound},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if response.Code != tc.status || (tc.cache != "" && response.Header().Get("Cache-Control") != tc.cache) {
+			t.Fatalf("%s status=%d cache=%q", tc.path, response.Code, response.Header().Get("Cache-Control"))
+		}
 	}
 }
 

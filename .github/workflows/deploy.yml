@@ -55,26 +55,56 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
       - id: ecr-login
         # aws-actions/amazon-ecr-login v2.1.6
-        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
-      - name: Build and publish the immutable image
-        id: image
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd
+      - name: Prepare immutable image references
+        id: image-refs
+        env:
+          ECR_REPOSITORY: ${{ steps.ecr-login.outputs.registry }}/mycfc-production
+          ECR_REPOSITORY_NAME: mycfc-production
+          GIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+        run: sh deployment/publish-release-image.sh prepare
+      # docker/setup-buildx-action v4.3.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Build and publish immutable image tags
+        id: build
+        if: steps.image-refs.outputs.build_required == 'true'
+        # docker/build-push-action v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.git_tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.image-refs.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+      - name: Prepare release promotion
+        id: release-ref
+        env:
+          GIT_SHA: ${{ steps.image-refs.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          SHA="$(git rev-parse HEAD)"
-          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          REPOSITORY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mycfc-production"
-          AWS_REGION="$AWS_REGION" \
-            ECR_REPOSITORY="$REPOSITORY" \
-            ECR_REPOSITORY_NAME=mycfc-production \
-            GIT_SHA="$SHA" \
-            GITHUB_OUTPUT="$GITHUB_OUTPUT" \
-            sh deployment/publish-release-image.sh
+          test "${#GIT_SHA}" -eq 40
+          echo "release_tag=release-$(date -u +%Y%m%d%H%M%S)-$GIT_SHA" >> "$GITHUB_OUTPUT"
+      - name: Verify and promote the immutable image
+        id: image
+        env:
+          ECR_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
+          ECR_REPOSITORY_NAME: mycfc-production
+          GIT_SHA: ${{ steps.image-refs.outputs.sha }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
+          RELEASE_TAG: ${{ steps.release-ref.outputs.release_tag }}
+        run: sh deployment/publish-release-image.sh
       - name: Promote the tested image for production pickup
+        id: publication
         env:
           RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
           test -n "$RELEASE_TAG"
+          echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Write deployment summary
         run: |
           {
@@ -83,5 +113,6 @@ jobs:
             echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
             echo "- Release tag: \`${{ steps.image.outputs.release_tag }}\`"
+            echo "- Publication completed: \`${{ steps.publication.outputs.published_at }}\`"
             echo "- The Hetzner pull-release timer will deploy this immutable release."
           } >> "$GITHUB_STEP_SUMMARY"

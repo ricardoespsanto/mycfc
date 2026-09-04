@@ -142,6 +142,22 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		page.CompetitionEvents = structuredCompetitionEvents(competitionEvents, h.location())
+		cycleRows, err := h.Store.ListManagedTrainingCycles(ctx, dbgen.ListManagedTrainingCyclesParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		cycleWeeks, err := h.Store.ListManagedTrainingCycleWeeks(ctx, dbgen.ListManagedTrainingCycleWeeksParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		cycleTargets, err := h.Store.ListManagedTrainingCycleTargets(ctx, dbgen.ListManagedTrainingCycleTargetsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
+		if err != nil {
+			h.System.InternalError(w, r)
+			return
+		}
+		page.Cycles = structuredTrainingCycles(cycleRows, cycleWeeks, cycleTargets, page.Audiences, h.location())
 		variationGroups, err := h.Store.ListManagedTrainingVariationGroups(ctx, dbgen.ListManagedTrainingVariationGroupsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if err != nil {
 			h.System.InternalError(w, r)
@@ -193,6 +209,8 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			requestedSessionID,
 		)
 		page.PlannerReturnURL = structuredPlannerURL(page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID)
+		page.PlannerAudiences = page.Audiences
+		page.Audiences = structuredPlannerContextAudience(page.Audiences, page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID)
 	}
 	page.Meta.PageLabel = "Planeamento semanal"
 	if page.Management {
@@ -315,6 +333,39 @@ func structuredPlannerSelection(audiences []pages.StructuredTrainingAudience, re
 		}
 	}
 	return groupID, weekID, sessionID
+}
+
+// structuredPlannerContextAudience keeps the workspace bounded to the selected
+// group, week and session. The complete audience list remains available to the
+// selector, but rendering every nested task for every managed plan makes large
+// clubs slow and creates unnecessary interactive DOM.
+func structuredPlannerContextAudience(audiences []pages.StructuredTrainingAudience, groupID, weekID, sessionID string) []pages.StructuredTrainingAudience {
+	for _, audience := range audiences {
+		if audience.GroupID != groupID {
+			continue
+		}
+		selected := audience
+		selected.Weeks = nil
+		for _, week := range audience.Weeks {
+			if week.ID != weekID {
+				continue
+			}
+			selectedWeek := week
+			if sessionID != "" {
+				selectedWeek.Sessions = nil
+				for _, session := range week.Sessions {
+					if session.ID == sessionID {
+						selectedWeek.Sessions = append(selectedWeek.Sessions, session)
+						break
+					}
+				}
+			}
+			selected.Weeks = append(selected.Weeks, selectedWeek)
+			break
+		}
+		return []pages.StructuredTrainingAudience{selected}
+	}
+	return nil
 }
 
 func (h StructuredTraining) PublishPlan(w http.ResponseWriter, r *http.Request) {
@@ -566,6 +617,178 @@ func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Reques
 	httpx.Redirect(w, r, structuredPlannerPath+"#training-plan", http.StatusSeeOther)
 }
 
+func (h StructuredTraining) CreateCycle(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderIndex(w, r, http.StatusBadRequest, pages.StructuredTrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "cycle"})
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	form, input := structuredTrainingCycleInput(r, user, uuid.Nil)
+	groupID, groupErr := uuid.Parse(form.GroupID)
+	if groupErr != nil {
+		form.Errors.Add("group_id", "Selecione um grupo válido.")
+	} else {
+		input.TrainingGroupID = groupID
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if groupErr == nil && !h.canManageGroup(ctx, user, groupID, w, r) {
+		return
+	}
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle", CycleForm: form})
+		return
+	}
+	_, err := h.Store.SaveTrainingCycle(ctx, input)
+	if errors.Is(err, errStructuredTrainingCycleScope) || isStructuredCopyRejection(err) {
+		form.Errors.Add("week_id", "Selecione semanas disponíveis do mesmo grupo e época; a estrutura superior também tem de usar esse âmbito.")
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle", CycleForm: form})
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Ciclo de treino criado sem alterar as semanas publicadas.")
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-cycles", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) UpdateCycle(w http.ResponseWriter, r *http.Request) {
+	cycleID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageCycle(ctx, user, cycleID, w, r) {
+		return
+	}
+	form, input := structuredTrainingCycleInput(r, user, cycleID)
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle-" + cycleID.String(), CycleForm: form})
+		return
+	}
+	_, err = h.Store.SaveTrainingCycle(ctx, input)
+	if errors.Is(err, errStructuredTrainingCycleConflict) {
+		message := "O ciclo foi alterado por outra pessoa. Reveja os dados atuais antes de guardar novamente."
+		form.Errors.Add("form", message)
+		h.renderIndex(w, r, http.StatusConflict, pages.StructuredTrainingPage{Error: message, OpenForm: "cycle-" + cycleID.String(), CycleForm: form})
+		return
+	}
+	if errors.Is(err, errStructuredTrainingCycleScope) || isStructuredCopyRejection(err) {
+		form.Errors.Add("week_id", "Selecione semanas disponíveis do mesmo grupo e época.")
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle-" + cycleID.String(), CycleForm: form})
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Ciclo atualizado. As semanas mantêm as suas revisões independentes.")
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-cycles", http.StatusSeeOther)
+}
+
+func (h StructuredTraining) CopyCycle(w http.ResponseWriter, r *http.Request) {
+	cycleID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || r.ParseForm() != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if !h.canManageCycle(ctx, user, cycleID, w, r) {
+		return
+	}
+	name := strings.TrimSpace(r.PostForm.Get("name"))
+	firstMondayRaw := r.PostForm.Get("first_monday")
+	firstMonday, dateErr := time.ParseInLocation("2006-01-02", firstMondayRaw, h.location())
+	copyForm := pages.StructuredTrainingCycleCopyForm{CycleID: cycleID.String(), Name: name, FirstMonday: firstMondayRaw, Errors: validation.FieldErrors{}}
+	if !validTrainingText(name, 2, 180) {
+		copyForm.Errors.Add("name", "O nome deve ter entre 2 e 180 caracteres.")
+	}
+	if dateErr != nil || firstMonday.Weekday() != time.Monday {
+		copyForm.Errors.Add("first_monday", "Selecione uma segunda-feira válida.")
+	}
+	if !copyForm.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle-copy-" + cycleID.String(), CycleCopyForm: copyForm})
+		return
+	}
+	if _, err = h.Store.CopyStructuredTrainingCycle(ctx, StructuredTrainingCycleCopyInput{SourceCycleID: cycleID, FirstMonday: firstMonday, Name: name, ActorID: user.ID}); err != nil {
+		if errors.Is(err, errStructuredTrainingCycleScope) || isStructuredCopyRejection(err) {
+			copyForm.Errors.Add("form", "Não foi possível criar semanas independentes nessas datas. Confirme a época e semanas já existentes.")
+			h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle-copy-" + cycleID.String(), CycleCopyForm: copyForm})
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Ciclo copiado como semanas e sessões independentes; publicações e respostas não foram copiadas.")
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-cycles", http.StatusSeeOther)
+}
+
+func structuredTrainingCycleInput(r *http.Request, user CurrentUser, cycleID uuid.UUID) (pages.StructuredTrainingCycleForm, StructuredTrainingCycleInput) {
+	form := pages.StructuredTrainingCycleForm{
+		CycleID: cycleID.String(), GroupID: r.PostForm.Get("group_id"),
+		Name: strings.TrimSpace(r.PostForm.Get("name")), LevelLabel: strings.TrimSpace(r.PostForm.Get("level_label")),
+		Goals: strings.TrimSpace(r.PostForm.Get("goals")), Focus: strings.TrimSpace(r.PostForm.Get("phase_focus_notes")),
+		Version: r.PostForm.Get("version"), WeekIDs: map[string]bool{}, ChildCycleIDs: map[string]bool{}, TargetEventIDs: map[string]bool{}, Errors: validation.FieldErrors{},
+	}
+	input := StructuredTrainingCycleInput{CycleID: cycleID, Name: form.Name, LevelLabel: form.LevelLabel, Goals: form.Goals, PhaseFocusNotes: form.Focus, ActorID: user.ID, IsAdmin: user.IsAdmin}
+	if cycleID == uuid.Nil {
+		input.CycleID = uuid.Nil
+	} else {
+		version, err := strconv.ParseInt(form.Version, 10, 32)
+		if err != nil || version < 1 {
+			form.Errors.Add("form", "A versão do ciclo é inválida. Atualize a página.")
+		} else {
+			input.ExpectedVersion = int32(version)
+		}
+	}
+	if !validTrainingText(form.Name, 2, 180) {
+		form.Errors.Add("name", "O nome deve ter entre 2 e 180 caracteres.")
+	}
+	if utf8.RuneCountInString(form.LevelLabel) > 80 || utf8.RuneCountInString(form.Goals) > 4000 || utf8.RuneCountInString(form.Focus) > 4000 {
+		form.Errors.Add("form", "Revise a designação, os objetivos e as notas de foco.")
+	}
+	seenWeeks := map[uuid.UUID]bool{}
+	for _, raw := range r.PostForm["week_id"] {
+		weekID, err := uuid.Parse(raw)
+		if err != nil || seenWeeks[weekID] {
+			form.Errors.Add("week_id", "Selecione semanas válidas sem repetições.")
+			continue
+		}
+		seenWeeks[weekID], form.WeekIDs[weekID.String()] = true, true
+		input.WeekIDs = append(input.WeekIDs, weekID)
+	}
+	seenChildren := map[uuid.UUID]bool{}
+	for _, raw := range r.PostForm["child_cycle_id"] {
+		childID, err := uuid.Parse(raw)
+		if err != nil || childID == cycleID || seenChildren[childID] {
+			form.Errors.Add("child_cycle_id", "Selecione estruturas válidas sem repetições.")
+			continue
+		}
+		seenChildren[childID], form.ChildCycleIDs[childID.String()] = true, true
+		input.ChildCycleIDs = append(input.ChildCycleIDs, childID)
+	}
+	if len(input.WeekIDs) == 0 && len(input.ChildCycleIDs) == 0 {
+		form.Errors.Add("week_id", "Selecione pelo menos uma semana direta ou uma estrutura incluída.")
+	}
+	seenTargets := map[uuid.UUID]bool{}
+	for _, raw := range r.PostForm["target_event_id"] {
+		eventID, err := uuid.Parse(raw)
+		if err != nil || seenTargets[eventID] {
+			form.Errors.Add("target_event_id", "Selecione competições válidas sem repetições.")
+			continue
+		}
+		seenTargets[eventID], form.TargetEventIDs[eventID.String()] = true, true
+		input.TargetEventIDs = append(input.TargetEventIDs, eventID)
+	}
+	return form, input
+}
+
 func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		h.renderIndex(w, r, http.StatusBadRequest, pages.StructuredTrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "session"})
@@ -636,18 +859,48 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 		h.System.RequestRejected(w, r)
 		return
 	}
-	modality := dbgen.TrainingSegmentModality(r.PostForm.Get("modality"))
-	purpose := dbgen.TrainingBlockPurpose(r.PostForm.Get("purpose"))
-	title, location := strings.TrimSpace(r.PostForm.Get("title")), strings.TrimSpace(r.PostForm.Get("location"))
-	blockTitle := strings.TrimSpace(r.PostForm.Get("block_title"))
-	instructions := strings.TrimSpace(r.PostForm.Get("instructions"))
-	duration, durationErr := optionalPositiveInt32(r.PostForm.Get("planned_duration_minutes"), 1440)
-	startOffset, startOffsetErr := optionalNonNegativeInt32(r.PostForm.Get("planned_start_offset_minutes"), 1440)
-	transition, transitionErr := optionalPositiveInt32(r.PostForm.Get("transition_duration_minutes"), 1440)
-	equipmentNotes := strings.TrimSpace(r.PostForm.Get("equipment_notes"))
-	if !validTrainingSegmentModality(modality) || !validTrainingBlockPurpose(purpose) || utf8.RuneCountInString(title) > 120 || utf8.RuneCountInString(location) > 180 || utf8.RuneCountInString(blockTitle) > 120 || !validTrainingText(instructions, 2, 4000) || utf8.RuneCountInString(equipmentNotes) > 1000 || durationErr != nil || startOffsetErr != nil || transitionErr != nil {
-		h.System.RequestRejected(w, r)
-		return
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
+	form := pages.StructuredTrainingSegmentForm{
+		SessionID: sessionID.String(), Modality: r.PostForm.Get("modality"), Title: strings.TrimSpace(r.PostForm.Get("title")),
+		Location: strings.TrimSpace(r.PostForm.Get("location")), Duration: strings.TrimSpace(r.PostForm.Get("planned_duration_minutes")),
+		StartOffset: strings.TrimSpace(r.PostForm.Get("planned_start_offset_minutes")), Transition: strings.TrimSpace(r.PostForm.Get("transition_duration_minutes")),
+		EquipmentNotes: strings.TrimSpace(r.PostForm.Get("equipment_notes")), Purpose: r.PostForm.Get("purpose"),
+		BlockTitle: strings.TrimSpace(r.PostForm.Get("block_title")), Instructions: strings.TrimSpace(r.PostForm.Get("instructions")), Errors: validation.FieldErrors{},
+	}
+	modality := dbgen.TrainingSegmentModality(form.Modality)
+	purpose := dbgen.TrainingBlockPurpose(form.Purpose)
+	duration, durationErr := optionalPositiveInt32(form.Duration, 1440)
+	startOffset, startOffsetErr := optionalNonNegativeInt32(form.StartOffset, 1440)
+	transition, transitionErr := optionalPositiveInt32(form.Transition, 1440)
+	if !validTrainingSegmentModality(modality) {
+		form.Errors.Add("modality", "Selecione uma modalidade válida.")
+	}
+	if !validTrainingBlockPurpose(purpose) {
+		form.Errors.Add("purpose", "Selecione um objetivo válido.")
+	}
+	if utf8.RuneCountInString(form.Title) > 120 {
+		form.Errors.Add("title", "O título não pode exceder 120 caracteres.")
+	}
+	if utf8.RuneCountInString(form.Location) > 180 {
+		form.Errors.Add("location", "O local não pode exceder 180 caracteres.")
+	}
+	if durationErr != nil {
+		form.Errors.Add("planned_duration_minutes", "Indique uma duração entre 1 e 1440 minutos.")
+	}
+	if startOffsetErr != nil {
+		form.Errors.Add("planned_start_offset_minutes", "Indique um início entre 0 e 1440 minutos.")
+	}
+	if transitionErr != nil {
+		form.Errors.Add("transition_duration_minutes", "Indique uma transição entre 1 e 1440 minutos.")
+	}
+	if utf8.RuneCountInString(form.EquipmentNotes) > 1000 {
+		form.Errors.Add("equipment_notes", "As notas de material não podem exceder 1000 caracteres.")
+	}
+	if utf8.RuneCountInString(form.BlockTitle) > 120 {
+		form.Errors.Add("block_title", "O título do bloco não pode exceder 120 caracteres.")
+	}
+	if !validTrainingText(form.Instructions, 2, 4000) {
+		form.Errors.Add("instructions", "As instruções devem ter entre 2 e 4000 caracteres.")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
@@ -663,9 +916,14 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 	if !h.canManageWeek(ctx, user, planID, w, r) {
 		return
 	}
-	_, err = h.Store.CreateSegment(ctx, StructuredTrainingSegmentInput{Segment: dbgen.CreateTrainingSessionSegmentParams{SessionID: sessionID, Modality: modality, Title: title, Location: location, PlannedDurationMinutes: duration, PlannedStartOffsetMinutes: startOffset, TransitionDurationMinutes: transition, EquipmentNotes: equipmentNotes}, Block: dbgen.CreateTrainingSegmentBlockParams{Purpose: purpose, Title: blockTitle, Instructions: instructions}})
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "segment-" + sessionID.String(), SegmentForm: form, PlannerReturnURL: returnTo})
+		return
+	}
+	_, err = h.Store.CreateSegment(ctx, StructuredTrainingSegmentInput{Segment: dbgen.CreateTrainingSessionSegmentParams{SessionID: sessionID, Modality: modality, Title: form.Title, Location: form.Location, PlannedDurationMinutes: duration, PlannedStartOffsetMinutes: startOffset, TransitionDurationMinutes: transition, EquipmentNotes: form.EquipmentNotes}, Block: dbgen.CreateTrainingSegmentBlockParams{Purpose: purpose, Title: form.BlockTitle, Instructions: form.Instructions}})
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.System.RequestRejected(w, r)
+		form.Errors.Add("session", "A sessão deixou de aceitar alterações. Reveja o plano antes de tentar novamente.")
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "segment-" + sessionID.String(), SegmentForm: form, PlannerReturnURL: returnTo})
 		return
 	}
 	if err != nil {
@@ -673,7 +931,11 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.flash(r, "Segmento adicionado.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if destination := structuredPlannerSessionReturn(returnTo, planID.String(), sessionID.String()); destination != "" {
+		httpx.Redirect(w, r, destination, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath+"#training-plan", http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) {
@@ -687,12 +949,17 @@ func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) 
 		h.System.RequestRejected(w, r)
 		return
 	}
-	purpose := dbgen.TrainingBlockPurpose(r.PostForm.Get("purpose"))
-	title := strings.TrimSpace(r.PostForm.Get("title"))
-	instructions := strings.TrimSpace(r.PostForm.Get("instructions"))
-	if !validTrainingBlockPurpose(purpose) || utf8.RuneCountInString(title) > 120 || !validTrainingText(instructions, 2, 4000) {
-		h.System.RequestRejected(w, r)
-		return
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
+	form := pages.StructuredTrainingBlockForm{SegmentID: segmentID.String(), Purpose: r.PostForm.Get("purpose"), Title: strings.TrimSpace(r.PostForm.Get("title")), Instructions: strings.TrimSpace(r.PostForm.Get("instructions")), Errors: validation.FieldErrors{}}
+	purpose := dbgen.TrainingBlockPurpose(form.Purpose)
+	if !validTrainingBlockPurpose(purpose) {
+		form.Errors.Add("purpose", "Selecione um objetivo válido.")
+	}
+	if utf8.RuneCountInString(form.Title) > 120 {
+		form.Errors.Add("title", "O título não pode exceder 120 caracteres.")
+	}
+	if !validTrainingText(form.Instructions, 2, 4000) {
+		form.Errors.Add("instructions", "As instruções devem ter entre 2 e 4000 caracteres.")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
@@ -708,12 +975,25 @@ func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) 
 	if !h.canManageWeek(ctx, user, planID, w, r) {
 		return
 	}
-	_, err = h.Store.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: segmentID, Purpose: purpose, Title: title, Instructions: instructions})
+	if !form.Errors.Empty() {
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "block-" + segmentID.String(), BlockForm: form, PlannerReturnURL: returnTo})
+		return
+	}
+	_, err = h.Store.CreateTrainingSegmentBlock(ctx, dbgen.CreateTrainingSegmentBlockParams{SegmentID: segmentID, Purpose: purpose, Title: form.Title, Instructions: form.Instructions})
+	if errors.Is(err, pgx.ErrNoRows) {
+		form.Errors.Add("segment", "O segmento deixou de aceitar alterações. Reveja o plano antes de tentar novamente.")
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "block-" + segmentID.String(), BlockForm: form, PlannerReturnURL: returnTo})
+		return
+	}
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
 	h.flash(r, "Bloco adicionado.")
+	if returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
@@ -755,6 +1035,75 @@ func (h StructuredTraining) CreateGymBlock(w http.ResponseWriter, r *http.Reques
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
+func (h StructuredTraining) GymBlockTask(w http.ResponseWriter, r *http.Request) {
+	h.renderGymBlockTask(w, r, http.StatusOK, r.URL.Query(), "")
+}
+
+func (h StructuredTraining) CreateGymBlockTask(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	sessionID, segmentID, err := structuredWaterTaskIDs(r)
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	if _, err := h.structuredWaterTaskContext(ctx, user, sessionID, segmentID); h.writeStructuredWaterTaskContextError(w, r, err) {
+		return
+	}
+	block, prescription, exercise, err := parseStructuredGymForm(r, segmentID, true)
+	if err != nil {
+		h.renderGymBlockTask(w, r, http.StatusUnprocessableEntity, r.PostForm, "Revise os campos obrigatórios e a prescrição do exercício.")
+		return
+	}
+	if _, err := h.Store.CreateGymBlock(ctx, StructuredGymBlockInput{Block: block, Prescription: prescription, Exercise: exercise}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			h.renderGymBlockTask(w, r, http.StatusConflict, r.PostForm, "O segmento foi alterado. Reveja o plano antes de tentar novamente.")
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	h.flash(r, "Bloco de ginásio adicionado.")
+	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
+	if returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
+}
+
+func (h StructuredTraining) renderGymBlockTask(w http.ResponseWriter, r *http.Request, status int, values url.Values, formError string) {
+	sessionID, segmentID, err := structuredWaterTaskIDs(r)
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	task, err := h.structuredWaterTaskContext(ctx, user, sessionID, segmentID)
+	if h.writeStructuredWaterTaskContextError(w, r, err) {
+		return
+	}
+	returnTo := structuredPlannerReturn(values.Get("return_to"))
+	if returnTo == "" {
+		returnTo = structuredPlannerURL(task.group.GroupID, task.week.ID, task.session.ID)
+	}
+	meta := h.meta(r, user, true)
+	meta.Title = "Adicionar bloco de ginásio | MyCFC"
+	meta.PageLabel = "Adicionar bloco de ginásio"
+	meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: returnTo}}
+	page := pages.StructuredGymBlockTaskPage{Meta: meta, CSRFField: templ.Raw(string(csrf.TemplateField(r))), ActionURL: "/admin/treinos/estruturados/sessoes/" + sessionID.String() + "/segmentos/" + segmentID.String() + "/ginasio", ReturnURL: returnTo, GroupName: task.group.GroupName, WeekTitle: task.week.Title, SessionTitle: task.session.Title, SegmentTitle: structuredSegmentTaskTitle(task.segment), Values: values, Error: formError}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.StructuredGymBlockTask(page).Render(r.Context(), w)
+}
+
 func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
 	blockID, err := uuid.Parse(r.PathValue("id"))
@@ -787,7 +1136,11 @@ func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Req
 		return
 	}
 	h.flash(r, "Exercício adicionado.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateWaterBlock(w http.ResponseWriter, r *http.Request) {
@@ -1059,7 +1412,11 @@ func (h StructuredTraining) CreateWaterWorkStep(w http.ResponseWriter, r *http.R
 		return
 	}
 	h.flash(r, "Passo de água adicionado.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateWaterIntensityProfile(w http.ResponseWriter, r *http.Request) {
@@ -1159,7 +1516,11 @@ func (h StructuredTraining) CreateRoutine(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.flash(r, "Rotina guardada como cópia independente.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request) {
@@ -1223,7 +1584,11 @@ func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.flash(r, "Rotina inserida como cópia independente.")
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CopyBlock(w http.ResponseWriter, r *http.Request) {
@@ -1354,6 +1719,10 @@ func (h StructuredTraining) CopyWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Semana copiada como novo rascunho independente.")
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
 }
 
@@ -1587,7 +1956,11 @@ func (h StructuredTraining) MoveGymExercise(w http.ResponseWriter, r *http.Reque
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) move(w http.ResponseWriter, r *http.Request, segment bool) {
@@ -1636,7 +2009,11 @@ func (h StructuredTraining) move(w http.ResponseWriter, r *http.Request, segment
 		h.System.InternalError(w, r)
 		return
 	}
-	httpx.Redirect(w, r, "/admin/treinos/estruturados", http.StatusSeeOther)
+	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
+		httpx.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
+	httpx.Redirect(w, r, structuredPlannerPath, http.StatusSeeOther)
 }
 
 func (h StructuredTraining) canManageGroup(ctx context.Context, user CurrentUser, id uuid.UUID, w http.ResponseWriter, r *http.Request) bool {
@@ -1654,6 +2031,19 @@ func (h StructuredTraining) canManageGroup(ctx context.Context, user CurrentUser
 
 func (h StructuredTraining) canManageWeek(ctx context.Context, user CurrentUser, id uuid.UUID, w http.ResponseWriter, r *http.Request) bool {
 	allowed, err := h.Store.CanManageStructuredTrainingWeek(ctx, dbgen.CanManageStructuredTrainingWeekParams{PlanID: id, IsAdmin: user.IsAdmin, UserID: user.ID})
+	if err != nil {
+		h.System.InternalError(w, r)
+		return false
+	}
+	if !allowed {
+		h.System.Forbidden(w, r)
+		return false
+	}
+	return true
+}
+
+func (h StructuredTraining) canManageCycle(ctx context.Context, user CurrentUser, id uuid.UUID, w http.ResponseWriter, r *http.Request) bool {
+	allowed, err := h.Store.CanManageTrainingCycle(ctx, dbgen.CanManageTrainingCycleParams{CycleID: id, IsAdmin: user.IsAdmin, UserID: user.ID})
 	if err != nil {
 		h.System.InternalError(w, r)
 		return false
@@ -2113,6 +2503,100 @@ func structuredPlanChoices(audiences []pages.StructuredTrainingAudience) ([]page
 		}
 	}
 	return groups, weeks, sessions, segments
+}
+
+func structuredTrainingCycles(cycleRows []dbgen.ListManagedTrainingCyclesRow, weekRows []dbgen.ListManagedTrainingCycleWeeksRow, targetRows []dbgen.ListManagedTrainingCycleTargetsRow, audiences []pages.StructuredTrainingAudience, location *time.Location) []pages.StructuredTrainingCycle {
+	weeksByID := map[uuid.UUID]pages.StructuredTrainingCycleWeek{}
+	for _, audience := range audiences {
+		for _, week := range audience.Weeks {
+			weekID, err := uuid.Parse(week.ID)
+			if err != nil {
+				continue
+			}
+			seenModalities := map[string]bool{}
+			modalities := []string{}
+			for _, session := range week.Sessions {
+				for _, modality := range session.Modalities {
+					label := structuredModalityName(modality)
+					if !seenModalities[label] {
+						seenModalities[label] = true
+						modalities = append(modalities, label)
+					}
+				}
+			}
+			weeksByID[weekID] = pages.StructuredTrainingCycleWeek{
+				ID: week.ID, Title: week.Title, DateRange: week.DateRange, PlannedLoad: week.PlannedLoad,
+				PlannerURL: structuredPlannerURL(audience.GroupID, week.ID, ""), Modalities: modalities,
+				MissingLoad: week.PlannedLoad == "", MissingModalities: len(modalities) == 0,
+			}
+		}
+	}
+	cycleIndex := map[uuid.UUID]int{}
+	result := make([]pages.StructuredTrainingCycle, 0, len(cycleRows))
+	for _, row := range cycleRows {
+		parentID, parentName := "", ""
+		if row.ParentCycleID != nil {
+			parentID = row.ParentCycleID.String()
+		}
+		if row.ParentCycleName != nil {
+			parentName = *row.ParentCycleName
+		}
+		cycleIndex[row.ID] = len(result)
+		result = append(result, pages.StructuredTrainingCycle{
+			ID: row.ID.String(), GroupID: row.TrainingGroupID.String(), GroupName: row.TrainingGroupName,
+			Season: row.SeasonName, ParentID: parentID, ParentName: parentName, Name: row.Name,
+			LevelLabel: row.LevelLabel, Goals: row.Goals, Focus: row.PhaseFocusNotes, Version: row.Version,
+		})
+	}
+	for _, row := range weekRows {
+		index, ok := cycleIndex[row.CycleID]
+		week, found := weeksByID[row.PlanID]
+		if !ok || !found {
+			continue
+		}
+		week.Direct = row.Direct
+		result[index].Weeks = append(result[index].Weeks, week)
+	}
+	for _, row := range targetRows {
+		index, ok := cycleIndex[row.CycleID]
+		if !ok {
+			continue
+		}
+		label := row.Title
+		if row.StartsAt.Valid {
+			label = row.StartsAt.Time.In(location).Format("02/01/2006") + " · " + row.Title
+		}
+		result[index].Targets = append(result[index].Targets, pages.StructuredTrainingCycleTarget{ID: row.EventID.String(), Label: label, Status: row.Status})
+	}
+	for index := range result {
+		cycle := &result[index]
+		if len(cycle.Weeks) > 0 {
+			cycle.DateRange = cycle.Weeks[0].DateRange
+			if len(cycle.Weeks) > 1 {
+				cycle.DateRange += " — " + cycle.Weeks[len(cycle.Weeks)-1].DateRange
+			}
+		}
+		missingLoad, missingModalities := 0, 0
+		for _, week := range cycle.Weeks {
+			if week.MissingLoad {
+				missingLoad++
+			}
+			if week.MissingModalities {
+				missingModalities++
+			}
+		}
+		warnings := []string{}
+		if missingLoad > 0 {
+			warnings = append(warnings, fmt.Sprintf("%d de %d semanas sem carga planeada", missingLoad, len(cycle.Weeks)))
+		}
+		if missingModalities > 0 {
+			warnings = append(warnings, fmt.Sprintf("%d de %d semanas sem modalidades estruturadas", missingModalities, len(cycle.Weeks)))
+		}
+		if len(warnings) > 0 {
+			cycle.Warning = "Distribuição incompleta: " + strings.Join(warnings, "; ") + "."
+		}
+	}
+	return result
 }
 
 func structuredVariationMembers(rows []dbgen.ListManagedTrainingGroupMembersRow) []pages.StructuredVariationMemberChoice {

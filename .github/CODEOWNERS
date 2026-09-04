@@ -1,0 +1,3 @@
+/.github/CODEOWNERS @ricardoespsanto
+/.github/workflows/ @ricardoespsanto
+/scripts/classify-ci-change.sh @ricardoespsanto

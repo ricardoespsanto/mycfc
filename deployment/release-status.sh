@@ -5,11 +5,31 @@ env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
 release_credentials_file=${MYCFC_RELEASE_AWS_CREDENTIALS_FILE:-/etc/mycfc/release-aws/credentials}
 release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
-pickup_window_seconds=${MYCFC_RELEASE_PICKUP_WINDOW_SECONDS:-300}
+pickup_window_seconds=${MYCFC_RELEASE_PICKUP_WINDOW_SECONDS:-60}
 
 fail() {
 	printf 'error=%s\n' "$1" >&2
 	exit 1
+}
+
+read_timeline_value() {
+	name=$1
+	cat "$state_dir/release-$name-at" 2>/dev/null || printf 'unknown'
+}
+
+duration_between() {
+	start=$1
+	finish=$2
+	case "$start:$finish" in
+		*unknown*|*none*) printf 'unknown\n'; return ;;
+	esac
+	start_epoch=$(date -u -d "$start" +%s 2>/dev/null || true)
+	finish_epoch=$(date -u -d "$finish" +%s 2>/dev/null || true)
+	if [ -z "$start_epoch" ] || [ -z "$finish_epoch" ] || [ "$finish_epoch" -lt "$start_epoch" ]; then
+		printf 'unknown\n'
+	else
+		printf '%s\n' "$((finish_epoch - start_epoch))"
+	fi
 }
 
 [ "$(id -u)" -eq 0 ] || fail 'must run as root'
@@ -45,6 +65,9 @@ case "$latest_digest" in
 	*) fail 'latest release has no valid digest' ;;
 esac
 latest_sha=${latest_tag##*-}
+release_stamp=${latest_tag#release-}
+release_stamp=${release_stamp%%-*}
+release_published_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$release_stamp" | cut -c1-4)" "$(printf '%s' "$release_stamp" | cut -c5-6)" "$(printf '%s' "$release_stamp" | cut -c7-8)" "$(printf '%s' "$release_stamp" | cut -c9-10)" "$(printf '%s' "$release_stamp" | cut -c11-12)" "$(printf '%s' "$release_stamp" | cut -c13-14)")"
 
 active_slot=$(cat "$state_dir/active-slot" 2>/dev/null || printf 'unknown')
 case "$active_slot" in
@@ -65,15 +88,56 @@ if [ -n "$active_container" ]; then
 fi
 
 quarantined_digest=$(cat "$state_dir/failed-release-digest" 2>/dev/null || true)
-last_attempt_digest=$(cat "$state_dir/last-attempt-digest" 2>/dev/null || true)
-last_attempt_result=$(cat "$state_dir/last-attempt-result" 2>/dev/null || true)
-last_attempt_at=$(cat "$state_dir/last-attempt-at" 2>/dev/null || true)
+last_attempt_digest=
+last_attempt_result=
+last_attempt_at=
+if [ -f "$state_dir/last-attempt" ]; then
+	IFS='	' read -r last_attempt_digest last_attempt_result last_attempt_at last_attempt_extra <"$state_dir/last-attempt" || true
+	case "$last_attempt_digest:$last_attempt_result:$last_attempt_at:$last_attempt_extra" in
+		sha256:*:checking:*:|sha256:*:succeeded:*:|sha256:*:failed:*:|sha256:*:quarantined:*:) ;;
+		*) last_attempt_digest=; last_attempt_result=; last_attempt_at= ;;
+	esac
+else
+	# Compatibility for hosts that have not yet written the atomic record.
+	last_attempt_digest=$(cat "$state_dir/last-attempt-digest" 2>/dev/null || true)
+	last_attempt_result=$(cat "$state_dir/last-attempt-result" 2>/dev/null || true)
+	last_attempt_at=$(cat "$state_dir/last-attempt-at" 2>/dev/null || true)
+fi
+timeline_digest=$(cat "$state_dir/release-timeline-digest" 2>/dev/null || true)
+timeline_tag=$(cat "$state_dir/release-timeline-tag" 2>/dev/null || true)
+agent_started_at=unknown
+release_detected_at=unknown
+image_pulled_at=unknown
+migration_completed_at=unknown
+candidate_ready_at=unknown
+traffic_switched_at=unknown
+deployment_completed_at=unknown
+if [ "$timeline_digest" = "$latest_digest" ] && [ "$timeline_tag" = "$latest_tag" ]; then
+	agent_started_at=$(read_timeline_value agent-started)
+	release_detected_at=$(read_timeline_value detected)
+	image_pulled_at=$(read_timeline_value image-pulled)
+	migration_completed_at=$(read_timeline_value migration-completed)
+	candidate_ready_at=$(read_timeline_value candidate-ready)
+	traffic_switched_at=$(read_timeline_value traffic-switched)
+	deployment_completed_at=$(read_timeline_value deployment-completed)
+	# A new release can reset the multi-file timeline while this command reads
+	# it. Accept the snapshot only when the tag and digest are stable afterward.
+	timeline_digest_after=$(cat "$state_dir/release-timeline-digest" 2>/dev/null || true)
+	timeline_tag_after=$(cat "$state_dir/release-timeline-tag" 2>/dev/null || true)
+	if [ "$timeline_digest_after" != "$timeline_digest" ] || [ "$timeline_tag_after" != "$timeline_tag" ]; then
+		agent_started_at=unknown
+		release_detected_at=unknown
+		image_pulled_at=unknown
+		migration_completed_at=unknown
+		candidate_ready_at=unknown
+		traffic_switched_at=unknown
+		deployment_completed_at=unknown
+	fi
+fi
 last_agent_result=$(systemctl show mycfc-pull-release.service --property=Result --value 2>/dev/null || printf 'unknown')
 last_agent_exit_status=$(systemctl show mycfc-pull-release.service --property=ExecMainStatus --value 2>/dev/null || printf 'unknown')
 last_agent_finished_at=$(systemctl show mycfc-pull-release.service --property=ExecMainExitTimestamp --value 2>/dev/null || printf 'unknown')
 
-release_stamp=${latest_tag#release-}
-release_stamp=${release_stamp%%-*}
 released_epoch=$(date -u -d "$(printf '%s-%s-%s %s:%s:%s UTC' "$(printf '%s' "$release_stamp" | cut -c1-4)" "$(printf '%s' "$release_stamp" | cut -c5-6)" "$(printf '%s' "$release_stamp" | cut -c7-8)" "$(printf '%s' "$release_stamp" | cut -c9-10)" "$(printf '%s' "$release_stamp" | cut -c11-12)" "$(printf '%s' "$release_stamp" | cut -c13-14)")" +%s)
 now_epoch=$(date -u +%s)
 release_age_seconds=$((now_epoch - released_epoch))
@@ -84,9 +148,11 @@ elif [ -n "$quarantined_digest" ] && [ "$quarantined_digest" = "$latest_digest" 
 	state=quarantined
 elif [ "$last_attempt_digest" = "$latest_digest" ] && [ "$last_attempt_result" = failed ]; then
 	state=failed
+elif [ "$last_attempt_digest" = "$latest_digest" ] && [ "$last_attempt_result" = checking ] && { [ "$last_agent_result" = failed ] || { [ "$last_agent_exit_status" != unknown ] && [ "$last_agent_exit_status" != 0 ]; }; }; then
+	state=failed
 elif [ -z "$last_attempt_digest" ] && { [ "$last_agent_result" = failed ] || { [ "$last_agent_exit_status" != unknown ] && [ "$last_agent_exit_status" != 0 ]; }; }; then
 	state=failed
-elif [ "$release_age_seconds" -gt "$pickup_window_seconds" ]; then
+elif [ "$agent_started_at" = unknown ] && [ "$release_age_seconds" -gt "$pickup_window_seconds" ]; then
 	state=delayed
 else
 	state=pending
@@ -98,6 +164,18 @@ printf 'latest_release_sha=%s\n' "$latest_sha"
 printf 'latest_release_digest=%s\n' "$latest_digest"
 printf 'release_age_seconds=%s\n' "$release_age_seconds"
 printf 'pickup_window_seconds=%s\n' "$pickup_window_seconds"
+printf 'release_published_at=%s\n' "$release_published_at"
+printf 'agent_started_at=%s\n' "$agent_started_at"
+printf 'release_detected_at=%s\n' "$release_detected_at"
+printf 'image_pulled_at=%s\n' "$image_pulled_at"
+printf 'migration_completed_at=%s\n' "$migration_completed_at"
+printf 'candidate_ready_at=%s\n' "$candidate_ready_at"
+printf 'traffic_switched_at=%s\n' "$traffic_switched_at"
+printf 'deployment_completed_at=%s\n' "$deployment_completed_at"
+printf 'publication_to_agent_start_seconds=%s\n' "$(duration_between "$release_published_at" "$agent_started_at")"
+printf 'publication_to_detection_seconds=%s\n' "$(duration_between "$release_published_at" "$release_detected_at")"
+printf 'publication_to_traffic_switch_seconds=%s\n' "$(duration_between "$release_published_at" "$traffic_switched_at")"
+printf 'publication_to_deployment_seconds=%s\n' "$(duration_between "$release_published_at" "$deployment_completed_at")"
 printf 'active_slot=%s\n' "$active_slot"
 printf 'running_release_sha=%s\n' "${running_sha:-unknown}"
 printf 'running_release_digest=%s\n' "${running_digest:-unknown}"

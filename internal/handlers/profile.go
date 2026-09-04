@@ -201,6 +201,10 @@ func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := r.ParseForm(); err != nil || r.PostForm.Get("confirm_removal") != "yes" {
+		h.System.RequestRejected(w, r)
+		return
+	}
 	oldKey, err := h.Store.RemovePhoto(r.Context(), actor.ID, subjectID, actor.IsAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.NotFound(w, r)
@@ -217,6 +221,33 @@ func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
 	h.deleteObject(r, oldKey)
 	h.flash(r, "Fotografia removida.")
 	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
+}
+
+func (h Profile) RemovePhotoPage(w http.ResponseWriter, r *http.Request) {
+	actor, _ := CurrentUserFromContext(r.Context())
+	subjectID, base, ok := h.subject(w, r, actor)
+	if !ok {
+		return
+	}
+	record, err := h.view(r.Context(), actor, subjectID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, ErrProfileForbidden) || record.PhotoObjectKey == nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !canEditProfile(record, actor.ID, actor.IsAdmin) {
+		h.System.Forbidden(w, r)
+		return
+	}
+	meta := h.page(r, actor, base, record, pages.ProfileForm{}, "").Meta
+	meta.Title = "Remover fotografia | MyCFC"
+	meta.PageLabel = "Remover fotografia"
+	returnURL := profileActionPath(base, profileCollectionReturn(r, actor))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pages.ProfilePhotoRemoval(pages.ProfilePhotoRemovalPage{Meta: meta, Name: record.Name, ActionPath: strings.Replace(returnURL, base, base+"/fotografia/remover", 1), ReturnURL: returnURL}).Render(r.Context(), w)
 }
 
 func (h Profile) Avatar(w http.ResponseWriter, r *http.Request) {
