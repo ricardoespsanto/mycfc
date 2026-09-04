@@ -80,7 +80,7 @@ services:
     env_file: .env
     environment:
       BASE_URL: http://e2e-app:8080
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mycfc_test?sslmode=disable
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
@@ -113,7 +113,7 @@ services:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      PGDATABASE: ${POSTGRES_DB}
+      PGDATABASE: mycfc_test
     command:
       - /bin/sh
       - -ec
@@ -133,6 +133,8 @@ services:
     environment:
       E2E_BASE_URL: http://e2e-app:8080
       MAILPIT_API_BASE: http://mailpit:8025
+      PLAYWRIGHT_WORKERS: ${PLAYWRIGHT_WORKERS:-2}
+      E2E_JSON_OUTPUT: ${E2E_JSON_OUTPUT:-}
       CI: "true"
     command:
       - /bin/sh

@@ -13,8 +13,12 @@ failed_digest_file="$state_dir/failed-release-digest"
 last_attempt_digest_file="$state_dir/last-attempt-digest"
 last_attempt_result_file="$state_dir/last-attempt-result"
 last_attempt_at_file="$state_dir/last-attempt-at"
+last_attempt_file="$state_dir/last-attempt"
+timeline_digest_file="$state_dir/release-timeline-digest"
+timeline_tag_file="$state_dir/release-timeline-tag"
 upstream_file="$state_dir/caddy-upstream.caddy"
 lock_file="$runtime_dir/mycfc-pull-release.lock"
+agent_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 backup_file=
 route_backup=
 release_digest=
@@ -41,9 +45,49 @@ write_state_value() {
 record_attempt() {
 	result=$1
 	[ -n "$release_digest" ] || return 0
+	attempted_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	# Keep the legacy fields during the rollout, then atomically commit the
+	# digest-associated snapshot that new status readers prefer.
 	write_state_value "$last_attempt_digest_file" "$release_digest"
 	write_state_value "$last_attempt_result_file" "$result"
-	write_state_value "$last_attempt_at_file" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	write_state_value "$last_attempt_at_file" "$attempted_at"
+	write_state_value "$last_attempt_file" "$(printf '%s\t%s\t%s' "$release_digest" "$result" "$attempted_at")"
+}
+
+timeline_file() {
+	printf '%s/release-%s-at\n' "$state_dir" "$1"
+}
+
+record_timeline_milestone() {
+	milestone=$1
+	case "$milestone" in
+		agent-started|detected|image-pulled|migration-completed|candidate-ready|traffic-switched|deployment-completed) ;;
+		*) log "invalid release timeline milestone: $milestone"; return 1 ;;
+	esac
+	milestone_file=$(timeline_file "$milestone")
+	if [ ! -f "$milestone_file" ]; then
+		milestone_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+		write_state_value "$milestone_file" "$milestone_at"
+		log "event=release_$milestone at=$milestone_at digest=$release_digest"
+	fi
+}
+
+begin_release_timeline() {
+	published_at=$1
+	if [ ! -f "$timeline_digest_file" ] || [ "$(cat "$timeline_digest_file")" != "$release_digest" ] ||
+		[ ! -f "$timeline_tag_file" ] || [ "$(cat "$timeline_tag_file")" != "$release_tag" ]; then
+		for milestone in published agent-started detected image-pulled migration-completed candidate-ready traffic-switched deployment-completed; do
+			rm -f "$(timeline_file "$milestone")"
+		done
+		write_state_value "$(timeline_file published)" "$published_at"
+		write_state_value "$(timeline_file agent-started)" "$agent_started_at"
+		# Identity files are the commit marker. Readers ignore the new timeline
+		# until both initial timestamps are durable.
+		write_state_value "$timeline_tag_file" "$release_tag"
+		write_state_value "$timeline_digest_file" "$release_digest"
+		log "event=release_agent-started at=$agent_started_at digest=$release_digest"
+	fi
+	record_timeline_milestone detected
 }
 
 write_upstream() {
@@ -105,9 +149,11 @@ rollback() {
 		cp "$backup_file" "$env_file"
 		if [ -n "$release_digest" ]; then
 			write_state_value "$failed_digest_file" "$release_digest"
-			record_attempt failed
 			log "quarantined failed release digest $release_digest"
 		fi
+	fi
+	if [ "$status" -ne 0 ] && [ -n "$release_digest" ]; then
+		record_attempt failed
 	fi
 	rm -f "$route_backup"
 	exit "$status"
@@ -181,13 +227,18 @@ case "$release_tag" in
 	release-??????????????-????????????????????????????????????????) ;;
 	*) log 'ECR has no valid release tag'; exit 1 ;;
 esac
+stamp=${release_tag#release-}
+stamp=${stamp%%-*}
+released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
 
 release_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
 case "$release_digest" in
 	sha256:*) ;;
 	*) log 'release has no valid digest'; exit 1 ;;
 esac
+begin_release_timeline "$released_at"
 record_attempt checking
+trap rollback EXIT HUP INT TERM
 if [ -f "$failed_digest_file" ] && [ "$(cat "$failed_digest_file")" = "$release_digest" ]; then
 	record_attempt quarantined
 	log "release $release_digest previously failed validation; waiting for a replacement release"
@@ -200,6 +251,7 @@ case "$image" in
 	*"@$release_digest") ;;
 	*) log 'pulled image digest does not match ECR release metadata'; exit 1 ;;
 esac
+record_timeline_milestone image-pulled
 
 case "$active_slot" in
 	blue|green) active_container="mycfc-production-app-$active_slot-1" ;;
@@ -217,10 +269,6 @@ case "$sha" in
 	????????????????????????????????????????) ;;
 	*) log 'release has no valid git SHA label'; exit 1 ;;
 esac
-stamp=${release_tag#release-}
-stamp=${stamp%%-*}
-released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
-
 case "$active_slot" in
 	blue) candidate_slot=green ;;
 	green|legacy) candidate_slot=blue ;;
@@ -232,7 +280,6 @@ backup_file="${env_file}.previous"
 cp "$env_file" "$backup_file"
 chmod 600 "$backup_file"
 chown root:root "$backup_file"
-trap rollback EXIT HUP INT TERM
 
 next_file=$(mktemp "${env_file}.next.XXXXXX")
 cp "$env_file" "$next_file"
@@ -262,6 +309,7 @@ log "preparing SHA $sha with digest $release_digest in the $candidate_slot slot"
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
+record_timeline_milestone migration-completed
 docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 	up -d --no-deps --force-recreate "$candidate_service"
 candidate_started=true
@@ -296,6 +344,7 @@ if ! curl -fsS -o /dev/null "http://$candidate_ip:8080$asset_path"; then
 	log "candidate check failed for $asset_path"
 	exit 1
 fi
+record_timeline_milestone candidate-ready
 
 route_backup=$(mktemp "$runtime_dir/mycfc-caddy-upstream.XXXXXX")
 cp "$upstream_file" "$route_backup"
@@ -307,6 +356,7 @@ if [ "$caddy_running" = true ]; then
 else
 	docker compose --env-file "$env_file" -f "$compose_file" up -d --no-deps caddy
 fi
+record_timeline_milestone traffic-switched
 
 for path in /health/live /health/ready /login "$asset_path"; do
 	if ! check_caddy_path "$path"; then
@@ -322,4 +372,5 @@ route_switched=false
 release_updated=false
 trap - EXIT HUP INT TERM
 record_attempt succeeded
+record_timeline_milestone deployment-completed
 log "deployed SHA $sha with digest $release_digest in the $candidate_slot slot"

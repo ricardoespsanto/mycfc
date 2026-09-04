@@ -22,9 +22,15 @@ type deliveryStoreFake struct {
 	claimed                    bool
 	completed, retried, failed bool
 	cancelled                  bool
+	claimErr, completeErr      error
+	retryErr, failErr          error
+	cancelErr                  error
 }
 
 func (f *deliveryStoreFake) ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error) {
+	if f.claimErr != nil {
+		return dbgen.ClaimEmailOutboxRow{}, f.claimErr
+	}
 	if f.claimed {
 		return dbgen.ClaimEmailOutboxRow{}, pgx.ErrNoRows
 	}
@@ -33,19 +39,19 @@ func (f *deliveryStoreFake) ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOu
 }
 func (f *deliveryStoreFake) CompleteEmailOutbox(context.Context, dbgen.CompleteEmailOutboxParams) (int64, error) {
 	f.completed = true
-	return 1, nil
+	return 1, f.completeErr
 }
 func (f *deliveryStoreFake) RetryEmailOutbox(context.Context, dbgen.RetryEmailOutboxParams) (int64, error) {
 	f.retried = true
-	return 1, nil
+	return 1, f.retryErr
 }
 func (f *deliveryStoreFake) FailEmailOutbox(context.Context, dbgen.FailEmailOutboxParams) (int64, error) {
 	f.failed = true
-	return 1, nil
+	return 1, f.failErr
 }
 func (f *deliveryStoreFake) CancelUndeliverableEmailOutbox(context.Context, pgtype.Timestamptz) (int64, error) {
 	f.cancelled = true
-	return 0, nil
+	return 0, f.cancelErr
 }
 
 type senderFake struct {
@@ -149,3 +155,82 @@ func TestWorkerDeliversPasswordResetAndFailsInvalidPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerStopsOrRecordsFailuresAcrossOutboxBoundaries(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	base := func(item dbgen.ClaimEmailOutboxRow) Worker {
+		return Worker{Store: &deliveryStoreFake{item: item}, Sender: &senderFake{err: errors.New("temporary failure")}, Now: func() time.Time { return now }}
+	}
+	for _, tc := range []struct {
+		name  string
+		item  dbgen.ClaimEmailOutboxRow
+		check func(*deliveryStoreFake)
+	}{
+		{"missing verification token is permanent", dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "EMAIL_VERIFICATION", ExpiresAt: timestamp(now.Add(time.Hour))}, func(s *deliveryStoreFake) {
+			if !s.failed || s.retried {
+				t.Fatalf("failed=%v retried=%v", s.failed, s.retried)
+			}
+		}},
+		{"unsupported type is permanent", dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "UNKNOWN", ExpiresAt: timestamp(now.Add(time.Hour))}, func(s *deliveryStoreFake) {
+			if !s.failed {
+				t.Fatal("unsupported type was not failed")
+			}
+		}},
+		{"attempt limit is permanent", dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "EMAIL_VERIFICATION", VerificationTokenID: ptrUUID(uuid.New()), Attempts: MaxAttempts, ExpiresAt: timestamp(now.Add(time.Hour))}, func(s *deliveryStoreFake) {
+			if !s.failed {
+				t.Fatal("attempt limit was not failed")
+			}
+		}},
+		{"expired before retry is permanent", dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "EMAIL_VERIFICATION", VerificationTokenID: ptrUUID(uuid.New()), Attempts: 1, ExpiresAt: timestamp(now.Add(time.Second))}, func(s *deliveryStoreFake) {
+			if !s.failed {
+				t.Fatal("expired message was not failed")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := base(tc.item)
+			store := worker.Store.(*deliveryStoreFake)
+			worker.drain(t.Context())
+			tc.check(store)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		store *deliveryStoreFake
+	}{
+		{"claim database failure", &deliveryStoreFake{claimErr: errors.New("database unavailable")}},
+		{"completion database failure", &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "EMAIL_VERIFICATION", VerificationTokenID: ptrUUID(uuid.New()), ExpiresAt: timestamp(now.Add(time.Hour))}, completeErr: errors.New("database unavailable")}},
+		{"retry database failure", &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "EMAIL_VERIFICATION", VerificationTokenID: ptrUUID(uuid.New()), ExpiresAt: timestamp(now.Add(time.Hour))}, retryErr: errors.New("database unavailable")}},
+		{"failure database failure", &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "UNKNOWN", ExpiresAt: timestamp(now.Add(time.Hour))}, failErr: errors.New("database unavailable")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &senderFake{}
+			if tc.name == "retry database failure" {
+				sender.err = errors.New("temporary failure")
+			}
+			Worker{Store: tc.store, Sender: sender, Now: func() time.Time { return now }}.drain(t.Context())
+		})
+	}
+}
+
+func TestWorkerRunStopsImmediatelyWhenContextIsAlreadyCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	store := &deliveryStoreFake{}
+	done := make(chan struct{})
+	go func() {
+		Worker{Store: store}.Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+		if !store.cancelled {
+			t.Fatal("worker did not perform safe outbox cleanup")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+}
+
+func ptrUUID(value uuid.UUID) *uuid.UUID { return &value }

@@ -7,11 +7,10 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresRegistrationStore struct {
-	Pool *pgxpool.Pool
+	Pool db.Beginner
 }
 
 func (s PostgresRegistrationStore) RegisterAdult(ctx context.Context, input RegistrationInput) (RegistrationResult, error) {

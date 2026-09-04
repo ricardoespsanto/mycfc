@@ -39,6 +39,68 @@ func (q *Queries) AddStructuredTrainingGroupMember(ctx context.Context, arg AddS
 	return result.RowsAffected(), nil
 }
 
+const addTrainingCycleTarget = `-- name: AddTrainingCycleTarget :execrows
+INSERT INTO training_cycle_competition_targets (cycle_id, event_id, added_by_id)
+SELECT cycle.id, event_row.id, $1
+FROM training_cycles cycle
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN events event_row ON event_row.id = $2 AND event_row.event_type = 'COMPETITION'
+WHERE cycle.id = $3
+  AND ($4::boolean OR (
+      EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = $5 AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      )
+      AND (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+           OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+      AND NOT EXISTS (
+          SELECT 1 FROM event_audiences audience
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = $5 AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM event_team_audiences audience
+          JOIN teams audience_team ON audience_team.id = audience.team_id
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = $5 AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL
+                  AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+            )
+      )
+  ))
+ON CONFLICT (cycle_id, event_id) DO NOTHING
+`
+
+type AddTrainingCycleTargetParams struct {
+	AddedByID uuid.UUID `json:"added_by_id"`
+	EventID   uuid.UUID `json:"event_id"`
+	CycleID   uuid.UUID `json:"cycle_id"`
+	IsAdmin   bool      `json:"is_admin"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCycleTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addTrainingCycleTarget,
+		arg.AddedByID,
+		arg.EventID,
+		arg.CycleID,
+		arg.IsAdmin,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const addTrainingVariationGroupMember = `-- name: AddTrainingVariationGroupMember :execrows
 INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
 SELECT variation_group.id, group_member.membership_id, $1
@@ -60,6 +122,60 @@ type AddTrainingVariationGroupMemberParams struct {
 
 func (q *Queries) AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error) {
 	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.VariationGroupID, arg.MembershipID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const assignTrainingCycleChild = `-- name: AssignTrainingCycleChild :execrows
+WITH RECURSIVE ancestors(id) AS (
+    SELECT parent_cycle_id FROM training_cycles WHERE id = $1
+    UNION ALL
+    SELECT ancestor.parent_cycle_id
+    FROM training_cycles ancestor
+    JOIN ancestors previous ON ancestor.id = previous.id
+    WHERE ancestor.parent_cycle_id IS NOT NULL
+)
+UPDATE training_cycles child
+SET parent_cycle_id = parent.id
+FROM training_cycles parent
+WHERE parent.id = $1 AND child.id = $2
+  AND child.id <> parent.id
+  AND child.training_group_id = parent.training_group_id AND child.season_id = parent.season_id
+  AND (child.parent_cycle_id IS NULL OR child.parent_cycle_id = parent.id)
+  AND NOT EXISTS (SELECT 1 FROM ancestors WHERE id = child.id)
+`
+
+type AssignTrainingCycleChildParams struct {
+	ParentCycleID uuid.UUID `json:"parent_cycle_id"`
+	ChildCycleID  uuid.UUID `json:"child_cycle_id"`
+}
+
+func (q *Queries) AssignTrainingCycleChild(ctx context.Context, arg AssignTrainingCycleChildParams) (int64, error) {
+	result, err := q.db.Exec(ctx, assignTrainingCycleChild, arg.ParentCycleID, arg.ChildCycleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const assignTrainingWeekToCycle = `-- name: AssignTrainingWeekToCycle :execrows
+UPDATE training_plans plan
+SET cycle_id = cycle.id
+FROM training_cycles cycle
+WHERE cycle.id = $1 AND plan.id = $2
+  AND plan.training_group_id = cycle.training_group_id AND plan.season_id = cycle.season_id
+  AND (plan.cycle_id IS NULL OR plan.cycle_id = cycle.id)
+`
+
+type AssignTrainingWeekToCycleParams struct {
+	CycleID uuid.UUID `json:"cycle_id"`
+	PlanID  uuid.UUID `json:"plan_id"`
+}
+
+func (q *Queries) AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, assignTrainingWeekToCycle, arg.CycleID, arg.PlanID)
 	if err != nil {
 		return 0, err
 	}
@@ -126,6 +242,93 @@ func (q *Queries) CanManageStructuredTrainingWeek(ctx context.Context, arg CanMa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const canManageTrainingCycle = `-- name: CanManageTrainingCycle :one
+SELECT EXISTS (
+    SELECT 1 FROM training_cycles cycle
+    JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+    WHERE cycle.id = $1
+      AND ($2::boolean OR EXISTS (
+          SELECT 1 FROM staff_grants grant_row
+          WHERE grant_row.user_id = $3
+            AND grant_row.capability = 'COACH'
+            AND grant_row.revoked_at IS NULL
+            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+      ))
+)
+`
+
+type CanManageTrainingCycleParams struct {
+	CycleID uuid.UUID `json:"cycle_id"`
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) CanManageTrainingCycle(ctx context.Context, arg CanManageTrainingCycleParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canManageTrainingCycle, arg.CycleID, arg.IsAdmin, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const clearManageableTrainingCycleTargets = `-- name: ClearManageableTrainingCycleTargets :exec
+DELETE FROM training_cycle_competition_targets target
+USING events event_row
+WHERE target.cycle_id = $1 AND event_row.id = target.event_id
+  AND ($2::boolean OR (
+      (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+       OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+      AND NOT EXISTS (
+          SELECT 1 FROM event_audiences audience
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = $3 AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+            )
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM event_team_audiences audience
+          JOIN teams audience_team ON audience_team.id = audience.team_id
+          WHERE audience.event_id = event_row.id
+            AND NOT EXISTS (
+                SELECT 1 FROM staff_grants grant_row
+                WHERE grant_row.user_id = $3 AND grant_row.capability = 'COACH'
+                  AND grant_row.revoked_at IS NULL
+                  AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+            )
+      )
+  ))
+`
+
+type ClearManageableTrainingCycleTargetsParams struct {
+	CycleID uuid.UUID `json:"cycle_id"`
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) ClearManageableTrainingCycleTargets(ctx context.Context, arg ClearManageableTrainingCycleTargetsParams) error {
+	_, err := q.db.Exec(ctx, clearManageableTrainingCycleTargets, arg.CycleID, arg.IsAdmin, arg.UserID)
+	return err
+}
+
+const clearTrainingCycleChildren = `-- name: ClearTrainingCycleChildren :exec
+UPDATE training_cycles SET parent_cycle_id = NULL WHERE parent_cycle_id = $1::uuid
+`
+
+func (q *Queries) ClearTrainingCycleChildren(ctx context.Context, cycleID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearTrainingCycleChildren, cycleID)
+	return err
+}
+
+const clearTrainingCycleWeeks = `-- name: ClearTrainingCycleWeeks :exec
+UPDATE training_plans SET cycle_id = NULL WHERE cycle_id = $1::uuid
+`
+
+func (q *Queries) ClearTrainingCycleWeeks(ctx context.Context, cycleID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearTrainingCycleWeeks, cycleID)
+	return err
 }
 
 const createGymBlockPrescription = `-- name: CreateGymBlockPrescription :execrows
@@ -311,7 +514,7 @@ JOIN LATERAL (
     LIMIT 1
 ) season ON true
 WHERE group_row.id = $6
-RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at
+RETURNING id, title, description, programme_id, team_id, training_group_id, season_id, cycle_id, week_start, planned_load_percentage, created_by_id, created_at, updated_at
 `
 
 type CreateStructuredTrainingWeekParams struct {
@@ -341,6 +544,7 @@ func (q *Queries) CreateStructuredTrainingWeek(ctx context.Context, arg CreateSt
 		&i.TeamID,
 		&i.TrainingGroupID,
 		&i.SeasonID,
+		&i.CycleID,
 		&i.WeekStart,
 		&i.PlannedLoadPercentage,
 		&i.CreatedByID,
@@ -375,6 +579,56 @@ func (q *Queries) CreateTrainingCopyEvent(ctx context.Context, arg CreateTrainin
 		arg.CopiedByID,
 	)
 	return err
+}
+
+const createTrainingCycle = `-- name: CreateTrainingCycle :one
+INSERT INTO training_cycles (training_group_id, season_id, parent_cycle_id, name, level_label, goals,
+                             phase_focus_notes, created_by_id, updated_by_id)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7,
+        $8, $8)
+RETURNING id, training_group_id, season_id, parent_cycle_id, name, level_label, goals, phase_focus_notes, version, created_by_id, updated_by_id, created_at, updated_at
+`
+
+type CreateTrainingCycleParams struct {
+	TrainingGroupID uuid.UUID  `json:"training_group_id"`
+	SeasonID        uuid.UUID  `json:"season_id"`
+	ParentCycleID   *uuid.UUID `json:"parent_cycle_id"`
+	Name            string     `json:"name"`
+	LevelLabel      string     `json:"level_label"`
+	Goals           string     `json:"goals"`
+	PhaseFocusNotes string     `json:"phase_focus_notes"`
+	CreatedByID     uuid.UUID  `json:"created_by_id"`
+}
+
+func (q *Queries) CreateTrainingCycle(ctx context.Context, arg CreateTrainingCycleParams) (TrainingCycle, error) {
+	row := q.db.QueryRow(ctx, createTrainingCycle,
+		arg.TrainingGroupID,
+		arg.SeasonID,
+		arg.ParentCycleID,
+		arg.Name,
+		arg.LevelLabel,
+		arg.Goals,
+		arg.PhaseFocusNotes,
+		arg.CreatedByID,
+	)
+	var i TrainingCycle
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.SeasonID,
+		&i.ParentCycleID,
+		&i.Name,
+		&i.LevelLabel,
+		&i.Goals,
+		&i.PhaseFocusNotes,
+		&i.Version,
+		&i.CreatedByID,
+		&i.UpdatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const createTrainingPlanPublication = `-- name: CreateTrainingPlanPublication :one
@@ -1158,6 +1412,64 @@ func (q *Queries) GetStructuredSessionPlanID(ctx context.Context, sessionID uuid
 	return plan_id, err
 }
 
+const getTrainingCycleCopySource = `-- name: GetTrainingCycleCopySource :one
+SELECT cycle.id, cycle.training_group_id, cycle.season_id, cycle.parent_cycle_id, cycle.name, cycle.level_label, cycle.goals, cycle.phase_focus_notes, cycle.version, cycle.created_by_id, cycle.updated_by_id, cycle.created_at, cycle.updated_at
+FROM training_cycles cycle
+WHERE cycle.id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetTrainingCycleCopySource(ctx context.Context, cycleID uuid.UUID) (TrainingCycle, error) {
+	row := q.db.QueryRow(ctx, getTrainingCycleCopySource, cycleID)
+	var i TrainingCycle
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.SeasonID,
+		&i.ParentCycleID,
+		&i.Name,
+		&i.LevelLabel,
+		&i.Goals,
+		&i.PhaseFocusNotes,
+		&i.Version,
+		&i.CreatedByID,
+		&i.UpdatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTrainingCycleWeekScope = `-- name: GetTrainingCycleWeekScope :one
+SELECT plan.id, plan.training_group_id, plan.season_id, plan.cycle_id, plan.week_start, plan.updated_at
+FROM training_plans plan
+WHERE plan.id = $1 AND plan.training_group_id IS NOT NULL AND plan.season_id IS NOT NULL
+FOR UPDATE
+`
+
+type GetTrainingCycleWeekScopeRow struct {
+	ID              uuid.UUID          `json:"id"`
+	TrainingGroupID *uuid.UUID         `json:"training_group_id"`
+	SeasonID        *uuid.UUID         `json:"season_id"`
+	CycleID         *uuid.UUID         `json:"cycle_id"`
+	WeekStart       pgtype.Date        `json:"week_start"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetTrainingCycleWeekScope(ctx context.Context, planID uuid.UUID) (GetTrainingCycleWeekScopeRow, error) {
+	row := q.db.QueryRow(ctx, getTrainingCycleWeekScope, planID)
+	var i GetTrainingCycleWeekScopeRow
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.SeasonID,
+		&i.CycleID,
+		&i.WeekStart,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getTrainingPrescriptionForViewer = `-- name: GetTrainingPrescriptionForViewer :one
 SELECT prescription.id, prescription.session_id, prescription.athlete_user_id, athlete.name AS athlete_name,
        publication.plan_id, plan.title AS plan_title, plan.week_start, season.name AS season_name,
@@ -1481,17 +1793,28 @@ WHERE event_row.event_type = 'COMPETITION'
   AND event_row.starts_at >= CURRENT_DATE
   AND (
       $1::boolean
-      OR EXISTS (
-          SELECT 1
-          FROM event_audiences audience
-          JOIN staff_grants grant_row ON true
-          LEFT JOIN teams grant_team ON grant_team.id = grant_row.team_id
-          WHERE audience.event_id = event_row.id
-            AND grant_row.user_id = $2
-            AND grant_row.capability = 'COACH'
-            AND grant_row.revoked_at IS NULL
-            AND (grant_row.programme_id = audience.programme_id OR grant_team.programme_id = audience.programme_id)
-      )
+      OR ((EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+           OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+          AND NOT EXISTS (
+              SELECT 1 FROM event_audiences audience
+              WHERE audience.event_id = event_row.id
+                AND NOT EXISTS (
+                    SELECT 1 FROM staff_grants grant_row
+                    WHERE grant_row.user_id = $2 AND grant_row.capability = 'COACH'
+                      AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM event_team_audiences audience
+              JOIN teams audience_team ON audience_team.id = audience.team_id
+              WHERE audience.event_id = event_row.id
+                AND NOT EXISTS (
+                    SELECT 1 FROM staff_grants grant_row
+                    WHERE grant_row.user_id = $2 AND grant_row.capability = 'COACH'
+                      AND grant_row.revoked_at IS NULL
+                      AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+                )
+          ))
   )
 ORDER BY event_row.starts_at, event_row.id
 `
@@ -1517,6 +1840,222 @@ func (q *Queries) ListManagedStructuredCompetitionEvents(ctx context.Context, ar
 	for rows.Next() {
 		var i ListManagedStructuredCompetitionEventsRow
 		if err := rows.Scan(&i.ID, &i.Title, &i.StartsAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingCycleTargets = `-- name: ListManagedTrainingCycleTargets :many
+SELECT target.cycle_id, event_row.id AS event_id, event_row.title, event_row.starts_at, event_row.status
+FROM training_cycle_competition_targets target
+JOIN training_cycles cycle ON cycle.id = target.cycle_id
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN events event_row ON event_row.id = target.event_id
+WHERE $1::boolean
+   OR (EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = $2
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+   AND (EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id = event_row.id)
+        OR EXISTS (SELECT 1 FROM event_team_audiences audience WHERE audience.event_id = event_row.id))
+   AND NOT EXISTS (
+       SELECT 1 FROM event_audiences audience
+       WHERE audience.event_id = event_row.id
+         AND NOT EXISTS (
+             SELECT 1 FROM staff_grants grant_row
+             WHERE grant_row.user_id = $2 AND grant_row.capability = 'COACH'
+               AND grant_row.revoked_at IS NULL AND grant_row.programme_id = audience.programme_id
+         )
+   )
+   AND NOT EXISTS (
+       SELECT 1 FROM event_team_audiences audience
+       JOIN teams audience_team ON audience_team.id = audience.team_id
+       WHERE audience.event_id = event_row.id
+         AND NOT EXISTS (
+             SELECT 1 FROM staff_grants grant_row
+             WHERE grant_row.user_id = $2 AND grant_row.capability = 'COACH'
+               AND grant_row.revoked_at IS NULL
+               AND (grant_row.team_id = audience.team_id OR grant_row.programme_id = audience_team.programme_id)
+         )
+   ))
+ORDER BY target.cycle_id, event_row.starts_at, event_row.id
+`
+
+type ListManagedTrainingCycleTargetsParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingCycleTargetsRow struct {
+	CycleID  uuid.UUID          `json:"cycle_id"`
+	EventID  uuid.UUID          `json:"event_id"`
+	Title    string             `json:"title"`
+	StartsAt pgtype.Timestamptz `json:"starts_at"`
+	Status   string             `json:"status"`
+}
+
+func (q *Queries) ListManagedTrainingCycleTargets(ctx context.Context, arg ListManagedTrainingCycleTargetsParams) ([]ListManagedTrainingCycleTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingCycleTargets, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingCycleTargetsRow{}
+	for rows.Next() {
+		var i ListManagedTrainingCycleTargetsRow
+		if err := rows.Scan(
+			&i.CycleID,
+			&i.EventID,
+			&i.Title,
+			&i.StartsAt,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingCycleWeeks = `-- name: ListManagedTrainingCycleWeeks :many
+WITH RECURSIVE cycle_tree AS (
+    SELECT cycle.id AS ancestor_id, cycle.id AS descendant_id
+    FROM training_cycles cycle
+    UNION ALL
+    SELECT tree.ancestor_id, child.id
+    FROM cycle_tree tree
+    JOIN training_cycles child ON child.parent_cycle_id = tree.descendant_id
+)
+SELECT tree.ancestor_id AS cycle_id, plan.id AS plan_id, plan.cycle_id = tree.ancestor_id AS direct
+FROM cycle_tree tree
+JOIN training_cycles cycle ON cycle.id = tree.ancestor_id
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN training_plans plan ON plan.cycle_id = tree.descendant_id
+WHERE $1::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = $2
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY tree.ancestor_id, plan.week_start, plan.id
+`
+
+type ListManagedTrainingCycleWeeksParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingCycleWeeksRow struct {
+	CycleID uuid.UUID `json:"cycle_id"`
+	PlanID  uuid.UUID `json:"plan_id"`
+	Direct  bool      `json:"direct"`
+}
+
+func (q *Queries) ListManagedTrainingCycleWeeks(ctx context.Context, arg ListManagedTrainingCycleWeeksParams) ([]ListManagedTrainingCycleWeeksRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingCycleWeeks, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingCycleWeeksRow{}
+	for rows.Next() {
+		var i ListManagedTrainingCycleWeeksRow
+		if err := rows.Scan(&i.CycleID, &i.PlanID, &i.Direct); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listManagedTrainingCycles = `-- name: ListManagedTrainingCycles :many
+SELECT cycle.id, cycle.training_group_id, group_row.name AS training_group_name,
+       cycle.season_id, season.name AS season_name, cycle.parent_cycle_id,
+       parent.name AS parent_cycle_name, cycle.name, cycle.level_label, cycle.goals,
+       cycle.phase_focus_notes, cycle.version, cycle.created_by_id, cycle.updated_by_id,
+       cycle.created_at, cycle.updated_at
+FROM training_cycles cycle
+JOIN training_groups group_row ON group_row.id = cycle.training_group_id
+JOIN seasons season ON season.id = cycle.season_id
+LEFT JOIN training_cycles parent ON parent.id = cycle.parent_cycle_id
+WHERE $1::boolean
+   OR EXISTS (
+       SELECT 1 FROM staff_grants grant_row
+       WHERE grant_row.user_id = $2
+         AND grant_row.capability = 'COACH'
+         AND grant_row.revoked_at IS NULL
+         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
+   )
+ORDER BY season.starts_on DESC, group_row.name, cycle.updated_at DESC, cycle.id
+`
+
+type ListManagedTrainingCyclesParams struct {
+	IsAdmin bool      `json:"is_admin"`
+	UserID  uuid.UUID `json:"user_id"`
+}
+
+type ListManagedTrainingCyclesRow struct {
+	ID                uuid.UUID          `json:"id"`
+	TrainingGroupID   uuid.UUID          `json:"training_group_id"`
+	TrainingGroupName string             `json:"training_group_name"`
+	SeasonID          uuid.UUID          `json:"season_id"`
+	SeasonName        string             `json:"season_name"`
+	ParentCycleID     *uuid.UUID         `json:"parent_cycle_id"`
+	ParentCycleName   *string            `json:"parent_cycle_name"`
+	Name              string             `json:"name"`
+	LevelLabel        string             `json:"level_label"`
+	Goals             string             `json:"goals"`
+	PhaseFocusNotes   string             `json:"phase_focus_notes"`
+	Version           int32              `json:"version"`
+	CreatedByID       uuid.UUID          `json:"created_by_id"`
+	UpdatedByID       uuid.UUID          `json:"updated_by_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListManagedTrainingCycles(ctx context.Context, arg ListManagedTrainingCyclesParams) ([]ListManagedTrainingCyclesRow, error) {
+	rows, err := q.db.Query(ctx, listManagedTrainingCycles, arg.IsAdmin, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListManagedTrainingCyclesRow{}
+	for rows.Next() {
+		var i ListManagedTrainingCyclesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TrainingGroupID,
+			&i.TrainingGroupName,
+			&i.SeasonID,
+			&i.SeasonName,
+			&i.ParentCycleID,
+			&i.ParentCycleName,
+			&i.Name,
+			&i.LevelLabel,
+			&i.Goals,
+			&i.PhaseFocusNotes,
+			&i.Version,
+			&i.CreatedByID,
+			&i.UpdatedByID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2393,6 +2932,60 @@ func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, 
 	return items, nil
 }
 
+const listTrainingCycleWeekCopySources = `-- name: ListTrainingCycleWeekCopySources :many
+WITH RECURSIVE descendants(id) AS (
+    SELECT $1::uuid
+    UNION ALL
+    SELECT child.id FROM training_cycles child JOIN descendants parent ON child.parent_cycle_id = parent.id
+)
+SELECT plan.id, plan.title, plan.description, plan.training_group_id, plan.season_id,
+       plan.week_start, plan.planned_load_percentage, plan.updated_at
+FROM training_plans plan
+WHERE plan.cycle_id IN (SELECT id FROM descendants)
+ORDER BY plan.week_start, plan.id
+FOR UPDATE
+`
+
+type ListTrainingCycleWeekCopySourcesRow struct {
+	ID                    uuid.UUID          `json:"id"`
+	Title                 string             `json:"title"`
+	Description           string             `json:"description"`
+	TrainingGroupID       *uuid.UUID         `json:"training_group_id"`
+	SeasonID              *uuid.UUID         `json:"season_id"`
+	WeekStart             pgtype.Date        `json:"week_start"`
+	PlannedLoadPercentage *int16             `json:"planned_load_percentage"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListTrainingCycleWeekCopySources(ctx context.Context, cycleID uuid.UUID) ([]ListTrainingCycleWeekCopySourcesRow, error) {
+	rows, err := q.db.Query(ctx, listTrainingCycleWeekCopySources, cycleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTrainingCycleWeekCopySourcesRow{}
+	for rows.Next() {
+		var i ListTrainingCycleWeekCopySourcesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.TrainingGroupID,
+			&i.SeasonID,
+			&i.WeekStart,
+			&i.PlannedLoadPercentage,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrainingPrescriptionLinksForSessionViewer = `-- name: ListTrainingPrescriptionLinksForSessionViewer :many
 SELECT prescription.id, prescription.athlete_user_id, athlete.name AS athlete_name,
        publication.revision, publication.published_at
@@ -2873,6 +3466,48 @@ func (q *Queries) LockStructuredTrainingPlanForPublication(ctx context.Context, 
 	return i, err
 }
 
+const lockTrainingCycles = `-- name: LockTrainingCycles :many
+SELECT cycle.id, cycle.training_group_id, cycle.season_id, cycle.parent_cycle_id, cycle.name, cycle.level_label, cycle.goals, cycle.phase_focus_notes, cycle.version, cycle.created_by_id, cycle.updated_by_id, cycle.created_at, cycle.updated_at
+FROM training_cycles cycle
+WHERE cycle.id = ANY($1::uuid[])
+ORDER BY cycle.id
+FOR UPDATE
+`
+
+func (q *Queries) LockTrainingCycles(ctx context.Context, cycleIds []uuid.UUID) ([]TrainingCycle, error) {
+	rows, err := q.db.Query(ctx, lockTrainingCycles, cycleIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TrainingCycle{}
+	for rows.Next() {
+		var i TrainingCycle
+		if err := rows.Scan(
+			&i.ID,
+			&i.TrainingGroupID,
+			&i.SeasonID,
+			&i.ParentCycleID,
+			&i.Name,
+			&i.LevelLabel,
+			&i.Goals,
+			&i.PhaseFocusNotes,
+			&i.Version,
+			&i.CreatedByID,
+			&i.UpdatedByID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const moveGymExercise = `-- name: MoveGymExercise :one
 SELECT move_gym_exercise($1, $2)
 `
@@ -3034,4 +3669,52 @@ func (q *Queries) UpdateStructuredTrainingWeekLoad(ctx context.Context, arg Upda
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateTrainingCycle = `-- name: UpdateTrainingCycle :one
+UPDATE training_cycles
+SET name = $1, level_label = $2, goals = $3,
+    phase_focus_notes = $4, updated_by_id = $5,
+    version = version + 1, updated_at = clock_timestamp()
+WHERE id = $6 AND version = $7
+RETURNING id, training_group_id, season_id, parent_cycle_id, name, level_label, goals, phase_focus_notes, version, created_by_id, updated_by_id, created_at, updated_at
+`
+
+type UpdateTrainingCycleParams struct {
+	Name            string    `json:"name"`
+	LevelLabel      string    `json:"level_label"`
+	Goals           string    `json:"goals"`
+	PhaseFocusNotes string    `json:"phase_focus_notes"`
+	UpdatedByID     uuid.UUID `json:"updated_by_id"`
+	CycleID         uuid.UUID `json:"cycle_id"`
+	ExpectedVersion int32     `json:"expected_version"`
+}
+
+func (q *Queries) UpdateTrainingCycle(ctx context.Context, arg UpdateTrainingCycleParams) (TrainingCycle, error) {
+	row := q.db.QueryRow(ctx, updateTrainingCycle,
+		arg.Name,
+		arg.LevelLabel,
+		arg.Goals,
+		arg.PhaseFocusNotes,
+		arg.UpdatedByID,
+		arg.CycleID,
+		arg.ExpectedVersion,
+	)
+	var i TrainingCycle
+	err := row.Scan(
+		&i.ID,
+		&i.TrainingGroupID,
+		&i.SeasonID,
+		&i.ParentCycleID,
+		&i.Name,
+		&i.LevelLabel,
+		&i.Goals,
+		&i.PhaseFocusNotes,
+		&i.Version,
+		&i.CreatedByID,
+		&i.UpdatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

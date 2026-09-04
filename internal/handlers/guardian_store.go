@@ -7,11 +7,10 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresGuardianDependentStore struct {
-	Pool *pgxpool.Pool
+	Pool db.Beginner
 }
 
 func (s PostgresGuardianDependentStore) CreateDependent(ctx context.Context, input GuardianDependentInput) error {

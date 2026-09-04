@@ -29,6 +29,18 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 - Confirm repair-image alternative text describes context rather than filenames.
 - Confirm member, tutor and administrator journeys in the named
   browser/screen-reader pairing, including the authenticated 403 and 404 pages.
+- As an administrator, open `/admin/treinos/estruturados`, choose a group,
+  week and session, and confirm that the page title, single H1, selected-plan
+  context, section headings, local navigation and current session are each
+  announced once and in a useful order. Open one gym task route and confirm
+  that its route-level heading and plan/week/session context are announced;
+  then use Voltar or Cancelar and confirm focus and the selected context return
+  to the planner rather than to the start of the page.
+- With a current profile photograph, open the removal confirmation from the
+  member profile. Confirm that the person's name, the permanent removal effect,
+  the initials fallback and the destructive confirmation control are announced
+  before activation. Repeat for the applicable tutor-dependant and
+  administrator-member routes when those actors are in the release scope.
 
 ## Responsive and visual
 
@@ -43,6 +55,13 @@ and tester in `docs/design/accessibility-audit.md` for every release pass.
 - Verify text, controls and focus contrast with a contrast analyser.
 - Verify statuses remain understandable without colour.
 - Verify frequent touch targets are at least 44 by 44 CSS pixels.
+- At 320 CSS pixels and at 400% zoom, inspect the structured planner after a
+  group, week and session have been selected. Its controls, current context,
+  session navigation and task-route return controls must remain readable and
+  operable without page-level horizontal scrolling.
+- At 320 CSS pixels, inspect the profile-photo removal confirmation. The
+  subject, irreversible effect, return control and destructive action must
+  remain distinct, readable and reachable without accidental activation.
 
 ## Calendar fallback
 

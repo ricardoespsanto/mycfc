@@ -42,6 +42,48 @@ func (h Training) Index(w http.ResponseWriter, r *http.Request) {
 	h.renderIndex(w, r, http.StatusOK, pages.TrainingPage{})
 }
 
+// CreatePlanPage renders the no-JavaScript fallback for the plan authoring task.
+func (h Training) CreatePlanPage(w http.ResponseWriter, r *http.Request) {
+	h.renderPlanCreate(w, r, http.StatusOK, pages.TrainingPage{})
+}
+
+// CreateSessionPage renders the no-JavaScript fallback for the session authoring task.
+func (h Training) CreateSessionPage(w http.ResponseWriter, r *http.Request) {
+	h.renderSessionCreate(w, r, http.StatusOK, pages.TrainingPage{})
+}
+
+func (h Training) renderPlanCreate(w http.ResponseWriter, r *http.Request, status int, page pages.TrainingPage) {
+	h.prepareTrainingCreatePage(r, &page, "Criar plano")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.TrainingPlanCreateView(page).Render(r.Context(), w)
+}
+
+func (h Training) renderSessionCreate(w http.ResponseWriter, r *http.Request, status int, page pages.TrainingPage) {
+	h.prepareTrainingCreatePage(r, &page, "Criar sessão")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.TrainingSessionCreateView(page).Render(r.Context(), w)
+}
+
+func (h Training) prepareTrainingCreatePage(r *http.Request, page *pages.TrainingPage, title string) {
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	page.Management = true
+	page.CanManage = user.IsAdmin || user.CanManageEvents
+	page.StructuredAvailable = featureflags.Available(user.FeatureModes, featureflags.StructuredTrainingPlanning, user.IsAdmin)
+	h.authoring(ctx, user, page, 1)
+	page.Meta = h.meta(r, user, true)
+	page.Meta.Title = title + " | MyCFC"
+	page.Meta.PageLabel = title
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
+	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+}
+
 func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int, page pages.TrainingPage) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -113,7 +155,7 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 
 func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "plan"})
+		h.renderPlanCreate(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário."})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -130,7 +172,7 @@ func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		form.Errors.Add("scope", "Selecione um âmbito que possa gerir.")
 	}
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "plan", PlanForm: form})
+		h.renderPlanCreate(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{PlanForm: form})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -145,7 +187,7 @@ func (h Training) CreatePlan(w http.ResponseWriter, r *http.Request) {
 
 func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderIndex(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "session"})
+		h.renderSessionCreate(w, r, http.StatusBadRequest, pages.TrainingPage{Error: "Não foi possível ler o formulário."})
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
@@ -176,7 +218,7 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 		form.Errors.Add("ends_at", "O fim tem de ser posterior ao início.")
 	}
 	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{OpenForm: "session", SessionForm: form})
+		h.renderSessionCreate(w, r, http.StatusUnprocessableEntity, pages.TrainingPage{SessionForm: form})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
@@ -339,7 +381,7 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 		errs.Add("state", "O formulário deixou de ser válido. Atualize a página.")
 	}
 	if !errs.Empty() {
-		h.renderSessionEdit(w, r, http.StatusUnprocessableEntity, sessionID, h.trainingSessionFormFromRecord(current), "", reason, errs)
+		h.renderSessionCancel(w, r, http.StatusUnprocessableEntity, sessionID, current, "", reason, errs)
 		return
 	}
 	now := h.now()
@@ -350,7 +392,7 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 			h.System.InternalError(w, r)
 			return
 		}
-		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, h.trainingSessionFormFromRecord(latest), "A sessão foi alterada entretanto, já começou ou já foi cancelada.", reason, validation.FieldErrors{})
+		h.renderSessionCancel(w, r, http.StatusConflict, sessionID, latest, "A sessão foi alterada entretanto, já começou ou já foi cancelada.", reason, validation.FieldErrors{})
 		return
 	}
 	if err != nil {
@@ -359,6 +401,35 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.flash(r, "Sessão cancelada.")
 	httpx.Redirect(w, r, "/admin/treinos", http.StatusSeeOther)
+}
+
+func (h Training) CancelSessionPage(w http.ResponseWriter, r *http.Request) {
+	sessionID, ok := h.trainingSessionID(w, r)
+	if !ok {
+		return
+	}
+	user, _ := CurrentUserFromContext(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
+	defer cancel()
+	session, err := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !h.canManageTrainingPlan(ctx, user, session.PlanID, w, r) {
+		return
+	}
+	conflict := ""
+	status := http.StatusOK
+	if session.Status != "ACTIVE" || !session.StartsAt.Time.After(h.now()) {
+		status = http.StatusConflict
+		conflict = "A sessão já não pode ser cancelada. As sessões canceladas ou já iniciadas continuam disponíveis para consulta."
+	}
+	h.renderSessionCancel(w, r, status, sessionID, session, conflict, "", validation.FieldErrors{})
 }
 
 func (h Training) ReportOutcome(w http.ResponseWriter, r *http.Request) {
@@ -550,6 +621,23 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.TrainingSessionEdit(page).Render(r.Context(), w)
+}
+
+func (h Training) renderSessionCancel(w http.ResponseWriter, r *http.Request, status int, sessionID uuid.UUID, session dbgen.GetTrainingSessionForEditRow, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
+	user, _ := CurrentUserFromContext(r.Context())
+	page := pages.TrainingSessionCancelPage{
+		Meta: h.meta(r, user, true), SessionID: sessionID.String(), Title: session.Title,
+		When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano),
+		Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors,
+		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
+	}
+	page.Meta.Title = "Cancelar sessão | MyCFC"
+	page.Meta.CurrentPath = r.URL.Path
+	page.Meta.PageLabel = "Cancelar sessão"
+	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}, {Label: session.Title, Path: "/admin/treinos/sessoes/" + sessionID.String() + "/editar"}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.TrainingSessionCancel(page).Render(r.Context(), w)
 }
 
 func (h Training) now() time.Time {

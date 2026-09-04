@@ -376,6 +376,53 @@ func TestDependentLeaderboardPrivacyUsesGuardianRelationship(t *testing.T) {
 	}
 }
 
+func TestLeaderboardPrivacyFailsClosedForUnauthorizedStaleAndUnavailableWrites(t *testing.T) {
+	userID, dependentID := uuid.New(), uuid.New()
+	t.Run("member preference requires a programme membership", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/leaderboard/privacy", strings.NewReader("leaderboard_visible=on"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		(Dashboard{Store: &dashboardStoreFake{visibilityRows: 1}}).LeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID})))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("response=%d", response.Code)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		store *dashboardStoreFake
+		want  int
+	}{
+		{"member stale preference", &dashboardStoreFake{visibilityRows: 0}, http.StatusConflict},
+		{"member write failure", &dashboardStoreFake{visibilityErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+		{"guardian relationship missing", &dashboardStoreFake{visibilityRows: 0}, http.StatusForbidden},
+		{"guardian write failure", &dashboardStoreFake{visibilityErr: errors.New("database unavailable")}, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/leaderboard/privacy", strings.NewReader("leaderboard_visible=on"))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			response := httptest.NewRecorder()
+			if strings.HasPrefix(tc.name, "guardian") {
+				request.SetPathValue("id", dependentID.String())
+				(Dashboard{Store: tc.store}).DependentLeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID})))
+			} else {
+				(Dashboard{Store: tc.store}).LeaderboardPrivacy(response, request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: userID, Programmes: map[string]bool{"Competition": true}})))
+			}
+			if response.Code != tc.want {
+				t.Fatalf("response=%d want=%d", response.Code, tc.want)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/dashboard/guardian/dependents/not-a-uuid/leaderboard-privacy", nil)
+	request.SetPathValue("id", "not-a-uuid")
+	response := httptest.NewRecorder()
+	(Dashboard{Store: &dashboardStoreFake{}}).DependentLeaderboardPrivacy(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid dependent response=%d", response.Code)
+	}
+}
+
 func TestDashboardCompetitorRendersDatabaseContent(t *testing.T) {
 	memberID := uuid.New()
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
@@ -415,6 +462,27 @@ func TestDashboardLeisureRendersDatabaseContent(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q: %q", want, body)
 		}
+	}
+}
+
+func TestDashboardRoleViewsRenderTheirDistinctMemberAndAthleteContexts(t *testing.T) {
+	store := &dashboardStoreFake{}
+	dashboard := Dashboard{Store: store, Location: time.UTC, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	for _, tc := range []struct {
+		name, want string
+		handler    http.HandlerFunc
+	}{
+		{"member", "Área de membro", dashboard.Member},
+		{"moderator", "Área de moderador", dashboard.Moderator},
+		{"initiation", "Iniciação", dashboard.Initiation},
+		{"kayak polo", "Kayak polo", dashboard.KayakPolo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := dashboardResponse(t, tc.handler, uuid.New())
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+				t.Fatalf("response=%d body=%q", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -478,6 +546,8 @@ type dashboardStoreFake struct {
 	adminEquipment            []dbgen.Equipment
 	repairs                   []dbgen.ListPendingRepairRequestsRow
 	maintenance               []dbgen.ListUpcomingMaintenanceRow
+	maintenanceDetail         dbgen.GetMaintenanceForAdminRow
+	maintenanceDetailErr      error
 	upcomingEvents            []dbgen.ListEventsForMemberRow
 	upcomingTraining          []dbgen.ListUpcomingTrainingSessionsForDashboardRow
 	adminParams               dbgen.ListEquipmentForAdminParams
@@ -511,6 +581,10 @@ func (f *dashboardStoreFake) ListPendingRepairRequests(_ context.Context, params
 func (f *dashboardStoreFake) ListUpcomingMaintenance(_ context.Context, params dbgen.ListUpcomingMaintenanceParams) ([]dbgen.ListUpcomingMaintenanceRow, error) {
 	f.maintenanceParams = params
 	return f.maintenance, nil
+}
+
+func (f *dashboardStoreFake) GetMaintenanceForAdmin(context.Context, uuid.UUID) (dbgen.GetMaintenanceForAdminRow, error) {
+	return f.maintenanceDetail, f.maintenanceDetailErr
 }
 
 func (f *dashboardStoreFake) ScheduleMaintenanceTask(_ context.Context, params dbgen.ScheduleMaintenanceTaskParams) (dbgen.ScheduleMaintenanceTaskRow, error) {
@@ -565,6 +639,64 @@ func TestMaintenanceHTMXValidationAndSuccess(t *testing.T) {
 	dashboard.Maintenance(response, request)
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/fleet#maintenance-schedule" {
 		t.Fatalf("normal response = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestFleetMutationsMapMissingStaleAndUnexpectedPersistenceFailures(t *testing.T) {
+	actor, equipmentID, repairID, taskID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	maintenanceValues := "equipment_id=" + equipmentID.String() + "&scheduled_for=2026-09-10T10%3A00&description=Substituir a peça danificada"
+
+	t.Run("maintenance requires fleet store", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader(maintenanceValues))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, IsAdmin: true}))
+		w := httptest.NewRecorder()
+		(Dashboard{Store: &dashboardStoreFake{}, Location: time.UTC}).Maintenance(w, r)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("response=%d", w.Code)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"maintenance missing equipment", pgx.ErrNoRows, http.StatusUnprocessableEntity},
+		{"maintenance write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+		{"repair write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+		{"completion write failure", errors.New("database unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &dashboardStoreFake{}
+			h := Dashboard{Store: store, Fleet: store, Location: time.UTC}
+			var r *http.Request
+			switch {
+			case strings.HasPrefix(tc.name, "maintenance"):
+				store.scheduleErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/maintenance", strings.NewReader(maintenanceValues))
+			case strings.HasPrefix(tc.name, "repair"):
+				store.repairErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/repairs/status", strings.NewReader("repair_id="+repairID.String()+"&expected_status=Pendente&status=Em_Analise"))
+			default:
+				store.completeErr = tc.err
+				r = httptest.NewRequest(http.MethodPost, "/admin/maintenance/complete", strings.NewReader("maintenance_id="+taskID.String()))
+			}
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.Header.Set("HX-Request", "true")
+			w := httptest.NewRecorder()
+			switch {
+			case strings.HasPrefix(tc.name, "maintenance"):
+				h.Maintenance(w, r)
+			case strings.HasPrefix(tc.name, "repair"):
+				h.RepairStatus(w, r)
+			default:
+				h.CompleteMaintenance(w, r)
+			}
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
 	}
 }
 
@@ -644,6 +776,41 @@ func TestCompleteMaintenanceSupportsHTMXAndNormalForms(t *testing.T) {
 	}
 }
 
+func TestMaintenanceCompletionPageNamesTaskAndBindsPostToRouteID(t *testing.T) {
+	taskID := uuid.New()
+	now := time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC)
+	store := &dashboardStoreFake{maintenanceDetail: dbgen.GetMaintenanceForAdminRow{ID: taskID, AssetTag: "K-01", EquipmentName: "K1 Escola", Description: "Substituir a pega danificada", Status: "Scheduled", ScheduledFor: pgtype.Timestamptz{Time: now, Valid: true}}}
+	dashboard := Dashboard{Store: store, Fleet: store, Location: time.UTC}
+	request := httptest.NewRequest(http.MethodGet, "/admin/maintenance/"+taskID.String()+"/complete?return_to=%2Fadmin%2Ffleet%23maintenance-"+taskID.String(), nil)
+	request.SetPathValue("id", taskID.String())
+	request = request.WithContext(context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Administradora", IsAdmin: true}))
+	response := httptest.NewRecorder()
+
+	dashboard.CompleteMaintenancePage(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "K-01 - K1 Escola") || !strings.Contains(response.Body.String(), `name="maintenance_id" value="`+taskID.String()+`"`) || !strings.Contains(response.Body.String(), `action="/admin/maintenance/`+taskID.String()+`/complete?return_to=`) {
+		t.Fatalf("response = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/admin/maintenance/"+taskID.String()+"/complete", strings.NewReader("maintenance_id="+uuid.NewString()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetPathValue("id", taskID.String())
+	response = httptest.NewRecorder()
+	dashboard.CompleteMaintenance(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "não corresponde") || store.completeID != uuid.Nil {
+		t.Fatalf("mismatched task = %d, complete id = %s, body = %s", response.Code, store.completeID, response.Body.String())
+	}
+
+	store.maintenanceDetail.Status = "Completed"
+	request = httptest.NewRequest(http.MethodGet, "/admin/maintenance/"+taskID.String()+"/complete", nil)
+	request.SetPathValue("id", taskID.String())
+	response = httptest.NewRecorder()
+	dashboard.CompleteMaintenancePage(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "já foi concluída") {
+		t.Fatalf("completed task = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	key, contentType := "repairs/2026/07/photo.jpg", "image/jpeg"
@@ -656,7 +823,7 @@ func TestAdminFleetPaginatesSectionsAndPresignsDisplayedRepairPhotos(t *testing.
 	objects := &presignStoreFake{}
 	dashboard := Dashboard{Store: store, Fleet: store, Objects: objects, Now: func() time.Time { return now }, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	response := dashboardResponse(t, dashboard.Admin, uuid.New())
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2#equipment-inventory"`) || !strings.Contains(response.Body.String(), `hx-target-422="#maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet#repair-requests"`) || !strings.Contains(response.Body.String(), `data-row-action-menu`) {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "A lista está limitada") || !strings.Contains(response.Body.String(), `href="/admin/fleet?equipment_page=2#equipment-inventory"`) || !strings.Contains(response.Body.String(), `data-task-open="maintenance-form"`) || !strings.Contains(response.Body.String(), `href="#repair-form"`) || !strings.Contains(response.Body.String(), `name="return_to" value="/admin/fleet#repair-requests"`) || !strings.Contains(response.Body.String(), `data-row-action-menu`) {
 		t.Fatalf("unexpected fleet response: %d %q", response.Code, response.Body.String())
 	}
 	body := response.Body.String()

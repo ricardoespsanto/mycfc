@@ -78,6 +78,54 @@ func TestAuthRejectsInvalidAndInactiveAccounts(t *testing.T) {
 	}
 }
 
+func TestAnonymousOnlyRedirectsSignedInUsersAndAllowsGuests(t *testing.T) {
+	auth := Auth{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name string
+		user *CurrentUser
+		want int
+	}{
+		{"guest", nil, http.StatusNoContent},
+		{"signed in", &CurrentUser{ID: uuid.New()}, http.StatusSeeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/login", nil)
+			if tc.user != nil {
+				r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, *tc.user))
+			}
+			w := httptest.NewRecorder()
+			auth.AnonymousOnly(next).ServeHTTP(w, r)
+			if w.Code != tc.want || (tc.user != nil && w.Header().Get("Location") != "/dashboard") {
+				t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+func TestRequireGuardianRejectsDependentAndAllowsGuardian(t *testing.T) {
+	auth := Auth{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name string
+		user CurrentUser
+		want int
+	}{
+		{"dependent", CurrentUser{ID: uuid.New(), IsDependent: true}, http.StatusForbidden},
+		{"guardian", CurrentUser{ID: uuid.New()}, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/dashboard/guardian", nil)
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, tc.user))
+			w := httptest.NewRecorder()
+			auth.RequireGuardian(next).ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestAuthRejectsSessionsFromOlderCredentialVersions(t *testing.T) {
 	id := uuid.New()
 	sessions := scs.New()
@@ -260,6 +308,16 @@ func TestAuthDashboardSelection(t *testing.T) {
 	}
 }
 
+func TestAuthLogoutDestroysSessionAndRedirectsToLogin(t *testing.T) {
+	auth := Auth{Sessions: scs.New()}
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	w := httptest.NewRecorder()
+	auth.Sessions.LoadAndSave(http.HandlerFunc(auth.Logout)).ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+		t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
+	}
+}
+
 func TestAuthReturnsInternalErrorForLookupFailure(t *testing.T) {
 	auth := Auth{Users: currentUserLookup{err: errors.New("database unavailable")}, Sessions: scs.New()}
 	if response := authenticatedRequest(t, auth.Sessions, uuid.NewString(), auth.Load(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))); response.Code != http.StatusInternalServerError {
@@ -282,6 +340,21 @@ func TestAuthFallsBackWhenProfileSchemaIsUnavailable(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
 	if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestAuthDoesNotFallbackWhenProfileSchemaAccessIsForbidden(t *testing.T) {
+	id := uuid.New()
+	auth := Auth{Users: currentUserLookup{
+		account:         dbgen.GetActiveAccountByIDRow{ID: id, Name: "Athlete", IsActive: true},
+		err:             &pgconn.PgError{Code: "42501"},
+		profileFallback: true,
+	}, Sessions: scs.New()}
+	handler := auth.Load(auth.RequireAuthenticated(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("protected handler called")
+	})))
+	if response := authenticatedRequest(t, auth.Sessions, id.String(), handler); response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", response.Code)
 	}
 }

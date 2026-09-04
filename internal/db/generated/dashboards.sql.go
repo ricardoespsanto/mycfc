@@ -92,6 +92,82 @@ func (q *Queries) ExpireNews(ctx context.Context, id uuid.UUID) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const getMaintenanceForAdmin = `-- name: GetMaintenanceForAdmin :one
+SELECT
+    mt.id,
+    mt.equipment_id,
+    e.asset_tag,
+    e.name AS equipment_name,
+    e.type AS equipment_type,
+    mt.scheduled_for,
+    mt.description,
+    mt.status,
+    mt.created_by_id,
+    mt.completed_at,
+    mt.created_at,
+    mt.updated_at
+FROM maintenance_tasks mt
+JOIN equipment e ON e.id = mt.equipment_id
+WHERE mt.id = $1
+`
+
+type GetMaintenanceForAdminRow struct {
+	ID            uuid.UUID          `json:"id"`
+	EquipmentID   uuid.UUID          `json:"equipment_id"`
+	AssetTag      string             `json:"asset_tag"`
+	EquipmentName string             `json:"equipment_name"`
+	EquipmentType string             `json:"equipment_type"`
+	ScheduledFor  pgtype.Timestamptz `json:"scheduled_for"`
+	Description   string             `json:"description"`
+	Status        string             `json:"status"`
+	CreatedByID   *uuid.UUID         `json:"created_by_id"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetMaintenanceForAdmin(ctx context.Context, id uuid.UUID) (GetMaintenanceForAdminRow, error) {
+	row := q.db.QueryRow(ctx, getMaintenanceForAdmin, id)
+	var i GetMaintenanceForAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.EquipmentID,
+		&i.AssetTag,
+		&i.EquipmentName,
+		&i.EquipmentType,
+		&i.ScheduledFor,
+		&i.Description,
+		&i.Status,
+		&i.CreatedByID,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getNewsForAdmin = `-- name: GetNewsForAdmin :one
+SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
+FROM news_items
+WHERE id = $1
+`
+
+func (q *Queries) GetNewsForAdmin(ctx context.Context, id uuid.UUID) (NewsItem, error) {
+	row := q.db.QueryRow(ctx, getNewsForAdmin, id)
+	var i NewsItem
+	err := row.Scan(
+		&i.ID,
+		&i.TitlePt,
+		&i.SummaryPt,
+		&i.Url,
+		&i.PublishedAt,
+		&i.IsPublished,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listNewsForAdmin = `-- name: ListNewsForAdmin :many
 SELECT id, title_pt, summary_pt, url, published_at, is_published, created_at, updated_at
 FROM news_items

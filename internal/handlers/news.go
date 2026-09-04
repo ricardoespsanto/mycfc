@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -26,6 +28,7 @@ const newsPageSize = 6
 
 type NewsStore interface {
 	ListNewsForAdmin(context.Context, dbgen.ListNewsForAdminParams) ([]dbgen.NewsItem, error)
+	GetNewsForAdmin(context.Context, uuid.UUID) (dbgen.NewsItem, error)
 	CreateNews(context.Context, dbgen.CreateNewsParams) (dbgen.NewsItem, error)
 	PublishNews(context.Context, uuid.UUID) (int64, error)
 	ExpireNews(context.Context, uuid.UUID) (int64, error)
@@ -76,6 +79,9 @@ func (h News) Create(w http.ResponseWriter, r *http.Request) {
 func (h News) Publish(w http.ResponseWriter, r *http.Request) { h.changeStatus(w, r, true) }
 func (h News) Expire(w http.ResponseWriter, r *http.Request)  { h.changeStatus(w, r, false) }
 
+func (h News) PublishPage(w http.ResponseWriter, r *http.Request) { h.renderStatusPage(w, r, true, "") }
+func (h News) ExpirePage(w http.ResponseWriter, r *http.Request)  { h.renderStatusPage(w, r, false, "") }
+
 func (h News) changeStatus(w http.ResponseWriter, r *http.Request, publish bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -95,7 +101,7 @@ func (h News) changeStatus(w http.ResponseWriter, r *http.Request, publish bool)
 		return
 	}
 	if changed == 0 {
-		http.Error(w, "A operação não é válida para esta notícia.", http.StatusConflict)
+		h.renderStatusPage(w, r, publish, "A notícia foi alterada entretanto. Reveja o estado atual antes de voltar a confirmar.")
 		return
 	}
 	if publish {
@@ -103,7 +109,46 @@ func (h News) changeStatus(w http.ResponseWriter, r *http.Request, publish bool)
 	} else {
 		h.flash(r, "Notícia expirada.")
 	}
-	httpx.Redirect(w, r, "/admin/noticias", http.StatusSeeOther)
+	httpx.Redirect(w, r, h.collectionReturn(r), http.StatusSeeOther)
+}
+
+func (h News) renderStatusPage(w http.ResponseWriter, r *http.Request, publish bool, conflict string) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), newsQueryTimeout)
+	defer cancel()
+	item, err := h.Store.GetNewsForAdmin(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if conflict == "" && item.IsPublished == publish {
+		if publish {
+			conflict = "Esta notícia já está publicada. Reveja o estado atual antes de continuar."
+		} else {
+			conflict = "Esta notícia já está expirada. Reveja o estado atual antes de continuar."
+		}
+	}
+	status := http.StatusOK
+	if conflict != "" {
+		status = http.StatusConflict
+	}
+	action := "expire"
+	if publish {
+		action = "publish"
+	}
+	page := pages.NewsStatusPage{Meta: h.meta(r), Item: h.item(item), CSRFField: templ.Raw(string(csrf.TemplateField(r))), ReturnURL: h.collectionReturn(r), Action: action, Conflict: conflict}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(status)
+	_ = pages.NewsStatus(page).Render(r.Context(), w)
 }
 
 func (h News) validate(r *http.Request) newsForm {
@@ -147,7 +192,7 @@ func (h News) renderIndex(w http.ResponseWriter, r *http.Request, status int, fo
 		items = items[:newsPageSize]
 	}
 	for _, item := range items {
-		page.Items = append(page.Items, pages.NewsItem{ID: item.ID.String(), Title: item.TitlePt, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Published: item.IsPublished})
+		page.Items = append(page.Items, h.item(item))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -158,6 +203,21 @@ func (h News) flash(r *http.Request, message string) {
 	if h.Sessions != nil {
 		h.Sessions.Put(r.Context(), "news_flash", message)
 	}
+}
+
+func (h News) item(item dbgen.NewsItem) pages.NewsItem {
+	return pages.NewsItem{ID: item.ID.String(), Title: item.TitlePt, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Published: item.IsPublished}
+}
+
+func (h News) collectionReturn(r *http.Request) string {
+	raw := r.URL.Query().Get("return_to")
+	if raw == "" && r.PostForm != nil {
+		raw = r.PostForm.Get("return_to")
+	}
+	if safe := adminCollectionReturn(raw, "/admin/noticias"); safe != "" {
+		return safe
+	}
+	return "/admin/noticias"
 }
 
 func newsPageNumber(value string) int {
