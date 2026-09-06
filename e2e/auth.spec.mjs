@@ -416,7 +416,6 @@ test.describe('authentication', () => {
     await interactivePage.locator('#profile-emergency-name').fill('Guardião de teste');
     await interactivePage.locator('#profile-emergency-relationship').fill('Tutor');
     await interactivePage.locator('#profile-emergency-phone').fill('+351 930 000 000');
-    await interactivePage.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
     await interactivePage.getByRole('button', { name: 'Guardar perfil' }).click();
     await expect(interactivePage.getByText('Perfil atualizado.')).toBeVisible();
     await interactivePage.getByRole('link', { name: 'Voltar aos menores' }).click();

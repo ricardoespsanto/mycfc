@@ -550,7 +550,7 @@ func profileOptionalString(value string) *string {
 	return &value
 }
 func profileComplete(record dbgen.GetMemberProfileRow) bool {
-	return record.EmergencyContactName != "" && record.EmergencyContactRelationship != "" && record.EmergencyContactPhone != "" && record.MedicalDeclaration != "UNKNOWN"
+	return record.EmergencyContactName != "" && record.EmergencyContactRelationship != "" && record.EmergencyContactPhone != ""
 }
 func profileFormFromRecord(r dbgen.GetMemberProfileRow) pages.ProfileForm {
 	return pages.ProfileForm{Name: r.Name, Email: stringValue(r.Email), DateOfBirth: r.DateOfBirth.Time.Format("2006-01-02"), Phone: r.Phone, AddressLine1: r.AddressLine1, AddressLine2: r.AddressLine2, Postcode: r.Postcode, Locality: r.Locality, CountryCode: r.CountryCode, NationalityCode: r.NationalityCode, ClubMemberNumber: stringValue(r.ClubMemberNumber), FederationLicenceNumber: stringValue(r.FederationLicenceNumber), EmergencyName: r.EmergencyContactName, EmergencyRelationship: r.EmergencyContactRelationship, EmergencyPhone: r.EmergencyContactPhone, EmergencyAlternatePhone: r.EmergencyContactAlternatePhone, MedicalDeclaration: r.MedicalDeclaration, Allergies: r.Allergies, MedicalConditions: r.MedicalConditions, Medication: r.Medication, ActivityRestrictions: r.ActivityRestrictions, MedicalNotes: r.MedicalNotes, ProfileUpdatedAt: r.UpdatedAt.Time.Format(time.RFC3339Nano), IdentityUpdatedAt: r.IdentityUpdatedAt.Time.Format(time.RFC3339Nano), Errors: validation.FieldErrors{}}

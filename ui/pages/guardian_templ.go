@@ -156,7 +156,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 						return templ_7745c5c3_Err
 					}
 					if dependent.ProfileIncomplete {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<p class=\"record-meta\">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<p class=\"record-meta\">Perfil incompleto: falta contacto de emergência.</p>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
