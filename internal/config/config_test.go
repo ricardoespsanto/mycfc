@@ -410,6 +410,73 @@ func TestApplyProductionRemoteConfigOverwritesEnvironmentValues(t *testing.T) {
 	}
 }
 
+func TestProductionLegalConfigurationSupportsOlderDeploymentBundle(t *testing.T) {
+	defaults := map[string]string{
+		"PRIVACY_NOTICE_URL":  "https://mycfcoimbra.com/legal/privacidade/2026-09-06",
+		"COOKIE_NOTICE_URL":   "https://mycfcoimbra.com/legal/cookies/2026-09-06",
+		"DATA_RIGHTS_CONTACT": "cfluvialcoimbra@gmail.com",
+	}
+	overrides := map[string]string{
+		"PRIVACY_NOTICE_URL":  "https://example.test/privacy",
+		"COOKIE_NOTICE_URL":   "https://example.test/cookies",
+		"DATA_RIGHTS_CONTACT": "privacy@example.test",
+	}
+	for _, tc := range []struct {
+		name        string
+		environment map[string]string
+		remote      map[string]string
+		want        map[string]string
+		wantError   string
+	}{
+		{name: "absent environment and SSM values", want: defaults},
+		{name: "environment overrides", environment: overrides, want: overrides},
+		{name: "SSM overrides environment", environment: defaults, remote: overrides, want: overrides},
+		{name: "invalid environment privacy", environment: map[string]string{"PRIVACY_NOTICE_URL": "http://example.test/privacy"}, wantError: "PRIVACY_NOTICE_URL"},
+		{name: "invalid environment cookies", environment: map[string]string{"COOKIE_NOTICE_URL": " "}, wantError: "COOKIE_NOTICE_URL"},
+		{name: "invalid environment contact", environment: map[string]string{"DATA_RIGHTS_CONTACT": "not-an-email"}, wantError: "DATA_RIGHTS_CONTACT"},
+		{name: "invalid SSM override", remote: map[string]string{"PRIVACY_NOTICE_URL": "http://example.test/privacy"}, wantError: "PRIVACY_NOTICE_URL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reproduce the old host bundle: no legal environment variables and
+			// no new legal SSM parameters unless this case explicitly supplies them.
+			environment := map[string]string{"APP_ENV": "production", "APP_VERSION": "release-test", "GIT_SHA": strings.Repeat("a", 40), "AWS_REGION": "eu-west-1"}
+			for name, value := range tc.environment {
+				environment[name] = value
+			}
+			cfg, err := env.ParseAsWithOptions[Config](env.Options{Environment: environment})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parameters := validProductionParameters()
+			for name := range defaults {
+				delete(parameters, name)
+			}
+			for name, value := range tc.remote {
+				parameters[name] = value
+			}
+			if err := cfg.applyProductionRemoteConfig(parameters, validProductionSecrets()); err != nil {
+				t.Fatal(err)
+			}
+			err = cfg.Validate()
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("Validate() error = %v, want %s", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]string{"PRIVACY_NOTICE_URL": cfg.PrivacyNoticeURL, "COOKIE_NOTICE_URL": cfg.CookieNoticeURL, "DATA_RIGHTS_CONTACT": cfg.DataRightsContact}
+			for name, want := range tc.want {
+				if got[name] != want {
+					t.Errorf("%s = %q, want %q", name, got[name], want)
+				}
+			}
+		})
+	}
+}
+
 func TestApplyProductionRemoteConfigRequiresEveryParameterAndSecret(t *testing.T) {
 	parameters := validProductionParameters()
 	secrets := validProductionSecrets()
