@@ -386,6 +386,20 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	if parameters["DATA_RIGHTS_CONTACT"] != "" {
 		c.DataRightsContact = parameters["DATA_RIGHTS_CONTACT"]
 	}
+	// The host's Compose bundle can predate these optional SSM parameters.
+	// Keep the approved public notices available during an image-only rollout;
+	// explicit environment or SSM values still go through normal validation.
+	if c.IsProduction() {
+		if c.PrivacyNoticeURL == "" {
+			c.PrivacyNoticeURL = "https://mycfcoimbra.com/legal/privacidade/2026-09-06"
+		}
+		if c.CookieNoticeURL == "" {
+			c.CookieNoticeURL = "https://mycfcoimbra.com/legal/cookies/2026-09-06"
+		}
+		if c.DataRightsContact == "" {
+			c.DataRightsContact = "cfluvialcoimbra@gmail.com"
+		}
+	}
 	c.LogLevel = parameters["LOG_LEVEL"]
 	c.ReleaseRepository = parameters["RELEASE_REPOSITORY"]
 	c.CookieDomain = ""
