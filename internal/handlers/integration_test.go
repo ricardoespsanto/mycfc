@@ -854,7 +854,7 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 	if err := pool.QueryRow(ctx, `SELECT medical_declaration, allergies, medical_notes FROM member_profiles WHERE user_id = $1`, dependentID).Scan(&dependentMedicalDeclaration, &dependentAllergies, &dependentMedicalNotes); err != nil {
 		t.Fatal(err)
 	}
-	if dependentMedicalDeclaration != "NONE_KNOWN" || dependentAllergies != "" || dependentMedicalNotes != "" {
+	if dependentMedicalDeclaration != current.MedicalDeclaration || dependentAllergies != current.Allergies || dependentMedicalNotes != current.MedicalNotes {
 		t.Fatalf("guardian changed dependent health data: declaration=%q allergies=%q notes=%q", dependentMedicalDeclaration, dependentAllergies, dependentMedicalNotes)
 	}
 	var guardianChangedFields []string
