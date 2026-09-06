@@ -192,7 +192,7 @@ func loginContent(page LoginPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</form><p class=\"auth-alternate\"><a href=\"/recuperar-palavra-passe\">Recuperar palavra-passe</a><br>Ainda não tem acesso? <a href=\"/registo\">Criar conta MyCFC</a></p></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</form><p class=\"auth-alternate\"><a href=\"/recuperar-palavra-passe\">Recuperar palavra-passe</a><br>Ainda não tem acesso? <a href=\"/registo\">Criar conta MyCFCoimbra</a></p></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

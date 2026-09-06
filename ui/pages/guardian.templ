@@ -33,7 +33,7 @@ templ GuardianContent(page GuardianPage) {
 						for _, dependent := range page.Dependents {
 							<li class="record-item"><div class="record-item__copy"><h3><a href={ "/perfil/dependentes/"+dependent.ID }>@components.PersonName(dependent.ID, dependent.Name)</a></h3><p class="record-meta">{ dependent.Detail }</p>
 								if dependent.ProfileIncomplete {
-									<p class="record-meta">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>
+									<p class="record-meta">Perfil incompleto: falta contacto de emergência.</p>
 								}
 							</div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
 						}
@@ -49,7 +49,8 @@ templ GuardianContent(page GuardianPage) {
 				@components.RequiredNote()
 				<div class="form-field">@components.FieldLabel("name", "Nome", true)<input id="name" name="name" autocomplete="name" value={ page.Name } required aria-invalid?={ page.Errors["name"] != "" } aria-describedby="name-help name-error"/>@components.FieldHelp("name-help", "Use o nome completo do menor.")@components.FieldErrorMessage("name", page.Errors["name"])</div>
 				<div class="form-field">@components.FieldLabel("date_of_birth", "Data de nascimento", true)<input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required aria-invalid?={ page.Errors["date_of_birth"] != "" } aria-describedby="date-of-birth-help date_of_birth-error"/>@components.FieldHelp("date-of-birth-help", "A idade é validada à data de hoje.")@components.FieldErrorMessage("date_of_birth", page.Errors["date_of_birth"])</div>
-				<label for="accept_minor_responsibility"><input id="accept_minor_responsibility" name="accept_minor_responsibility" type="checkbox" required checked?={ page.ResponsibilityAccepted } aria-invalid?={ page.Errors["accept_minor_responsibility"] != "" } aria-describedby="accept_minor_responsibility-error"/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) } target="_blank" rel="noopener">responsabilidade pelo menor a cargo</a>. <span class="required-mark" aria-hidden="true">*</span></label>@components.FieldErrorMessage("accept_minor_responsibility", page.Errors["accept_minor_responsibility"])
+				<p class="field-hint">Explique ao menor, de forma adequada à idade, a <a href="/legal/privacidade-menores">informação de privacidade para menores</a>. Consulte também a <a href="/legal/privacidade">Política de privacidade</a>.</p>
+				<label for="accept_minor_responsibility"><input id="accept_minor_responsibility" name="accept_minor_responsibility" type="checkbox" required checked?={ page.ResponsibilityAccepted } aria-invalid?={ page.Errors["accept_minor_responsibility"] != "" } aria-describedby="accept_minor_responsibility-error"/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) }>responsabilidade pelo menor a cargo</a>. <span class="required-mark" aria-hidden="true">*</span></label>@components.FieldErrorMessage("accept_minor_responsibility", page.Errors["accept_minor_responsibility"])
 				@components.TaskActions("/dashboard/guardian") { <button class="action action--primary" type="submit" data-task-submit>Adicionar menor</button> }
 			</form>
 			</div>

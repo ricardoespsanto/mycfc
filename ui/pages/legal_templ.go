@@ -8,16 +8,15 @@ package pages
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import (
-	"github.com/cfcoimbra/mycfc/ui/components"
-)
+import "github.com/cfcoimbra/mycfc/ui/components"
 
-type EmailVerificationPage struct {
-	Meta    components.PageMeta
-	Success bool
+type LegalPage struct {
+	Meta                   components.PageMeta
+	Title, Version, SHA256 string
+	Content                templ.Component
 }
 
-func EmailVerification(page EmailVerificationPage) templ.Component {
+func Legal(page LegalPage) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -38,7 +37,7 @@ func EmailVerification(page EmailVerificationPage) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = components.AuthBase(page.Meta, emailVerificationContent(page)).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.PublicBase(page.Meta, legalContent(page)).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -46,7 +45,7 @@ func EmailVerification(page EmailVerificationPage) templ.Component {
 	})
 }
 
-func emailVerificationContent(page EmailVerificationPage) templ.Component {
+func legalContent(page LegalPage) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -67,22 +66,28 @@ func emailVerificationContent(page EmailVerificationPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card\" aria-labelledby=\"email-verification-title\"><p class=\"eyebrow\">Conta MyCFCoimbra</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<article class=\"legal-document\"><p class=\"eyebrow\">Informação jurídica e privacidade</p><div class=\"legal-document__content\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if page.Success {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<h1 id=\"email-verification-title\">Email confirmado</h1><p>O endereço de email foi confirmado com sucesso.</p><p><a class=\"action\" href=\"/login\">Iniciar sessão</a></p>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<h1 id=\"email-verification-title\">Não foi possível confirmar o email</h1><p>O link é inválido, já foi utilizado ou expirou. Inicie sessão para pedir um novo link no seu perfil.</p><p><a class=\"action\" href=\"/login\">Iniciar sessão</a></p>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
+		templ_7745c5c3_Err = page.Content.Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</div><footer><p>Identificador da versão: <code>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var3 string
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(page.SHA256)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/legal.templ`, Line: 19, Col: 58}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "</code></p></footer></article>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

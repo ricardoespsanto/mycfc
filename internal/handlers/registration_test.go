@@ -50,10 +50,13 @@ func TestRegistrationGetRendersForm(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	for _, expected := range []string{`<body class="auth-body">`, `<h1 id="registration-title">Criar conta</h1>`, `name="registration_token"`, `class="registration-trap"`, `name="company"`, `autocomplete="email"`, `autocomplete="bday"`, `autocomplete="new-password"`, `id="password-help"`, `name="accept_terms"`, `name="accept_image_use"`, `href="https://example.test/termos"`, `href="https://example.test/imagem"`, `href="/login">Iniciar sessão</a>`} {
+	for _, expected := range []string{`<body class="auth-body">`, `<h1 id="registration-title">Criar conta</h1>`, `name="registration_token"`, `class="registration-trap"`, `name="company"`, `autocomplete="email"`, `autocomplete="bday"`, `autocomplete="new-password"`, `id="password-help"`, `name="accept_terms"`, `href="https://example.test/termos"`, `href="https://example.test/imagem"`, `href="/legal/privacidade"`, `href="/login">Iniciar sessão</a>`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
 		}
+	}
+	if strings.Contains(response.Body.String(), `name="accept_image_use"`) {
+		t.Fatal("registration must not require image consent")
 	}
 }
 
@@ -75,7 +78,7 @@ func TestRegistrationPostValidatesBeforeStore(t *testing.T) {
 			t.Errorf("body does not contain %q", expected)
 		}
 	}
-	for _, expected := range []string{`value="Maria Silva"`, `value="member@example.com"`, `value="2020-01-01"`, `name="accept_image_use" type="checkbox" required checked`, `class="error-summary"`, `aria-invalid="true"`} {
+	for _, expected := range []string{`value="Maria Silva"`, `value="member@example.com"`, `value="2020-01-01"`, `class="error-summary"`, `aria-invalid="true"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("validation response does not preserve shared contract %q", expected)
 		}
@@ -159,8 +162,8 @@ func TestRegistrationPostCreatesAccountAndSession(t *testing.T) {
 	if bcrypt.CompareHashAndPassword([]byte(store.input.PasswordHash), []byte("correct horse 7")) != nil {
 		t.Fatal("password was not bcrypt hashed")
 	}
-	if store.input.TermsVersion != "1.0" || store.input.ImageVersion != "2.0" {
-		t.Fatalf("consent versions = %q, %q", store.input.TermsVersion, store.input.ImageVersion)
+	if store.input.TermsVersion != "1.0" {
+		t.Fatalf("terms version = %q", store.input.TermsVersion)
 	}
 	if len(response.Result().Cookies()) == 0 {
 		t.Fatal("successful registration did not set a session cookie")

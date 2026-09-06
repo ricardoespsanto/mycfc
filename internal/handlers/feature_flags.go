@@ -89,7 +89,7 @@ func (h Dashboard) renderSystem(w http.ResponseWriter, r *http.Request, status i
 	user, _ := CurrentUserFromContext(r.Context())
 	page := pages.ReleasesPage{Release: h.releaseStatus(r.Context()), Error: form.Error, Conflict: form.Conflict}
 	page.Meta = h.PageMeta
-	page.Meta.Title = "Sistema | MyCFC"
+	page.Meta.Title = "Sistema | MyCFCoimbra"
 	page.Meta.CurrentPath = "/admin/sistema"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()

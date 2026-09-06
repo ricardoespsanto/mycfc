@@ -68,7 +68,7 @@ func passwordRecoveryRequestContent(page PasswordRecoveryRequestPage) templ.Comp
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-recovery-title\"><p class=\"eyebrow\">Conta MyCFC</p><h1 id=\"password-recovery-title\">Recuperar palavra-passe</h1><p>Indique o correio eletrónico da sua conta adulta. Se a conta puder recuperar o acesso por email, enviaremos um link.</p><form class=\"form-layout\" method=\"post\" action=\"/recuperar-palavra-passe\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-recovery-title\"><p class=\"eyebrow\">Conta MyCFCoimbra</p><h1 id=\"password-recovery-title\">Recuperar palavra-passe</h1><p>Indique o correio eletrónico da sua conta adulta. Se a conta puder recuperar o acesso por email, enviaremos um link.</p><form class=\"form-layout\" method=\"post\" action=\"/recuperar-palavra-passe\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -247,7 +247,7 @@ func passwordRecoveryResetContent(page PasswordRecoveryResetPage) templ.Componen
 			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-reset-title\"><p class=\"eyebrow\">Conta MyCFC</p><h1 id=\"password-reset-title\">Definir nova palavra-passe</h1><p>Escolha uma palavra-passe que ainda não utiliza noutros serviços.</p><form class=\"form-layout\" method=\"post\" action=\"/recuperar-palavra-passe/repor\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-reset-title\"><p class=\"eyebrow\">Conta MyCFCoimbra</p><h1 id=\"password-reset-title\">Definir nova palavra-passe</h1><p>Escolha uma palavra-passe que ainda não utiliza noutros serviços.</p><form class=\"form-layout\" method=\"post\" action=\"/recuperar-palavra-passe/repor\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -428,7 +428,7 @@ func passwordRecoveryInvalidContent() templ.Component {
 			templ_7745c5c3_Var13 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-recovery-invalid-title\"><p class=\"eyebrow\">Conta MyCFC</p><h1 id=\"password-recovery-invalid-title\">Este link já não está disponível</h1><p>O link é inválido, já foi utilizado, foi substituído por um pedido mais recente ou expirou.</p><p><a class=\"action action--primary\" href=\"/recuperar-palavra-passe\">Pedir um novo link</a></p></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<section class=\"auth-card auth-card--login\" aria-labelledby=\"password-recovery-invalid-title\"><p class=\"eyebrow\">Conta MyCFCoimbra</p><h1 id=\"password-recovery-invalid-title\">Este link já não está disponível</h1><p>O link é inválido, já foi utilizado, foi substituído por um pedido mais recente ou expirou.</p><p><a class=\"action action--primary\" href=\"/recuperar-palavra-passe\">Pedir um novo link</a></p></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

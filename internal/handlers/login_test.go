@@ -56,14 +56,14 @@ func TestLoginGetRendersForm(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`<body class="auth-body">`,
-		`aria-label="MyCFC, voltar à página inicial"`,
+		`aria-label="MyCFCoimbra, voltar à página inicial"`,
 		`<h1 id="login-title">Iniciar sessão</h1>`,
 		`action="/login"`,
 		`name="next" value="/dashboard/leisure"`,
 		`autocomplete="username"`,
 		`autocomplete="current-password"`,
 		`href="/recuperar-palavra-passe">Recuperar palavra-passe</a>`,
-		`href="/registo">Criar conta MyCFC</a>`,
+		`href="/registo">Criar conta MyCFCoimbra</a>`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q", expected)
@@ -275,7 +275,7 @@ func TestLoginPostReturnsInternalErrorForLookupFailure(t *testing.T) {
 
 func loginTestPageMeta() components.PageMeta {
 	return components.PageMeta{
-		Title:         "Iniciar sessão | MyCFC",
+		Title:         "Iniciar sessão | MyCFCoimbra",
 		StylesheetURL: "/assets/app.css",
 		ScriptURL:     "/assets/app.js",
 	}

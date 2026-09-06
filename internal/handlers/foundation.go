@@ -14,7 +14,7 @@ type Foundation struct{ PageMeta components.PageMeta }
 func (h Foundation) Get(w http.ResponseWriter, r *http.Request) {
 	meta := h.PageMeta
 	user, _ := CurrentUserFromContext(r.Context())
-	meta.Title = "Componentes | MyCFC"
+	meta.Title = "Componentes | MyCFCoimbra"
 	meta.CurrentPath = "/admin/componentes"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

@@ -23,6 +23,9 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.HandleFunc("GET /health/live", health.Live)
 	mux.HandleFunc("GET /health/ready", health.Ready)
 	mux.Handle("GET /assets/{path...}", assetHandler())
+	legal := handlers.NewLegal(landing.PageMeta)
+	mux.HandleFunc("GET /legal/{slug}", legal.Get)
+	mux.HandleFunc("GET /legal/{slug}/{version}", legal.Get)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		if httpx.UserID(r.Context()) != "" {

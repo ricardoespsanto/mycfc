@@ -1,7 +1,7 @@
 # Autorização para captação e utilização de imagem e voz
 
-Versão proposta: `2026-09-04`
-Entrada em vigor: **[a deliberar]**
+Versão: `2026-09-06`
+Entrada em vigor: **6 de setembro de 2026**
 
 ## Informação essencial
 
@@ -17,6 +17,7 @@ Autorizo, de forma gratuita, a captação e utilização digna e contextualizada
 - [ ] **Redes sociais oficiais do CFC:** publicação nas contas oficiais, reconhecendo que plataformas externas podem efetuar tratamento próprio, permitir partilha e estar sujeitas às suas condições.
 - [ ] **Comunicação social e parceiros de eventos:** envio pontual de imagens de eventos ou resultados a órgãos de comunicação, federações, organizadores e parceiros identificados, apenas para cobertura institucional/desportiva.
 - [ ] **Álbuns privados MyCFCoimbra:** apresentação a públicos autenticados da equipa ou programa relevante, após moderação.
+- [ ] **Fotografia de perfil privada MyCFCoimbra:** apresentação apenas a utilizadores autenticados que já podem consultar o perfil do titular. Quando a autorização é prestada no próprio fluxo de carregamento da fotografia, fica limitada a esta finalidade.
 
 Não autorizo usos comerciais autónomos, publicidade de terceiros, reconhecimento facial, criação de perfis biométricos, venda de imagens, manipulação enganosa ou utilização que prejudique honra, reputação, segurança ou dignidade. Uma utilização materialmente diferente exige nova informação e, quando aplicável, nova autorização.
 

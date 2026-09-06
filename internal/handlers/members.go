@@ -397,7 +397,7 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	}
 	meta := h.meta(r, "Membro", "/admin/membros")
 	meta.PageLabel = "Detalhe do membro"
-	meta.Title = member.Name + " | MyCFC"
+	meta.Title = member.Name + " | MyCFCoimbra"
 	meta.SubjectContext = member.Name
 	meta.CurrentPath = r.URL.Path
 	returnURL := memberCollectionReturn(r)
@@ -471,7 +471,7 @@ func memberDetailPath(id uuid.UUID, returnURL string) string {
 func (h Members) meta(r *http.Request, title, path string) components.PageMeta {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = title + " | MyCFC"
+	meta.Title = title + " | MyCFCoimbra"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

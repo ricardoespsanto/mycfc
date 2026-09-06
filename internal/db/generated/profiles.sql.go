@@ -62,29 +62,6 @@ func (q *Queries) EnsureMemberProfile(ctx context.Context, userID uuid.UUID) err
 	return err
 }
 
-const getCurrentImageConsent = `-- name: GetCurrentImageConsent :one
-SELECT id
-FROM consent_forms
-WHERE user_id = $1 AND consent_type = 'Uso_Imagem'
-  AND document_version = $2 AND document_sha256 = $3
-  AND is_accepted = true
-ORDER BY date_signed DESC
-LIMIT 1
-`
-
-type GetCurrentImageConsentParams struct {
-	UserID          uuid.UUID `json:"user_id"`
-	DocumentVersion string    `json:"document_version"`
-	DocumentSha256  string    `json:"document_sha256"`
-}
-
-func (q *Queries) GetCurrentImageConsent(ctx context.Context, arg GetCurrentImageConsentParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getCurrentImageConsent, arg.UserID, arg.DocumentVersion, arg.DocumentSha256)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const getMemberAvatar = `-- name: GetMemberAvatar :one
 SELECT u.name,
        p.photo_object_key, p.photo_content_type, p.photo_size_bytes,
@@ -92,7 +69,7 @@ SELECT u.name,
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
-  AND c.user_id = u.id AND c.consent_type = 'Uso_Imagem' AND c.is_accepted = true
+  AND c.user_id = u.id AND c.consent_type = 'Foto_Perfil' AND c.is_accepted = true
   AND c.document_version = $1
   AND c.document_sha256 = $2
 WHERE u.id = $3

@@ -14,6 +14,7 @@ RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY cmd ./cmd
+COPY docs/legal ./docs/legal
 COPY internal ./internal
 COPY ui ./ui
 COPY --from=assets /src/ui/static/dist ./ui/static/dist

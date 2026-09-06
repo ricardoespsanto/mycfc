@@ -14,7 +14,7 @@ import (
 func TestBaseRendersDocumentContract(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:         "Iniciar sessão | MyCFC",
+		Title:         "Iniciar sessão | MyCFCoimbra",
 		StylesheetURL: "/assets/app.css",
 		ScriptURL:     "/assets/app.js",
 	}, Flash("Sessão terminada.")).Render(context.Background(), &output)
@@ -40,10 +40,30 @@ func TestBaseRendersDocumentContract(t *testing.T) {
 	}
 }
 
+func TestEveryLayoutRendersSharedLegalNavigation(t *testing.T) {
+	for name, component := range map[string]templ.Component{
+		"public":         PublicBase(PageMeta{}, Flash("")),
+		"authentication": AuthBase(PageMeta{}, Flash("")),
+		"authenticated":  Base(PageMeta{}, Flash("")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output strings.Builder
+			if err := component.Render(context.Background(), &output); err != nil {
+				t.Fatal(err)
+			}
+			for _, expected := range []string{`aria-label="Informação jurídica e privacidade"`, `href="/legal/privacidade"`, `href="/legal/termos-gerais"`, `href="/legal/cookies"`, `href="/legal/direitos"`} {
+				if !strings.Contains(output.String(), expected) {
+					t.Errorf("layout missing %q", expected)
+				}
+			}
+		})
+	}
+}
+
 func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:           "Gestão de membros | MyCFC",
+		Title:           "Gestão de membros | MyCFCoimbra",
 		StylesheetURL:   "/assets/app.css",
 		ScriptURL:       "/assets/app.js",
 		CurrentPath:     "/admin/membros",
@@ -85,7 +105,7 @@ func TestBaseUsesGlobalNavigationAsTheOnlyAdminNavigation(t *testing.T) {
 
 func TestBaseMarksUnverifiedEmailInDesktopAndMobileAccountContext(t *testing.T) {
 	var output strings.Builder
-	err := Base(PageMeta{Title: "Hoje | MyCFC", CurrentUserName: "Maria Silva", CurrentUserID: "member-1", EmailVerificationPending: true, Navigation: []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}}}, Flash("")).Render(context.Background(), &output)
+	err := Base(PageMeta{Title: "Hoje | MyCFCoimbra", CurrentUserName: "Maria Silva", CurrentUserID: "member-1", EmailVerificationPending: true, Navigation: []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}}}, Flash("")).Render(context.Background(), &output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +117,7 @@ func TestBaseMarksUnverifiedEmailInDesktopAndMobileAccountContext(t *testing.T) 
 func TestBaseSeparatesAccountMembershipsAndResponsibilities(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:           "Hoje | MyCFC",
+		Title:           "Hoje | MyCFCoimbra",
 		CurrentUserName: "Maria Silva",
 		CurrentUserID:   "member-1",
 		Navigation: []NavigationGroup{{
@@ -123,7 +143,7 @@ func TestBaseSeparatesAccountMembershipsAndResponsibilities(t *testing.T) {
 func TestBaseRendersEnhancedMobileDrawerAndNoJSFallback(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:           "Hoje | MyCFC",
+		Title:           "Hoje | MyCFCoimbra",
 		CurrentUserName: "Maria Silva",
 		Navigation:      []NavigationGroup{{Items: []NavigationItem{{Label: "Hoje", Path: "/today"}}}},
 	}, Flash("")).Render(context.Background(), &output)
@@ -147,7 +167,7 @@ func TestBaseRendersEnhancedMobileDrawerAndNoJSFallback(t *testing.T) {
 func TestBaseRendersSubjectContext(t *testing.T) {
 	var output strings.Builder
 	err := Base(PageMeta{
-		Title:           "Detalhe do membro | MyCFC",
+		Title:           "Detalhe do membro | MyCFCoimbra",
 		StylesheetURL:   "/assets/app.css",
 		ScriptURL:       "/assets/app.js",
 		CurrentPath:     "/admin/membros/member-123",

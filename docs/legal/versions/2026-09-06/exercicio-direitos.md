@@ -1,6 +1,7 @@
 # Exercer os seus direitos sobre dados pessoais
 
-Versão proposta: `2026-09-04`
+Versão: `2026-09-06`
+Entrada em vigor: **6 de setembro de 2026**
 
 Pode pedir ao Clube Fluvial de Coimbra acesso, retificação, apagamento, limitação, portabilidade ou oposição, e retirar um consentimento. Cada direito tem condições próprias; um pedido de apagamento não significa eliminação automática de todos os registos.
 

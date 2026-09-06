@@ -563,7 +563,7 @@ func todayContent(page TodayPage) templ.Component {
 			}
 		}
 		if page.ShowShortcuts {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<section class=\"today-module today-module--shortcuts\"><header><div><h2>Continuar no MyCFC</h2></div></header><div class=\"today-shortcuts\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<section class=\"today-module today-module--shortcuts\"><header><div><h2>Continuar no MyCFCoimbra</h2></div></header><div class=\"today-shortcuts\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

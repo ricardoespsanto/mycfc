@@ -1,7 +1,7 @@
 # Termos gerais de utilização do MyCFCoimbra
 
-Versão proposta: `2026-09-04`
-Entrada em vigor: **[a deliberar]**
+Versão: `2026-09-06`
+Entrada em vigor: **6 de setembro de 2026**
 
 ## 1. Identificação e objeto
 

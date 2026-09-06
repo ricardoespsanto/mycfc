@@ -12,14 +12,14 @@ import "github.com/cfcoimbra/mycfc/internal/validation"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
 type RegistrationPage struct {
-	Meta                         components.PageMeta
-	Name, Email, DateOfBirth     string
-	TermsURL, ImageURL           string
-	TermsAccepted, ImageAccepted bool
-	Errors                       validation.FieldErrors
-	CSRFField                    templ.Component
-	RegistrationToken            string
-	TurnstileSiteKey             string
+	Meta                     components.PageMeta
+	Name, Email, DateOfBirth string
+	TermsURL, ImageURL       string
+	TermsAccepted            bool
+	Errors                   validation.FieldErrors
+	CSRFField                templ.Component
+	RegistrationToken        string
+	TurnstileSiteKey         string
 }
 
 func Registration(page RegistrationPage) templ.Component {
@@ -72,7 +72,7 @@ func registrationContent(page RegistrationPage) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--registration\" aria-labelledby=\"registration-title\"><p class=\"eyebrow\">Junte-se ao clube</p><h1 id=\"registration-title\">Criar conta</h1><p>Crie o seu acesso pessoal ao MyCFC. Os campos assinalados são obrigatórios.</p><form class=\"form-layout\" method=\"post\" action=\"/registo\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"auth-card auth-card--registration\" aria-labelledby=\"registration-title\"><p class=\"eyebrow\">Junte-se ao clube</p><h1 id=\"registration-title\">Criar conta</h1><p>Crie o seu acesso pessoal ao MyCFCoimbra. Os campos assinalados são obrigatórios.</p><form class=\"form-layout\" method=\"post\" action=\"/registo\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -97,7 +97,7 @@ func registrationContent(page RegistrationPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"registration_check", "name", "email", "date_of_birth", "password", "password_confirmation", "accept_terms", "accept_image_use"})).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"registration_check", "name", "email", "date_of_birth", "password", "password_confirmation", "accept_terms"})).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -364,7 +364,7 @@ func registrationContent(page RegistrationPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\" target=\"_blank\" rel=\"noopener\">termos gerais</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></span></label>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\">termos gerais</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></span></label>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -372,74 +372,43 @@ func registrationContent(page RegistrationPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</div><div class=\"consent-field\"><label for=\"accept_image_use\"><input id=\"accept_image_use\" name=\"accept_image_use\" type=\"checkbox\" required")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</div><p class=\"field-hint\">Consulte a <a href=\"/legal/privacidade\">Política de privacidade</a>. A <a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if page.ImageAccepted {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, " checked")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
+		var templ_7745c5c3_Var15 templ.SafeURL
+		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ImageURL))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 44, Col: 135}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, " aria-invalid=\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var15 string
-		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaBoolean(page.Errors["accept_image_use"] != ""))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 44, Col: 235}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\" aria-describedby=\"accept_image_use-error\"><span>Aceito a <a href=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var16 templ.SafeURL
-		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ImageURL))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 44, Col: 334}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\" target=\"_blank\" rel=\"noopener\">autorização de uso de imagem</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></span></label>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = components.FieldErrorMessage("accept_image_use", page.Errors["accept_image_use"]).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\">autorização de imagem</a> é facultativa e será pedida apenas quando utilizar uma funcionalidade que necessite de fotografia.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if page.TurnstileSiteKey != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "<div class=\"turnstile-field\"><div class=\"cf-turnstile\" data-sitekey=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "<div class=\"turnstile-field\"><div class=\"cf-turnstile\" data-sitekey=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var17 string
-			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.TurnstileSiteKey)
+			var templ_7745c5c3_Var16 string
+			templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.TurnstileSiteKey)
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/registration.templ`, Line: 47, Col: 67}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\"></div></div><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer></script>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\"></div></div><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Var18 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_Var17 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 			templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 			templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
 			if !templ_7745c5c3_IsBuffer {
@@ -451,17 +420,17 @@ func registrationContent(page RegistrationPage) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "<button class=\"action action--primary\" type=\"submit\">Criar conta</button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<button class=\"action action--primary\" type=\"submit\">Criar conta</button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = components.FormActions("").Render(templ.WithChildren(ctx, templ_7745c5c3_Var18), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.FormActions("").Render(templ.WithChildren(ctx, templ_7745c5c3_Var17), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "</form><p class=\"auth-alternate\">Já tem conta? <a href=\"/login\">Iniciar sessão</a></p></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</form><p class=\"auth-alternate\">Já tem conta? <a href=\"/login\">Iniciar sessão</a></p></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

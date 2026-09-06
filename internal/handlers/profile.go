@@ -43,19 +43,23 @@ const (
 )
 
 type Profile struct {
-	Store           ProfileStore
-	Objects         storage.ObjectStore
-	System          System
-	PageMeta        components.PageMeta
-	Sessions        *scs.SessionManager
-	Location        *time.Location
-	Now             func() time.Time
-	MaxRequestBytes int64
-	MaxPhotoBytes   int64
-	ImageVersion    string
-	ImageSHA256     string
-	ImageURL        string
-	HTTPClient      *http.Client
+	Store                  ProfileStore
+	Objects                storage.ObjectStore
+	System                 System
+	PageMeta               components.PageMeta
+	Sessions               *scs.SessionManager
+	Location               *time.Location
+	Now                    func() time.Time
+	MaxRequestBytes        int64
+	MaxPhotoBytes          int64
+	ImageVersion           string
+	ImageSHA256            string
+	ImageURL               string
+	HealthVersion          string
+	HealthSHA256           string
+	HealthURL              string
+	HealthConsentStatement string
+	HTTPClient             *http.Client
 }
 
 func (h Profile) Get(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +109,20 @@ func (h Profile) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profileParams.UserID = subjectID
-	input := ProfileUpdate{ActorID: actor.ID, SubjectID: subjectID, IsAdmin: actor.IsAdmin, Profile: profileParams, Identity: identityParams, ChangedFields: profileChangedFields(record, profileParams)}
+	var ip *netip.Addr
+	if address, found := httpx.RemoteIP(r.Context()); found {
+		ip = &address
+	}
+	input := ProfileUpdate{ActorID: actor.ID, SubjectID: subjectID, IsAdmin: actor.IsAdmin, Profile: profileParams, Identity: identityParams, ChangedFields: profileChangedFields(record, profileParams), HealthVersion: h.HealthVersion, HealthSHA256: h.HealthSHA256, AcceptHealthConsent: form.HealthConsentAccepted, IP: ip, UserAgent: truncateRunes(r.UserAgent(), 512)}
 	if identityParams != nil {
 		input.IdentityFields = identityChangedFields(record, *identityParams)
 	}
 	err = h.Store.Update(r.Context(), input)
+	if errors.Is(err, ErrHealthConsentRequired) {
+		form.Errors.Add("accept_health_data", "Para guardar informação médica nova ou alterada, é necessário prestar consentimento explícito.")
+		h.render(w, r, http.StatusUnprocessableEntity, h.page(r, actor, base, record, form, ""))
+		return
+	}
 	if errors.Is(err, ErrProfileConflict) {
 		h.render(w, r, http.StatusConflict, h.page(r, actor, base, record, form, "Outra pessoa alterou este perfil. Recarregue a página antes de guardar novamente."))
 		return
@@ -243,7 +256,7 @@ func (h Profile) RemovePhotoPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta := h.page(r, actor, base, record, pages.ProfileForm{}, "").Meta
-	meta.Title = "Remover fotografia | MyCFC"
+	meta.Title = "Remover fotografia | MyCFCoimbra"
 	meta.PageLabel = "Remover fotografia"
 	returnURL := profileActionPath(base, profileCollectionReturn(r, actor))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -333,7 +346,7 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 		form = profileFormFromRecord(record)
 	}
 	meta := h.PageMeta
-	meta.Title = "Perfil de " + record.Name + " | MyCFC"
+	meta.Title = "Perfil de " + record.Name + " | MyCFCoimbra"
 	meta.CurrentPath = base
 	meta.CurrentUserName = actor.Name
 	meta.CurrentUserID = actor.ID.String()
@@ -359,7 +372,7 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	visible := avatarErr == nil && avatar.PhotoObjectKey != nil && avatar.ConsentCurrent
 	nationalHistoryURL, internationalHistoryURL := fpcHistoryURLs(stringValue(record.FederationLicenceNumber))
 	returnURL := profileCollectionReturn(r, actor)
-	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ActionPath: profileActionPath(base, returnURL), ReturnURL: returnURL, ImageConsentURL: h.ImageURL, FPCNationalHistoryURL: nationalHistoryURL, FPCInternationalHistoryURL: internationalHistoryURL, Form: form, Conflict: conflict}
+	page := pages.ProfilePage{Meta: meta, SubjectID: record.ID.String(), Name: record.Name, Email: stringValue(record.Email), LoginID: stringValue(record.MinorLoginID), DateOfBirth: record.DateOfBirth.Time.Format("2006-01-02"), Dependent: record.IsDependent, Active: record.IsActive, Editable: canEditProfile(record, actor.ID, actor.IsAdmin), Admin: actor.IsAdmin, Self: record.ID == actor.ID, Complete: profileComplete(record), HasPhoto: record.PhotoObjectKey != nil, PhotoVisible: visible, EmailVerified: record.EmailVerifiedAt.Valid, PhotoURL: "/membros/" + record.ID.String() + "/foto", BasePath: base, ActionPath: profileActionPath(base, returnURL), ReturnURL: returnURL, ImageConsentURL: h.ImageURL, HealthConsentURL: h.HealthURL, HealthConsentStatement: h.HealthConsentStatement, FPCNationalHistoryURL: nationalHistoryURL, FPCInternationalHistoryURL: internationalHistoryURL, Form: form, Conflict: conflict}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "profile_flash")
 	}
@@ -382,7 +395,15 @@ func profileActionPath(base, returnURL string) string {
 
 func (h Profile) validateForm(r *http.Request, current dbgen.GetMemberProfileRow, isAdmin bool) (pages.ProfileForm, dbgen.UpdateMemberProfileParams, *dbgen.UpdateMemberIdentityParams) {
 	value := func(key string) string { return strings.TrimSpace(r.PostForm.Get(key)) }
-	form := pages.ProfileForm{Phone: value("phone"), AddressLine1: value("address_line1"), AddressLine2: value("address_line2"), Postcode: value("postcode"), Locality: value("locality"), CountryCode: strings.ToUpper(value("country_code")), NationalityCode: strings.ToUpper(value("nationality_code")), ClubMemberNumber: value("club_member_number"), FederationLicenceNumber: value("federation_licence_number"), EmergencyName: value("emergency_contact_name"), EmergencyRelationship: value("emergency_contact_relationship"), EmergencyPhone: value("emergency_contact_phone"), EmergencyAlternatePhone: value("emergency_contact_alternate_phone"), MedicalDeclaration: value("medical_declaration"), Allergies: value("allergies"), MedicalConditions: value("medical_conditions"), Medication: value("medication"), ActivityRestrictions: value("activity_restrictions"), MedicalNotes: value("medical_notes"), Name: value("name"), Email: value("email"), DateOfBirth: value("date_of_birth"), ProfileUpdatedAt: value("profile_updated_at"), IdentityUpdatedAt: value("identity_updated_at"), Errors: validation.FieldErrors{}}
+	form := pages.ProfileForm{Phone: value("phone"), AddressLine1: value("address_line1"), AddressLine2: value("address_line2"), Postcode: value("postcode"), Locality: value("locality"), CountryCode: strings.ToUpper(value("country_code")), NationalityCode: strings.ToUpper(value("nationality_code")), ClubMemberNumber: value("club_member_number"), FederationLicenceNumber: value("federation_licence_number"), EmergencyName: value("emergency_contact_name"), EmergencyRelationship: value("emergency_contact_relationship"), EmergencyPhone: value("emergency_contact_phone"), EmergencyAlternatePhone: value("emergency_contact_alternate_phone"), MedicalDeclaration: value("medical_declaration"), Allergies: value("allergies"), MedicalConditions: value("medical_conditions"), Medication: value("medication"), ActivityRestrictions: value("activity_restrictions"), MedicalNotes: value("medical_notes"), HealthConsentAccepted: r.PostForm.Get("accept_health_data") == "on", Name: value("name"), Email: value("email"), DateOfBirth: value("date_of_birth"), ProfileUpdatedAt: value("profile_updated_at"), IdentityUpdatedAt: value("identity_updated_at"), Errors: validation.FieldErrors{}}
+	if !r.PostForm.Has("medical_declaration") {
+		form.MedicalDeclaration = current.MedicalDeclaration
+		form.Allergies = current.Allergies
+		form.MedicalConditions = current.MedicalConditions
+		form.Medication = current.Medication
+		form.ActivityRestrictions = current.ActivityRestrictions
+		form.MedicalNotes = current.MedicalNotes
+	}
 	checkLength := func(key, label, input string, max int) {
 		if !utf8.ValidString(input) || utf8.RuneCountInString(input) > max {
 			form.Errors.Add(key, fmt.Sprintf("%s não pode exceder %d caracteres.", label, max))
@@ -474,6 +495,8 @@ func (h Profile) photoError(w http.ResponseWriter, r *http.Request, actor Curren
 
 func (h Profile) render(w http.ResponseWriter, r *http.Request, status int, page pages.ProfilePage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	_ = pages.Profile(page).Render(r.Context(), w)
 }
@@ -535,7 +558,7 @@ func profileOptionalString(value string) *string {
 	return &value
 }
 func profileComplete(record dbgen.GetMemberProfileRow) bool {
-	return record.EmergencyContactName != "" && record.EmergencyContactRelationship != "" && record.EmergencyContactPhone != "" && record.MedicalDeclaration != "UNKNOWN"
+	return record.EmergencyContactName != "" && record.EmergencyContactRelationship != "" && record.EmergencyContactPhone != ""
 }
 func profileFormFromRecord(r dbgen.GetMemberProfileRow) pages.ProfileForm {
 	return pages.ProfileForm{Name: r.Name, Email: stringValue(r.Email), DateOfBirth: r.DateOfBirth.Time.Format("2006-01-02"), Phone: r.Phone, AddressLine1: r.AddressLine1, AddressLine2: r.AddressLine2, Postcode: r.Postcode, Locality: r.Locality, CountryCode: r.CountryCode, NationalityCode: r.NationalityCode, ClubMemberNumber: stringValue(r.ClubMemberNumber), FederationLicenceNumber: stringValue(r.FederationLicenceNumber), EmergencyName: r.EmergencyContactName, EmergencyRelationship: r.EmergencyContactRelationship, EmergencyPhone: r.EmergencyContactPhone, EmergencyAlternatePhone: r.EmergencyContactAlternatePhone, MedicalDeclaration: r.MedicalDeclaration, Allergies: r.Allergies, MedicalConditions: r.MedicalConditions, Medication: r.Medication, ActivityRestrictions: r.ActivityRestrictions, MedicalNotes: r.MedicalNotes, ProfileUpdatedAt: r.UpdatedAt.Time.Format(time.RFC3339Nano), IdentityUpdatedAt: r.IdentityUpdatedAt.Time.Format(time.RFC3339Nano), Errors: validation.FieldErrors{}}

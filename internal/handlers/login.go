@@ -112,7 +112,7 @@ func (h Login) render(w http.ResponseWriter, r *http.Request, status int, email,
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	meta := h.PageMeta
-	meta.Title = "Iniciar sessão | MyCFC"
+	meta.Title = "Iniciar sessão | MyCFCoimbra"
 	_ = pages.Login(pages.LoginPage{
 		Meta:      meta,
 		Email:     email,

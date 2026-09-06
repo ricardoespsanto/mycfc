@@ -277,7 +277,7 @@ func (h Announcements) Detail(w http.ResponseWriter, r *http.Request) {
 	page := pages.AnnouncementDetailPage{Title: item.Title, Body: body, PublishedAt: item.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04"), Meta: h.meta(r, user, "/announcements", "Aviso")}
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = item.Title
-	page.Meta.Title = item.Title + " | MyCFC"
+	page.Meta.Title = item.Title + " | MyCFCoimbra"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Hoje", Path: "/today"}}
 	if document != nil {
 		page.DocumentURL, page.DocumentSource, page.DocumentReviewedOn = document.URL, document.Source, document.ReviewedOn
@@ -505,7 +505,7 @@ func parseOfficialDocument(body string) (string, *officialDocument) {
 }
 func (h Announcements) meta(r *http.Request, u CurrentUser, path, title string) components.PageMeta {
 	m := h.PageMeta
-	m.Title = title + " | MyCFC"
+	m.Title = title + " | MyCFCoimbra"
 	m.CurrentPath = path
 	m.AreaLabel = "Atividade"
 	m.PageLabel = title

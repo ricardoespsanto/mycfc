@@ -60,7 +60,7 @@ func foundationGalleryContent() templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = components.PageHeader("Fundação visual", "Componentes River Clubhouse", "Estados e padrões partilhados para construir o MyCFC sem estilos locais paralelos.", nil).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.PageHeader("Fundação visual", "Componentes River Clubhouse", "Estados e padrões partilhados para construir o MyCFCoimbra sem estilos locais paralelos.", nil).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

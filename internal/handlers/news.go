@@ -233,7 +233,7 @@ func newsPageURL(page int) string { return "/admin/noticias?page=" + strconv.Ito
 func (h News) meta(r *http.Request) components.PageMeta {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Notícias | MyCFC"
+	meta.Title = "Notícias | MyCFCoimbra"
 	meta.CurrentPath = "/admin/noticias"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

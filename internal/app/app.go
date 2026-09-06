@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	legalcontent "github.com/cfcoimbra/mycfc/docs/legal"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
@@ -143,35 +144,44 @@ func New(ctx context.Context) (*Application, error) {
 		pool.Close()
 		return nil, err
 	}
+	legalMeta := components.PageMeta{PrivacyNoticeURL: cfg.PrivacyNoticeURL, CookieNoticeURL: cfg.CookieNoticeURL, DataRightsContact: cfg.DataRightsContact}
 	landing := handlers.Landing{
-		PageMeta: components.PageMeta{Title: "Clube Fluvial de Coimbra | MyCFC", StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+		PageMeta: components.PageMeta{Title: "Clube Fluvial de Coimbra | MyCFCoimbra", StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"], PrivacyNoticeURL: legalMeta.PrivacyNoticeURL, CookieNoticeURL: legalMeta.CookieNoticeURL, DataRightsContact: legalMeta.DataRightsContact},
 		HeroURL:  assets["images/cfc-hero.png"],
 	}
+	legalDocuments := legalcontent.Documents()
+	termsDocument := legalDocuments["termos-gerais"]
+	imageDocument := legalDocuments["uso-imagem"]
+	minorDocument := legalDocuments["responsabilidade-menor"]
+	privacyDocument := legalDocuments["privacidade"]
+	versionedLegalURL := func(document legalcontent.Document) string { return "/legal/" + document.Slug + "/" + document.Version }
 	login := handlers.Login{
 		Users:    dbgen.New(pool),
 		Sessions: sessions,
 		PageMeta: components.PageMeta{
-			StylesheetURL: assets["app.css"],
-			ScriptURL:     assets["app.js"],
-			BrandImageURL: assets["images/cfc-logo.png"],
+			StylesheetURL:    assets["app.css"],
+			ScriptURL:        assets["app.js"],
+			BrandImageURL:    assets["images/cfc-logo.png"],
+			PrivacyNoticeURL: legalMeta.PrivacyNoticeURL, CookieNoticeURL: legalMeta.CookieNoticeURL, DataRightsContact: legalMeta.DataRightsContact,
 		},
 	}
 	registration := handlers.Registration{
 		Store: handlers.PostgresRegistrationStore{Pool: pool}, Sessions: sessions, Location: location,
-		TermsVersion: cfg.ConsentTermsVersion, TermsSHA256: cfg.ConsentTermsSHA256,
-		ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256,
-		TermsURL: cfg.ConsentTermsURL, ImageURL: cfg.ConsentImageURL,
+		TermsVersion: termsDocument.Version, TermsSHA256: termsDocument.SHA256,
+		ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256,
+		TermsURL: versionedLegalURL(termsDocument), ImageURL: versionedLegalURL(imageDocument),
 		AntiBotKey: csrfKey,
-		PageMeta:   components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"]},
+		PageMeta:   components.PageMeta{StylesheetURL: assets["app.css"], ScriptURL: assets["app.js"], BrandImageURL: assets["images/cfc-logo.png"], PrivacyNoticeURL: legalMeta.PrivacyNoticeURL, CookieNoticeURL: legalMeta.CookieNoticeURL, DataRightsContact: legalMeta.DataRightsContact},
 	}
 	if cfg.TurnstileSiteKey != "" {
 		registration.TurnstileSiteKey = cfg.TurnstileSiteKey
 		registration.TurnstileVerifier = handlers.CloudflareTurnstileVerifier{Secret: cfg.TurnstileSecretKey.Value(), Client: &http.Client{Timeout: 5 * time.Second}}
 	}
 	pageMeta := components.PageMeta{
-		StylesheetURL: assets["app.css"],
-		ScriptURL:     assets["app.js"],
-		BrandImageURL: assets["images/cfc-logo.png"],
+		StylesheetURL:    assets["app.css"],
+		ScriptURL:        assets["app.js"],
+		BrandImageURL:    assets["images/cfc-logo.png"],
+		PrivacyNoticeURL: legalMeta.PrivacyNoticeURL, CookieNoticeURL: legalMeta.CookieNoticeURL, DataRightsContact: legalMeta.DataRightsContact,
 	}
 	system := handlers.System{PageMeta: pageMeta}
 	verificationService := emailverification.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
@@ -198,8 +208,8 @@ func New(ctx context.Context) (*Application, error) {
 		System:                system,
 		Location:              location,
 		Sessions:              sessions,
-		ResponsibilityVersion: cfg.ConsentMinorVersion, ResponsibilitySHA256: cfg.ConsentMinorSHA256,
-		ResponsibilityURL: cfg.ConsentMinorURL,
+		ResponsibilityVersion: minorDocument.Version, ResponsibilitySHA256: minorDocument.SHA256,
+		ResponsibilityURL: versionedLegalURL(minorDocument),
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), Sessions: sessions, System: system}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
@@ -208,7 +218,7 @@ func New(ctx context.Context) (*Application, error) {
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: cfg.ConsentImageVersion, ImageSHA256: cfg.ConsentImageSHA256, ImageURL: cfg.ConsentImageURL}
+	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}

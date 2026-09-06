@@ -246,11 +246,11 @@ func (h Suggestions) flash(r *http.Request, message string) {
 
 func (h Suggestions) meta(r *http.Request, user CurrentUser, management bool) components.PageMeta {
 	meta := h.PageMeta
-	meta.Title = "Sugestões | MyCFC"
+	meta.Title = "Sugestões | MyCFCoimbra"
 	meta.CurrentPath = "/sugestoes"
 	meta.AreaLabel = "Atividade"
 	if management {
-		meta.Title = "Triar sugestões | MyCFC"
+		meta.Title = "Triar sugestões | MyCFCoimbra"
 		meta.CurrentPath = "/admin/sugestoes"
 		meta.AreaLabel = "Moderação"
 		meta.PageLabel = "Triar sugestões"

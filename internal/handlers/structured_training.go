@@ -1095,7 +1095,7 @@ func (h StructuredTraining) renderGymBlockTask(w http.ResponseWriter, r *http.Re
 		returnTo = structuredPlannerURL(task.group.GroupID, task.week.ID, task.session.ID)
 	}
 	meta := h.meta(r, user, true)
-	meta.Title = "Adicionar bloco de ginásio | MyCFC"
+	meta.Title = "Adicionar bloco de ginásio | MyCFCoimbra"
 	meta.PageLabel = "Adicionar bloco de ginásio"
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: returnTo}}
 	page := pages.StructuredGymBlockTaskPage{Meta: meta, CSRFField: templ.Raw(string(csrf.TemplateField(r))), ActionURL: "/admin/treinos/estruturados/sessoes/" + sessionID.String() + "/segmentos/" + segmentID.String() + "/ginasio", ReturnURL: returnTo, GroupName: task.group.GroupName, WeekTitle: task.week.Title, SessionTitle: task.session.Title, SegmentTitle: structuredSegmentTaskTitle(task.segment), Values: values, Error: formError}
@@ -1261,7 +1261,7 @@ func (h StructuredTraining) renderWaterBlockTask(w http.ResponseWriter, r *http.
 		returnTo = structuredPlannerURL(task.group.GroupID, task.week.ID, task.session.ID)
 	}
 	meta := h.meta(r, user, true)
-	meta.Title = "Adicionar bloco de água | MyCFC"
+	meta.Title = "Adicionar bloco de água | MyCFCoimbra"
 	meta.PageLabel = "Adicionar bloco de água"
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: returnTo}}
 	page := pages.StructuredWaterBlockTaskPage{
@@ -2070,9 +2070,9 @@ func (h StructuredTraining) location() *time.Location {
 
 func (h StructuredTraining) meta(r *http.Request, user CurrentUser, management bool) components.PageMeta {
 	meta := h.PageMeta
-	meta.Title, meta.CurrentPath = "Planeamento semanal | MyCFC", "/treinos/estruturados"
+	meta.Title, meta.CurrentPath = "Planeamento semanal | MyCFCoimbra", "/treinos/estruturados"
 	if management {
-		meta.Title, meta.CurrentPath = "Gestão do planeamento semanal | MyCFC", "/admin/treinos/estruturados"
+		meta.Title, meta.CurrentPath = "Gestão do planeamento semanal | MyCFCoimbra", "/admin/treinos/estruturados"
 	}
 	meta.CurrentUserName, meta.CurrentUserID = user.Name, user.ID.String()
 	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified

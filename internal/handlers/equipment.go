@@ -444,7 +444,7 @@ func (h Dashboard) renderEquipmentEdit(w http.ResponseWriter, r *http.Request, s
 
 func (h Dashboard) renderEquipmentRetire(w http.ResponseWriter, r *http.Request, status int, equipment dbgen.Equipment, fieldErrors validation.FieldErrors, conflict string) {
 	meta := h.equipmentMeta(r)
-	meta.Title = "Retirar equipamento | MyCFC"
+	meta.Title = "Retirar equipamento | MyCFCoimbra"
 	meta.PageLabel = "Retirar equipamento"
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Frota", Path: fleetCollectionReturn(r, "equipment-"+equipment.ID.String())}}
 	form := equipmentPageForm(equipmentFormFromModel(equipment))
@@ -498,7 +498,7 @@ func (h Dashboard) equipmentPhotoURL(ctx context.Context, r *http.Request, key, 
 func (h Dashboard) equipmentMeta(r *http.Request) components.PageMeta {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Equipamento | MyCFC"
+	meta.Title = "Equipamento | MyCFCoimbra"
 	meta.CurrentPath = "/admin/fleet"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

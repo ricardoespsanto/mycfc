@@ -54,9 +54,9 @@ func (s *SMTPSender) SendVerification(ctx context.Context, recipient, link strin
 	if err := message.To(recipient); err != nil {
 		return err
 	}
-	message.Subject("Confirme o seu email no MyCFC")
-	message.SetBodyString(mail.TypeTextPlain, "Confirme o seu endereço de email no MyCFC:\n\n"+link+"\n\nEste link é válido durante 24 horas. Se não pediu esta confirmação, ignore esta mensagem.\n")
-	message.SetBodyString(mail.TypeTextHTML, "<p>Confirme o seu endereço de email no MyCFC.</p><p><a href=\""+html.EscapeString(link)+"\">Confirmar email</a></p><p>Este link é válido durante 24 horas. Se não pediu esta confirmação, ignore esta mensagem.</p>")
+	message.Subject("Confirme o seu email no MyCFCoimbra")
+	message.SetBodyString(mail.TypeTextPlain, "Confirme o seu endereço de email no MyCFCoimbra:\n\n"+link+"\n\nEste link é válido durante 24 horas. Se não pediu esta confirmação, ignore esta mensagem.\n")
+	message.SetBodyString(mail.TypeTextHTML, "<p>Confirme o seu endereço de email no MyCFCoimbra.</p><p><a href=\""+html.EscapeString(link)+"\">Confirmar email</a></p><p>Este link é válido durante 24 horas. Se não pediu esta confirmação, ignore esta mensagem.</p>")
 	return s.Client.DialAndSendWithContext(ctx, message)
 }
 
@@ -76,9 +76,9 @@ func (s *SMTPSender) SendPasswordReset(ctx context.Context, recipient, link stri
 }
 
 func passwordResetMessage(link string) (string, string, string) {
-	subject := "Recupere a sua palavra-passe no MyCFC"
-	plain := "Recebemos um pedido para alterar a palavra-passe da sua conta MyCFC:\n\n" + link + "\n\nEste link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.\n"
-	rich := "<p>Recebemos um pedido para alterar a palavra-passe da sua conta MyCFC.</p><p><a href=\"" + html.EscapeString(link) + "\">Alterar palavra-passe</a></p><p>Este link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.</p>"
+	subject := "Recupere a sua palavra-passe no MyCFCoimbra"
+	plain := "Recebemos um pedido para alterar a palavra-passe da sua conta MyCFCoimbra:\n\n" + link + "\n\nEste link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.\n"
+	rich := "<p>Recebemos um pedido para alterar a palavra-passe da sua conta MyCFCoimbra.</p><p><a href=\"" + html.EscapeString(link) + "\">Alterar palavra-passe</a></p><p>Este link é válido durante 60 minutos e só pode ser utilizado uma vez. Se não fez este pedido, ignore esta mensagem; a sua palavra-passe não será alterada.</p>"
 	return subject, plain, rich
 }
 

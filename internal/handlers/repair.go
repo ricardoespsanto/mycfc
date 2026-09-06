@@ -68,7 +68,7 @@ func (h Repair) Index(w http.ResponseWriter, r *http.Request) {
 		choices[i].OpenRepairs = openCounts[choices[i].ID]
 	}
 	meta := h.PageMeta
-	meta.Title = "Frota | MyCFC"
+	meta.Title = "Frota | MyCFCoimbra"
 	meta.CurrentPath = "/fleet"
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()

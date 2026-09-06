@@ -156,7 +156,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 						return templ_7745c5c3_Err
 					}
 					if dependent.ProfileIncomplete {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<p class=\"record-meta\">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<p class=\"record-meta\">Perfil incompleto: falta contacto de emergência.</p>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -330,7 +330,7 @@ func GuardianContent(page GuardianPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "</div><label for=\"accept_minor_responsibility\"><input id=\"accept_minor_responsibility\" name=\"accept_minor_responsibility\" type=\"checkbox\" required")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "</div><p class=\"field-hint\">Explique ao menor, de forma adequada à idade, a <a href=\"/legal/privacidade-menores\">informação de privacidade para menores</a>. Consulte também a <a href=\"/legal/privacidade\">Política de privacidade</a>.</p><label for=\"accept_minor_responsibility\"><input id=\"accept_minor_responsibility\" name=\"accept_minor_responsibility\" type=\"checkbox\" required")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -353,13 +353,13 @@ func GuardianContent(page GuardianPage) templ.Component {
 			var templ_7745c5c3_Var10 templ.SafeURL
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.ResponsibilityURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 52, Col: 364}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/guardian.templ`, Line: 53, Col: 364}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\" target=\"_blank\" rel=\"noopener\">responsabilidade pelo menor a cargo</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></label>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\">responsabilidade pelo menor a cargo</a>. <span class=\"required-mark\" aria-hidden=\"true\">*</span></label>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

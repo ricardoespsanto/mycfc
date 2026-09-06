@@ -77,7 +77,7 @@ func (h Training) prepareTrainingCreatePage(r *http.Request, page *pages.Trainin
 	page.StructuredAvailable = featureflags.Available(user.FeatureModes, featureflags.StructuredTrainingPlanning, user.IsAdmin)
 	h.authoring(ctx, user, page, 1)
 	page.Meta = h.meta(r, user, true)
-	page.Meta.Title = title + " | MyCFC"
+	page.Meta.Title = title + " | MyCFCoimbra"
 	page.Meta.PageLabel = title
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
@@ -614,7 +614,7 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 		page.Modalities = append(page.Modalities, pages.TrainingChoice{ID: modality.ID.String(), Name: modality.NamePt})
 	}
 	page.Meta = h.meta(r, user, true)
-	page.Meta.Title = "Editar sessão | MyCFC"
+	page.Meta.Title = "Editar sessão | MyCFCoimbra"
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = "Editar sessão"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}}
@@ -631,7 +631,7 @@ func (h Training) renderSessionCancel(w http.ResponseWriter, r *http.Request, st
 		Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors,
 		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
 	}
-	page.Meta.Title = "Cancelar sessão | MyCFC"
+	page.Meta.Title = "Cancelar sessão | MyCFCoimbra"
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = "Cancelar sessão"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: "Planear treinos", Path: "/admin/treinos"}, {Label: session.Title, Path: "/admin/treinos/sessoes/" + sessionID.String() + "/editar"}}
@@ -902,12 +902,12 @@ func (h Training) location() *time.Location {
 }
 func (h Training) meta(r *http.Request, user CurrentUser, management bool) components.PageMeta {
 	meta := h.PageMeta
-	meta.Title = "Treinos e competição | MyCFC"
+	meta.Title = "Treinos e competição | MyCFCoimbra"
 	meta.CurrentPath = "/treinos"
 	meta.AreaLabel = "Atividade"
 	meta.PageLabel = "Treinos"
 	if management {
-		meta.Title = "Gestão de treinos | MyCFC"
+		meta.Title = "Gestão de treinos | MyCFCoimbra"
 		meta.CurrentPath = "/admin/treinos"
 		meta.AreaLabel = "Coordenação"
 		meta.PageLabel = "Planear treinos"

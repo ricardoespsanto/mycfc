@@ -48,15 +48,18 @@ BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
 
 GALLERY_URL=https://example.com/gallery
 
-CONSENT_TERMS_VERSION=<version>
-CONSENT_TERMS_SHA256=<64-lowercase-hex-sha256>
-CONSENT_TERMS_URL=https://example.com/legal/termos-gerais
-CONSENT_IMAGE_VERSION=<version>
-CONSENT_IMAGE_SHA256=<64-lowercase-hex-sha256>
-CONSENT_IMAGE_URL=https://example.com/legal/uso-imagem
-CONSENT_MINOR_VERSION=<version>
-CONSENT_MINOR_SHA256=<64-lowercase-hex-sha256>
-CONSENT_MINOR_URL=https://example.com/legal/responsabilidade-menor
+CONSENT_TERMS_VERSION=2026-09-06
+CONSENT_TERMS_SHA256=21bf1637847c01b9f0be7fc951bd1fdc0b8b3c42c61576c06556519c8282a75a
+CONSENT_TERMS_URL=https://mycfcoimbra.com/legal/termos-gerais/2026-09-06
+CONSENT_IMAGE_VERSION=2026-09-06
+CONSENT_IMAGE_SHA256=8bb45fc72a29f72d13bac15a8c9769572b62408e24a83c5ccd698059aee34cf8
+CONSENT_IMAGE_URL=https://mycfcoimbra.com/legal/uso-imagem/2026-09-06
+CONSENT_MINOR_VERSION=2026-09-06
+CONSENT_MINOR_SHA256=900c3a6a0b29cad578700db47ff3636708496be64b60ec9d1a81f89789102b61
+CONSENT_MINOR_URL=https://mycfcoimbra.com/legal/responsabilidade-menor/2026-09-06
+PRIVACY_NOTICE_URL=https://mycfcoimbra.com/legal/privacidade/2026-09-06
+COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
+DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
 `POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead.
@@ -97,6 +100,9 @@ Apply `infra/environments/production` before releasing an app image that loads p
 /mycfc/production/consent/minor/version
 /mycfc/production/consent/minor/sha256
 /mycfc/production/consent/minor/url
+/mycfc/production/legal/privacy-url
+/mycfc/production/legal/cookies-url
+/mycfc/production/legal/rights-contact
 /mycfc/production/log-level
 /mycfc/production/trusted-proxy-cidrs
 /mycfc/production/release/repository

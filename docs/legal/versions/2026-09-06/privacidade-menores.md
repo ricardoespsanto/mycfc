@@ -1,6 +1,7 @@
 # A tua privacidade no MyCFCoimbra
 
-Versão proposta: `2026-09-04`
+Versão: `2026-09-06`
+Entrada em vigor: **6 de setembro de 2026**
 
 O MyCFCoimbra ajuda-te a ver treinos, eventos e informação do Clube Fluvial de Coimbra. Para funcionar, guarda alguns dados sobre ti.
 

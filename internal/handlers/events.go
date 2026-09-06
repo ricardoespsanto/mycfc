@@ -454,7 +454,7 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 	page.Meta.SubjectContext = subjectContext
 	page.Meta.CurrentPath = r.URL.Path
 	page.Meta.PageLabel = page.Title
-	page.Meta.Title = page.Title + " | MyCFC"
+	page.Meta.Title = page.Title + " | MyCFCoimbra"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: breadcrumbLabel, Path: basePath}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	if h.Sessions != nil {
@@ -1235,7 +1235,7 @@ func eventCalendarEntry(id uuid.UUID, title, eventType, status string, startsAt 
 }
 func (h Events) meta(r *http.Request, user CurrentUser, path, title string) components.PageMeta {
 	meta := h.PageMeta
-	meta.Title = title + " | MyCFC"
+	meta.Title = title + " | MyCFCoimbra"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
