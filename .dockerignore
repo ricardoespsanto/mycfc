@@ -7,6 +7,9 @@
 !package-lock.json
 !cmd/
 !cmd/**
+!docs/
+!docs/legal/
+!docs/legal/**
 !internal/
 !internal/**
 !scripts/
