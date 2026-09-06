@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -846,8 +847,22 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 	}
 	healthParams := dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen", MedicalNotes: "Levar medicação", ExpectedUpdatedAt: current.UpdatedAt}
 	healthUpdate := ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: healthParams, ChangedFields: []string{"medical_declaration", "allergies", "medical_notes"}, HealthVersion: "health-v1", HealthSHA256: strings.Repeat("a", 64), AcceptHealthConsent: true}
-	if err := store.Update(ctx, healthUpdate); !errors.Is(err, ErrHealthConsentRequired) {
-		t.Fatalf("unverified guardian health consent error = %v", err)
+	if err := store.Update(ctx, healthUpdate); err != nil {
+		t.Fatalf("guardian update with ignored health fields: %v", err)
+	}
+	var dependentMedicalDeclaration, dependentAllergies, dependentMedicalNotes string
+	if err := pool.QueryRow(ctx, `SELECT medical_declaration, allergies, medical_notes FROM member_profiles WHERE user_id = $1`, dependentID).Scan(&dependentMedicalDeclaration, &dependentAllergies, &dependentMedicalNotes); err != nil {
+		t.Fatal(err)
+	}
+	if dependentMedicalDeclaration != "NONE_KNOWN" || dependentAllergies != "" || dependentMedicalNotes != "" {
+		t.Fatalf("guardian changed dependent health data: declaration=%q allergies=%q notes=%q", dependentMedicalDeclaration, dependentAllergies, dependentMedicalNotes)
+	}
+	var guardianChangedFields []string
+	if err := pool.QueryRow(ctx, `SELECT changed_fields FROM member_profile_audit WHERE actor_user_id = $1 AND subject_user_id = $2 AND action = 'PROFILE_UPDATED' ORDER BY occurred_at DESC LIMIT 1`, guardianID, dependentID).Scan(&guardianChangedFields); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(guardianChangedFields, isHealthField) {
+		t.Fatalf("guardian health fields recorded in audit: %v", guardianChangedFields)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO member_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, guardianID); err != nil {
 		t.Fatal(err)
