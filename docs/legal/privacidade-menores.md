@@ -1,8 +1,8 @@
-# A tua privacidade no MyCFC
+# A tua privacidade no MyCFCoimbra
 
 Versão proposta: `2026-09-04`
 
-O MyCFC ajuda-te a ver treinos, eventos e informação do Clube Fluvial de Coimbra. Para funcionar, guarda alguns dados sobre ti.
+O MyCFCoimbra ajuda-te a ver treinos, eventos e informação do Clube Fluvial de Coimbra. Para funcionar, guarda alguns dados sobre ti.
 
 ## Que dados usamos
 

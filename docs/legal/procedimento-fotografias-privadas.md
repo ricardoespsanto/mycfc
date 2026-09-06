@@ -6,7 +6,7 @@ Estado: proposta `2026-09-04`, aplicável apenas quando as funcionalidades #150�
 
 - Cada álbum tem equipas/programas expressos; nunca há álbum público ou acesso implícito a todo o clube.
 - Carregar não é publicar. O ficheiro fica pendente e visível apenas ao autor e moderação autorizada.
-- O autor identifica manualmente todas as pessoas MyCFC reconhecíveis dentro do público autorizado; não existe reconhecimento facial, OCR ou tentativa de adivinhar nomes.
+- O autor identifica manualmente todas as pessoas reconhecíveis na imagem, dentro do público autorizado do MyCFCoimbra; não existe reconhecimento facial, OCR ou tentativa de adivinhar nomes.
 - Consentimento de imagem atual é confirmado na submissão e novamente na publicação. Para menor, só atua responsável atualmente reconhecido e a oposição do menor é respeitada.
 - Álbuns privados não autorizam website público, redes sociais, comunicação social ou publicidade.
 - Não são permitidas imagens de balneários, assistência médica, vulnerabilidade, conteúdo íntimo, humilhante, perigoso ou que revele desnecessariamente localização/rotina de menor.

@@ -8,7 +8,7 @@ Pode pedir ao Clube Fluvial de Coimbra acesso, retificação, apagamento, limita
 
 Use, por esta ordem:
 
-1. a área «Privacidade e dados pessoais» no perfil MyCFC, quando disponível; ou
+1. a área «Privacidade e dados pessoais» no perfil MyCFCoimbra, quando disponível; ou
 2. o email `cfluvialcoimbra@gmail.com`, com o assunto «Direitos sobre dados pessoais»; ou
 3. carta para Clube Fluvial de Coimbra, Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra.
 

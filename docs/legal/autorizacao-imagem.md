@@ -5,7 +5,7 @@ Entrada em vigor: **[a deliberar]**
 
 ## Informação essencial
 
-O Clube Fluvial de Coimbra («CFC») pede uma autorização autónoma para captar e usar fotografia, vídeo e voz identificável do titular. Esta autorização é **facultativa**: recusar ou retirar não impede a inscrição, a conta MyCFC, o treino ou a participação desportiva, salvo quando uma imagem seja estritamente necessária para uma credencial ou obrigação específica, situação que será explicada separadamente.
+O Clube Fluvial de Coimbra («CFC») pede uma autorização autónoma para captar e usar fotografia, vídeo e voz identificável do titular. Esta autorização é **facultativa**: recusar ou retirar não impede a inscrição, a conta MyCFCoimbra, o treino ou a participação desportiva, salvo quando uma imagem seja estritamente necessária para uma credencial ou obrigação específica, situação que será explicada separadamente.
 
 O titular pode escolher finalidades diferentes. A ausência de escolha significa «não autorizo».
 
@@ -16,7 +16,7 @@ Autorizo, de forma gratuita, a captação e utilização digna e contextualizada
 - [ ] **Comunicação institucional pública do CFC:** website público, notícias, cartazes, relatórios de atividade e materiais de divulgação do clube.
 - [ ] **Redes sociais oficiais do CFC:** publicação nas contas oficiais, reconhecendo que plataformas externas podem efetuar tratamento próprio, permitir partilha e estar sujeitas às suas condições.
 - [ ] **Comunicação social e parceiros de eventos:** envio pontual de imagens de eventos ou resultados a órgãos de comunicação, federações, organizadores e parceiros identificados, apenas para cobertura institucional/desportiva.
-- [ ] **Álbuns privados MyCFC:** apresentação a públicos autenticados da equipa ou programa relevante, após moderação.
+- [ ] **Álbuns privados MyCFCoimbra:** apresentação a públicos autenticados da equipa ou programa relevante, após moderação.
 
 Não autorizo usos comerciais autónomos, publicidade de terceiros, reconhecimento facial, criação de perfis biométricos, venda de imagens, manipulação enganosa ou utilização que prejudique honra, reputação, segurança ou dignidade. Uma utilização materialmente diferente exige nova informação e, quando aplicável, nova autorização.
 

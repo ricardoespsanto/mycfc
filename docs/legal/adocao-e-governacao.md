@@ -1,4 +1,4 @@
-# Registo de adoção e governação dos documentos MyCFC
+# Registo de adoção e governação dos documentos MyCFCoimbra
 
 Estado: **por aprovar**
 
@@ -40,7 +40,7 @@ Conservar cada versão aprovada de forma imutável, exatamente nos bytes usados 
 - [ ] Aprovar lista/contratos/localizações de prestadores e transferências.
 - [ ] Nomear autoridade de casos de privacidade distinta do simples acesso administrativo.
 - [ ] Aprovar o momento de bloqueio de conta e prazo da prova mínima de pedidos.
-- [ ] Harmonizar a política de `cfcoimbra.com` com o MyCFC.
+- [ ] Harmonizar a política de `cfcoimbra.com` com o MyCFCoimbra.
 
 ## Revisão
 

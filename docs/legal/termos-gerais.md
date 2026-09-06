@@ -1,19 +1,19 @@
-# Termos gerais de utilização do MyCFC
+# Termos gerais de utilização do MyCFCoimbra
 
 Versão proposta: `2026-09-04`
 Entrada em vigor: **[a deliberar]**
 
 ## 1. Identificação e objeto
 
-O MyCFC é a plataforma digital do Clube Fluvial de Coimbra, associação cultural e desportiva sem fins lucrativos, NIPC 502 440 597, com sede na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra, adiante «CFC».
+O MyCFCoimbra é a plataforma digital do Clube Fluvial de Coimbra, associação sem fins lucrativos, NIPC 502 440 597, com sede na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra, adiante «CFC».
 
-Estes termos regulam a criação e utilização de contas MyCFC e as funcionalidades disponibilizadas a atletas, associados, responsáveis por menores, treinadores, moderadores e dirigentes. Não substituem os estatutos, regulamentos internos, regras federativas, decisões dos órgãos sociais, condições de seguro ou normas específicas de cada atividade. Em caso de conflito, prevalecem a lei e os instrumentos do CFC aplicáveis.
+Estes termos regulam a criação e utilização de contas MyCFCoimbra e as funcionalidades disponibilizadas a atletas, sócios das diferentes categorias, responsáveis por menores, treinadores, moderadores e dirigentes. Neste documento, «responsável pelo menor» abrange quem exerce responsabilidades parentais, um tutor nomeado, outro representante legal ou uma pessoa devidamente autorizada, conforme o caso. Estes termos não substituem os estatutos, regulamentos internos, regras federativas, decisões dos órgãos sociais, condições de seguro ou normas específicas de cada atividade. Em caso de conflito, prevalecem a lei e os instrumentos do CFC aplicáveis.
 
 ## 2. Conta e acesso
 
 O utilizador deve fornecer dados verdadeiros, atuais e necessários, proteger as suas credenciais, não partilhá-las e informar o CFC sem demora se suspeitar de acesso indevido. O CFC pode exigir verificação razoável de identidade.
 
-As permissões dependem da relação atual com o clube, inscrição, equipa, programa, responsabilidade por menor e funções atribuídas. O simples acesso à plataforma não cria a qualidade de associado, atleta, treinador ou dirigente.
+As permissões dependem da relação atual com o clube, inscrição, equipa, programa, responsabilidade por menor e funções atribuídas. O simples acesso à plataforma não cria a qualidade de sócio, atleta, treinador ou dirigente.
 
 Contas de menores são criadas e geridas nos termos da declaração de responsabilidade e das regras do CFC. O identificador de acesso de um menor é pessoal e não deve ser divulgado.
 
@@ -21,11 +21,11 @@ Contas de menores são criadas e geridas nos termos da declaração de responsab
 
 O utilizador compromete-se a:
 
-- usar o MyCFC apenas para fins legítimos relacionados com o clube;
+- usar o MyCFCoimbra apenas para fins legítimos relacionados com o clube;
 - respeitar os direitos, segurança, privacidade e dignidade de outras pessoas;
 - não tentar aceder a contas, equipas, documentos, imagens ou dados para os quais não tenha autorização;
 - não introduzir código malicioso, contornar controlos, testar vulnerabilidades sem autorização ou perturbar o serviço;
-- não copiar, publicar ou reenviar conteúdo privado do MyCFC fora do público a que se destina;
+- não copiar, publicar ou reenviar conteúdo privado do MyCFCoimbra fora do público a que se destina;
 - não inserir dados de saúde, contactos ou dados de terceiros em campos de texto onde não sejam pedidos;
 - comunicar erros, conteúdo impróprio, perda de credenciais ou incidentes ao CFC.
 

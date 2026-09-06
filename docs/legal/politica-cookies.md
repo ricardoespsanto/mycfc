@@ -3,9 +3,9 @@
 Versão proposta: `2026-09-04`
 Entrada em vigor: **[a deliberar]**
 
-## O que o MyCFC utiliza
+## O que o MyCFCoimbra utiliza
 
-O MyCFC utiliza apenas mecanismos estritamente necessários para prestar e proteger o serviço, designadamente:
+O MyCFCoimbra utiliza apenas mecanismos estritamente necessários para prestar e proteger o serviço, designadamente:
 
 | Mecanismo | Finalidade | Duração proposta |
 |---|---|---|
@@ -19,7 +19,7 @@ O formulário de registo carrega **Cloudflare Turnstile** para prevenir submiss�
 
 O código da versão abrangida por esta proposta não inclui cookies de publicidade, criação de perfis, medição de audiência opcional ou marketing. A configuração efetivamente implantada de Cloudflare/Caddy e o comportamento do Turnstile têm de ser verificados antes de a Direção declarar o inventário completo. Confirmando-se apenas mecanismos necessários, não se apresenta um banner de «aceitar cookies» que nada acrescentaria ao controlo do utilizador.
 
-Ligações para websites, redes sociais, WhatsApp, federações ou fornecedores externos não depositam, por si só, cookies desses terceiros no MyCFC. Ao seguir a ligação, aplica-se a política do destino.
+Ligações para websites, redes sociais, WhatsApp, federações ou fornecedores externos não depositam, por si só, cookies desses terceiros no MyCFCoimbra. Ao seguir a ligação, aplica-se a política do destino.
 
 ## Controlo e alterações
 

@@ -5,14 +5,14 @@ Entrada em vigor: **[a deliberar]**
 
 ## 1. Declaração do responsável
 
-Ao associar uma pessoa menor à sua conta MyCFC, o declarante afirma, sob sua responsabilidade, que:
+Ao associar uma pessoa menor à sua conta MyCFCoimbra, o declarante afirma, sob sua responsabilidade, que:
 
 - é titular das responsabilidades parentais, tutor, representante legal ou pessoa com autorização bastante para os atos aqui descritos;
 - os dados do menor e do responsável são verdadeiros e serão mantidos atualizados;
 - informará imediatamente o CFC de alteração da representação, decisões judiciais relevantes, limitações de contacto, mudança de responsável ou situação que afete a segurança do menor;
 - não usará esta funcionalidade para obter acesso indevido a informação de um menor.
 
-O CFC pode pedir prova proporcional da legitimidade e suspender o acesso enquanto resolve uma dúvida fundada. A criação da relação no MyCFC não decide conflitos de responsabilidades parentais.
+O CFC pode pedir prova proporcional da legitimidade e suspender o acesso enquanto resolve uma dúvida fundada. A criação da relação no MyCFCoimbra não decide conflitos de responsabilidades parentais.
 
 ## 2. Participação e segurança
 
@@ -38,5 +38,4 @@ Declaro que li e compreendi este documento, que tenho legitimidade para agir e q
 
 **Menor:** [preenchido pelo sistema]
 **Responsável:** [preenchido pelo sistema]
-**Qualidade em que intervém:** [a indicar]
 **Data e versão:** [registadas pelo sistema]

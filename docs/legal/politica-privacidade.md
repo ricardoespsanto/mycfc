@@ -1,4 +1,4 @@
-# Política de privacidade do MyCFC
+# Política de privacidade do MyCFCoimbra
 
 Versão proposta: `2026-09-04`
 Entrada em vigor: **[a deliberar]**
@@ -6,20 +6,20 @@ Entrada em vigor: **[a deliberar]**
 
 ## 1. Quem é responsável
 
-O responsável pelo tratamento é o **Clube Fluvial de Coimbra**, associação cultural e desportiva sem fins lucrativos, NIPC **502 440 597**, com morada na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra («CFC»).
+O responsável pelo tratamento é o **Clube Fluvial de Coimbra**, associação sem fins lucrativos, NIPC **502 440 597**, com morada na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra («CFC»).
 
 Contacto geral e, até a Direção aprovar um canal dedicado, contacto para dados pessoais: `cfluvialcoimbra@gmail.com`. A designação de encarregado da proteção de dados, caso exista ou venha a ser legalmente necessária, será publicada aqui.
 
-Esta política abrange o MyCFC. O website público `cfcoimbra.com` mantém atualmente uma política própria, que deve ser harmonizada por deliberação separada.
+Esta política abrange o MyCFCoimbra. O website público `cfcoimbra.com` mantém atualmente uma política própria, que deve ser harmonizada por deliberação separada.
 
 ## 2. A quem e a que dados se aplica
 
-Tratamos dados de visitantes, candidatos, associados, atletas, responsáveis por menores, treinadores, dirigentes, moderadores e outras pessoas que usam ou surgem legitimamente nas operações do clube.
+Tratamos dados de visitantes, candidatos, sócios das diferentes categorias, atletas, responsáveis por menores, treinadores, dirigentes, moderadores e outras pessoas que usam ou surgem legitimamente nas operações do clube. Nesta política, «responsável pelo menor» abrange quem exerce responsabilidades parentais, um tutor nomeado, outro representante legal ou uma pessoa devidamente autorizada, conforme o caso.
 
 Consoante a relação e funcionalidades usadas, podemos tratar:
 
-- identificação e conta: nome, data de nascimento, email, identificador de menor, estado da conta e credenciais protegidas;
-- relação com o clube: época, programa, equipa, modalidade, categoria, funções, permissões e responsabilidade por menor;
+- identificação e conta: nome, data de nascimento, email, identificador de acesso atribuído ao menor, estado da conta e credenciais protegidas;
+- relação com o clube: época, programa, equipa, modalidade, especialidade, categoria, funções, permissões e responsabilidade por menor;
 - contacto e perfil: telefone, morada, identificação oficial e número de licença federativa, quando necessários;
 - segurança e emergência: contacto de emergência, restrições à atividade, alergias, medicação e outras informações de saúde voluntariamente facultadas no campo próprio;
 - atividade desportiva: planos, sessões, presenças, respostas, resultados, distância, duração, perceção de esforço e métricas;
@@ -55,7 +55,7 @@ Não use campos livres comuns para comunicar saúde. Em emergência, podem ser c
 
 ## 5. Crianças e responsáveis
 
-O responsável fornece apenas os dados necessários do menor e declara legitimidade. O CFC verifica a relação quando necessário, presta informação adequada à idade, ouve a opinião do menor segundo maturidade e superior interesse e reavalia acessos quando a relação muda ou o menor atinge a maioridade.
+O responsável pelo menor fornece apenas os dados necessários e declara a legitimidade em que atua. O CFC verifica a relação quando necessário, presta informação adequada à idade, ouve a opinião do menor segundo maturidade e superior interesse e reavalia acessos quando a relação muda ou o menor atinge a maioridade. A associação atual entre uma conta adulta e um menor na plataforma não equivale, por si só, à verificação de uma qualidade jurídica específica.
 
 Em Portugal, para consentimento relativo a oferta direta de serviços da sociedade da informação, a Lei n.º 58/2019 fixa em 13 anos a idade mínima; abaixo dessa idade intervêm os representantes legais, preferencialmente com autenticação segura. Esta regra não transforma consentimento na base de todos os tratamentos do clube nem substitui as regras gerais de capacidade e responsabilidades parentais.
 
@@ -67,13 +67,15 @@ Pode retirar a autorização. Impedimos novos usos e atuamos sobre cópias sob c
 
 ## 7. Destinatários e prestadores
 
-O acesso interno é concedido por função e necessidade. Dados podem ser comunicados, no mínimo necessário, a federações e organizadores de provas, seguradoras, profissionais de saúde/emergência, autoridades e consultores sujeitos a confidencialidade.
+O MyCFCoimbra é uma plataforma de gestão interna da relação do CFC com sócios, atletas e restantes utilizadores abrangidos por esta política. O acesso interno é concedido por função e limitado ao necessário. O CFC não disponibiliza perfis ou dados da plataforma a terceiros para fins comerciais ou alheios à atividade do clube.
 
-O MyCFC utiliza categorias de prestadores para alojamento e operação: infraestrutura Hetzner, proteção de rede/DNS Cloudflare (incluindo Turnstile onde configurado), serviços AWS que suportam DNS, imagens de software, email ou cópias de segurança conforme a configuração de produção, e fornecedores de correio eletrónico. O registo interno identifica entidade, serviço, localização, contrato e transferências. Não se deve publicar um fornecedor futuro como destinatário ativo antes da ativação.
+No funcionamento desportivo corrente, o CFC comunica à Federação Portuguesa de Canoagem, através do respetivo portal, os dados mínimos necessários à inscrição ou revalidação federativa. A Federação trata os dados que recebe de acordo com a sua própria política e responsabilidade. Dados de saúde ou contacto de emergência só são comunicados aos serviços de socorro, profissionais de saúde ou pessoas responsáveis pela segurança da atividade quando exista fundamento jurídico aplicável e isso seja necessário para proteger o titular. Outras comunicações apenas ocorrem quando exista fundamento jurídico aplicável e uma necessidade concreta devidamente documentada, por exemplo uma obrigação legal, um pedido de autoridade competente ou o tratamento de um sinistro segurado. Qualquer comunicação de dados de saúde permanece dependente da decisão e salvaguardas do artigo 9.º identificadas nesta política.
 
-Polar, Garmin e outros fornecedores só recebem ou devolvem dados depois de ligação voluntária. WhatsApp, FPC e websites externos são destinos de ligações: quando os visita, passam a aplicar-se as políticas próprias. O CFC não envia o perfil MyCFC por uma simples ligação.
+Na arquitetura técnica abrangida por esta proposta, a Hetzner aloja o servidor, a base de dados, o armazenamento privado e cópias do servidor; a Cloudflare presta DNS, túnel/proteção de rede e Turnstile; e serviços AWS suportam armazenamento privado, cópias cifradas da base de dados, chaves, email e configuração operacional. Os prestadores tratam apenas os dados técnicos ou alojados necessários ao respetivo serviço. Antes da publicação, o CFC deve confirmar no registo interno a entidade contratada, função, contrato, localização, subprocessadores, prazo e eventual transferência aplicável a cada serviço.
 
-Quando haja transferência para fora do Espaço Económico Europeu, o CFC usa uma decisão de adequação ou garantias adequadas, como cláusulas contratuais-tipo, e disponibiliza informação mediante pedido.
+Polar, Garmin e outros fornecedores só recebem ou devolvem dados depois de ligação voluntária. Fora da comunicação federativa à FPC descrita acima, WhatsApp e outros websites externos são apenas destinos de ligações: quando os visita, passam a aplicar-se as políticas próprias. O CFC não envia o perfil MyCFCoimbra por uma simples ligação.
+
+Antes de qualquer transferência para fora do Espaço Económico Europeu, o CFC deve confirmar e documentar o mecanismo aplicável, como uma decisão de adequação ou garantias adequadas. A versão publicada identificará as transferências confirmadas e indicará como obter informação ou cópia das garantias relevantes.
 
 ## 8. Conservação
 

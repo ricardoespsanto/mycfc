@@ -1,4 +1,4 @@
-# Pacote jurídico e de privacidade MyCFC
+# Pacote jurídico e de privacidade MyCFCoimbra
 
 Estado: **proposta para aprovação pela Direção e revisão jurídica**
 Versão proposta: `2026-09-04`
@@ -6,7 +6,7 @@ Responsável pelo tratamento: Clube Fluvial de Coimbra (CFC), NIPC 502 440 597
 Morada: Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra
 Contacto atual: `cfluvialcoimbra@gmail.com`
 
-Este diretório reúne os textos que permitem à Direção deliberar um conjunto coerente para o MyCFC. Nenhum texto deve ser apresentado como aprovado antes de serem preenchidas e assinadas as decisões do [registo de adoção](adocao-e-governacao.md).
+Este diretório reúne os textos que permitem à Direção deliberar um conjunto coerente para o MyCFCoimbra. Nenhum texto deve ser apresentado como aprovado antes de serem preenchidas e assinadas as decisões do [registo de adoção](adocao-e-governacao.md).
 
 A pesquisa legal, exemplos comparados e correspondência com os issues estão resumidos em [Fundamentação e mapa dos issues](fundamentacao-e-mapa-issues.md).
 
@@ -15,10 +15,10 @@ A pesquisa legal, exemplos comparados e correspondência com os issues estão re
 | Documento | Rota pública proposta | Função |
 |---|---|---|
 | [Política de privacidade](politica-privacidade.md) | `/legal/privacidade` | Informação dos artigos 12.º–14.º do RGPD |
-| [Termos gerais de utilização](termos-gerais.md) | `/legal/termos-gerais` | Regras de acesso e utilização do MyCFC |
+| [Termos gerais de utilização](termos-gerais.md) | `/legal/termos-gerais` | Regras de acesso e utilização do MyCFCoimbra |
 | [Política de cookies](politica-cookies.md) | `/legal/cookies` | Informação sobre armazenamento estritamente necessário |
 | [Autorização de utilização de imagem](autorizacao-imagem.md) | `/legal/uso-imagem` | Consentimento autónomo, específico e revogável |
-| [Declaração de responsabilidade por menor](responsabilidade-menor.md) | `/legal/responsabilidade-menor` | Legitimidade e deveres do representante; não é renúncia de responsabilidade |
+| [Declaração de responsabilidade por menor](responsabilidade-menor.md) | `/legal/responsabilidade-menor` | Documento contextual da inscrição de menor: legitimidade e deveres do representante; não é renúncia de responsabilidade |
 | [Exercer direitos](exercicio-direitos.md) | `/legal/direitos` | Canal e procedimento dos direitos RGPD |
 | [Informação para atletas menores](privacidade-menores.md) | `/legal/privacidade-menores` | Explicação clara e adequada à idade |
 
@@ -34,12 +34,13 @@ A pesquisa legal, exemplos comparados e correspondência com os issues estão re
 
 ## Decisões estruturais propostas
 
-1. O CFC aloja estes textos no próprio MyCFC, em páginas públicas e versionadas. Isto resolve a dependência de #109 e os três links sem destino de #218.
+1. O CFC aloja estes textos no próprio MyCFCoimbra, em páginas públicas e versionadas. Isto resolve a dependência de #109 e os três links sem destino de #218.
 2. A política de privacidade é informação, não um contrato: não se pede “aceitação”.
 3. A utilização promocional da imagem é opcional, granular e separada da inscrição. A recusa ou retirada não impede conta, filiação ou treino.
-4. Os dados de saúde são recolhidos apenas quando necessários à segurança e prática desportiva, com acesso fortemente limitado. A Direção deve validar, com apoio jurídico, o fundamento do artigo 9.º aplicável a cada fluxo.
-5. Não se instala um banner enquanto existirem apenas cookies/sessões tecnicamente necessários. Qualquer medição, marketing ou conteúdo incorporado opcional exige nova avaliação e escolha real antes de ser carregado.
-6. Os prazos da matriz são propostas conservadoras. A Direção e a contabilidade devem confirmar obrigações fiscais, federativas, laborais, seguradoras e de defesa de direitos antes da adoção.
+4. A declaração de responsabilidade por menor mantém uma página pública versionada para consulta e prova do texto aceite, mas é apresentada no contexto da ficha de inscrição do menor e não na navegação jurídica geral.
+5. Os dados de saúde são recolhidos apenas quando necessários à segurança e prática desportiva, com acesso fortemente limitado. A Direção deve validar, com apoio jurídico, o fundamento do artigo 9.º aplicável a cada fluxo.
+6. Não se instala um banner enquanto existirem apenas cookies/sessões tecnicamente necessários. Qualquer medição, marketing ou conteúdo incorporado opcional exige nova avaliação e escolha real antes de ser carregado.
+7. Os prazos da matriz são propostas conservadoras. A Direção e a contabilidade devem confirmar obrigações fiscais, federativas, laborais, seguradoras e de defesa de direitos antes da adoção.
 
 ## Fontes principais
 

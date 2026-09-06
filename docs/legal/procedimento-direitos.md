@@ -4,7 +4,7 @@ Estado: proposta `2026-09-04`. Acesso interno restrito.
 
 ## Receção e identidade
 
-1. Aceitar pedidos pelo MyCFC, email ou carta e não obrigar ao canal original.
+1. Aceitar pedidos pelo MyCFCoimbra, email ou carta e não obrigar ao canal original.
 2. Registar data, referência opaca, titular, requerente, direito e âmbito estruturado; não copiar dados médicos nem texto livre para logs/auditoria.
 3. Confirmar identidade através de sessão com autenticação recente ou informação mínima. Pedir documento adicional só perante dúvida razoável, ocultando dados não necessários e apagando a cópia após verificação.
 4. Para menor, confirmar responsabilidades parentais no momento, ouvir o menor conforme idade/maturidade e suspender divulgação perante conflito. Nunca aceitar o ID enviado pelo navegador como prova de relação.
