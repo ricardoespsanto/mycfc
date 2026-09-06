@@ -108,6 +108,8 @@ const (
 	ConsentTypeTermosGerais          ConsentType = "Termos_Gerais"
 	ConsentTypeUsoImagem             ConsentType = "Uso_Imagem"
 	ConsentTypeResponsabilidadeMenor ConsentType = "Responsabilidade_Menor"
+	ConsentTypeDadosSaude            ConsentType = "Dados_Saude"
+	ConsentTypeFotoPerfil            ConsentType = "Foto_Perfil"
 )
 
 func (e *ConsentType) Scan(src interface{}) error {

@@ -13,7 +13,7 @@ import (
 type System struct{ PageMeta components.PageMeta }
 
 func (h System) NotFound(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, http.StatusNotFound, "Página indisponível", "Página não encontrada", "Verifique o endereço ou regresse ao início do MyCFC.", "")
+	h.render(w, r, http.StatusNotFound, "Página indisponível", "Página não encontrada", "Verifique o endereço ou regresse ao início do MyCFCoimbra.", "")
 }
 
 func (h System) Forbidden(w http.ResponseWriter, r *http.Request) {
@@ -34,11 +34,11 @@ func (h System) NotImplemented(w http.ResponseWriter, r *http.Request) {
 
 func (h System) render(w http.ResponseWriter, r *http.Request, status int, eyebrow, title, message, requestID string) {
 	meta := h.PageMeta
-	meta.Title = title + " | MyCFC"
+	meta.Title = title + " | MyCFCoimbra"
 	// A failed or denied target must not activate route-derived navigation (for
 	// example, the administration sub-navigation for a non-administrator).
 	meta.CurrentPath = "/system"
-	meta.AreaLabel = "MyCFC"
+	meta.AreaLabel = "MyCFCoimbra"
 	meta.PageLabel = title
 	if user, ok := CurrentUserFromContext(r.Context()); ok {
 		meta.CurrentUserName = user.Name

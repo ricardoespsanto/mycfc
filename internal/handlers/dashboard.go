@@ -247,7 +247,7 @@ func (h Dashboard) Today(w http.ResponseWriter, r *http.Request) {
 		page.Success = h.Sessions.PopString(r.Context(), "leaderboard_flash")
 	}
 	page.Meta = h.PageMeta
-	page.Meta.Title = "Hoje | MyCFC"
+	page.Meta.Title = "Hoje | MyCFCoimbra"
 	page.Meta.CurrentPath = "/today"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()
@@ -555,7 +555,7 @@ func (h Dashboard) renderMaintenanceCompletionPage(w http.ResponseWriter, r *htt
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Concluir manutenção | MyCFC"
+	meta.Title = "Concluir manutenção | MyCFCoimbra"
 	meta.CurrentPath = r.URL.Path
 	meta.PageLabel = "Concluir manutenção"
 	meta.CurrentUserName = user.Name
@@ -628,7 +628,7 @@ func (h Dashboard) renderFleet(w http.ResponseWriter, r *http.Request, status in
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	page.Meta = h.PageMeta
-	page.Meta.Title = "Frota | MyCFC"
+	page.Meta.Title = "Frota | MyCFCoimbra"
 	page.Meta.CurrentPath = "/admin/fleet"
 	page.Meta.CurrentUserName = user.Name
 	page.Meta.CurrentUserID = user.ID.String()
@@ -876,7 +876,7 @@ func validRepairImageContentType(contentType string) bool {
 func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro, emptyText, path string, agenda []DashboardAgendaItemVM, sections []DashboardSectionVM) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = heading + " | MyCFC"
+	meta.Title = heading + " | MyCFCoimbra"
 	meta.CurrentPath = path
 	meta.CurrentUserName = user.Name
 	meta.CurrentUserID = user.ID.String()
@@ -903,7 +903,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
-	meta.Title = "Menores a cargo | MyCFC"
+	meta.Title = "Menores a cargo | MyCFCoimbra"
 	meta.PageLabel = "Menores a cargo"
 	meta.CurrentPath = "/dashboard/guardian"
 	meta.CurrentUserName = user.Name

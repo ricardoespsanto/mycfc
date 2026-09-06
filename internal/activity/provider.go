@@ -1,6 +1,6 @@
 // Package activity defines the provider-neutral boundary for wearable activity
 // integrations. Provider implementations translate their APIs into these types;
-// persistence and training-session matching remain owned by MyCFC.
+// persistence and training-session matching remain owned by MyCFCoimbra.
 package activity
 
 import (

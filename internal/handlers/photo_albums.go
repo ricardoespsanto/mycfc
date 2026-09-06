@@ -195,7 +195,7 @@ func (h PhotoAlbums) renderArchivePage(w http.ResponseWriter, r *http.Request, s
 		status = http.StatusConflict
 	}
 	meta := h.meta(r, user, true)
-	meta.Title = "Arquivar álbum | MyCFC"
+	meta.Title = "Arquivar álbum | MyCFCoimbra"
 	meta.CurrentPath = r.URL.Path
 	meta.PageLabel = "Arquivar álbum"
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Gerir álbuns", Path: h.collectionReturn(r)}}
@@ -262,7 +262,7 @@ func (h PhotoAlbums) renderDetail(w http.ResponseWriter, r *http.Request, status
 	}
 	management := strings.HasPrefix(r.URL.Path, "/admin/") && privileged
 	meta := h.meta(r, user, management)
-	meta.Title = row.Title + " | MyCFC"
+	meta.Title = row.Title + " | MyCFCoimbra"
 	meta.CurrentPath = r.URL.Path
 	meta.PageLabel = row.Title
 	breadcrumb := components.NavigationItem{Label: "Álbuns", Path: "/albuns"}
@@ -307,11 +307,11 @@ func (h PhotoAlbums) albumItem(id uuid.UUID, title, description, status, program
 
 func (h PhotoAlbums) meta(r *http.Request, user CurrentUser, management bool) components.PageMeta {
 	meta := h.PageMeta
-	meta.Title = "Álbuns privados | MyCFC"
+	meta.Title = "Álbuns privados | MyCFCoimbra"
 	meta.CurrentPath = "/albuns"
 	meta.AreaLabel = "Atividade"
 	if management {
-		meta.Title = "Gerir álbuns | MyCFC"
+		meta.Title = "Gerir álbuns | MyCFCoimbra"
 		meta.CurrentPath = "/admin/albuns"
 		meta.AreaLabel = "Moderação"
 		meta.PageLabel = "Gerir álbuns"

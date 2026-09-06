@@ -26,7 +26,7 @@ import (
 func TestProfileAuthorizationBoundaries(t *testing.T) {
 	adultID, dependentID, guardianID := uuid.New(), uuid.New(), uuid.New()
 	adult := dbgen.GetMemberProfileRow{ID: adultID, IsActive: true}
-	dependent := dbgen.GetMemberProfileRow{ID: dependentID, GuardianID: &guardianID, IsDependent: true, IsActive: true}
+	dependent := dbgen.GetMemberProfileRow{ID: dependentID, GuardianID: &guardianID, IsDependent: true, IsActive: true, DateOfBirth: pgtype.Date{Time: time.Now().AddDate(-10, 0, 0), Valid: true}}
 	if !canViewProfile(adult, adultID, false) || !canEditProfile(adult, adultID, false) {
 		t.Fatal("adult cannot manage own profile")
 	}
@@ -39,6 +39,11 @@ func TestProfileAuthorizationBoundaries(t *testing.T) {
 	if canViewProfile(dependent, uuid.New(), false) || canEditProfile(dependent, uuid.New(), false) {
 		t.Fatal("unrelated account can access dependent profile")
 	}
+	dependent.DateOfBirth = pgtype.Date{Time: time.Now().AddDate(-18, 0, -1), Valid: true}
+	if canViewProfile(dependent, guardianID, false) || canEditProfile(dependent, guardianID, false) {
+		t.Fatal("guardian retains access after the dependant reaches adulthood")
+	}
+	dependent.DateOfBirth = pgtype.Date{Time: time.Now().AddDate(-10, 0, 0), Valid: true}
 	dependent.IsActive = false
 	if canViewProfile(dependent, guardianID, false) || canEditProfile(dependent, guardianID, false) {
 		t.Fatal("inactive dependent is exposed to non-admin")
@@ -54,16 +59,16 @@ func TestPostgresProfileStoreSavePhotoCreatesConsentAndAuditsReplacement(t *test
 	oldKey := "profiles/old.png"
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, oldPhotoKey: &oldKey}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
-	old, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: actorID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true, UserAgent: "MyCFC test"})
+	old, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: actorID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true, UserAgent: "MyCFCoimbra test"})
 
 	if err != nil || old == nil || *old != oldKey || !tx.committed {
 		t.Fatalf("old=%v error=%v committed=%t", old, err, tx.committed)
 	}
-	if len(tx.execCalls) != 1 || len(tx.queryCalls) != 5 {
+	if len(tx.execCalls) != 1 || len(tx.queryCalls) != 4 {
 		t.Fatalf("exec=%#v query=%#v", tx.execCalls, tx.queryCalls)
 	}
 	consentArgs := tx.argsFor("CreateConsentForm")
-	if len(consentArgs) != 7 || consentArgs[0] != subjectID || consentArgs[2] != "Uso_Imagem" || consentArgs[3] != "2026-09" || consentArgs[4] != "digest" {
+	if len(consentArgs) != 7 || consentArgs[0] != subjectID || consentArgs[2] != "Foto_Perfil" || consentArgs[3] != "2026-09" || consentArgs[4] != "digest" {
 		t.Fatalf("consent args=%#v", consentArgs)
 	}
 	photoArgs := tx.argsFor("UpdateMemberProfilePhoto")
@@ -86,7 +91,7 @@ func TestPostgresProfileStoreSavePhotoRequiresCurrentConsentBeforeWrite(t *testi
 	tx := &profileTransactionFake{subjectID: subjectID}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
 	_, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest"})
-	if !errors.Is(err, ErrConsentRequired) || tx.committed || len(tx.queryCalls) != 2 {
+	if !errors.Is(err, ErrConsentRequired) || tx.committed || len(tx.queryCalls) != 1 {
 		t.Fatalf("error=%v committed=%t query=%#v", err, tx.committed, tx.queryCalls)
 	}
 }
@@ -101,17 +106,17 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 
 	writeErr := errors.New("photo update unavailable")
 	tx := &profileTransactionFake{subjectID: subjectID, currentConsent: true, queryErrs: map[string]error{"UpdateMemberProfilePhoto": writeErr}}
-	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest"})
+	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
 	if !errors.Is(err, writeErr) || tx.committed || tx.argsFor("CreateMemberProfileAudit") != nil {
 		t.Fatalf("SavePhoto error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 	}
 }
 
-func TestPostgresProfileStoreSavePhotoReusesCurrentConsent(t *testing.T) {
+func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *testing.T) {
 	subjectID, consentID := uuid.New(), uuid.New()
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, currentConsent: true}
-	_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/current-consent.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest"})
-	if err != nil || !tx.committed || tx.argsFor("CreateConsentForm") != nil {
+	_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/current-consent.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
+	if err != nil || !tx.committed || tx.argsFor("CreateConsentForm") == nil {
 		t.Fatalf("error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 	}
 	photoArgs := tx.argsFor("UpdateMemberProfilePhoto")
@@ -192,6 +197,41 @@ func TestPostgresProfileStoreUpdateProtectsNonAdminIdentityAndAuditsProfile(t *t
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
 	if len(auditArgs) != 4 || auditArgs[2] != "PROFILE_UPDATED" {
 		t.Fatalf("audit args=%#v", auditArgs)
+	}
+}
+
+func TestPostgresProfileStoreRequiresAndRecordsExplicitHealthConsent(t *testing.T) {
+	subjectID := uuid.New()
+	profile := dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen"}
+	input := ProfileUpdate{ActorID: subjectID, SubjectID: subjectID, Profile: profile, ChangedFields: []string{"medical_declaration", "allergies"}, HealthVersion: "2026-09-06", HealthSHA256: "privacy-digest"}
+
+	tx := &profileTransactionFake{subjectID: subjectID}
+	err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), input)
+	if !errors.Is(err, ErrHealthConsentRequired) || tx.committed || tx.argsFor("UpdateMemberProfile") != nil {
+		t.Fatalf("without consent: error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
+	}
+
+	tx = &profileTransactionFake{subjectID: subjectID, consentID: uuid.New()}
+	input.AcceptHealthConsent = true
+	err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), input)
+	if err != nil || !tx.committed {
+		t.Fatalf("with consent: error=%v committed=%t", err, tx.committed)
+	}
+	args := tx.argsFor("CreateConsentForm")
+	if len(args) != 7 || args[0] != subjectID || args[2] != "Dados_Saude" || args[3] != "2026-09-06" || args[4] != "privacy-digest" {
+		t.Fatalf("health consent args=%#v", args)
+	}
+}
+
+func TestHealthDataExpansionIncludesNegativeDeclarationAndAllowsMinimization(t *testing.T) {
+	current := dbgen.GetMemberProfileRow{MedicalDeclaration: "UNKNOWN"}
+	if !healthDataExpanded(current, dbgen.UpdateMemberProfileParams{MedicalDeclaration: "NONE_KNOWN"}) {
+		t.Fatal("negative medical-status assertion bypassed explicit consent")
+	}
+	current = dbgen.GetMemberProfileRow{MedicalDeclaration: "PROVIDED", Allergies: "Pólen", MedicalNotes: "Nota antiga"}
+	next := dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen"}
+	if healthDataExpanded(current, next) {
+		t.Fatal("removing health information was treated as an expansion")
 	}
 }
 
@@ -397,6 +437,7 @@ type profileTransactionFake struct {
 	oldPhotoKey    *string
 	email          *string
 	currentConsent bool
+	healthConsent  bool
 	queryErrs      map[string]error
 	execCalls      []profileSQLCall
 	queryCalls     []profileSQLCall
@@ -405,7 +446,7 @@ type profileTransactionFake struct {
 
 func (tx *profileTransactionFake) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
 	tx.queryCalls = append(tx.queryCalls, profileSQLCall{query: query, args: args})
-	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, email: tx.email, currentConsent: tx.currentConsent}
+	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent}
 	for name, err := range tx.queryErrs {
 		if strings.Contains(query, name) {
 			row.err = err
@@ -436,6 +477,7 @@ type profileTransactionRow struct {
 	oldPhotoKey    *string
 	email          *string
 	currentConsent bool
+	healthConsent  bool
 	err            error
 }
 
@@ -444,6 +486,8 @@ func (row profileTransactionRow) Scan(dest ...any) error {
 		return row.err
 	}
 	switch {
+	case strings.Contains(row.query, "HasConsentVersion"):
+		*dest[0].(*bool) = row.healthConsent
 	case strings.Contains(row.query, "GetCurrentImageConsent"):
 		if row.currentConsent {
 			*dest[0].(*uuid.UUID) = row.consentID
@@ -655,7 +699,7 @@ func TestProfileGetAndPostRenderAndPersistOwnProfile(t *testing.T) {
 	get = get.WithContext(context.WithValue(get.Context(), currentUserKey{}, actor))
 	getResponse := httptest.NewRecorder()
 	h.Get(getResponse, get)
-	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), "Perfil de Ana Silva") {
+	if getResponse.Code != http.StatusOK || getResponse.Header().Get("Cache-Control") != "private, no-store" || getResponse.Header().Get("Pragma") != "no-cache" || !strings.Contains(getResponse.Body.String(), "Perfil de Ana Silva") {
 		t.Fatalf("GET response = %d, body=%s", getResponse.Code, getResponse.Body.String())
 	}
 

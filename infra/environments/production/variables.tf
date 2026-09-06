@@ -72,6 +72,9 @@ variable "image_digest" { type = string }
 variable "consent_terms_url" { type = string }
 variable "consent_image_url" { type = string }
 variable "consent_minor_url" { type = string }
+variable "privacy_notice_url" { type = string }
+variable "cookie_notice_url" { type = string }
+variable "data_rights_contact" { type = string }
 variable "image_git_sha" { type = string }
 variable "database_host" {
   type    = string
@@ -270,7 +273,7 @@ check "production_input_validation" {
     error_message = "Image digest, VPC CIDR, Fargate sizing, or database connection budget is invalid."
   }
   assert {
-    condition     = can(regex("^[0-9a-f]{40}$", var.image_git_sha)) && alltrue([for value in [var.consent_terms_url, var.consent_image_url, var.consent_minor_url] : can(regex("^https://", value))])
+    condition     = can(regex("^[0-9a-f]{40}$", var.image_git_sha)) && alltrue([for value in [var.consent_terms_url, var.consent_image_url, var.consent_minor_url, var.privacy_notice_url, var.cookie_notice_url] : can(regex("^https://", value))]) && can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.data_rights_contact))
     error_message = "Image Git SHA and consent document URLs are invalid."
   }
   assert {

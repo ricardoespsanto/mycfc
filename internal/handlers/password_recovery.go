@@ -168,7 +168,7 @@ func (h PasswordRecovery) observe(event, outcome string) {
 func (h PasswordRecovery) renderRequest(w http.ResponseWriter, r *http.Request, status int) {
 	h.recoveryHeaders(w, false)
 	meta := h.PageMeta
-	meta.Title = "Recuperar palavra-passe | MyCFC"
+	meta.Title = "Recuperar palavra-passe | MyCFCoimbra"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.PasswordRecoveryRequest(pages.PasswordRecoveryRequestPage{Meta: meta, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
@@ -177,7 +177,7 @@ func (h PasswordRecovery) renderRequest(w http.ResponseWriter, r *http.Request, 
 func (h PasswordRecovery) renderConfirmation(w http.ResponseWriter, r *http.Request) {
 	h.recoveryHeaders(w, false)
 	meta := h.PageMeta
-	meta.Title = "Pedido recebido | MyCFC"
+	meta.Title = "Pedido recebido | MyCFCoimbra"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = pages.PasswordRecoveryConfirmation(pages.PasswordRecoveryConfirmationPage{Meta: meta}).Render(r.Context(), w)
@@ -187,7 +187,7 @@ func (h PasswordRecovery) renderReset(w http.ResponseWriter, r *http.Request, st
 	h.recoveryHeaders(w, false)
 	w.Header().Set("Referrer-Policy", "same-origin")
 	meta := h.PageMeta
-	meta.Title = "Definir nova palavra-passe | MyCFC"
+	meta.Title = "Definir nova palavra-passe | MyCFCoimbra"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.PasswordRecoveryReset(pages.PasswordRecoveryResetPage{Meta: meta, Token: token, Errors: errorsByField, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}).Render(r.Context(), w)
@@ -196,7 +196,7 @@ func (h PasswordRecovery) renderReset(w http.ResponseWriter, r *http.Request, st
 func (h PasswordRecovery) renderInvalidLink(w http.ResponseWriter, r *http.Request) {
 	h.recoveryHeaders(w, true)
 	meta := h.PageMeta
-	meta.Title = "Link de recuperação indisponível | MyCFC"
+	meta.Title = "Link de recuperação indisponível | MyCFCoimbra"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusUnprocessableEntity)
 	_ = pages.PasswordRecoveryInvalid(pages.PasswordRecoveryInvalidPage{Meta: meta}).Render(r.Context(), w)

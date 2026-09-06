@@ -12,13 +12,14 @@ type ProfileForm struct {
 	CountryCode, NationalityCode, ClubMemberNumber, FederationLicenceNumber string
 	EmergencyName, EmergencyRelationship, EmergencyPhone, EmergencyAlternatePhone string
 	MedicalDeclaration, Allergies, MedicalConditions, Medication, ActivityRestrictions, MedicalNotes string
+	HealthConsentAccepted bool
 	ProfileUpdatedAt, IdentityUpdatedAt string
 	Errors validation.FieldErrors
 }
 
 type ProfilePage struct {
 	Meta components.PageMeta
-	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ActionPath, ReturnURL, ImageConsentURL string
+	SubjectID, Name, Email, LoginID, DateOfBirth, PhotoURL, BasePath, ActionPath, ReturnURL, ImageConsentURL, HealthConsentURL, HealthConsentStatement string
 	FPCNationalHistoryURL, FPCInternationalHistoryURL string
 	Dependent, Active, Editable, Admin, Self, Complete, HasPhoto, PhotoVisible, EmailVerified bool
 	Form ProfileForm
@@ -57,7 +58,7 @@ templ profileContent(page ProfilePage) {
 		}
 		if page.Self && !page.Dependent && !page.EmailVerified {
 			<section class="email-verification-status" aria-labelledby="email-verification-status-title">
-				<div><p class="eyebrow">Email por verificar</p><h2 id="email-verification-status-title">Confirme { page.Email }</h2><p>Enviámos um link de confirmação válido durante 24 horas. Pode continuar a usar todas as áreas do MyCFC.</p></div>
+				<div><p class="eyebrow">Email por verificar</p><h2 id="email-verification-status-title">Confirme { page.Email }</h2><p>Enviámos um link de confirmação válido durante 24 horas. Pode continuar a usar todas as áreas do MyCFCoimbra.</p></div>
 				<form method="post" action="/perfil/email-verificacao/reenviar">@page.Meta.CSRFField<button class="action action--secondary" type="submit">Reenviar link</button></form>
 			</section>
 		}
@@ -129,20 +130,29 @@ templ profileEditForm(page ProfilePage) {
 			<div class="form-field">@components.FieldLabel("profile-country", "País", false)@countrySelect("profile-country", "country_code", page.Form.CountryCode)</div>
 			<div class="form-field">@components.FieldLabel("profile-nationality", "Nacionalidade", false)@countrySelect("profile-nationality", "nationality_code", page.Form.NationalityCode)</div>
 		</fieldset>
-		<fieldset><legend>Contacto de emergência</legend><p>Deixe todos os campos vazios ou preencha, pelo menos, nome, relação e telefone principal.</p>
+		<fieldset><legend>Contacto de emergência</legend><p>Deixe todos os campos vazios ou preencha, pelo menos, nome, relação e telefone principal. Consulte a <a href="/legal/privacidade">Política de privacidade</a>.</p>
 			@components.FieldErrorMessage("emergency_contact", page.Form.Errors["emergency_contact"])
 			<div class="form-field">@components.FieldLabel("profile-emergency-name", "Nome", false)<input id="profile-emergency-name" name="emergency_contact_name" value={ page.Form.EmergencyName } maxlength="120"/></div>
 			<div class="form-field">@components.FieldLabel("profile-emergency-relationship", "Relação", false)<input id="profile-emergency-relationship" name="emergency_contact_relationship" value={ page.Form.EmergencyRelationship } maxlength="80"/></div>
 			<div class="form-field">@components.FieldLabel("profile-emergency-phone", "Telefone principal", false)<input id="profile-emergency-phone" name="emergency_contact_phone" type="tel" inputmode="tel" value={ page.Form.EmergencyPhone } maxlength="32" pattern="[+]?[0-9][0-9 ().-]*[0-9]" title="Introduza entre 7 e 15 algarismos, com indicativo opcional." aria-describedby="profile-emergency-phone-hint" aria-invalid?={ page.Form.Errors["emergency_contact_phone"] != "" }/><p id="profile-emergency-phone-hint" class="field-hint">Formato nacional ou internacional.</p>@components.FieldErrorMessage("emergency_contact_phone", page.Form.Errors["emergency_contact_phone"])</div>
 			<div class="form-field">@components.FieldLabel("profile-emergency-alt", "Telefone alternativo", false)<input id="profile-emergency-alt" name="emergency_contact_alternate_phone" type="tel" inputmode="tel" value={ page.Form.EmergencyAlternatePhone } maxlength="32" pattern="[+]?[0-9][0-9 ().-]*[0-9]" title="Introduza entre 7 e 15 algarismos, com indicativo opcional." aria-describedby="profile-emergency-alt-hint" aria-invalid?={ page.Form.Errors["emergency_contact_alternate_phone"] != "" }/><p id="profile-emergency-alt-hint" class="field-hint">Formato nacional ou internacional.</p>@components.FieldErrorMessage("emergency_contact_alternate_phone", page.Form.Errors["emergency_contact_alternate_phone"])</div>
 		</fieldset>
-		<fieldset><legend>Informação médica relevante</legend><p>Registe apenas informação necessária à participação segura nas atividades.</p>
-			<div class="form-field">@components.FieldLabel("profile-medical-declaration", "Declaração", true)<select id="profile-medical-declaration" name="medical_declaration" required aria-invalid?={ page.Form.Errors["medical_declaration"] != "" }><option value="UNKNOWN" selected?={ page.Form.MedicalDeclaration == "UNKNOWN" }>Ainda não indicada</option><option value="NONE_KNOWN" selected?={ page.Form.MedicalDeclaration == "NONE_KNOWN" }>Sem informação médica conhecida</option><option value="PROVIDED" selected?={ page.Form.MedicalDeclaration == "PROVIDED" }>Existe informação relevante</option></select>@components.FieldErrorMessage("medical_declaration", page.Form.Errors["medical_declaration"])</div>
-			@profileTextarea("profile-allergies", "allergies", "Alergias", page.Form.Allergies)
-			@profileTextarea("profile-conditions", "medical_conditions", "Condições médicas", page.Form.MedicalConditions)
-			@profileTextarea("profile-medication", "medication", "Medicação", page.Form.Medication)
-			@profileTextarea("profile-restrictions", "activity_restrictions", "Restrições ou adaptações", page.Form.ActivityRestrictions)
-			@profileTextarea("profile-medical-notes", "medical_notes", "Outras notas relevantes", page.Form.MedicalNotes)
+		<fieldset><legend>Informação médica relevante</legend><p>Estes campos são facultativos. Registe apenas informação necessária à participação segura nas atividades. Consulte a <a href={ templ.SafeURL(page.HealthConsentURL) }>Política de privacidade</a>.</p>
+			if page.Self || page.Admin {
+				<div class="form-field">@components.FieldLabel("profile-medical-declaration", "Declaração", true)<select id="profile-medical-declaration" name="medical_declaration" required aria-invalid?={ page.Form.Errors["medical_declaration"] != "" }><option value="UNKNOWN" selected?={ page.Form.MedicalDeclaration == "UNKNOWN" }>Ainda não indicada</option><option value="NONE_KNOWN" selected?={ page.Form.MedicalDeclaration == "NONE_KNOWN" }>Sem informação médica conhecida</option><option value="PROVIDED" selected?={ page.Form.MedicalDeclaration == "PROVIDED" }>Existe informação relevante</option></select>@components.FieldErrorMessage("medical_declaration", page.Form.Errors["medical_declaration"])</div>
+				@profileTextarea("profile-allergies", "allergies", "Alergias", page.Form.Allergies)
+				@profileTextarea("profile-conditions", "medical_conditions", "Condições médicas", page.Form.MedicalConditions)
+				@profileTextarea("profile-medication", "medication", "Medicação", page.Form.Medication)
+				@profileTextarea("profile-restrictions", "activity_restrictions", "Restrições ou adaptações", page.Form.ActivityRestrictions)
+				@profileTextarea("profile-medical-notes", "medical_notes", "Outras notas relevantes", page.Form.MedicalNotes)
+				if page.Self && !page.Admin {
+					<label class="consent-field" for="accept_health_data"><input id="accept_health_data" name="accept_health_data" type="checkbox" checked?={ page.Form.HealthConsentAccepted } aria-invalid={ ariaBoolean(page.Form.Errors["accept_health_data"] != "") } aria-describedby="accept_health_data-error"/> { page.HealthConsentStatement }</label>@components.FieldErrorMessage("accept_health_data", page.Form.Errors["accept_health_data"])
+				} else {
+					<p class="field-hint">Um administrador pode apenas reduzir ou eliminar informação existente; não pode prestar consentimento nem acrescentar informação médica.</p>
+				}
+			} else {
+				<p class="field-hint">A informação médica não é disponibilizada à conta responsável associada enquanto a legitimidade específica não estiver verificada.</p>
+			}
 		</fieldset>
 		@components.FormActions(page.ActionPath) { <button type="submit">Guardar perfil</button> }
 	</form>
@@ -173,17 +183,17 @@ templ profileReadOnly(page ProfilePage) {
 }
 
 templ profilePhoto(page ProfilePage) {
-	<section class="module"><h2>Fotografia de perfil</h2><p>A fotografia é privada e só fica visível com o consentimento de uso de imagem atual.</p>
+	<section class="module"><h2>Fotografia de perfil</h2><p>A fotografia é facultativa, privada e só fica visível com o consentimento de uso de imagem atual. Consulte também a <a href="/legal/privacidade">Política de privacidade</a>.</p>
 		@components.FieldErrorMessage("photo", page.Form.Errors["photo"])
-		<form class="form-layout" method="post" action={ profileSubpath(page, "/fotografia") } enctype="multipart/form-data">@page.Meta.CSRFField
-			@components.FieldLabel("profile-photo", "Fotografia JPEG, PNG ou WebP", true)<input id="profile-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-invalid?={ page.Form.Errors["photo"] != "" }/>
-			if !page.Admin {
-				<label class="consent-field"><input name="accept_image_use" type="checkbox" value="yes"/> Confirmo o <a href={ templ.SafeURL(page.ImageConsentURL) } target="_blank" rel="noopener">consentimento de uso de imagem</a> atual para esta pessoa.</label>
-			} else {
-				<p>Um administrador só pode carregar a fotografia quando o próprio adulto ou tutor já tiver aceite o consentimento atual.</p>
-			}
-			<button type="submit">{ photoButtonLabel(page.HasPhoto) }</button>
-		</form>
+		if page.Self && !page.Admin {
+			<form class="form-layout" method="post" action={ profileSubpath(page, "/fotografia") } enctype="multipart/form-data">@page.Meta.CSRFField
+				@components.FieldLabel("profile-photo", "Fotografia JPEG, PNG ou WebP", true)<input id="profile-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required aria-invalid?={ page.Form.Errors["photo"] != "" }/>
+				<label class="consent-field"><input name="accept_image_use" type="checkbox" value="yes"/> Autorizo a utilização desta fotografia apenas como fotografia de perfil privada no MyCFCoimbra, nos termos da <a href={ templ.SafeURL(page.ImageConsentURL) }>autorização de imagem</a>.</label>
+				<button type="submit">{ photoButtonLabel(page.HasPhoto) }</button>
+			</form>
+		} else {
+			<p>O carregamento exige uma autorização prestada pelo próprio titular adulto. Um administrador ou responsável associado não pode prestá-la neste fluxo enquanto a legitimidade específica não estiver verificada.</p>
+		}
 		if page.HasPhoto {
 			<a class="action action--danger" href={ templ.SafeURL(profileSubpath(page, "/fotografia/remover")) }>Remover fotografia</a>
 		}
@@ -211,4 +221,4 @@ func profileAddress(form ProfileForm) string { return strings.Trim(strings.Join(
 func profileEmergency(form ProfileForm) string { if form.EmergencyName=="" {return ""}; return form.EmergencyName+" · "+form.EmergencyRelationship+" · "+form.EmergencyPhone }
 func photoButtonLabel(hasPhoto bool) string { if hasPhoto {return "Substituir fotografia"}; return "Carregar fotografia" }
 func profileSubpath(page ProfilePage, suffix string) string { return strings.Replace(page.ActionPath, page.BasePath, page.BasePath+suffix, 1) }
-func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"federation_licence_number",Field:"profile-federation-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"}} }
+func profileErrorFields() []components.FieldErrorRef { return []components.FieldErrorRef{{Key:"form",Field:"profile-phone"},{Key:"name",Field:"profile-name"},{Key:"email",Field:"profile-email"},{Key:"date_of_birth",Field:"profile-birth"},{Key:"phone",Field:"profile-phone"},{Key:"country_code",Field:"profile-country"},{Key:"nationality_code",Field:"profile-nationality"},{Key:"official_identifiers",Field:"profile-club-number"},{Key:"federation_licence_number",Field:"profile-federation-number"},{Key:"emergency_contact",Field:"profile-emergency-name"},{Key:"emergency_contact_phone",Field:"profile-emergency-phone"},{Key:"emergency_contact_alternate_phone",Field:"profile-emergency-alt"},{Key:"medical_declaration",Field:"profile-medical-declaration"},{Key:"accept_health_data",Field:"accept_health_data"}} }

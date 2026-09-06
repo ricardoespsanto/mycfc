@@ -36,5 +36,6 @@ SELECT EXISTS (
     WHERE user_id = sqlc.arg(user_id)
       AND consent_type = sqlc.arg(consent_type)
       AND document_version = sqlc.arg(document_version)
+      AND document_sha256 = sqlc.arg(document_sha256)
       AND is_accepted = true
 )::boolean;

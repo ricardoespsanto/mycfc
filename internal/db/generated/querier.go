@@ -113,7 +113,6 @@ type Querier interface {
 	GetAnnouncementAuthor(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetAnnouncementForStatus(ctx context.Context, id uuid.UUID) (GetAnnouncementForStatusRow, error)
 	GetBlockRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetBlockRoutineSourceRow, error)
-	GetCurrentImageConsent(ctx context.Context, arg GetCurrentImageConsentParams) (uuid.UUID, error)
 	GetCurrentSeason(ctx context.Context) (Season, error)
 	GetEmailVerificationToken(ctx context.Context, id uuid.UUID) (EmailVerificationToken, error)
 	GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment, error)

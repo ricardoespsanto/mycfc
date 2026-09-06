@@ -50,7 +50,7 @@ func TestSystemStateKeepsAuthenticatedContext(t *testing.T) {
 	response := httptest.NewRecorder()
 	System{}.NotFound(response, request)
 	body := response.Body.String()
-	for _, expected := range []string{"Beatriz Administradora", `aria-label="Contexto e navegação MyCFC"`, `href="/today"`, "Voltar a Hoje"} {
+	for _, expected := range []string{"Beatriz Administradora", `aria-label="Contexto e navegação MyCFCoimbra"`, `href="/today"`, "Voltar a Hoje"} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("body does not contain %q", expected)
 		}

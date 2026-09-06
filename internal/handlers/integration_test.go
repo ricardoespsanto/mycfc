@@ -29,7 +29,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
+func TestPostgresRegistrationStorePersistsRequiredTermsConsentAtomically(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)
 	store := PostgresRegistrationStore{Pool: pool}
@@ -42,7 +42,6 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 		Name: "Pessoa de integração", Email: email, PasswordHash: "hash",
 		DateOfBirth:  time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
 		TermsVersion: "test-v1", TermsSHA256: strings.Repeat("a", 64),
-		ImageVersion: "test-v1", ImageSHA256: strings.Repeat("b", 64),
 		IP: ptrAddr(netip.MustParseAddr("192.0.2.1")), UserAgent: "integration-test",
 	}
 	result, err := store.RegisterAdult(ctx, input)
@@ -60,8 +59,8 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(consents) != 2 {
-		t.Fatalf("consent count = %d, want 2", len(consents))
+	if len(consents) != 1 || consents[0].ConsentType != "Termos_Gerais" {
+		t.Fatalf("consents = %#v, want only required terms", consents)
 	}
 	for _, consent := range consents {
 		if consent.GrantedByUserID == nil || *consent.GrantedByUserID != user.ID || !consent.IsAccepted {
@@ -94,7 +93,7 @@ func TestPostgresRegistrationStorePersistsConsentsAtomically(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE email = $1`, rollbackEmail)
 	})
 	input.Email = rollbackEmail
-	input.ImageVersion = strings.Repeat("x", 41)
+	input.TermsVersion = strings.Repeat("x", 41)
 	if _, err := store.RegisterAdult(ctx, input); err == nil {
 		t.Fatal("RegisterAdult succeeded with an invalid consent version")
 	}
@@ -834,24 +833,68 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 	if _, err := store.View(ctx, unrelatedID, dependentID, false); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("unrelated view error = %v", err)
 	}
-	params := dbgen.UpdateMemberProfileParams{EmergencyContactName: "Responsável", EmergencyContactRelationship: "Tutor", EmergencyContactPhone: "+351 910 000 000", MedicalDeclaration: "NONE_KNOWN", ExpectedUpdatedAt: profile.UpdatedAt}
+	params := dbgen.UpdateMemberProfileParams{EmergencyContactName: "Responsável", EmergencyContactRelationship: "Tutor", EmergencyContactPhone: "+351 910 000 000", MedicalDeclaration: "UNKNOWN", ExpectedUpdatedAt: profile.UpdatedAt}
 	if err := store.Update(ctx, ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: params, ChangedFields: []string{"emergency_contact_name", "emergency_contact_relationship", "emergency_contact_phone", "medical_declaration"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: params}); !errors.Is(err, ErrProfileConflict) {
 		t.Fatalf("stale update error = %v", err)
 	}
-	consentVersion, consentSHA := "profile-v1", strings.Repeat("c", 64)
-	key := "profiles/integration/photo.png"
-	if _, err := store.SavePhoto(ctx, ProfilePhotoUpdate{ActorID: guardianID, SubjectID: dependentID, ObjectKey: key, ContentType: "image/png", Size: 128, ConsentVersion: consentVersion, ConsentSHA256: consentSHA, AcceptConsent: true, UserAgent: "integration-test"}); err != nil {
+	current, err := store.View(ctx, guardianID, dependentID, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	avatar, err := store.Avatar(ctx, dbgen.GetMemberAvatarParams{UserID: dependentID, DocumentVersion: consentVersion, DocumentSha256: consentSHA})
+	healthParams := dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen", MedicalNotes: "Levar medicação", ExpectedUpdatedAt: current.UpdatedAt}
+	healthUpdate := ProfileUpdate{ActorID: guardianID, SubjectID: dependentID, Profile: healthParams, ChangedFields: []string{"medical_declaration", "allergies", "medical_notes"}, HealthVersion: "health-v1", HealthSHA256: strings.Repeat("a", 64), AcceptHealthConsent: true}
+	if err := store.Update(ctx, healthUpdate); !errors.Is(err, ErrHealthConsentRequired) {
+		t.Fatalf("unverified guardian health consent error = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO member_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, guardianID); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.View(ctx, guardianID, guardianID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthParams.ExpectedUpdatedAt = current.UpdatedAt
+	healthUpdate = ProfileUpdate{ActorID: guardianID, SubjectID: guardianID, Profile: healthParams, ChangedFields: []string{"medical_declaration", "allergies", "medical_notes"}, HealthVersion: "health-v1", HealthSHA256: strings.Repeat("a", 64)}
+	if err := store.Update(ctx, healthUpdate); !errors.Is(err, ErrHealthConsentRequired) {
+		t.Fatalf("adult health update without consent error = %v", err)
+	}
+	healthUpdate.AcceptHealthConsent = true
+	if err := store.Update(ctx, healthUpdate); err != nil {
+		t.Fatalf("adult health update with consent: %v", err)
+	}
+	current, err = store.View(ctx, guardianID, guardianID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthParams = dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen e ácaros", MedicalNotes: "Levar medicação", ExpectedUpdatedAt: current.UpdatedAt}
+	if err := store.Update(ctx, ProfileUpdate{ActorID: guardianID, SubjectID: guardianID, Profile: healthParams, ChangedFields: []string{"allergies"}, HealthVersion: "health-v1", HealthSHA256: strings.Repeat("b", 64)}); !errors.Is(err, ErrHealthConsentRequired) {
+		t.Fatalf("health update with mismatched document hash error = %v", err)
+	}
+	healthParams.Allergies = "Pólen"
+	healthParams.MedicalNotes = ""
+	if err := store.Update(ctx, ProfileUpdate{ActorID: unrelatedID, SubjectID: guardianID, IsAdmin: true, Profile: healthParams, ChangedFields: []string{"medical_notes"}, HealthVersion: "health-v1", HealthSHA256: strings.Repeat("a", 64)}); err != nil {
+		t.Fatalf("administrator could not minimize legacy health data: %v", err)
+	}
+	consentVersion, consentSHA := "profile-v1", strings.Repeat("c", 64)
+	key := "profiles/integration/photo.png"
+	if _, err := store.SavePhoto(ctx, ProfilePhotoUpdate{ActorID: guardianID, SubjectID: guardianID, ObjectKey: key, ContentType: "image/png", Size: 128, ConsentVersion: consentVersion, ConsentSHA256: consentSHA, AcceptConsent: true, UserAgent: "integration-test"}); err != nil {
+		t.Fatal(err)
+	}
+	avatar, err := store.Avatar(ctx, dbgen.GetMemberAvatarParams{UserID: guardianID, DocumentVersion: consentVersion, DocumentSha256: consentSHA})
 	if err != nil || avatar.PhotoObjectKey == nil || *avatar.PhotoObjectKey != key || !avatar.ConsentCurrent {
 		t.Fatalf("avatar = %#v, err = %v", avatar, err)
 	}
-	if _, err := store.RemovePhoto(ctx, guardianID, dependentID, false); err != nil {
+	if _, err := store.RemovePhoto(ctx, guardianID, guardianID, false); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET date_of_birth = '2000-01-01' WHERE id = $1`, dependentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.View(ctx, guardianID, dependentID, false); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("guardian retained access to adult dependant: %v", err)
 	}
 	var actions []string
 	rows, err := pool.Query(ctx, `SELECT action FROM member_profile_audit_events WHERE subject_user_id = $1 ORDER BY occurred_at, id`, dependentID)
@@ -867,7 +910,7 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 		actions = append(actions, action)
 	}
 	joined := strings.Join(actions, ",")
-	for _, action := range []string{"SENSITIVE_VIEW", "PROFILE_UPDATED", "PHOTO_UPLOADED", "PHOTO_REMOVED"} {
+	for _, action := range []string{"SENSITIVE_VIEW", "PROFILE_UPDATED"} {
 		if !strings.Contains(joined, action) {
 			t.Fatalf("audit actions = %v, missing %s", actions, action)
 		}

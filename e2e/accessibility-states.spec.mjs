@@ -61,7 +61,15 @@ test.describe('representative page-state accessibility', () => {
 
   test('covers public empty and validation-error states', async ({ page }) => {
     test.setTimeout(120_000);
+	await page.setViewportSize({ width: 320, height: 720 });
+	await page.goto('/legal/privacidade');
+	await expect(page.getByRole('heading', { name: 'Política de privacidade do MyCFCoimbra', exact: true })).toBeVisible();
+	await expect(page.getByRole('navigation', { name: 'Informação jurídica e privacidade' })).toBeVisible();
+	await expectAccessiblePageState(page, 'GET /legal/privacidade mobile');
+	await page.setViewportSize({ width: 1280, height: 720 });
+	await expectAccessiblePageState(page, 'GET /legal/privacidade desktop');
     await page.goto('/login');
+	await expect(page.getByRole('navigation', { name: 'Informação jurídica e privacidade' })).toBeVisible();
     await expectAccessiblePageState(page, 'GET /login empty');
 
     await page.getByLabel('Correio eletrónico ou identificador CFC').fill('unknown@example.test');
@@ -77,7 +85,6 @@ test.describe('representative page-state accessibility', () => {
     await page.locator('#password').fill('short');
     await page.getByLabel('Confirmar palavra-passe').fill('different');
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await waitUntilRegistrationCanSubmit(page);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page.locator('.error-summary')).toBeFocused();
@@ -94,7 +101,6 @@ test.describe('representative page-state accessibility', () => {
     await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await waitUntilRegistrationCanSubmit(page);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page).toHaveURL('/today');

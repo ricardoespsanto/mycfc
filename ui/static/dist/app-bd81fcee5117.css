@@ -176,6 +176,13 @@ button:hover {
 .site-nav__group ul a:focus-visible { background: rgb(255 255 255 / 12%); }
 .logout-button { padding: 0.4rem 0.65rem; background: transparent; border: 1px solid currentColor; }
 .site-footer { padding: 2rem 1rem; text-align: center; color: #4d5964; }
+.site-footer, .auth-footer { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.75rem 1.25rem; }
+.legal-navigation { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem 1rem; }
+.legal-document { width: min(100% - 2rem, 56rem); margin: 2rem auto 4rem; padding: clamp(1.25rem, 3vw, 3rem); background: #fff; border-radius: var(--radius-lg); box-shadow: var(--shadow-low); }
+.legal-document__content { overflow-wrap: anywhere; }
+.legal-document__content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.legal-document__content th, .legal-document__content td { padding: 0.65rem; border: 1px solid #cbd5d1; text-align: left; vertical-align: top; }
+.legal-document footer code { font-size: var(--text-xs); }
 
 /* Shared "you are here" strip across the three /admin/* sections, so moving
    between Membros/Notícias/Frota reads as one area rather than three
@@ -590,7 +597,7 @@ body.task-surface-open { overflow: hidden; }
 }
 .auth-alternate { margin: var(--space-6) 0 0; padding-block-start: var(--space-4); border-block-start: 1px solid var(--c-border); color: var(--c-muted); text-align: center; }
 .auth-alternate a { color: var(--c-river-700); font-weight: 750; }
-.auth-footer { min-block-size: 4.5rem; display: grid; place-items: center; padding: var(--space-3) max(1rem,calc((100% - 78rem) / 2)); color: #dce6e0; background: #061f32; font-size: var(--text-sm); text-align: center; }
+.auth-footer { min-block-size: 4.5rem; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.75rem 1.25rem; padding: var(--space-3) max(1rem,calc((100% - 78rem) / 2)); color: #dce6e0; background: #061f32; font-size: var(--text-sm); text-align: center; }
 @media (max-width: 40rem) { .auth-card--registration .form-layout { grid-template-columns: 1fr; }.auth-card--registration .form-layout > * { grid-column: auto; } }
 @media (max-width: 30rem) { .auth-header { min-block-size: 4.5rem; }.auth-brand small { display: none; }.auth-back { min-block-size: 2.5rem; padding-inline: var(--space-2); font-size: var(--text-xs); }.auth-body .auth-main { width: min(calc(100% - 1rem),44rem); padding-block: var(--space-3); }.auth-card { padding: var(--space-5) var(--space-4); } }
 @media (forced-colors: active) { .auth-card { box-shadow: none; }.auth-card,.auth-alternate { border-color: CanvasText; } }

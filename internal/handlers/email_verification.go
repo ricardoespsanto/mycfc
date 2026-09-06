@@ -65,7 +65,7 @@ func (h EmailVerification) Resend(w http.ResponseWriter, r *http.Request) {
 
 func (h EmailVerification) render(w http.ResponseWriter, r *http.Request, status int, success bool) {
 	meta := h.PageMeta
-	meta.Title = "Confirmar email | MyCFC"
+	meta.Title = "Confirmar email | MyCFCoimbra"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = pages.EmailVerification(pages.EmailVerificationPage{Meta: meta, Success: success}).Render(r.Context(), w)

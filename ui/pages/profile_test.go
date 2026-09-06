@@ -12,7 +12,7 @@ import (
 
 func TestProfilePhotoRemovalRendersAnExplicitDestructiveConfirmation(t *testing.T) {
 	page := ProfilePhotoRemovalPage{
-		Meta:       components.PageMeta{Title: "Remover fotografia | MyCFC", CSRFField: templ.Raw("")},
+		Meta:       components.PageMeta{Title: "Remover fotografia | MyCFCoimbra", CSRFField: templ.Raw("")},
 		Name:       "Ana Silva",
 		ActionPath: "/perfil/fotografia/remover",
 		ReturnURL:  "/perfil",

@@ -17,6 +17,9 @@ type PageMeta struct {
 	PageLabel       string
 	SubjectContext  string
 	Breadcrumbs     []NavigationItem
+	PrivacyNoticeURL string
+	CookieNoticeURL string
+	DataRightsContact string
 }
 
 templ PublicBase(meta PageMeta, content templ.Component) {
@@ -35,7 +38,7 @@ templ PublicBase(meta PageMeta, content templ.Component) {
 				<div class="public-header__content">
 					<a class="public-brand" href="/" aria-label="Clube Fluvial de Coimbra, página inicial">
 						<img src={ meta.BrandImageURL } alt="Clube Fluvial de Coimbra"/>
-						<span>Clube Fluvial de Coimbra<small>MyCFC</small></span>
+						<span>Clube Fluvial de Coimbra<small>MyCFCoimbra</small></span>
 					</a>
 					<nav aria-label="Navegação pública"><a href="https://cfcoimbra.com/o-clube/">O Clube</a><a href="https://cfcoimbra.com/noticias/">Notícias</a><a href="https://cfcoimbra.com/eventos/">Eventos</a></nav>
 					<div class="public-header__actions"><a class="public-login" href="/login">Iniciar sessão</a><a class="public-register" href="/registo">Criar conta</a></div>
@@ -47,6 +50,7 @@ templ PublicBase(meta PageMeta, content templ.Component) {
 			<footer class="public-footer">
 				<div><strong>Clube Fluvial de Coimbra</strong><p>A promover a canoagem desde 1989.</p></div>
 				<address><a href="tel:+351912626410">+351 912 626 410</a><a href="mailto:cfluvialcoimbra@gmail.com">cfluvialcoimbra@gmail.com</a><span>Av. Inês de Castro, Pav. A, 3040-255 Coimbra</span></address>
+				@LegalNavigation(meta)
 				<nav aria-label="Redes sociais"><a href="https://www.facebook.com/CFCoimbra">Facebook</a><a href="https://www.instagram.com/cfcoimbra/">Instagram</a><a href="https://www.youtube.com/channel/UCiCvFGLsklKxzqOrEjG9gDw">YouTube</a></nav>
 			</footer>
 		</body>
@@ -66,18 +70,18 @@ templ AuthBase(meta PageMeta, content templ.Component) {
 		<body class="auth-body">
 			<a class="skip-link" href="#conteudo-principal">Saltar para o conteúdo principal</a>
 			<header class="auth-header">
-				<a class="auth-brand" href="/" aria-label="MyCFC, voltar à página inicial">
+				<a class="auth-brand" href="/" aria-label="MyCFCoimbra, voltar à página inicial">
 					if meta.BrandImageURL != "" {
 						<img src={ meta.BrandImageURL } alt=""/>
 					} else {
 						<span class="site-brand__mark" aria-hidden="true">≈</span>
 					}
-					<span><strong>MyCFC</strong><small>Clube Fluvial de Coimbra</small></span>
+					<span><strong>MyCFCoimbra</strong><small>Clube Fluvial de Coimbra</small></span>
 				</a>
 				<a class="auth-back" href="/">Voltar ao início</a>
 			</header>
 			<main id="conteudo-principal" class="auth-main">@content</main>
-			<footer class="auth-footer">Clube Fluvial de Coimbra · Desde 1989</footer>
+			<footer class="auth-footer"><span>Clube Fluvial de Coimbra · Desde 1989</span>@LegalNavigation(meta)</footer>
 		</body>
 	</html>
 }
@@ -102,7 +106,7 @@ templ Base(meta PageMeta, content templ.Component) {
 						} else {
 							<span class="site-brand__mark" aria-hidden="true">≈</span>
 						}
-						<span>MyCFC</span>
+						<span>MyCFCoimbra</span>
 					</a>
 					<div class="mobile-app-header__actions">
 						@announcementTrigger()
@@ -111,7 +115,7 @@ templ Base(meta PageMeta, content templ.Component) {
 					</div>
 				</header>
 				<dialog id="mobile-navigation" class="mobile-navigation-drawer" aria-labelledby="mobile-navigation-title" data-mobile-navigation>
-					<header><h2 id="mobile-navigation-title">Menu MyCFC</h2><button type="button" class="action action--quiet" data-mobile-navigation-close autofocus>Fechar</button></header>
+					<header><h2 id="mobile-navigation-title">Menu MyCFCoimbra</h2><button type="button" class="action action--quiet" data-mobile-navigation-close autofocus>Fechar</button></header>
 					<div class="mobile-navigation-drawer__content">@mobileNavigationContent(meta)</div>
 				</dialog>
 				<section id="announcement-panel" class="announcement-panel" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title" data-announcement-panel hidden>
@@ -119,7 +123,7 @@ templ Base(meta PageMeta, content templ.Component) {
 					<p class="announcement-panel__loading" role="status">A carregar avisos…</p>
 				</section>
 				<div class="app-shell">
-					<aside class="app-rail" aria-label="Contexto e navegação MyCFC">
+					<aside class="app-rail" aria-label="Contexto e navegação MyCFCoimbra">
 						<div class="app-rail__brand-row">
 							<a class="site-brand" href="/today">
 								if meta.BrandImageURL != "" {
@@ -127,7 +131,7 @@ templ Base(meta PageMeta, content templ.Component) {
 								} else {
 									<span class="site-brand__mark" aria-hidden="true">≈</span>
 								}
-								<span>MyCFC</span>
+								<span>MyCFCoimbra</span>
 							</a>
 							@announcementTrigger()
 						</div>
@@ -136,7 +140,7 @@ templ Base(meta PageMeta, content templ.Component) {
 						@accountActions(meta)
 					</aside>
 					<div class="app-workspace">
-						<header class={ "workspace-header " + workspaceHeaderClass(meta) }><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFC</a></li>
+						<header class={ "workspace-header " + workspaceHeaderClass(meta) }><nav aria-label="Localização atual"><ol><li><a href="/today">MyCFCoimbra</a></li>
 							for _, item := range meta.Breadcrumbs {
 								<li><a href={ item.Path }>{ item.Label }</a></li>
 							}
@@ -149,14 +153,31 @@ templ Base(meta PageMeta, content templ.Component) {
 							}
 						</header>
 						<main id="conteudo-principal">@content</main>
-						<footer class="site-footer">Clube Fluvial de Coimbra</footer>
+						<footer class="site-footer"><span>Clube Fluvial de Coimbra</span>@LegalNavigation(meta)</footer>
 					</div>
 				</div>
 			} else {
-				<main id="conteudo-principal">@content</main><footer class="site-footer">Clube Fluvial de Coimbra</footer>
+				<main id="conteudo-principal">@content</main><footer class="site-footer"><span>Clube Fluvial de Coimbra</span>@LegalNavigation(meta)</footer>
 			}
 		</body>
 	</html>
+}
+
+templ LegalNavigation(meta PageMeta) {
+	<nav class="legal-navigation" aria-label="Informação jurídica e privacidade">
+		<a href={ templ.SafeURL(legalURL(meta.PrivacyNoticeURL, "/legal/privacidade")) }>Política de privacidade</a>
+		<a href="/legal/termos-gerais">Termos gerais</a>
+		<a href={ templ.SafeURL(legalURL(meta.CookieNoticeURL, "/legal/cookies")) }>Política de cookies</a>
+		<a href="/legal/direitos">Exercer os meus direitos</a>
+		if strings.TrimSpace(meta.DataRightsContact) != "" {
+			<a href={ templ.SafeURL("mailto:" + meta.DataRightsContact) }>Contacto de privacidade</a>
+		}
+	</nav>
+}
+
+func legalURL(configured, fallback string) string {
+	if strings.TrimSpace(configured) == "" { return fallback }
+	return configured
 }
 
 templ mobileNavigationContent(meta PageMeta) {

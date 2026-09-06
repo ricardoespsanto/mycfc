@@ -56,15 +56,6 @@ INSERT INTO member_profile_audit_events (actor_user_id, subject_user_id, action,
 VALUES (sqlc.arg(actor_user_id), sqlc.arg(subject_user_id), sqlc.arg(action), sqlc.arg(changed_fields))
 RETURNING id;
 
--- name: GetCurrentImageConsent :one
-SELECT id
-FROM consent_forms
-WHERE user_id = sqlc.arg(user_id) AND consent_type = 'Uso_Imagem'
-  AND document_version = sqlc.arg(document_version) AND document_sha256 = sqlc.arg(document_sha256)
-  AND is_accepted = true
-ORDER BY date_signed DESC
-LIMIT 1;
-
 -- name: UpdateMemberProfilePhoto :one
 UPDATE member_profiles SET photo_object_key = sqlc.arg(photo_object_key),
     photo_content_type = sqlc.arg(photo_content_type), photo_size_bytes = sqlc.arg(photo_size_bytes),
@@ -85,7 +76,7 @@ SELECT u.name,
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
-  AND c.user_id = u.id AND c.consent_type = 'Uso_Imagem' AND c.is_accepted = true
+  AND c.user_id = u.id AND c.consent_type = 'Foto_Perfil' AND c.is_accepted = true
   AND c.document_version = sqlc.arg(document_version)
   AND c.document_sha256 = sqlc.arg(document_sha256)
 WHERE u.id = sqlc.arg(user_id)

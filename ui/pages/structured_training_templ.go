@@ -3389,7 +3389,7 @@ func structuredCycleFields(page StructuredTrainingPage, form StructuredTrainingC
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 329, "\">Por exemplo, mesociclo ou bloco. MyCFC não impõe uma metodologia.</small>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 329, "\">Por exemplo, mesociclo ou bloco. MyCFCoimbra não impõe uma metodologia.</small>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

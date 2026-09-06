@@ -127,7 +127,7 @@ func TestStructuredTrainingCycleErrorDialogReopensAndPreservesCopyInput(t *testi
 
 func TestStructuredWaterBlockTaskRendersAFullTaskWithRecoverableErrors(t *testing.T) {
 	page := StructuredWaterBlockTaskPage{
-		Meta:      components.PageMeta{Title: "Adicionar bloco de água | MyCFC"},
+		Meta:      components.PageMeta{Title: "Adicionar bloco de água | MyCFCoimbra"},
 		CSRFField: templ.Raw(""),
 		ActionURL: "/admin/treinos/estruturados/sessoes/session-1/segmentos/segment-1/agua",
 		ReturnURL: "/admin/treinos/estruturados?group_id=group-1&week_id=week-1&session_id=session-1#training-plan",

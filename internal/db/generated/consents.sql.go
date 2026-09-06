@@ -79,6 +79,7 @@ SELECT EXISTS (
     WHERE user_id = $1
       AND consent_type = $2
       AND document_version = $3
+      AND document_sha256 = $4
       AND is_accepted = true
 )::boolean
 `
@@ -87,10 +88,16 @@ type HasConsentVersionParams struct {
 	UserID          uuid.UUID `json:"user_id"`
 	ConsentType     string    `json:"consent_type"`
 	DocumentVersion string    `json:"document_version"`
+	DocumentSha256  string    `json:"document_sha256"`
 }
 
 func (q *Queries) HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasConsentVersion, arg.UserID, arg.ConsentType, arg.DocumentVersion)
+	row := q.db.QueryRow(ctx, hasConsentVersion,
+		arg.UserID,
+		arg.ConsentType,
+		arg.DocumentVersion,
+		arg.DocumentSha256,
+	)
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err

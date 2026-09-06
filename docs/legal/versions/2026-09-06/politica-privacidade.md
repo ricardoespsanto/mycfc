@@ -1,8 +1,8 @@
 # Política de privacidade do MyCFCoimbra
 
-Versão proposta: `2026-09-04`
-Entrada em vigor: **[a deliberar]**
-Última revisão: 4 de setembro de 2026
+Versão: `2026-09-06`
+Entrada em vigor: **6 de setembro de 2026**
+Última revisão: 6 de setembro de 2026
 
 ## 1. Quem é responsável
 
@@ -42,7 +42,7 @@ Não usamos reconhecimento facial nem tomamos decisões exclusivamente automatiz
 | Administrar inscrições, equipas, treino, eventos, presença, equipamento e comunicações operacionais | Execução da relação; obrigações jurídicas aplicáveis; interesses legítimos de organização e segurança, após ponderação |
 | Cumprir obrigações contabilísticas, fiscais, federativas, seguradoras, de salvaguarda e autoridades competentes | Obrigação jurídica (artigo 6.º, n.º 1, alínea c)) |
 | Proteger pessoas, instalações, sistemas e defender direitos | Interesses legítimos (alínea f)) e, em emergência, interesses vitais (alínea d)) |
-| Tratar dados de saúde necessários à prática segura | **Decisão jurídica da Direção em falta:** documentar a condição exata do artigo 9.º, n.º 2, para cada fluxo; quando se use consentimento explícito, este deve ser específico e retirável |
+| Tratar dados de saúde facultados para uma participação segura | Consentimento explícito (artigo 9.º, n.º 2, alínea a)); em emergência genuína poderá aplicar-se a proteção de interesses vitais nos limites legais |
 | Publicar ou partilhar imagem/voz nas finalidades escolhidas | Consentimento (artigos 6.º, n.º 1, alínea a), e 7.º); direito à imagem nos termos da lei portuguesa |
 | Ligar Polar, Garmin ou outro fornecedor escolhido pelo atleta | Consentimento/execução do serviço pedido, conforme os dados e contrato; a ligação é facultativa e retirada ao desligar |
 | Manter auditoria proporcional e responder a pedidos/reclamações | Obrigação jurídica e interesses legítimos de responsabilização e defesa de direitos |
@@ -51,7 +51,7 @@ Quando invoquemos interesse legítimo, avaliamos necessidade, proporcionalidade 
 
 ## 4. Dados de saúde e emergência
 
-Dados de saúde são categoria especial. São opcionais salvo indicação fundamentada para uma atividade e destinam-se à segurança e adaptação da participação. O acesso é limitado ao titular, representante legitimado, administradores estritamente autorizados e profissionais/treinadores que necessitem da informação para proteger o atleta. Não são mostrados em classificações, anúncios, diretórios gerais ou análises de desempenho desnecessárias.
+Dados de saúde são uma categoria especial e o seu fornecimento no perfil é facultativo. Só são guardados após consentimento explícito do titular adulto para segurança e adaptação da participação. No formulário, a declaração exata é: «Consinto explicitamente o tratamento da informação médica nova ou alterada que introduzo, para segurança e adaptação da participação.» O consentimento pode ser retirado a qualquer momento, sem afetar a licitude do tratamento anterior. O titular pode retirar o consentimento eliminando toda a informação médica do perfil ou através do canal indicado em «Exercer direitos»; qualquer introdução posterior exige novo consentimento. Até existir verificação específica da legitimidade do representante, o fluxo MyCFCoimbra não permite que uma conta associada a um menor preste este consentimento. O acesso é limitado ao titular, aos administradores da plataforma designados pela Direção e aos profissionais/treinadores que necessitem da informação para proteger o atleta. Não são mostrados em classificações, anúncios, diretórios gerais ou análises de desempenho desnecessárias.
 
 Não use campos livres comuns para comunicar saúde. Em emergência, podem ser comunicados os dados mínimos aos serviços de socorro e pessoas que necessitem de intervir.
 
@@ -73,15 +73,15 @@ O MyCFCoimbra é uma plataforma de gestão interna da relação do CFC com sóci
 
 No funcionamento desportivo corrente, o CFC comunica à Federação Portuguesa de Canoagem, através do respetivo portal, os dados mínimos necessários à inscrição ou revalidação federativa. A Federação trata os dados que recebe de acordo com a sua própria política e responsabilidade. Dados de saúde ou contacto de emergência só são comunicados aos serviços de socorro, profissionais de saúde ou pessoas responsáveis pela segurança da atividade quando exista fundamento jurídico aplicável e isso seja necessário para proteger o titular. Outras comunicações apenas ocorrem quando exista fundamento jurídico aplicável e uma necessidade concreta devidamente documentada, por exemplo uma obrigação legal, um pedido de autoridade competente ou o tratamento de um sinistro segurado. Qualquer comunicação de dados de saúde permanece dependente da decisão e salvaguardas do artigo 9.º identificadas nesta política.
 
-Na arquitetura técnica abrangida por esta proposta, a Hetzner aloja o servidor, a base de dados, o armazenamento privado e cópias do servidor; a Cloudflare presta DNS, túnel/proteção de rede e Turnstile; e serviços AWS suportam armazenamento privado, cópias cifradas da base de dados, chaves, email e configuração operacional. Os prestadores tratam apenas os dados técnicos ou alojados necessários ao respetivo serviço. Antes da publicação, o CFC deve confirmar no registo interno a entidade contratada, função, contrato, localização, subprocessadores, prazo e eventual transferência aplicável a cada serviço.
+Na arquitetura técnica abrangida por esta política, a Hetzner aloja o servidor, a base de dados, o armazenamento privado e cópias do servidor; a Cloudflare presta DNS, túnel/proteção de rede e Turnstile; e serviços AWS suportam armazenamento privado, cópias cifradas da base de dados, chaves, email e configuração operacional. Os prestadores tratam apenas os dados técnicos ou alojados necessários ao respetivo serviço. O CFC mantém e revê internamente a identificação, função, contrato, localização, subprocessadores, prazos e eventuais transferências aplicáveis a cada serviço.
 
 Polar, Garmin e outros fornecedores só recebem ou devolvem dados depois de ligação voluntária. Fora da comunicação federativa à FPC descrita acima, WhatsApp e outros websites externos são apenas destinos de ligações: quando os visita, passam a aplicar-se as políticas próprias. O CFC não envia o perfil MyCFCoimbra por uma simples ligação.
 
-Antes de qualquer transferência para fora do Espaço Económico Europeu, o CFC deve confirmar e documentar o mecanismo aplicável, como uma decisão de adequação ou garantias adequadas. A versão publicada identificará as transferências confirmadas e indicará como obter informação ou cópia das garantias relevantes.
+Antes de qualquer transferência para fora do Espaço Económico Europeu, o CFC confirma e documenta o mecanismo aplicável, como uma decisão de adequação ou garantias adequadas. Pode pedir informação sobre transferências confirmadas e, quando aplicável, obter informação ou cópia das garantias relevantes através do canal de direitos.
 
 ## 8. Conservação
 
-Conservamos dados apenas durante a finalidade e os prazos legais. A matriz aprovada especifica cada categoria. Em termos gerais:
+Conservamos dados apenas durante a finalidade e os prazos legais. O inventário interno identifica cada categoria e os critérios que a Direção, a contabilidade e os responsáveis operacionais devem confirmar. Em termos gerais:
 
 - sessões e tokens expiram rapidamente;
 - dados correntes de conta, filiação e atividade permanecem durante a relação e um período limitado de encerramento;
@@ -93,7 +93,7 @@ Conservamos dados apenas durante a finalidade e os prazos legais. A matriz aprov
 - registos técnicos expiram por calendário curto;
 - cópias de segurança cifradas ficam isoladas, expiram pelo calendário aprovado e, após restauro, recebem novamente os apagamentos antes de servir tráfego.
 
-Prazos concretos só entram em vigor após aprovação da [matriz de conservação](matriz-conservacao.md).
+Os prazos concretos são mantidos no inventário e matriz de conservação internos e são aplicados apenas depois de confirmado o fundamento legal e operacional de cada categoria.
 
 ## 9. Segurança
 
@@ -101,13 +101,13 @@ Aplicamos controlo de acesso por função e âmbito, autenticação, proteção 
 
 ## 10. Direitos
 
-Pode exercer acesso, retificação, apagamento, limitação, portabilidade e oposição e retirar consentimento. Pode também apresentar reclamação à CNPD. Consulte [Exercer direitos](exercicio-direitos.md).
+Pode exercer acesso, retificação, apagamento, limitação, portabilidade e oposição e retirar consentimento. Pode também apresentar reclamação à CNPD. Consulte [Exercer direitos](/legal/direitos).
 
 Respondemos normalmente em um mês. Podemos pedir prova proporcional de identidade e considerar direitos de terceiros. O apagamento tem exceções, incluindo obrigação legal e declaração, exercício ou defesa de direitos.
 
 ## 11. Cookies
 
-Consulte a [Política de cookies](politica-cookies.md). Enquanto só existirem mecanismos estritamente necessários, não é pedido consentimento nem apresentado banner artificial.
+Consulte a [Política de cookies](/legal/cookies). Enquanto só existirem mecanismos estritamente necessários, não é pedido consentimento nem apresentado banner artificial.
 
 ## 12. Alterações
 

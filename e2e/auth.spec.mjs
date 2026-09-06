@@ -90,7 +90,7 @@ test.describe('authentication', () => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'A promover a canoagem, dentro e fora de água.' })).toBeVisible();
     await expect(page.getByAltText('Instalações do Clube Fluvial de Coimbra junto ao rio')).toBeVisible();
-    const register = page.getByRole('link', { name: 'Criar conta MyCFC' });
+    const register = page.getByRole('link', { name: 'Criar conta MyCFCoimbra' });
     await expect(register).toHaveAttribute('href', '/registo');
     await expect(page.getByRole('link', { name: 'Iniciar sessão' }).first()).toHaveAttribute('href', '/login');
     await expect(page.getByRole('link', { name: 'Ver as novidades do clube' })).toHaveAttribute('href', 'https://cfcoimbra.com/noticias/');
@@ -149,6 +149,8 @@ test.describe('authentication', () => {
     test.setTimeout(90_000);
     await page.goto('/registo');
     await expectNoSeriousAxeViolations(page);
+    await expect(page.locator('input[name="accept_image_use"]')).toHaveCount(0);
+    await expect(page.getByText(/autorização de imagem.*facultativa/)).toBeVisible();
     const name = page.getByLabel('Nome');
     const emailField = page.getByLabel('Correio eletrónico');
     await name.focus();
@@ -162,13 +164,13 @@ test.describe('authentication', () => {
     await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.waitForTimeout(2100);
     await page.getByRole('button', { name: 'Criar conta' }).click();
 
     await expect(page).toHaveURL('/today');
     await expect(page.getByRole('heading', { name: 'Olá, Pessoa', exact: true })).toBeVisible();
     await expect(page.locator('.app-rail .email-verification-cue')).toHaveText('Email por verificar');
+    await expect(page.getByRole('navigation', { name: 'Informação jurídica e privacidade' })).toBeVisible();
     await expectNoSeriousAxeViolations(page);
 
     await page.goto(await verificationLinkFor(email));
@@ -182,11 +184,13 @@ test.describe('authentication', () => {
     await page.locator('#profile-emergency-relationship').fill('Família');
     await page.locator('#profile-emergency-phone').fill('+351 920 000 000');
     await page.locator('#profile-medical-declaration').selectOption('NONE_KNOWN');
+    await page.getByLabel(/Consinto explicitamente o tratamento da informação médica/).check();
     await page.getByRole('button', { name: 'Guardar perfil' }).click();
     await expect(page).toHaveURL('/perfil');
     await expect(page.getByText('Perfil atualizado.')).toBeVisible();
     await expect(page.getByText(/Complete o contacto de emergência/)).toHaveCount(0);
     await page.getByLabel('Fotografia JPEG, PNG ou WebP').setInputFiles({ name: 'perfil.png', mimeType: 'image/png', buffer: validPNG });
+    await page.getByLabel(/Autorizo a utilização desta fotografia apenas como fotografia de perfil privada/).check();
     await page.getByRole('button', { name: 'Carregar fotografia' }).click();
     await expect(page.getByText('Fotografia atualizada.')).toBeVisible();
     await expect(page.getByAltText('Fotografia de Pessoa de teste')).toBeVisible();
@@ -204,7 +208,7 @@ test.describe('authentication', () => {
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole('button', { name: 'Menu', exact: true }).click();
-    const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
+    const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFCoimbra' });
     await expect(mobileMenu).toBeVisible();
     const logout = mobileMenu.getByRole('button', { name: 'Terminar sessão' });
     await logout.click();
@@ -263,7 +267,6 @@ test.describe('authentication', () => {
     await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.waitForTimeout(2100);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page).toHaveURL('/today');
@@ -316,7 +319,6 @@ test.describe('authentication', () => {
     await oldSessionPage.locator('#password').fill(password);
     await oldSessionPage.getByLabel('Confirmar palavra-passe').fill(password);
     await oldSessionPage.getByLabel(/Aceito os termos gerais/).check();
-    await oldSessionPage.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await oldSessionPage.waitForTimeout(2100);
     await oldSessionPage.getByRole('button', { name: 'Criar conta' }).click();
     await expect(oldSessionPage).toHaveURL('/today');
@@ -379,7 +381,6 @@ test.describe('authentication', () => {
     await page.locator('#password').fill(password);
     await page.getByLabel('Confirmar palavra-passe').fill(password);
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.waitForTimeout(2100);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page).toHaveURL('/today');

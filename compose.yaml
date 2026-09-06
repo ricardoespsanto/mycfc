@@ -92,6 +92,9 @@ services:
       CONSENT_TERMS_URL: http://e2e-app:8080/legal/termos-gerais
       CONSENT_IMAGE_URL: http://e2e-app:8080/legal/uso-imagem
       CONSENT_MINOR_URL: http://e2e-app:8080/legal/responsabilidade-menor
+      PRIVACY_NOTICE_URL: http://e2e-app:8080/legal/privacidade
+      COOKIE_NOTICE_URL: http://e2e-app:8080/legal/cookies
+      DATA_RIGHTS_CONTACT: privacy@example.test
     command: go run ./cmd/server
     depends_on:
       postgres:
@@ -173,6 +176,9 @@ services:
       CONSENT_TERMS_URL: http://ui-review-app:8080/legal/termos-gerais
       CONSENT_IMAGE_URL: http://ui-review-app:8080/legal/uso-imagem
       CONSENT_MINOR_URL: http://ui-review-app:8080/legal/responsabilidade-menor
+      PRIVACY_NOTICE_URL: http://ui-review-app:8080/legal/privacidade
+      COOKIE_NOTICE_URL: http://ui-review-app:8080/legal/cookies
+      DATA_RIGHTS_CONTACT: privacy@example.test
     command: go run ./cmd/server
     depends_on:
       postgres:

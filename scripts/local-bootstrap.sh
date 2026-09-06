@@ -14,7 +14,10 @@ set +a
 for consent_url in \
   "CONSENT_TERMS_URL=$BASE_URL/legal/termos-gerais" \
   "CONSENT_IMAGE_URL=$BASE_URL/legal/uso-imagem" \
-  "CONSENT_MINOR_URL=$BASE_URL/legal/responsabilidade-menor"; do
+  "CONSENT_MINOR_URL=$BASE_URL/legal/responsabilidade-menor" \
+  "PRIVACY_NOTICE_URL=$BASE_URL/legal/privacidade" \
+  "COOKIE_NOTICE_URL=$BASE_URL/legal/cookies" \
+  "DATA_RIGHTS_CONTACT=privacy@example.test"; do
   key=${consent_url%%=*}
   if [[ -z ${!key:-} ]]; then
     printf '\n%s\n' "$consent_url" >> .env

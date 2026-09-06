@@ -1,0 +1,21 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type LegalPage struct {
+	Meta components.PageMeta
+	Title, Version, SHA256 string
+	Content templ.Component
+}
+
+templ Legal(page LegalPage) {
+	@components.PublicBase(page.Meta, legalContent(page))
+}
+
+templ legalContent(page LegalPage) {
+	<article class="legal-document">
+		<p class="eyebrow">Informação jurídica e privacidade</p>
+		<div class="legal-document__content">@page.Content</div>
+		<footer><p>Identificador da versão: <code>{ page.SHA256 }</code></p></footer>
+	</article>
+}

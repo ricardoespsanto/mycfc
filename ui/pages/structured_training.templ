@@ -754,7 +754,7 @@ templ structuredCycleFields(page StructuredTrainingPage, form StructuredTraining
 	<input id={ prefix+"-name" } name="name" value={ form.Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", form.Errors["name"])
 	@components.FieldLabel(prefix+"-level", "Designação usada pela equipa (opcional)", false)
 	<input id={ prefix+"-level" } name="level_label" value={ form.LevelLabel } maxlength="80" aria-describedby={ prefix+"-level-help" }/>
-	<small id={ prefix+"-level-help" }>Por exemplo, mesociclo ou bloco. MyCFC não impõe uma metodologia.</small>
+	<small id={ prefix+"-level-help" }>Por exemplo, mesociclo ou bloco. MyCFCoimbra não impõe uma metodologia.</small>
 	@components.FieldLabel(prefix+"-goals", "Objetivos (opcional)", false)
 	<textarea id={ prefix+"-goals" } name="goals" maxlength="4000">{ form.Goals }</textarea>
 	@components.FieldLabel(prefix+"-focus", "Fase ou foco (opcional)", false)

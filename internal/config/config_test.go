@@ -151,11 +151,12 @@ func TestLoadParsesAndValidatesCompleteLocalEnvironment(t *testing.T) {
 		"APP_ENV": "local", "APP_VERSION": "test", "GIT_SHA": strings.Repeat("0", 40), "BASE_URL": "http://localhost:8080",
 		"DATABASE_URL": "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable", "DB_HOST": "", "DB_PORT": "", "DB_NAME": "", "DB_USER": "", "DB_PASSWORD": "", "DB_SSLMODE": "",
 		"CSRF_AUTH_KEY_B64": base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")), "EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
-		"SMTP_HOST": "localhost", "SMTP_PORT": "1025", "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM_ADDRESS": "mycfc@example.test", "SMTP_FROM_NAME": "MyCFC", "SMTP_TLS_MODE": "none",
+		"SMTP_HOST": "localhost", "SMTP_PORT": "1025", "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM_ADDRESS": "mycfc@example.test", "SMTP_FROM_NAME": "MyCFCoimbra", "SMTP_TLS_MODE": "none",
 		"AWS_REGION": "eu-west-1", "S3_BUCKET_NAME": "mycfc-local", "S3_ENDPOINT": "http://localhost:9000", "S3_FORCE_PATH_STYLE": "true", "GALLERY_URL": "https://example.invalid/gallery",
 		"CONSENT_TERMS_VERSION": "dev-v1", "CONSENT_TERMS_SHA256": strings.Repeat("0", 64), "CONSENT_TERMS_URL": "http://localhost:8080/legal/termos",
 		"CONSENT_IMAGE_VERSION": "dev-v1", "CONSENT_IMAGE_SHA256": strings.Repeat("0", 64), "CONSENT_IMAGE_URL": "http://localhost:8080/legal/imagem",
 		"CONSENT_MINOR_VERSION": "dev-v1", "CONSENT_MINOR_SHA256": strings.Repeat("0", 64), "CONSENT_MINOR_URL": "http://localhost:8080/legal/menores", "TRUSTED_PROXY_CIDRS": "",
+		"PRIVACY_NOTICE_URL": "http://localhost:8080/legal/privacidade", "COOKIE_NOTICE_URL": "http://localhost:8080/legal/cookies", "DATA_RIGHTS_CONTACT": "privacy@example.test",
 	} {
 		t.Setenv(name, value)
 	}
@@ -179,7 +180,7 @@ func validConfig() Config {
 		SMTPHost:                    "localhost",
 		SMTPPort:                    1025,
 		SMTPFromAddress:             "mycfc@example.test",
-		SMTPFromName:                "MyCFC",
+		SMTPFromName:                "MyCFCoimbra",
 		SMTPTLSMode:                 "none",
 		SMTPTimeout:                 10 * time.Second,
 		AWSRegion:                   "eu-west-1",
@@ -196,6 +197,9 @@ func validConfig() Config {
 		ConsentMinorVersion:         "dev-v1",
 		ConsentMinorSHA256:          strings.Repeat("0", 64),
 		ConsentMinorURL:             "http://localhost:8080/legal/responsabilidade-menor",
+		PrivacyNoticeURL:            "http://localhost:8080/legal/privacidade",
+		CookieNoticeURL:             "http://localhost:8080/legal/cookies",
+		DataRightsContact:           "privacy@example.test",
 		LogLevel:                    "INFO",
 		DBMaxConns:                  8,
 		DBMinConns:                  1,
@@ -469,7 +473,7 @@ func validProductionParameters() map[string]string {
 		"SMTP_HOST":                "email-smtp.eu-west-1.amazonaws.com",
 		"SMTP_PORT":                "587",
 		"SMTP_FROM_ADDRESS":        "no-reply@mycfcoimbra.com",
-		"SMTP_FROM_NAME":           "MyCFC",
+		"SMTP_FROM_NAME":           "MyCFCoimbra",
 		"SMTP_TLS_MODE":            "starttls",
 		"SMTP_TIMEOUT":             "10s",
 		"TURNSTILE_SITE_KEY":       "site-key",
@@ -485,6 +489,9 @@ func validProductionParameters() map[string]string {
 		"CONSENT_MINOR_VERSION":    "0.0.1",
 		"CONSENT_MINOR_SHA256":     strings.Repeat("c", 64),
 		"CONSENT_MINOR_URL":        "https://mycfcoimbra.com/legal/responsabilidade-menor",
+		"PRIVACY_NOTICE_URL":       "https://mycfcoimbra.com/legal/privacidade",
+		"COOKIE_NOTICE_URL":        "https://mycfcoimbra.com/legal/cookies",
+		"DATA_RIGHTS_CONTACT":      "cfluvialcoimbra@gmail.com",
 		"LOG_LEVEL":                "INFO",
 		"TRUSTED_PROXY_CIDRS":      "172.30.0.0/24",
 		"RELEASE_REPOSITORY":       "ricardoespsanto/mycfc",
@@ -529,6 +536,8 @@ func TestValidateRequiresTurnstileInProduction(t *testing.T) {
 	cfg.ConsentTermsURL = "https://mycfc.pt/legal/termos-gerais"
 	cfg.ConsentImageURL = "https://mycfc.pt/legal/uso-imagem"
 	cfg.ConsentMinorURL = "https://mycfc.pt/legal/responsabilidade-menor"
+	cfg.PrivacyNoticeURL = "https://mycfc.pt/legal/privacidade"
+	cfg.CookieNoticeURL = "https://mycfc.pt/legal/cookies"
 	cfg.ConsentTermsSHA256 = strings.Repeat("a", 64)
 	cfg.ConsentImageSHA256 = strings.Repeat("b", 64)
 	cfg.ConsentMinorSHA256 = strings.Repeat("c", 64)
@@ -629,6 +638,47 @@ func TestValidateCookieDomain(t *testing.T) {
 	cfg.CookieDomain = "attacker.example"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "COOKIE_DOMAIN") {
 		t.Fatalf("invalid cookie domain error = %v", err)
+	}
+}
+
+func TestValidateRequiresSafeLegalDiscoveryConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.PrivacyNoticeURL = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_NOTICE_URL") {
+		t.Fatalf("missing privacy URL error = %v", err)
+	}
+
+	cfg = validConfig()
+	cfg.DataRightsContact = "not-an-email"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DATA_RIGHTS_CONTACT") {
+		t.Fatalf("malformed rights contact error = %v", err)
+	}
+
+	cfg = validConfig()
+	cfg.AppEnv = "production"
+	cfg.GITSHA = strings.Repeat("a", 40)
+	cfg.BaseURL = "https://mycfcoimbra.com"
+	cfg.GalleryURL = "https://mycfcoimbra.com/gallery"
+	cfg.ConsentTermsURL = "https://mycfcoimbra.com/legal/termos-gerais"
+	cfg.ConsentImageURL = "https://mycfcoimbra.com/legal/uso-imagem"
+	cfg.ConsentMinorURL = "https://mycfcoimbra.com/legal/responsabilidade-menor"
+	cfg.PrivacyNoticeURL = "http://mycfcoimbra.com/legal/privacidade"
+	cfg.CookieNoticeURL = "https://mycfcoimbra.com/legal/cookies"
+	cfg.ConsentTermsSHA256 = strings.Repeat("a", 64)
+	cfg.ConsentImageSHA256 = strings.Repeat("b", 64)
+	cfg.ConsentMinorSHA256 = strings.Repeat("c", 64)
+	cfg.SMTPTLSMode = "starttls"
+	cfg.S3Endpoint = ""
+	cfg.S3ForcePathStyle = false
+	cfg.TrustedProxyCIDRValues = []string{"172.30.0.0/24"}
+	cfg.TurnstileSiteKey = "site-key"
+	cfg.TurnstileSecretKey = Secret("secret-key")
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_NOTICE_URL") {
+		t.Fatalf("HTTP production privacy URL error = %v", err)
+	}
+	cfg.PrivacyNoticeURL = "https://mycfcoimbra.com/legal/privacidade"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid production legal configuration rejected: %v", err)
 	}
 }
 

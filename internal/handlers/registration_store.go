@@ -24,17 +24,12 @@ func (s PostgresRegistrationStore) RegisterAdult(ctx context.Context, input Regi
 		if err != nil {
 			return err
 		}
-		for _, consent := range []struct{ consentType, version, hash string }{
-			{"Termos_Gerais", input.TermsVersion, input.TermsSHA256},
-			{"Uso_Imagem", input.ImageVersion, input.ImageSHA256},
-		} {
-			if _, err := queries.CreateConsentForm(ctx, dbgen.CreateConsentFormParams{
-				UserID: user.ID, GrantedByUserID: &user.ID, ConsentType: consent.consentType,
-				DocumentVersion: consent.version, DocumentSha256: consent.hash,
-				IpAddress: input.IP, UserAgent: input.UserAgent,
-			}); err != nil {
-				return err
-			}
+		if _, err := queries.CreateConsentForm(ctx, dbgen.CreateConsentFormParams{
+			UserID: user.ID, GrantedByUserID: &user.ID, ConsentType: "Termos_Gerais",
+			DocumentVersion: input.TermsVersion, DocumentSha256: input.TermsSHA256,
+			IpAddress: input.IP, UserAgent: input.UserAgent,
+		}); err != nil {
+			return err
 		}
 		result = RegistrationResult{UserID: user.ID, CredentialVersion: user.CredentialVersion}
 		return nil

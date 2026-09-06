@@ -61,6 +61,9 @@ var productionParameterNames = map[string]string{
 	"CONSENT_MINOR_VERSION":    productionParameterPrefix + "/consent/minor/version",
 	"CONSENT_MINOR_SHA256":     productionParameterPrefix + "/consent/minor/sha256",
 	"CONSENT_MINOR_URL":        productionParameterPrefix + "/consent/minor/url",
+	"PRIVACY_NOTICE_URL":       productionParameterPrefix + "/legal/privacy-url",
+	"COOKIE_NOTICE_URL":        productionParameterPrefix + "/legal/cookies-url",
+	"DATA_RIGHTS_CONTACT":      productionParameterPrefix + "/legal/rights-contact",
 	"LOG_LEVEL":                productionParameterPrefix + "/log-level",
 	"TRUSTED_PROXY_CIDRS":      productionParameterPrefix + "/trusted-proxy-cidrs",
 	"RELEASE_REPOSITORY":       productionParameterPrefix + "/release/repository",
@@ -80,6 +83,12 @@ var productionParameterNames = map[string]string{
 	"SHUTDOWN_TIMEOUT":         productionParameterPrefix + "/http/shutdown-timeout",
 	"RELEASE_CHECK_TIMEOUT":    productionParameterPrefix + "/release/check-timeout",
 	"RELEASE_CHECK_CACHE_TTL":  productionParameterPrefix + "/release/check-cache-ttl",
+}
+
+var rolloutOptionalProductionParameters = map[string]bool{
+	"PRIVACY_NOTICE_URL":  true,
+	"COOKIE_NOTICE_URL":   true,
+	"DATA_RIGHTS_CONTACT": true,
 }
 
 var productionSecretFields = []string{
@@ -135,7 +144,7 @@ type Config struct {
 	SMTPUsername    string        `env:"SMTP_USERNAME"`
 	SMTPPassword    Secret        `env:"SMTP_PASSWORD"`
 	SMTPFromAddress string        `env:"SMTP_FROM_ADDRESS"`
-	SMTPFromName    string        `env:"SMTP_FROM_NAME" envDefault:"MyCFC"`
+	SMTPFromName    string        `env:"SMTP_FROM_NAME" envDefault:"MyCFCoimbra"`
 	SMTPTLSMode     string        `env:"SMTP_TLS_MODE" envDefault:"starttls"`
 	SMTPTimeout     time.Duration `env:"SMTP_TIMEOUT" envDefault:"10s"`
 
@@ -155,6 +164,9 @@ type Config struct {
 	ConsentMinorVersion string `env:"CONSENT_MINOR_VERSION"`
 	ConsentMinorSHA256  string `env:"CONSENT_MINOR_SHA256"`
 	ConsentMinorURL     string `env:"CONSENT_MINOR_URL"`
+	PrivacyNoticeURL    string `env:"PRIVACY_NOTICE_URL"`
+	CookieNoticeURL     string `env:"COOKIE_NOTICE_URL"`
+	DataRightsContact   string `env:"DATA_RIGHTS_CONTACT"`
 
 	LogLevel string `env:"LOG_LEVEL" envDefault:"INFO"`
 
@@ -258,8 +270,10 @@ func loadProductionParameterValues(ctx context.Context, client parameterGetter) 
 		if result.err != nil {
 			return nil, fmt.Errorf("load production parameters from SSM: %w", result.err)
 		}
-		if len(result.output.InvalidParameters) > 0 {
-			return nil, fmt.Errorf("load production parameters from SSM: parameters not found: %s", strings.Join(result.output.InvalidParameters, ", "))
+		for _, name := range result.output.InvalidParameters {
+			if field, ok := fieldByName[name]; !ok || !rolloutOptionalProductionParameters[field] {
+				return nil, fmt.Errorf("load production parameters from SSM: parameters not found: %s", name)
+			}
 		}
 		for _, parameter := range result.output.Parameters {
 			name := awsStringValue(parameter.Name)
@@ -270,8 +284,10 @@ func loadProductionParameterValues(ctx context.Context, client parameterGetter) 
 			parameters[field] = *parameter.Value
 		}
 	}
-	if len(parameters) != len(productionParameterNames) {
-		return nil, fmt.Errorf("load production parameters from SSM: received %d of %d values", len(parameters), len(productionParameterNames))
+	for field := range productionParameterNames {
+		if !rolloutOptionalProductionParameters[field] && strings.TrimSpace(parameters[field]) == "" {
+			return nil, fmt.Errorf("load production parameters from SSM: received %d values; required value %s was not received", len(parameters), field)
+		}
 	}
 	return parameters, nil
 }
@@ -312,6 +328,9 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	}
 	slices.Sort(required)
 	for _, field := range required {
+		if rolloutOptionalProductionParameters[field] {
+			continue
+		}
 		if strings.TrimSpace(parameters[field]) == "" {
 			problems.Add(field, "production SSM parameter must not be empty")
 		}
@@ -358,6 +377,15 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	c.ConsentMinorVersion = parameters["CONSENT_MINOR_VERSION"]
 	c.ConsentMinorSHA256 = parameters["CONSENT_MINOR_SHA256"]
 	c.ConsentMinorURL = parameters["CONSENT_MINOR_URL"]
+	if parameters["PRIVACY_NOTICE_URL"] != "" {
+		c.PrivacyNoticeURL = parameters["PRIVACY_NOTICE_URL"]
+	}
+	if parameters["COOKIE_NOTICE_URL"] != "" {
+		c.CookieNoticeURL = parameters["COOKIE_NOTICE_URL"]
+	}
+	if parameters["DATA_RIGHTS_CONTACT"] != "" {
+		c.DataRightsContact = parameters["DATA_RIGHTS_CONTACT"]
+	}
 	c.LogLevel = parameters["LOG_LEVEL"]
 	c.ReleaseRepository = parameters["RELEASE_REPOSITORY"]
 	c.CookieDomain = ""
@@ -689,13 +717,18 @@ func (c Config) Validate() error {
 	validateConsent("CONSENT_IMAGE_VERSION", c.ConsentImageVersion, "CONSENT_IMAGE_SHA256", c.ConsentImageSHA256)
 	validateConsent("CONSENT_MINOR_VERSION", c.ConsentMinorVersion, "CONSENT_MINOR_SHA256", c.ConsentMinorSHA256)
 	for field, value := range map[string]string{
-		"CONSENT_TERMS_URL": c.ConsentTermsURL,
-		"CONSENT_IMAGE_URL": c.ConsentImageURL,
-		"CONSENT_MINOR_URL": c.ConsentMinorURL,
+		"CONSENT_TERMS_URL":  c.ConsentTermsURL,
+		"CONSENT_IMAGE_URL":  c.ConsentImageURL,
+		"CONSENT_MINOR_URL":  c.ConsentMinorURL,
+		"PRIVACY_NOTICE_URL": c.PrivacyNoticeURL,
+		"COOKIE_NOTICE_URL":  c.CookieNoticeURL,
 	} {
 		if _, err := validateAbsoluteURL(value, c.IsProduction(), true); err != nil {
 			problems.Add(field, err.Error())
 		}
+	}
+	if address, err := mail.ParseAddress(c.DataRightsContact); err != nil || address.Address != c.DataRightsContact {
+		problems.Add("DATA_RIGHTS_CONTACT", "must be a plain valid email address")
 	}
 
 	if !slices.Contains([]string{"DEBUG", "INFO", "WARN", "ERROR"}, strings.ToUpper(c.LogLevel)) {

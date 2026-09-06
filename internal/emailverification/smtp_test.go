@@ -64,7 +64,7 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 			send: func(sender *SMTPSender) error {
 				return sender.SendVerification(context.Background(), "member@example.test", "https://mycfc.example/confirm?token=opaque", time.Now())
 			},
-			headers: []string{"To: <member@example.test>", "Confirme o seu email no MyCFC"},
+			headers: []string{"To: <member@example.test>", "Confirme o seu email no MyCFCoimbra"},
 			body:    []string{"https://mycfc.example/confirm?token=opaque", "válido durante 24 horas"},
 		},
 		{
@@ -72,7 +72,7 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 			send: func(sender *SMTPSender) error {
 				return sender.SendPasswordReset(context.Background(), "member@example.test", "https://mycfc.example/reset?token=opaque", time.Now())
 			},
-			headers: []string{"To: <member@example.test>", "Recupere a sua palavra-passe no MyCFC"},
+			headers: []string{"To: <member@example.test>", "Recupere a sua palavra-passe no MyCFCoimbra"},
 			body:    []string{"https://mycfc.example/reset?token=opaque", "válido durante 60 minutos"},
 		},
 	} {
@@ -138,7 +138,7 @@ func smtpCapture(t *testing.T) (SMTPConfig, func() string) {
 			}
 			return writer.Flush()
 		}
-		if err := write("220 localhost MyCFC test SMTP"); err != nil {
+		if err := write("220 localhost MyCFCoimbra test SMTP"); err != nil {
 			errs <- err
 			return
 		}
@@ -200,7 +200,7 @@ func smtpCapture(t *testing.T) (SMTPConfig, func() string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return SMTPConfig{Host: host, Port: mustSMTPPort(t, port), Timeout: time.Second, TLSMode: "none", FromAddress: "no-reply@example.test", FromName: "MyCFC"}, func() string {
+	return SMTPConfig{Host: host, Port: mustSMTPPort(t, port), Timeout: time.Second, TLSMode: "none", FromAddress: "no-reply@example.test", FromName: "MyCFCoimbra"}, func() string {
 		select {
 		case err := <-errs:
 			t.Fatal(err)

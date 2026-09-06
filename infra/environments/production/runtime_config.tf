@@ -36,6 +36,9 @@ locals {
     "consent/minor/version"    = var.consent_minor_version
     "consent/minor/sha256"     = var.consent_minor_sha256
     "consent/minor/url"        = var.consent_minor_url
+    "legal/privacy-url"        = var.privacy_notice_url
+    "legal/cookies-url"        = var.cookie_notice_url
+    "legal/rights-contact"     = var.data_rights_contact
     "log-level"                = var.log_level
     "trusted-proxy-cidrs"      = join(",", var.trusted_proxy_cidrs)
     "release/repository"       = "${var.github_org}/${var.github_repo}"

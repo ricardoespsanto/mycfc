@@ -73,7 +73,7 @@ func TestIdentityStoresPropagateTransactionStartFailures(t *testing.T) {
 
 func TestIdentityStoresCommitCompleteRegistrationAndDependentTransactions(t *testing.T) {
 	registrationTx := &identityTransactionFake{}
-	result, err := (PostgresRegistrationStore{Pool: identityBeginnerFake{tx: registrationTx}}).RegisterAdult(t.Context(), RegistrationInput{Name: "Membro", Email: "member@example.test", PasswordHash: "hash", DateOfBirth: time.Now().AddDate(-20, 0, 0), TermsVersion: "v1", TermsSHA256: "hash", ImageVersion: "v1", ImageSHA256: "hash"})
+	result, err := (PostgresRegistrationStore{Pool: identityBeginnerFake{tx: registrationTx}}).RegisterAdult(t.Context(), RegistrationInput{Name: "Membro", Email: "member@example.test", PasswordHash: "hash", DateOfBirth: time.Now().AddDate(-20, 0, 0), TermsVersion: "v1", TermsSHA256: "hash"})
 	if err != nil || result.UserID == uuid.Nil || !registrationTx.committed {
 		t.Fatalf("registration=%#v committed=%v error=%v", result, registrationTx.committed, err)
 	}

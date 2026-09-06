@@ -25,7 +25,7 @@ test('mobile navigation drawer contains focus and closes predictably', async ({ 
   await expect(trigger).toHaveAttribute('aria-controls', 'mobile-navigation');
 
   await trigger.click();
-  const drawer = page.getByRole('dialog', { name: 'Menu MyCFC' });
+  const drawer = page.getByRole('dialog', { name: 'Menu MyCFCoimbra' });
   await expect(drawer).toBeVisible();
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('body')).toHaveClass(/mobile-navigation-open/);
@@ -82,7 +82,7 @@ test('mobile navigation supports compact height, panel exclusivity and route sel
   await login(page);
   const trigger = page.getByRole('button', { name: 'Menu', exact: true });
   await trigger.click();
-  const drawer = page.getByRole('dialog', { name: 'Menu MyCFC' });
+  const drawer = page.getByRole('dialog', { name: 'Menu MyCFCoimbra' });
   await expect(drawer).toBeVisible();
   const geometry = await drawer.evaluate((element) => {
     const content = element.querySelector('.mobile-navigation-drawer__content');
@@ -142,7 +142,7 @@ test('mobile shell and Today leaderboard reflow at 200 percent text size', async
     }));
     expect(layout.documentWidth, `${route}: ${JSON.stringify(layout.overflowers)}`).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.headerWidth).toBeLessThanOrEqual(layout.viewportWidth);
-    await expect(page.getByRole('link', { name: 'MyCFC' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'MyCFCoimbra' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Menu', exact: true })).toBeVisible();
     await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
   }

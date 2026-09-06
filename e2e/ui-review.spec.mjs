@@ -258,7 +258,7 @@ async function expectVisibleResponsibility(page, label) {
   }
   await expect(page.locator('.account-context:visible').getByText(label, { exact: true })).toBeVisible();
   if (openedDrawer) {
-    await page.getByRole('dialog', { name: 'Menu MyCFC' }).getByRole('button', { name: 'Fechar' }).click();
+    await page.getByRole('dialog', { name: 'Menu MyCFCoimbra' }).getByRole('button', { name: 'Fechar' }).click();
   }
 }
 
@@ -272,7 +272,7 @@ async function expectTodayComposition(page, persona) {
     .map((module) => Math.round(module.getBoundingClientRect().width)));
   expect(new Set(moduleWidths).size, 'Today modules use inconsistent content widths').toBe(1);
   await expect(page.getByRole('navigation', { name: 'Período da classificação' }).getByRole('link', { name: 'Semana' })).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('heading', { name: 'Continuar no MyCFC' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Continuar no MyCFCoimbra' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Eventos Agenda e respostas/ })).toBeVisible();
   if (persona.key === 'tutor') {
     await expect(page.getByRole('heading', { name: 'Menores a cargo' })).toBeVisible();
@@ -364,7 +364,7 @@ test('captures River Clubhouse authentication states', async ({ browser }) => {
 
     await page.goto('/login');
     await expect(page.locator('body')).toHaveClass('auth-body');
-    await expect(page.getByRole('link', { name: 'MyCFC, voltar à página inicial' })).toHaveAttribute('href', '/');
+    await expect(page.getByRole('link', { name: 'MyCFCoimbra, voltar à página inicial' })).toHaveAttribute('href', '/');
     await expect(page.getByRole('navigation', { name: 'Navegação principal' })).toHaveCount(0);
     await expectAccessibilityContract(page, '/login');
     await expectResponsiveContract(page, '/login', viewport);
@@ -391,11 +391,9 @@ test('captures River Clubhouse authentication states', async ({ browser }) => {
     await page.locator('#password').fill('curta');
     await page.getByLabel('Confirmar palavra-passe').fill('diferente');
     await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.getByLabel(/Aceito a autorização de uso de imagem/).check();
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await expect(page.locator('.error-summary')).toBeFocused();
     await expect(page.getByLabel('Correio eletrónico')).toHaveValue('pessoa@example.test');
-    await expect(page.getByLabel(/Aceito a autorização de uso de imagem/)).toBeChecked();
     await expect(page.locator('#password')).toHaveValue('');
     await page.screenshot({ path: path.join(directory, 'registration-invalid.png'), fullPage: true });
     await context.close();
@@ -432,7 +430,7 @@ test('keeps collection creation usable', async ({ browser }) => {
   await login(page, 'review-admin@example.test');
   const mobileMenuTrigger = page.getByRole('button', { name: 'Menu', exact: true });
   await mobileMenuTrigger.click();
-  const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFC' });
+  const mobileMenu = page.getByRole('dialog', { name: 'Menu MyCFCoimbra' });
   await expect(mobileMenu).toBeVisible();
   await expect(mobileMenu.getByRole('navigation', { name: 'Navegação principal' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth), 'mobile navigation drawer overflows').toBeLessThanOrEqual(375);
