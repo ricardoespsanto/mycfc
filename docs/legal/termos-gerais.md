@@ -7,6 +7,8 @@ Entrada em vigor: **[a deliberar]**
 
 O MyCFCoimbra é a plataforma digital do Clube Fluvial de Coimbra, associação sem fins lucrativos, NIPC 502 440 597, com sede na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra, adiante «CFC».
 
+Para efeitos deste documento, «MyCFCoimbra» designa a plataforma digital do CFC disponível em `mycfcoimbra.com`. As referências a «MyCFC», nome anteriormente utilizado ou usado como abreviatura, e a `mycfcoimbra.com` referem-se à mesma plataforma. O responsável pela plataforma continua a ser o CFC. O website público do clube em `cfcoimbra.com` é um serviço distinto.
+
 Estes termos regulam a criação e utilização de contas MyCFCoimbra e as funcionalidades disponibilizadas a atletas, sócios das diferentes categorias, responsáveis por menores, treinadores, moderadores e dirigentes. Neste documento, «responsável pelo menor» abrange quem exerce responsabilidades parentais, um tutor nomeado, outro representante legal ou uma pessoa devidamente autorizada, conforme o caso. Estes termos não substituem os estatutos, regulamentos internos, regras federativas, decisões dos órgãos sociais, condições de seguro ou normas específicas de cada atividade. Em caso de conflito, prevalecem a lei e os instrumentos do CFC aplicáveis.
 
 ## 2. Conta e acesso

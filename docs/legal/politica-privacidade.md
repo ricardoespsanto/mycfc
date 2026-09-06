@@ -8,6 +8,8 @@ Entrada em vigor: **[a deliberar]**
 
 O responsável pelo tratamento é o **Clube Fluvial de Coimbra**, associação sem fins lucrativos, NIPC **502 440 597**, com morada na Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra («CFC»).
 
+Para efeitos desta política, «MyCFCoimbra» designa a plataforma digital do CFC disponível em `mycfcoimbra.com`. As referências a «MyCFC», nome anteriormente utilizado ou usado como abreviatura, e a `mycfcoimbra.com` referem-se à mesma plataforma e ao mesmo tratamento de dados. O responsável pelo tratamento continua a ser o CFC.
+
 Contacto geral e, até a Direção aprovar um canal dedicado, contacto para dados pessoais: `cfluvialcoimbra@gmail.com`. A designação de encarregado da proteção de dados, caso exista ou venha a ser legalmente necessária, será publicada aqui.
 
 Esta política abrange o MyCFCoimbra. O website público `cfcoimbra.com` mantém atualmente uma política própria, que deve ser harmonizada por deliberação separada.
