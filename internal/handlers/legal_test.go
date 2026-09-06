@@ -39,4 +39,13 @@ func TestLegalDocumentsAreAllowlistedPublicAndVersioned(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("unknown version status=%d", response.Code)
 	}
+
+	request = httptest.NewRequest(http.MethodGet, "/legal/termos-gerais/2026-09-06", nil)
+	request.SetPathValue("slug", "termos-gerais")
+	request.SetPathValue("version", "2026-09-06")
+	response = httptest.NewRecorder()
+	handler.Get(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("versioned response=%d cache-control=%q", response.Code, response.Header().Get("Cache-Control"))
+	}
 }

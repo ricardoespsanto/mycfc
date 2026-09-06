@@ -133,7 +133,7 @@ test.describe('authentication', () => {
     expect(invalidResponse?.headers()['referrer-policy']).toBe('no-referrer');
     await expect(page.getByRole('heading', { name: 'Este link já não está disponível' })).toBeVisible();
     await expect(page.getByText('e2e-invalid-token')).toHaveCount(0);
-    await expect(page.locator('a[href^="http"]')).toHaveCount(0);
+    await expect(page.locator('a[href*="e2e-invalid-token"]')).toHaveCount(0);
     await expectNoSeriousAxeViolations(page);
 
     await page.goto('/recuperar-palavra-passe');

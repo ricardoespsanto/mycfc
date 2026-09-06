@@ -25,6 +25,9 @@ func (b identityBeginnerFake) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, e
 type identityTransactionFake struct {
 	pgx.Tx
 	err       error
+	rowCalls  int
+	failRow   int
+	rowErr    error
 	committed bool
 }
 
@@ -35,7 +38,12 @@ func (tx *identityTransactionFake) Query(context.Context, string, ...any) (pgx.R
 	return nil, tx.err
 }
 func (tx *identityTransactionFake) QueryRow(context.Context, string, ...any) pgx.Row {
-	return identityRowFake{err: tx.err}
+	tx.rowCalls++
+	err := tx.err
+	if tx.rowCalls == tx.failRow {
+		err = tx.rowErr
+	}
+	return identityRowFake{err: err}
 }
 func (*identityTransactionFake) Rollback(context.Context) error  { return nil }
 func (tx *identityTransactionFake) Commit(context.Context) error { tx.committed = true; return tx.err }
@@ -81,6 +89,15 @@ func TestIdentityStoresCommitCompleteRegistrationAndDependentTransactions(t *tes
 	err = (PostgresGuardianDependentStore{Pool: identityBeginnerFake{tx: guardianTx}}).CreateDependent(t.Context(), GuardianDependentInput{Name: "Dependente", GuardianID: uuid.New(), DateOfBirth: time.Now().AddDate(-10, 0, 0), ResponsibilityVersion: "v1", ResponsibilitySHA256: "hash"})
 	if err != nil || !guardianTx.committed {
 		t.Fatalf("committed=%v error=%v", guardianTx.committed, err)
+	}
+}
+
+func TestRegistrationRollsBackWhenTermsConsentCannotBeRecorded(t *testing.T) {
+	want := errors.New("consent unavailable")
+	tx := &identityTransactionFake{failRow: 2, rowErr: want}
+	_, err := (PostgresRegistrationStore{Pool: identityBeginnerFake{tx: tx}}).RegisterAdult(t.Context(), RegistrationInput{Name: "Membro", Email: "member@example.test", PasswordHash: "hash", DateOfBirth: time.Now().AddDate(-20, 0, 0), TermsVersion: "v1", TermsSHA256: "hash"})
+	if !errors.Is(err, want) || tx.committed {
+		t.Fatalf("error=%v committed=%t", err, tx.committed)
 	}
 }
 

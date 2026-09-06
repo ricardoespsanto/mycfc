@@ -396,6 +396,14 @@ func profileActionPath(base, returnURL string) string {
 func (h Profile) validateForm(r *http.Request, current dbgen.GetMemberProfileRow, isAdmin bool) (pages.ProfileForm, dbgen.UpdateMemberProfileParams, *dbgen.UpdateMemberIdentityParams) {
 	value := func(key string) string { return strings.TrimSpace(r.PostForm.Get(key)) }
 	form := pages.ProfileForm{Phone: value("phone"), AddressLine1: value("address_line1"), AddressLine2: value("address_line2"), Postcode: value("postcode"), Locality: value("locality"), CountryCode: strings.ToUpper(value("country_code")), NationalityCode: strings.ToUpper(value("nationality_code")), ClubMemberNumber: value("club_member_number"), FederationLicenceNumber: value("federation_licence_number"), EmergencyName: value("emergency_contact_name"), EmergencyRelationship: value("emergency_contact_relationship"), EmergencyPhone: value("emergency_contact_phone"), EmergencyAlternatePhone: value("emergency_contact_alternate_phone"), MedicalDeclaration: value("medical_declaration"), Allergies: value("allergies"), MedicalConditions: value("medical_conditions"), Medication: value("medication"), ActivityRestrictions: value("activity_restrictions"), MedicalNotes: value("medical_notes"), HealthConsentAccepted: r.PostForm.Get("accept_health_data") == "on", Name: value("name"), Email: value("email"), DateOfBirth: value("date_of_birth"), ProfileUpdatedAt: value("profile_updated_at"), IdentityUpdatedAt: value("identity_updated_at"), Errors: validation.FieldErrors{}}
+	if !r.PostForm.Has("medical_declaration") {
+		form.MedicalDeclaration = current.MedicalDeclaration
+		form.Allergies = current.Allergies
+		form.MedicalConditions = current.MedicalConditions
+		form.Medication = current.Medication
+		form.ActivityRestrictions = current.ActivityRestrictions
+		form.MedicalNotes = current.MedicalNotes
+	}
 	checkLength := func(key, label, input string, max int) {
 		if !utf8.ValidString(input) || utf8.RuneCountInString(input) > max {
 			form.Errors.Add(key, fmt.Sprintf("%s não pode exceder %d caracteres.", label, max))

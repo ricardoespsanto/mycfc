@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
@@ -221,6 +223,52 @@ func TestPostgresProfileStoreRequiresAndRecordsExplicitHealthConsent(t *testing.
 	if len(args) != 7 || args[0] != subjectID || args[2] != "Dados_Saude" || args[3] != "2026-09-06" || args[4] != "privacy-digest" {
 		t.Fatalf("health consent args=%#v", args)
 	}
+}
+
+func TestPostgresProfileStoreProtectsHealthDataAcrossActorTypesAndConsentStates(t *testing.T) {
+	subjectID, guardianID := uuid.New(), uuid.New()
+
+	t.Run("guardian health values are preserved and excluded from audit fields", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, guardianID: &guardianID, isDependent: true, dateOfBirth: pgtype.Date{Time: time.Now().AddDate(-10, 0, 0), Valid: true}, medicalDeclaration: "NONE_KNOWN"}
+		input := ProfileUpdate{ActorID: guardianID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen"}, ChangedFields: []string{"phone", "medical_declaration", "allergies"}}
+		if err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), input); err != nil || !tx.committed {
+			t.Fatalf("error=%v committed=%t", err, tx.committed)
+		}
+		updateArgs := tx.argsFor("UpdateMemberProfile")
+		if len(updateArgs) < 21 || updateArgs[13] != "NONE_KNOWN" || updateArgs[14] != "" {
+			t.Fatalf("health values were not preserved: %#v", updateArgs)
+		}
+		auditArgs := tx.argsFor("CreateMemberProfileAudit")
+		fields, ok := auditArgs[3].([]string)
+		if !ok || !reflect.DeepEqual(fields, []string{"phone"}) {
+			t.Fatalf("audit fields=%#v", auditArgs)
+		}
+	})
+
+	t.Run("administrator cannot expand health data", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID}
+		err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), ProfileUpdate{ActorID: uuid.New(), SubjectID: subjectID, IsAdmin: true, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen"}})
+		if !errors.Is(err, ErrHealthConsentRequired) || tx.committed {
+			t.Fatalf("error=%v committed=%t", err, tx.committed)
+		}
+	})
+
+	t.Run("current consent permits an adult health update", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, medicalDeclaration: "PROVIDED", allergies: "Pólen", healthConsent: true}
+		err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), ProfileUpdate{ActorID: subjectID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "PROVIDED", Allergies: "Pólen e ácaros"}, HealthVersion: "v1", HealthSHA256: "digest"})
+		if err != nil || !tx.committed || tx.argsFor("HasConsentVersion") == nil || tx.argsFor("CreateConsentForm") != nil {
+			t.Fatalf("error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
+		}
+	})
+
+	t.Run("consent write failure rolls back", func(t *testing.T) {
+		want := errors.New("consent unavailable")
+		tx := &profileTransactionFake{subjectID: subjectID, queryErrs: map[string]error{"CreateConsentForm": want}}
+		err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), ProfileUpdate{ActorID: subjectID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "NONE_KNOWN"}, AcceptHealthConsent: true})
+		if !errors.Is(err, want) || tx.committed {
+			t.Fatalf("error=%v committed=%t", err, tx.committed)
+		}
+	})
 }
 
 func TestHealthDataExpansionIncludesNegativeDeclarationAndAllowsMinimization(t *testing.T) {
@@ -432,21 +480,30 @@ type profileSQLCall struct {
 
 type profileTransactionFake struct {
 	pgx.Tx
-	subjectID      uuid.UUID
-	consentID      uuid.UUID
-	oldPhotoKey    *string
-	email          *string
-	currentConsent bool
-	healthConsent  bool
-	queryErrs      map[string]error
-	execCalls      []profileSQLCall
-	queryCalls     []profileSQLCall
-	committed      bool
+	subjectID            uuid.UUID
+	consentID            uuid.UUID
+	oldPhotoKey          *string
+	email                *string
+	currentConsent       bool
+	healthConsent        bool
+	guardianID           *uuid.UUID
+	isDependent          bool
+	dateOfBirth          pgtype.Date
+	medicalDeclaration   string
+	allergies            string
+	medicalConditions    string
+	medication           string
+	activityRestrictions string
+	medicalNotes         string
+	queryErrs            map[string]error
+	execCalls            []profileSQLCall
+	queryCalls           []profileSQLCall
+	committed            bool
 }
 
 func (tx *profileTransactionFake) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
 	tx.queryCalls = append(tx.queryCalls, profileSQLCall{query: query, args: args})
-	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent}
+	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent, guardianID: tx.guardianID, isDependent: tx.isDependent, dateOfBirth: tx.dateOfBirth, medicalDeclaration: tx.medicalDeclaration, allergies: tx.allergies, medicalConditions: tx.medicalConditions, medication: tx.medication, activityRestrictions: tx.activityRestrictions, medicalNotes: tx.medicalNotes}
 	for name, err := range tx.queryErrs {
 		if strings.Contains(query, name) {
 			row.err = err
@@ -471,14 +528,23 @@ func (tx *profileTransactionFake) argsFor(name string) []any {
 }
 
 type profileTransactionRow struct {
-	query          string
-	subjectID      uuid.UUID
-	consentID      uuid.UUID
-	oldPhotoKey    *string
-	email          *string
-	currentConsent bool
-	healthConsent  bool
-	err            error
+	query                string
+	subjectID            uuid.UUID
+	consentID            uuid.UUID
+	oldPhotoKey          *string
+	email                *string
+	currentConsent       bool
+	healthConsent        bool
+	guardianID           *uuid.UUID
+	isDependent          bool
+	dateOfBirth          pgtype.Date
+	medicalDeclaration   string
+	allergies            string
+	medicalConditions    string
+	medication           string
+	activityRestrictions string
+	medicalNotes         string
+	err                  error
 }
 
 func (row profileTransactionRow) Scan(dest ...any) error {
@@ -497,7 +563,16 @@ func (row profileTransactionRow) Scan(dest ...any) error {
 	case strings.Contains(row.query, "GetMemberProfile"):
 		*dest[0].(*uuid.UUID) = row.subjectID
 		*dest[2].(**string) = row.email
+		*dest[5].(**uuid.UUID) = row.guardianID
+		*dest[6].(*bool) = row.isDependent
+		*dest[7].(*pgtype.Date) = row.dateOfBirth
 		*dest[8].(*bool) = true
+		*dest[23].(*string) = row.medicalDeclaration
+		*dest[24].(*string) = row.allergies
+		*dest[25].(*string) = row.medicalConditions
+		*dest[26].(*string) = row.medication
+		*dest[27].(*string) = row.activityRestrictions
+		*dest[28].(*string) = row.medicalNotes
 		*dest[29].(**string) = row.oldPhotoKey
 	case strings.Contains(row.query, "CreateConsentForm"):
 		*dest[0].(*uuid.UUID) = row.consentID
@@ -596,6 +671,18 @@ func TestProfileValidationRequiresCompleteEmergencyAndMedicalDetails(t *testing.
 	form, params, identity := h.validateForm(request, record, false)
 	if !form.Errors.Empty() || identity != nil || params.MedicalDeclaration != "NONE_KNOWN" {
 		t.Fatalf("valid form = %#v, params = %#v, identity = %#v", form.Errors, params, identity)
+	}
+
+	record.MedicalDeclaration = "PROVIDED"
+	record.Allergies = "Pólen"
+	withoutHealthFields := cloneValues(validBase)
+	withoutHealthFields.Del("medical_declaration")
+	request = httptest.NewRequest(http.MethodPost, "/perfil/dependentes/member", strings.NewReader(withoutHealthFields.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_ = request.ParseForm()
+	form, params, _ = h.validateForm(request, record, false)
+	if !form.Errors.Empty() || params.MedicalDeclaration != "PROVIDED" || params.Allergies != "Pólen" {
+		t.Fatalf("hidden health values were not preserved: errors=%#v params=%#v", form.Errors, params)
 	}
 }
 
@@ -714,6 +801,17 @@ func TestProfileGetAndPostRenderAndPersistOwnProfile(t *testing.T) {
 	}
 }
 
+func TestProfileCompletionDoesNotRequireOptionalHealthData(t *testing.T) {
+	record := dbgen.GetMemberProfileRow{EmergencyContactName: "Rui", EmergencyContactRelationship: "Tutor", EmergencyContactPhone: "+351 912 000 000", MedicalDeclaration: "UNKNOWN"}
+	if !profileComplete(record) {
+		t.Fatal("optional health declaration made an emergency-complete profile incomplete")
+	}
+	record.EmergencyContactPhone = ""
+	if profileComplete(record) {
+		t.Fatal("profile without a complete emergency contact was marked complete")
+	}
+}
+
 func TestProfileHandlersKeepPrivateDataBehindAuthorizationAndExposeUpdateOutcomes(t *testing.T) {
 	userID := uuid.New()
 	updated := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
@@ -766,6 +864,24 @@ func TestProfileHandlersKeepPrivateDataBehindAuthorizationAndExposeUpdateOutcome
 			}
 		})
 	}
+
+	t.Run("new health data requires explicit consent", func(t *testing.T) {
+		store := &profileWorkflowStore{record: record, updateErr: ErrHealthConsentRequired}
+		h := Profile{Store: store, Location: time.UTC, HealthVersion: "2026-09-06", HealthSHA256: "digest"}
+		values := cloneValues(form)
+		values.Set("medical_declaration", "PROVIDED")
+		values.Set("allergies", "Pólen")
+		values.Set("accept_health_data", "on")
+		r := httptest.NewRequest(http.MethodPost, "/perfil", strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("User-Agent", "MyCFCoimbra test agent")
+		r = r.WithContext(context.WithValue(httpx.WithRemoteIP(r.Context(), netip.MustParseAddr("192.0.2.10")), currentUserKey{}, CurrentUser{ID: userID}))
+		w := httptest.NewRecorder()
+		h.Post(w, r)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "consentimento explícito") || store.update.IP == nil || store.update.UserAgent != "MyCFCoimbra test agent" || store.update.HealthVersion != "2026-09-06" || !store.update.AcceptHealthConsent {
+			t.Fatalf("response=%d update=%#v body=%s", w.Code, store.update, w.Body.String())
+		}
+	})
 
 	t.Run("database unique violation retains the submitted identity form", func(t *testing.T) {
 		store := &profileWorkflowStore{record: record, updateErr: &pgconn.PgError{Code: "23505"}}
