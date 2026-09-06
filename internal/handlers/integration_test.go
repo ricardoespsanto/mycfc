@@ -858,7 +858,7 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 		t.Fatalf("guardian changed dependent health data: declaration=%q allergies=%q notes=%q", dependentMedicalDeclaration, dependentAllergies, dependentMedicalNotes)
 	}
 	var guardianChangedFields []string
-	if err := pool.QueryRow(ctx, `SELECT changed_fields FROM member_profile_audit WHERE actor_user_id = $1 AND subject_user_id = $2 AND action = 'PROFILE_UPDATED' ORDER BY occurred_at DESC LIMIT 1`, guardianID, dependentID).Scan(&guardianChangedFields); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT changed_fields FROM member_profile_audit_events WHERE actor_user_id = $1 AND subject_user_id = $2 AND action = 'PROFILE_UPDATED' ORDER BY occurred_at DESC LIMIT 1`, guardianID, dependentID).Scan(&guardianChangedFields); err != nil {
 		t.Fatal(err)
 	}
 	if slices.ContainsFunc(guardianChangedFields, isHealthField) {
