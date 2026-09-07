@@ -147,6 +147,43 @@ func TestSecurityHeadersProtectPasswordRecoveryResponses(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersProtectPolarCallbackBeforeAuthentication(t *testing.T) {
+	handler := SecurityHeadersMiddleware(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, httptest.NewRequest(http.MethodGet, "/", nil), "/login", http.StatusSeeOther)
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/oauth/polar/callback?code=private&state=private", nil))
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	if got := response.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q", got)
+	}
+}
+
+func TestSecurityHeadersScopePolarOAuthFormRedirect(t *testing.T) {
+	handler := SecurityHeadersMiddleware(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, tc := range []struct {
+		path    string
+		allowed bool
+	}{
+		{path: "/perfil/integracoes", allowed: true},
+		{path: "/perfil/integracoes/polar/ligar", allowed: true},
+		{path: "/perfil/integracoes/polar/desligar", allowed: false},
+		{path: "/perfil", allowed: false},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		csp := response.Header().Get("Content-Security-Policy")
+		if got := strings.Contains(csp, "form-action 'self' https://flow.polar.com;"); got != tc.allowed {
+			t.Errorf("%s Polar form-action allowed = %v, want %v: %q", tc.path, got, tc.allowed, csp)
+		}
+	}
+}
+
 func TestAccessLogDoesNotRecordPasswordRecoveryToken(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))

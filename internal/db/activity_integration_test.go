@@ -85,12 +85,6 @@ func TestActivityIntegrationPersistsIdempotentlyAndOwnsMatches(t *testing.T) {
 		t.Fatalf("claimed job = %#v, err = %v", claimed, err)
 	}
 	checkpoint := "page-2"
-	completed, err := queries.CompleteActivitySyncJob(ctx, dbgen.CompleteActivitySyncJobParams{
-		Checkpoint: &checkpoint, FinishedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true}, ID: job.ID,
-	})
-	if err != nil || completed.Status != "SUCCEEDED" || completed.Checkpoint == nil || *completed.Checkpoint != checkpoint {
-		t.Fatalf("completed job = %#v, err = %v", completed, err)
-	}
 
 	distance := 5000.25
 	average, maximum := int16(145), int16(181)
@@ -101,6 +95,7 @@ func TestActivityIntegrationPersistsIdempotentlyAndOwnsMatches(t *testing.T) {
 		DistanceMetres: &distance, AverageHeartRate: &average, MaximumHeartRate: &maximum,
 		ProviderMetrics: []byte(`{"relative_effort":42}`), RawSummary: []byte(`{"private":true}`),
 		PayloadSha256: make([]byte, 32), NormalizationVersion: 1,
+		ExpectedCredentialVersion: connection.CredentialVersion, SyncJobID: job.ID,
 	}
 	activity, err := queries.UpsertSyncedActivity(ctx, activityParams)
 	if err != nil {
@@ -116,6 +111,13 @@ func TestActivityIntegrationPersistsIdempotentlyAndOwnsMatches(t *testing.T) {
 	activityParams.UserID = otherUserID
 	if _, err := queries.UpsertSyncedActivity(ctx, activityParams); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("cross-user activity collision error = %v", err)
+	}
+	completed, err := queries.CompleteActivitySyncJob(ctx, dbgen.CompleteActivitySyncJobParams{
+		Checkpoint: &checkpoint, FinishedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true}, ID: job.ID,
+		ConnectionID: connection.ID, UserID: athleteID, Provider: "strava", ExpectedCredentialVersion: connection.CredentialVersion,
+	})
+	if err != nil || completed.Status != "SUCCEEDED" || completed.Checkpoint == nil || *completed.Checkpoint != checkpoint {
+		t.Fatalf("completed job = %#v, err = %v", completed, err)
 	}
 
 	var programmeID uuid.UUID
@@ -187,7 +189,7 @@ func TestActivityMigrationPreservesExistingRecords(t *testing.T) {
 	if _, err := tx.Exec(ctx, `INSERT INTO training_logs (id, user_id, occurred_at, duration_seconds, distance_metres, notes) VALUES ($1, $2, now(), 3600, 8000, 'não alterar')`, logID, userID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `DROP TABLE training_session_activity_matches, synced_activities, activity_sync_jobs, activity_connections`); err != nil {
+	if _, err := tx.Exec(ctx, `DROP TABLE training_session_activity_matches, synced_activities, activity_load_observations, activity_sync_jobs, activity_connections`); err != nil {
 		t.Fatal(err)
 	}
 	migrationSQL, err := migrationFiles.ReadFile("migrations/202608060001_activity_integration_foundation.sql")
@@ -195,6 +197,13 @@ func TestActivityMigrationPreservesExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, string(migrationSQL)); err != nil {
+		t.Fatal(err)
+	}
+	polarMigrationSQL, err := migrationFiles.ReadFile("migrations/202608230002_polar_activity_load.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(polarMigrationSQL)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,7 +215,7 @@ func TestActivityMigrationPreservesExistingRecords(t *testing.T) {
 	if name != "Preservada" || notes != "não alterar" || distance != 8000 {
 		t.Fatalf("existing record changed: name=%q notes=%q distance=%d", name, notes, distance)
 	}
-	for _, table := range []string{"activity_connections", "activity_sync_jobs", "synced_activities", "training_session_activity_matches"} {
+	for _, table := range []string{"activity_connections", "activity_sync_jobs", "synced_activities", "activity_load_observations", "training_session_activity_matches"} {
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil || !exists {
 			t.Fatalf("table %s exists=%v err=%v", table, exists, err)

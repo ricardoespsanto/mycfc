@@ -15,7 +15,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, structuredTraining handlers.StructuredTraining, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, structuredTraining handlers.StructuredTraining, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, integrations handlers.Integrations, foundation handlers.Foundation) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System(foundation)
@@ -48,6 +48,12 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /perfil/fotografia", auth.RequireAuthenticated(http.HandlerFunc(profile.UploadPhoto)))
 	mux.Handle("GET /perfil/fotografia/remover", auth.RequireAuthenticated(http.HandlerFunc(profile.RemovePhotoPage)))
 	mux.Handle("POST /perfil/fotografia/remover", auth.RequireAuthenticated(http.HandlerFunc(profile.RemovePhoto)))
+	mux.Handle("GET /perfil/integracoes", auth.RequireAuthenticated(http.HandlerFunc(integrations.Index)))
+	mux.Handle("POST /perfil/integracoes/polar/ligar", auth.RequireAuthenticated(http.HandlerFunc(integrations.Connect)))
+	mux.Handle("GET /oauth/polar/callback", auth.RequireAuthenticated(http.HandlerFunc(integrations.Callback)))
+	mux.Handle("POST /perfil/integracoes/polar/sincronizar", auth.RequireAuthenticated(http.HandlerFunc(integrations.Sync)))
+	mux.Handle("GET /perfil/integracoes/polar/desligar", auth.RequireAuthenticated(http.HandlerFunc(integrations.DisconnectPage)))
+	mux.Handle("POST /perfil/integracoes/polar/desligar", auth.RequireAuthenticated(http.HandlerFunc(integrations.Disconnect)))
 	mux.Handle("GET /perfil/dependentes/{id}", auth.RequireGuardian(http.HandlerFunc(profile.Get)))
 	mux.Handle("POST /perfil/dependentes/{id}", auth.RequireGuardian(http.HandlerFunc(profile.Post)))
 	mux.Handle("POST /perfil/dependentes/{id}/fotografia", auth.RequireGuardian(http.HandlerFunc(profile.UploadPhoto)))

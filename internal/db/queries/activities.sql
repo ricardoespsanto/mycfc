@@ -19,6 +19,7 @@ ON CONFLICT (user_id, provider) DO UPDATE SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     disconnected_at = NULL,
     updated_at = now()
 RETURNING *;
@@ -26,6 +27,11 @@ RETURNING *;
 -- name: GetActivityConnectionForUser :one
 SELECT * FROM activity_connections
 WHERE user_id = sqlc.arg(user_id) AND provider = sqlc.arg(provider);
+
+-- name: GetActivityConnectionForUserForUpdate :one
+SELECT * FROM activity_connections
+WHERE user_id = sqlc.arg(user_id) AND provider = sqlc.arg(provider)
+FOR UPDATE;
 
 -- name: GetActivityConnectionByProviderIdentity :one
 SELECT * FROM activity_connections
@@ -42,6 +48,7 @@ UPDATE activity_connections SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND credential_version = sqlc.arg(expected_credential_version) AND status <> 'DISCONNECTED'
 RETURNING *;
@@ -53,8 +60,11 @@ UPDATE activity_connections SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     updated_at = now()
-WHERE id = sqlc.arg(id) AND status <> 'DISCONNECTED'
+WHERE id = sqlc.arg(id) AND status = 'ACTIVE'
+	AND user_id = sqlc.arg(user_id) AND provider = sqlc.arg(provider)
+	AND credential_version = sqlc.arg(expected_credential_version)
 RETURNING *;
 
 -- name: RecordActivityConnectionError :one
@@ -63,8 +73,11 @@ UPDATE activity_connections SET
     last_error_code = sqlc.arg(error_code),
     last_error_message = sqlc.arg(error_message),
     last_error_at = sqlc.arg(failed_at),
+	provider_retry_after = sqlc.narg(provider_retry_after),
     updated_at = now()
-WHERE id = sqlc.arg(id) AND status <> 'DISCONNECTED'
+WHERE id = sqlc.arg(id) AND status = 'ACTIVE'
+	AND user_id = sqlc.arg(user_id) AND provider = sqlc.arg(provider)
+	AND credential_version = sqlc.arg(expected_credential_version)
 RETURNING *;
 
 -- name: DisconnectActivityConnection :one
@@ -76,6 +89,7 @@ WITH disconnected AS (
         credential_expires_at = NULL,
         credential_version = credential_version + 1,
         sync_cursor = NULL,
+		provider_retry_after = NULL,
         disconnected_at = sqlc.arg(disconnected_at),
         updated_at = now()
     WHERE activity_connections.id = sqlc.arg(id) AND activity_connections.user_id = sqlc.arg(user_id)
@@ -95,11 +109,31 @@ WHERE activity_sync_jobs.connection_id = EXCLUDED.connection_id
   AND activity_sync_jobs.reason = EXCLUDED.reason
 RETURNING *;
 
+-- name: CancelStaleActivitySyncJobs :execrows
+UPDATE activity_sync_jobs job SET
+    status = 'CANCELLED', finished_at = sqlc.arg(cancelled_at), updated_at = now()
+FROM activity_connections connection
+WHERE job.connection_id = connection.id
+  AND connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+  AND connection.provider = sqlc.arg(provider)
+  AND ((job.status = 'PENDING' AND job.requested_at < sqlc.arg(stale_before))
+    OR (job.status = 'RUNNING' AND job.started_at < sqlc.arg(stale_before)));
+
+-- name: CancelActivitySyncJob :execrows
+UPDATE activity_sync_jobs job SET
+    status = 'CANCELLED', finished_at = sqlc.arg(cancelled_at), updated_at = now()
+FROM activity_connections connection
+WHERE job.id = sqlc.arg(id) AND job.connection_id = connection.id
+  AND job.status IN ('PENDING', 'RUNNING')
+  AND connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+  AND connection.provider = sqlc.arg(provider)
+  AND connection.credential_version = sqlc.arg(expected_credential_version);
+
 -- name: ClaimNextActivitySyncJob :one
 WITH candidate AS (
     SELECT job.id FROM activity_sync_jobs job
     JOIN activity_connections connection ON connection.id = job.connection_id
-    WHERE job.status = 'PENDING' AND connection.status <> 'DISCONNECTED'
+    WHERE job.status = 'PENDING' AND connection.status = 'ACTIVE'
     ORDER BY job.requested_at, job.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
@@ -110,12 +144,29 @@ FROM candidate
 WHERE job.id = candidate.id
 RETURNING job.*;
 
+-- name: StartActivitySyncJob :one
+UPDATE activity_sync_jobs job SET
+    status = 'RUNNING', attempts = attempts + 1,
+    started_at = sqlc.arg(started_at), updated_at = now()
+FROM activity_connections connection
+WHERE job.id = sqlc.arg(id) AND job.connection_id = connection.id
+  AND job.status = 'PENDING' AND connection.id = sqlc.arg(connection_id)
+  AND connection.user_id = sqlc.arg(user_id) AND connection.provider = sqlc.arg(provider)
+  AND connection.status = 'ACTIVE'
+  AND connection.credential_version = sqlc.arg(expected_credential_version)
+RETURNING job.*;
+
 -- name: CompleteActivitySyncJob :one
 UPDATE activity_sync_jobs SET
     status = 'SUCCEEDED', checkpoint = sqlc.narg(checkpoint),
     last_error_code = NULL, last_error_message = NULL,
     finished_at = sqlc.arg(finished_at), updated_at = now()
-WHERE id = sqlc.arg(id) AND status = 'RUNNING'
+WHERE activity_sync_jobs.id = sqlc.arg(id) AND activity_sync_jobs.status = 'RUNNING'
+  AND EXISTS (SELECT 1 FROM activity_connections connection
+      WHERE connection.id = activity_sync_jobs.connection_id
+        AND connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+        AND connection.provider = sqlc.arg(provider) AND connection.status = 'ACTIVE'
+        AND connection.credential_version = sqlc.arg(expected_credential_version))
 RETURNING *;
 
 -- name: FailActivitySyncJob :one
@@ -123,7 +174,12 @@ UPDATE activity_sync_jobs SET
     status = 'FAILED', checkpoint = sqlc.narg(checkpoint),
     last_error_code = sqlc.arg(error_code), last_error_message = sqlc.arg(error_message),
     finished_at = sqlc.arg(finished_at), updated_at = now()
-WHERE id = sqlc.arg(id) AND status = 'RUNNING'
+WHERE activity_sync_jobs.id = sqlc.arg(id) AND activity_sync_jobs.status = 'RUNNING'
+  AND EXISTS (SELECT 1 FROM activity_connections connection
+      WHERE connection.id = activity_sync_jobs.connection_id
+        AND connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+        AND connection.provider = sqlc.arg(provider) AND connection.status = 'ACTIVE'
+        AND connection.credential_version = sqlc.arg(expected_credential_version))
 RETURNING *;
 
 -- name: GetActivitySyncJob :one
@@ -136,12 +192,17 @@ INSERT INTO synced_activities (
     moving_duration_seconds, distance_metres, average_heart_rate, maximum_heart_rate,
     provider_metrics, raw_summary, payload_sha256, normalization_version, deleted_at
 )
-VALUES (
-    sqlc.arg(connection_id), sqlc.arg(user_id), sqlc.arg(provider), sqlc.arg(provider_activity_id), sqlc.narg(provider_updated_at),
+SELECT
+    sqlc.arg(connection_id), sqlc.arg(user_id), sqlc.arg(provider)::varchar, sqlc.arg(provider_activity_id), sqlc.narg(provider_updated_at),
     sqlc.arg(starts_at), sqlc.arg(ends_at), sqlc.arg(sport), sqlc.arg(normalized_sport), sqlc.arg(duration_seconds),
     sqlc.narg(moving_duration_seconds), sqlc.narg(distance_metres), sqlc.narg(average_heart_rate), sqlc.narg(maximum_heart_rate),
     sqlc.arg(provider_metrics), sqlc.arg(raw_summary), sqlc.arg(payload_sha256), sqlc.arg(normalization_version), sqlc.narg(deleted_at)
-)
+FROM activity_connections connection
+JOIN activity_sync_jobs job ON job.connection_id = connection.id
+WHERE connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+  AND connection.provider = sqlc.arg(provider)::varchar AND connection.status = 'ACTIVE'
+  AND connection.credential_version = sqlc.arg(expected_credential_version)
+  AND job.id = sqlc.arg(sync_job_id) AND job.status = 'RUNNING'
 ON CONFLICT (provider, provider_activity_id) DO UPDATE SET
     provider_updated_at = EXCLUDED.provider_updated_at,
     starts_at = EXCLUDED.starts_at,
@@ -165,7 +226,8 @@ RETURNING *;
 
 -- name: GetSyncedActivityByProviderID :one
 SELECT * FROM synced_activities
-WHERE provider = sqlc.arg(provider) AND provider_activity_id = sqlc.arg(provider_activity_id);
+WHERE connection_id = sqlc.arg(connection_id) AND user_id = sqlc.arg(user_id)
+  AND provider = sqlc.arg(provider) AND provider_activity_id = sqlc.arg(provider_activity_id);
 
 -- name: ListRecentSyncedActivitiesForUser :many
 SELECT * FROM synced_activities
@@ -175,8 +237,50 @@ LIMIT sqlc.arg(row_limit);
 
 -- name: MarkSyncedActivityDeleted :one
 UPDATE synced_activities SET deleted_at = sqlc.arg(deleted_at), updated_at = now()
-WHERE provider = sqlc.arg(provider) AND provider_activity_id = sqlc.arg(provider_activity_id)
+WHERE connection_id = sqlc.arg(connection_id) AND user_id = sqlc.arg(user_id)
+  AND provider = sqlc.arg(provider) AND provider_activity_id = sqlc.arg(provider_activity_id)
 RETURNING *;
+
+-- name: UpsertActivityLoadObservation :one
+INSERT INTO activity_load_observations (
+    connection_id, user_id, provider, load_kind, observed_on, availability,
+    provider_status, load_value, short_term_load, short_term_window_days,
+    long_term_load, long_term_window_days, load_ratio, provider_metrics,
+    payload_sha256, source_updated_at, fetched_at
+)
+SELECT
+    connection.id, connection.user_id, connection.provider, sqlc.arg(load_kind),
+    sqlc.arg(observed_on), sqlc.arg(availability), sqlc.arg(provider_status),
+    sqlc.narg(load_value), sqlc.narg(short_term_load), sqlc.narg(short_term_window_days),
+    sqlc.narg(long_term_load), sqlc.narg(long_term_window_days), sqlc.narg(load_ratio),
+    sqlc.arg(provider_metrics), sqlc.arg(payload_sha256), sqlc.narg(source_updated_at),
+    sqlc.arg(fetched_at)
+FROM activity_connections connection
+JOIN activity_sync_jobs job ON job.connection_id = connection.id
+WHERE connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+  AND connection.provider = sqlc.arg(provider) AND connection.status = 'ACTIVE'
+  AND connection.credential_version = sqlc.arg(expected_credential_version)
+  AND job.id = sqlc.arg(sync_job_id) AND job.status = 'RUNNING'
+ON CONFLICT (connection_id, load_kind, observed_on) DO UPDATE SET
+    availability = EXCLUDED.availability, provider_status = EXCLUDED.provider_status,
+    load_value = EXCLUDED.load_value, short_term_load = EXCLUDED.short_term_load,
+    short_term_window_days = EXCLUDED.short_term_window_days,
+    long_term_load = EXCLUDED.long_term_load, long_term_window_days = EXCLUDED.long_term_window_days,
+    load_ratio = EXCLUDED.load_ratio, provider_metrics = EXCLUDED.provider_metrics,
+    payload_sha256 = EXCLUDED.payload_sha256, source_updated_at = EXCLUDED.source_updated_at,
+    fetched_at = EXCLUDED.fetched_at, updated_at = now()
+WHERE activity_load_observations.connection_id = EXCLUDED.connection_id
+RETURNING *;
+
+-- name: PruneActivityLoadObservationsBefore :execrows
+DELETE FROM activity_load_observations observation
+USING activity_connections connection, activity_sync_jobs job
+WHERE observation.connection_id = connection.id AND job.connection_id = connection.id
+  AND connection.id = sqlc.arg(connection_id) AND connection.user_id = sqlc.arg(user_id)
+  AND connection.provider = sqlc.arg(provider) AND connection.status = 'ACTIVE'
+  AND connection.credential_version = sqlc.arg(expected_credential_version)
+  AND job.id = sqlc.arg(sync_job_id) AND job.status = 'RUNNING'
+  AND observation.load_kind = sqlc.arg(load_kind) AND observation.observed_on < sqlc.arg(oldest_date);
 
 -- name: UpsertSuggestedActivityMatch :one
 INSERT INTO training_session_activity_matches (session_id, activity_id, user_id, status, confidence, match_basis)

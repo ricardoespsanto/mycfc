@@ -68,6 +68,22 @@ func TestNormalizedActivityValidation(t *testing.T) {
 	}
 }
 
+func TestLoadObservationValidationPreservesUnavailableState(t *testing.T) {
+	observation := LoadObservation{
+		ObservedOn: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC),
+		Method:     "polar_cardio_load_trimp", AvailabilityStatus: "LOAD_STATUS_NOT_AVAILABLE",
+		FetchedAt: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	}
+	if err := observation.Validate(); err != nil {
+		t.Fatalf("unavailable observation rejected: %v", err)
+	}
+	negative := -1.0
+	observation.LoadValue = &negative
+	if err := observation.Validate(); err == nil {
+		t.Fatal("negative load accepted")
+	}
+}
+
 func TestSyncRequestRequiresBoundedWindow(t *testing.T) {
 	now := time.Now().UTC()
 	if err := (SyncRequest{Since: now.Add(-time.Hour), Until: now, Limit: 100}).Validate(); err != nil {

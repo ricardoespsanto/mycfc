@@ -176,6 +176,10 @@ func validConfig() Config {
 		DatabaseURL:                 Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"),
 		CSRFAuthKeyB64:              Secret(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))),
 		EmailVerificationHMACKeyB64: Secret(base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789"))),
+		PolarClientID:               Secret("polar-client"),
+		PolarClientSecret:           Secret("polar-secret"),
+		ActivityCredentialKeyID:     "activity-v1",
+		ActivityCredentialKeysJSON:  Secret(`{"activity-v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}`),
 		SMTPHost:                    "localhost",
 		SMTPPort:                    1025,
 		SMTPFromAddress:             "mycfc@example.test",
@@ -458,52 +462,53 @@ func TestValidateRequiresTurnstilePair(t *testing.T) {
 
 func validProductionParameters() map[string]string {
 	return map[string]string{
-		"BASE_URL":                 "https://mycfcoimbra.com",
-		"DB_HOST":                  "postgres",
-		"DB_PORT":                  "5432",
-		"DB_NAME":                  "mycfc",
-		"DB_USER":                  "mycfc_app",
-		"POSTGRES_USER":            "mycfc",
-		"MIGRATION_DB_USER":        "mycfc_migrator",
-		"DB_SSLMODE":               "disable",
-		"SMTP_HOST":                "email-smtp.eu-west-1.amazonaws.com",
-		"SMTP_PORT":                "587",
-		"SMTP_FROM_ADDRESS":        "no-reply@mycfcoimbra.com",
-		"SMTP_FROM_NAME":           "MyCFC",
-		"SMTP_TLS_MODE":            "starttls",
-		"SMTP_TIMEOUT":             "10s",
-		"TURNSTILE_SITE_KEY":       "site-key",
-		"S3_BUCKET_NAME":           "mycfc-production-repairs",
-		"S3_FORCE_PATH_STYLE":      "false",
-		"GALLERY_URL":              "https://mycfcoimbra.com/gallery",
-		"CONSENT_TERMS_VERSION":    "0.0.1",
-		"CONSENT_TERMS_SHA256":     strings.Repeat("a", 64),
-		"CONSENT_TERMS_URL":        "https://mycfcoimbra.com/legal/termos-gerais",
-		"CONSENT_IMAGE_VERSION":    "0.0.1",
-		"CONSENT_IMAGE_SHA256":     strings.Repeat("b", 64),
-		"CONSENT_IMAGE_URL":        "https://mycfcoimbra.com/legal/uso-imagem",
-		"CONSENT_MINOR_VERSION":    "0.0.1",
-		"CONSENT_MINOR_SHA256":     strings.Repeat("c", 64),
-		"CONSENT_MINOR_URL":        "https://mycfcoimbra.com/legal/responsabilidade-menor",
-		"LOG_LEVEL":                "INFO",
-		"TRUSTED_PROXY_CIDRS":      "172.30.0.0/24",
-		"RELEASE_REPOSITORY":       "ricardoespsanto/mycfc",
-		"DB_MAX_CONNS":             "8",
-		"DB_MIN_CONNS":             "1",
-		"DB_MAX_CONN_LIFETIME":     "30m",
-		"DB_MAX_CONN_IDLE_TIME":    "5m",
-		"DB_HEALTH_CHECK_PERIOD":   "30s",
-		"SESSION_LIFETIME":         "12h",
-		"SESSION_IDLE_TIMEOUT":     "30m",
-		"MAX_REQUEST_BYTES":        "12582912",
-		"MAX_PHOTO_BYTES":          "10485760",
-		"HTTP_READ_HEADER_TIMEOUT": "5s",
-		"HTTP_READ_TIMEOUT":        "15s",
-		"HTTP_WRITE_TIMEOUT":       "30s",
-		"HTTP_IDLE_TIMEOUT":        "60s",
-		"SHUTDOWN_TIMEOUT":         "20s",
-		"RELEASE_CHECK_TIMEOUT":    "3s",
-		"RELEASE_CHECK_CACHE_TTL":  "15m",
+		"BASE_URL":                   "https://mycfcoimbra.com",
+		"DB_HOST":                    "postgres",
+		"DB_PORT":                    "5432",
+		"DB_NAME":                    "mycfc",
+		"DB_USER":                    "mycfc_app",
+		"POSTGRES_USER":              "mycfc",
+		"MIGRATION_DB_USER":          "mycfc_migrator",
+		"DB_SSLMODE":                 "disable",
+		"SMTP_HOST":                  "email-smtp.eu-west-1.amazonaws.com",
+		"SMTP_PORT":                  "587",
+		"SMTP_FROM_ADDRESS":          "no-reply@mycfcoimbra.com",
+		"SMTP_FROM_NAME":             "MyCFC",
+		"SMTP_TLS_MODE":              "starttls",
+		"SMTP_TIMEOUT":               "10s",
+		"ACTIVITY_CREDENTIAL_KEY_ID": "activity-v1",
+		"TURNSTILE_SITE_KEY":         "site-key",
+		"S3_BUCKET_NAME":             "mycfc-production-repairs",
+		"S3_FORCE_PATH_STYLE":        "false",
+		"GALLERY_URL":                "https://mycfcoimbra.com/gallery",
+		"CONSENT_TERMS_VERSION":      "0.0.1",
+		"CONSENT_TERMS_SHA256":       strings.Repeat("a", 64),
+		"CONSENT_TERMS_URL":          "https://mycfcoimbra.com/legal/termos-gerais",
+		"CONSENT_IMAGE_VERSION":      "0.0.1",
+		"CONSENT_IMAGE_SHA256":       strings.Repeat("b", 64),
+		"CONSENT_IMAGE_URL":          "https://mycfcoimbra.com/legal/uso-imagem",
+		"CONSENT_MINOR_VERSION":      "0.0.1",
+		"CONSENT_MINOR_SHA256":       strings.Repeat("c", 64),
+		"CONSENT_MINOR_URL":          "https://mycfcoimbra.com/legal/responsabilidade-menor",
+		"LOG_LEVEL":                  "INFO",
+		"TRUSTED_PROXY_CIDRS":        "172.30.0.0/24",
+		"RELEASE_REPOSITORY":         "ricardoespsanto/mycfc",
+		"DB_MAX_CONNS":               "8",
+		"DB_MIN_CONNS":               "1",
+		"DB_MAX_CONN_LIFETIME":       "30m",
+		"DB_MAX_CONN_IDLE_TIME":      "5m",
+		"DB_HEALTH_CHECK_PERIOD":     "30s",
+		"SESSION_LIFETIME":           "12h",
+		"SESSION_IDLE_TIMEOUT":       "30m",
+		"MAX_REQUEST_BYTES":          "12582912",
+		"MAX_PHOTO_BYTES":            "10485760",
+		"HTTP_READ_HEADER_TIMEOUT":   "5s",
+		"HTTP_READ_TIMEOUT":          "15s",
+		"HTTP_WRITE_TIMEOUT":         "30s",
+		"HTTP_IDLE_TIMEOUT":          "60s",
+		"SHUTDOWN_TIMEOUT":           "20s",
+		"RELEASE_CHECK_TIMEOUT":      "3s",
+		"RELEASE_CHECK_CACHE_TTL":    "15m",
 	}
 }
 
@@ -517,6 +522,9 @@ func validProductionSecrets() map[string]string {
 		"TURNSTILE_SECRET_KEY":            "secret-key",
 		"SMTP_USERNAME":                   "smtp-user",
 		"SMTP_PASSWORD":                   "smtp-pass",
+		"POLAR_CLIENT_ID":                 "polar-client",
+		"POLAR_CLIENT_SECRET":             "polar-secret",
+		"ACTIVITY_CREDENTIAL_KEYS_JSON":   `{"activity-v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}`,
 	}
 }
 
@@ -545,6 +553,21 @@ func TestValidateRequiresTurnstileInProduction(t *testing.T) {
 	cfg.TurnstileSecretKey = Secret("secret-key")
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("production turnstile configuration rejected: %v", err)
+	}
+}
+
+func TestActivityCredentialKeyringAndPolarCallbackAreValidated(t *testing.T) {
+	cfg := validConfig()
+	keys, err := cfg.ActivityCredentialKeys()
+	if err != nil || len(keys["activity-v1"]) != 32 {
+		t.Fatalf("keys=%v err=%v", keys, err)
+	}
+	if got := cfg.PolarRedirectURL(); got != "http://localhost:8080/oauth/polar/callback" {
+		t.Fatalf("callback = %q", got)
+	}
+	cfg.ActivityCredentialKeyID = "missing"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ACTIVITY_CREDENTIAL_KEY_ID") {
+		t.Fatalf("missing active key error = %v", err)
 	}
 }
 

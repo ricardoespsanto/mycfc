@@ -95,7 +95,7 @@ templ profileContent(page ProfilePage) {
 func profileActions(page ProfilePage) []components.PageAction {
 	if page.Admin { return []components.PageAction{{Label: "Voltar ao membro", Href: memberDetailURL(page.SubjectID, page.ReturnURL), Variant: "secondary"}} }
 	if !page.Self { return []components.PageAction{{Label: "Voltar aos menores", Href: "/dashboard/guardian", Variant: "secondary"}} }
-	return nil
+	return []components.PageAction{{Label: "Integrações", Href: "/perfil/integracoes", Variant: "secondary"}}
 }
 
 templ profileEditForm(page ProfilePage) {

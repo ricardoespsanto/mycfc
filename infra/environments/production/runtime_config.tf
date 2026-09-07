@@ -5,56 +5,57 @@ locals {
   release_agent_user_name  = "${local.name}-release-agent"
 
   runtime_parameters = {
-    "base-url"                 = "https://${var.domain_name}"
-    "db/host"                  = var.database_host
-    "db/port"                  = tostring(var.database_port)
-    "db/name"                  = var.database_name
-    "db/user"                  = var.app_db_username
-    "db/bootstrap-user"        = var.postgres_username
-    "db/migration-user"        = var.migration_db_username
-    "db/sslmode"               = var.database_sslmode
-    "smtp/host"                = local.ses_smtp_endpoint
-    "smtp/port"                = tostring(var.smtp_port)
-    "smtp/from-address"        = local.ses_from_address
-    "smtp/from-name"           = var.smtp_from_name
-    "smtp/tls-mode"            = var.smtp_tls_mode
-    "smtp/timeout"             = var.smtp_timeout
-    "turnstile/site-key"       = var.turnstile_site_key
-    "s3/bucket-name"           = aws_s3_bucket.repairs.bucket
-    "s3/force-path-style"      = "false"
-    "calendar/competition-id"  = var.calendar_competition_id
-    "calendar/training-id"     = var.calendar_training_id
-    "calendar/social-id"       = var.calendar_social_id
-    "calendar/cleanups-id"     = var.calendar_cleanups_id
-    "gallery-url"              = var.gallery_url
-    "consent/terms/version"    = var.consent_terms_version
-    "consent/terms/sha256"     = var.consent_terms_sha256
-    "consent/terms/url"        = var.consent_terms_url
-    "consent/image/version"    = var.consent_image_version
-    "consent/image/sha256"     = var.consent_image_sha256
-    "consent/image/url"        = var.consent_image_url
-    "consent/minor/version"    = var.consent_minor_version
-    "consent/minor/sha256"     = var.consent_minor_sha256
-    "consent/minor/url"        = var.consent_minor_url
-    "log-level"                = var.log_level
-    "trusted-proxy-cidrs"      = join(",", var.trusted_proxy_cidrs)
-    "release/repository"       = "${var.github_org}/${var.github_repo}"
-    "db/max-conns"             = tostring(var.db_max_conns)
-    "db/min-conns"             = tostring(var.db_min_conns)
-    "db/max-conn-lifetime"     = var.db_max_conn_lifetime
-    "db/max-conn-idle-time"    = var.db_max_conn_idle_time
-    "db/health-check-period"   = var.db_health_check_period
-    "session/lifetime"         = var.session_lifetime
-    "session/idle-timeout"     = var.session_idle_timeout
-    "http/max-request-bytes"   = tostring(var.max_request_bytes)
-    "http/max-photo-bytes"     = tostring(var.max_photo_bytes)
-    "http/read-header-timeout" = var.http_read_header_timeout
-    "http/read-timeout"        = var.http_read_timeout
-    "http/write-timeout"       = var.http_write_timeout
-    "http/idle-timeout"        = var.http_idle_timeout
-    "http/shutdown-timeout"    = var.shutdown_timeout
-    "release/check-timeout"    = var.release_check_timeout
-    "release/check-cache-ttl"  = var.release_check_cache_ttl
+    "base-url"                   = "https://${var.domain_name}"
+    "db/host"                    = var.database_host
+    "db/port"                    = tostring(var.database_port)
+    "db/name"                    = var.database_name
+    "db/user"                    = var.app_db_username
+    "db/bootstrap-user"          = var.postgres_username
+    "db/migration-user"          = var.migration_db_username
+    "db/sslmode"                 = var.database_sslmode
+    "smtp/host"                  = local.ses_smtp_endpoint
+    "smtp/port"                  = tostring(var.smtp_port)
+    "smtp/from-address"          = local.ses_from_address
+    "smtp/from-name"             = var.smtp_from_name
+    "smtp/tls-mode"              = var.smtp_tls_mode
+    "smtp/timeout"               = var.smtp_timeout
+    "activity/credential-key-id" = "activity-v1"
+    "turnstile/site-key"         = var.turnstile_site_key
+    "s3/bucket-name"             = aws_s3_bucket.repairs.bucket
+    "s3/force-path-style"        = "false"
+    "calendar/competition-id"    = var.calendar_competition_id
+    "calendar/training-id"       = var.calendar_training_id
+    "calendar/social-id"         = var.calendar_social_id
+    "calendar/cleanups-id"       = var.calendar_cleanups_id
+    "gallery-url"                = var.gallery_url
+    "consent/terms/version"      = var.consent_terms_version
+    "consent/terms/sha256"       = var.consent_terms_sha256
+    "consent/terms/url"          = var.consent_terms_url
+    "consent/image/version"      = var.consent_image_version
+    "consent/image/sha256"       = var.consent_image_sha256
+    "consent/image/url"          = var.consent_image_url
+    "consent/minor/version"      = var.consent_minor_version
+    "consent/minor/sha256"       = var.consent_minor_sha256
+    "consent/minor/url"          = var.consent_minor_url
+    "log-level"                  = var.log_level
+    "trusted-proxy-cidrs"        = join(",", var.trusted_proxy_cidrs)
+    "release/repository"         = "${var.github_org}/${var.github_repo}"
+    "db/max-conns"               = tostring(var.db_max_conns)
+    "db/min-conns"               = tostring(var.db_min_conns)
+    "db/max-conn-lifetime"       = var.db_max_conn_lifetime
+    "db/max-conn-idle-time"      = var.db_max_conn_idle_time
+    "db/health-check-period"     = var.db_health_check_period
+    "session/lifetime"           = var.session_lifetime
+    "session/idle-timeout"       = var.session_idle_timeout
+    "http/max-request-bytes"     = tostring(var.max_request_bytes)
+    "http/max-photo-bytes"       = tostring(var.max_photo_bytes)
+    "http/read-header-timeout"   = var.http_read_header_timeout
+    "http/read-timeout"          = var.http_read_timeout
+    "http/write-timeout"         = var.http_write_timeout
+    "http/idle-timeout"          = var.http_idle_timeout
+    "http/shutdown-timeout"      = var.shutdown_timeout
+    "release/check-timeout"      = var.release_check_timeout
+    "release/check-cache-ttl"    = var.release_check_cache_ttl
   }
 
   runtime_secret = {
@@ -67,6 +68,9 @@ locals {
     SMTP_USERNAME                   = aws_iam_access_key.ses_smtp.id
     SMTP_PASSWORD                   = aws_iam_access_key.ses_smtp.ses_smtp_password_v4
     GOOGLE_CALENDAR_API_KEY         = var.google_calendar_api_key
+    POLAR_CLIENT_ID                 = var.polar_client_id
+    POLAR_CLIENT_SECRET             = var.polar_client_secret
+    ACTIVITY_CREDENTIAL_KEYS_JSON   = jsonencode({ "activity-v1" = random_id.activity_credential_key.b64_std })
   }
 }
 
@@ -75,6 +79,15 @@ resource "random_id" "csrf_auth_key" {
 
   keepers = {
     environment = var.environment
+  }
+}
+
+resource "random_id" "activity_credential_key" {
+  byte_length = 32
+
+  keepers = {
+    environment = var.environment
+    key_id      = "activity-v1"
   }
 }
 

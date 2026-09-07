@@ -347,7 +347,7 @@ CREATE FUNCTION audit_announcement_change() RETURNS trigger LANGUAGE plpgsql AS 
 CREATE TRIGGER announcements_audit_trigger AFTER INSERT OR UPDATE ON announcements FOR EACH ROW EXECUTE FUNCTION audit_announcement_change();
 
 CREATE TABLE activity_connections (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider varchar(40) NOT NULL, provider_user_id varchar(255) NOT NULL, status varchar(40) NOT NULL DEFAULT 'ACTIVE', credentials_ciphertext bytea NULL, credential_key_id varchar(120) NULL, credential_expires_at timestamptz NULL, credential_version bigint NOT NULL DEFAULT 1, scopes text[] NOT NULL DEFAULT '{}', sync_cursor text NULL, last_successful_sync_at timestamptz NULL, last_error_code varchar(120) NULL, last_error_message varchar(2000) NULL, last_error_at timestamptz NULL, disconnected_at timestamptz NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider varchar(40) NOT NULL, provider_user_id varchar(255) NOT NULL, status varchar(40) NOT NULL DEFAULT 'ACTIVE', credentials_ciphertext bytea NULL, credential_key_id varchar(120) NULL, credential_expires_at timestamptz NULL, credential_version bigint NOT NULL DEFAULT 1, scopes text[] NOT NULL DEFAULT '{}', sync_cursor text NULL, last_successful_sync_at timestamptz NULL, last_error_code varchar(120) NULL, last_error_message varchar(2000) NULL, last_error_at timestamptz NULL, provider_retry_after timestamptz NULL, disconnected_at timestamptz NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
  CONSTRAINT activity_connections_provider_valid CHECK (provider = btrim(provider) AND provider ~ '^[a-z][a-z0-9_-]{1,39}$'),
  CONSTRAINT activity_connections_provider_user_valid CHECK (provider_user_id = btrim(provider_user_id) AND char_length(provider_user_id) BETWEEN 1 AND 255),
  CONSTRAINT activity_connections_status_valid CHECK (status IN ('ACTIVE', 'REAUTHORIZATION_REQUIRED', 'DISCONNECTED')),
@@ -371,6 +371,22 @@ CREATE TABLE activity_sync_jobs (
 );
 CREATE INDEX activity_sync_jobs_pending_idx ON activity_sync_jobs (requested_at, id) WHERE status = 'PENDING';
 CREATE INDEX activity_sync_jobs_connection_idx ON activity_sync_jobs (connection_id, requested_at DESC, id DESC);
+CREATE UNIQUE INDEX activity_sync_jobs_one_active_per_connection_idx ON activity_sync_jobs (connection_id) WHERE status IN ('PENDING', 'RUNNING');
+
+CREATE TABLE activity_load_observations (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), connection_id uuid NOT NULL, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider varchar(40) NOT NULL, load_kind varchar(80) NOT NULL, observed_on date NOT NULL, availability varchar(20) NOT NULL, provider_status varchar(120) NOT NULL, load_value double precision NULL, short_term_load double precision NULL, short_term_window_days smallint NULL, long_term_load double precision NULL, long_term_window_days smallint NULL, load_ratio double precision NULL, provider_metrics jsonb NOT NULL DEFAULT '{}', payload_sha256 bytea NOT NULL, source_updated_at timestamptz NULL, fetched_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT activity_load_observations_connection_fk FOREIGN KEY (connection_id, user_id, provider) REFERENCES activity_connections(id, user_id, provider) ON DELETE CASCADE,
+ CONSTRAINT activity_load_observations_kind_valid CHECK (load_kind = btrim(load_kind) AND char_length(load_kind) BETWEEN 1 AND 80),
+ CONSTRAINT activity_load_observations_availability_valid CHECK (availability IN ('AVAILABLE', 'UNAVAILABLE')),
+ CONSTRAINT activity_load_observations_status_valid CHECK (provider_status = btrim(provider_status) AND char_length(provider_status) BETWEEN 1 AND 120),
+ CONSTRAINT activity_load_observations_values_valid CHECK ((availability = 'UNAVAILABLE' AND load_value IS NULL AND short_term_load IS NULL AND short_term_window_days IS NULL AND long_term_load IS NULL AND long_term_window_days IS NULL AND load_ratio IS NULL) OR (availability = 'AVAILABLE' AND (load_value IS NULL OR load_value >= 0) AND (short_term_load IS NULL OR short_term_load >= 0) AND (long_term_load IS NULL OR long_term_load >= 0) AND (load_ratio IS NULL OR load_ratio >= 0))),
+ CONSTRAINT activity_load_observations_windows_valid CHECK ((short_term_load IS NULL) = (short_term_window_days IS NULL) AND (long_term_load IS NULL) = (long_term_window_days IS NULL) AND (short_term_window_days IS NULL OR short_term_window_days > 0) AND (long_term_window_days IS NULL OR long_term_window_days > 0)),
+ CONSTRAINT activity_load_observations_payload_hash_valid CHECK (octet_length(payload_sha256) = 32),
+ CONSTRAINT activity_load_observations_identity_unique UNIQUE (connection_id, load_kind, observed_on)
+);
+CREATE INDEX activity_load_observations_user_date_idx ON activity_load_observations (user_id, observed_on DESC, id DESC);
+CREATE INDEX activity_load_observations_connection_fetched_idx ON activity_load_observations (connection_id, fetched_at DESC, id DESC);
+
 
 CREATE TABLE synced_activities (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), connection_id uuid NOT NULL, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider varchar(40) NOT NULL, provider_activity_id varchar(255) NOT NULL, provider_updated_at timestamptz NULL, starts_at timestamptz NOT NULL, ends_at timestamptz NOT NULL, sport varchar(120) NOT NULL, normalized_sport varchar(80) NOT NULL, duration_seconds integer NOT NULL, moving_duration_seconds integer NULL, distance_metres double precision NULL, average_heart_rate smallint NULL, maximum_heart_rate smallint NULL, provider_metrics jsonb NOT NULL DEFAULT '{}', raw_summary jsonb NOT NULL DEFAULT '{}', payload_sha256 bytea NOT NULL, normalization_version integer NOT NULL DEFAULT 1, deleted_at timestamptz NULL, ingested_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),

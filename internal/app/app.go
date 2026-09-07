@@ -18,12 +18,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/cfcoimbra/mycfc/internal/activity"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
+	"github.com/cfcoimbra/mycfc/internal/polar"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -212,8 +214,31 @@ func New(ctx context.Context) (*Application, error) {
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	integrations := handlers.Integrations{Sessions: sessions, PageMeta: pageMeta, System: system, Location: location}
+	if cfg.PolarClientID.Value() != "" {
+		keys, keyErr := cfg.ActivityCredentialKeys()
+		if keyErr != nil {
+			sessionStore.StopCleanup()
+			pool.Close()
+			return nil, keyErr
+		}
+		vault, vaultErr := activity.NewAESGCMKeyring(cfg.ActivityCredentialKeyID, keys)
+		if vaultErr != nil {
+			sessionStore.StopCleanup()
+			pool.Close()
+			return nil, vaultErr
+		}
+		polarClient, polarErr := polar.NewClient(polar.Config{ClientID: cfg.PolarClientID.Value(), ClientSecret: cfg.PolarClientSecret.Value(), RedirectURL: cfg.PolarRedirectURL()})
+		if polarErr != nil {
+			sessionStore.StopCleanup()
+			pool.Close()
+			return nil, polarErr
+		}
+		integrations.Client = polarClient
+		integrations.Service = handlers.PostgresPolarIntegrationService{Pool: pool, Client: polarClient, Vault: vault}
+	}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, integrations, foundation))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

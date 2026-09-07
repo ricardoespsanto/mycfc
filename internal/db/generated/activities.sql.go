@@ -12,11 +12,79 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelActivitySyncJob = `-- name: CancelActivitySyncJob :execrows
+UPDATE activity_sync_jobs job SET
+    status = 'CANCELLED', finished_at = $1, updated_at = now()
+FROM activity_connections connection
+WHERE job.id = $2 AND job.connection_id = connection.id
+  AND job.status IN ('PENDING', 'RUNNING')
+  AND connection.id = $3 AND connection.user_id = $4
+  AND connection.provider = $5
+  AND connection.credential_version = $6
+`
+
+type CancelActivitySyncJobParams struct {
+	CancelledAt               pgtype.Timestamptz `json:"cancelled_at"`
+	ID                        uuid.UUID          `json:"id"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
+}
+
+func (q *Queries) CancelActivitySyncJob(ctx context.Context, arg CancelActivitySyncJobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelActivitySyncJob,
+		arg.CancelledAt,
+		arg.ID,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cancelStaleActivitySyncJobs = `-- name: CancelStaleActivitySyncJobs :execrows
+UPDATE activity_sync_jobs job SET
+    status = 'CANCELLED', finished_at = $1, updated_at = now()
+FROM activity_connections connection
+WHERE job.connection_id = connection.id
+  AND connection.id = $2 AND connection.user_id = $3
+  AND connection.provider = $4
+  AND ((job.status = 'PENDING' AND job.requested_at < $5)
+    OR (job.status = 'RUNNING' AND job.started_at < $5))
+`
+
+type CancelStaleActivitySyncJobsParams struct {
+	CancelledAt  pgtype.Timestamptz `json:"cancelled_at"`
+	ConnectionID uuid.UUID          `json:"connection_id"`
+	UserID       uuid.UUID          `json:"user_id"`
+	Provider     string             `json:"provider"`
+	StaleBefore  pgtype.Timestamptz `json:"stale_before"`
+}
+
+func (q *Queries) CancelStaleActivitySyncJobs(ctx context.Context, arg CancelStaleActivitySyncJobsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelStaleActivitySyncJobs,
+		arg.CancelledAt,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.StaleBefore,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimNextActivitySyncJob = `-- name: ClaimNextActivitySyncJob :one
 WITH candidate AS (
     SELECT job.id FROM activity_sync_jobs job
     JOIN activity_connections connection ON connection.id = job.connection_id
-    WHERE job.status = 'PENDING' AND connection.status <> 'DISCONNECTED'
+    WHERE job.status = 'PENDING' AND connection.status = 'ACTIVE'
     ORDER BY job.requested_at, job.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
@@ -54,18 +122,35 @@ UPDATE activity_sync_jobs SET
     status = 'SUCCEEDED', checkpoint = $1,
     last_error_code = NULL, last_error_message = NULL,
     finished_at = $2, updated_at = now()
-WHERE id = $3 AND status = 'RUNNING'
+WHERE activity_sync_jobs.id = $3 AND activity_sync_jobs.status = 'RUNNING'
+  AND EXISTS (SELECT 1 FROM activity_connections connection
+      WHERE connection.id = activity_sync_jobs.connection_id
+        AND connection.id = $4 AND connection.user_id = $5
+        AND connection.provider = $6 AND connection.status = 'ACTIVE'
+        AND connection.credential_version = $7)
 RETURNING id, idempotency_key, connection_id, reason, status, attempts, checkpoint, last_error_code, last_error_message, requested_at, started_at, finished_at, updated_at
 `
 
 type CompleteActivitySyncJobParams struct {
-	Checkpoint *string            `json:"checkpoint"`
-	FinishedAt pgtype.Timestamptz `json:"finished_at"`
-	ID         uuid.UUID          `json:"id"`
+	Checkpoint                *string            `json:"checkpoint"`
+	FinishedAt                pgtype.Timestamptz `json:"finished_at"`
+	ID                        uuid.UUID          `json:"id"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
 }
 
 func (q *Queries) CompleteActivitySyncJob(ctx context.Context, arg CompleteActivitySyncJobParams) (ActivitySyncJob, error) {
-	row := q.db.QueryRow(ctx, completeActivitySyncJob, arg.Checkpoint, arg.FinishedAt, arg.ID)
+	row := q.db.QueryRow(ctx, completeActivitySyncJob,
+		arg.Checkpoint,
+		arg.FinishedAt,
+		arg.ID,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+	)
 	var i ActivitySyncJob
 	err := row.Scan(
 		&i.ID,
@@ -180,16 +265,17 @@ WITH disconnected AS (
         credential_expires_at = NULL,
         credential_version = credential_version + 1,
         sync_cursor = NULL,
+		provider_retry_after = NULL,
         disconnected_at = $1,
         updated_at = now()
     WHERE activity_connections.id = $2 AND activity_connections.user_id = $3
-    RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at
+    RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at
 ), cancelled_jobs AS (
     UPDATE activity_sync_jobs SET
         status = 'CANCELLED', finished_at = $1, updated_at = now()
     WHERE connection_id IN (SELECT id FROM disconnected) AND status IN ('PENDING', 'RUNNING')
 )
-SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at FROM disconnected
+SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at FROM disconnected
 `
 
 type DisconnectActivityConnectionParams struct {
@@ -214,6 +300,7 @@ type DisconnectActivityConnectionRow struct {
 	LastErrorCode         *string            `json:"last_error_code"`
 	LastErrorMessage      *string            `json:"last_error_message"`
 	LastErrorAt           pgtype.Timestamptz `json:"last_error_at"`
+	ProviderRetryAfter    pgtype.Timestamptz `json:"provider_retry_after"`
 	DisconnectedAt        pgtype.Timestamptz `json:"disconnected_at"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
@@ -238,6 +325,7 @@ func (q *Queries) DisconnectActivityConnection(ctx context.Context, arg Disconne
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -250,16 +338,25 @@ UPDATE activity_sync_jobs SET
     status = 'FAILED', checkpoint = $1,
     last_error_code = $2, last_error_message = $3,
     finished_at = $4, updated_at = now()
-WHERE id = $5 AND status = 'RUNNING'
+WHERE activity_sync_jobs.id = $5 AND activity_sync_jobs.status = 'RUNNING'
+  AND EXISTS (SELECT 1 FROM activity_connections connection
+      WHERE connection.id = activity_sync_jobs.connection_id
+        AND connection.id = $6 AND connection.user_id = $7
+        AND connection.provider = $8 AND connection.status = 'ACTIVE'
+        AND connection.credential_version = $9)
 RETURNING id, idempotency_key, connection_id, reason, status, attempts, checkpoint, last_error_code, last_error_message, requested_at, started_at, finished_at, updated_at
 `
 
 type FailActivitySyncJobParams struct {
-	Checkpoint   *string            `json:"checkpoint"`
-	ErrorCode    *string            `json:"error_code"`
-	ErrorMessage *string            `json:"error_message"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
-	ID           uuid.UUID          `json:"id"`
+	Checkpoint                *string            `json:"checkpoint"`
+	ErrorCode                 *string            `json:"error_code"`
+	ErrorMessage              *string            `json:"error_message"`
+	FinishedAt                pgtype.Timestamptz `json:"finished_at"`
+	ID                        uuid.UUID          `json:"id"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
 }
 
 func (q *Queries) FailActivitySyncJob(ctx context.Context, arg FailActivitySyncJobParams) (ActivitySyncJob, error) {
@@ -269,6 +366,10 @@ func (q *Queries) FailActivitySyncJob(ctx context.Context, arg FailActivitySyncJ
 		arg.ErrorMessage,
 		arg.FinishedAt,
 		arg.ID,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
 	)
 	var i ActivitySyncJob
 	err := row.Scan(
@@ -290,7 +391,7 @@ func (q *Queries) FailActivitySyncJob(ctx context.Context, arg FailActivitySyncJ
 }
 
 const getActivityConnectionByProviderIdentity = `-- name: GetActivityConnectionByProviderIdentity :one
-SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at FROM activity_connections
+SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at FROM activity_connections
 WHERE provider = $1 AND provider_user_id = $2
 `
 
@@ -318,6 +419,7 @@ func (q *Queries) GetActivityConnectionByProviderIdentity(ctx context.Context, a
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -326,7 +428,7 @@ func (q *Queries) GetActivityConnectionByProviderIdentity(ctx context.Context, a
 }
 
 const getActivityConnectionForUser = `-- name: GetActivityConnectionForUser :one
-SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at FROM activity_connections
+SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at FROM activity_connections
 WHERE user_id = $1 AND provider = $2
 `
 
@@ -354,6 +456,45 @@ func (q *Queries) GetActivityConnectionForUser(ctx context.Context, arg GetActiv
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
+		&i.DisconnectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getActivityConnectionForUserForUpdate = `-- name: GetActivityConnectionForUserForUpdate :one
+SELECT id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at FROM activity_connections
+WHERE user_id = $1 AND provider = $2
+FOR UPDATE
+`
+
+type GetActivityConnectionForUserForUpdateParams struct {
+	UserID   uuid.UUID `json:"user_id"`
+	Provider string    `json:"provider"`
+}
+
+func (q *Queries) GetActivityConnectionForUserForUpdate(ctx context.Context, arg GetActivityConnectionForUserForUpdateParams) (ActivityConnection, error) {
+	row := q.db.QueryRow(ctx, getActivityConnectionForUserForUpdate, arg.UserID, arg.Provider)
+	var i ActivityConnection
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.ProviderUserID,
+		&i.Status,
+		&i.CredentialsCiphertext,
+		&i.CredentialKeyID,
+		&i.CredentialExpiresAt,
+		&i.CredentialVersion,
+		&i.Scopes,
+		&i.SyncCursor,
+		&i.LastSuccessfulSyncAt,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
+		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -388,16 +529,24 @@ func (q *Queries) GetActivitySyncJob(ctx context.Context, id uuid.UUID) (Activit
 
 const getSyncedActivityByProviderID = `-- name: GetSyncedActivityByProviderID :one
 SELECT id, connection_id, user_id, provider, provider_activity_id, provider_updated_at, starts_at, ends_at, sport, normalized_sport, duration_seconds, moving_duration_seconds, distance_metres, average_heart_rate, maximum_heart_rate, provider_metrics, raw_summary, payload_sha256, normalization_version, deleted_at, ingested_at, updated_at FROM synced_activities
-WHERE provider = $1 AND provider_activity_id = $2
+WHERE connection_id = $1 AND user_id = $2
+  AND provider = $3 AND provider_activity_id = $4
 `
 
 type GetSyncedActivityByProviderIDParams struct {
-	Provider           string `json:"provider"`
-	ProviderActivityID string `json:"provider_activity_id"`
+	ConnectionID       uuid.UUID `json:"connection_id"`
+	UserID             uuid.UUID `json:"user_id"`
+	Provider           string    `json:"provider"`
+	ProviderActivityID string    `json:"provider_activity_id"`
 }
 
 func (q *Queries) GetSyncedActivityByProviderID(ctx context.Context, arg GetSyncedActivityByProviderIDParams) (SyncedActivity, error) {
-	row := q.db.QueryRow(ctx, getSyncedActivityByProviderID, arg.Provider, arg.ProviderActivityID)
+	row := q.db.QueryRow(ctx, getSyncedActivityByProviderID,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ProviderActivityID,
+	)
 	var i SyncedActivity
 	err := row.Scan(
 		&i.ID,
@@ -528,18 +677,27 @@ func (q *Queries) ListSuggestedActivityMatchesForUser(ctx context.Context, arg L
 
 const markSyncedActivityDeleted = `-- name: MarkSyncedActivityDeleted :one
 UPDATE synced_activities SET deleted_at = $1, updated_at = now()
-WHERE provider = $2 AND provider_activity_id = $3
+WHERE connection_id = $2 AND user_id = $3
+  AND provider = $4 AND provider_activity_id = $5
 RETURNING id, connection_id, user_id, provider, provider_activity_id, provider_updated_at, starts_at, ends_at, sport, normalized_sport, duration_seconds, moving_duration_seconds, distance_metres, average_heart_rate, maximum_heart_rate, provider_metrics, raw_summary, payload_sha256, normalization_version, deleted_at, ingested_at, updated_at
 `
 
 type MarkSyncedActivityDeletedParams struct {
 	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	ConnectionID       uuid.UUID          `json:"connection_id"`
+	UserID             uuid.UUID          `json:"user_id"`
 	Provider           string             `json:"provider"`
 	ProviderActivityID string             `json:"provider_activity_id"`
 }
 
 func (q *Queries) MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedActivityDeletedParams) (SyncedActivity, error) {
-	row := q.db.QueryRow(ctx, markSyncedActivityDeleted, arg.DeletedAt, arg.Provider, arg.ProviderActivityID)
+	row := q.db.QueryRow(ctx, markSyncedActivityDeleted,
+		arg.DeletedAt,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ProviderActivityID,
+	)
 	var i SyncedActivity
 	err := row.Scan(
 		&i.ID,
@@ -568,23 +726,67 @@ func (q *Queries) MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedA
 	return i, err
 }
 
+const pruneActivityLoadObservationsBefore = `-- name: PruneActivityLoadObservationsBefore :execrows
+DELETE FROM activity_load_observations observation
+USING activity_connections connection, activity_sync_jobs job
+WHERE observation.connection_id = connection.id AND job.connection_id = connection.id
+  AND connection.id = $1 AND connection.user_id = $2
+  AND connection.provider = $3 AND connection.status = 'ACTIVE'
+  AND connection.credential_version = $4
+  AND job.id = $5 AND job.status = 'RUNNING'
+  AND observation.load_kind = $6 AND observation.observed_on < $7
+`
+
+type PruneActivityLoadObservationsBeforeParams struct {
+	ConnectionID              uuid.UUID   `json:"connection_id"`
+	UserID                    uuid.UUID   `json:"user_id"`
+	Provider                  string      `json:"provider"`
+	ExpectedCredentialVersion int64       `json:"expected_credential_version"`
+	SyncJobID                 uuid.UUID   `json:"sync_job_id"`
+	LoadKind                  string      `json:"load_kind"`
+	OldestDate                pgtype.Date `json:"oldest_date"`
+}
+
+func (q *Queries) PruneActivityLoadObservationsBefore(ctx context.Context, arg PruneActivityLoadObservationsBeforeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneActivityLoadObservationsBefore,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+		arg.SyncJobID,
+		arg.LoadKind,
+		arg.OldestDate,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const recordActivityConnectionError = `-- name: RecordActivityConnectionError :one
 UPDATE activity_connections SET
     status = CASE WHEN $1::boolean THEN 'REAUTHORIZATION_REQUIRED' ELSE status END,
     last_error_code = $2,
     last_error_message = $3,
     last_error_at = $4,
+	provider_retry_after = $5,
     updated_at = now()
-WHERE id = $5 AND status <> 'DISCONNECTED'
-RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at
+WHERE id = $6 AND status = 'ACTIVE'
+	AND user_id = $7 AND provider = $8
+	AND credential_version = $9
+RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at
 `
 
 type RecordActivityConnectionErrorParams struct {
-	RequiresReauthorization bool               `json:"requires_reauthorization"`
-	ErrorCode               *string            `json:"error_code"`
-	ErrorMessage            *string            `json:"error_message"`
-	FailedAt                pgtype.Timestamptz `json:"failed_at"`
-	ID                      uuid.UUID          `json:"id"`
+	RequiresReauthorization   bool               `json:"requires_reauthorization"`
+	ErrorCode                 *string            `json:"error_code"`
+	ErrorMessage              *string            `json:"error_message"`
+	FailedAt                  pgtype.Timestamptz `json:"failed_at"`
+	ProviderRetryAfter        pgtype.Timestamptz `json:"provider_retry_after"`
+	ID                        uuid.UUID          `json:"id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
 }
 
 func (q *Queries) RecordActivityConnectionError(ctx context.Context, arg RecordActivityConnectionErrorParams) (ActivityConnection, error) {
@@ -593,7 +795,11 @@ func (q *Queries) RecordActivityConnectionError(ctx context.Context, arg RecordA
 		arg.ErrorCode,
 		arg.ErrorMessage,
 		arg.FailedAt,
+		arg.ProviderRetryAfter,
 		arg.ID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
 	)
 	var i ActivityConnection
 	err := row.Scan(
@@ -612,6 +818,7 @@ func (q *Queries) RecordActivityConnectionError(ctx context.Context, arg RecordA
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -626,19 +833,32 @@ UPDATE activity_connections SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     updated_at = now()
-WHERE id = $3 AND status <> 'DISCONNECTED'
-RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at
+WHERE id = $3 AND status = 'ACTIVE'
+	AND user_id = $4 AND provider = $5
+	AND credential_version = $6
+RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at
 `
 
 type RecordActivityConnectionSyncSuccessParams struct {
-	SyncCursor  *string            `json:"sync_cursor"`
-	SucceededAt pgtype.Timestamptz `json:"succeeded_at"`
-	ID          uuid.UUID          `json:"id"`
+	SyncCursor                *string            `json:"sync_cursor"`
+	SucceededAt               pgtype.Timestamptz `json:"succeeded_at"`
+	ID                        uuid.UUID          `json:"id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
 }
 
 func (q *Queries) RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error) {
-	row := q.db.QueryRow(ctx, recordActivityConnectionSyncSuccess, arg.SyncCursor, arg.SucceededAt, arg.ID)
+	row := q.db.QueryRow(ctx, recordActivityConnectionSyncSuccess,
+		arg.SyncCursor,
+		arg.SucceededAt,
+		arg.ID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+	)
 	var i ActivityConnection
 	err := row.Scan(
 		&i.ID,
@@ -656,8 +876,59 @@ func (q *Queries) RecordActivityConnectionSyncSuccess(ctx context.Context, arg R
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const startActivitySyncJob = `-- name: StartActivitySyncJob :one
+UPDATE activity_sync_jobs job SET
+    status = 'RUNNING', attempts = attempts + 1,
+    started_at = $1, updated_at = now()
+FROM activity_connections connection
+WHERE job.id = $2 AND job.connection_id = connection.id
+  AND job.status = 'PENDING' AND connection.id = $3
+  AND connection.user_id = $4 AND connection.provider = $5
+  AND connection.status = 'ACTIVE'
+  AND connection.credential_version = $6
+RETURNING job.id, job.idempotency_key, job.connection_id, job.reason, job.status, job.attempts, job.checkpoint, job.last_error_code, job.last_error_message, job.requested_at, job.started_at, job.finished_at, job.updated_at
+`
+
+type StartActivitySyncJobParams struct {
+	StartedAt                 pgtype.Timestamptz `json:"started_at"`
+	ID                        uuid.UUID          `json:"id"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
+}
+
+func (q *Queries) StartActivitySyncJob(ctx context.Context, arg StartActivitySyncJobParams) (ActivitySyncJob, error) {
+	row := q.db.QueryRow(ctx, startActivitySyncJob,
+		arg.StartedAt,
+		arg.ID,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+	)
+	var i ActivitySyncJob
+	err := row.Scan(
+		&i.ID,
+		&i.IdempotencyKey,
+		&i.ConnectionID,
+		&i.Reason,
+		&i.Status,
+		&i.Attempts,
+		&i.Checkpoint,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -674,9 +945,10 @@ UPDATE activity_connections SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     updated_at = now()
 WHERE id = $5 AND credential_version = $6 AND status <> 'DISCONNECTED'
-RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at
+RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at
 `
 
 type UpdateActivityConnectionCredentialsParams struct {
@@ -714,6 +986,7 @@ func (q *Queries) UpdateActivityConnectionCredentials(ctx context.Context, arg U
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -742,9 +1015,10 @@ ON CONFLICT (user_id, provider) DO UPDATE SET
     last_error_code = NULL,
     last_error_message = NULL,
     last_error_at = NULL,
+	provider_retry_after = NULL,
     disconnected_at = NULL,
     updated_at = now()
-RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, disconnected_at, created_at, updated_at
+RETURNING id, user_id, provider, provider_user_id, status, credentials_ciphertext, credential_key_id, credential_expires_at, credential_version, scopes, sync_cursor, last_successful_sync_at, last_error_code, last_error_message, last_error_at, provider_retry_after, disconnected_at, created_at, updated_at
 `
 
 type UpsertActivityConnectionParams struct {
@@ -784,7 +1058,110 @@ func (q *Queries) UpsertActivityConnection(ctx context.Context, arg UpsertActivi
 		&i.LastErrorCode,
 		&i.LastErrorMessage,
 		&i.LastErrorAt,
+		&i.ProviderRetryAfter,
 		&i.DisconnectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertActivityLoadObservation = `-- name: UpsertActivityLoadObservation :one
+INSERT INTO activity_load_observations (
+    connection_id, user_id, provider, load_kind, observed_on, availability,
+    provider_status, load_value, short_term_load, short_term_window_days,
+    long_term_load, long_term_window_days, load_ratio, provider_metrics,
+    payload_sha256, source_updated_at, fetched_at
+)
+SELECT
+    connection.id, connection.user_id, connection.provider, $1,
+    $2, $3, $4,
+    $5, $6, $7,
+    $8, $9, $10,
+    $11, $12, $13,
+    $14
+FROM activity_connections connection
+JOIN activity_sync_jobs job ON job.connection_id = connection.id
+WHERE connection.id = $15 AND connection.user_id = $16
+  AND connection.provider = $17 AND connection.status = 'ACTIVE'
+  AND connection.credential_version = $18
+  AND job.id = $19 AND job.status = 'RUNNING'
+ON CONFLICT (connection_id, load_kind, observed_on) DO UPDATE SET
+    availability = EXCLUDED.availability, provider_status = EXCLUDED.provider_status,
+    load_value = EXCLUDED.load_value, short_term_load = EXCLUDED.short_term_load,
+    short_term_window_days = EXCLUDED.short_term_window_days,
+    long_term_load = EXCLUDED.long_term_load, long_term_window_days = EXCLUDED.long_term_window_days,
+    load_ratio = EXCLUDED.load_ratio, provider_metrics = EXCLUDED.provider_metrics,
+    payload_sha256 = EXCLUDED.payload_sha256, source_updated_at = EXCLUDED.source_updated_at,
+    fetched_at = EXCLUDED.fetched_at, updated_at = now()
+WHERE activity_load_observations.connection_id = EXCLUDED.connection_id
+RETURNING id, connection_id, user_id, provider, load_kind, observed_on, availability, provider_status, load_value, short_term_load, short_term_window_days, long_term_load, long_term_window_days, load_ratio, provider_metrics, payload_sha256, source_updated_at, fetched_at, created_at, updated_at
+`
+
+type UpsertActivityLoadObservationParams struct {
+	LoadKind                  string             `json:"load_kind"`
+	ObservedOn                pgtype.Date        `json:"observed_on"`
+	Availability              string             `json:"availability"`
+	ProviderStatus            string             `json:"provider_status"`
+	LoadValue                 *float64           `json:"load_value"`
+	ShortTermLoad             *float64           `json:"short_term_load"`
+	ShortTermWindowDays       *int16             `json:"short_term_window_days"`
+	LongTermLoad              *float64           `json:"long_term_load"`
+	LongTermWindowDays        *int16             `json:"long_term_window_days"`
+	LoadRatio                 *float64           `json:"load_ratio"`
+	ProviderMetrics           []byte             `json:"provider_metrics"`
+	PayloadSha256             []byte             `json:"payload_sha256"`
+	SourceUpdatedAt           pgtype.Timestamptz `json:"source_updated_at"`
+	FetchedAt                 pgtype.Timestamptz `json:"fetched_at"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
+	SyncJobID                 uuid.UUID          `json:"sync_job_id"`
+}
+
+func (q *Queries) UpsertActivityLoadObservation(ctx context.Context, arg UpsertActivityLoadObservationParams) (ActivityLoadObservation, error) {
+	row := q.db.QueryRow(ctx, upsertActivityLoadObservation,
+		arg.LoadKind,
+		arg.ObservedOn,
+		arg.Availability,
+		arg.ProviderStatus,
+		arg.LoadValue,
+		arg.ShortTermLoad,
+		arg.ShortTermWindowDays,
+		arg.LongTermLoad,
+		arg.LongTermWindowDays,
+		arg.LoadRatio,
+		arg.ProviderMetrics,
+		arg.PayloadSha256,
+		arg.SourceUpdatedAt,
+		arg.FetchedAt,
+		arg.ConnectionID,
+		arg.UserID,
+		arg.Provider,
+		arg.ExpectedCredentialVersion,
+		arg.SyncJobID,
+	)
+	var i ActivityLoadObservation
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.UserID,
+		&i.Provider,
+		&i.LoadKind,
+		&i.ObservedOn,
+		&i.Availability,
+		&i.ProviderStatus,
+		&i.LoadValue,
+		&i.ShortTermLoad,
+		&i.ShortTermWindowDays,
+		&i.LongTermLoad,
+		&i.LongTermWindowDays,
+		&i.LoadRatio,
+		&i.ProviderMetrics,
+		&i.PayloadSha256,
+		&i.SourceUpdatedAt,
+		&i.FetchedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -844,12 +1221,17 @@ INSERT INTO synced_activities (
     moving_duration_seconds, distance_metres, average_heart_rate, maximum_heart_rate,
     provider_metrics, raw_summary, payload_sha256, normalization_version, deleted_at
 )
-VALUES (
-    $1, $2, $3, $4, $5,
+SELECT
+    $1, $2, $3::varchar, $4, $5,
     $6, $7, $8, $9, $10,
     $11, $12, $13, $14,
     $15, $16, $17, $18, $19
-)
+FROM activity_connections connection
+JOIN activity_sync_jobs job ON job.connection_id = connection.id
+WHERE connection.id = $1 AND connection.user_id = $2
+  AND connection.provider = $3::varchar AND connection.status = 'ACTIVE'
+  AND connection.credential_version = $20
+  AND job.id = $21 AND job.status = 'RUNNING'
 ON CONFLICT (provider, provider_activity_id) DO UPDATE SET
     provider_updated_at = EXCLUDED.provider_updated_at,
     starts_at = EXCLUDED.starts_at,
@@ -873,25 +1255,27 @@ RETURNING id, connection_id, user_id, provider, provider_activity_id, provider_u
 `
 
 type UpsertSyncedActivityParams struct {
-	ConnectionID          uuid.UUID          `json:"connection_id"`
-	UserID                uuid.UUID          `json:"user_id"`
-	Provider              string             `json:"provider"`
-	ProviderActivityID    string             `json:"provider_activity_id"`
-	ProviderUpdatedAt     pgtype.Timestamptz `json:"provider_updated_at"`
-	StartsAt              pgtype.Timestamptz `json:"starts_at"`
-	EndsAt                pgtype.Timestamptz `json:"ends_at"`
-	Sport                 string             `json:"sport"`
-	NormalizedSport       string             `json:"normalized_sport"`
-	DurationSeconds       int32              `json:"duration_seconds"`
-	MovingDurationSeconds *int32             `json:"moving_duration_seconds"`
-	DistanceMetres        *float64           `json:"distance_metres"`
-	AverageHeartRate      *int16             `json:"average_heart_rate"`
-	MaximumHeartRate      *int16             `json:"maximum_heart_rate"`
-	ProviderMetrics       []byte             `json:"provider_metrics"`
-	RawSummary            []byte             `json:"raw_summary"`
-	PayloadSha256         []byte             `json:"payload_sha256"`
-	NormalizationVersion  int32              `json:"normalization_version"`
-	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	UserID                    uuid.UUID          `json:"user_id"`
+	Provider                  string             `json:"provider"`
+	ProviderActivityID        string             `json:"provider_activity_id"`
+	ProviderUpdatedAt         pgtype.Timestamptz `json:"provider_updated_at"`
+	StartsAt                  pgtype.Timestamptz `json:"starts_at"`
+	EndsAt                    pgtype.Timestamptz `json:"ends_at"`
+	Sport                     string             `json:"sport"`
+	NormalizedSport           string             `json:"normalized_sport"`
+	DurationSeconds           int32              `json:"duration_seconds"`
+	MovingDurationSeconds     *int32             `json:"moving_duration_seconds"`
+	DistanceMetres            *float64           `json:"distance_metres"`
+	AverageHeartRate          *int16             `json:"average_heart_rate"`
+	MaximumHeartRate          *int16             `json:"maximum_heart_rate"`
+	ProviderMetrics           []byte             `json:"provider_metrics"`
+	RawSummary                []byte             `json:"raw_summary"`
+	PayloadSha256             []byte             `json:"payload_sha256"`
+	NormalizationVersion      int32              `json:"normalization_version"`
+	DeletedAt                 pgtype.Timestamptz `json:"deleted_at"`
+	ExpectedCredentialVersion int64              `json:"expected_credential_version"`
+	SyncJobID                 uuid.UUID          `json:"sync_job_id"`
 }
 
 func (q *Queries) UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActivityParams) (SyncedActivity, error) {
@@ -915,6 +1299,8 @@ func (q *Queries) UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActi
 		arg.PayloadSha256,
 		arg.NormalizationVersion,
 		arg.DeletedAt,
+		arg.ExpectedCredentialVersion,
+		arg.SyncJobID,
 	)
 	var i SyncedActivity
 	err := row.Scan(

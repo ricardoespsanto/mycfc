@@ -112,6 +112,14 @@ variable "turnstile_secret_key" {
   type      = string
   sensitive = true
 }
+variable "polar_client_id" {
+  type      = string
+  sensitive = true
+}
+variable "polar_client_secret" {
+  type      = string
+  sensitive = true
+}
 variable "smtp_port" {
   type    = number
   default = 587

@@ -375,7 +375,7 @@ func profileActions(page ProfilePage) []components.PageAction {
 	if !page.Self {
 		return []components.PageAction{{Label: "Voltar aos menores", Href: "/dashboard/guardian", Variant: "secondary"}}
 	}
-	return nil
+	return []components.PageAction{{Label: "Integrações", Href: "/perfil/integracoes", Variant: "secondary"}}
 }
 
 func profileEditForm(page ProfilePage) templ.Component {

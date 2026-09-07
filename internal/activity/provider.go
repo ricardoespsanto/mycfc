@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -124,6 +125,44 @@ type NormalizedActivity struct {
 	DeletedAt            *time.Time
 }
 
+// LoadObservation is a provider-owned daily training-load observation. Values
+// are not MyCFC calculations and consumers must always interpret them together
+// with AvailabilityStatus. ProviderMetricsJSON contains only allowlisted
+// provider fields, never a raw response body.
+type LoadObservation struct {
+	ObservedOn          time.Time
+	Method              string
+	AvailabilityStatus  string
+	LoadValue           *float64
+	Strain7Days         *float64
+	Tolerance28Days     *float64
+	Ratio               *float64
+	ProviderMetricsJSON []byte
+	SourceUpdatedAt     *time.Time
+	FetchedAt           time.Time
+}
+
+func (o LoadObservation) Validate() error {
+	if o.ObservedOn.IsZero() || o.ObservedOn.Location() != time.UTC || o.ObservedOn != o.ObservedOn.Truncate(24*time.Hour) {
+		return errors.New("load observation date must be UTC midnight")
+	}
+	if strings.TrimSpace(o.Method) == "" || len(o.Method) > 80 {
+		return errors.New("load observation method must contain 1 to 80 characters")
+	}
+	if strings.TrimSpace(o.AvailabilityStatus) == "" || len(o.AvailabilityStatus) > 120 {
+		return errors.New("load observation status must contain 1 to 120 characters")
+	}
+	if o.FetchedAt.IsZero() {
+		return errors.New("load observation fetch time must be set")
+	}
+	for _, value := range []*float64{o.LoadValue, o.Strain7Days, o.Tolerance28Days, o.Ratio} {
+		if value != nil && (*value < 0 || math.IsNaN(*value) || math.IsInf(*value, 0)) {
+			return errors.New("load observation values must be finite and non-negative")
+		}
+	}
+	return nil
+}
+
 func (a NormalizedActivity) Validate() error {
 	if strings.TrimSpace(a.ProviderActivityID) == "" || len(a.ProviderActivityID) > 255 {
 		return errors.New("provider activity id must contain 1 to 255 characters")
@@ -157,9 +196,10 @@ func validHeartRate(value *int16) bool {
 }
 
 type SyncPage struct {
-	Activities     []NormalizedActivity
-	NextCheckpoint string
-	Complete       bool
+	Activities       []NormalizedActivity
+	LoadObservations []LoadObservation
+	NextCheckpoint   string
+	Complete         bool
 }
 
 type WebhookEnvelope struct {

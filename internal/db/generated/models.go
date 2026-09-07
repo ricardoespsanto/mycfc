@@ -1435,9 +1435,33 @@ type ActivityConnection struct {
 	LastErrorCode         *string            `json:"last_error_code"`
 	LastErrorMessage      *string            `json:"last_error_message"`
 	LastErrorAt           pgtype.Timestamptz `json:"last_error_at"`
+	ProviderRetryAfter    pgtype.Timestamptz `json:"provider_retry_after"`
 	DisconnectedAt        pgtype.Timestamptz `json:"disconnected_at"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ActivityLoadObservation struct {
+	ID                  uuid.UUID          `json:"id"`
+	ConnectionID        uuid.UUID          `json:"connection_id"`
+	UserID              uuid.UUID          `json:"user_id"`
+	Provider            string             `json:"provider"`
+	LoadKind            string             `json:"load_kind"`
+	ObservedOn          pgtype.Date        `json:"observed_on"`
+	Availability        string             `json:"availability"`
+	ProviderStatus      string             `json:"provider_status"`
+	LoadValue           *float64           `json:"load_value"`
+	ShortTermLoad       *float64           `json:"short_term_load"`
+	ShortTermWindowDays *int16             `json:"short_term_window_days"`
+	LongTermLoad        *float64           `json:"long_term_load"`
+	LongTermWindowDays  *int16             `json:"long_term_window_days"`
+	LoadRatio           *float64           `json:"load_ratio"`
+	ProviderMetrics     []byte             `json:"provider_metrics"`
+	PayloadSha256       []byte             `json:"payload_sha256"`
+	SourceUpdatedAt     pgtype.Timestamptz `json:"source_updated_at"`
+	FetchedAt           pgtype.Timestamptz `json:"fetched_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ActivitySyncJob struct {

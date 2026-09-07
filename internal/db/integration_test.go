@@ -69,6 +69,49 @@ func TestScheduleMaintenanceTaskUpdatesOnlyDueEquipment(t *testing.T) {
 	}
 }
 
+func TestActivitySyncWritesAreIdempotentAndStopAfterDisconnect(t *testing.T) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(ctx) })
+	userID := uuid.New()
+	if _, err := conn.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1,'Atleta Polar',$2,'hash','1990-01-01')`, userID, "polar-"+uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID) })
+	queries := dbgen.New(conn)
+	keyID := "activity-v1"
+	connection, err := queries.UpsertActivityConnection(ctx, dbgen.UpsertActivityConnectionParams{UserID: userID, Provider: "polar", ProviderUserID: "42", CredentialsCiphertext: []byte("sealed"), CredentialKeyID: &keyID, CredentialExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}, Scopes: []string{"accesslink.read_all"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := queries.CreateActivitySyncJob(ctx, dbgen.CreateActivitySyncJobParams{IdempotencyKey: uuid.New(), ConnectionID: connection.ID, Reason: "MANUAL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.StartActivitySyncJob(ctx, dbgen.StartActivitySyncJobParams{StartedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ID: job.ID, ConnectionID: connection.ID, UserID: userID, Provider: "polar", ExpectedCredentialVersion: connection.CredentialVersion}); err != nil {
+		t.Fatal(err)
+	}
+	hash := make([]byte, 32)
+	loadParams := dbgen.UpsertActivityLoadObservationParams{LoadKind: "polar_cardio_load_trimp", ObservedOn: pgtype.Date{Time: time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC), Valid: true}, Availability: "UNAVAILABLE", ProviderStatus: "LOAD_STATUS_NOT_AVAILABLE", ProviderMetrics: []byte(`{}`), PayloadSha256: hash, FetchedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ConnectionID: connection.ID, UserID: userID, Provider: "polar", ExpectedCredentialVersion: connection.CredentialVersion, SyncJobID: job.ID}
+	first, err := queries.UpsertActivityLoadObservation(ctx, loadParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := queries.UpsertActivityLoadObservation(ctx, loadParams)
+	if err != nil || first.ID != second.ID {
+		t.Fatalf("idempotent load = %s %s, %v", first.ID, second.ID, err)
+	}
+	if _, err := queries.DisconnectActivityConnection(ctx, dbgen.DisconnectActivityConnectionParams{DisconnectedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ID: connection.ID, UserID: userID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.UpsertActivityLoadObservation(ctx, loadParams); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale write after disconnect error = %v", err)
+	}
+}
+
 func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))

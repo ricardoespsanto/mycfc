@@ -26,6 +26,8 @@ terraform plan -var-file=terraform.tfvars
 
 Review the plan, then apply it. Terraform writes application runtime values into SSM under `/mycfc/production` and writes the application secret JSON into Secrets Manager as `/mycfc/production/app-secrets`. The secret value is sensitive and stored in the encrypted remote Terraform state, so keep backend access tightly scoped.
 
+Polar is shipped enabled in production. Before applying, rotate any credential that has been exposed, set `polar_client_id` and `polar_client_secret` to the replacement values, and approve exactly `https://mycfcoimbra.com/oauth/polar/callback` in Polar AccessLink. Terraform generates the activity-envelope key; never place tokens or either Polar credential in repository files or host environment files.
+
 ```text
 runtime_parameter_prefix = /mycfc/production
 runtime_secret_arn       = arn:aws:secretsmanager:...

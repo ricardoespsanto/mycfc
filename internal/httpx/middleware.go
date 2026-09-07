@@ -168,10 +168,18 @@ func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middlewa
 				if strings.HasPrefix(r.URL.Path, "/recuperar-palavra-passe/repor") {
 					w.Header().Set("Referrer-Policy", "no-referrer")
 				}
+				if r.URL.Path == "/oauth/polar/callback" {
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Referrer-Policy", "no-referrer")
+				}
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
-				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src " + imageDirective + "; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'"
+				formActionDirective := "form-action 'self'"
+				if r.URL.Path == "/perfil/integracoes" || r.URL.Path == "/perfil/integracoes/polar/ligar" {
+					formActionDirective += " https://flow.polar.com"
+				}
+				csp := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " + formActionDirective + "; img-src " + imageDirective + "; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://www.googleapis.com; font-src 'self'"
 				if production {
 					w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 					csp += "; upgrade-insecure-requests"

@@ -42,6 +42,9 @@ func TestRouterHealthAndMethodSemantics(t *testing.T) {
 		{http.MethodPost, "/perfil/email-verificacao/reenviar", http.StatusSeeOther, "", "/login?next=%2Fperfil%2Femail-verificacao%2Freenviar"},
 		{http.MethodGet, "/dashboard", http.StatusSeeOther, "", "/login?next=%2Fdashboard"},
 		{http.MethodGet, "/perfil", http.StatusSeeOther, "", "/login?next=%2Fperfil"},
+		{http.MethodGet, "/perfil/integracoes", http.StatusSeeOther, "", "/login?next=%2Fperfil%2Fintegracoes"},
+		{http.MethodGet, "/oauth/polar/callback", http.StatusSeeOther, "", "/login?next=%2Foauth%2Fpolar%2Fcallback"},
+		{http.MethodPost, "/perfil/integracoes/polar/ligar", http.StatusSeeOther, "", "/login?next=%2Fperfil%2Fintegracoes%2Fpolar%2Fligar"},
 		{http.MethodGet, "/fleet", http.StatusSeeOther, "", "/login?next=%2Ffleet"},
 		{http.MethodGet, "/admin/fleet", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet"},
 		{http.MethodGet, "/admin/fleet/equipment/00000000-0000-0000-0000-000000000000/edit", http.StatusSeeOther, "", "/login?next=%2Fadmin%2Ffleet%2Fequipment%2F00000000-0000-0000-0000-000000000000%2Fedit"},
@@ -108,7 +111,7 @@ func TestPasswordRecoveryRoutesRenderCSRFAndRejectCrossSitePosts(t *testing.T) {
 	sessions := scs.New()
 	auth := handlers.Auth{Sessions: sessions}
 	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
-	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Integrations{}, handlers.Foundation{})
 	handler := httpx.SecurityHeadersMiddleware(false)(csrfProtection(make([]byte, 32), handlers.System{})(router))
 
 	response := httptest.NewRecorder()
@@ -147,7 +150,7 @@ func TestPasswordRecoveryRoutesRedirectAuthenticatedAccounts(t *testing.T) {
 	id := uuid.New()
 	auth := handlers.Auth{Sessions: sessions, Users: routerCurrentUserLookup{id: id}}
 	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
-	router := sessions.LoadAndSave(auth.Load(newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})))
+	router := sessions.LoadAndSave(auth.Load(newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Integrations{}, handlers.Foundation{})))
 
 	seed := httptest.NewRecorder()
 	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -226,7 +229,7 @@ func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
-	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Integrations{}, handlers.Foundation{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
 	response := httptest.NewRecorder()
@@ -252,5 +255,5 @@ func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Integrations{}, handlers.Foundation{})))
 }
