@@ -31,6 +31,13 @@ var (
 
 func main() {
 	ctx := context.Background()
+	if len(os.Args) > 1 && os.Args[1] == "privacy" {
+		if err := runPrivacyCommand(ctx, os.Args[2:]); err != nil {
+			slog.Error("privacy operator command failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] != "serve" {
 		if err := runDatabaseCommand(ctx, os.Args[1]); err != nil {
 			slog.Error("database command failed", "error", err)

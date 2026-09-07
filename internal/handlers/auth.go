@@ -28,6 +28,7 @@ type FeatureFlagLookup interface {
 }
 
 type CurrentUser struct {
+	CanReviewPrivacy   bool
 	ID                 uuid.UUID
 	Name               string
 	Email              string
@@ -44,7 +45,11 @@ type CurrentUser struct {
 	FeatureModes       map[featureflags.Key]featureflags.Mode
 }
 
+type PrivacyReviewLookup interface {
+	CanReview(context.Context, uuid.UUID) (bool, error)
+}
 type Auth struct {
+	Privacy  PrivacyReviewLookup
 	Users    CurrentUserLookup
 	Features FeatureFlagLookup
 	Sessions *scs.SessionManager
@@ -143,6 +148,14 @@ func (a Auth) Load(next http.Handler) http.Handler {
 					current.FeatureModes[key] = featureflags.Mode(flag.Mode)
 				}
 			}
+		}
+		if a.Privacy != nil {
+			allowed, err := a.Privacy.CanReview(r.Context(), current.ID)
+			if err != nil {
+				a.System.InternalError(w, r)
+				return
+			}
+			current.CanReviewPrivacy = allowed
 		}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
 		ctx = httpx.WithUserID(ctx, current.ID.String())

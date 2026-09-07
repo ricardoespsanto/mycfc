@@ -237,3 +237,28 @@ func TestHTTPBoundaryHelpersHandleMalformedPeersAndResponseWriterCapabilities(t 
 		t.Fatal("non-hijacking recorder accepted Hijack")
 	}
 }
+
+func TestAccessLogRedactsPrivacyRoutesAndActorIdentifiers(t *testing.T) {
+	for _, path := range []string{
+		"/perfil/privacidade", "/perfil/privacidade/novo",
+		"/perfil/privacidade/11000000-0000-0000-0000-000000000001",
+		"/admin/privacidade/11000000-0000-0000-0000-000000000001/unknown",
+	} {
+		t.Run(path, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			handler := AccessLogMiddleware(logger)(http.NotFoundHandler())
+			ctx := WithRemoteIP(context.Background(), netip.MustParseAddr("203.0.113.92"))
+			ctx = WithUserID(ctx, "private-actor")
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path+"?explanation=private-note", nil).WithContext(ctx))
+			for _, secret := range []string{"11000000", "203.0.113.92", "private-actor", "private-note", "remote_ip", "user_id", "/unknown", "/novo"} {
+				if strings.Contains(logs.String(), secret) {
+					t.Fatalf("privacy value %q leaked: %s", secret, logs.String())
+				}
+			}
+			if !strings.Contains(logs.String(), `privacidade/*`) || !strings.Contains(logs.String(), `"status":404`) {
+				t.Fatalf("missing normalized route/status: %s", logs.String())
+			}
+		})
+	}
+}

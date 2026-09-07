@@ -2,6 +2,8 @@
 
 This document records the current implementation boundary. Planned and deferred work is tracked in the [MyCFC Delivery Project](https://github.com/users/ricardoespsanto/projects/1).
 
+The #110 privacy-request workflow is implemented behind `PRIVACY_REQUESTS_ENABLED=false`: recently authenticated adults can submit and track requests, guardians receive a redacted receipt until case-specific representation is verified, and explicitly granted independent reviewers can claim, verify, extend, partially approve, refuse or approve cases with optimistic concurrency and immutable policy snapshots. Durable encrypted notifications, metadata-only audit, dependant and last-administrator safeguards, deadline filtering, and closed-case working/evidence expiry are included. Approval remains awaiting execution and preserves account access; #111 owns actual erasure. Production activation still requires an adopted category policy and working-record period, two named reviewers, and an evidenced executor or separately approved manual fulfilment route.
+
 | Specification | State | Notes |
 |---|---|---|
 | 00 System context | In progress | Repository boundaries, module, config, HTTP foundation and local workflow exist; a public CFC landing page with locally embedded imagery, contacts, account calls to action, and club-site links is available at `/`. |

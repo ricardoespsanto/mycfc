@@ -1535,6 +1535,60 @@ type ConsentForm struct {
 	UserAgent       string             `json:"user_agent"`
 }
 
+type DataErasureRequest struct {
+	ID                                  uuid.UUID          `json:"id"`
+	PublicRef                           uuid.UUID          `json:"public_ref"`
+	IdempotencyKey                      uuid.UUID          `json:"idempotency_key"`
+	SubjectUserID                       *uuid.UUID         `json:"subject_user_id"`
+	RequesterUserID                     *uuid.UUID         `json:"requester_user_id"`
+	SubjectKind                         string             `json:"subject_kind"`
+	ScopeKind                           string             `json:"scope_kind"`
+	Categories                          []string           `json:"categories"`
+	Status                              string             `json:"status"`
+	Version                             int64              `json:"version"`
+	ReceivedAt                          pgtype.Timestamptz `json:"received_at"`
+	DueAt                               pgtype.Timestamptz `json:"due_at"`
+	ExtendedDueAt                       pgtype.Timestamptz `json:"extended_due_at"`
+	ExtensionReasonCode                 *string            `json:"extension_reason_code"`
+	ClaimedBy                           *uuid.UUID         `json:"claimed_by"`
+	ReviewedAt                          pgtype.Timestamptz `json:"reviewed_at"`
+	IdentityVerifiedAt                  pgtype.Timestamptz `json:"identity_verified_at"`
+	IdentityMethod                      *string            `json:"identity_method"`
+	IdentityVerifiedBy                  *uuid.UUID         `json:"identity_verified_by"`
+	RepresentationVerifiedAt            pgtype.Timestamptz `json:"representation_verified_at"`
+	RepresentationMethod                *string            `json:"representation_method"`
+	RepresentationVerifiedBy            *uuid.UUID         `json:"representation_verified_by"`
+	RepresentationGuardianID            *uuid.UUID         `json:"representation_guardian_id"`
+	RepresentationConflict              bool               `json:"representation_conflict"`
+	DecisionCode                        *string            `json:"decision_code"`
+	DecisionExplanation                 string             `json:"decision_explanation"`
+	CategoryDecisions                   []byte             `json:"category_decisions"`
+	DecidedBy                           *uuid.UUID         `json:"decided_by"`
+	DecidedAt                           pgtype.Timestamptz `json:"decided_at"`
+	PolicyVersion                       *string            `json:"policy_version"`
+	PolicySnapshot                      []byte             `json:"policy_snapshot"`
+	ClosedAt                            pgtype.Timestamptz `json:"closed_at"`
+	CancelledAt                         pgtype.Timestamptz `json:"cancelled_at"`
+	EvidenceExpiresAt                   pgtype.Timestamptz `json:"evidence_expires_at"`
+	WorkingExpiresAt                    pgtype.Timestamptz `json:"working_expires_at"`
+	WorkingErasedAt                     pgtype.Timestamptz `json:"working_erased_at"`
+	UpdatedAt                           pgtype.Timestamptz `json:"updated_at"`
+	RepresentationRelationshipUpdatedAt pgtype.Timestamptz `json:"representation_relationship_updated_at"`
+}
+
+type DataErasureRequestEvent struct {
+	ID         uuid.UUID          `json:"id"`
+	RequestID  uuid.UUID          `json:"request_id"`
+	ActorRole  string             `json:"actor_role"`
+	ActorRef   uuid.UUID          `json:"actor_ref"`
+	Action     string             `json:"action"`
+	ReasonCode string             `json:"reason_code"`
+	FromStatus *string            `json:"from_status"`
+	ToStatus   string             `json:"to_status"`
+	Version    int64              `json:"version"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
 type EmailOutbox struct {
 	ID                   uuid.UUID          `json:"id"`
 	MessageType          string             `json:"message_type"`
@@ -1549,6 +1603,9 @@ type EmailOutbox struct {
 	LastError            *string            `json:"last_error"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	PrivacyRequestID     *uuid.UUID         `json:"privacy_request_id"`
+	PrivacyRequesterID   *uuid.UUID         `json:"privacy_requester_id"`
+	PrivacyEventKey      *uuid.UUID         `json:"privacy_event_key"`
 }
 
 type EmailVerificationToken struct {
@@ -1808,6 +1865,79 @@ type PlatformRole struct {
 	ID     uuid.UUID `json:"id"`
 	Code   string    `json:"code"`
 	NamePt string    `json:"name_pt"`
+}
+
+type PrivacyRequestActivation struct {
+	Singleton       bool               `json:"singleton"`
+	PolicyVersion   string             `json:"policy_version"`
+	Enabled         bool               `json:"enabled"`
+	FulfilmentReady bool               `json:"fulfilment_ready"`
+	UpdatedBy       uuid.UUID          `json:"updated_by"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PrivacyRequestActivationEvent struct {
+	ID              uuid.UUID          `json:"id"`
+	PolicyVersion   string             `json:"policy_version"`
+	ActorRef        uuid.UUID          `json:"actor_ref"`
+	Enabled         bool               `json:"enabled"`
+	FulfilmentReady bool               `json:"fulfilment_ready"`
+	OccurredAt      pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyRequestAuthLimit struct {
+	Bucket      string             `json:"bucket"`
+	WindowStart pgtype.Timestamptz `json:"window_start"`
+	Attempts    int32              `json:"attempts"`
+}
+
+type PrivacyRequestDependantResolution struct {
+	RequestID             uuid.UUID          `json:"request_id"`
+	DependantID           uuid.UUID          `json:"dependant_id"`
+	GuardianIDSnapshot    uuid.UUID          `json:"guardian_id_snapshot"`
+	RelationshipUpdatedAt pgtype.Timestamptz `json:"relationship_updated_at"`
+	ResolutionCode        string             `json:"resolution_code"`
+	RelatedRequestID      *uuid.UUID         `json:"related_request_id"`
+	VerifiedBy            uuid.UUID          `json:"verified_by"`
+	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
+	Explanation           string             `json:"explanation"`
+}
+
+type PrivacyRequestMaintenanceEvent struct {
+	ID              uuid.UUID          `json:"id"`
+	ActorRef        uuid.UUID          `json:"actor_ref"`
+	OccurredAt      pgtype.Timestamptz `json:"occurred_at"`
+	WorkingRecords  int32              `json:"working_records"`
+	EvidenceRecords int32              `json:"evidence_records"`
+}
+
+type PrivacyRequestPolicy struct {
+	Version               string             `json:"version"`
+	CategoryCatalogue     []byte             `json:"category_catalogue"`
+	AccountClosureEnabled bool               `json:"account_closure_enabled"`
+	WorkingRetentionDays  *int32             `json:"working_retention_days"`
+	ResponseMonths        int32              `json:"response_months"`
+	ExtensionMonths       int32              `json:"extension_months"`
+	AdoptedAt             pgtype.Timestamptz `json:"adopted_at"`
+	AdoptedBy             *uuid.UUID         `json:"adopted_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyReviewerGrant struct {
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
+	GrantedBy uuid.UUID          `json:"granted_by"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy *uuid.UUID         `json:"revoked_by"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type PrivacyReviewerGrantEvent struct {
+	ID         uuid.UUID          `json:"id"`
+	GrantID    uuid.UUID          `json:"grant_id"`
+	ActorRef   uuid.UUID          `json:"actor_ref"`
+	Action     string             `json:"action"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type Programme struct {

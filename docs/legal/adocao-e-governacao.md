@@ -39,8 +39,15 @@ Conservar cada versão aprovada de forma imutável, exatamente nos bytes usados 
 - [ ] Corrigir expiração de versões não correntes dos backups/objetos e implementar repetição de tombstones no restauro antes de prometer apagamento completo.
 - [ ] Aprovar lista/contratos/localizações de prestadores e transferências.
 - [ ] Nomear autoridade de casos de privacidade distinta do simples acesso administrativo.
-- [ ] Aprovar o momento de bloqueio de conta e prazo da prova mínima de pedidos.
+- [x] Aprovar o momento de bloqueio de conta e prazo da prova mínima de pedidos: início efetivo de execução de encerramento e 24 meses após fecho do caso, respetivamente, conforme decisão de 7 de setembro de 2026.
+- [ ] Definir o prazo dos elementos identificáveis de trabalho dos casos, separado da prova mínima.
 - [ ] Harmonizar a política de `cfcoimbra.com` com o MyCFCoimbra.
+
+## Decisões operacionais aprovadas em 7 de setembro de 2026
+
+O responsável humano pelo produto aprovou as quatro opções de implementação descritas em `../planning/privacy-request-decisions.md`: capacidade explícita e auditada para revisão de casos (sem acesso automático de administradores); preservação de acesso até ao início efetivo da execução de encerramento; verificação da representação e resolução de dependentes antes de encerramento; conservação de prova mínima de casos encerrados durante 24 meses, com exceções documentadas e prazo próprio.
+
+Esta aprovação não nomeia revisores, não aprova a matriz geral de conservação ou o prazo dos elementos identificáveis de trabalho, não verifica representação de qualquer pessoa e não autoriza ativação pública ou execução de apagamentos. Os itens de acompanhamento acima mantêm essas pendências operacionais.
 
 ## Revisão
 

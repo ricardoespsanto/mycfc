@@ -5,6 +5,8 @@ Versão: `2026-09-04`
 
 As ações possíveis são: **apagar**, **anonimizar**, **reter com acesso restrito** ou **expirar pelo calendário**. Os prazos abaixo são propostas de produto, não afirmações de obrigação legal. «Fim da relação» significa encerramento de conta e cessação das inscrições/funções relevantes, depois de resolvidas relações com dependentes.
 
+Atualização de 7 de setembro de 2026: foi aprovado isoladamente o prazo de **24 meses após fecho do caso para a prova mínima dos pedidos de apagamento** (referência, datas, códigos de decisão/resultado e prazo de expiração), com exceções documentadas com responsável, motivo e prazo próprio. A aprovação não abrange elementos identificáveis de trabalho, prova de consentimento ou os restantes prazos desta matriz. A aprovação de um pedido ainda a aguardar execução não inicia este prazo. Ver `adocao-e-governacao.md` e `../planning/privacy-request-decisions.md`.
+
 | Categoria/sistema | Conteúdo | Finalidade/base proposta | Destinatários | Prazo proposto | Ação no apagamento | Responsável/controlo |
 |---|---|---|---|---|---|---|
 | `users` | Nome, nascimento, email/ID menor, estado, hash e versão credencial e conta adulta associada ao menor; a qualidade jurídica do adulto não é atualmente registada/verificada | Conta e relação contratual | Administração autorizada | Relação + 90 dias | Apagar identificadores/credenciais; conservar principal pseudónimo apenas se necessário a registos retidos | Privacidade + TI |
@@ -48,5 +50,5 @@ As ações possíveis são: **apagar**, **anonimizar**, **reter com acesso restr
 - a eliminação comum de objetos em bucket versionado não remove necessariamente versões antigas (até 90 dias na configuração conhecida) e a permissão atual pode não permitir eliminação completa; fechar a lacuna antes de prometer conclusão;
 - o ensaio de restauro atual verifica a base mas ainda não reaplica tombstones; #111 tem de implementar e provar esse passo;
 - inspecionar todos os JSON de auditoria antes de permitir pseudonimização;
-- aprovar prazo da prova mínima de consentimento e dos processos de direitos;
+- aprovar prazo da prova mínima de consentimento e dos elementos identificáveis de trabalho dos processos de direitos; a prova mínima dos casos de apagamento encerrados tem prazo de 24 meses aprovado em 7 de setembro de 2026;
 - atualizar esta matriz antes de ativar pagamentos, transporte, álbuns, Polar/Garmin ou importação de resultados.

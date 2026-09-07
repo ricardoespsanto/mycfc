@@ -8,6 +8,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -24,6 +25,12 @@ type Sender interface {
 	SendPasswordReset(context.Context, string, string, time.Time) error
 }
 
+// PrivacySender is separate so existing verification/reset senders keep their
+// contract. Missing support fails closed rather than silently dropping a notice.
+type PrivacySender interface {
+	SendPrivacyNotification(context.Context, string, string, string) error
+}
+
 type DeliveryStore interface {
 	ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error)
 	CompleteEmailOutbox(context.Context, dbgen.CompleteEmailOutboxParams) (int64, error)
@@ -37,6 +44,7 @@ type Worker struct {
 	Sender        Sender
 	Service       Service
 	PasswordReset passwordreset.Service
+	PrivacyKey    []byte
 	Logger        *slog.Logger
 	Now           func() time.Time
 }
@@ -92,6 +100,17 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		} else {
 			err = w.Sender.SendPasswordReset(ctx, item.Email, link, item.ExpiresAt.Time)
 		}
+	case "PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION":
+		payload, openErr := privacyrequests.OpenDelivery(w.PrivacyKey, item.SealedPayload)
+		sender, supported := w.Sender.(PrivacySender)
+		if openErr != nil || !supported {
+			err = errors.New("invalid privacy delivery configuration or payload")
+			invalidPayload = true
+		} else {
+			// The encrypted recipient is intentionally independent of a current
+			// account or token, which may disappear during later erasure execution.
+			err = sender.SendPrivacyNotification(ctx, payload.Recipient, payload.ContactURL, item.MessageType)
+		}
 	default:
 		err = errors.New("unsupported email outbox message type")
 		invalidPayload = true
@@ -106,7 +125,9 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		return
 	}
 	permanent := invalidPayload || IsPermanent(err)
-	if permanent || item.Attempts >= MaxAttempts || !item.ExpiresAt.Time.After(now.Add(retryDelay(item.Attempts))) {
+	tokenMessage := item.MessageType == "EMAIL_VERIFICATION" || item.MessageType == "PASSWORD_RESET"
+	tokenExpired := tokenMessage && !item.ExpiresAt.Time.After(now.Add(retryDelay(item.Attempts)))
+	if permanent || item.Attempts >= MaxAttempts || tokenExpired {
 		reason := "SMTP delivery failed permanently"
 		_, updateErr := w.Store.FailEmailOutbox(ctx, dbgen.FailEmailOutboxParams{ID: item.ID, FailedAt: timestamp(now), LastError: &reason})
 		if updateErr != nil {
