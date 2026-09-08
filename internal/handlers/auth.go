@@ -29,6 +29,7 @@ type FeatureFlagLookup interface {
 
 type CurrentUser struct {
 	CanReviewPrivacy   bool
+	CanExecutePrivacy  bool
 	ID                 uuid.UUID
 	Name               string
 	Email              string
@@ -48,12 +49,16 @@ type CurrentUser struct {
 type PrivacyReviewLookup interface {
 	CanReview(context.Context, uuid.UUID) (bool, error)
 }
+type PrivacyExecutionLookup interface {
+	CanExecute(context.Context, uuid.UUID) (bool, error)
+}
 type Auth struct {
-	Privacy  PrivacyReviewLookup
-	Users    CurrentUserLookup
-	Features FeatureFlagLookup
-	Sessions *scs.SessionManager
-	System   System
+	Privacy          PrivacyReviewLookup
+	PrivacyExecution PrivacyExecutionLookup
+	Users            CurrentUserLookup
+	Features         FeatureFlagLookup
+	Sessions         *scs.SessionManager
+	System           System
 }
 
 type currentUserKey struct{}
@@ -156,6 +161,14 @@ func (a Auth) Load(next http.Handler) http.Handler {
 				return
 			}
 			current.CanReviewPrivacy = allowed
+		}
+		if a.PrivacyExecution != nil {
+			allowed, err := a.PrivacyExecution.CanExecute(r.Context(), current.ID)
+			if err != nil {
+				a.System.InternalError(w, r)
+				return
+			}
+			current.CanExecutePrivacy = allowed
 		}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
 		ctx = httpx.WithUserID(ctx, current.ID.String())

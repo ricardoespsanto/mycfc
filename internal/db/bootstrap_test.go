@@ -13,16 +13,19 @@ import (
 
 type bootstrapTransactionFake struct {
 	pgx.Tx
-	versions  []string
-	legacy    map[string]bool
-	execErr   error
-	rowErr    error
-	commitErr error
-	installed bool
-	objects   int
+	versions   []string
+	legacy     map[string]bool
+	execErr    error
+	rowErr     error
+	commitErr  error
+	installed  bool
+	objects    int
+	statements []string
+	committed  bool
 }
 
-func (t *bootstrapTransactionFake) Exec(_ context.Context, _ string, args ...any) (pgconn.CommandTag, error) {
+func (t *bootstrapTransactionFake) Exec(_ context.Context, statement string, args ...any) (pgconn.CommandTag, error) {
+	t.statements = append(t.statements, statement)
 	if t.execErr != nil {
 		return pgconn.CommandTag{}, t.execErr
 	}
@@ -66,7 +69,10 @@ func (r bootstrapRow) Scan(dest ...any) error {
 }
 
 func (t *bootstrapTransactionFake) Rollback(context.Context) error { return nil }
-func (t *bootstrapTransactionFake) Commit(context.Context) error   { return t.commitErr }
+func (t *bootstrapTransactionFake) Commit(context.Context) error {
+	t.committed = t.commitErr == nil
+	return t.commitErr
+}
 
 type bootstrapConnectionFake struct {
 	tx  pgx.Tx
@@ -113,12 +119,104 @@ func TestBootstrapRolesExecutesAllRoleHardeningStatementsAndStopsOnFailure(t *te
 	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
 		t.Fatal(err)
 	}
-	if len(conn.statements) < 15 || !strings.Contains(conn.statements[0], "CREATE EXTENSION") || !strings.Contains(conn.statements[len(conn.statements)-1], "ALTER DEFAULT PRIVILEGES") {
+	joined := strings.Join(conn.statements, "\n")
+	if len(conn.statements) < 15 || !strings.Contains(conn.statements[0], "CREATE EXTENSION") || !strings.Contains(joined, "ALTER DEFAULT PRIVILEGES") || strings.Contains(joined, "privacy_executor") {
 		t.Fatalf("bootstrap statements=%#v", conn.statements)
 	}
 	conn.err = errors.New("permission denied")
 	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); !errors.Is(err, conn.err) || !strings.Contains(err.Error(), "enable citext") {
 		t.Fatalf("BootstrapRoles() error=%v", err)
+	}
+}
+
+func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_privacy_executor" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_executor"`,
+		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_executor"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("bootstrap statements missing %q", expected)
+		}
+	}
+}
+
+func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := HardenPrivacyExecutionRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`privacy_erasure_job_checkpoints, privacy_erasure_failures FROM PUBLIC`,
+		`REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`,
+		`GRANT INSERT (request_id, plan_sha256, executor_version`,
+		`GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid)`,
+		`privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
+		`privacy_request_execution_plans TO "mycfc_privacy_executor"`,
+		`GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_executor"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("hardening statements missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		`GRANT UPDATE ON TABLE privacy_request_execution_plans`,
+		`GRANT DELETE ON TABLE privacy_erasure_`,
+		`GRANT DELETE ON TABLE data_erasure_requests`,
+		`GRANT UPDATE ON TABLE users`,
+		`GRANT INSERT ON TABLE privacy_reviewer_grants`,
+		`GRANT INSERT ON TABLE privacy_executor_grants`,
+		`GRANT INSERT ON TABLE privacy_erasure_executions TO "mycfc_privacy_executor"`,
+		`ON TABLE users TO "mycfc_privacy_executor"`,
+		`ON TABLE user_platform_roles TO "mycfc_privacy_executor"`,
+		`ON TABLE staff_grants TO "mycfc_privacy_executor"`,
+		`ON TABLE staff_grant_audit_events TO "mycfc_privacy_executor"`,
+		`ON TABLE privacy_reviewer_grants TO "mycfc_privacy_executor"`,
+		`ON TABLE privacy_executor_grants TO "mycfc_privacy_executor"`,
+		`ON TABLE sessions TO "mycfc_privacy_executor"`,
+		`ON TABLE email_verification_tokens TO "mycfc_privacy_executor"`,
+		`ON TABLE password_reset_tokens TO "mycfc_privacy_executor"`,
+		`ON TABLE email_outbox TO "mycfc_privacy_executor"`,
+		`GRANT INSERT (execution_id, grant_kind, capability_code, revoked_count, actor_ref, occurred_at) ON TABLE privacy_erasure_access_revocations TO "mycfc_privacy_executor"`,
+		`GRANT UPDATE (status, version, started_at`,
+		`GRANT INSERT (job_id, epoch, worker_ref`,
+		`GRANT INSERT (request_id, actor_role, actor_ref`,
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("hardening statements contain forbidden privilege %q", forbidden)
+		}
+	}
+
+	appOnly := &bootstrapRoleConnectionFake{}
+	credentials.PrivacyExecutorUsername = ""
+	credentials.PrivacyExecutorPassword = ""
+	if err := HardenPrivacyExecutionRoles(t.Context(), appOnly, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(appOnly.statements, "\n"), "privacy_executor") {
+		t.Fatal("disabled rollout granted privacy executor privileges")
+	}
+
+	failed := &bootstrapRoleConnectionFake{err: errors.New("permission denied")}
+	if err := HardenPrivacyExecutionRoles(t.Context(), failed, "mycfc", credentials); !errors.Is(err, failed.err) || !strings.Contains(err.Error(), "revoke public execution table access") {
+		t.Fatalf("HardenPrivacyExecutionRoles() error=%v", err)
 	}
 }
 
@@ -146,6 +244,26 @@ func TestApplyBaselineCoversTransactionAndInstalledMigrationOutcomes(t *testing.
 	}
 }
 
+func TestApplyBaselineAndHardenAppliesBoundaryBeforeCommit(t *testing.T) {
+	tx := &bootstrapTransactionFake{installed: true}
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+	}
+	if err := ApplyBaselineAndHarden(t.Context(), bootstrapConnectionFake{tx: tx}, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	if !tx.committed {
+		t.Fatal("migration transaction was not committed")
+	}
+	joined := strings.Join(tx.statements, "\n")
+	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`) ||
+		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) {
+		t.Fatalf("transaction did not contain role boundary: %s", joined)
+	}
+}
+
 func TestValidateBootstrapInput(t *testing.T) {
 	valid := RoleCredentials{AppUsername: "mycfc_app", AppPassword: "app-password", MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password"}
 	if err := validateBootstrapInput("mycfc", valid); err != nil {
@@ -154,6 +272,27 @@ func TestValidateBootstrapInput(t *testing.T) {
 	valid.MigrationUsername = valid.AppUsername
 	if err := validateBootstrapInput("mycfc", valid); err == nil || !strings.Contains(err.Error(), "must differ") {
 		t.Fatalf("error = %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*RoleCredentials)
+	}{
+		{"executor password missing", func(c *RoleCredentials) { c.PrivacyExecutorUsername = "mycfc_privacy_executor" }},
+		{"executor username missing", func(c *RoleCredentials) { c.PrivacyExecutorPassword = "secret" }},
+		{"executor aliases app", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = c.AppUsername, "secret"
+		}},
+		{"executor identifier invalid", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "privacy-executor", "secret"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := RoleCredentials{AppUsername: "mycfc_app", AppPassword: "app-password", MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password"}
+			test.change(&candidate)
+			if err := validateBootstrapInput("mycfc", candidate); err == nil {
+				t.Fatal("invalid executor credentials accepted")
+			}
+		})
 	}
 }
 

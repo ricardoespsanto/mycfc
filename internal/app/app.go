@@ -14,7 +14,6 @@ import (
 	"time"
 
 	csrf "filippo.io/csrf/gorilla"
-	"github.com/alexedwards/scs/pgxstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -28,6 +27,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/release"
+	"github.com/cfcoimbra/mycfc/internal/sessionstore"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -39,7 +39,7 @@ type Application struct {
 	Location     *time.Location
 	Pool         *pgxpool.Pool
 	Sessions     *scs.SessionManager
-	SessionStore *pgxstore.PostgresStore
+	SessionStore *sessionstore.PostgresStore
 	ObjectStore  storage.ObjectStore
 	EmailWorker  *emailverification.Worker
 	Server       *http.Server
@@ -91,8 +91,8 @@ func New(ctx context.Context) (*Application, error) {
 		return nil, errors.New("database ping failed")
 	}
 
-	sessionStore := pgxstore.New(pool)
 	sessions := scs.New()
+	sessionStore := sessionstore.New(pool, sessions.Codec)
 	sessions.Store = sessionStore
 	sessions.Lifetime = cfg.SessionLifetime
 	sessions.IdleTimeout = cfg.SessionIdleTimeout
@@ -226,7 +226,16 @@ func New(ctx context.Context) (*Application, error) {
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
 	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos"}
+	if cfg.AppEnv == "test" {
+		privacyService.ExecutionCapabilities = map[string]bool{}
+		for _, capability := range strings.Split(cfg.PrivacyExecutionTestCapabilities, ",") {
+			if capability = strings.TrimSpace(capability); capability != "" {
+				privacyService.ExecutionCapabilities[capability] = true
+			}
+		}
+	}
 	auth.Privacy = privacyService
+	auth.PrivacyExecution = privacyService
 	privacy := handlers.PrivacyRequests{Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL}
 	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, privacy))
 	csrfMiddleware := csrfProtection(csrfKey, system)

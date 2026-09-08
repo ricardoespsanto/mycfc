@@ -133,6 +133,9 @@ templ privacyRequestDetailContent(page PrivacyRequestDetailPage) {
 				if page.Status == "AWAITING_EXECUTION" || page.Status == "PARTIALLY_APPROVED" {
 					<p class="callout">Os dados ainda não foram apagados.</p>
 				}
+				if page.Status == "PROCESSING" || page.Status == "RETRYABLE_FAILED" || page.Status == "TERMINAL_FAILED" {
+					<p class="callout">O processamento começou, mas este pedido ainda não está concluído.</p>
+				}
 				for _, category := range page.Categories {
 					<p><strong>{ category.Label }</strong> { category.Description }</p>
 					if category.Outcome != "" {
@@ -149,6 +152,50 @@ templ privacyRequestDetailContent(page PrivacyRequestDetailPage) {
 					<p>{ page.Explanation }</p>
 				}
 			</section>
+			if len(page.ExecutionPlan) > 0 && page.Management && page.CanViewExecution {
+				<section class="module" aria-label="Plano de execução">
+					<h2>Plano de execução aprovado</h2>
+					<p>Este plano é imutável. Iniciar o processamento cria todo o trabalho antes de qualquer corte de acesso. Um pedido por categorias mantém a conta ativa; o encerramento da conta termina o acesso depois de o trabalho ficar registado.</p>
+					if page.ExecutionStatus != "" {
+						<p><strong>Estado técnico:</strong> { page.ExecutionStatus }</p>
+					}
+					<ul>
+						for _, item := range page.ExecutionPlan {
+							<li>
+								<strong>{ item.CategoryLabel }</strong> — { item.Disposition } · responsável { item.Owner }
+								if item.DueAt != "" {
+									<span> · prazo técnico { item.DueAt }</span>
+								}
+								<ul>
+									for _, operation := range item.Operations {
+										<li><code>{ operation }</code></li>
+									}
+								</ul>
+							</li>
+						}
+					</ul>
+					<h3>Bloqueios atuais</h3>
+					if len(page.ExecutionBlockers) > 0 {
+						<ul aria-label="Bloqueios atuais da execução">
+							for _, blocker := range page.ExecutionBlockers {
+								<li>{ blocker }</li>
+							}
+						</ul>
+					} else if page.ExecutionStatus == "" {
+						<p>Nenhum bloqueio atual foi detetado. As verificações serão repetidas ao confirmar.</p>
+					}
+					if page.CanExecute {
+						<h3>Iniciar processamento</h3>
+						<p>A identidade, a representação, os dependentes, a continuidade da administração, o plano e a separação de funções serão novamente verificados. Se algum facto mudou, nada será iniciado.</p>
+						<form class="form-layout" method="post" action={ templ.SafeURL("/admin/privacidade/" + page.Reference + "/executar") }>
+							@privacyVersion(page)
+							@components.FieldErrorMessage("execution_confirmed", page.Errors["execution_confirmed"])
+							<label for="execution_confirmed"><input id="execution_confirmed" type="checkbox" name="execution_confirmed" value="yes" required aria-invalid?={ page.Errors["execution_confirmed"] != "" } aria-describedby="execution_confirmed-error"/>Confirmo que revi o plano, as consequências e os bloqueios atuais.</label>
+							<button class="action action--primary" type="submit">Iniciar processamento</button>
+						</form>
+					}
+				</section>
+			}
 			if len(page.History) > 0 {
 				<section class="module" aria-label="Histórico do pedido">
 					<h2>Histórico</h2>

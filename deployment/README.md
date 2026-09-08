@@ -37,6 +37,10 @@ APP_DB_PASSWORD=<restricted-application-password>
 MIGRATION_DB_USER=<schema-migration-user>
 MIGRATION_DB_PASSWORD=<schema-migration-password>
 
+# Leave unset until #248 receives separate production activation approval.
+# PRIVACY_EXECUTOR_DB_USER=<restricted-privacy-worker-user>
+# PRIVACY_EXECUTOR_DB_PASSWORD=<restricted-privacy-worker-password>
+
 AWS_REGION=<aws-region>
 AWS_ACCESS_KEY_ID=<aws-access-key-id>
 AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
@@ -62,7 +66,7 @@ COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
 DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
-`POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead.
+`POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead. #244 also supports an optional, distinct `PRIVACY_EXECUTOR_DB_*` PostgreSQL login, but this source release does not install or start a privacy worker. Keep those values unset until #248 has separately approved the production credential, service, capabilities, evidence and activation. Never add the executor password to `/mycfc/production/app-secrets`, which the web identity can read. The optional database role has read-only access to the immutable execution context and can mutate worker state only through the fenced `privacy_worker_*` routines. It receives no table DML, no access to accounts, roles or grants, sessions, authentication tokens, the email outbox, or access-revocation creation; account cutoff remains in the atomic web-side `StartExecution` transaction.
 
 ## Required AWS configuration
 
@@ -194,7 +198,7 @@ The source timer polls every 30 seconds with up to 10 seconds of jitter and one 
 
 Terraform creates a CloudWatch metric filter, alarm, and SNS email subscription for repeated non-zero agent results. Confirm the AWS subscription message sent to `alarm_email`; an unconfirmed subscription receives no alerts. The alarm fires when failures occur in at least two of three five-minute periods and sends a recovery notification when the metric returns to normal.
 
-Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before starting a candidate, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. On an empty volume that command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap or migration failure aborts the rollout before a candidate receives traffic.
+Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before starting a candidate, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. That command applies schema changes and the privacy-execution privilege boundary in one transaction, so newly created worker tables never have a committed broad-DML window. The release agent then reapplies the boundary idempotently as defence in depth. The web role can create and read only the durable handoff graph; a separately configured executor role has no direct DML and can advance worker state only through fenced routines. On an empty volume the migration command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap, migration or privilege-hardening failure aborts the rollout before a candidate receives traffic.
 
 The active application slot is recorded in `/etc/mycfc/deployment/active-slot`, and `/etc/mycfc/deployment/caddy-upstream.caddy` is generated from that state. Inspect both during an incident with:
 

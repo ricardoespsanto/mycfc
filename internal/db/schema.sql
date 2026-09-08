@@ -84,6 +84,45 @@ CREATE TABLE platform_roles (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code
 INSERT INTO platform_roles (code, name_pt) VALUES ('ADMIN', 'Administração'), ('STAFF', 'Equipa do clube');
 CREATE TABLE user_platform_roles (user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, role_id uuid NOT NULL REFERENCES platform_roles(id) ON DELETE RESTRICT, granted_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (user_id, role_id));
 CREATE INDEX user_platform_roles_role_idx ON user_platform_roles (role_id, user_id);
+CREATE FUNCTION guard_active_administrator_set() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE old_admin boolean := false; new_admin boolean := false; active_admins bigint;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc-active-admin-set/v1',0));
+ IF TG_TABLE_NAME='user_platform_roles' THEN
+  IF TG_OP<>'INSERT' THEN old_admin:=EXISTS(SELECT 1 FROM platform_roles WHERE id=OLD.role_id AND code='ADMIN') AND EXISTS(SELECT 1 FROM users WHERE id=OLD.user_id AND is_active AND NOT is_dependent AND date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND email IS NOT NULL AND password_hash IS NOT NULL); END IF;
+  IF TG_OP<>'DELETE' THEN new_admin:=EXISTS(SELECT 1 FROM platform_roles WHERE id=NEW.role_id AND code='ADMIN') AND EXISTS(SELECT 1 FROM users WHERE id=NEW.user_id AND is_active AND NOT is_dependent AND date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND email IS NOT NULL AND password_hash IS NOT NULL); END IF;
+  IF old_admin AND NOT new_admin THEN
+   SELECT count(*) INTO active_admins FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id JOIN users account ON account.id=assignment.user_id WHERE role.code='ADMIN' AND account.is_active AND NOT account.is_dependent AND account.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND account.email IS NOT NULL AND account.password_hash IS NOT NULL;
+   IF active_admins<=1 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='last_active_administrator'; END IF;
+  END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+ END IF;
+ old_admin:=OLD.is_active AND NOT OLD.is_dependent AND OLD.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND OLD.email IS NOT NULL AND OLD.password_hash IS NOT NULL AND EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=OLD.id AND role.code='ADMIN');
+ IF TG_OP<>'DELETE' THEN new_admin:=NEW.is_active AND NOT NEW.is_dependent AND NEW.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND NEW.email IS NOT NULL AND NEW.password_hash IS NOT NULL AND EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=NEW.id AND role.code='ADMIN'); END IF;
+ IF old_admin AND NOT new_admin THEN
+  SELECT count(*) INTO active_admins FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id JOIN users account ON account.id=assignment.user_id WHERE role.code='ADMIN' AND account.is_active AND NOT account.is_dependent AND account.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) AND account.email IS NOT NULL AND account.password_hash IS NOT NULL;
+  IF active_admins<=1 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='last_active_administrator'; END IF;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END; $$;
+CREATE TRIGGER user_platform_roles_guard_active_admin BEFORE INSERT OR UPDATE OR DELETE ON user_platform_roles FOR EACH ROW EXECUTE FUNCTION guard_active_administrator_set();
+CREATE TRIGGER users_guard_active_admin BEFORE UPDATE OF is_active,is_dependent,date_of_birth,email,password_hash OR DELETE ON users FOR EACH ROW EXECUTE FUNCTION guard_active_administrator_set();
+
+CREATE FUNCTION require_active_privacy_attachment_subject() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE subject_id uuid;
+BEGIN
+ IF TG_TABLE_NAME='users' THEN subject_id:=NULLIF(to_jsonb(NEW)->>'guardian_id','')::uuid;
+ ELSE subject_id:=NULLIF(to_jsonb(NEW)->>'user_id','')::uuid;
+ END IF;
+ IF subject_id IS NULL THEN RETURN NEW; END IF;
+ PERFORM 1 FROM users WHERE id=subject_id AND is_active FOR KEY SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='inactive_privacy_attachment_subject'; END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER users_active_guardian_attachment BEFORE INSERT OR UPDATE OF guardian_id ON users FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
+CREATE TRIGGER email_verification_tokens_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON email_verification_tokens FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
+CREATE TRIGGER password_reset_tokens_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON password_reset_tokens FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
+CREATE TRIGGER user_platform_roles_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON user_platform_roles FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
 CREATE TABLE equipment (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), asset_tag varchar(40) NOT NULL UNIQUE, name varchar(120) NOT NULL, type equipment_type NOT NULL, status equipment_status NOT NULL DEFAULT 'Operational', notes text NOT NULL DEFAULT '', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT equipment_asset_tag_valid CHECK (asset_tag = btrim(asset_tag) AND char_length(asset_tag) BETWEEN 2 AND 40), CONSTRAINT equipment_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT equipment_notes_valid CHECK (char_length(notes) <= 4000), CONSTRAINT equipment_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT equipment_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760));
 CREATE INDEX equipment_status_type_idx ON equipment (status, type);
 CREATE TABLE equipment_audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, action varchar(20) NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'RETIRED', 'REACTIVATED')), before_state jsonb NULL, after_state jsonb NOT NULL, affected_maintenance_ids uuid[] NOT NULL DEFAULT '{}', occurred_at timestamptz NOT NULL DEFAULT now());
@@ -135,7 +174,8 @@ CREATE TABLE news_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title_pt
 CREATE INDEX news_published_date_idx ON news_items (is_published, published_at DESC);
 CREATE TABLE maintenance_tasks (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, scheduled_for timestamptz NOT NULL, description varchar(2000) NOT NULL, status maintenance_status NOT NULL DEFAULT 'Scheduled', created_by_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT maintenance_description_valid CHECK (description = btrim(description) AND char_length(description) BETWEEN 10 AND 2000), CONSTRAINT maintenance_completion_valid CHECK ((status = 'Completed' AND completed_at IS NOT NULL) OR (status <> 'Completed' AND completed_at IS NULL)));
 CREATE INDEX maintenance_status_scheduled_idx ON maintenance_tasks (status, scheduled_for); CREATE INDEX maintenance_equipment_id_idx ON maintenance_tasks (equipment_id);
-CREATE TABLE sessions (token text PRIMARY KEY, data bytea NOT NULL, expiry timestamptz NOT NULL); CREATE INDEX sessions_expiry_idx ON sessions (expiry);
+CREATE TABLE sessions (token text PRIMARY KEY, data bytea NOT NULL, expiry timestamptz NOT NULL, user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, subject_indexed boolean NOT NULL DEFAULT false, CHECK (user_id IS NULL OR subject_indexed)); CREATE INDEX sessions_expiry_idx ON sessions (expiry); CREATE INDEX sessions_user_expiry_idx ON sessions (user_id, expiry) WHERE subject_indexed AND user_id IS NOT NULL; CREATE INDEX sessions_unindexed_expiry_idx ON sessions (expiry) WHERE NOT subject_indexed;
+CREATE TRIGGER sessions_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON sessions FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
 CREATE TABLE seasons (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code varchar(20) NOT NULL UNIQUE, name varchar(120) NOT NULL, starts_on date NOT NULL, ends_on date NOT NULL, is_current boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT seasons_code_valid CHECK (code = btrim(code) AND char_length(code) BETWEEN 1 AND 20), CONSTRAINT seasons_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT seasons_dates_valid CHECK (starts_on <= ends_on)); CREATE UNIQUE INDEX seasons_current_uidx ON seasons (is_current) WHERE is_current;
 CREATE TABLE programmes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code varchar(40) NOT NULL UNIQUE, name_pt varchar(120) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT programmes_code_valid CHECK (code = btrim(code) AND code ~ '^[A-Za-z][A-Za-z0-9_]*$'), CONSTRAINT programmes_name_valid CHECK (name_pt = btrim(name_pt) AND char_length(name_pt) BETWEEN 2 AND 120));
 INSERT INTO programmes (code, name_pt) VALUES ('Leisure', 'Lazer'), ('Initiation', 'Iniciação'), ('Competition', 'Competição'), ('Kayak_Polo', 'Kayak Polo');
@@ -315,6 +355,7 @@ CREATE TABLE training_session_outcomes (session_id uuid NOT NULL REFERENCES trai
 CREATE TABLE competition_documents (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title varchar(180) NOT NULL, url text NOT NULL, source varchar(180) NOT NULL, reviewed_on date NOT NULL, event_id uuid NULL REFERENCES events(id) ON DELETE CASCADE, modality_id uuid NULL REFERENCES modalities(id) ON DELETE RESTRICT, programme_id uuid NULL REFERENCES programmes(id) ON DELETE RESTRICT, team_id uuid NULL REFERENCES teams(id) ON DELETE RESTRICT, author_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, published_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT competition_documents_title_valid CHECK (title = btrim(title) AND char_length(title) BETWEEN 2 AND 180), CONSTRAINT competition_documents_url_valid CHECK (url ~ '^https://'), CONSTRAINT competition_documents_source_valid CHECK (source = btrim(source) AND char_length(source) BETWEEN 2 AND 180), CONSTRAINT competition_documents_context_valid CHECK (event_id IS NOT NULL OR modality_id IS NOT NULL), CONSTRAINT competition_documents_scope_valid CHECK (programme_id IS NOT NULL OR team_id IS NOT NULL OR event_id IS NOT NULL), CONSTRAINT competition_documents_modality_scope_valid CHECK (modality_id IS NULL OR programme_id IS NOT NULL OR team_id IS NOT NULL)); CREATE INDEX competition_documents_event_idx ON competition_documents (event_id, published_at DESC) WHERE event_id IS NOT NULL; CREATE INDEX competition_documents_modality_idx ON competition_documents (modality_id, published_at DESC) WHERE modality_id IS NOT NULL;
 CREATE TYPE staff_capability AS ENUM ('COACH', 'MODERATOR');
 CREATE TABLE staff_grants (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, capability staff_capability NOT NULL, programme_id uuid NULL REFERENCES programmes(id) ON DELETE RESTRICT, team_id uuid NULL REFERENCES teams(id) ON DELETE RESTRICT, granted_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, granted_at timestamptz NOT NULL DEFAULT now(), revoked_by_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, revoked_at timestamptz NULL, revoke_reason varchar(500) NULL, CONSTRAINT staff_grants_scope_valid CHECK ((capability = 'COACH' AND (programme_id IS NOT NULL OR team_id IS NOT NULL)) OR (capability = 'MODERATOR' AND programme_id IS NULL AND team_id IS NULL)), CONSTRAINT staff_grants_revocation_valid CHECK ((revoked_at IS NULL AND revoked_by_id IS NULL AND revoke_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_id IS NOT NULL AND revoke_reason = btrim(revoke_reason) AND char_length(revoke_reason) BETWEEN 1 AND 500)));
+CREATE TRIGGER staff_grants_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON staff_grants FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
 CREATE UNIQUE INDEX staff_grants_active_scope_uidx ON staff_grants (user_id, capability, COALESCE(programme_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(team_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE revoked_at IS NULL; CREATE INDEX staff_grants_active_user_idx ON staff_grants (user_id) WHERE revoked_at IS NULL;
 CREATE FUNCTION reject_dependent_privileges() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id AND is_dependent) THEN RAISE EXCEPTION 'dependants cannot receive platform or staff privileges'; END IF; RETURN NEW; END; $$;
 CREATE TRIGGER user_platform_roles_reject_dependant BEFORE INSERT OR UPDATE OF user_id ON user_platform_roles FOR EACH ROW EXECUTE FUNCTION reject_dependent_privileges(); CREATE TRIGGER staff_grants_reject_dependant BEFORE INSERT OR UPDATE OF user_id ON staff_grants FOR EACH ROW EXECUTE FUNCTION reject_dependent_privileges();
@@ -464,6 +505,23 @@ CREATE TABLE privacy_reviewer_grant_events (
 CREATE FUNCTION prevent_privacy_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'privacy audit events are append-only'; END; $$;
 CREATE TRIGGER privacy_grant_events_immutable BEFORE UPDATE OR DELETE ON privacy_reviewer_grant_events FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
 
+-- Erasure execution is a separate four-eyes capability. It is never implied by
+-- administrator or reviewer access, and no account is seeded with it.
+CREATE TABLE privacy_executor_grants (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ granted_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, granted_at timestamptz NOT NULL,
+ revoked_by uuid NULL REFERENCES users(id) ON DELETE RESTRICT, revoked_at timestamptz NULL,
+ CHECK ((revoked_at IS NULL) = (revoked_by IS NULL)), CHECK (revoked_at IS NULL OR revoked_at >= granted_at)
+);
+CREATE UNIQUE INDEX privacy_executor_grants_active_uidx ON privacy_executor_grants(user_id) WHERE revoked_at IS NULL;
+CREATE TABLE privacy_executor_grant_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), grant_id uuid NOT NULL REFERENCES privacy_executor_grants(id) ON DELETE RESTRICT,
+ actor_ref uuid NOT NULL, action varchar(20) NOT NULL CHECK (action IN ('GRANTED','REVOKED')), occurred_at timestamptz NOT NULL
+);
+CREATE TRIGGER privacy_executor_grant_events_immutable BEFORE UPDATE OR DELETE ON privacy_executor_grant_events FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TRIGGER privacy_reviewer_grants_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON privacy_reviewer_grants FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
+CREATE TRIGGER privacy_executor_grants_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON privacy_executor_grants FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
+
 -- Immutable adopted versions contain only controller-approved catalogue metadata.
 CREATE TABLE privacy_request_policies (
  version varchar(80) PRIMARY KEY CHECK (char_length(btrim(version)) BETWEEN 1 AND 80),
@@ -491,7 +549,7 @@ CREATE TABLE data_erasure_requests (
  idempotency_key uuid NOT NULL, subject_user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
  requester_user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, subject_kind varchar(20) NOT NULL CHECK (subject_kind IN ('SELF','DEPENDANT')),
  scope_kind varchar(20) NOT NULL CHECK (scope_kind IN ('ACCOUNT_CLOSURE','CATEGORIES')), categories text[] NOT NULL DEFAULT '{}',
- status varchar(30) NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED','CANCELLED')),
+ status varchar(30) NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','PROCESSING','RETRYABLE_FAILED','TERMINAL_FAILED','COMPLETED','REFUSED','CANCELLED')),
  version bigint NOT NULL DEFAULT 1 CHECK (version > 0), received_at timestamptz NOT NULL, due_at timestamptz NOT NULL,
  extended_due_at timestamptz NULL, extension_reason_code varchar(40) NULL CHECK (extension_reason_code IN ('COMPLEXITY','REQUEST_VOLUME')),
  claimed_by uuid NULL REFERENCES users(id) ON DELETE RESTRICT, reviewed_at timestamptz NULL,
@@ -518,11 +576,12 @@ CREATE TABLE data_erasure_requests (
  CHECK ((identity_verified_at IS NULL AND identity_method IS NULL AND identity_verified_by IS NULL) OR (identity_verified_at IS NOT NULL AND identity_method IS NOT NULL AND identity_verified_by IS NOT NULL)),
  CHECK ((representation_verified_at IS NULL AND representation_method IS NULL AND representation_verified_by IS NULL AND representation_guardian_id IS NULL) OR (representation_verified_at IS NOT NULL AND representation_method IS NOT NULL AND representation_verified_by IS NOT NULL AND representation_guardian_id IS NOT NULL)),
  CHECK ((policy_version IS NULL) = (policy_snapshot IS NULL)),
- CHECK ((status IN ('REFUSED','CANCELLED') AND closed_at IS NOT NULL AND evidence_expires_at > closed_at) OR (status NOT IN ('REFUSED','CANCELLED') AND closed_at IS NULL AND evidence_expires_at IS NULL)),
- CHECK ((status IN ('AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED') AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND decision_code IS NOT NULL AND policy_version IS NOT NULL) OR (status NOT IN ('AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED')) OR working_erased_at IS NOT NULL)
+ CONSTRAINT privacy_case_closure_state CHECK ((status IN ('REFUSED','CANCELLED','COMPLETED') AND closed_at IS NOT NULL AND evidence_expires_at > closed_at) OR (status NOT IN ('REFUSED','CANCELLED','COMPLETED') AND closed_at IS NULL AND evidence_expires_at IS NULL)),
+ CHECK ((status IN ('AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED') AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND decision_code IS NOT NULL AND policy_version IS NOT NULL) OR (status NOT IN ('AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED')) OR working_erased_at IS NOT NULL),
+ CONSTRAINT privacy_case_execution_decision_complete CHECK (status NOT IN ('PROCESSING','RETRYABLE_FAILED','TERMINAL_FAILED','COMPLETED') OR (decided_at IS NOT NULL AND decided_by IS NOT NULL AND decision_code IN ('APPROVED','PARTIALLY_APPROVED') AND policy_version IS NOT NULL))
 );
 CREATE UNIQUE INDEX data_erasure_request_idempotency_uidx ON data_erasure_requests(requester_user_id,idempotency_key);
-CREATE UNIQUE INDEX data_erasure_request_active_uidx ON data_erasure_requests(subject_user_id,requester_user_id) WHERE status NOT IN ('REFUSED','CANCELLED');
+CREATE UNIQUE INDEX data_erasure_request_active_uidx ON data_erasure_requests(subject_user_id,requester_user_id) WHERE status NOT IN ('REFUSED','CANCELLED','COMPLETED');
 CREATE INDEX data_erasure_requests_queue_idx ON data_erasure_requests(status, due_at, received_at);
 CREATE INDEX data_erasure_requests_requester_idx ON data_erasure_requests(requester_user_id, received_at DESC);
 -- Server-compiled plans contain stable codes only and survive the 90-day
@@ -536,20 +595,308 @@ CREATE TABLE privacy_request_execution_plans (
  plan_sha256 bytea NOT NULL,
  created_at timestamptz NOT NULL,
  CHECK (octet_length(plan_sha256) = 32),
- CHECK (plan->>'policy_version' = policy_version AND plan->>'executor_version' = executor_version AND plan->>'schema_version' = schema_version)
+ CHECK (plan->>'policy_version' = policy_version AND plan->>'executor_version' = executor_version AND plan->>'schema_version' = schema_version),
+ CONSTRAINT privacy_execution_plans_binding_unique UNIQUE(request_id,plan_sha256,executor_version,schema_version)
 );
 CREATE TRIGGER privacy_execution_plans_immutable BEFORE UPDATE OR DELETE ON privacy_request_execution_plans FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+
+-- Execution rows bind a request to its immutable plan without copying subject
+-- identity. Category jobs and operation checkpoints contain stable codes only.
+CREATE TABLE privacy_erasure_executions (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), request_id uuid NOT NULL UNIQUE REFERENCES data_erasure_requests(id) ON DELETE RESTRICT,
+ plan_sha256 bytea NOT NULL, executor_version varchar(80) NOT NULL, schema_version varchar(80) NOT NULL,
+ request_version_at_start bigint NOT NULL CHECK (request_version_at_start > 1),
+ status varchar(30) NOT NULL DEFAULT 'QUEUED' CHECK (status IN ('QUEUED','RUNNING','RETRYABLE_FAILED','TERMINAL_FAILED','SUCCEEDED')),
+ version bigint NOT NULL DEFAULT 1 CHECK (version > 0), started_by_ref uuid NOT NULL,
+ accepted_at timestamptz NOT NULL, started_at timestamptz NULL, finished_at timestamptz NULL, updated_at timestamptz NOT NULL,
+ FOREIGN KEY(request_id,plan_sha256,executor_version,schema_version) REFERENCES privacy_request_execution_plans(request_id,plan_sha256,executor_version,schema_version) ON DELETE RESTRICT,
+ CHECK (octet_length(plan_sha256)=32), CHECK (updated_at>=accepted_at),
+ CHECK ((status='QUEUED' AND started_at IS NULL AND finished_at IS NULL) OR (status IN ('RUNNING','RETRYABLE_FAILED') AND started_at IS NOT NULL AND finished_at IS NULL) OR (status IN ('TERMINAL_FAILED','SUCCEEDED') AND started_at IS NOT NULL AND finished_at IS NOT NULL)),
+ CHECK (finished_at IS NULL OR finished_at>=started_at)
+);
+CREATE INDEX privacy_erasure_executions_status_idx ON privacy_erasure_executions(status,updated_at,id);
+
+CREATE TABLE privacy_erasure_access_revocations (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), execution_id uuid NOT NULL REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,
+ grant_kind varchar(30) NOT NULL CHECK (grant_kind IN ('PLATFORM_ROLE','STAFF_GRANT','PRIVACY_REVIEWER','PRIVACY_EXECUTOR')),
+ capability_code varchar(120) NOT NULL, revoked_count integer NOT NULL CHECK (revoked_count>0), actor_ref uuid NOT NULL, occurred_at timestamptz NOT NULL,
+ CHECK (capability_code=btrim(capability_code) AND capability_code ~ '^[A-Z][A-Z0-9_]{0,119}$'),
+ UNIQUE(execution_id,grant_kind,capability_code)
+);
+CREATE INDEX privacy_erasure_access_revocations_execution_idx ON privacy_erasure_access_revocations(execution_id,grant_kind,capability_code);
+
+CREATE TABLE privacy_erasure_category_jobs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), execution_id uuid NOT NULL REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,
+ plan_entry_position smallint NOT NULL CHECK (plan_entry_position BETWEEN 1 AND 50), entry_sha256 bytea NOT NULL CHECK (octet_length(entry_sha256)=32),
+ category_key varchar(120) NOT NULL, purpose_code varchar(120) NOT NULL,
+ status varchar(30) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','LEASED','RETRY_WAIT','SUCCEEDED','TERMINAL_FAILED')),
+ next_attempt_at timestamptz NOT NULL, lease_epoch bigint NOT NULL DEFAULT 0 CHECK (lease_epoch>=0), attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count>=0),
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, completed_at timestamptz NULL,
+ CHECK (category_key=btrim(category_key) AND category_key ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (purpose_code=btrim(purpose_code) AND purpose_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (updated_at>=created_at), CHECK ((status='SUCCEEDED')=(completed_at IS NOT NULL)), CHECK (completed_at IS NULL OR completed_at>=created_at),
+ UNIQUE(execution_id,category_key), UNIQUE(execution_id,plan_entry_position)
+);
+CREATE INDEX privacy_erasure_category_jobs_claim_idx ON privacy_erasure_category_jobs(status,next_attempt_at,created_at,id) WHERE status IN ('PENDING','RETRY_WAIT','LEASED');
+
+CREATE TABLE privacy_erasure_job_leases (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ epoch bigint NOT NULL CHECK (epoch>0), worker_ref uuid NOT NULL,
+ acquired_at timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL, expires_at timestamptz NOT NULL,
+ released_at timestamptz NULL, outcome varchar(30) NULL CHECK (outcome IN ('SUCCEEDED','RETRYABLE_FAILED','TERMINAL_FAILED','EXPIRED')),
+ CHECK (heartbeat_at>=acquired_at AND expires_at>heartbeat_at),
+ CHECK ((released_at IS NULL)=(outcome IS NULL)), CHECK (released_at IS NULL OR released_at>=acquired_at),
+ UNIQUE(job_id,epoch), UNIQUE(id,job_id,epoch)
+);
+CREATE UNIQUE INDEX privacy_erasure_job_leases_active_uidx ON privacy_erasure_job_leases(job_id) WHERE released_at IS NULL;
+CREATE INDEX privacy_erasure_job_leases_expiry_idx ON privacy_erasure_job_leases(expires_at,id) WHERE released_at IS NULL;
+
+CREATE TABLE privacy_erasure_job_attempts (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ lease_id uuid NOT NULL, lease_epoch bigint NOT NULL, attempt_number integer NOT NULL CHECK (attempt_number>0),
+ started_at timestamptz NOT NULL, finished_at timestamptz NULL,
+ outcome varchar(30) NULL CHECK (outcome IN ('SUCCEEDED','RETRYABLE_FAILED','TERMINAL_FAILED','LEASE_EXPIRED')),
+ FOREIGN KEY(lease_id,job_id,lease_epoch) REFERENCES privacy_erasure_job_leases(id,job_id,epoch) ON DELETE RESTRICT,
+ CHECK ((finished_at IS NULL)=(outcome IS NULL)), CHECK (finished_at IS NULL OR finished_at>=started_at),
+ UNIQUE(job_id,attempt_number), UNIQUE(lease_id), UNIQUE(id,job_id)
+);
+CREATE INDEX privacy_erasure_job_attempts_job_idx ON privacy_erasure_job_attempts(job_id,attempt_number);
+
+CREATE TABLE privacy_erasure_job_checkpoints (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ operation_position smallint NOT NULL CHECK (operation_position BETWEEN 1 AND 100), operation_code varchar(120) NOT NULL, action_version varchar(40) NOT NULL,
+ status varchar(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SUCCEEDED')),
+ completed_by_attempt_id uuid NULL, created_at timestamptz NOT NULL, completed_at timestamptz NULL,
+ FOREIGN KEY(completed_by_attempt_id,job_id) REFERENCES privacy_erasure_job_attempts(id,job_id) ON DELETE RESTRICT,
+ CHECK (operation_code=btrim(operation_code) AND operation_code ~ '^[A-Z][A-Z0-9_]{0,119}$'),
+ CHECK (action_version=btrim(action_version) AND action_version ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,39}$'),
+ CHECK ((status='PENDING' AND completed_by_attempt_id IS NULL AND completed_at IS NULL) OR (status='SUCCEEDED' AND completed_by_attempt_id IS NOT NULL AND completed_at IS NOT NULL)),
+ CHECK (completed_at IS NULL OR completed_at>=created_at),
+ UNIQUE(job_id,operation_position), UNIQUE(job_id,operation_code,action_version)
+);
+CREATE INDEX privacy_erasure_job_checkpoints_pending_idx ON privacy_erasure_job_checkpoints(job_id,operation_position) WHERE status='PENDING';
+
+CREATE TABLE privacy_erasure_failures (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ attempt_id uuid NOT NULL, classification varchar(20) NOT NULL CHECK (classification IN ('RETRYABLE','TERMINAL')),
+ stage_code varchar(80) NOT NULL, failure_code varchar(120) NOT NULL, diagnostic_digest bytea NULL,
+ occurred_at timestamptz NOT NULL,
+ FOREIGN KEY(attempt_id,job_id) REFERENCES privacy_erasure_job_attempts(id,job_id) ON DELETE RESTRICT,
+ CHECK (stage_code=btrim(stage_code) AND stage_code ~ '^[A-Z][A-Z0-9_]{0,79}$'),
+ CHECK (failure_code=btrim(failure_code) AND failure_code ~ '^[A-Z][A-Z0-9_]{0,119}$'),
+ CHECK (diagnostic_digest IS NULL OR octet_length(diagnostic_digest)=32), UNIQUE(attempt_id)
+);
+CREATE INDEX privacy_erasure_failures_job_idx ON privacy_erasure_failures(job_id,occurred_at,id);
+
+CREATE FUNCTION prevent_privacy_execution_record_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'privacy execution records cannot be deleted before approved evidence expiry'; END; $$;
+CREATE TRIGGER privacy_erasure_executions_no_delete BEFORE DELETE ON privacy_erasure_executions FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_access_revocations_immutable BEFORE UPDATE OR DELETE ON privacy_erasure_access_revocations FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_category_jobs_no_delete BEFORE DELETE ON privacy_erasure_category_jobs FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_job_leases_no_delete BEFORE DELETE ON privacy_erasure_job_leases FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_job_attempts_no_delete BEFORE DELETE ON privacy_erasure_job_attempts FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_job_checkpoints_no_delete BEFORE DELETE ON privacy_erasure_job_checkpoints FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_erasure_failures_immutable BEFORE UPDATE OR DELETE ON privacy_erasure_failures FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
 CREATE TABLE data_erasure_request_events (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), request_id uuid NOT NULL REFERENCES data_erasure_requests(id) ON DELETE RESTRICT,
- actor_role varchar(20) NOT NULL CHECK (actor_role IN ('REQUESTER','REVIEWER','SYSTEM')), actor_ref uuid NOT NULL,
- action varchar(40) NOT NULL CHECK (action IN ('RECEIVED','CLAIMED','IDENTITY_REQUESTED','IDENTITY_VERIFIED','REPRESENTATION_VERIFIED','REPRESENTATION_CONFLICT','DEADLINE_EXTENDED','DEPENDANT_RESOLVED','APPROVED','PARTIALLY_APPROVED','REFUSED','CANCELLED')),
- reason_code varchar(40) NOT NULL CHECK (reason_code IN ('REQUEST_RECEIVED','REVIEW_CLAIMED','VERIFICATION_REQUIRED','VERIFICATION_RECORDED','DEPENDANT_RESOLVED','REPRESENTATION_CONFLICT','COMPLEXITY','REQUEST_VOLUME','POLICY_DECISION','REQUESTER_CANCELLED')),
- from_status varchar(30) NULL CHECK (from_status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED','CANCELLED')),
- to_status varchar(30) NOT NULL CHECK (to_status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','REFUSED','CANCELLED')),
+ actor_role varchar(20) NOT NULL CHECK (actor_role IN ('REQUESTER','REVIEWER','EXECUTOR','SYSTEM')), actor_ref uuid NOT NULL,
+ action varchar(40) NOT NULL CHECK (action IN ('RECEIVED','CLAIMED','IDENTITY_REQUESTED','IDENTITY_VERIFIED','REPRESENTATION_VERIFIED','REPRESENTATION_CONFLICT','DEADLINE_EXTENDED','DEPENDANT_RESOLVED','APPROVED','PARTIALLY_APPROVED','PROCESSING_STARTED','EXECUTION_RETRYABLE_FAILED','EXECUTION_RESUMED','EXECUTION_TERMINAL_FAILED','COMPLETED','REFUSED','CANCELLED')),
+ reason_code varchar(40) NOT NULL CHECK (reason_code IN ('REQUEST_RECEIVED','REVIEW_CLAIMED','VERIFICATION_REQUIRED','VERIFICATION_RECORDED','DEPENDANT_RESOLVED','REPRESENTATION_CONFLICT','COMPLEXITY','REQUEST_VOLUME','POLICY_DECISION','EXECUTION_ACCEPTED','EXECUTION_RETRYABLE_FAILURE','EXECUTION_RETRY_STARTED','EXECUTION_TERMINAL_FAILURE','EXECUTION_COMPLETED','REQUESTER_CANCELLED')),
+ from_status varchar(30) NULL CHECK (from_status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','PROCESSING','RETRYABLE_FAILED','TERMINAL_FAILED','COMPLETED','REFUSED','CANCELLED')),
+ to_status varchar(30) NOT NULL CHECK (to_status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED','PROCESSING','RETRYABLE_FAILED','TERMINAL_FAILED','COMPLETED','REFUSED','CANCELLED')),
  version bigint NOT NULL CHECK (version > 0), occurred_at timestamptz NOT NULL, UNIQUE(request_id,version)
 );
 CREATE TRIGGER privacy_case_events_immutable BEFORE UPDATE OR DELETE ON data_erasure_request_events FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
 CREATE INDEX data_erasure_request_events_request_idx ON data_erasure_request_events(request_id,version);
+
+CREATE FUNCTION privacy_worker_claim(p_lease_milliseconds bigint, p_worker_ref uuid)
+RETURNS TABLE(job_id uuid, lease_id uuid, attempt_id uuid)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+WITH candidate AS MATERIALIZED (
+ SELECT job.id,job.status,job.lease_epoch
+ FROM public.privacy_erasure_category_jobs job
+ WHERE p_lease_milliseconds BETWEEN 1000 AND 3600000
+ AND ((job.status IN ('PENDING','RETRY_WAIT') AND job.next_attempt_at<=clock_timestamp())
+    OR (job.status='LEASED' AND EXISTS(
+      SELECT 1 FROM public.privacy_erasure_job_leases lease
+      WHERE lease.job_id=job.id AND lease.epoch=job.lease_epoch AND lease.released_at IS NULL AND lease.expires_at<=clock_timestamp()
+    )))
+ ORDER BY job.next_attempt_at,job.created_at,job.id
+ FOR UPDATE SKIP LOCKED LIMIT 1
+), authority_clock AS MATERIALIZED (
+ SELECT clock_timestamp() AS occurred_at FROM candidate LIMIT 1
+), expired_lease AS (
+ UPDATE public.privacy_erasure_job_leases lease SET released_at=authority_clock.occurred_at,outcome='EXPIRED'
+ FROM candidate,authority_clock WHERE lease.job_id=candidate.id AND lease.epoch=candidate.lease_epoch
+ AND candidate.status='LEASED' AND lease.released_at IS NULL AND lease.expires_at<=authority_clock.occurred_at
+ RETURNING lease.id,lease.job_id
+), expired_attempt AS (
+ UPDATE public.privacy_erasure_job_attempts attempt SET finished_at=authority_clock.occurred_at,outcome='LEASE_EXPIRED'
+ FROM expired_lease,authority_clock WHERE attempt.lease_id=expired_lease.id AND attempt.finished_at IS NULL
+ RETURNING attempt.id
+), claimed_job AS (
+ UPDATE public.privacy_erasure_category_jobs job SET status='LEASED',lease_epoch=job.lease_epoch+1,
+ attempt_count=job.attempt_count+1,updated_at=authority_clock.occurred_at
+ FROM candidate,authority_clock WHERE job.id=candidate.id AND (candidate.status<>'LEASED' OR EXISTS(SELECT 1 FROM expired_lease))
+ RETURNING job.*
+), new_lease AS (
+ INSERT INTO public.privacy_erasure_job_leases(job_id,epoch,worker_ref,acquired_at,heartbeat_at,expires_at)
+ SELECT id,lease_epoch,p_worker_ref,authority_clock.occurred_at,authority_clock.occurred_at,
+ authority_clock.occurred_at+(p_lease_milliseconds*INTERVAL '1 millisecond')
+ FROM claimed_job,authority_clock RETURNING *
+), new_attempt AS (
+ INSERT INTO public.privacy_erasure_job_attempts(job_id,lease_id,lease_epoch,attempt_number,started_at)
+ SELECT claimed_job.id,new_lease.id,new_lease.epoch,claimed_job.attempt_count,authority_clock.occurred_at
+ FROM claimed_job JOIN new_lease ON new_lease.job_id=claimed_job.id CROSS JOIN authority_clock RETURNING *
+), execution_started AS (
+ UPDATE public.privacy_erasure_executions execution SET status='RUNNING',version=execution.version+1,
+ started_at=COALESCE(execution.started_at,authority_clock.occurred_at),finished_at=NULL,updated_at=authority_clock.occurred_at
+ FROM claimed_job,authority_clock WHERE execution.id=claimed_job.execution_id AND execution.status NOT IN ('SUCCEEDED','TERMINAL_FAILED') RETURNING execution.id
+)
+SELECT claimed_job.id,new_lease.id,new_attempt.id
+FROM claimed_job JOIN new_lease ON new_lease.job_id=claimed_job.id JOIN new_attempt ON new_attempt.job_id=claimed_job.id
+WHERE EXISTS(SELECT 1 FROM execution_started);
+$$;
+
+CREATE FUNCTION privacy_worker_heartbeat(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_lease_milliseconds bigint)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+WITH authorized AS MATERIALIZED (
+ SELECT lease.id
+ FROM public.privacy_erasure_job_leases lease
+ JOIN public.privacy_erasure_category_jobs job ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN public.privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_epoch
+ AND lease.worker_ref=p_worker_ref AND job.status='LEASED' AND lease.released_at IS NULL
+ AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp()
+ AND p_lease_milliseconds BETWEEN 1000 AND 3600000 FOR UPDATE OF job,lease,attempt
+), authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at FROM authorized LIMIT 1)
+UPDATE public.privacy_erasure_job_leases lease SET heartbeat_at=authority_clock.occurred_at,
+expires_at=authority_clock.occurred_at+(p_lease_milliseconds*INTERVAL '1 millisecond')
+FROM authorized,authority_clock WHERE lease.id=authorized.id RETURNING lease.id;
+$$;
+
+CREATE FUNCTION privacy_worker_complete_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+WITH authorized AS MATERIALIZED (
+ SELECT job.id AS job_id,attempt.id AS attempt_id
+ FROM public.privacy_erasure_category_jobs job
+ JOIN public.privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN public.privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_epoch
+ AND lease.worker_ref=p_worker_ref AND job.status='LEASED' AND lease.released_at IS NULL
+ AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL FOR UPDATE OF job,lease,attempt
+), authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at FROM authorized LIMIT 1)
+UPDATE public.privacy_erasure_job_checkpoints checkpoint SET status='SUCCEEDED',completed_by_attempt_id=authorized.attempt_id,completed_at=authority_clock.occurred_at
+FROM authorized,authority_clock WHERE checkpoint.job_id=authorized.job_id AND checkpoint.operation_code=p_operation_code
+AND checkpoint.action_version=p_action_version AND checkpoint.status='PENDING' RETURNING checkpoint.id;
+$$;
+
+CREATE FUNCTION privacy_worker_complete_job(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+WITH authorized AS MATERIALIZED (
+ SELECT job.id,lease.id AS lease_id,attempt.id AS attempt_id
+ FROM public.privacy_erasure_category_jobs job
+ JOIN public.privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN public.privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_epoch
+ AND lease.worker_ref=p_worker_ref AND job.status='LEASED' AND lease.released_at IS NULL
+ AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL
+ AND NOT EXISTS(SELECT 1 FROM public.privacy_erasure_job_checkpoints checkpoint WHERE checkpoint.job_id=job.id AND checkpoint.status<>'SUCCEEDED')
+ FOR UPDATE OF job,lease,attempt
+), authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at FROM authorized LIMIT 1),
+completed_job AS (
+ UPDATE public.privacy_erasure_category_jobs job SET status='SUCCEEDED',completed_at=authority_clock.occurred_at,updated_at=authority_clock.occurred_at
+ FROM authorized,authority_clock WHERE job.id=authorized.id RETURNING job.id
+), closed_lease AS (
+ UPDATE public.privacy_erasure_job_leases lease SET released_at=authority_clock.occurred_at,outcome='SUCCEEDED'
+ FROM authorized,completed_job,authority_clock WHERE lease.id=authorized.lease_id RETURNING lease.id
+), closed_attempt AS (
+ UPDATE public.privacy_erasure_job_attempts attempt SET finished_at=authority_clock.occurred_at,outcome='SUCCEEDED'
+ FROM authorized,closed_lease,authority_clock WHERE attempt.id=authorized.attempt_id RETURNING attempt.id
+)
+SELECT completed_job.id FROM completed_job WHERE EXISTS(SELECT 1 FROM closed_attempt);
+$$;
+
+CREATE FUNCTION privacy_worker_fail_job(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_classification text,p_retry_milliseconds bigint,p_stage_code text,p_failure_code text,p_diagnostic_digest bytea)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+WITH authorized AS MATERIALIZED (
+ SELECT job.id,lease.id AS lease_id,attempt.id AS attempt_id
+ FROM public.privacy_erasure_category_jobs job
+ JOIN public.privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN public.privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_epoch
+ AND lease.worker_ref=p_worker_ref AND job.status='LEASED' AND lease.released_at IS NULL
+ AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL
+ AND ((p_classification='RETRYABLE' AND p_retry_milliseconds BETWEEN 1 AND 3600000)
+   OR (p_classification='TERMINAL' AND p_retry_milliseconds=0)) FOR UPDATE OF job,lease,attempt
+), authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at FROM authorized LIMIT 1),
+recorded_failure AS (
+ INSERT INTO public.privacy_erasure_failures(job_id,attempt_id,classification,stage_code,failure_code,diagnostic_digest,occurred_at)
+ SELECT id,attempt_id,p_classification,p_stage_code,p_failure_code,p_diagnostic_digest,authority_clock.occurred_at
+ FROM authorized,authority_clock RETURNING *
+), failed_job AS (
+ UPDATE public.privacy_erasure_category_jobs job SET status=CASE WHEN recorded_failure.classification='RETRYABLE' THEN 'RETRY_WAIT' ELSE 'TERMINAL_FAILED' END,
+ next_attempt_at=CASE WHEN recorded_failure.classification='RETRYABLE' THEN authority_clock.occurred_at+(p_retry_milliseconds*INTERVAL '1 millisecond') ELSE job.next_attempt_at END,
+ updated_at=authority_clock.occurred_at FROM authorized,recorded_failure,authority_clock WHERE job.id=authorized.id RETURNING job.id
+), closed_lease AS (
+ UPDATE public.privacy_erasure_job_leases lease SET released_at=authority_clock.occurred_at,outcome=CASE WHEN recorded_failure.classification='RETRYABLE' THEN 'RETRYABLE_FAILED' ELSE 'TERMINAL_FAILED' END
+ FROM authorized,recorded_failure,failed_job,authority_clock WHERE lease.id=authorized.lease_id RETURNING lease.id
+), closed_attempt AS (
+ UPDATE public.privacy_erasure_job_attempts attempt SET finished_at=authority_clock.occurred_at,outcome=CASE WHEN recorded_failure.classification='RETRYABLE' THEN 'RETRYABLE_FAILED' ELSE 'TERMINAL_FAILED' END
+ FROM authorized,recorded_failure,closed_lease,authority_clock WHERE attempt.id=authorized.attempt_id RETURNING attempt.id
+)
+SELECT failed_job.id FROM failed_job WHERE EXISTS(SELECT 1 FROM closed_attempt);
+$$;
+
+CREATE FUNCTION privacy_worker_sync(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE p_execution_id uuid; authoritative_worker_ref uuid; execution_status text; request_id uuid; request_status text; request_version bigint;
+DECLARE target_status text; event_action text; event_reason text; occurred_at timestamptz; updated_version bigint;
+BEGIN
+ SELECT job.execution_id,lease.worker_ref INTO p_execution_id,authoritative_worker_ref
+ FROM public.privacy_erasure_category_jobs job
+ JOIN public.privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=p_epoch
+ JOIN public.privacy_erasure_job_attempts attempt ON attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_epoch
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.worker_ref=p_worker_ref
+ AND ((job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp())
+   OR (job.status IN ('SUCCEEDED','RETRY_WAIT','TERMINAL_FAILED') AND lease.released_at IS NOT NULL AND attempt.finished_at IS NOT NULL))
+ FOR UPDATE OF job,lease,attempt;
+ IF NOT FOUND THEN RETURN NULL; END IF;
+ PERFORM 1 FROM public.privacy_erasure_executions WHERE id=p_execution_id FOR UPDATE;
+ SELECT CASE WHEN bool_or(status='TERMINAL_FAILED') THEN 'TERMINAL_FAILED'
+             WHEN bool_or(status='RETRY_WAIT') THEN 'RETRYABLE_FAILED'
+             WHEN bool_and(status='SUCCEEDED') THEN 'SUCCEEDED'
+             WHEN bool_or(status='LEASED') OR bool_or(attempt_count>0) THEN 'RUNNING' ELSE 'QUEUED' END
+ INTO execution_status FROM public.privacy_erasure_category_jobs WHERE execution_id=p_execution_id;
+ occurred_at:=clock_timestamp();
+ UPDATE public.privacy_erasure_executions SET status=execution_status,version=version+1,
+  started_at=CASE WHEN execution_status='QUEUED' THEN NULL ELSE COALESCE(started_at,occurred_at) END,
+  finished_at=CASE WHEN execution_status IN ('TERMINAL_FAILED','SUCCEEDED') THEN COALESCE(finished_at,occurred_at) ELSE NULL END,
+  updated_at=occurred_at WHERE id=p_execution_id RETURNING privacy_erasure_executions.request_id INTO request_id;
+ IF execution_status IN ('QUEUED','SUCCEEDED') THEN RETURN p_execution_id; END IF;
+ IF execution_status='RUNNING' THEN target_status:='PROCESSING'; event_action:='EXECUTION_RESUMED'; event_reason:='EXECUTION_RETRY_STARTED';
+ ELSIF execution_status='RETRYABLE_FAILED' THEN target_status:='RETRYABLE_FAILED'; event_action:='EXECUTION_RETRYABLE_FAILED'; event_reason:='EXECUTION_RETRYABLE_FAILURE';
+ ELSIF execution_status='TERMINAL_FAILED' THEN target_status:='TERMINAL_FAILED'; event_action:='EXECUTION_TERMINAL_FAILED'; event_reason:='EXECUTION_TERMINAL_FAILURE';
+ ELSE RAISE EXCEPTION 'invalid privacy execution aggregate'; END IF;
+ SELECT status,version INTO request_status,request_version FROM public.data_erasure_requests WHERE id=request_id FOR UPDATE;
+ IF request_status=target_status OR (execution_status='RUNNING' AND request_status='PROCESSING') THEN RETURN p_execution_id; END IF;
+ IF NOT ((target_status='PROCESSING' AND request_status='RETRYABLE_FAILED') OR
+         (target_status='RETRYABLE_FAILED' AND request_status='PROCESSING') OR
+         (target_status='TERMINAL_FAILED' AND request_status IN ('PROCESSING','RETRYABLE_FAILED'))) THEN
+  RAISE EXCEPTION 'invalid privacy request lifecycle transition';
+ END IF;
+ UPDATE public.data_erasure_requests SET status=target_status,version=version+1,updated_at=occurred_at
+ WHERE id=request_id AND version=request_version RETURNING version INTO updated_version;
+ INSERT INTO public.data_erasure_request_events(request_id,actor_role,actor_ref,action,reason_code,from_status,to_status,version,occurred_at)
+ VALUES(request_id,'SYSTEM',authoritative_worker_ref,event_action,event_reason,request_status,target_status,updated_version,occurred_at);
+ RETURN p_execution_id;
+END; $$;
+
+REVOKE ALL ON FUNCTION privacy_worker_claim(bigint,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
 
 ALTER TABLE email_outbox ADD COLUMN privacy_request_id uuid NULL REFERENCES data_erasure_requests(id) ON DELETE RESTRICT;
 ALTER TABLE email_outbox ADD COLUMN privacy_requester_id uuid NULL REFERENCES users(id) ON DELETE SET NULL;
@@ -558,7 +905,7 @@ ALTER TABLE email_outbox DROP CONSTRAINT email_outbox_message_valid;
 ALTER TABLE email_outbox ADD CONSTRAINT email_outbox_message_valid CHECK (
  (message_type = 'EMAIL_VERIFICATION' AND verification_token_id IS NOT NULL AND password_reset_token_id IS NULL AND sealed_payload IS NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL)
  OR (message_type = 'PASSWORD_RESET' AND verification_token_id IS NULL AND password_reset_token_id IS NOT NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL)
- OR (message_type IN ('PRIVACY_ACKNOWLEDGEMENT','PRIVACY_DECISION') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NOT NULL AND privacy_event_key IS NOT NULL)
+ OR (message_type IN ('PRIVACY_ACKNOWLEDGEMENT','PRIVACY_DECISION','PRIVACY_PROCESSING_STARTED') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NOT NULL AND privacy_event_key IS NOT NULL)
 );
 CREATE UNIQUE INDEX email_outbox_privacy_event_uidx ON email_outbox(privacy_event_key) WHERE privacy_event_key IS NOT NULL;
 

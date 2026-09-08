@@ -74,6 +74,7 @@ func TestPrivacyReviewerNavigationIsCapabilityScoped(t *testing.T) {
 	}{
 		{name: "ordinary member", user: CurrentUser{}},
 		{name: "privacy reviewer", user: CurrentUser{CanReviewPrivacy: true}, want: true},
+		{name: "privacy executor", user: CurrentUser{CanExecutePrivacy: true}, want: true},
 		{name: "administrator without reviewer grant", user: CurrentUser{IsAdmin: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

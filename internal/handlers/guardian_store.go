@@ -27,7 +27,7 @@ func (s PostgresGuardianDependentStore) CreateDependent(ctx context.Context, inp
 			return ErrMaximumDependents
 		}
 		dependent, err := queries.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{
-			Name: input.Name, GuardianID: &input.GuardianID,
+			Name: input.Name, GuardianID: input.GuardianID,
 			DateOfBirth: pgtype.Date{Time: input.DateOfBirth, Valid: true},
 		})
 		if err != nil {

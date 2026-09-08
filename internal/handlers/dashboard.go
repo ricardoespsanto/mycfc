@@ -1151,7 +1151,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		}
 	}
 	var admin []components.NavigationItem
-	if user.CanReviewPrivacy {
+	if user.CanReviewPrivacy || user.CanExecutePrivacy {
 		admin = append(admin, components.NavigationItem{Label: "Pedidos de privacidade", Path: "/admin/privacidade"})
 	}
 	if user.IsAdmin {

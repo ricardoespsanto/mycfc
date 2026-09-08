@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -159,10 +160,44 @@ func TestPrivacyDecisionOutboxSurvivesAccountDisableAndDetachment(t *testing.T) 
 	if claimed.ID != id || claimed.MessageType != "PRIVACY_DECISION" || claimed.Email != "" || claimed.UserID != uuid.Nil || claimed.ExpiresAt.Valid {
 		t.Fatalf("invalid private notice claim: %+v", claimed)
 	}
+	if _, err = q.CompleteEmailOutbox(ctx, dbgen.CompleteEmailOutboxParams{ID: claimed.ID, CompletedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	processingEventID := uuid.New()
+	processingID, err := q.EnqueuePrivacyRequestEmail(ctx, dbgen.EnqueuePrivacyRequestEmailParams{MessageType: "PRIVACY_PROCESSING_STARTED", PrivacyRequestID: &r.ID, PrivacyRequesterID: &user, PrivacyEventKey: &processingEventID, SealedPayload: []byte("encrypted"), CreatedAt: created})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processing, err := q.ClaimEmailOutbox(ctx, dbgen.ClaimEmailOutboxParams{ClaimedAt: now, StaleBefore: resetTimestamp(time.Now().Add(-time.Minute))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processing.ID != processingID || processing.MessageType != "PRIVACY_PROCESSING_STARTED" {
+		t.Fatalf("processing notice was not claimable: %+v", processing)
+	}
 	// event identity prevents duplicate notices transactionally.
 	_, err = q.EnqueuePrivacyRequestEmail(ctx, dbgen.EnqueuePrivacyRequestEmailParams{MessageType: "PRIVACY_DECISION", PrivacyRequestID: &r.ID, PrivacyRequesterID: &user, PrivacyEventKey: &eventID, SealedPayload: []byte("encrypted"), CreatedAt: created})
 	requirePrivacyPGCode(t, err, "23505")
 }
+
+func TestInactivePrivacySubjectRejectsNewAccessAttachments(t *testing.T) {
+	pool, ctx := privacyDB(t)
+	userID, _ := insertPasswordResetUser(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbgen.New(pool).CreateDependentUser(ctx, dbgen.CreateDependentUserParams{
+		GuardianID: userID, Name: "Dependente tardio",
+		DateOfBirth: pgtype.Date{Time: time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("inactive guardian dependent creation error=%v", err)
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES('late-session','x',clock_timestamp()+interval '1 hour',$1,true)`, userID)
+	requirePrivacyPGCode(t, err, "23514")
+	_, err = pool.Exec(ctx, `INSERT INTO password_reset_tokens(user_id,email,token_digest,expires_at) VALUES($1,'late@example.test',$2,clock_timestamp()+interval '1 hour')`, userID, make([]byte, 32))
+	requirePrivacyPGCode(t, err, "23514")
+}
+
 func TestPrivacyAdoptedPolicyImmutableAndNoSeededActivation(t *testing.T) {
 	pool, ctx := privacyDB(t)
 	user, _ := insertPasswordResetUser(t, ctx, pool)

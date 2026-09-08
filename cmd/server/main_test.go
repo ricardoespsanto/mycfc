@@ -16,12 +16,14 @@ import (
 type databaseCommandConnectionFake struct {
 	pgx.Tx
 	statements int
+	sql        []string
 	tx         pgx.Tx
 }
 
 func (c *databaseCommandConnectionFake) Close(context.Context) error { return nil }
-func (c *databaseCommandConnectionFake) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+func (c *databaseCommandConnectionFake) Exec(_ context.Context, statement string, _ ...any) (pgconn.CommandTag, error) {
 	c.statements++
+	c.sql = append(c.sql, statement)
 	return pgconn.NewCommandTag("OK"), nil
 }
 func (c *databaseCommandConnectionFake) Begin(context.Context) (pgx.Tx, error) { return c.tx, nil }
@@ -228,8 +230,36 @@ func TestRunDatabaseCommandBootstrapsUsingExplicitEnvironmentConnection(t *testi
 	}
 }
 
+func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("DB_NAME", "mycfc")
+	t.Setenv("APP_DB_USER", "mycfc_app")
+	t.Setenv("APP_DB_PASSWORD", "app-password")
+	t.Setenv("MIGRATION_DB_USER", "mycfc_migrate")
+	t.Setenv("MIGRATION_DB_PASSWORD", "migration-password")
+	t.Setenv("PRIVACY_EXECUTOR_DB_USER", "mycfc_privacy_executor")
+	t.Setenv("PRIVACY_EXECUTOR_DB_PASSWORD", "executor-password")
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connection := &databaseCommandConnectionFake{}
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
+	if err := runDatabaseCommand(t.Context(), "harden-db"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(connection.sql, "\n")
+	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`) ||
+		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) {
+		t.Fatalf("hardening statements=%#v", connection.sql)
+	}
+}
+
 func TestRunDatabaseCommandMigratesUsingExplicitEnvironmentConnection(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("DB_NAME", "mycfc")
+	t.Setenv("APP_DB_USER", "mycfc_app")
+	t.Setenv("APP_DB_PASSWORD", "app-secret")
+	t.Setenv("MIGRATION_DB_USER", "mycfc_migrate")
+	t.Setenv("MIGRATION_DB_PASSWORD", "migration-secret")
 	original := connectDatabaseCommand
 	t.Cleanup(func() { connectDatabaseCommand = original })
 	connection := &databaseCommandConnectionFake{tx: databaseMigrationTransactionFake{}}
@@ -247,7 +277,7 @@ func TestRunDatabaseCommandFallsBackToValidatedConfiguration(t *testing.T) {
 		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
 	})
 	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
-		return config.Config{DBHost: "localhost", DBPort: 5432, DBName: "mycfc", DBSSLMode: "disable", MigrationDBUser: "mycfc_migrate", MigrationDBPassword: config.Secret("secret")}, nil
+		return config.Config{DBHost: "localhost", DBPort: 5432, DBName: "mycfc", DBSSLMode: "disable", DBUser: "mycfc_app", DBPassword: config.Secret("app-secret"), MigrationDBUser: "mycfc_migrate", MigrationDBPassword: config.Secret("secret")}, nil
 	}
 	connection := &databaseCommandConnectionFake{tx: databaseMigrationTransactionFake{}}
 	connectDatabaseCommand = func(_ context.Context, rawURL string) (databaseCommandConnection, error) {

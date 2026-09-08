@@ -24,11 +24,12 @@ var ErrRateLimited = errors.New("privacy authentication temporarily limited")
 var ErrDuplicate = errors.New("an active privacy request already exists")
 
 type Service struct {
-	Pool       *pgxpool.Pool
-	Enabled    bool
-	Key        []byte
-	ContactURL string
-	Now        func() time.Time
+	Pool                  *pgxpool.Pool
+	Enabled               bool
+	Key                   []byte
+	ContactURL            string
+	Now                   func() time.Time
+	ExecutionCapabilities map[string]bool
 }
 
 func (s Service) now() time.Time {
@@ -75,13 +76,24 @@ func adult(u dbgen.User, now time.Time) bool {
 	return u.IsActive && !u.IsDependent && (!u.DateOfBirth.Valid || !u.DateOfBirth.Time.AddDate(18, 0, 0).After(now))
 }
 func currentRelationship(requester, subject dbgen.User, now time.Time) bool {
-	return requester.ID == subject.ID || (subject.IsDependent && subject.IsActive && subject.GuardianID != nil && *subject.GuardianID == requester.ID && subject.DateOfBirth.Valid && subject.DateOfBirth.Time.AddDate(18, 0, 0).After(now))
+	if requester.ID == subject.ID {
+		return requester.IsActive
+	}
+	return adult(requester, now) && subject.IsDependent && subject.IsActive && subject.GuardianID != nil && *subject.GuardianID == requester.ID && subject.DateOfBirth.Valid && subject.DateOfBirth.Time.AddDate(18, 0, 0).After(now)
 }
 func reviewer(ctx context.Context, q *dbgen.Queries, u dbgen.User, now time.Time) bool {
 	if !adult(u, now) {
 		return false
 	}
 	_, e := q.GetPrivacyReviewerGrantForShare(ctx, u.ID)
+	return e == nil
+}
+
+func executor(ctx context.Context, q *dbgen.Queries, u dbgen.User, now time.Time) bool {
+	if !adult(u, now) {
+		return false
+	}
+	_, e := q.GetPrivacyExecutorGrantForShare(ctx, u.ID)
 	return e == nil
 }
 func (s Service) Available(ctx context.Context) (AdoptedPolicy, error) {
@@ -286,14 +298,19 @@ type View struct {
 	Record                            dbgen.DataErasureRequest
 	Subject, Requester                dbgen.User
 	Policy                            AdoptedPolicy
+	Plan                              *ExecutionPlan
+	Execution                         *dbgen.PrivacyErasureExecution
 	Events                            []dbgen.DataErasureRequestEvent
 	Dependants                        []dbgen.User
 	Resolutions                       []dbgen.PrivacyRequestDependantResolution
+	ExecutionBlockers                 []string
 	SafeReceipt, CanCancel, CanReview bool
+	CanViewExecution, CanExecute      bool
 }
 
 func verification(r dbgen.DataErasureRequest, requester, subject dbgen.User, now time.Time) Verification {
-	return Verification{IdentityVerified: r.IdentityVerifiedAt.Valid, CurrentRelationship: currentRelationship(requester, subject, now), RepresentationVerified: r.RepresentationVerifiedAt.Valid && r.RepresentationGuardianID != nil && subject.GuardianID != nil && *r.RepresentationGuardianID == *subject.GuardianID && r.RepresentationRelationshipUpdatedAt.Valid && r.RepresentationRelationshipUpdatedAt.Time.Equal(subject.UpdatedAt.Time), Conflict: r.RepresentationConflict}
+	identityCurrent := r.IdentityVerifiedAt.Valid && subject.UpdatedAt.Valid && !r.IdentityVerifiedAt.Time.Before(subject.UpdatedAt.Time)
+	return Verification{IdentityVerified: identityCurrent, CurrentRelationship: currentRelationship(requester, subject, now), RepresentationVerified: r.RepresentationVerifiedAt.Valid && r.RepresentationGuardianID != nil && subject.GuardianID != nil && *r.RepresentationGuardianID == *subject.GuardianID && r.RepresentationRelationshipUpdatedAt.Valid && r.RepresentationRelationshipUpdatedAt.Time.Equal(subject.UpdatedAt.Time), Conflict: r.RepresentationConflict}
 }
 func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool) (View, error) {
 	var v View
@@ -312,25 +329,36 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 	}
 	a, requester, subject := us[actor], us[*r.RequesterUserID], us[*r.SubjectUserID]
 	now := s.now()
+	executorEligible := false
 	if !a.IsActive {
 		return v, ErrForbidden
 	}
 	if management {
-		if !reviewer(ctx, q, a, now) || actor == requester.ID || actor == subject.ID {
+		isReviewer := reviewer(ctx, q, a, now)
+		isExecutor := executor(ctx, q, a, now)
+		if (!isReviewer && !isExecutor) || actor == requester.ID || actor == subject.ID {
 			return v, ErrForbidden
 		}
-		v.CanReview = true
+		v.CanReview = isReviewer
+		executorEligible = isExecutor && (r.DecidedBy == nil || actor != *r.DecidedBy)
+		v.CanViewExecution = executorEligible
+		v.CanExecute = executorEligible
 	} else {
-		if actor != requester.ID || !currentRelationship(requester, subject, now) {
+		historicalReceipt := requester.ID != subject.ID && subject.GuardianID != nil && *subject.GuardianID == requester.ID && executionStatus(r.Status)
+		if actor != requester.ID || (!currentRelationship(requester, subject, now) && !historicalReceipt) {
 			return v, ErrForbidden
 		}
 	}
 	v.Record = r
 	checks := verification(r, requester, subject, now)
-	v.SafeReceipt = !management && requester.ID != subject.ID && (!checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict)
+	v.SafeReceipt = !management && requester.ID != subject.ID && (!checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict || !checks.CurrentRelationship)
 	v.CanCancel = !management && (r.Status == "RECEIVED" || r.Status == "UNDER_REVIEW" || r.Status == "AWAITING_EXECUTION" || r.Status == "PARTIALLY_APPROVED") && !checks.Conflict && (!v.SafeReceipt || r.Status == "RECEIVED" || r.Status == "UNDER_REVIEW")
 	if v.SafeReceipt {
-		v.Record = dbgen.DataErasureRequest{PublicRef: r.PublicRef, ReceivedAt: r.ReceivedAt, Version: r.Version, Status: "RECEIVED"}
+		status := "RECEIVED"
+		if executionStatus(r.Status) {
+			status = r.Status
+		}
+		v.Record = dbgen.DataErasureRequest{PublicRef: r.PublicRef, ReceivedAt: r.ReceivedAt, Version: r.Version, Status: status}
 		return v, tx.Commit(ctx)
 	}
 	v.Subject = subject
@@ -342,6 +370,24 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 	if e != nil {
 		return View{}, e
 	}
+	if r.Status == "AWAITING_EXECUTION" || r.Status == "PARTIALLY_APPROVED" || executionStatus(r.Status) {
+		planRow, planErr := q.GetPrivacyExecutionPlan(ctx, r.ID)
+		if planErr != nil {
+			return View{}, ErrPolicyUnresolved
+		}
+		plan, planErr := ReadExecutionPlan(planRow)
+		if planErr != nil {
+			return View{}, planErr
+		}
+		v.Plan = &plan
+		v.CanExecute = v.CanExecute && s.ExecutionCapabilitiesReady(plan)
+		executionRow, executionErr := q.GetPrivacyErasureExecutionByRequest(ctx, r.ID)
+		if executionErr == nil {
+			v.Execution = &executionRow
+		} else if !errors.Is(executionErr, pgx.ErrNoRows) {
+			return View{}, executionErr
+		}
+	}
 	if management && r.ScopeKind == string(AccountClosure) {
 		v.Dependants, e = q.ListPrivacyDependantsForUpdate(ctx, &subject.ID)
 		if e != nil {
@@ -352,7 +398,99 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 			return View{}, e
 		}
 	}
+	if management && v.Plan != nil && v.Execution == nil && (r.Status == string(AwaitingExecution) || r.Status == string(PartiallyApproved)) {
+		v.ExecutionBlockers, e = s.executionViewBlockers(ctx, tx, q, r, requester, subject, checks, v, executorEligible)
+		if e != nil {
+			return View{}, e
+		}
+		v.CanExecute = len(v.ExecutionBlockers) == 0
+	}
 	return v, tx.Commit(ctx)
+}
+
+func (s Service) executionViewBlockers(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, r dbgen.DataErasureRequest, requester, subject dbgen.User, checks Verification, v View, executorEligible bool) ([]string, error) {
+	blockers := make([]string, 0, 8)
+	add := func(code string) {
+		if !slices.Contains(blockers, code) {
+			blockers = append(blockers, code)
+		}
+	}
+	if !executorEligible {
+		add("EXECUTOR_AUTHORITY_OR_SEPARATION")
+	}
+	if !checks.IdentityVerified {
+		add("IDENTITY_CHANGED")
+	}
+	if !checks.CurrentRelationship {
+		add("RELATIONSHIP_CHANGED")
+	}
+	if requester.ID != subject.ID && (!checks.RepresentationVerified || checks.Conflict) {
+		add("REPRESENTATION_CHANGED")
+	}
+	if r.DecidedBy == nil || !r.DecidedAt.Valid {
+		add("DECISION_AUTHORITY")
+	} else if ok, err := historicalReviewerAuthority(ctx, tx, *r.DecidedBy, r.DecidedAt.Time); err != nil {
+		return nil, err
+	} else if !ok {
+		add("DECISION_AUTHORITY")
+	}
+	if v.Plan == nil || !s.ExecutionCapabilitiesReady(*v.Plan) {
+		add("CAPABILITIES_UNAVAILABLE")
+	}
+	activation, err := q.GetPrivacyActivation(ctx)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		add("ACTIVATION_DISABLED")
+	} else if !executionActivationReady(activation) {
+		add("ACTIVATION_DISABLED")
+	}
+	if r.ScopeKind != string(AccountClosure) {
+		return blockers, nil
+	}
+	admin, err := q.IsPrivacyAdministrator(ctx, subject.ID)
+	if err != nil {
+		return nil, err
+	}
+	if admin {
+		count, countErr := q.CountPrivacyActiveAdministrators(ctx)
+		if countErr != nil {
+			return nil, countErr
+		}
+		if count <= 1 {
+			add("ADMIN_CONTINUITY")
+		}
+	}
+	legacy, err := q.CountActiveUnindexedPrivacySessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if legacy > 0 {
+		add("LEGACY_SESSIONS")
+	}
+	related, err := lockRelatedClosureExecutions(ctx, tx, v.Resolutions)
+	if err != nil {
+		return nil, err
+	}
+	for _, dependant := range v.Dependants {
+		resolved := false
+		for _, resolution := range v.Resolutions {
+			if resolution.DependantID != dependant.ID || resolution.GuardianIDSnapshot != subject.ID ||
+				!resolution.RelationshipUpdatedAt.Valid || !dependant.UpdatedAt.Valid ||
+				!resolution.RelationshipUpdatedAt.Time.Equal(dependant.UpdatedAt.Time) ||
+				resolution.ResolutionCode != "SEPARATE_APPROVED_REQUEST" || resolution.RelatedRequestID == nil {
+				continue
+			}
+			child, ok := related[*resolution.RelatedRequestID]
+			resolved = ok && child.GraphValid && child.SubjectID != nil && *child.SubjectID == dependant.ID &&
+				child.ScopeKind == string(AccountClosure) && (child.Status == string(Processing) || child.Status == string(Completed))
+		}
+		if !resolved {
+			add("DEPENDANTS_UNRESOLVED")
+		}
+	}
+	return blockers, nil
 }
 func (s Service) List(ctx context.Context, actor uuid.UUID, management bool, status, deadline, order string) ([]dbgen.DataErasureRequest, error) {
 	tx, q, e := s.begin(ctx)
@@ -366,7 +504,7 @@ func (s Service) List(ctx context.Context, actor uuid.UUID, management bool, sta
 	}
 	var rows []dbgen.DataErasureRequest
 	if management {
-		if !reviewer(ctx, q, u, s.now()) {
+		if !reviewer(ctx, q, u, s.now()) && !executor(ctx, q, u, s.now()) {
 			return nil, ErrForbidden
 		}
 		rows, e = q.ListPrivacyReviewQueue(ctx, dbgen.ListPrivacyReviewQueueParams{StatusFilter: status, ReviewerID: &actor, DeadlineFilter: deadline, OrderFilter: order, NowAt: stamp(s.now()), SoonAt: stamp(s.now().AddDate(0, 0, 7))})
@@ -383,11 +521,12 @@ func (s Service) List(ctx context.Context, actor uuid.UUID, management bool, sta
 		}
 		if !management && *r.SubjectUserID != actor {
 			subject, e := q.GetPrivacyAccountForUpdate(ctx, *r.SubjectUserID)
-			if e != nil || !currentRelationship(u, subject, s.now()) {
+			historicalReceipt := e == nil && subject.GuardianID != nil && *subject.GuardianID == actor && executionStatus(r.Status)
+			if e != nil || (!currentRelationship(u, subject, s.now()) && !historicalReceipt) {
 				continue
 			}
 			checks := verification(r, u, subject, s.now())
-			if !checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict {
+			if !checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict || !checks.CurrentRelationship {
 				r.Status = "RECEIVED"
 				r.DueAt = pgtype.Timestamptz{}
 				r.ExtendedDueAt = pgtype.Timestamptz{}
@@ -396,6 +535,10 @@ func (s Service) List(ctx context.Context, actor uuid.UUID, management bool, sta
 		out = append(out, dbgen.DataErasureRequest{PublicRef: r.PublicRef, ReceivedAt: r.ReceivedAt, DueAt: r.DueAt, ExtendedDueAt: r.ExtendedDueAt, Status: r.Status})
 	}
 	return out, tx.Commit(ctx)
+}
+
+func executionStatus(status string) bool {
+	return status == "PROCESSING" || status == "RETRYABLE_FAILED" || status == "TERMINAL_FAILED" || status == "COMPLETED"
 }
 func (s Service) Subjects(ctx context.Context, actor uuid.UUID) ([]dbgen.User, error) {
 	tx, q, e := s.begin(ctx)
@@ -549,6 +692,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 		c := Case{RequesterID: requester.ID, SubjectID: subject.ID, Scope: scope, Status: Status(r.Status), Version: r.Version, ReceivedAt: r.ReceivedAt.Time, UpdatedAt: r.UpdatedAt.Time}
 		if c.Status == AwaitingExecution || c.Status == PartiallyApproved {
 			c.DecisionPolicy = &policy
+			c.DecidedBy = r.DecidedBy
 		}
 		cmd := Command{ExpectedVersion: r.Version, Actor: Actor{ID: a.ID, Active: a.IsActive, PrivacyReviewer: isReviewer}, Verification: checks, Policy: policy, At: now}
 		if in.Action == "cancel" {
@@ -656,7 +800,7 @@ func saveCase(ctx context.Context, q *dbgen.Queries, r dbgen.DataErasureRequest,
 	return q.UpdatePrivacyRequest(ctx, dbgen.UpdatePrivacyRequestParams{ID: r.ID, ExpectedVersion: version, Status: r.Status, ExtendedDueAt: r.ExtendedDueAt, ExtensionReasonCode: r.ExtensionReasonCode, ClaimedBy: r.ClaimedBy, ReviewedAt: r.ReviewedAt, IdentityVerifiedAt: r.IdentityVerifiedAt, IdentityMethod: r.IdentityMethod, IdentityVerifiedBy: r.IdentityVerifiedBy, RepresentationRelationshipUpdatedAt: r.RepresentationRelationshipUpdatedAt, RepresentationVerifiedAt: r.RepresentationVerifiedAt, RepresentationMethod: r.RepresentationMethod, RepresentationVerifiedBy: r.RepresentationVerifiedBy, RepresentationGuardianID: r.RepresentationGuardianID, RepresentationConflict: r.RepresentationConflict, DecisionCode: r.DecisionCode, DecisionExplanation: r.DecisionExplanation, CategoryDecisions: r.CategoryDecisions, DecidedBy: r.DecidedBy, DecidedAt: r.DecidedAt, PolicyVersion: r.PolicyVersion, PolicySnapshot: r.PolicySnapshot, ClosedAt: r.ClosedAt, CancelledAt: r.CancelledAt, EvidenceExpiresAt: r.EvidenceExpiresAt, WorkingExpiresAt: r.WorkingExpiresAt, UpdatedAt: r.UpdatedAt})
 }
 func resolveDependant(ctx context.Context, q *dbgen.Queries, r dbgen.DataErasureRequest, actor, subject dbgen.User, in ReviewInput, now time.Time) error {
-	if !bounded(in.ResolutionExplanation, 2000) || !slices.Contains([]string{"VERIFIED_TRANSFER", "SEPARATE_APPROVED_REQUEST", "FORMAL_RESOLUTION"}, in.ResolutionCode) {
+	if !bounded(in.ResolutionExplanation, 2000) || !slices.Contains([]string{"VERIFIED_TRANSFER", "SEPARATE_APPROVED_REQUEST"}, in.ResolutionCode) {
 		return ErrInvalid
 	}
 	d, e := q.GetPrivacyAccountForUpdate(ctx, in.DependantID)
@@ -671,7 +815,7 @@ func resolveDependant(ctx context.Context, q *dbgen.Queries, r dbgen.DataErasure
 	var related *uuid.UUID
 	if in.ResolutionCode == "SEPARATE_APPROVED_REQUEST" {
 		rr, e := q.GetPrivacyRequestByRef(ctx, in.RelatedReference)
-		if e != nil || rr.SubjectUserID == nil || *rr.SubjectUserID != d.ID || rr.Status != "AWAITING_EXECUTION" || rr.ScopeKind != string(AccountClosure) || rr.DecidedBy == nil || *rr.DecidedBy == d.ID {
+		if e != nil || rr.SubjectUserID == nil || *rr.SubjectUserID != d.ID || !slices.Contains([]string{"PROCESSING", "COMPLETED"}, rr.Status) || rr.ScopeKind != string(AccountClosure) || rr.DecidedBy == nil || *rr.DecidedBy == d.ID {
 			return ErrClosureSafeguards
 		}
 		related = &rr.ID
@@ -706,15 +850,12 @@ func closureSafeguards(ctx context.Context, q *dbgen.Queries, r dbgen.DataErasur
 			if x.DependantID != d.ID || x.GuardianIDSnapshot != subject.ID || !x.RelationshipUpdatedAt.Time.Equal(d.UpdatedAt.Time) {
 				continue
 			}
-			if x.ResolutionCode == "FORMAL_RESOLUTION" {
-				resolved = true
-			}
 			if x.ResolutionCode == "SEPARATE_APPROVED_REQUEST" && x.RelatedRequestID != nil {
 				rr, e := q.GetPrivacyRequest(ctx, *x.RelatedRequestID)
 				if e != nil {
 					return out, e
 				}
-				resolved = rr.Status == "AWAITING_EXECUTION" && rr.SubjectUserID != nil && *rr.SubjectUserID == d.ID && rr.ScopeKind == string(AccountClosure)
+				resolved = slices.Contains([]string{"PROCESSING", "COMPLETED"}, rr.Status) && rr.SubjectUserID != nil && *rr.SubjectUserID == d.ID && rr.ScopeKind == string(AccountClosure)
 			}
 		}
 		if !resolved {
@@ -738,6 +879,20 @@ func (s Service) CanReview(ctx context.Context, actor uuid.UUID) (bool, error) {
 	var allowed bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM users u JOIN privacy_reviewer_grants g ON g.user_id = u.id
+		WHERE u.id = $1 AND u.is_active AND NOT u.is_dependent
+		AND (u.date_of_birth IS NULL OR u.date_of_birth <= $2)
+		AND g.revoked_at IS NULL
+	)`, actor, s.now().AddDate(-18, 0, 0).Format("2006-01-02")).Scan(&allowed)
+	return allowed, err
+}
+
+// CanExecute is a navigation hint only. StartExecution rechecks the explicit
+// grant, active-adult status, four-eyes separation, and every case invariant in
+// its transaction.
+func (s Service) CanExecute(ctx context.Context, actor uuid.UUID) (bool, error) {
+	var allowed bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM users u JOIN privacy_executor_grants g ON g.user_id = u.id
 		WHERE u.id = $1 AND u.is_active AND NOT u.is_dependent
 		AND (u.date_of_birth IS NULL OR u.date_of_birth <= $2)
 		AND g.revoked_at IS NULL

@@ -27,6 +27,7 @@ type PrivacyRequestStore interface {
 	View(context.Context, uuid.UUID, uuid.UUID, bool) (pr.View, error)
 	Submit(context.Context, pr.SubmitInput) (dbgen.DataErasureRequest, error)
 	Change(context.Context, pr.ReviewInput) (dbgen.DataErasureRequest, error)
+	StartExecution(context.Context, pr.StartInput) (dbgen.PrivacyErasureExecution, error)
 }
 type PrivacyRequests struct {
 	Service    PrivacyRequestStore
@@ -84,7 +85,7 @@ func (h PrivacyRequests) Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, deadline, order := r.URL.Query().Get("status"), r.URL.Query().Get("deadline"), r.URL.Query().Get("order")
-	if !oneOf(status, "", "RECEIVED", "UNDER_REVIEW", "AWAITING_EXECUTION", "PARTIALLY_APPROVED", "REFUSED", "CANCELLED") || !oneOf(deadline, "", "overdue", "soon") || !oneOf(order, "", "due", "received") {
+	if !oneOf(status, "", "RECEIVED", "UNDER_REVIEW", "AWAITING_EXECUTION", "PARTIALLY_APPROVED", "PROCESSING", "RETRYABLE_FAILED", "TERMINAL_FAILED", "COMPLETED", "REFUSED", "CANCELLED") || !oneOf(deadline, "", "overdue", "soon") || !oneOf(order, "", "due", "received") {
 		h.System.RequestRejected(w, r)
 		return
 	}
@@ -98,7 +99,7 @@ func (h PrivacyRequests) Index(w http.ResponseWriter, r *http.Request) {
 	page.StatusFilter = status
 	page.DeadlineFilter = deadline
 	page.Order = order
-	page.StatusOptions = []pages.PrivacyOption{{Value: "", Label: "Todos"}, {Value: "RECEIVED", Label: "Recebido"}, {Value: "UNDER_REVIEW", Label: "Em análise"}, {Value: "AWAITING_EXECUTION", Label: "Aprovado — a aguardar execução"}, {Value: "PARTIALLY_APPROVED", Label: "Parcialmente aprovado"}, {Value: "REFUSED", Label: "Recusado"}, {Value: "CANCELLED", Label: "Cancelado"}}
+	page.StatusOptions = []pages.PrivacyOption{{Value: "", Label: "Todos"}, {Value: "RECEIVED", Label: "Recebido"}, {Value: "UNDER_REVIEW", Label: "Em análise"}, {Value: "AWAITING_EXECUTION", Label: "Aprovado — a aguardar execução"}, {Value: "PARTIALLY_APPROVED", Label: "Parcialmente aprovado"}, {Value: "PROCESSING", Label: "Em processamento"}, {Value: "RETRYABLE_FAILED", Label: "Nova tentativa pendente"}, {Value: "TERMINAL_FAILED", Label: "Intervenção necessária"}, {Value: "COMPLETED", Label: "Concluído"}, {Value: "REFUSED", Label: "Recusado"}, {Value: "CANCELLED", Label: "Cancelado"}}
 	page.DeadlineOptions = []pages.PrivacyOption{{Value: "", Label: "Todos os prazos"}, {Value: "overdue", Label: "Prazo ultrapassado"}, {Value: "soon", Label: "Próximos 7 dias"}}
 	page.OrderOptions = []pages.PrivacyOption{{Value: "due", Label: "Prazo de resposta"}, {Value: "received", Label: "Data de receção"}}
 	base := "/perfil/privacidade/"
@@ -111,7 +112,7 @@ func (h PrivacyRequests) Index(w http.ResponseWriter, r *http.Request) {
 		if row.ExtendedDueAt.Valid {
 			due = row.ExtendedDueAt.Time
 		}
-		terminal := row.Status == "REFUSED" || row.Status == "CANCELLED"
+		terminal := row.Status == "REFUSED" || row.Status == "CANCELLED" || row.Status == "COMPLETED"
 		overdue := row.DueAt.Valid && !terminal && due.Before(now)
 		soon := row.DueAt.Valid && !terminal && !overdue && due.Before(now.AddDate(0, 0, 7))
 		if deadline == "overdue" && !overdue || deadline == "soon" && !soon {
@@ -248,11 +249,15 @@ func (h PrivacyRequests) detail(w http.ResponseWriter, r *http.Request, status i
 	p := pages.PrivacyRequestDetailPage{Meta: h.meta(r), Reference: ref.String(), ReceivedAt: privacyDate(rcr.ReceivedAt.Time), Status: rcr.Status, Version: strconv.FormatInt(rcr.Version, 10), DueAt: optionalPrivacyDate(due), Management: management, SafeReceipt: v.SafeReceipt, CanCancel: v.CanCancel, ContactURL: h.ContactURL, Errors: validation.FieldErrors{}}
 	if actionErr != nil {
 		p.Errors["explanation"] = "Não foi possível guardar. Reveja os campos, a verificação e o estado atual do pedido."
+		if errors.Is(actionErr, pr.ErrExecutorUnavailable) || errors.Is(actionErr, pr.ErrVerification) {
+			delete(p.Errors, "explanation")
+			p.Errors["execution_confirmed"] = "A execução não pode começar: confirme o plano e resolva todos os bloqueios apresentados."
+		}
 		if errors.Is(actionErr, pr.ErrStaleVersion) {
 			p.Conflict = "O pedido foi atualizado por outra pessoa. Reveja a versão atual antes de tentar novamente."
 		}
 		if errors.Is(actionErr, pr.ErrClosureSafeguards) {
-			p.Errors["explanation"] = "Resolva os dependentes e confirme a continuidade da administração antes de aprovar."
+			p.Errors["explanation"] = "Resolva os dependentes e confirme a continuidade da administração antes de continuar."
 		}
 	}
 	if !v.SafeReceipt {
@@ -272,13 +277,13 @@ func (h PrivacyRequests) detail(w http.ResponseWriter, r *http.Request, status i
 		p.RepresentationMethod = stringValue(rcr.RepresentationMethod)
 		open := rcr.Status == "RECEIVED" || rcr.Status == "UNDER_REVIEW"
 		claimedByCurrentReviewer := rcr.ClaimedBy != nil && *rcr.ClaimedBy == u.ID
-		p.CanClaim = management && open && rcr.ClaimedBy == nil
-		p.CanVerify = management && open && claimedByCurrentReviewer
+		p.CanClaim = management && v.CanReview && open && rcr.ClaimedBy == nil
+		p.CanVerify = management && v.CanReview && open && claimedByCurrentReviewer
 		p.CanDecide = p.CanVerify && p.IdentityVerified && !p.ConflictFlag && (!p.Representative || p.RepresentationVerified)
-		p.CanExtend = management && open && claimedByCurrentReviewer && !rcr.ExtendedDueAt.Valid && !h.now().After(rcr.DueAt.Time)
+		p.CanExtend = management && v.CanReview && open && claimedByCurrentReviewer && !rcr.ExtendedDueAt.Valid && !h.now().After(rcr.DueAt.Time)
 		p.IdentityMethods = []pages.PrivacyOption{{Value: "IN_PERSON", Label: "Presencial"}, {Value: "EXISTING_CHANNEL", Label: "Canal já verificado"}, {Value: "DOCUMENT_CHECK", Label: "Verificação documental"}}
 		p.RepresentationMethods = []pages.PrivacyOption{{Value: "IN_PERSON", Label: "Presencial"}, {Value: "DOCUMENT_CHECK", Label: "Verificação documental"}}
-		p.ResolutionOptions = []pages.PrivacyOption{{Value: "SEPARATE_APPROVED_REQUEST", Label: "Pedido separado aprovado"}, {Value: "FORMAL_RESOLUTION", Label: "Resolução formal verificada"}}
+		p.ResolutionOptions = []pages.PrivacyOption{{Value: "SEPARATE_APPROVED_REQUEST", Label: "Pedido separado aprovado (deve estar em processamento antes da execução)"}}
 		var savedDecisions []pr.CategoryDecision
 		if len(rcr.CategoryDecisions) > 0 {
 			if err := json.Unmarshal(rcr.CategoryDecisions, &savedDecisions); err != nil {
@@ -320,8 +325,88 @@ func (h PrivacyRequests) detail(w http.ResponseWriter, r *http.Request, status i
 			label := privacyEventLabel(event.Action)
 			p.History = append(p.History, pages.PrivacyHistoryItem{At: privacyDate(event.OccurredAt.Time), Label: label})
 		}
+		p.CanViewExecution = management && v.CanViewExecution
+		if v.Plan != nil && p.CanViewExecution {
+			labels := map[string]string{}
+			for _, category := range v.Policy.Categories {
+				labels[category.Key] = category.Label
+			}
+			for _, entry := range v.Plan.Entries {
+				label := labels[entry.Category]
+				if label == "" {
+					label = entry.Category
+				}
+				p.ExecutionPlan = append(p.ExecutionPlan, pages.PrivacyExecutionPlanItem{Category: entry.Category, CategoryLabel: label, Disposition: entry.Disposition, Owner: entry.Owner, DueAt: entry.DueAt, Operations: entry.Operations})
+			}
+		}
+		if v.Execution != nil && p.CanViewExecution {
+			p.ExecutionStatus = v.Execution.Status
+		}
+		for _, blocker := range v.ExecutionBlockers {
+			if !p.CanViewExecution {
+				break
+			}
+			p.ExecutionBlockers = append(p.ExecutionBlockers, privacyExecutionBlocker(blocker))
+		}
+		p.CanExecute = management && v.CanExecute && v.Execution == nil && (rcr.Status == "AWAITING_EXECUTION" || rcr.Status == "PARTIALLY_APPROVED")
 	}
 	h.render(w, r, status, pages.PrivacyRequestDetail(p))
+}
+
+func privacyExecutionBlocker(code string) string {
+	switch code {
+	case "EXECUTOR_AUTHORITY_OR_SEPARATION":
+		return "É necessária uma pessoa executora autorizada e diferente do requerente, da pessoa afetada e de quem decidiu."
+	case "IDENTITY_CHANGED":
+		return "A verificação de identidade deixou de corresponder aos dados atuais."
+	case "RELATIONSHIP_CHANGED":
+		return "A relação atual entre requerente e pessoa afetada precisa de nova validação."
+	case "REPRESENTATION_CHANGED":
+		return "A representação está incompleta, em conflito ou deixou de corresponder à relação atual."
+	case "DECISION_AUTHORITY":
+		return "A autoridade histórica de quem decidiu não pôde ser confirmada."
+	case "CAPABILITIES_UNAVAILABLE":
+		return "Ainda não estão instaladas todas as operações exigidas pelo plano imutável."
+	case "ACTIVATION_DISABLED":
+		return "A execução permanece desativada até à validação operacional final."
+	case "ADMIN_CONTINUITY":
+		return "O encerramento removeria a última pessoa administradora adulta e utilizável."
+	case "LEGACY_SESSIONS":
+		return "Ainda existem sessões antigas sem índice de pessoa; têm de expirar ou ser migradas."
+	case "DEPENDANTS_UNRESOLVED":
+		return "Há dependentes sem transferência verificada ou sem encerramento separado já em processamento."
+	default:
+		return "Existe um bloqueio de segurança que tem de ser resolvido antes do processamento."
+	}
+}
+
+func (h PrivacyRequests) StartExecution(w http.ResponseWriter, r *http.Request) {
+	privacyHeaders(w)
+	if e := r.ParseForm(); e != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	u, _ := CurrentUserFromContext(r.Context())
+	ref, refErr := uuid.Parse(r.PathValue("ref"))
+	version, versionErr := strconv.ParseInt(r.PostForm.Get("version"), 10, 64)
+	if refErr != nil || versionErr != nil || version < 1 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	_, e := h.Service.StartExecution(r.Context(), pr.StartInput{ActorID: u.ID, Reference: ref, Version: version, Confirmed: r.PostForm.Get("execution_confirmed") == "yes"})
+	if e != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(e, pr.ErrStaleVersion) {
+			status = http.StatusConflict
+		}
+		if errors.Is(e, pr.ErrForbidden) {
+			h.failure(w, r, e)
+			return
+		}
+		h.detail(w, r, status, errors.Join(e, pr.ErrExecutorUnavailable))
+		return
+	}
+	http.Redirect(w, r, "/admin/privacidade/"+ref.String(), http.StatusSeeOther)
 }
 func (h PrivacyRequests) Change(w http.ResponseWriter, r *http.Request) {
 	privacyHeaders(w)
@@ -386,7 +471,7 @@ func oneOf(v string, allowed ...string) bool {
 	return false
 }
 func privacyEventLabel(action string) string {
-	m := map[string]string{"RECEIVED": "Pedido recebido", "CLAIMED": "Análise atribuída", "IDENTITY_REQUESTED": "Verificação solicitada", "IDENTITY_VERIFIED": "Verificação registada", "REPRESENTATION_VERIFIED": "Representação verificada", "REPRESENTATION_CONFLICT": "Conflito de representação", "DEADLINE_EXTENDED": "Prazo prorrogado", "DEPENDANT_RESOLVED": "Resolução de dependente registada", "APPROVED": "Aprovado — a aguardar execução", "PARTIALLY_APPROVED": "Parcialmente aprovado — a aguardar execução", "REFUSED": "Pedido recusado", "CANCELLED": "Pedido cancelado"}
+	m := map[string]string{"RECEIVED": "Pedido recebido", "CLAIMED": "Análise atribuída", "IDENTITY_REQUESTED": "Verificação solicitada", "IDENTITY_VERIFIED": "Verificação registada", "REPRESENTATION_VERIFIED": "Representação verificada", "REPRESENTATION_CONFLICT": "Conflito de representação", "DEADLINE_EXTENDED": "Prazo prorrogado", "DEPENDANT_RESOLVED": "Resolução de dependente registada", "APPROVED": "Aprovado — a aguardar execução", "PARTIALLY_APPROVED": "Parcialmente aprovado — a aguardar execução", "PROCESSING_STARTED": "Processamento iniciado", "EXECUTION_RETRY_STARTED": "Nova tentativa iniciada", "EXECUTION_RETRYABLE_FAILED": "Execução interrompida; nova tentativa pendente", "EXECUTION_TERMINAL_FAILED": "Execução bloqueada; intervenção necessária", "REFUSED": "Pedido recusado", "CANCELLED": "Pedido cancelado"}
 	if s := m[action]; s != "" {
 		return s
 	}

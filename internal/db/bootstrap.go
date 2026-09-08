@@ -23,15 +23,19 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609080001_privacy_execution_plans"
+	baselineIncludesThrough = "202609080003_privacy_worker_api"
 )
 
 type RoleCredentials struct {
-	AppUsername       string
-	AppPassword       string
-	MigrationUsername string
-	MigrationPassword string
+	AppUsername             string
+	AppPassword             string
+	MigrationUsername       string
+	MigrationPassword       string
+	PrivacyExecutorUsername string
+	PrivacyExecutorPassword string
 }
+
+type namedStatement struct{ name, sql string }
 
 type bootstrapConnection interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -49,7 +53,7 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 	migration := quoteIdentifier(credentials.MigrationUsername)
 	database := quoteIdentifier(databaseName)
 
-	statements := []struct{ name, sql string }{
+	statements := []namedStatement{
 		{"enable citext", "CREATE EXTENSION IF NOT EXISTS citext"},
 		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
 		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
@@ -70,6 +74,14 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 		{"set table defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + app},
 		{"set sequence defaults", "ALTER DEFAULT PRIVILEGES FOR ROLE " + migration + " IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO " + app},
 	}
+	if privacyExecutorConfigured(credentials) {
+		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
+		statements = append(statements,
+			namedStatement{"configure privacy executor role", roleStatement(credentials.PrivacyExecutorUsername, credentials.PrivacyExecutorPassword)},
+			namedStatement{"grant privacy executor database access", "GRANT CONNECT ON DATABASE " + database + " TO " + executor},
+			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
+		)
+	}
 	for _, statement := range statements {
 		if _, err := conn.Exec(ctx, statement.sql); err != nil {
 			return fmt.Errorf("bootstrap database roles (%s): %w", statement.name, err)
@@ -78,7 +90,81 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 	return nil
 }
 
+// HardenPrivacyExecutionRoles reapplies the #244 table boundary after migrations
+// have created the execution tables. The web role may materialize the immutable
+// handoff graph, but only the optional executor role may mutate worker state.
+// Keeping this separate from BootstrapRoles makes the required post-migration
+// ordering explicit and allows a disabled rollout with no executor credential.
+func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, databaseName string, credentials RoleCredentials) error {
+	if err := validateBootstrapInput(databaseName, credentials); err != nil {
+		return err
+	}
+	app := quoteIdentifier(credentials.AppUsername)
+	executionTables := strings.Join([]string{
+		"privacy_erasure_executions",
+		"privacy_erasure_access_revocations",
+		"privacy_erasure_category_jobs",
+		"privacy_erasure_job_leases",
+		"privacy_erasure_job_attempts",
+		"privacy_erasure_job_checkpoints",
+		"privacy_erasure_failures",
+	}, ", ")
+	webHandoffTables := strings.Join([]string{
+		"privacy_erasure_executions",
+		"privacy_erasure_access_revocations",
+		"privacy_erasure_category_jobs",
+		"privacy_erasure_job_checkpoints",
+	}, ", ")
+	statements := []namedStatement{
+		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
+		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"grant web execution reads", "GRANT SELECT ON TABLE " + webHandoffTables + " TO " + app},
+		{"grant web execution insert", "GRANT INSERT (request_id, plan_sha256, executor_version, schema_version, request_version_at_start, started_by_ref, accepted_at, updated_at) ON TABLE privacy_erasure_executions TO " + app},
+		{"grant web access revocation insert", "GRANT INSERT (execution_id, grant_kind, capability_code, revoked_count, actor_ref, occurred_at) ON TABLE privacy_erasure_access_revocations TO " + app},
+		{"grant web category job insert", "GRANT INSERT (execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, next_attempt_at, created_at, updated_at) ON TABLE privacy_erasure_category_jobs TO " + app},
+		{"grant web checkpoint insert", "GRANT INSERT (job_id, operation_position, operation_code, action_version, created_at) ON TABLE privacy_erasure_job_checkpoints TO " + app},
+	}
+	if privacyExecutorConfigured(credentials) {
+		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
+		statements = append(statements,
+			namedStatement{"revoke privacy executor schema creation", "REVOKE CREATE ON SCHEMA public FROM " + executor},
+			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
+			namedStatement{"revoke privacy executor table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + executor},
+			namedStatement{"revoke privacy executor sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + executor},
+			namedStatement{"grant privacy executor execution reads", "GRANT SELECT ON TABLE " + executionTables + ", privacy_request_execution_plans TO " + executor},
+			namedStatement{"grant privacy executor request lifecycle reads", "GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests TO " + executor},
+			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
+		)
+	}
+	for _, statement := range statements {
+		if _, err := conn.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("harden privacy execution roles (%s): %w", statement.name, err)
+		}
+	}
+	return nil
+}
+
 func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
+	return applyBaseline(ctx, conn, nil)
+}
+
+// ApplyBaselineAndHarden applies every pending schema migration and the
+// execution-role boundary in the same transaction. This prevents a newly
+// created execution table from inheriting the web role's broad default DML
+// privileges for even a brief post-migration window.
+func ApplyBaselineAndHarden(ctx context.Context, conn baselineConnection, databaseName string, credentials RoleCredentials) error {
+	if err := validateBootstrapInput(databaseName, credentials); err != nil {
+		return err
+	}
+	return applyBaseline(ctx, conn, func(ctx context.Context, tx pgx.Tx) error {
+		if err := HardenPrivacyExecutionRoles(ctx, tx, databaseName, credentials); err != nil {
+			return fmt.Errorf("harden roles before migration commit: %w", err)
+		}
+		return nil
+	})
+}
+
+func applyBaseline(ctx context.Context, conn baselineConnection, beforeCommit func(context.Context, pgx.Tx) error) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin baseline migration: %w", err)
@@ -104,7 +190,7 @@ func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
 		if err := applyIncrementalMigrations(ctx, tx); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return commitBaseline(ctx, tx, beforeCommit)
 	}
 
 	var objectCount int
@@ -121,7 +207,7 @@ func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
 		if err := applyIncrementalMigrations(ctx, tx); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return commitBaseline(ctx, tx, beforeCommit)
 	}
 	if _, err := tx.Conn().PgConn().Exec(ctx, baselineSchema).ReadAll(); err != nil {
 		return fmt.Errorf("apply reset baseline: %w", err)
@@ -134,6 +220,15 @@ func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
 	}
 	if err := applyIncrementalMigrations(ctx, tx); err != nil {
 		return err
+	}
+	return commitBaseline(ctx, tx, beforeCommit)
+}
+
+func commitBaseline(ctx context.Context, tx pgx.Tx, beforeCommit func(context.Context, pgx.Tx) error) error {
+	if beforeCommit != nil {
+		if err := beforeCommit(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit baseline migration: %w", err)
@@ -226,13 +321,30 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 	if strings.TrimSpace(credentials.AppPassword) == "" || strings.TrimSpace(credentials.MigrationPassword) == "" {
 		return errors.New("database role passwords must not be empty")
 	}
+	executorUser := strings.TrimSpace(credentials.PrivacyExecutorUsername)
+	executorPassword := strings.TrimSpace(credentials.PrivacyExecutorPassword)
+	if (executorUser == "") != (executorPassword == "") {
+		return errors.New("privacy executor database user and password must either both be set or both be empty")
+	}
+	if executorUser != "" {
+		if !postgresIdentifier.MatchString(credentials.PrivacyExecutorUsername) {
+			return errors.New("privacy executor database user must be a PostgreSQL identifier")
+		}
+		if credentials.PrivacyExecutorUsername == credentials.AppUsername || credentials.PrivacyExecutorUsername == credentials.MigrationUsername {
+			return errors.New("privacy executor, app, and migration database users must differ")
+		}
+	}
 	return nil
+}
+
+func privacyExecutorConfigured(credentials RoleCredentials) bool {
+	return strings.TrimSpace(credentials.PrivacyExecutorUsername) != "" && strings.TrimSpace(credentials.PrivacyExecutorPassword) != ""
 }
 
 func roleStatement(username, password string) string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
-		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION; END IF; " +
-		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD " + quoteLiteral(password) + "; END $$"
+		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
+		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD " + quoteLiteral(password) + "; END $$"
 }
 
 func transferOwnershipStatement(migrationUsername string) string {

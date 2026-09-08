@@ -18,6 +18,7 @@ import (
 
 type privacyCommandService interface {
 	GrantReviewer(context.Context, uuid.UUID, uuid.UUID, bool) error
+	GrantExecutor(context.Context, uuid.UUID, uuid.UUID, bool) error
 	ImportPolicy(context.Context, uuid.UUID, privacyrequests.AdoptedPolicy) error
 	Activate(context.Context, uuid.UUID, string, bool) error
 	AddRetentionException(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, string) error
@@ -64,7 +65,7 @@ func runPrivacyCommand(ctx context.Context, args []string) error {
 
 func runPrivacyCommandWith(ctx context.Context, args []string, deps privacyCommandDependencies) error {
 	if len(args) == 0 {
-		return errors.New("privacy requires grant, revoke, import-policy, activate, deactivate, hold or expire")
+		return errors.New("privacy requires grant, revoke, grant-executor, revoke-executor, import-policy, activate, deactivate, hold or expire")
 	}
 	if !privacySubcommand(args[0]) {
 		return errors.New("unknown privacy command")
@@ -72,7 +73,7 @@ func runPrivacyCommandWith(ctx context.Context, args []string, deps privacyComma
 	flags := flag.NewFlagSet("privacy "+args[0], flag.ContinueOnError)
 	flags.SetOutput(deps.stderr)
 	actorText := flags.String("actor", "", "active adult administrator UUID")
-	targetText := flags.String("user", "", "reviewer UUID")
+	targetText := flags.String("user", "", "reviewer or executor UUID")
 	file := flags.String("file", "", "approved policy JSON file")
 	version := flags.String("policy", "", "adopted policy version")
 	referenceText := flags.String("reference", "", "privacy case public reference UUID")
@@ -95,7 +96,7 @@ func runPrivacyCommandWith(ctx context.Context, args []string, deps privacyComma
 	var hold privacyHold
 	var policy privacyrequests.AdoptedPolicy
 	switch args[0] {
-	case "grant", "revoke":
+	case "grant", "revoke", "grant-executor", "revoke-executor":
 		target, err = uuid.Parse(*targetText)
 		if err != nil {
 			return errors.New("valid --user is required")
@@ -126,6 +127,8 @@ func runPrivacyCommandWith(ctx context.Context, args []string, deps privacyComma
 	switch args[0] {
 	case "grant", "revoke":
 		return service.GrantReviewer(ctx, actor, target, args[0] == "revoke")
+	case "grant-executor", "revoke-executor":
+		return service.GrantExecutor(ctx, actor, target, args[0] == "revoke-executor")
 	case "import-policy":
 		return service.ImportPolicy(ctx, actor, policy)
 	case "activate", "deactivate":
@@ -146,7 +149,7 @@ func runPrivacyCommandWith(ctx context.Context, args []string, deps privacyComma
 
 func privacySubcommand(value string) bool {
 	switch value {
-	case "grant", "revoke", "import-policy", "activate", "deactivate", "hold", "expire":
+	case "grant", "revoke", "grant-executor", "revoke-executor", "import-policy", "activate", "deactivate", "hold", "expire":
 		return true
 	default:
 		return false

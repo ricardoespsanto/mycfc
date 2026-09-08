@@ -29,6 +29,17 @@ WITH grant_row AS (
 INSERT INTO privacy_reviewer_grant_events (grant_id, actor_ref, action, occurred_at)
 SELECT id, granted_by, 'GRANTED', granted_at FROM grant_row;
 
+WITH grant_row AS (
+  INSERT INTO privacy_executor_grants (user_id, granted_by, granted_at)
+  SELECT executor.id, actor.id, now() FROM users actor CROSS JOIN users executor
+  WHERE actor.email = 'e2e-admin@example.test'
+    AND executor.email = 'e2e-privacy-alternate@example.test'
+  ON CONFLICT (user_id) WHERE revoked_at IS NULL DO NOTHING
+  RETURNING id, granted_by, granted_at
+)
+INSERT INTO privacy_executor_grant_events (grant_id, actor_ref, action, occurred_at)
+SELECT id, granted_by, 'GRANTED', granted_at FROM grant_row;
+
 -- These names and codes deliberately make no claim about adopted club policy.
 INSERT INTO privacy_request_policies
   (version, category_catalogue, executor_version, plan_schema_version, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by)

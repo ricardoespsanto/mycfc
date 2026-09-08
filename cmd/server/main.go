@@ -64,27 +64,29 @@ func runServerCommand(ctx context.Context, args []string) error {
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
-	if command != "bootstrap-db" && command != "migrate" {
+	if command != "bootstrap-db" && command != "migrate" && command != "harden-db" {
 		return fmt.Errorf("unknown command %q", command)
 	}
 	if databaseURL, ok, err := databaseURLFromEnvironment(); err != nil {
 		return err
 	} else if ok {
+		connectionConfig, err := pgx.ParseConfig(databaseURL)
+		if err != nil {
+			return fmt.Errorf("parse database URL: %w", err)
+		}
 		conn, err := connectDatabaseCommand(ctx, databaseURL)
 		if err != nil {
 			return fmt.Errorf("connect to database: %w", err)
 		}
 		defer conn.Close(ctx)
+		databaseName := connectionConfig.Database
 		switch command {
 		case "bootstrap-db":
-			return db.BootstrapRoles(ctx, conn, os.Getenv("DB_NAME"), db.RoleCredentials{
-				AppUsername:       os.Getenv("APP_DB_USER"),
-				AppPassword:       os.Getenv("APP_DB_PASSWORD"),
-				MigrationUsername: os.Getenv("MIGRATION_DB_USER"),
-				MigrationPassword: os.Getenv("MIGRATION_DB_PASSWORD"),
-			})
+			return db.BootstrapRoles(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
 		case "migrate":
-			return db.ApplyBaseline(ctx, conn)
+			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
+		case "harden-db":
+			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
 		}
 	}
 
@@ -94,7 +96,7 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	var databaseURL string
 	switch command {
-	case "bootstrap-db":
+	case "bootstrap-db", "harden-db":
 		databaseURL, err = cfg.BootstrapDatabaseURL()
 	case "migrate":
 		databaseURL, err = cfg.MigrationDatabaseURL()
@@ -108,15 +110,30 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	defer conn.Close(ctx)
 
-	if command == "bootstrap-db" {
-		return db.BootstrapRoles(ctx, conn, cfg.DBName, db.RoleCredentials{
-			AppUsername:       cfg.DBUser,
-			AppPassword:       cfg.DBPassword.Value(),
-			MigrationUsername: cfg.MigrationDBUser,
-			MigrationPassword: cfg.MigrationDBPassword.Value(),
-		})
+	credentials := db.RoleCredentials{
+		AppUsername:       cfg.DBUser,
+		AppPassword:       cfg.DBPassword.Value(),
+		MigrationUsername: cfg.MigrationDBUser,
+		MigrationPassword: cfg.MigrationDBPassword.Value(),
 	}
-	return db.ApplyBaseline(ctx, conn)
+	if command == "bootstrap-db" {
+		return db.BootstrapRoles(ctx, conn, cfg.DBName, credentials)
+	}
+	if command == "harden-db" {
+		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
+	}
+	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+}
+
+func databaseRoleCredentialsFromEnvironment() db.RoleCredentials {
+	return db.RoleCredentials{
+		AppUsername:             os.Getenv("APP_DB_USER"),
+		AppPassword:             os.Getenv("APP_DB_PASSWORD"),
+		MigrationUsername:       os.Getenv("MIGRATION_DB_USER"),
+		MigrationPassword:       os.Getenv("MIGRATION_DB_PASSWORD"),
+		PrivacyExecutorUsername: os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
+		PrivacyExecutorPassword: os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+	}
 }
 
 func databaseURLFromEnvironment() (string, bool, error) {

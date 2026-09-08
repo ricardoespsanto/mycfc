@@ -96,6 +96,8 @@ services:
       COOKIE_NOTICE_URL: http://e2e-app:8080/legal/cookies
       DATA_RIGHTS_CONTACT: privacy@example.test
       PRIVACY_REQUESTS_ENABLED: "true"
+      APP_ENV: test
+      PRIVACY_EXECUTION_TEST_CAPABILITIES: IDENTITY_CLEAR
     command: go run ./cmd/server
     depends_on:
       postgres:

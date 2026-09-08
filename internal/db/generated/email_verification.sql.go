@@ -49,7 +49,7 @@ WITH candidate AS (
   LEFT JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= $1)
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < $2))
-    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION') OR (
+    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION', 'PRIVACY_PROCESSING_STARTED') OR (
       COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > $1
     AND account.is_active = true AND account.is_dependent = false

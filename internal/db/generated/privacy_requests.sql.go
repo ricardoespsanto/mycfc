@@ -36,6 +36,28 @@ func (q *Queries) AppendPrivacyActivationEvent(ctx context.Context, arg AppendPr
 	return err
 }
 
+const appendPrivacyExecutorGrantEvent = `-- name: AppendPrivacyExecutorGrantEvent :exec
+INSERT INTO privacy_executor_grant_events(grant_id,actor_ref,action,occurred_at)
+VALUES($1,$2,$3,$4)
+`
+
+type AppendPrivacyExecutorGrantEventParams struct {
+	GrantID    uuid.UUID          `json:"grant_id"`
+	ActorRef   uuid.UUID          `json:"actor_ref"`
+	Action     string             `json:"action"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+func (q *Queries) AppendPrivacyExecutorGrantEvent(ctx context.Context, arg AppendPrivacyExecutorGrantEventParams) error {
+	_, err := q.db.Exec(ctx, appendPrivacyExecutorGrantEvent,
+		arg.GrantID,
+		arg.ActorRef,
+		arg.Action,
+		arg.OccurredAt,
+	)
+	return err
+}
+
 const appendPrivacyRequestEvent = `-- name: AppendPrivacyRequestEvent :one
 INSERT INTO data_erasure_request_events(request_id,actor_role,actor_ref,action,reason_code,from_status,to_status,version,occurred_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, request_id, actor_role, actor_ref, action, reason_code, from_status, to_status, version, occurred_at
@@ -102,9 +124,91 @@ func (q *Queries) AppendPrivacyReviewerGrantEvent(ctx context.Context, arg Appen
 	return err
 }
 
+const authorizePrivacyErasureJobLease = `-- name: AuthorizePrivacyErasureJobLease :one
+SELECT lease.id, lease.job_id, lease.epoch, lease.worker_ref, lease.acquired_at, lease.heartbeat_at, lease.expires_at, lease.released_at, lease.outcome
+FROM privacy_erasure_job_leases lease
+JOIN privacy_erasure_category_jobs job ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+WHERE job.id=$1 AND lease.id=$2 AND attempt.id=$3
+AND lease.epoch=$4 AND lease.worker_ref=$5
+AND job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL
+AND lease.expires_at>clock_timestamp()
+FOR UPDATE OF job,lease,attempt
+`
+
+type AuthorizePrivacyErasureJobLeaseParams struct {
+	JobID      uuid.UUID `json:"job_id"`
+	LeaseID    uuid.UUID `json:"lease_id"`
+	AttemptID  uuid.UUID `json:"attempt_id"`
+	LeaseEpoch int64     `json:"lease_epoch"`
+	WorkerRef  uuid.UUID `json:"worker_ref"`
+}
+
+func (q *Queries) AuthorizePrivacyErasureJobLease(ctx context.Context, arg AuthorizePrivacyErasureJobLeaseParams) (PrivacyErasureJobLease, error) {
+	row := q.db.QueryRow(ctx, authorizePrivacyErasureJobLease,
+		arg.JobID,
+		arg.LeaseID,
+		arg.AttemptID,
+		arg.LeaseEpoch,
+		arg.WorkerRef,
+	)
+	var i PrivacyErasureJobLease
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Epoch,
+		&i.WorkerRef,
+		&i.AcquiredAt,
+		&i.HeartbeatAt,
+		&i.ExpiresAt,
+		&i.ReleasedAt,
+		&i.Outcome,
+	)
+	return i, err
+}
+
+const callPrivacyWorkerSync = `-- name: CallPrivacyWorkerSync :one
+SELECT privacy_worker_sync($1,$2,$3,$4,$5)::uuid
+`
+
+type CallPrivacyWorkerSyncParams struct {
+	JobID      uuid.UUID `json:"job_id"`
+	LeaseID    uuid.UUID `json:"lease_id"`
+	AttemptID  uuid.UUID `json:"attempt_id"`
+	LeaseEpoch int64     `json:"lease_epoch"`
+	WorkerRef  uuid.UUID `json:"worker_ref"`
+}
+
+func (q *Queries) CallPrivacyWorkerSync(ctx context.Context, arg CallPrivacyWorkerSyncParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, callPrivacyWorkerSync,
+		arg.JobID,
+		arg.LeaseID,
+		arg.AttemptID,
+		arg.LeaseEpoch,
+		arg.WorkerRef,
+	)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countActiveUnindexedPrivacySessions = `-- name: CountActiveUnindexedPrivacySessions :one
+SELECT count(*) FROM sessions WHERE NOT subject_indexed AND expiry>clock_timestamp()
+`
+
+func (q *Queries) CountActiveUnindexedPrivacySessions(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUnindexedPrivacySessions)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPrivacyActiveAdministrators = `-- name: CountPrivacyActiveAdministrators :one
 SELECT count(*) FROM users account JOIN user_platform_roles grant_row ON grant_row.user_id = account.id
-JOIN platform_roles role_row ON role_row.id = grant_row.role_id WHERE account.is_active AND role_row.code = 'ADMIN'
+JOIN platform_roles role_row ON role_row.id = grant_row.role_id
+WHERE account.is_active AND NOT account.is_dependent
+AND account.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
+AND account.email IS NOT NULL AND account.password_hash IS NOT NULL AND role_row.code = 'ADMIN'
 `
 
 func (q *Queries) CountPrivacyActiveAdministrators(ctx context.Context) (int64, error) {
@@ -112,6 +216,170 @@ func (q *Queries) CountPrivacyActiveAdministrators(ctx context.Context) (int64, 
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createPrivacyErasureAccessRevocation = `-- name: CreatePrivacyErasureAccessRevocation :one
+INSERT INTO privacy_erasure_access_revocations(execution_id,grant_kind,capability_code,revoked_count,actor_ref,occurred_at)
+VALUES($1,$2,$3,$4,$5,$6)
+RETURNING id, execution_id, grant_kind, capability_code, revoked_count, actor_ref, occurred_at
+`
+
+type CreatePrivacyErasureAccessRevocationParams struct {
+	ExecutionID    uuid.UUID          `json:"execution_id"`
+	GrantKind      string             `json:"grant_kind"`
+	CapabilityCode string             `json:"capability_code"`
+	RevokedCount   int32              `json:"revoked_count"`
+	ActorRef       uuid.UUID          `json:"actor_ref"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+}
+
+func (q *Queries) CreatePrivacyErasureAccessRevocation(ctx context.Context, arg CreatePrivacyErasureAccessRevocationParams) (PrivacyErasureAccessRevocation, error) {
+	row := q.db.QueryRow(ctx, createPrivacyErasureAccessRevocation,
+		arg.ExecutionID,
+		arg.GrantKind,
+		arg.CapabilityCode,
+		arg.RevokedCount,
+		arg.ActorRef,
+		arg.OccurredAt,
+	)
+	var i PrivacyErasureAccessRevocation
+	err := row.Scan(
+		&i.ID,
+		&i.ExecutionID,
+		&i.GrantKind,
+		&i.CapabilityCode,
+		&i.RevokedCount,
+		&i.ActorRef,
+		&i.OccurredAt,
+	)
+	return i, err
+}
+
+const createPrivacyErasureCategoryJob = `-- name: CreatePrivacyErasureCategoryJob :one
+INSERT INTO privacy_erasure_category_jobs(execution_id,plan_entry_position,entry_sha256,category_key,purpose_code,next_attempt_at,created_at,updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$7)
+RETURNING id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at
+`
+
+type CreatePrivacyErasureCategoryJobParams struct {
+	ExecutionID       uuid.UUID          `json:"execution_id"`
+	PlanEntryPosition int16              `json:"plan_entry_position"`
+	EntrySha256       []byte             `json:"entry_sha256"`
+	CategoryKey       string             `json:"category_key"`
+	PurposeCode       string             `json:"purpose_code"`
+	NextAttemptAt     pgtype.Timestamptz `json:"next_attempt_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreatePrivacyErasureCategoryJob(ctx context.Context, arg CreatePrivacyErasureCategoryJobParams) (PrivacyErasureCategoryJob, error) {
+	row := q.db.QueryRow(ctx, createPrivacyErasureCategoryJob,
+		arg.ExecutionID,
+		arg.PlanEntryPosition,
+		arg.EntrySha256,
+		arg.CategoryKey,
+		arg.PurposeCode,
+		arg.NextAttemptAt,
+		arg.CreatedAt,
+	)
+	var i PrivacyErasureCategoryJob
+	err := row.Scan(
+		&i.ID,
+		&i.ExecutionID,
+		&i.PlanEntryPosition,
+		&i.EntrySha256,
+		&i.CategoryKey,
+		&i.PurposeCode,
+		&i.Status,
+		&i.NextAttemptAt,
+		&i.LeaseEpoch,
+		&i.AttemptCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const createPrivacyErasureExecution = `-- name: CreatePrivacyErasureExecution :one
+INSERT INTO privacy_erasure_executions(request_id,plan_sha256,executor_version,schema_version,request_version_at_start,started_by_ref,accepted_at,updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$7)
+RETURNING id, request_id, plan_sha256, executor_version, schema_version, request_version_at_start, status, version, started_by_ref, accepted_at, started_at, finished_at, updated_at
+`
+
+type CreatePrivacyErasureExecutionParams struct {
+	RequestID             uuid.UUID          `json:"request_id"`
+	PlanSha256            []byte             `json:"plan_sha256"`
+	ExecutorVersion       string             `json:"executor_version"`
+	SchemaVersion         string             `json:"schema_version"`
+	RequestVersionAtStart int64              `json:"request_version_at_start"`
+	StartedByRef          uuid.UUID          `json:"started_by_ref"`
+	AcceptedAt            pgtype.Timestamptz `json:"accepted_at"`
+}
+
+func (q *Queries) CreatePrivacyErasureExecution(ctx context.Context, arg CreatePrivacyErasureExecutionParams) (PrivacyErasureExecution, error) {
+	row := q.db.QueryRow(ctx, createPrivacyErasureExecution,
+		arg.RequestID,
+		arg.PlanSha256,
+		arg.ExecutorVersion,
+		arg.SchemaVersion,
+		arg.RequestVersionAtStart,
+		arg.StartedByRef,
+		arg.AcceptedAt,
+	)
+	var i PrivacyErasureExecution
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.PlanSha256,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.RequestVersionAtStart,
+		&i.Status,
+		&i.Version,
+		&i.StartedByRef,
+		&i.AcceptedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createPrivacyErasureJobCheckpoint = `-- name: CreatePrivacyErasureJobCheckpoint :one
+INSERT INTO privacy_erasure_job_checkpoints(job_id,operation_position,operation_code,action_version,created_at)
+VALUES($1,$2,$3,$4,$5)
+RETURNING id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at
+`
+
+type CreatePrivacyErasureJobCheckpointParams struct {
+	JobID             uuid.UUID          `json:"job_id"`
+	OperationPosition int16              `json:"operation_position"`
+	OperationCode     string             `json:"operation_code"`
+	ActionVersion     string             `json:"action_version"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreatePrivacyErasureJobCheckpoint(ctx context.Context, arg CreatePrivacyErasureJobCheckpointParams) (PrivacyErasureJobCheckpoint, error) {
+	row := q.db.QueryRow(ctx, createPrivacyErasureJobCheckpoint,
+		arg.JobID,
+		arg.OperationPosition,
+		arg.OperationCode,
+		arg.ActionVersion,
+		arg.CreatedAt,
+	)
+	var i PrivacyErasureJobCheckpoint
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.OperationPosition,
+		&i.OperationCode,
+		&i.ActionVersion,
+		&i.Status,
+		&i.CompletedByAttemptID,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
 }
 
 const createPrivacyExecutionPlan = `-- name: CreatePrivacyExecutionPlan :one
@@ -275,6 +543,50 @@ func (q *Queries) CreatePrivacyRequest(ctx context.Context, arg CreatePrivacyReq
 	return i, err
 }
 
+const deletePrivacySessionsByUser = `-- name: DeletePrivacySessionsByUser :execrows
+DELETE FROM sessions WHERE subject_indexed AND user_id=$1
+`
+
+func (q *Queries) DeletePrivacySessionsByUser(ctx context.Context, userID *uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePrivacySessionsByUser, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const disablePrivacyAccountForExecution = `-- name: DisablePrivacyAccountForExecution :one
+UPDATE users SET is_active=false,credential_version=credential_version+1,updated_at=$1
+WHERE id=$2 AND is_active RETURNING id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at
+`
+
+type DisablePrivacyAccountForExecutionParams struct {
+	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
+	UserID     uuid.UUID          `json:"user_id"`
+}
+
+func (q *Queries) DisablePrivacyAccountForExecution(ctx context.Context, arg DisablePrivacyAccountForExecutionParams) (User, error) {
+	row := q.db.QueryRow(ctx, disablePrivacyAccountForExecution, arg.DisabledAt, arg.UserID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.EmailVerifiedAt,
+		&i.MinorLoginID,
+		&i.PasswordHash,
+		&i.CredentialVersion,
+		&i.GuardianID,
+		&i.IsDependent,
+		&i.DateOfBirth,
+		&i.IsActive,
+		&i.LeaderboardVisible,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const enqueuePrivacyRequestEmail = `-- name: EnqueuePrivacyRequestEmail :one
 INSERT INTO email_outbox(message_type,privacy_request_id,privacy_requester_id,privacy_event_key,sealed_payload,next_attempt_at,created_at,updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$6,$6) RETURNING id
@@ -301,6 +613,20 @@ func (q *Queries) EnqueuePrivacyRequestEmail(ctx context.Context, arg EnqueuePri
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const expireLegacyPrivacySessionsBy = `-- name: ExpireLegacyPrivacySessionsBy :execrows
+WITH authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at)
+UPDATE sessions SET expiry=authority_clock.occurred_at
+FROM authority_clock WHERE NOT sessions.subject_indexed AND sessions.expiry>authority_clock.occurred_at
+`
+
+func (q *Queries) ExpireLegacyPrivacySessionsBy(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, expireLegacyPrivacySessionsBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getPrivacyAccountForUpdate = `-- name: GetPrivacyAccountForUpdate :one
@@ -365,6 +691,166 @@ func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (PrivacyReq
 	return i, err
 }
 
+const getPrivacyErasureCategoryJob = `-- name: GetPrivacyErasureCategoryJob :one
+SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at FROM privacy_erasure_category_jobs WHERE id=$1
+`
+
+func (q *Queries) GetPrivacyErasureCategoryJob(ctx context.Context, id uuid.UUID) (PrivacyErasureCategoryJob, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureCategoryJob, id)
+	var i PrivacyErasureCategoryJob
+	err := row.Scan(
+		&i.ID,
+		&i.ExecutionID,
+		&i.PlanEntryPosition,
+		&i.EntrySha256,
+		&i.CategoryKey,
+		&i.PurposeCode,
+		&i.Status,
+		&i.NextAttemptAt,
+		&i.LeaseEpoch,
+		&i.AttemptCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getPrivacyErasureExecution = `-- name: GetPrivacyErasureExecution :one
+SELECT id, request_id, plan_sha256, executor_version, schema_version, request_version_at_start, status, version, started_by_ref, accepted_at, started_at, finished_at, updated_at FROM privacy_erasure_executions WHERE id=$1
+`
+
+func (q *Queries) GetPrivacyErasureExecution(ctx context.Context, id uuid.UUID) (PrivacyErasureExecution, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureExecution, id)
+	var i PrivacyErasureExecution
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.PlanSha256,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.RequestVersionAtStart,
+		&i.Status,
+		&i.Version,
+		&i.StartedByRef,
+		&i.AcceptedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPrivacyErasureExecutionByRequest = `-- name: GetPrivacyErasureExecutionByRequest :one
+SELECT id, request_id, plan_sha256, executor_version, schema_version, request_version_at_start, status, version, started_by_ref, accepted_at, started_at, finished_at, updated_at FROM privacy_erasure_executions WHERE request_id=$1
+`
+
+func (q *Queries) GetPrivacyErasureExecutionByRequest(ctx context.Context, requestID uuid.UUID) (PrivacyErasureExecution, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureExecutionByRequest, requestID)
+	var i PrivacyErasureExecution
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.PlanSha256,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.RequestVersionAtStart,
+		&i.Status,
+		&i.Version,
+		&i.StartedByRef,
+		&i.AcceptedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPrivacyErasureExecutionForUpdate = `-- name: GetPrivacyErasureExecutionForUpdate :one
+SELECT id, request_id, plan_sha256, executor_version, schema_version, request_version_at_start, status, version, started_by_ref, accepted_at, started_at, finished_at, updated_at FROM privacy_erasure_executions WHERE id=$1 FOR UPDATE
+`
+
+func (q *Queries) GetPrivacyErasureExecutionForUpdate(ctx context.Context, id uuid.UUID) (PrivacyErasureExecution, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureExecutionForUpdate, id)
+	var i PrivacyErasureExecution
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.PlanSha256,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.RequestVersionAtStart,
+		&i.Status,
+		&i.Version,
+		&i.StartedByRef,
+		&i.AcceptedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPrivacyErasureJobCheckpoint = `-- name: GetPrivacyErasureJobCheckpoint :one
+SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at FROM privacy_erasure_job_checkpoints WHERE id=$1
+`
+
+func (q *Queries) GetPrivacyErasureJobCheckpoint(ctx context.Context, id uuid.UUID) (PrivacyErasureJobCheckpoint, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureJobCheckpoint, id)
+	var i PrivacyErasureJobCheckpoint
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.OperationPosition,
+		&i.OperationCode,
+		&i.ActionVersion,
+		&i.Status,
+		&i.CompletedByAttemptID,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getPrivacyErasureJobLease = `-- name: GetPrivacyErasureJobLease :one
+SELECT id, job_id, epoch, worker_ref, acquired_at, heartbeat_at, expires_at, released_at, outcome FROM privacy_erasure_job_leases WHERE id=$1
+`
+
+func (q *Queries) GetPrivacyErasureJobLease(ctx context.Context, id uuid.UUID) (PrivacyErasureJobLease, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureJobLease, id)
+	var i PrivacyErasureJobLease
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Epoch,
+		&i.WorkerRef,
+		&i.AcquiredAt,
+		&i.HeartbeatAt,
+		&i.ExpiresAt,
+		&i.ReleasedAt,
+		&i.Outcome,
+	)
+	return i, err
+}
+
+const getPrivacyErasureWorkSetCounts = `-- name: GetPrivacyErasureWorkSetCounts :one
+SELECT
+ (SELECT count(*) FROM privacy_erasure_category_jobs counted_job WHERE counted_job.execution_id=$1)::bigint AS job_count,
+ (SELECT count(*) FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id WHERE job.execution_id=$1)::bigint AS checkpoint_count
+`
+
+type GetPrivacyErasureWorkSetCountsRow struct {
+	JobCount        int64 `json:"job_count"`
+	CheckpointCount int64 `json:"checkpoint_count"`
+}
+
+func (q *Queries) GetPrivacyErasureWorkSetCounts(ctx context.Context, executionRef uuid.UUID) (GetPrivacyErasureWorkSetCountsRow, error) {
+	row := q.db.QueryRow(ctx, getPrivacyErasureWorkSetCounts, executionRef)
+	var i GetPrivacyErasureWorkSetCountsRow
+	err := row.Scan(&i.JobCount, &i.CheckpointCount)
+	return i, err
+}
+
 const getPrivacyExecutionPlan = `-- name: GetPrivacyExecutionPlan :one
 SELECT request_id, policy_version, executor_version, schema_version, plan, plan_sha256, created_at FROM privacy_request_execution_plans WHERE request_id = $1
 `
@@ -380,6 +866,24 @@ func (q *Queries) GetPrivacyExecutionPlan(ctx context.Context, requestID uuid.UU
 		&i.Plan,
 		&i.PlanSha256,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPrivacyExecutorGrantForShare = `-- name: GetPrivacyExecutorGrantForShare :one
+SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at FROM privacy_executor_grants WHERE user_id=$1 AND revoked_at IS NULL FOR SHARE
+`
+
+func (q *Queries) GetPrivacyExecutorGrantForShare(ctx context.Context, userID uuid.UUID) (PrivacyExecutorGrant, error) {
+	row := q.db.QueryRow(ctx, getPrivacyExecutorGrantForShare, userID)
+	var i PrivacyExecutorGrant
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.GrantedBy,
+		&i.GrantedAt,
+		&i.RevokedBy,
+		&i.RevokedAt,
 	)
 	return i, err
 }
@@ -562,6 +1066,23 @@ func (q *Queries) GetPrivacyRequestByRef(ctx context.Context, publicRef uuid.UUI
 	return i, err
 }
 
+const getPrivacyRequestExecutionLifecycle = `-- name: GetPrivacyRequestExecutionLifecycle :one
+SELECT id,status,version FROM data_erasure_requests WHERE id=$1
+`
+
+type GetPrivacyRequestExecutionLifecycleRow struct {
+	ID      uuid.UUID `json:"id"`
+	Status  string    `json:"status"`
+	Version int64     `json:"version"`
+}
+
+func (q *Queries) GetPrivacyRequestExecutionLifecycle(ctx context.Context, id uuid.UUID) (GetPrivacyRequestExecutionLifecycleRow, error) {
+	row := q.db.QueryRow(ctx, getPrivacyRequestExecutionLifecycle, id)
+	var i GetPrivacyRequestExecutionLifecycleRow
+	err := row.Scan(&i.ID, &i.Status, &i.Version)
+	return i, err
+}
+
 const getPrivacyRequestForUpdate = `-- name: GetPrivacyRequestForUpdate :one
 SELECT id, public_ref, idempotency_key, subject_user_id, requester_user_id, subject_kind, scope_kind, categories, status, version, received_at, due_at, extended_due_at, extension_reason_code, claimed_by, reviewed_at, identity_verified_at, identity_method, identity_verified_by, representation_verified_at, representation_method, representation_verified_by, representation_guardian_id, representation_conflict, decision_code, decision_explanation, category_decisions, decided_by, decided_at, policy_version, policy_snapshot, closed_at, cancelled_at, evidence_expires_at, working_expires_at, working_erased_at, updated_at, representation_relationship_updated_at FROM data_erasure_requests WHERE public_ref = $1 FOR UPDATE
 `
@@ -630,6 +1151,31 @@ func (q *Queries) GetPrivacyReviewerGrantForShare(ctx context.Context, userID uu
 	return i, err
 }
 
+const grantPrivacyExecutor = `-- name: GrantPrivacyExecutor :one
+INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at)
+VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+`
+
+type GrantPrivacyExecutorParams struct {
+	UserID    uuid.UUID          `json:"user_id"`
+	GrantedBy uuid.UUID          `json:"granted_by"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+}
+
+func (q *Queries) GrantPrivacyExecutor(ctx context.Context, arg GrantPrivacyExecutorParams) (PrivacyExecutorGrant, error) {
+	row := q.db.QueryRow(ctx, grantPrivacyExecutor, arg.UserID, arg.GrantedBy, arg.GrantedAt)
+	var i PrivacyExecutorGrant
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.GrantedBy,
+		&i.GrantedAt,
+		&i.RevokedBy,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
 const grantPrivacyReviewer = `-- name: GrantPrivacyReviewer :one
 INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
 `
@@ -651,6 +1197,40 @@ func (q *Queries) GrantPrivacyReviewer(ctx context.Context, arg GrantPrivacyRevi
 		&i.RevokedBy,
 		&i.RevokedAt,
 	)
+	return i, err
+}
+
+const invalidatePrivacyAccountTokens = `-- name: InvalidatePrivacyAccountTokens :one
+WITH verification AS (
+ UPDATE email_verification_tokens token SET consumed_at=GREATEST($1,token.created_at)
+ WHERE token.user_id=$2 AND token.consumed_at IS NULL RETURNING token.id
+), reset AS (
+ UPDATE password_reset_tokens token SET consumed_at=GREATEST($1,token.created_at)
+ WHERE token.user_id=$2 AND token.consumed_at IS NULL RETURNING token.id
+), cancelled AS (
+ UPDATE email_outbox SET status='CANCELLED',claimed_at=NULL,updated_at=$1
+ WHERE status IN ('PENDING','SENDING') AND (verification_token_id IN (SELECT id FROM verification) OR password_reset_token_id IN (SELECT id FROM reset)) RETURNING id
+)
+SELECT (SELECT count(*) FROM verification)::bigint AS verification_tokens,
+       (SELECT count(*) FROM reset)::bigint AS reset_tokens,
+       (SELECT count(*) FROM cancelled)::bigint AS cancelled_deliveries
+`
+
+type InvalidatePrivacyAccountTokensParams struct {
+	InvalidatedAt pgtype.Timestamptz `json:"invalidated_at"`
+	SubjectUserID uuid.UUID          `json:"subject_user_id"`
+}
+
+type InvalidatePrivacyAccountTokensRow struct {
+	VerificationTokens  int64 `json:"verification_tokens"`
+	ResetTokens         int64 `json:"reset_tokens"`
+	CancelledDeliveries int64 `json:"cancelled_deliveries"`
+}
+
+func (q *Queries) InvalidatePrivacyAccountTokens(ctx context.Context, arg InvalidatePrivacyAccountTokensParams) (InvalidatePrivacyAccountTokensRow, error) {
+	row := q.db.QueryRow(ctx, invalidatePrivacyAccountTokens, arg.InvalidatedAt, arg.SubjectUserID)
+	var i InvalidatePrivacyAccountTokensRow
+	err := row.Scan(&i.VerificationTokens, &i.ResetTokens, &i.CancelledDeliveries)
 	return i, err
 }
 
@@ -727,6 +1307,110 @@ func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID
 			&i.LeaderboardVisible,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivacyErasureAccessRevocations = `-- name: ListPrivacyErasureAccessRevocations :many
+SELECT id, execution_id, grant_kind, capability_code, revoked_count, actor_ref, occurred_at FROM privacy_erasure_access_revocations WHERE execution_id=$1 ORDER BY grant_kind,capability_code
+`
+
+func (q *Queries) ListPrivacyErasureAccessRevocations(ctx context.Context, executionID uuid.UUID) ([]PrivacyErasureAccessRevocation, error) {
+	rows, err := q.db.Query(ctx, listPrivacyErasureAccessRevocations, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivacyErasureAccessRevocation{}
+	for rows.Next() {
+		var i PrivacyErasureAccessRevocation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExecutionID,
+			&i.GrantKind,
+			&i.CapabilityCode,
+			&i.RevokedCount,
+			&i.ActorRef,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivacyErasureCategoryJobs = `-- name: ListPrivacyErasureCategoryJobs :many
+SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at FROM privacy_erasure_category_jobs WHERE execution_id=$1 ORDER BY plan_entry_position
+`
+
+func (q *Queries) ListPrivacyErasureCategoryJobs(ctx context.Context, executionID uuid.UUID) ([]PrivacyErasureCategoryJob, error) {
+	rows, err := q.db.Query(ctx, listPrivacyErasureCategoryJobs, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivacyErasureCategoryJob{}
+	for rows.Next() {
+		var i PrivacyErasureCategoryJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExecutionID,
+			&i.PlanEntryPosition,
+			&i.EntrySha256,
+			&i.CategoryKey,
+			&i.PurposeCode,
+			&i.Status,
+			&i.NextAttemptAt,
+			&i.LeaseEpoch,
+			&i.AttemptCount,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivacyErasureJobCheckpoints = `-- name: ListPrivacyErasureJobCheckpoints :many
+SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at FROM privacy_erasure_job_checkpoints WHERE job_id=$1 ORDER BY operation_position
+`
+
+func (q *Queries) ListPrivacyErasureJobCheckpoints(ctx context.Context, jobID uuid.UUID) ([]PrivacyErasureJobCheckpoint, error) {
+	rows, err := q.db.Query(ctx, listPrivacyErasureJobCheckpoints, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivacyErasureJobCheckpoint{}
+	for rows.Next() {
+		var i PrivacyErasureJobCheckpoint
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.OperationPosition,
+			&i.OperationCode,
+			&i.ActionVersion,
+			&i.Status,
+			&i.CompletedByAttemptID,
+			&i.CreatedAt,
+			&i.CompletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -924,6 +1608,122 @@ func (q *Queries) ListPrivacyReviewQueue(ctx context.Context, arg ListPrivacyRev
 	return items, nil
 }
 
+const lockPrivacyActiveAdministratorSet = `-- name: LockPrivacyActiveAdministratorSet :exec
+SELECT pg_advisory_xact_lock(hashtextextended('mycfc-active-admin-set/v1',0))
+`
+
+func (q *Queries) LockPrivacyActiveAdministratorSet(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockPrivacyActiveAdministratorSet)
+	return err
+}
+
+const markPrivacySessionIndexed = `-- name: MarkPrivacySessionIndexed :execrows
+UPDATE sessions SET user_id=$1,subject_indexed=true WHERE token=$2
+`
+
+type MarkPrivacySessionIndexedParams struct {
+	UserID *uuid.UUID `json:"user_id"`
+	Token  string     `json:"token"`
+}
+
+func (q *Queries) MarkPrivacySessionIndexed(ctx context.Context, arg MarkPrivacySessionIndexedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPrivacySessionIndexed, arg.UserID, arg.Token)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokePrivacyExecutor = `-- name: RevokePrivacyExecutor :one
+UPDATE privacy_executor_grants SET revoked_by=$1,revoked_at=$2
+WHERE id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+`
+
+type RevokePrivacyExecutorParams struct {
+	RevokedBy *uuid.UUID         `json:"revoked_by"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	ID        uuid.UUID          `json:"id"`
+}
+
+func (q *Queries) RevokePrivacyExecutor(ctx context.Context, arg RevokePrivacyExecutorParams) (PrivacyExecutorGrant, error) {
+	row := q.db.QueryRow(ctx, revokePrivacyExecutor, arg.RevokedBy, arg.RevokedAt, arg.ID)
+	var i PrivacyExecutorGrant
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.GrantedBy,
+		&i.GrantedAt,
+		&i.RevokedBy,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
+const revokePrivacyExecutorGrantsForExecution = `-- name: RevokePrivacyExecutorGrantsForExecution :many
+UPDATE privacy_executor_grants SET revoked_by=$1,revoked_at=$2
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+`
+
+type RevokePrivacyExecutorGrantsForExecutionParams struct {
+	RevokedBy *uuid.UUID         `json:"revoked_by"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	UserID    uuid.UUID          `json:"user_id"`
+}
+
+func (q *Queries) RevokePrivacyExecutorGrantsForExecution(ctx context.Context, arg RevokePrivacyExecutorGrantsForExecutionParams) ([]PrivacyExecutorGrant, error) {
+	rows, err := q.db.Query(ctx, revokePrivacyExecutorGrantsForExecution, arg.RevokedBy, arg.RevokedAt, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivacyExecutorGrant{}
+	for rows.Next() {
+		var i PrivacyExecutorGrant
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.GrantedBy,
+			&i.GrantedAt,
+			&i.RevokedBy,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokePrivacyPlatformRolesForExecution = `-- name: RevokePrivacyPlatformRolesForExecution :many
+WITH removed AS (
+ DELETE FROM user_platform_roles assignment WHERE assignment.user_id=$1 RETURNING assignment.role_id
+)
+SELECT role.code FROM removed JOIN platform_roles role ON role.id=removed.role_id ORDER BY role.code
+`
+
+func (q *Queries) RevokePrivacyPlatformRolesForExecution(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, revokePrivacyPlatformRolesForExecution, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		items = append(items, code)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const revokePrivacyReviewer = `-- name: RevokePrivacyReviewer :one
 UPDATE privacy_reviewer_grants SET revoked_by = $1, revoked_at = $2 WHERE id = $3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
 `
@@ -946,6 +1746,86 @@ func (q *Queries) RevokePrivacyReviewer(ctx context.Context, arg RevokePrivacyRe
 		&i.RevokedAt,
 	)
 	return i, err
+}
+
+const revokePrivacyReviewerGrantsForExecution = `-- name: RevokePrivacyReviewerGrantsForExecution :many
+UPDATE privacy_reviewer_grants SET revoked_by=$1,revoked_at=$2
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+`
+
+type RevokePrivacyReviewerGrantsForExecutionParams struct {
+	RevokedBy *uuid.UUID         `json:"revoked_by"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	UserID    uuid.UUID          `json:"user_id"`
+}
+
+func (q *Queries) RevokePrivacyReviewerGrantsForExecution(ctx context.Context, arg RevokePrivacyReviewerGrantsForExecutionParams) ([]PrivacyReviewerGrant, error) {
+	rows, err := q.db.Query(ctx, revokePrivacyReviewerGrantsForExecution, arg.RevokedBy, arg.RevokedAt, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PrivacyReviewerGrant{}
+	for rows.Next() {
+		var i PrivacyReviewerGrant
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.GrantedBy,
+			&i.GrantedAt,
+			&i.RevokedBy,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokePrivacyStaffGrantsForExecution = `-- name: RevokePrivacyStaffGrantsForExecution :many
+UPDATE staff_grants SET revoked_by_id=$1,revoked_at=$2,revoke_reason='PRIVACY_ACCOUNT_CLOSURE'
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, capability, programme_id, team_id, granted_by_id, granted_at, revoked_by_id, revoked_at, revoke_reason
+`
+
+type RevokePrivacyStaffGrantsForExecutionParams struct {
+	RevokedByID *uuid.UUID         `json:"revoked_by_id"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	UserID      uuid.UUID          `json:"user_id"`
+}
+
+func (q *Queries) RevokePrivacyStaffGrantsForExecution(ctx context.Context, arg RevokePrivacyStaffGrantsForExecutionParams) ([]StaffGrant, error) {
+	rows, err := q.db.Query(ctx, revokePrivacyStaffGrantsForExecution, arg.RevokedByID, arg.RevokedAt, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []StaffGrant{}
+	for rows.Next() {
+		var i StaffGrant
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Capability,
+			&i.ProgrammeID,
+			&i.TeamID,
+			&i.GrantedByID,
+			&i.GrantedAt,
+			&i.RevokedByID,
+			&i.RevokedAt,
+			&i.RevokeReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setPrivacyActivation = `-- name: SetPrivacyActivation :one
@@ -978,6 +1858,79 @@ func (q *Queries) SetPrivacyActivation(ctx context.Context, arg SetPrivacyActiva
 		&i.FulfilmentReady,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const transitionPrivacyRequestExecutionStatus = `-- name: TransitionPrivacyRequestExecutionStatus :one
+UPDATE data_erasure_requests SET status=$1,version=version+1,
+closed_at=$2,evidence_expires_at=$3,working_expires_at=$4,updated_at=$5
+WHERE id=$6 AND version=$7 AND status=ANY($8::text[])
+RETURNING id, public_ref, idempotency_key, subject_user_id, requester_user_id, subject_kind, scope_kind, categories, status, version, received_at, due_at, extended_due_at, extension_reason_code, claimed_by, reviewed_at, identity_verified_at, identity_method, identity_verified_by, representation_verified_at, representation_method, representation_verified_by, representation_guardian_id, representation_conflict, decision_code, decision_explanation, category_decisions, decided_by, decided_at, policy_version, policy_snapshot, closed_at, cancelled_at, evidence_expires_at, working_expires_at, working_erased_at, updated_at, representation_relationship_updated_at
+`
+
+type TransitionPrivacyRequestExecutionStatusParams struct {
+	ToStatus          string             `json:"to_status"`
+	ClosedAt          pgtype.Timestamptz `json:"closed_at"`
+	EvidenceExpiresAt pgtype.Timestamptz `json:"evidence_expires_at"`
+	WorkingExpiresAt  pgtype.Timestamptz `json:"working_expires_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                uuid.UUID          `json:"id"`
+	ExpectedVersion   int64              `json:"expected_version"`
+	FromStatuses      []string           `json:"from_statuses"`
+}
+
+func (q *Queries) TransitionPrivacyRequestExecutionStatus(ctx context.Context, arg TransitionPrivacyRequestExecutionStatusParams) (DataErasureRequest, error) {
+	row := q.db.QueryRow(ctx, transitionPrivacyRequestExecutionStatus,
+		arg.ToStatus,
+		arg.ClosedAt,
+		arg.EvidenceExpiresAt,
+		arg.WorkingExpiresAt,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.ExpectedVersion,
+		arg.FromStatuses,
+	)
+	var i DataErasureRequest
+	err := row.Scan(
+		&i.ID,
+		&i.PublicRef,
+		&i.IdempotencyKey,
+		&i.SubjectUserID,
+		&i.RequesterUserID,
+		&i.SubjectKind,
+		&i.ScopeKind,
+		&i.Categories,
+		&i.Status,
+		&i.Version,
+		&i.ReceivedAt,
+		&i.DueAt,
+		&i.ExtendedDueAt,
+		&i.ExtensionReasonCode,
+		&i.ClaimedBy,
+		&i.ReviewedAt,
+		&i.IdentityVerifiedAt,
+		&i.IdentityMethod,
+		&i.IdentityVerifiedBy,
+		&i.RepresentationVerifiedAt,
+		&i.RepresentationMethod,
+		&i.RepresentationVerifiedBy,
+		&i.RepresentationGuardianID,
+		&i.RepresentationConflict,
+		&i.DecisionCode,
+		&i.DecisionExplanation,
+		&i.CategoryDecisions,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.PolicyVersion,
+		&i.PolicySnapshot,
+		&i.ClosedAt,
+		&i.CancelledAt,
+		&i.EvidenceExpiresAt,
+		&i.WorkingExpiresAt,
+		&i.WorkingErasedAt,
+		&i.UpdatedAt,
+		&i.RepresentationRelationshipUpdatedAt,
 	)
 	return i, err
 }

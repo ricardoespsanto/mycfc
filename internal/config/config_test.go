@@ -221,6 +221,18 @@ func validConfig() Config {
 	}
 }
 
+func TestPrivacyExecutionTestCapabilitiesAreTestOnly(t *testing.T) {
+	cfg := validConfig()
+	cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_EXECUTION_TEST_CAPABILITIES") {
+		t.Fatalf("non-test capability configuration error=%v", err)
+	}
+	cfg.AppEnv = "test"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("test capability configuration error=%v", err)
+	}
+}
+
 func TestObjectStorageOriginUsesOnlyTheConfiguredBrowserOrigin(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -669,6 +681,14 @@ func TestValidateAggregatesAndSortsProblems(t *testing.T) {
 	}
 	if strings.Index(message, "APP_VERSION") > strings.Index(message, "PORT") {
 		t.Errorf("problems are not sorted: %q", message)
+	}
+}
+
+func TestValidateRejectsSessionsBeyondPrivacyBoundary(t *testing.T) {
+	cfg := validConfig()
+	cfg.SessionLifetime = 12*time.Hour + time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "SESSION_LIFETIME") {
+		t.Fatalf("session lifetime error = %v", err)
 	}
 }
 

@@ -3,6 +3,7 @@ import AxeBuilder from '@axe-core/playwright';
 
 const password = 'correct horse 7';
 const reviewer = 'e2e-privacy-reviewer@example.test';
+const executor = 'e2e-privacy-alternate@example.test';
 const guardian = 'e2e-privacy-guardian@example.test';
 const minorID = '11000000-0000-0000-0000-000000000003';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:18080';
@@ -188,6 +189,53 @@ test('full closure is claimed, verified and approved while preserving access and
     await page.context().clearCookies();
     await login(page, email);
   } finally { await staff.context.close(); }
+});
+
+test('independent executor reviews blockers and starts category processing with keyboard and no JavaScript', async ({ page, browser }) => {
+  test.setTimeout(120000);
+  const email = await register(page, 'execution');
+  await newRequest(page, { categories: ['identity-core'] });
+  const ref = await submit(page);
+  const staff = await review(browser, ref);
+  try {
+    await verify(staff.page);
+    await staff.page.locator('#outcome_identity-core').selectOption('APPROVE');
+    await staff.page.getByLabel('Explicação para o requerente').fill('Execução sintética aprovada.');
+    await staff.page.getByRole('button', { name: 'Aprovar — aguardar execução', exact: true }).click();
+    await expect(receipt(staff.page)).toContainText('Aprovado — a aguardar execução');
+  } finally { await staff.context.close(); }
+
+  const previewContext = await browser.newContext({ baseURL, viewport: { width: 320, height: 720 } });
+  const preview = await previewContext.newPage();
+  try {
+    await login(preview, executor);
+    await preview.goto(`/admin/privacidade/${ref}`);
+    await expect(preview.getByRole('heading', { name: 'Plano de execução aprovado' })).toBeVisible();
+    await expect(preview.getByRole('heading', { name: 'Bloqueios atuais' })).toBeVisible();
+    await expect(preview.getByText(/Nenhum bloqueio atual foi detetado/)).toBeVisible();
+    await expect(preview.getByRole('button', { name: 'Iniciar processamento' })).toBeVisible();
+    await accessibleAt320(preview);
+  } finally { await previewContext.close(); }
+
+  const noScriptContext = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 320, height: 720 } });
+  const noScript = await noScriptContext.newPage();
+  try {
+    await login(noScript, executor);
+    await noScript.goto(`/admin/privacidade/${ref}`);
+    const confirmation = noScript.getByLabel(/Confirmo que revi o plano/);
+    await confirmation.focus();
+    await noScript.keyboard.press('Space');
+    await noScript.getByRole('button', { name: 'Iniciar processamento' }).focus();
+    await noScript.keyboard.press('Enter');
+    await expect(receipt(noScript)).toContainText('Em processamento');
+    await expect(noScript.getByText(/ainda não está concluído/)).toBeVisible();
+  } finally { await noScriptContext.close(); }
+
+  await page.reload();
+  await expect(receipt(page)).toContainText('Em processamento');
+  await page.goto('/today');
+  await expect(page).toHaveURL(/\/today$/);
+  genericMessages(await privacyMessages(email, 3), ref, 'Execução sintética aprovada.');
 });
 
 for (const partial of [true, false]) {

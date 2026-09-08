@@ -109,6 +109,9 @@ func privacyNotificationMessage(kind, contactURL string) (string, string, string
 	case "PRIVACY_DECISION":
 		subject = "Atualização do pedido de privacidade no MyCFCoimbra"
 		opening = "Existe uma atualização do seu pedido relativo a dados pessoais. Esta mensagem não confirma que os dados foram apagados."
+	case "PRIVACY_PROCESSING_STARTED":
+		subject = "Tratamento do pedido de privacidade iniciado no MyCFCoimbra"
+		opening = "Iniciámos o tratamento do seu pedido relativo a dados pessoais. O acesso à conta afetada pode ter terminado. Esta mensagem não confirma que os dados foram apagados."
 	default:
 		return "", "", "", errors.New("unsupported privacy notification")
 	}
