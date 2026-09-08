@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,19 +28,13 @@ var (
 		return pgx.Connect(ctx, databaseURL)
 	}
 	loadDatabaseCommandConfig = config.Load
+	executePrivacyCommand     = runPrivacyCommand
 )
 
 func main() {
 	ctx := context.Background()
-	if len(os.Args) > 1 && os.Args[1] == "privacy" {
-		if err := runPrivacyCommand(ctx, os.Args[2:]); err != nil {
-			slog.Error("privacy operator command failed")
-			os.Exit(1)
-		}
-		return
-	}
 	if len(os.Args) > 1 && os.Args[1] != "serve" {
-		if err := runDatabaseCommand(ctx, os.Args[1]); err != nil {
+		if err := runServerCommand(ctx, os.Args[1:]); err != nil {
 			slog.Error("database command failed", "error", err)
 			os.Exit(1)
 		}
@@ -56,6 +51,16 @@ func main() {
 		application.Logger.Error("application stopped with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func runServerCommand(ctx context.Context, args []string) error {
+	if args[0] == "privacy" {
+		if err := executePrivacyCommand(ctx, args[1:]); err != nil {
+			return errors.New("privacy operator command failed")
+		}
+		return nil
+	}
+	return runDatabaseCommand(ctx, args[0])
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {

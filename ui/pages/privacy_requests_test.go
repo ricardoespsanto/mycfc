@@ -116,3 +116,49 @@ func TestPrivacyQueueFiltersAndMinorRights(t *testing.T) {
 		t.Error("minor rights route must not submit a request")
 	}
 }
+
+func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
+	for status, want := range map[string]string{
+		"RECEIVED": "Recebido", "IDENTITY_NEEDED": "A aguardar verificação", "UNDER_REVIEW": "Em análise",
+		"IN_REVIEW": "Em análise", "AWAITING_EXECUTION": "Aprovado — a aguardar execução",
+		"PARTIALLY_APPROVED": "Parcialmente aprovado — a aguardar execução", "REFUSED": "Recusado",
+		"CANCELLED": "Cancelado", "FUTURE": "FUTURE",
+	} {
+		if got := privacyStatus(status); got != want {
+			t.Errorf("status %s=%q want=%q", status, got, want)
+		}
+	}
+	if privacyBase(true) != "/admin/privacidade" || privacyBase(false) != "/perfil/privacidade" {
+		t.Fatal("privacy base routes changed")
+	}
+	if privacyContact("") != "/legal/direitos" || privacyContact("/contact") != "/contact" {
+		t.Fatal("privacy contact fallback changed")
+	}
+	if privacyOutcome("APPROVE") != "Apagamento aprovado — a aguardar execução" || privacyOutcome("RETAIN") != "Conservar" || privacyOutcome("FUTURE") != "FUTURE" {
+		t.Fatal("privacy outcome mapping changed")
+	}
+	options := []PrivacyOption{{Value: "GROUND", Label: "Approved ground"}}
+	if privacyOptionLabel(options, "GROUND") != "Approved ground" || privacyOptionLabel(options, "OTHER") != "OTHER" {
+		t.Fatal("privacy option fallback changed")
+	}
+
+	fields := privacyErrors(validation.FieldErrors{"password": "Password", "unexpected": "Unexpected"})
+	if len(fields) != 2 || fields[0].Field != "password" || fields[1].Field != "privacy-request-form" {
+		t.Fatalf("new-form error targets=%+v", fields)
+	}
+	page := PrivacyRequestDetailPage{CanVerify: true, CanDecide: true, CanExtend: true, Representative: true,
+		Categories: []PrivacyCategory{{Key: "photos"}}, Errors: validation.FieldErrors{
+			"identity_method": "identity", "representation_method": "representation", "explanation": "explanation",
+			"outcome_photos": "outcome", "ground_photos": "ground", "extension_months": "months",
+			"extension_reason": "reason", "unexpected": "unexpected",
+		}}
+	targets := map[string]bool{}
+	for _, item := range privacyDetailErrors(page) {
+		targets[item.Field] = true
+	}
+	for _, want := range []string{"identity_method", "representation_method", "explanation", "outcome_photos", "ground_photos", "extension_months", "extension_reason", "privacy-receipt"} {
+		if !targets[want] {
+			t.Errorf("detail error target missing %q: %+v", want, targets)
+		}
+	}
+}

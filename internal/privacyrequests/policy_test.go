@@ -238,3 +238,160 @@ func TestDeliveryDomainSeparationAndNoSensitiveContent(t *testing.T) {
 		t.Fatal("tampered payload")
 	}
 }
+
+func TestDeliveryRejectsInvalidEnvelopeInputsAndPayloads(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	for _, delivery := range []Delivery{
+		{},
+		{Recipient: "not-an-email", ContactURL: "https://example.test/legal/direitos"},
+		{Recipient: "Person <person@example.test>", ContactURL: "https://example.test/legal/direitos"},
+		{Recipient: "person@example.test", ContactURL: "/legal/direitos"},
+		{Recipient: "person@example.test", ContactURL: "ftp://example.test/legal/direitos"},
+		{Recipient: "person@example.test", ContactURL: "https://example.test/legal/direitos\r\nInjected: true"},
+	} {
+		if validDelivery(delivery) {
+			t.Errorf("invalid delivery accepted: %+v", delivery)
+		}
+		if _, err := SealDelivery(key, delivery); !errors.Is(err, ErrInvalid) {
+			t.Errorf("invalid delivery seal error=%v", err)
+		}
+	}
+	valid := Delivery{Recipient: "person@example.test", ContactURL: "https://example.test/legal/direitos"}
+	if _, err := SealDelivery([]byte("short"), valid); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("short key seal error=%v", err)
+	}
+	for _, payload := range [][]byte{nil, {1, 2, 3}} {
+		if _, err := OpenDelivery(key, payload); !errors.Is(err, ErrInvalid) {
+			t.Errorf("short payload error=%v", err)
+		}
+	}
+	if _, err := OpenDelivery([]byte("short"), make([]byte, 32)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("short key open error=%v", err)
+	}
+	aead, err := deliveryCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealRaw := func(raw []byte) []byte {
+		nonce := make([]byte, aead.NonceSize())
+		return aead.Seal(nonce, nonce, raw, []byte("privacy-notification-v1"))
+	}
+	for _, raw := range [][]byte{[]byte("not-json"), []byte(`{"recipient":"invalid","contact_url":"https://example.test"}`)} {
+		if _, err := OpenDelivery(key, sealRaw(raw)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("invalid decrypted payload error=%v", err)
+		}
+	}
+}
+
+func TestDecisionPlanRejectsIncompleteOrContradictoryInputs(t *testing.T) {
+	policy := testPolicy()
+	scope := Scope{Kind: Categories, Categories: []Category{"identity-core", "profile-core"}}
+	at := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	valid := map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}
+	for _, tc := range []struct {
+		name   string
+		action string
+		at     time.Time
+		inputs map[string]CategoryDecision
+	}{
+		{name: "zero decision time", action: "partial", inputs: valid},
+		{name: "missing category", action: "partial", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}}},
+		{name: "extra category", action: "partial", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}, "invented": {Outcome: "APPROVE"}}},
+		{name: "approve with retention ground", action: "partial", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE", Ground: "LEGAL_HOLD"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}},
+		{name: "unknown outcome", action: "partial", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "UNKNOWN"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}},
+		{name: "retain without ground", action: "refuse", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "RETAIN"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}},
+		{name: "partial declared approve", action: "approve", at: at, inputs: valid},
+		{name: "all approved declared partial", action: "partial", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "APPROVE"}}},
+		{name: "approval declared refusal", action: "refuse", at: at, inputs: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := policy.DecisionPlan(scope, tc.inputs, tc.action, tc.at); err == nil {
+				t.Fatal("contradictory decision plan accepted")
+			}
+		})
+	}
+}
+
+func TestStoredExecutionPlanRejectsSemanticTampering(t *testing.T) {
+	policy := testPolicy()
+	scope := Scope{Kind: Categories, Categories: []Category{"identity-core", "profile-core"}}
+	created := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	_, base, err := policy.DecisionPlan(scope, map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}, "partial", created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.RequestVersion = 2
+	requestID := uuid.New()
+	rowFor := func(plan ExecutionPlan) dbgen.PrivacyRequestExecutionPlan {
+		payload, marshalErr := json.Marshal(plan)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return dbgen.PrivacyRequestExecutionPlan{RequestID: requestID, PolicyVersion: policy.Version, ExecutorVersion: SupportedExecutorVersion, SchemaVersion: SupportedPlanSchemaVersion, Plan: payload, PlanSha256: executionPlanDigest(requestID, created, policy.Version, SupportedExecutorVersion, SupportedPlanSchemaVersion, payload), CreatedAt: stamp(created)}
+	}
+	if _, err := ReadExecutionPlan(rowFor(base)); err != nil {
+		t.Fatalf("valid stored plan rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ExecutionPlan)
+	}{
+		{name: "old request version", mutate: func(p *ExecutionPlan) { p.RequestVersion = 1 }},
+		{name: "unknown decision action", mutate: func(p *ExecutionPlan) { p.DecisionAction = "future" }},
+		{name: "empty plan", mutate: func(p *ExecutionPlan) { p.Entries = nil }},
+		{name: "operation remapping", mutate: func(p *ExecutionPlan) { p.Entries[0].Operations = []string{"INVENTED"} }},
+		{name: "duplicate category", mutate: func(p *ExecutionPlan) { p.Entries[1].Category = p.Entries[0].Category }},
+		{name: "invalid deadline anchor", mutate: func(p *ExecutionPlan) { p.Entries[0].DeadlineAnchor = "REQUEST_RECEIVED" }},
+		{name: "deadline before decision", mutate: func(p *ExecutionPlan) { p.Entries[0].DueAt = created.Add(-time.Second).Format(time.RFC3339Nano) }},
+		{name: "unexpected retained field", mutate: func(p *ExecutionPlan) { p.Entries[0].RetainedFields = []string{"users.id"} }},
+		{name: "unsorted retained fields", mutate: func(p *ExecutionPlan) {
+			p.Entries[1].RetainedFields = []string{"member_profile.federation_id", "member_profile.federation_id"}
+		}},
+		{name: "unresolved anchor has timestamp", mutate: func(p *ExecutionPlan) { p.Entries[1].ExpireAt = created.AddDate(0, 0, 90).Format(time.RFC3339Nano) }},
+		{name: "wrong retention unit", mutate: func(p *ExecutionPlan) { p.Entries[1].RetentionUnit = "HOUR" }},
+		{name: "expiry beyond contract", mutate: func(p *ExecutionPlan) { tooLong := int32(36501); p.Entries[1].ExpireAfter = &tooLong }},
+		{name: "scope entry missing", mutate: func(p *ExecutionPlan) { p.ScopeCategories = []string{"identity-core"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := base
+			candidate.ScopeCategories = append([]string(nil), base.ScopeCategories...)
+			candidate.Entries = append([]ExecutionPlanEntry(nil), base.Entries...)
+			for i := range candidate.Entries {
+				candidate.Entries[i].Operations = append([]string(nil), base.Entries[i].Operations...)
+				candidate.Entries[i].RetainedFields = append([]string(nil), base.Entries[i].RetainedFields...)
+			}
+			tc.mutate(&candidate)
+			if _, err := ReadExecutionPlan(rowFor(candidate)); !errors.Is(err, ErrPolicyUnresolved) {
+				t.Fatalf("tampered plan error=%v", err)
+			}
+		})
+	}
+
+	badDigest := rowFor(base)
+	badDigest.PlanSha256[0] ^= 1
+	if _, err := ReadExecutionPlan(badDigest); !errors.Is(err, ErrPolicyUnresolved) {
+		t.Fatalf("bad digest error=%v", err)
+	}
+}
+
+func TestRetentionOffsetsAndScopeValidationUseClosedContracts(t *testing.T) {
+	at := time.Date(2026, time.January, 31, 12, 0, 0, 0, time.UTC)
+	if got := addRetentionOffset(at, 12, "HOUR"); !got.Equal(at.Add(12 * time.Hour)) {
+		t.Fatalf("hour offset=%v", got)
+	}
+	if got := addRetentionOffset(at, 12, calendarDayUnit); !got.Equal(at.AddDate(0, 0, 12)) {
+		t.Fatalf("day offset=%v", got)
+	}
+	if got := addRetentionOffset(at, 1, "CALENDAR_MONTH"); !got.Equal(time.Date(2026, time.February, 28, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("month offset=%v", got)
+	}
+	if got := addRetentionOffset(at, 3, "CALENDAR_YEAR"); !got.Equal(at.AddDate(3, 0, 0)) {
+		t.Fatalf("year offset=%v", got)
+	}
+	if got := addRetentionOffset(at, 1, "UNKNOWN"); !got.IsZero() {
+		t.Fatalf("unknown unit offset=%v", got)
+	}
+	if !AccountClosure.validWith(nil) || AccountClosure.validWith([]string{"identity-core"}) || Categories.validWith(nil) || !Categories.validWith([]string{"identity-core"}) || ScopeKind("UNKNOWN").validWith(nil) {
+		t.Fatal("scope/category contract accepted an invalid combination")
+	}
+}

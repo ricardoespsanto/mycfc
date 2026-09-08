@@ -4,6 +4,7 @@ set -Eeuo pipefail
 minimum=${GO_COVERAGE_MIN:-85.0}
 report_dir=${COVERAGE_DIR:-artifacts/coverage}
 raw_profile="$report_dir/unit.raw.out"
+merged_profile="$report_dir/unit-and-integration.raw.out"
 profile="$report_dir/unit.out"
 text_report="$report_dir/unit.txt"
 html_report="$report_dir/unit.html"
@@ -15,6 +16,28 @@ package_floors=scripts/go-coverage-floors.txt
 
 mkdir -p "$report_dir"
 go test -covermode=atomic -coverprofile="$raw_profile" ./internal/... ./cmd/... ./ui/... | tee "$package_report"
+
+# Database-backed services are exercised by the tagged PostgreSQL suite. CI
+# supplies that suite's profile so the unchanged coverage floors measure all
+# automated Go evidence rather than treating integration-owned code as absent.
+additional_profile=${COVERAGE_ADDITIONAL_PROFILE:-}
+if [[ -n "$additional_profile" ]]; then
+	[[ -f "$additional_profile" ]] || { printf 'additional coverage profile not found: %s\n' "$additional_profile" >&2; exit 1; }
+	awk '
+		FNR == 1 { if ($0 != "mode: atomic") exit 2; next }
+		{
+			key = $1 SUBSEP $2
+			location[key] = $1
+			statements[key] = $2
+			if (!(key in count) || $3 > count[key]) count[key] = $3
+		}
+		END {
+			print "mode: atomic"
+			for (key in count) print location[key] " " statements[key] " " count[key]
+		}
+	' "$raw_profile" "$additional_profile" >"$merged_profile"
+	mv "$merged_profile" "$raw_profile"
+fi
 
 # sqlc and templ output are generated from reviewed SQL/templates. Counting
 # their wrappers as hand-written unit-testable code obscures the useful
@@ -146,13 +169,13 @@ fi
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
-    echo "## Unit coverage"
+    echo "## Go coverage"
     echo
-    echo "- Hand-written Go statements: **${total}%**"
+		echo "- Hand-written Go statements across unit and supplied integration evidence: **${total}%**"
     echo "- Required floor: **${minimum}%**"
     echo "- Per-package regression floors: **enforced**"
 	echo '- Changed hand-written Go source lines: see `unit-changed-files.txt` (85% expectation; CI requires a valid comparison SHA).'
-    echo '- Largest uncovered hand-written files: see `unit-largest-uncovered.txt`.'
+		echo '- Largest uncovered hand-written files: see `unit-largest-uncovered.txt`.'
     echo "- Generated sqlc wrappers are excluded; integration coverage remains a separate CI gate."
   } >>"$GITHUB_STEP_SUMMARY"
 fi

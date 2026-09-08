@@ -29,7 +29,7 @@ exist.
 | CI correctness and reproducibility | 8/10 | Parallel generated, foundation, quality, integration, and E2E gates; pinned Ubuntu, Go and Node versions; concurrency cancellation; explicit aggregate result gate | Require the aggregate `summary` check in branch protection; keep the path-filtered Infrastructure workflow outside the global required set; add a scheduled full-pipeline run to catch external image/service drift |
 | Static analysis and formatting | 8/10 | gofmt, vet, Staticcheck, ESLint, Stylelint, HTMX/templ checks, ShellCheck, actionlint, Hadolint, Terraform fmt/validate and TFLint | Remove the documented Staticcheck CSRF/package-comment exceptions over time; consider SQL linting and a rendered-HTML conformance checker if their signal justifies maintenance |
 | Unit tests and coverage | 8/10 | Atomic Go profile, text and browsable HTML reports, per-file and changed-executable-line evidence, 14-day CI artifact, GitHub summary, UI Go tests, and overall plus per-package regression floors over hand-written source | The primary hand-written Go floor is 85%; maintain risk-focused behavioural coverage and add JavaScript unit tests where they provide useful signal |
-| Integration and browser assurance | 8/10 | PostgreSQL/MinIO integration suites, deployment-script tests, Playwright flows, and axe accessibility coverage run as separate gates | Coverage from integration tests is not merged into the report; only the pinned Chromium environment is evidenced; add selected failure/upgrade-path tests rather than broad browser duplication |
+| Integration and browser assurance | 8/10 | PostgreSQL/MinIO integration suites, combined unit/integration Go coverage, deployment-script tests, Playwright flows, and axe accessibility coverage run as separate gates | Only the pinned Chromium environment is evidenced; add selected failure/upgrade-path tests rather than broad browser duplication |
 | Workflow trust boundaries | 9/10 | Read-only default permissions, deployment-only OIDC, production environment, tested-SHA verification, immutable digest lookup, and non-cancelling deploy concurrency | Verify production environment reviewers/rules in GitHub settings; consider a dedicated reusable build workflow to remove any residual divergence between tested and published builds |
 | Dependency and supply-chain security | 6/10 | Dependabot covers Actions, Go, npm and Docker; direct dependencies are exact; Actions use commit SHAs; ECR tags are immutable and scan on push | Add `govulncheck`, npm audit, filesystem/container scanning, SBOM generation, provenance/attestation, and image signing with a deployment verification policy |
 | Release safety and rollback | 8/10 | Build from a verified successful main SHA; publish by digest; blue-green candidate checks; atomic Caddy switch; failed-release quarantine; previous slot retained | GitHub does not receive confirmation that host pickup succeeded; automate rollback exercises and expose release age/failed pickup as a first-class alert |
@@ -44,15 +44,16 @@ exist.
 
 - Added one CI quality job for application, HTMX/templ, CSS, shell, workflow,
   Dockerfile, and Terraform linting.
-- Added a deterministic unit-coverage gate and downloadable text, profile, and
+- Added a deterministic Go-coverage gate and downloadable text, profile, and
   HTML reports. Generated sqlc and templ Go wrappers are excluded; their
   behavior remains covered by integration, rendering, and browser gates.
-- Ratcheted the hand-written-Go unit-coverage floor to 85.0%. The same filtered
-  atomic profile is used locally and in CI; CI fetches the comparison commit and
-  records aggregate, package, file, largest-uncovered and changed-executable-line
-  evidence. Every changed hand-written Go source line must meet the 85% coverage
-  expectation. Integration coverage remains a separate gate and is never merged
-  into this unit denominator.
+- Ratcheted the hand-written-Go coverage floor to 85.0%. CI combines atomic
+  unit and tagged PostgreSQL integration profiles by source block using the
+  greatest observed execution count, so a statement is never double-counted.
+  It fetches the comparison commit and records aggregate, package, file,
+  largest-uncovered and changed-executable-line evidence. Every changed
+  hand-written Go source file must still meet the 85% coverage expectation;
+  integration tests remain an independently required execution gate.
 - Fixed defects exposed by the new linters: a discarded login value, dead Go
   helpers, shell portability/quoting issues, and retired Terraform variables.
 - Made Terraform validation cover `bootstrap`, `hetzner`, and `production`, and

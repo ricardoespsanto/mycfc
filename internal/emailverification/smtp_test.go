@@ -75,6 +75,14 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 			headers: []string{"To: <member@example.test>", "Recupere a sua palavra-passe no MyCFCoimbra"},
 			body:    []string{"https://mycfc.example/reset?token=opaque", "válido durante 60 minutos"},
 		},
+		{
+			name: "privacy notification",
+			send: func(sender *SMTPSender) error {
+				return sender.SendPrivacyNotification(context.Background(), "member@example.test", "https://mycfc.example/legal/direitos?source=email", "PRIVACY_DECISION")
+			},
+			headers: []string{"To: <member@example.test>", "Subject:"},
+			body:    []string{"https://mycfc.example/legal/direitos?source=email", "não confirma que os dados foram apagados"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, message := smtpCapture(t)
@@ -101,6 +109,33 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 	}
 }
 
+func TestPrivacySMTPRejectsMessageConstructionBeforeDelivery(t *testing.T) {
+	sender, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: 1, Timeout: time.Millisecond, TLSMode: "none", FromAddress: "no-reply@example.test", FromName: "MyCFCoimbra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		recipient string
+		kind      string
+		configure func(*SMTPSender)
+	}{
+		{name: "unsupported kind", recipient: "member@example.test", kind: "UNKNOWN"},
+		{name: "invalid from", recipient: "member@example.test", kind: "PRIVACY_DECISION", configure: func(s *SMTPSender) { s.FromAddress = "invalid\nfrom@example.test" }},
+		{name: "invalid recipient", recipient: "invalid\nrecipient@example.test", kind: "PRIVACY_DECISION"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := *sender
+			if tc.configure != nil {
+				tc.configure(&candidate)
+			}
+			if err := candidate.SendPrivacyNotification(context.Background(), tc.recipient, "https://mycfc.example/legal/direitos", tc.kind); err == nil {
+				t.Fatal("invalid privacy email was accepted")
+			}
+		})
+	}
+}
+
 func decodeSMTPBody(t *testing.T, message string) string {
 	t.Helper()
 	_, encoded, found := strings.Cut(message, "\r\n\r\n")
@@ -120,6 +155,7 @@ func smtpCapture(t *testing.T) (SMTPConfig, func() string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = listener.Close() })
 	message := make(chan string, 1)
 	errs := make(chan error, 1)
 	go func() {

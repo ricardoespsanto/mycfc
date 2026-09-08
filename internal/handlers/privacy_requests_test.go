@@ -3,14 +3,18 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/httpx"
 	pr "github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -18,24 +22,50 @@ import (
 
 type privacyHandlerStore struct {
 	PrivacyRequestStore
-	view        pr.View
-	viewErr     error
-	changeErr   error
-	changeInput pr.ReviewInput
+	policy                              pr.AdoptedPolicy
+	availableErr, subjectsErr, listErr  error
+	subjects                            []dbgen.User
+	list                                []dbgen.DataErasureRequest
+	listManagement                      bool
+	listStatus, listDeadline, listOrder string
+	view                                pr.View
+	viewErr                             error
+	submitResult                        dbgen.DataErasureRequest
+	submitErr                           error
+	submitInput                         pr.SubmitInput
+	changeErr                           error
+	changeInput                         pr.ReviewInput
 }
 
+func (s *privacyHandlerStore) Available(context.Context) (pr.AdoptedPolicy, error) {
+	return s.policy, s.availableErr
+}
+func (s *privacyHandlerStore) Subjects(context.Context, uuid.UUID) ([]dbgen.User, error) {
+	return s.subjects, s.subjectsErr
+}
+func (s *privacyHandlerStore) List(_ context.Context, _ uuid.UUID, management bool, status, deadline, order string) ([]dbgen.DataErasureRequest, error) {
+	s.listManagement, s.listStatus, s.listDeadline, s.listOrder = management, status, deadline, order
+	return s.list, s.listErr
+}
 func (s *privacyHandlerStore) View(context.Context, uuid.UUID, uuid.UUID, bool) (pr.View, error) {
 	return s.view, s.viewErr
+}
+func (s *privacyHandlerStore) Submit(_ context.Context, in pr.SubmitInput) (dbgen.DataErasureRequest, error) {
+	s.submitInput = in
+	return s.submitResult, s.submitErr
 }
 func (s *privacyHandlerStore) Change(_ context.Context, in pr.ReviewInput) (dbgen.DataErasureRequest, error) {
 	s.changeInput = in
 	return s.view.Record, s.changeErr
 }
 func privacyHandlerRequest(method, path string, form url.Values) *http.Request {
+	return privacyHandlerRequestFor(method, path, form, CurrentUser{ID: uuid.New(), Name: "Current person"})
+}
+func privacyHandlerRequestFor(method, path string, form url.Values, user CurrentUser) *http.Request {
 	r := httptest.NewRequest(method, path, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.SetPathValue("ref", "11000000-0000-0000-0000-000000000001")
-	return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Current person"}))
+	return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, user))
 }
 func privacyHandlerFixture(t *testing.T) *privacyHandlerStore {
 	t.Helper()
@@ -43,12 +73,407 @@ func privacyHandlerFixture(t *testing.T) *privacyHandlerStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &privacyHandlerStore{view: pr.View{
+	policy := pr.AdoptedPolicy{Version: "private-policy", AccountClosureEnabled: true, Categories: []pr.CatalogueEntry{{Key: "alpha", Label: "Protected category", Description: "Protected description", Grounds: []pr.Ground{{Code: "hold", Label: "Approved preservation ground"}}}}}
+	return &privacyHandlerStore{policy: policy, subjects: []dbgen.User{{ID: uuid.New(), Name: "Current person"}}, view: pr.View{
 		Record:  dbgen.DataErasureRequest{PublicRef: uuid.MustParse("11000000-0000-0000-0000-000000000001"), Version: 7, Status: "REFUSED", ScopeKind: "CATEGORIES", Categories: []string{"alpha"}, CategoryDecisions: decisions, DecisionExplanation: "Protected explanation", ReceivedAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), Valid: true}},
 		Subject: dbgen.User{ID: uuid.New(), Name: "Protected subject"}, Requester: dbgen.User{ID: uuid.New(), Name: "Protected requester"},
-		Policy: pr.AdoptedPolicy{Version: "private-policy", Categories: []pr.CatalogueEntry{{Key: "alpha", Label: "Protected category", Grounds: []pr.Ground{{Code: "hold", Label: "Approved preservation ground"}}}}},
+		Policy: policy,
 	}}
 }
+
+type privacyBrokenBody struct{}
+
+func (privacyBrokenBody) Read([]byte) (int, error) { return 0, errors.New("broken request body") }
+
+func TestPrivacyIndexStatesFiltersAndFailures(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	overdueRef, soonRef, terminalRef := uuid.New(), uuid.New(), uuid.New()
+	rows := []dbgen.DataErasureRequest{
+		{PublicRef: overdueRef, Status: "UNDER_REVIEW", ReceivedAt: privacyTestStamp(now.AddDate(0, 0, -10)), DueAt: privacyTestStamp(now.Add(-time.Hour))},
+		{PublicRef: soonRef, Status: "RECEIVED", ReceivedAt: privacyTestStamp(now.AddDate(0, 0, -2)), DueAt: privacyTestStamp(now.AddDate(0, 0, 20)), ExtendedDueAt: privacyTestStamp(now.AddDate(0, 0, 2))},
+		{PublicRef: terminalRef, Status: "REFUSED", ReceivedAt: privacyTestStamp(now.AddDate(0, 0, -20)), DueAt: privacyTestStamp(now.AddDate(0, 0, -10))},
+	}
+	t.Run("management deadline views use extended deadline and terminal safety", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, deadline, wantRef, warning string
+		}{
+			{"overdue", "overdue", overdueRef.String(), "Prazo ultrapassado"},
+			{"soon", "soon", soonRef.String(), "Prazo nos próximos 7 dias"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := privacyHandlerFixture(t)
+				s.list = rows
+				w := httptest.NewRecorder()
+				r := privacyHandlerRequest(http.MethodGet, "/admin/privacidade?status=UNDER_REVIEW&deadline="+tc.deadline+"&order=received", nil)
+				PrivacyRequests{Service: s, Now: func() time.Time { return now }}.Index(w, r)
+				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.wantRef) || !strings.Contains(w.Body.String(), tc.warning) || strings.Contains(w.Body.String(), terminalRef.String()) {
+					t.Fatalf("unexpected filtered queue status=%d body=%s", w.Code, w.Body.String())
+				}
+				if !s.listManagement || s.listStatus != "UNDER_REVIEW" || s.listDeadline != tc.deadline || s.listOrder != "received" {
+					t.Fatalf("filters not forwarded: management=%v status=%q deadline=%q order=%q", s.listManagement, s.listStatus, s.listDeadline, s.listOrder)
+				}
+			})
+		}
+	})
+	t.Run("member can start available request", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		s.list = rows[2:]
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s}.Index(w, privacyHandlerRequest(http.MethodGet, "/perfil/privacidade", nil))
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Novo pedido") || !strings.Contains(w.Body.String(), "/perfil/privacidade/"+terminalRef.String()) || s.listManagement {
+			t.Fatalf("member index status=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("minor sees rights without loading case data", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		u := CurrentUser{ID: uuid.New(), Name: "Young person", IsDependent: true}
+		PrivacyRequests{Service: &privacyHandlerStore{}}.Index(w, privacyHandlerRequestFor(http.MethodGet, "/perfil/privacidade", nil, u))
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Os teus direitos") {
+			t.Fatalf("minor page status=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	for _, tc := range []struct {
+		name, query string
+	}{
+		{"bad status", "status=UNKNOWN"}, {"bad deadline", "deadline=later"}, {"bad order", "order=newest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: privacyHandlerFixture(t)}.Index(w, privacyHandlerRequest(http.MethodGet, "/admin/privacidade?"+tc.query, nil))
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Pedido recusado") {
+				t.Fatalf("invalid filter status=%d", w.Code)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"hidden policy failure", pr.ErrPolicyUnresolved, http.StatusNotFound},
+		{"internal list failure", errors.New("list unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			s.listErr = tc.err
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.Index(w, privacyHandlerRequest(http.MethodGet, "/perfil/privacidade", nil))
+			if w.Code != tc.want {
+				t.Fatalf("failure status=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrivacyNewLoadsApprovedSubjectsAndFailsClosed(t *testing.T) {
+	t.Run("renders adopted catalogue", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		s.subjects = []dbgen.User{{ID: uuid.New(), Name: "Adult member"}, {ID: uuid.New(), Name: "Dependent member"}}
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s, ContactURL: "/legal/privacy-contact"}.New(w, privacyHandlerRequest(http.MethodGet, "/perfil/privacidade/novo", nil))
+		for _, want := range []string{"Adult member", "Dependent member", "Protected category", "Protected description", "private-policy", "Encerramento da conta"} {
+			if !strings.Contains(w.Body.String(), want) {
+				t.Errorf("new request page missing %q", want)
+			}
+		}
+		if w.Code != http.StatusOK {
+			t.Fatalf("new page status=%d", w.Code)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		set  func(*privacyHandlerStore)
+		want int
+	}{
+		{"unavailable policy", func(s *privacyHandlerStore) { s.availableErr = pr.ErrPolicyUnresolved }, http.StatusNotFound},
+		{"subject lookup failure", func(s *privacyHandlerStore) { s.subjectsErr = errors.New("subjects unavailable") }, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			tc.set(s)
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.New(w, privacyHandlerRequest(http.MethodGet, "/perfil/privacidade/novo", nil))
+			if w.Code != tc.want {
+				t.Fatalf("new failure status=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrivacySubmitValidationErrorsAndSuccess(t *testing.T) {
+	actor, subject, requestKey, resultRef := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	valid := url.Values{"subject_id": {subject.String()}, "request_key": {requestKey.String()}, "scope_kind": {"CATEGORIES"}, "categories": {"alpha"}, "password": {"current password"}, "policy_version": {"private-policy"}}
+	t.Run("malformed request body is rejected", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/perfil/privacidade/novo", privacyBrokenBody{})
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.Submit(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("malformed body status=%d", w.Code)
+		}
+	})
+	t.Run("invalid identifiers preserve selected values", func(t *testing.T) {
+		form := clonePrivacyValues(valid)
+		form.Set("subject_id", "not-a-uuid")
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.Submit(w, privacyHandlerRequestFor(http.MethodPost, "/perfil/privacidade/novo", form, CurrentUser{ID: actor}))
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Selecione uma pessoa") || !strings.Contains(w.Body.String(), "checked") {
+			t.Fatalf("invalid identifiers status=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("unavailable policy fails closed", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		s.availableErr = pr.ErrPolicyUnresolved
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s}.Submit(w, privacyHandlerRequestFor(http.MethodPost, "/perfil/privacidade/novo", valid, CurrentUser{ID: actor}))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("unavailable policy status=%d", w.Code)
+		}
+	})
+	for _, tc := range []struct {
+		name, scope string
+		err         error
+		wantStatus  int
+		wantMessage string
+		categories  []string
+	}{
+		{"rate limited", "CATEGORIES", pr.ErrRateLimited, http.StatusTooManyRequests, "Aguarde 15 minutos", []string{"alpha"}},
+		{"authentication denied", "CATEGORIES", pr.ErrForbidden, http.StatusUnprocessableEntity, "Não foi possível confirmar", []string{"alpha"}},
+		{"duplicate", "CATEGORIES", pr.ErrDuplicate, http.StatusUnprocessableEntity, "Já existe um pedido ativo", []string{"alpha"}},
+		{"missing categories", "CATEGORIES", pr.ErrInvalid, http.StatusUnprocessableEntity, "Selecione pelo menos uma categoria", nil},
+		{"invalid scope", "UNKNOWN", pr.ErrInvalid, http.StatusUnprocessableEntity, "Reveja o âmbito", []string{"alpha"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			s.submitErr = tc.err
+			form := clonePrivacyValues(valid)
+			form.Set("scope_kind", tc.scope)
+			form.Del("categories")
+			for _, category := range tc.categories {
+				form.Add("categories", category)
+			}
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.Submit(w, privacyHandlerRequestFor(http.MethodPost, "/perfil/privacidade/novo", form, CurrentUser{ID: actor}))
+			if w.Code != tc.wantStatus || !strings.Contains(w.Body.String(), tc.wantMessage) {
+				t.Fatalf("submit error status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.err == pr.ErrRateLimited && w.Header().Get("Retry-After") != "900" {
+				t.Fatal("rate limit omitted Retry-After")
+			}
+		})
+	}
+	t.Run("forwards authenticated actor session remote IP and scope", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		s.submitResult.PublicRef = resultRef
+		sessions := scs.New()
+		setup := httptest.NewRecorder()
+		sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			sessions.Put(r.Context(), "credential_version", int64(9))
+		})).ServeHTTP(setup, httptest.NewRequest(http.MethodGet, "/", nil))
+		cookie := setup.Result().Cookies()[0]
+		r := privacyHandlerRequestFor(http.MethodPost, "/perfil/privacidade/novo", valid, CurrentUser{ID: actor})
+		r.AddCookie(cookie)
+		r = r.WithContext(httpx.WithRemoteIP(r.Context(), netip.MustParseAddr("203.0.113.45")))
+		w := httptest.NewRecorder()
+		sessions.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			PrivacyRequests{Service: s, Sessions: sessions}.Submit(w, r)
+		})).ServeHTTP(w, r)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/perfil/privacidade/"+resultRef.String() {
+			t.Fatalf("success status=%d location=%q", w.Code, w.Header().Get("Location"))
+		}
+		if s.submitInput.ActorID != actor || s.submitInput.SubjectID != subject || s.submitInput.RequestKey != requestKey || s.submitInput.CredentialVersion != 9 || s.submitInput.IP != "203.0.113.45" || s.submitInput.PolicyVersion != "private-policy" || s.submitInput.Scope.Kind != pr.Categories || len(s.submitInput.Scope.Categories) != 1 || s.submitInput.Scope.Categories[0] != "alpha" {
+			t.Fatalf("submission not forwarded safely: %+v", s.submitInput)
+		}
+	})
+}
+
+func clonePrivacyValues(source url.Values) url.Values {
+	out := make(url.Values, len(source))
+	for key, values := range source {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
+func privacyTestStamp(at time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: at, Valid: true}
+}
+
+func TestPrivacyDetailReviewerStateHistoryAndFailures(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	actor := uuid.New()
+	t.Run("claimed verified representative exposes only valid reviewer controls", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		relationshipAt := privacyTestStamp(now.AddDate(0, 0, -1))
+		s.view.Record.Status = "UNDER_REVIEW"
+		s.view.Record.ScopeKind = string(pr.AccountClosure)
+		s.view.Record.Categories = nil
+		s.view.Record.ClaimedBy = &actor
+		s.view.Record.DueAt = privacyTestStamp(now.AddDate(0, 0, 3))
+		s.view.Record.IdentityVerifiedAt = privacyTestStamp(now)
+		s.view.Record.IdentityMethod = stringPointer("IN_PERSON")
+		s.view.Record.RepresentationVerifiedAt = privacyTestStamp(now)
+		s.view.Record.RepresentationMethod = stringPointer("DOCUMENT_CHECK")
+		s.view.Record.RepresentationRelationshipUpdatedAt = relationshipAt
+		s.view.Subject.ID = uuid.New()
+		s.view.Subject.UpdatedAt = relationshipAt
+		s.view.Requester.ID = uuid.New()
+		s.view.Policy.Categories = append(s.view.Policy.Categories, pr.CatalogueEntry{Key: "beta", Label: "Second category"})
+		dependant := dbgen.User{ID: uuid.New(), Name: "Dependent child", UpdatedAt: relationshipAt}
+		s.view.Dependants = []dbgen.User{dependant}
+		s.view.Resolutions = []dbgen.PrivacyRequestDependantResolution{{DependantID: dependant.ID, RelationshipUpdatedAt: relationshipAt, VerifiedAt: privacyTestStamp(now)}}
+		s.view.Events = []dbgen.DataErasureRequestEvent{{Action: "RECEIVED", OccurredAt: privacyTestStamp(now.Add(-time.Hour))}, {Action: "FUTURE_EVENT", OccurredAt: privacyTestStamp(now)}}
+		w := httptest.NewRecorder()
+		r := privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil, CurrentUser{ID: actor, Name: "Reviewer"})
+		PrivacyRequests{Service: s, Now: func() time.Time { return now }}.Detail(w, r)
+		for _, want := range []string{"Encerramento da conta", "Guardar verificação", "Aprovar apagamento", "Prorrogar o prazo", "Dependent child", "Resolução verificada", "Pedido recebido", "Pedido atualizado", "Second category"} {
+			if !strings.Contains(w.Body.String(), want) {
+				t.Errorf("review detail missing %q", want)
+			}
+		}
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "Assumir análise") {
+			t.Fatalf("review detail status=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("unclaimed case can be claimed and extended due date is displayed", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		s.view.Record.Status = "RECEIVED"
+		s.view.Record.ClaimedBy = nil
+		s.view.Record.DueAt = privacyTestStamp(now.AddDate(0, 0, 2))
+		s.view.Record.ExtendedDueAt = privacyTestStamp(now.AddDate(0, 1, 2))
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s, Now: func() time.Time { return now }}.Detail(w, privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil, CurrentUser{ID: actor}))
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Assumir análise") || !strings.Contains(w.Body.String(), privacyDate(s.view.Record.ExtendedDueAt.Time)) {
+			t.Fatalf("claim detail status=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	for _, tc := range []struct {
+		name      string
+		configure func(*privacyHandlerStore, *http.Request)
+		want      int
+	}{
+		{"invalid reference", func(_ *privacyHandlerStore, r *http.Request) { r.SetPathValue("ref", "invalid") }, http.StatusNotFound},
+		{"internal lookup failure", func(s *privacyHandlerStore, _ *http.Request) { s.viewErr = errors.New("view unavailable") }, http.StatusInternalServerError},
+		{"invalid stored decisions", func(s *privacyHandlerStore, _ *http.Request) { s.view.Record.CategoryDecisions = []byte("{") }, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			r := privacyHandlerRequest(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil)
+			tc.configure(s, r)
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.Detail(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("detail failure status=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrivacyChangeParsesActionsRedirectsAndHandlesFailures(t *testing.T) {
+	actor, dependant, related := uuid.New(), uuid.New(), uuid.New()
+	fullForm := url.Values{
+		"version":                    {"7"},
+		"action":                     {"partial"},
+		"policy_version":             {"private-policy"},
+		"identity_method":            {"IN_PERSON"},
+		"representation_method":      {"DOCUMENT_CHECK"},
+		"identity_verified":          {"yes"},
+		"representation_verified":    {"yes"},
+		"conflict":                   {"yes"},
+		"explanation":                {"Reviewed category decisions."},
+		"extension_months":           {"2"},
+		"extension_reason":           {"COMPLEXITY"},
+		"dependant_id":               {dependant.String()},
+		"related_ref":                {related.String()},
+		"resolution_code":            {"FORMAL_RESOLUTION"},
+		"resolution_explanation":     {"Verified independently."},
+		"outcome_alpha":              {"RETAIN"},
+		"ground_alpha":               {"hold"},
+		"outcome_ignored_duplicates": {"APPROVE", "RETAIN"},
+	}
+	t.Run("management action forwards every reviewed field", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s}.Change(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/11000000-0000-0000-0000-000000000001", fullForm, CurrentUser{ID: actor}))
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/privacidade/11000000-0000-0000-0000-000000000001" {
+			t.Fatalf("management redirect status=%d location=%q", w.Code, w.Header().Get("Location"))
+		}
+		in := s.changeInput
+		if in.ActorID != actor || in.Version != 7 || in.Action != "partial" || in.PolicyVersion != "private-policy" || in.IdentityMethod != "IN_PERSON" || in.RepresentationMethod != "DOCUMENT_CHECK" || !in.IdentityVerified || !in.RepresentationVerified || !in.Conflict || in.Explanation != "Reviewed category decisions." || in.ExtensionMonths != 2 || in.ExtensionReason != "COMPLEXITY" || in.DependantID != dependant || in.RelatedReference != related || in.ResolutionCode != "FORMAL_RESOLUTION" || in.ResolutionExplanation != "Verified independently." || in.Decisions["alpha"].Ground != "hold" {
+			t.Fatalf("review input not forwarded: %+v", in)
+		}
+		if _, exists := in.Decisions["ignored_duplicates"]; exists {
+			t.Fatal("ambiguous duplicate outcome was accepted")
+		}
+	})
+	t.Run("member route forces cancellation", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		form := url.Values{"version": {"7"}, "action": {"approve"}}
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: s}.Change(w, privacyHandlerRequestFor(http.MethodPost, "/perfil/privacidade/11000000-0000-0000-0000-000000000001/cancelar", form, CurrentUser{ID: actor}))
+		if w.Code != http.StatusSeeOther || s.changeInput.Action != "cancel" || w.Header().Get("Location") != "/perfil/privacidade/11000000-0000-0000-0000-000000000001" {
+			t.Fatalf("member cancellation status=%d input=%+v", w.Code, s.changeInput)
+		}
+	})
+	t.Run("malformed form is rejected before mutation", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/admin/privacidade/ref", privacyBrokenBody{})
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.Change(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("malformed change status=%d", w.Code)
+		}
+	})
+	for _, tc := range []struct {
+		name, ref, version string
+	}{
+		{"invalid reference", "not-a-uuid", "7"},
+		{"invalid version", uuid.NewString(), "seven"},
+		{"non-positive version", uuid.NewString(), "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := privacyHandlerRequest(http.MethodPost, "/admin/privacidade/invalid", url.Values{"version": {tc.version}})
+			r.SetPathValue("ref", tc.ref)
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: privacyHandlerFixture(t)}.Change(w, r)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("invalid change status=%d", w.Code)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, message string
+		err           error
+		want          int
+	}{
+		{"forbidden mutation is hidden", "Página não encontrada", pr.ErrForbidden, http.StatusNotFound},
+		{"closure safeguard explains correction", "Resolva os dependentes", pr.ErrClosureSafeguards, http.StatusUnprocessableEntity},
+		{"validation failure redisplays case", "Não foi possível guardar", pr.ErrInvalid, http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			s.changeErr = tc.err
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.Change(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/11000000-0000-0000-0000-000000000001", fullForm, CurrentUser{ID: actor}))
+			if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.message) {
+				t.Fatalf("change failure status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestPrivacyEventLabelsUseStablePublicCopy(t *testing.T) {
+	if got := privacyEventLabel("APPROVED"); got != "Aprovado — a aguardar execução" {
+		t.Fatalf("approved label=%q", got)
+	}
+	if got := privacyEventLabel("FUTURE_EVENT"); got != "Pedido atualizado" {
+		t.Fatalf("unknown event label=%q", got)
+	}
+}
+
+func stringPointer(value string) *string { return &value }
 func TestPrivacyDetailRendersSavedDecisionAndApprovedGround(t *testing.T) {
 	s := privacyHandlerFixture(t)
 	r := privacyHandlerRequest(http.MethodGet, "/perfil/privacidade/11000000-0000-0000-0000-000000000001", nil)

@@ -66,6 +66,32 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	}
 }
 
+func TestPrivacyReviewerNavigationIsCapabilityScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		user CurrentUser
+		want bool
+	}{
+		{name: "ordinary member", user: CurrentUser{}},
+		{name: "privacy reviewer", user: CurrentUser{CanReviewPrivacy: true}, want: true},
+		{name: "administrator without reviewer grant", user: CurrentUser{IsAdmin: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found := false
+			for _, group := range dashboardNavigation(tc.user) {
+				for _, item := range group.Items {
+					if item.Path == "/admin/privacidade" {
+						found = true
+					}
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("privacy navigation=%v want=%v", found, tc.want)
+			}
+		})
+	}
+}
+
 func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
 	labels := strings.Join(dashboardCapabilities(user), ",")
