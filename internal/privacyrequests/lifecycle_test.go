@@ -99,7 +99,7 @@ func TestDecisionRejectsUnsafeFactsWithoutChangingCase(t *testing.T) {
 	}
 }
 
-func TestApprovalPreservesReceiptAndCannotStartExecution(t *testing.T) {
+func TestApprovalPreservesReceiptAndRequiresIndependentReadyExecutor(t *testing.T) {
 	c, cmd := fixture(t, false)
 	result, err := Transition(c, cmd)
 	if err != nil {
@@ -121,15 +121,104 @@ func TestApprovalPreservesReceiptAndCannotStartExecution(t *testing.T) {
 	}
 	cmd.ExpectedVersion = approved.Version
 	cmd.Action = StartProcessing
+	cmd.Actor = Actor{ID: uuid.New(), Active: true, PrivacyExecutor: true}
 	if _, err = Transition(approved, cmd); !errors.Is(err, ErrExecutorUnavailable) {
 		t.Fatalf("unexpected executor result: %v", err)
 	}
+	cmd.ExecutionReady = true
+	processing, err := Transition(approved, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processing.Case.Status != Processing || processing.Case.Version != 3 || !processing.Case.ClosedAt.IsZero() {
+		t.Fatalf("incorrect processing handoff: %+v", processing.Case)
+	}
+	for _, actor := range []Actor{
+		{ID: approved.RequesterID, Active: true, PrivacyExecutor: true},
+		{ID: approved.SubjectID, Active: true, PrivacyExecutor: true},
+		{ID: *approved.DecidedBy, Active: true, PrivacyExecutor: true},
+		{ID: uuid.New(), Active: true},
+	} {
+		blocked := cmd
+		blocked.Actor = actor
+		if _, err := Transition(approved, blocked); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("actor %+v started execution: %v", actor, err)
+		}
+	}
 	cmd.Action = Approve
+	cmd.Actor = Actor{ID: *approved.DecidedBy, Active: true, PrivacyReviewer: true}
 	if _, err = Transition(approved, cmd); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("repeat approval accepted: %v", err)
 	}
 	if c.Status != Received || c.DecisionPolicy != nil {
 		t.Fatal("approval modified original receipt")
+	}
+}
+
+func TestProcessingHandoffFailsClosedOnChangedFacts(t *testing.T) {
+	c, cmd := fixture(t, true)
+	approved, err := Transition(c, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := Command{
+		Action: StartProcessing, ExpectedVersion: approved.Case.Version,
+		Actor:        Actor{ID: uuid.New(), Active: true, PrivacyExecutor: true},
+		Verification: approvedVerification(true), Safeguards: ClosureSafeguards{DependantsResolved: true, PreservesAdministrator: true},
+		ExecutionReady: true, At: cmd.At.Add(time.Hour),
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*Command)
+		want   error
+	}{
+		{name: "stale request", change: func(in *Command) { in.ExpectedVersion-- }, want: ErrStaleVersion},
+		{name: "identity changed", change: func(in *Command) { in.Verification.IdentityVerified = false }, want: ErrVerification},
+		{name: "relationship changed", change: func(in *Command) { in.Verification.CurrentRelationship = false }, want: ErrVerification},
+		{name: "dependant unresolved", change: func(in *Command) { in.Safeguards.DependantsResolved = false }, want: ErrClosureSafeguards},
+		{name: "last administrator", change: func(in *Command) { in.Safeguards.PreservesAdministrator = false }, want: ErrClosureSafeguards},
+		{name: "capability graph unavailable", change: func(in *Command) { in.ExecutionReady = false }, want: ErrExecutorUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := start
+			test.change(&candidate)
+			if _, err := Transition(approved.Case, candidate); !errors.Is(err, test.want) {
+				t.Fatalf("error=%v want=%v", err, test.want)
+			}
+		})
+	}
+}
+
+func approvedVerification(representative bool) Verification {
+	return Verification{IdentityVerified: true, CurrentRelationship: representative, RepresentationVerified: representative}
+}
+
+func TestProcessingAndFailureStatesRemainOpenAndCannotBeCancelledOrRestarted(t *testing.T) {
+	c, cmd := fixture(t, false)
+	approved, err := Transition(c, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := Command{Action: StartProcessing, ExpectedVersion: approved.Case.Version, Actor: Actor{ID: uuid.New(), Active: true, PrivacyExecutor: true}, Verification: approvedVerification(false), Safeguards: ClosureSafeguards{DependantsResolved: true, PreservesAdministrator: true}, ExecutionReady: true, At: cmd.At.Add(time.Hour)}
+	processing, err := Transition(approved.Case, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []Status{Processing, RetryableFailed, TerminalFailed} {
+		open := processing.Case
+		open.Status = status
+		if !open.valid() || !open.ClosedAt.IsZero() || !open.EvidenceExpiresAt.IsZero() {
+			t.Fatalf("state %s is not a valid open obligation: %+v", status, open)
+		}
+		cancel := Command{Action: Cancel, ExpectedVersion: open.Version, Actor: Actor{ID: open.RequesterID, Active: true}, At: start.At.Add(time.Hour)}
+		if _, err := Transition(open, cancel); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("state %s accepted cancellation: %v", status, err)
+		}
+		start.ExpectedVersion = open.Version
+		start.At = cancel.At
+		if _, err := Transition(open, start); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("state %s accepted duplicate start: %v", status, err)
+		}
 	}
 }
 

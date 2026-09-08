@@ -166,6 +166,13 @@ awk '
 grep -q 'reverse_proxy app-blue:8080' "$success_case/state/caddy-upstream.caddy"
 grep -q '^MYCFC_IMAGE=.*bbbbbbbb' "$success_case/mycfc.env"
 grep -q -- '--profile blue up -d --no-deps --force-recreate app-blue' "$success_case/docker.log"
+awk '
+	/run --rm db-bootstrap$/ { bootstrap = NR }
+	/run --rm migrate$/ { migrated = NR }
+	/run --rm db-bootstrap harden-db$/ { hardened = NR }
+	/--profile blue up -d --no-deps --force-recreate app-blue$/ { candidate = NR }
+	END { exit !(bootstrap < migrated && migrated < hardened && hardened < candidate) }
+' "$success_case/docker.log"
 grep -q 'exec -T caddy caddy reload' "$success_case/docker.log"
 grep -q "^mycfc-release|$success_case/release-aws/credentials$" "$success_case/aws.log"
 if grep -q 'cloudflared' "$success_case/docker.log"; then

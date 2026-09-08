@@ -14,6 +14,10 @@ type PrivacyCategory struct {
 }
 type PrivacyRequestItem struct{ Reference, ReceivedAt, Status, URL, DueAt, DeadlineWarning string }
 type PrivacyHistoryItem struct{ At, Label, Explanation string }
+type PrivacyExecutionPlanItem struct {
+	Category, CategoryLabel, Disposition, Owner, DueAt string
+	Operations                                         []string
+}
 type PrivacyRequestsPage struct {
 	Meta                                         components.PageMeta
 	Management, MinorRights, CanSubmit           bool
@@ -37,13 +41,16 @@ type PrivacyDependant struct {
 type PrivacyRequestDetailPage struct {
 	Meta                                                                                                                          components.PageMeta
 	Reference, ReceivedAt, Status, Version, SubjectName, RequesterName, ScopeLabel, PolicyVersion, DueAt, Explanation, ContactURL string
-	Management, SafeReceipt, CanCancel, CanClaim, CanVerify, CanDecide, CanExtend                                                 bool
+	Management, SafeReceipt, CanCancel, CanClaim, CanVerify, CanDecide, CanExtend, CanViewExecution, CanExecute                   bool
 	IdentityVerified, RepresentationVerified, ConflictFlag, Representative                                                        bool
 	IdentityMethod, RepresentationMethod, Success, Conflict                                                                       string
 	IdentityMethods, RepresentationMethods, ResolutionOptions                                                                     []PrivacyOption
 	Categories                                                                                                                    []PrivacyCategory
 	Dependants                                                                                                                    []PrivacyDependant
 	History                                                                                                                       []PrivacyHistoryItem
+	ExecutionPlan                                                                                                                 []PrivacyExecutionPlanItem
+	ExecutionBlockers                                                                                                             []string
+	ExecutionStatus                                                                                                               string
 	Errors                                                                                                                        validation.FieldErrors
 }
 
@@ -65,6 +72,14 @@ func privacyStatus(status string) string {
 		return "Aprovado — a aguardar execução"
 	case "PARTIALLY_APPROVED":
 		return "Parcialmente aprovado — a aguardar execução"
+	case "PROCESSING":
+		return "Em processamento"
+	case "RETRYABLE_FAILED":
+		return "Execução interrompida — nova tentativa pendente"
+	case "TERMINAL_FAILED":
+		return "Execução bloqueada — intervenção necessária"
+	case "COMPLETED":
+		return "Concluído"
 	case "REFUSED":
 		return "Recusado"
 	case "CANCELLED":
@@ -121,6 +136,9 @@ func privacyDetailErrors(page PrivacyRequestDetailPage) []components.FieldError 
 			}
 		}
 		if page.CanExtend && (key == "extension_months" || key == "extension_reason") {
+			field = key
+		}
+		if page.CanExecute && key == "execution_confirmed" {
 			field = key
 		}
 		items = append(items, components.FieldError{Field: field, Message: page.Errors[key]})

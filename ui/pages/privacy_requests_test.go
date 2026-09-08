@@ -98,6 +98,42 @@ func TestPrivacyReviewerControlsAreVersionedAndCapabilityGated(t *testing.T) {
 	}
 }
 
+func TestPrivacyExecutorControlShowsImmutablePlanAndExplicitConfirmation(t *testing.T) {
+	page := PrivacyRequestDetailPage{Meta: privacyCSRF(), Reference: "opaque", Version: "9", Status: "AWAITING_EXECUTION", Management: true, CanViewExecution: true, CanExecute: true, ExecutionPlan: []PrivacyExecutionPlanItem{{CategoryLabel: "Perfil", Disposition: "DELETE", Owner: "PRIVACY", Operations: []string{"PROFILE_IDENTITY_DELETE"}}}}
+	body := privacyRender(t, privacyRequestDetailContent(page))
+	for _, want := range []string{"Plano de execução aprovado", "Perfil", "DELETE", "Iniciar processamento", `action="/admin/privacidade/opaque/executar"`, `name="execution_confirmed" value="yes" required`, `name="version" value="9"`, "csrf-proof"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("executor surface missing %q", want)
+		}
+	}
+	if strings.Contains(body, `value="claim"`) || strings.Contains(body, `value="approve"`) {
+		t.Fatal("executor surface exposed reviewer controls")
+	}
+	page.ExecutionStatus = "SUCCEEDED"
+	page.CanExecute = false
+	body = privacyRender(t, privacyRequestDetailContent(page))
+	if strings.Contains(body, "Concluído") || !strings.Contains(body, "SUCCEEDED") {
+		t.Fatal("technical success was presented as legal completion")
+	}
+}
+
+func TestPrivacyExecutorSurfaceListsCurrentBlockersWithoutStartControl(t *testing.T) {
+	page := PrivacyRequestDetailPage{
+		Meta: privacyCSRF(), Reference: "opaque", Version: "9", Status: "AWAITING_EXECUTION", Management: true, CanViewExecution: true,
+		ExecutionPlan:     []PrivacyExecutionPlanItem{{CategoryLabel: "Perfil", Disposition: "DELETE", Owner: "PRIVACY", Operations: []string{"PROFILE_IDENTITY_DELETE"}}},
+		ExecutionBlockers: []string{"Ainda não estão instaladas todas as operações exigidas pelo plano imutável.", "A execução permanece desativada até à validação operacional final."},
+	}
+	body := privacyRender(t, privacyRequestDetailContent(page))
+	for _, want := range []string{"Bloqueios atuais", `aria-label="Bloqueios atuais da execução"`, page.ExecutionBlockers[0], page.ExecutionBlockers[1]} {
+		if !strings.Contains(body, want) {
+			t.Errorf("blocked executor surface missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Iniciar processamento") || strings.Contains(body, `action="/admin/privacidade/opaque/executar"`) {
+		t.Fatal("blocked executor surface exposed irreversible start control")
+	}
+}
+
 func TestPrivacyQueueFiltersAndMinorRights(t *testing.T) {
 	page := PrivacyRequestsPage{Management: true, StatusFilter: "UNDER_REVIEW", StatusOptions: []PrivacyOption{{Value: "UNDER_REVIEW", Label: "Em análise"}}, DeadlineOptions: []PrivacyOption{{Value: "overdue", Label: "Ultrapassado"}}, OrderOptions: []PrivacyOption{{Value: "due", Label: "Prazo mais próximo"}}, Items: []PrivacyRequestItem{{Reference: "ref", DueAt: "08/09/2026", DeadlineWarning: "Prazo ultrapassado"}}}
 	body := privacyRender(t, privacyRequestsContent(page))
@@ -122,6 +158,8 @@ func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
 		"RECEIVED": "Recebido", "IDENTITY_NEEDED": "A aguardar verificação", "UNDER_REVIEW": "Em análise",
 		"IN_REVIEW": "Em análise", "AWAITING_EXECUTION": "Aprovado — a aguardar execução",
 		"PARTIALLY_APPROVED": "Parcialmente aprovado — a aguardar execução", "REFUSED": "Recusado",
+		"PROCESSING": "Em processamento", "RETRYABLE_FAILED": "Execução interrompida — nova tentativa pendente",
+		"TERMINAL_FAILED": "Execução bloqueada — intervenção necessária", "COMPLETED": "Concluído",
 		"CANCELLED": "Cancelado", "FUTURE": "FUTURE",
 	} {
 		if got := privacyStatus(status); got != want {
@@ -146,17 +184,17 @@ func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
 	if len(fields) != 2 || fields[0].Field != "password" || fields[1].Field != "privacy-request-form" {
 		t.Fatalf("new-form error targets=%+v", fields)
 	}
-	page := PrivacyRequestDetailPage{CanVerify: true, CanDecide: true, CanExtend: true, Representative: true,
+	page := PrivacyRequestDetailPage{CanVerify: true, CanDecide: true, CanExtend: true, CanExecute: true, Representative: true,
 		Categories: []PrivacyCategory{{Key: "photos"}}, Errors: validation.FieldErrors{
 			"identity_method": "identity", "representation_method": "representation", "explanation": "explanation",
 			"outcome_photos": "outcome", "ground_photos": "ground", "extension_months": "months",
-			"extension_reason": "reason", "unexpected": "unexpected",
+			"extension_reason": "reason", "execution_confirmed": "confirmation", "unexpected": "unexpected",
 		}}
 	targets := map[string]bool{}
 	for _, item := range privacyDetailErrors(page) {
 		targets[item.Field] = true
 	}
-	for _, want := range []string{"identity_method", "representation_method", "explanation", "outcome_photos", "ground_photos", "extension_months", "extension_reason", "privacy-receipt"} {
+	for _, want := range []string{"identity_method", "representation_method", "explanation", "outcome_photos", "ground_photos", "extension_months", "extension_reason", "execution_confirmed", "privacy-receipt"} {
 		if !targets[want] {
 			t.Errorf("detail error target missing %q: %+v", want, targets)
 		}

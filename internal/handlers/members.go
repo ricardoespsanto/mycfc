@@ -139,7 +139,7 @@ func (h Members) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if form.Dependent {
 		guardianID, _ := uuid.Parse(form.GuardianID)
-		_, err := h.Store.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{Name: form.Name, GuardianID: &guardianID, DateOfBirth: pgtype.Date{Time: parseMemberDate(form.DateOfBirth), Valid: true}})
+		_, err := h.Store.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{Name: form.Name, GuardianID: guardianID, DateOfBirth: pgtype.Date{Time: parseMemberDate(form.DateOfBirth), Valid: true}})
 		if err != nil {
 			h.System.InternalError(w, r)
 			return

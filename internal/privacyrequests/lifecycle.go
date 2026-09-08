@@ -1,5 +1,5 @@
-// Package privacyrequests defines the unexposed request-review foundation.
-// It performs no persistence, authorization lookup, account mutation or erasure.
+// Package privacyrequests defines the privacy-request review and durable
+// execution-handoff domain rules. It performs no persistence by itself.
 // Callers must load trusted, current facts for the exact case inside a transaction,
 // enforce version compare-and-swap, and persist the case and event atomically.
 // Facts must never be populated from browser-submitted claims. Public activation
@@ -33,6 +33,10 @@ const (
 	UnderReview       Status = "UNDER_REVIEW"
 	PartiallyApproved Status = "PARTIALLY_APPROVED"
 	AwaitingExecution Status = "AWAITING_EXECUTION"
+	Processing        Status = "PROCESSING"
+	RetryableFailed   Status = "RETRYABLE_FAILED"
+	TerminalFailed    Status = "TERMINAL_FAILED"
+	Completed         Status = "COMPLETED"
 	Cancelled         Status = "CANCELLED"
 	Refused           Status = "REFUSED"
 )
@@ -71,24 +75,27 @@ type Policy struct {
 }
 
 type Case struct {
-	RequesterID       uuid.UUID
-	SubjectID         uuid.UUID
-	Scope             Scope
-	Status            Status
-	Version           int64
-	ReceivedAt        time.Time
-	UpdatedAt         time.Time
-	ClosedAt          time.Time
-	EvidenceExpiresAt time.Time
-	DecisionPolicy    *Policy
+	RequesterID        uuid.UUID
+	SubjectID          uuid.UUID
+	Scope              Scope
+	Status             Status
+	Version            int64
+	ReceivedAt         time.Time
+	UpdatedAt          time.Time
+	ClosedAt           time.Time
+	EvidenceExpiresAt  time.Time
+	DecisionPolicy     *Policy
+	DecidedBy          *uuid.UUID
+	CompletionVerified bool
 }
 
-// Actor capability is explicitly granted; ordinary administrator status cannot
-// substitute for PrivacyReviewer. Active is rechecked on every operation.
+// Actor capabilities are explicitly granted; ordinary administrator status
+// cannot substitute for either capability. Active is rechecked on every action.
 type Actor struct {
 	ID              uuid.UUID
 	Active          bool
 	PrivacyReviewer bool
+	PrivacyExecutor bool
 }
 
 // Verification is case-specific. A current guardian relationship alone does not
@@ -125,6 +132,7 @@ type Command struct {
 	Verification    Verification
 	Safeguards      ClosureSafeguards
 	Policy          Policy
+	ExecutionReady  bool
 	At              time.Time
 }
 
@@ -166,17 +174,20 @@ func CanReview(c Case, actor Actor) bool {
 	return c.valid() && actor.ID != uuid.Nil && actor.Active && actor.PrivacyReviewer && actor.ID != c.RequesterID && actor.ID != c.SubjectID
 }
 
+// CanExecute enforces four-eyes control at the irreversible handoff boundary.
+func CanExecute(c Case, actor Actor) bool {
+	return c.valid() && actor.ID != uuid.Nil && actor.Active && actor.PrivacyExecutor && actor.ID != c.RequesterID && actor.ID != c.SubjectID && c.DecidedBy != nil && actor.ID != *c.DecidedBy
+}
+
 // CanDiscloseToRequester rechecks representation even for a previously approved
 // case. Initial acknowledgement, without protected case content, is separate.
 func CanDiscloseToRequester(c Case, actor Actor, v Verification) bool {
 	return c.valid() && actor.ID != uuid.Nil && actor.Active && actor.ID == c.RequesterID && verified(c, v)
 }
 
-// Transition has no account-access side effects. Approval only queues a decision
-// awaiting execution and never closes a case or starts its evidence-retention clock.
-// Execution is deliberately unavailable until #111 can atomically accept work,
-// disable account-closure authentication and revoke sessions. That executor must
-// recheck authorization, policy, representation and closure safeguards at handoff.
+// Transition has no side effects. Its START_PROCESSING result is valid only when
+// the persistence service applies it in the same transaction that creates and
+// verifies the complete work graph and, for account closure, cuts off access.
 func Transition(c Case, cmd Command) (Result, error) {
 	if !c.valid() || cmd.At.IsZero() || cmd.At.Before(c.UpdatedAt) {
 		return Result{}, ErrInvalid
@@ -193,6 +204,10 @@ func Transition(c Case, cmd Command) (Result, error) {
 		if c.RequesterID != c.SubjectID && (c.Status == AwaitingExecution || c.Status == PartiallyApproved) && !verified(c, cmd.Verification) {
 			return Result{}, ErrVerification
 		}
+	} else if cmd.Action == StartProcessing {
+		if !CanExecute(c, cmd.Actor) {
+			return Result{}, ErrForbidden
+		}
 	} else if !CanReview(c, cmd.Actor) {
 		return Result{}, ErrForbidden
 	}
@@ -202,11 +217,27 @@ func Transition(c Case, cmd Command) (Result, error) {
 	if c.Status == Cancelled || c.Status == Refused {
 		return Result{}, ErrInvalidTransition
 	}
+	if cmd.Action == Cancel && c.Status != Received && c.Status != UnderReview && c.Status != AwaitingExecution && c.Status != PartiallyApproved {
+		return Result{}, ErrInvalidTransition
+	}
 	if cmd.Action == StartProcessing {
 		if c.Status != AwaitingExecution && c.Status != PartiallyApproved {
 			return Result{}, ErrInvalidTransition
 		}
-		return Result{}, ErrExecutorUnavailable
+		if !verified(c, cmd.Verification) {
+			return Result{}, ErrVerification
+		}
+		if c.Scope.Kind == AccountClosure && (!cmd.Safeguards.DependantsResolved || !cmd.Safeguards.PreservesAdministrator) {
+			return Result{}, ErrClosureSafeguards
+		}
+		if !cmd.ExecutionReady {
+			return Result{}, ErrExecutorUnavailable
+		}
+		next := c.clone()
+		next.Status = Processing
+		next.Version++
+		next.UpdatedAt = cmd.At
+		return Result{Case: next, Event: Event{From: c.Status, To: Processing, Version: next.Version, At: cmd.At}}, nil
 	}
 	if cmd.Action != Cancel && c.Status != Received && c.Status != UnderReview {
 		return Result{}, ErrInvalidTransition
@@ -227,6 +258,8 @@ func Transition(c Case, cmd Command) (Result, error) {
 		}
 		policy := cmd.Policy.clone()
 		next.DecisionPolicy = &policy
+		decider := cmd.Actor.ID
+		next.DecidedBy = &decider
 		next.Status = AwaitingExecution
 		if cmd.Action == PartialApprove {
 			next.Status = PartiallyApproved
@@ -300,17 +333,19 @@ func (c Case) valid() bool {
 	}
 	switch c.Status {
 	case Received, UnderReview:
-		return c.DecisionPolicy == nil && c.ClosedAt.IsZero() && c.EvidenceExpiresAt.IsZero()
-	case AwaitingExecution, PartiallyApproved:
-		return c.DecisionPolicy != nil && c.DecisionPolicy.validFor(c.Scope) && c.ClosedAt.IsZero() && c.EvidenceExpiresAt.IsZero()
+		return c.DecisionPolicy == nil && c.DecidedBy == nil && c.ClosedAt.IsZero() && c.EvidenceExpiresAt.IsZero()
+	case AwaitingExecution, PartiallyApproved, Processing, RetryableFailed, TerminalFailed:
+		return c.DecisionPolicy != nil && c.DecisionPolicy.validFor(c.Scope) && c.DecidedBy != nil && *c.DecidedBy != uuid.Nil && !c.CompletionVerified && c.ClosedAt.IsZero() && c.EvidenceExpiresAt.IsZero()
+	case Completed:
+		return c.DecisionPolicy != nil && c.DecisionPolicy.validFor(c.Scope) && c.DecidedBy != nil && *c.DecidedBy != uuid.Nil && c.CompletionVerified && !c.ClosedAt.IsZero() && c.ClosedAt.Equal(c.UpdatedAt) && c.EvidenceExpiresAt.Equal(evidenceExpiry(c.ClosedAt))
 	case Cancelled, Refused:
 		if c.ClosedAt.IsZero() || !c.ClosedAt.Equal(c.UpdatedAt) || !c.EvidenceExpiresAt.Equal(evidenceExpiry(c.ClosedAt)) {
 			return false
 		}
 		if c.DecisionPolicy != nil {
-			return c.DecisionPolicy.validFor(c.Scope)
+			return c.DecidedBy != nil && *c.DecidedBy != uuid.Nil && c.DecisionPolicy.validFor(c.Scope)
 		}
-		return c.Status == Cancelled
+		return c.Status == Cancelled && c.DecidedBy == nil
 	default:
 		return false
 	}
@@ -332,6 +367,10 @@ func (c Case) clone() Case {
 	if c.DecisionPolicy != nil {
 		policy := c.DecisionPolicy.clone()
 		c.DecisionPolicy = &policy
+	}
+	if c.DecidedBy != nil {
+		decider := *c.DecidedBy
+		c.DecidedBy = &decider
 	}
 	return c
 }

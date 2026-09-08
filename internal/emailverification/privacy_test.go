@@ -45,7 +45,7 @@ func privacyDeliveryFixture(t *testing.T, kind string) (*deliveryStoreFake, []by
 }
 
 func TestPrivacyWorkerDeliversToSealedRecipientWithoutAccount(t *testing.T) {
-	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION"} {
+	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED"} {
 		t.Run(kind, func(t *testing.T) {
 			store, key, now := privacyDeliveryFixture(t, kind)
 			sender := &privacySenderFake{}
@@ -108,7 +108,7 @@ func TestPrivacyWorkerRetriesWithoutLoggingSensitiveSMTPError(t *testing.T) {
 }
 
 func TestPrivacyNotificationProvidesPublicContactWithoutDisclosingDecision(t *testing.T) {
-	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION"} {
+	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED"} {
 		subject, plain, rich, err := privacyNotificationMessage(kind, "https://mycfc.example/legal/direitos?lang=pt&source=email")
 		if err != nil || subject == "" {
 			t.Fatalf("notification construction failed: %v", err)
@@ -121,8 +121,11 @@ func TestPrivacyNotificationProvidesPublicContactWithoutDisclosingDecision(t *te
 				t.Fatal("notification disclosed case details or required a private route")
 			}
 		}
-		if kind == "PRIVACY_DECISION" && !strings.Contains(plain, "não confirma que os dados foram apagados") {
+		if (kind == "PRIVACY_DECISION" || kind == "PRIVACY_PROCESSING_STARTED") && !strings.Contains(plain, "não confirma que os dados foram apagados") {
 			t.Fatal("update message implies erasure completion")
+		}
+		if kind == "PRIVACY_PROCESSING_STARTED" && !strings.Contains(plain, "acesso à conta afetada pode ter terminado") {
+			t.Fatal("processing message omits the access consequence")
 		}
 	}
 	if _, _, _, err := privacyNotificationMessage("ARBITRARY", "https://mycfc.example/legal/direitos"); err == nil {

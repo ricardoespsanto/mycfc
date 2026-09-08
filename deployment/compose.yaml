@@ -80,6 +80,9 @@ services:
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
       MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
       MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      # Optional until #248 separately approves and provisions the worker.
+      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
+      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +99,12 @@ services:
       DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
       DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
       DB_SSLMODE: disable
+      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
+      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
+      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy

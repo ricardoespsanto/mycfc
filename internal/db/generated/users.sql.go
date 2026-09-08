@@ -105,6 +105,17 @@ func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams
 }
 
 const createDependentUser = `-- name: CreateDependentUser :one
+WITH privacy_guard AS (
+    SELECT pg_advisory_xact_lock(110, 110)
+), eligible_guardian AS (
+    SELECT guardian.id
+    FROM users guardian, privacy_guard
+    WHERE guardian.id = $1
+      AND guardian.is_active
+      AND NOT guardian.is_dependent
+      AND (guardian.date_of_birth IS NULL OR guardian.date_of_birth <= ((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date - INTERVAL '18 years')::date)
+    FOR UPDATE OF guardian
+), account AS (
 INSERT INTO users (
     name,
     email,
@@ -112,21 +123,23 @@ INSERT INTO users (
     guardian_id,
     is_dependent,
     date_of_birth
-) VALUES (
-    $1,
-    NULL,
-    NULL,
+) SELECT
     $2,
+    NULL,
+    NULL,
+    eligible_guardian.id,
     true,
     $3
-)
+FROM eligible_guardian
 RETURNING id, name, email, password_hash, guardian_id,
           is_dependent, date_of_birth, is_active, created_at, updated_at
+)
+SELECT id, name, email, password_hash, guardian_id, is_dependent, date_of_birth, is_active, created_at, updated_at FROM account
 `
 
 type CreateDependentUserParams struct {
+	GuardianID  uuid.UUID   `json:"guardian_id"`
 	Name        string      `json:"name"`
-	GuardianID  *uuid.UUID  `json:"guardian_id"`
 	DateOfBirth pgtype.Date `json:"date_of_birth"`
 }
 
@@ -144,7 +157,7 @@ type CreateDependentUserRow struct {
 }
 
 func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (CreateDependentUserRow, error) {
-	row := q.db.QueryRow(ctx, createDependentUser, arg.Name, arg.GuardianID, arg.DateOfBirth)
+	row := q.db.QueryRow(ctx, createDependentUser, arg.GuardianID, arg.Name, arg.DateOfBirth)
 	var i CreateDependentUserRow
 	err := row.Scan(
 		&i.ID,

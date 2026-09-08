@@ -33,7 +33,7 @@ WITH candidate AS (
   LEFT JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= sqlc.arg(claimed_at))
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < sqlc.arg(stale_before)))
-    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION') OR (
+    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION', 'PRIVACY_PROCESSING_STARTED') OR (
       COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > sqlc.arg(claimed_at)
     AND account.is_active = true AND account.is_dependent = false

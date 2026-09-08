@@ -30,6 +30,17 @@ SELECT id, name, email, password_hash, credential_version, guardian_id,
 FROM account;
 
 -- name: CreateDependentUser :one
+WITH privacy_guard AS (
+    SELECT pg_advisory_xact_lock(110, 110)
+), eligible_guardian AS (
+    SELECT guardian.id
+    FROM users guardian, privacy_guard
+    WHERE guardian.id = sqlc.arg(guardian_id)
+      AND guardian.is_active
+      AND NOT guardian.is_dependent
+      AND (guardian.date_of_birth IS NULL OR guardian.date_of_birth <= ((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date - INTERVAL '18 years')::date)
+    FOR UPDATE OF guardian
+), account AS (
 INSERT INTO users (
     name,
     email,
@@ -37,16 +48,18 @@ INSERT INTO users (
     guardian_id,
     is_dependent,
     date_of_birth
-) VALUES (
+) SELECT
     sqlc.arg(name),
     NULL,
     NULL,
-    sqlc.arg(guardian_id),
+    eligible_guardian.id,
     true,
     sqlc.arg(date_of_birth)
-)
+FROM eligible_guardian
 RETURNING id, name, email, password_hash, guardian_id,
-          is_dependent, date_of_birth, is_active, created_at, updated_at;
+          is_dependent, date_of_birth, is_active, created_at, updated_at
+)
+SELECT * FROM account;
 
 -- name: GetUserByID :one
 SELECT id, name, email, password_hash, guardian_id,

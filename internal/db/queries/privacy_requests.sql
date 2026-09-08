@@ -15,7 +15,10 @@ SELECT * FROM users WHERE guardian_id = sqlc.arg(guardian_id) ORDER BY id FOR UP
 
 -- name: CountPrivacyActiveAdministrators :one
 SELECT count(*) FROM users account JOIN user_platform_roles grant_row ON grant_row.user_id = account.id
-JOIN platform_roles role_row ON role_row.id = grant_row.role_id WHERE account.is_active AND role_row.code = 'ADMIN';
+JOIN platform_roles role_row ON role_row.id = grant_row.role_id
+WHERE account.is_active AND NOT account.is_dependent
+AND account.date_of_birth<=(((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
+AND account.email IS NOT NULL AND account.password_hash IS NOT NULL AND role_row.code = 'ADMIN';
 
 -- name: IsPrivacyAdministrator :one
 SELECT EXISTS(SELECT 1 FROM user_platform_roles grant_row JOIN platform_roles role_row ON role_row.id = grant_row.role_id WHERE grant_row.user_id = sqlc.arg(user_id) AND role_row.code = 'ADMIN');
@@ -88,6 +91,21 @@ UPDATE privacy_reviewer_grants SET revoked_by = sqlc.arg(revoked_by), revoked_at
 -- name: AppendPrivacyReviewerGrantEvent :exec
 INSERT INTO privacy_reviewer_grant_events(grant_id,actor_ref,action,occurred_at) VALUES(sqlc.arg(grant_id),sqlc.arg(actor_ref),sqlc.arg(action),sqlc.arg(occurred_at));
 
+-- name: GetPrivacyExecutorGrantForShare :one
+SELECT * FROM privacy_executor_grants WHERE user_id=sqlc.arg(user_id) AND revoked_at IS NULL FOR SHARE;
+
+-- name: GrantPrivacyExecutor :one
+INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at)
+VALUES(sqlc.arg(user_id),sqlc.arg(granted_by),sqlc.arg(granted_at)) RETURNING *;
+
+-- name: RevokePrivacyExecutor :one
+UPDATE privacy_executor_grants SET revoked_by=sqlc.arg(revoked_by),revoked_at=sqlc.arg(revoked_at)
+WHERE id=sqlc.arg(id) AND revoked_at IS NULL RETURNING *;
+
+-- name: AppendPrivacyExecutorGrantEvent :exec
+INSERT INTO privacy_executor_grant_events(grant_id,actor_ref,action,occurred_at)
+VALUES(sqlc.arg(grant_id),sqlc.arg(actor_ref),sqlc.arg(action),sqlc.arg(occurred_at));
+
 -- name: ListPrivacyDependantResolutions :many
 SELECT * FROM privacy_request_dependant_resolutions WHERE request_id = sqlc.arg(request_id) ORDER BY dependant_id;
 
@@ -111,3 +129,132 @@ ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enab
 -- name: AppendPrivacyActivationEvent :exec
 INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
 VALUES(sqlc.arg(policy_version),sqlc.arg(actor_ref),sqlc.arg(enabled),sqlc.arg(fulfilment_ready),sqlc.arg(occurred_at));
+
+-- name: LockPrivacyActiveAdministratorSet :exec
+SELECT pg_advisory_xact_lock(hashtextextended('mycfc-active-admin-set/v1',0));
+
+-- name: CountActiveUnindexedPrivacySessions :one
+SELECT count(*) FROM sessions WHERE NOT subject_indexed AND expiry>clock_timestamp();
+
+-- name: MarkPrivacySessionIndexed :execrows
+UPDATE sessions SET user_id=sqlc.narg(user_id),subject_indexed=true WHERE token=sqlc.arg(token);
+
+-- name: DeletePrivacySessionsByUser :execrows
+DELETE FROM sessions WHERE subject_indexed AND user_id=sqlc.arg(user_id);
+
+-- name: ExpireLegacyPrivacySessionsBy :execrows
+WITH authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at)
+UPDATE sessions SET expiry=authority_clock.occurred_at
+FROM authority_clock WHERE NOT sessions.subject_indexed AND sessions.expiry>authority_clock.occurred_at;
+
+-- name: CreatePrivacyErasureExecution :one
+INSERT INTO privacy_erasure_executions(request_id,plan_sha256,executor_version,schema_version,request_version_at_start,started_by_ref,accepted_at,updated_at)
+VALUES(sqlc.arg(request_id),sqlc.arg(plan_sha256),sqlc.arg(executor_version),sqlc.arg(schema_version),sqlc.arg(request_version_at_start),sqlc.arg(started_by_ref),sqlc.arg(accepted_at),sqlc.arg(accepted_at))
+RETURNING *;
+
+-- name: GetPrivacyErasureExecutionByRequest :one
+SELECT * FROM privacy_erasure_executions WHERE request_id=sqlc.arg(request_id);
+
+-- name: GetPrivacyErasureExecutionForUpdate :one
+SELECT * FROM privacy_erasure_executions WHERE id=sqlc.arg(id) FOR UPDATE;
+
+-- name: GetPrivacyErasureExecution :one
+SELECT * FROM privacy_erasure_executions WHERE id=sqlc.arg(id);
+
+-- name: CreatePrivacyErasureAccessRevocation :one
+INSERT INTO privacy_erasure_access_revocations(execution_id,grant_kind,capability_code,revoked_count,actor_ref,occurred_at)
+VALUES(sqlc.arg(execution_id),sqlc.arg(grant_kind),sqlc.arg(capability_code),sqlc.arg(revoked_count),sqlc.arg(actor_ref),sqlc.arg(occurred_at))
+RETURNING *;
+
+-- name: ListPrivacyErasureAccessRevocations :many
+SELECT * FROM privacy_erasure_access_revocations WHERE execution_id=sqlc.arg(execution_id) ORDER BY grant_kind,capability_code;
+
+-- name: CreatePrivacyErasureCategoryJob :one
+INSERT INTO privacy_erasure_category_jobs(execution_id,plan_entry_position,entry_sha256,category_key,purpose_code,next_attempt_at,created_at,updated_at)
+VALUES(sqlc.arg(execution_id),sqlc.arg(plan_entry_position),sqlc.arg(entry_sha256),sqlc.arg(category_key),sqlc.arg(purpose_code),sqlc.arg(next_attempt_at),sqlc.arg(created_at),sqlc.arg(created_at))
+RETURNING *;
+
+-- name: CreatePrivacyErasureJobCheckpoint :one
+INSERT INTO privacy_erasure_job_checkpoints(job_id,operation_position,operation_code,action_version,created_at)
+VALUES(sqlc.arg(job_id),sqlc.arg(operation_position),sqlc.arg(operation_code),sqlc.arg(action_version),sqlc.arg(created_at))
+RETURNING *;
+
+-- name: ListPrivacyErasureCategoryJobs :many
+SELECT * FROM privacy_erasure_category_jobs WHERE execution_id=sqlc.arg(execution_id) ORDER BY plan_entry_position;
+
+-- name: ListPrivacyErasureJobCheckpoints :many
+SELECT * FROM privacy_erasure_job_checkpoints WHERE job_id=sqlc.arg(job_id) ORDER BY operation_position;
+
+-- name: GetPrivacyErasureWorkSetCounts :one
+SELECT
+ (SELECT count(*) FROM privacy_erasure_category_jobs counted_job WHERE counted_job.execution_id=sqlc.arg(execution_ref))::bigint AS job_count,
+ (SELECT count(*) FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id WHERE job.execution_id=sqlc.arg(execution_ref))::bigint AS checkpoint_count;
+
+-- name: GetPrivacyErasureCategoryJob :one
+SELECT * FROM privacy_erasure_category_jobs WHERE id=sqlc.arg(id);
+
+-- name: GetPrivacyErasureJobLease :one
+SELECT * FROM privacy_erasure_job_leases WHERE id=sqlc.arg(id);
+
+-- name: GetPrivacyErasureJobCheckpoint :one
+SELECT * FROM privacy_erasure_job_checkpoints WHERE id=sqlc.arg(id);
+
+-- name: AuthorizePrivacyErasureJobLease :one
+SELECT lease.*
+FROM privacy_erasure_job_leases lease
+JOIN privacy_erasure_category_jobs job ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id
+WHERE job.id=sqlc.arg(job_id) AND lease.id=sqlc.arg(lease_id) AND attempt.id=sqlc.arg(attempt_id)
+AND lease.epoch=sqlc.arg(lease_epoch) AND lease.worker_ref=sqlc.arg(worker_ref)
+AND job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL
+AND lease.expires_at>clock_timestamp()
+FOR UPDATE OF job,lease,attempt;
+
+-- name: GetPrivacyRequestExecutionLifecycle :one
+SELECT id,status,version FROM data_erasure_requests WHERE id=sqlc.arg(id);
+
+-- name: CallPrivacyWorkerSync :one
+SELECT privacy_worker_sync(sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref))::uuid;
+
+-- name: TransitionPrivacyRequestExecutionStatus :one
+UPDATE data_erasure_requests SET status=sqlc.arg(to_status),version=version+1,
+closed_at=sqlc.narg(closed_at),evidence_expires_at=sqlc.narg(evidence_expires_at),working_expires_at=sqlc.narg(working_expires_at),updated_at=sqlc.arg(updated_at)
+WHERE id=sqlc.arg(id) AND version=sqlc.arg(expected_version) AND status=ANY(sqlc.arg(from_statuses)::text[])
+RETURNING *;
+
+-- name: DisablePrivacyAccountForExecution :one
+UPDATE users SET is_active=false,credential_version=credential_version+1,updated_at=sqlc.arg(disabled_at)
+WHERE id=sqlc.arg(user_id) AND is_active RETURNING *;
+
+-- name: RevokePrivacyPlatformRolesForExecution :many
+WITH removed AS (
+ DELETE FROM user_platform_roles assignment WHERE assignment.user_id=sqlc.arg(user_id) RETURNING assignment.role_id
+)
+SELECT role.code FROM removed JOIN platform_roles role ON role.id=removed.role_id ORDER BY role.code;
+
+-- name: RevokePrivacyStaffGrantsForExecution :many
+UPDATE staff_grants SET revoked_by_id=sqlc.arg(revoked_by_id),revoked_at=sqlc.arg(revoked_at),revoke_reason='PRIVACY_ACCOUNT_CLOSURE'
+WHERE user_id=sqlc.arg(user_id) AND revoked_at IS NULL RETURNING *;
+
+-- name: RevokePrivacyReviewerGrantsForExecution :many
+UPDATE privacy_reviewer_grants SET revoked_by=sqlc.arg(revoked_by),revoked_at=sqlc.arg(revoked_at)
+WHERE user_id=sqlc.arg(user_id) AND revoked_at IS NULL RETURNING *;
+
+-- name: RevokePrivacyExecutorGrantsForExecution :many
+UPDATE privacy_executor_grants SET revoked_by=sqlc.arg(revoked_by),revoked_at=sqlc.arg(revoked_at)
+WHERE user_id=sqlc.arg(user_id) AND revoked_at IS NULL RETURNING *;
+
+-- name: InvalidatePrivacyAccountTokens :one
+WITH verification AS (
+ UPDATE email_verification_tokens token SET consumed_at=GREATEST(sqlc.arg(invalidated_at),token.created_at)
+ WHERE token.user_id=sqlc.arg(subject_user_id) AND token.consumed_at IS NULL RETURNING token.id
+), reset AS (
+ UPDATE password_reset_tokens token SET consumed_at=GREATEST(sqlc.arg(invalidated_at),token.created_at)
+ WHERE token.user_id=sqlc.arg(subject_user_id) AND token.consumed_at IS NULL RETURNING token.id
+), cancelled AS (
+ UPDATE email_outbox SET status='CANCELLED',claimed_at=NULL,updated_at=sqlc.arg(invalidated_at)
+ WHERE status IN ('PENDING','SENDING') AND (verification_token_id IN (SELECT id FROM verification) OR password_reset_token_id IN (SELECT id FROM reset)) RETURNING id
+)
+SELECT (SELECT count(*) FROM verification)::bigint AS verification_tokens,
+       (SELECT count(*) FROM reset)::bigint AS reset_tokens,
+       (SELECT count(*) FROM cancelled)::bigint AS cancelled_deliveries;

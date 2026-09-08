@@ -55,6 +55,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 		mux.Handle("GET /admin/privacidade", auth.RequireAuthenticated(http.HandlerFunc(privacy.Index)))
 		mux.Handle("GET /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Detail)))
 		mux.Handle("POST /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Change)))
+		mux.Handle("POST /admin/privacidade/{ref}/executar", auth.RequireAuthenticated(http.HandlerFunc(privacy.StartExecution)))
 	}
 	mux.Handle("GET /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Get)))
 	mux.Handle("POST /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Post)))

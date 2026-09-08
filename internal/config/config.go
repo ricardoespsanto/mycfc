@@ -115,14 +115,15 @@ func (Secret) GoString() string { return "[REDACTED]" }
 func (s Secret) Value() string  { return string(s) }
 
 type Config struct {
-	PrivacyRequestsEnabled bool   `env:"PRIVACY_REQUESTS_ENABLED" envDefault:"false"`
-	AppEnv                 string `env:"APP_ENV,required"`
-	AppVersion             string `env:"APP_VERSION,required"`
-	GITSHA                 string `env:"GIT_SHA,required"`
-	AppReleasedAt          string `env:"APP_RELEASED_AT"`
-	ReleaseRepository      string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
-	Port                   int    `env:"PORT" envDefault:"8080"`
-	BaseURL                string `env:"BASE_URL"`
+	PrivacyRequestsEnabled           bool   `env:"PRIVACY_REQUESTS_ENABLED" envDefault:"false"`
+	PrivacyExecutionTestCapabilities string `env:"PRIVACY_EXECUTION_TEST_CAPABILITIES"`
+	AppEnv                           string `env:"APP_ENV,required"`
+	AppVersion                       string `env:"APP_VERSION,required"`
+	GITSHA                           string `env:"GIT_SHA,required"`
+	AppReleasedAt                    string `env:"APP_RELEASED_AT"`
+	ReleaseRepository                string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
+	Port                             int    `env:"PORT" envDefault:"8080"`
+	BaseURL                          string `env:"BASE_URL"`
 
 	DatabaseURL                 Secret `env:"DATABASE_URL"`
 	DBHost                      string `env:"DB_HOST"`
@@ -613,6 +614,9 @@ func (c Config) Validate() error {
 	if !slices.Contains([]string{"local", "test", "production"}, c.AppEnv) {
 		problems.Add("APP_ENV", "must be local, test or production")
 	}
+	if strings.TrimSpace(c.PrivacyExecutionTestCapabilities) != "" && c.AppEnv != "test" {
+		problems.Add("PRIVACY_EXECUTION_TEST_CAPABILITIES", "is allowed only when APP_ENV=test")
+	}
 	if strings.TrimSpace(c.AppVersion) == "" {
 		problems.Add("APP_VERSION", "must not be empty")
 	}
@@ -775,6 +779,9 @@ func (c Config) Validate() error {
 	}
 	if c.SessionIdleTimeout > c.SessionLifetime {
 		problems.Add("SESSION_IDLE_TIMEOUT", "must not exceed SESSION_LIFETIME")
+	}
+	if c.SessionLifetime > 12*time.Hour {
+		problems.Add("SESSION_LIFETIME", "must not exceed the approved 12 hour privacy boundary")
 	}
 	if c.MaxPhotoBytes < 1 {
 		problems.Add("MAX_PHOTO_BYTES", "must be greater than zero")

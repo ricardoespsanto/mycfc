@@ -35,6 +35,9 @@ type privacyHandlerStore struct {
 	submitInput                         pr.SubmitInput
 	changeErr                           error
 	changeInput                         pr.ReviewInput
+	startResult                         dbgen.PrivacyErasureExecution
+	startErr                            error
+	startInput                          pr.StartInput
 }
 
 func (s *privacyHandlerStore) Available(context.Context) (pr.AdoptedPolicy, error) {
@@ -58,6 +61,10 @@ func (s *privacyHandlerStore) Change(_ context.Context, in pr.ReviewInput) (dbge
 	s.changeInput = in
 	return s.view.Record, s.changeErr
 }
+func (s *privacyHandlerStore) StartExecution(_ context.Context, in pr.StartInput) (dbgen.PrivacyErasureExecution, error) {
+	s.startInput = in
+	return s.startResult, s.startErr
+}
 func privacyHandlerRequest(method, path string, form url.Values) *http.Request {
 	return privacyHandlerRequestFor(method, path, form, CurrentUser{ID: uuid.New(), Name: "Current person"})
 }
@@ -77,7 +84,7 @@ func privacyHandlerFixture(t *testing.T) *privacyHandlerStore {
 	return &privacyHandlerStore{policy: policy, subjects: []dbgen.User{{ID: uuid.New(), Name: "Current person"}}, view: pr.View{
 		Record:  dbgen.DataErasureRequest{PublicRef: uuid.MustParse("11000000-0000-0000-0000-000000000001"), Version: 7, Status: "REFUSED", ScopeKind: "CATEGORIES", Categories: []string{"alpha"}, CategoryDecisions: decisions, DecisionExplanation: "Protected explanation", ReceivedAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), Valid: true}},
 		Subject: dbgen.User{ID: uuid.New(), Name: "Protected subject"}, Requester: dbgen.User{ID: uuid.New(), Name: "Protected requester"},
-		Policy: policy,
+		Policy: policy, CanReview: true,
 	}}
 }
 
@@ -461,6 +468,125 @@ func TestPrivacyChangeParsesActionsRedirectsAndHandlesFailures(t *testing.T) {
 				t.Fatalf("change failure status=%d body=%s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestPrivacyExecutionUsesSeparateConfirmedExecutorAction(t *testing.T) {
+	actor := uuid.New()
+	s := privacyHandlerFixture(t)
+	s.view.CanReview = false
+	s.view.CanViewExecution = true
+	s.view.CanExecute = true
+	s.view.Record.Status = "AWAITING_EXECUTION"
+	s.view.Plan = &pr.ExecutionPlan{Entries: []pr.ExecutionPlanEntry{{Category: "alpha", Disposition: "DELETE", Owner: "PRIVACY", Operations: []string{"PROFILE_IDENTITY_DELETE"}}}}
+	w := httptest.NewRecorder()
+	PrivacyRequests{Service: s}.Detail(w, privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil, CurrentUser{ID: actor}))
+	for _, want := range []string{"Plano de execução aprovado", "Iniciar processamento", `action="/admin/privacidade/11000000-0000-0000-0000-000000000001/executar"`, `name="execution_confirmed"`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("executor detail missing %q", want)
+		}
+	}
+	if strings.Contains(w.Body.String(), `value="claim"`) || strings.Contains(w.Body.String(), `value="approve"`) {
+		t.Fatal("executor-only view exposed reviewer controls")
+	}
+
+	form := url.Values{"version": {"7"}, "execution_confirmed": {"yes"}}
+	w = httptest.NewRecorder()
+	PrivacyRequests{Service: s}.StartExecution(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/11000000-0000-0000-0000-000000000001/executar", form, CurrentUser{ID: actor}))
+	if w.Code != http.StatusSeeOther || s.startInput.ActorID != actor || s.startInput.Version != 7 || !s.startInput.Confirmed {
+		t.Fatalf("start result status=%d input=%+v", w.Code, s.startInput)
+	}
+
+	s.startErr = pr.ErrStaleVersion
+	w = httptest.NewRecorder()
+	PrivacyRequests{Service: s}.StartExecution(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/11000000-0000-0000-0000-000000000001/executar", form, CurrentUser{ID: actor}))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "atualizado por outra pessoa") {
+		t.Fatalf("stale start status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPrivacyExecutionBlockersUseBoundedPublicCopy(t *testing.T) {
+	for code, want := range map[string]string{
+		"EXECUTOR_AUTHORITY_OR_SEPARATION": "pessoa executora autorizada",
+		"IDENTITY_CHANGED":                 "verificação de identidade",
+		"RELATIONSHIP_CHANGED":             "relação atual",
+		"REPRESENTATION_CHANGED":           "representação está incompleta",
+		"DECISION_AUTHORITY":               "autoridade histórica",
+		"CAPABILITIES_UNAVAILABLE":         "operações exigidas",
+		"ACTIVATION_DISABLED":              "execução permanece desativada",
+		"ADMIN_CONTINUITY":                 "última pessoa administradora",
+		"LEGACY_SESSIONS":                  "sessões antigas",
+		"DEPENDANTS_UNRESOLVED":            "dependentes sem transferência",
+		"FUTURE_PRIVATE_DETAIL":            "bloqueio de segurança",
+	} {
+		if got := privacyExecutionBlocker(code); !strings.Contains(got, want) {
+			t.Errorf("blocker %s=%q want substring %q", code, got, want)
+		}
+	}
+}
+
+func TestPrivacyExecutionRejectsMalformedInputsAndMapsFailures(t *testing.T) {
+	actor := uuid.New()
+	t.Run("malformed form", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/admin/privacidade/ref/executar", privacyBrokenBody{})
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.StartExecution(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status=%d", w.Code)
+		}
+	})
+	for _, tc := range []struct{ name, ref, version string }{
+		{name: "invalid reference", ref: "invalid", version: "7"},
+		{name: "invalid version", ref: uuid.NewString(), version: "seven"},
+		{name: "non-positive version", ref: uuid.NewString(), version: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ref/executar", url.Values{"version": {tc.version}}, CurrentUser{ID: actor})
+			r.SetPathValue("ref", tc.ref)
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: privacyHandlerFixture(t)}.StartExecution(w, r)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status=%d", w.Code)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		text string
+	}{
+		{name: "forbidden", err: pr.ErrForbidden, want: http.StatusNotFound, text: "Página não encontrada"},
+		{name: "executor unavailable", err: pr.ErrExecutorUnavailable, want: http.StatusUnprocessableEntity, text: "execução não pode começar"},
+		{name: "closure safeguard", err: pr.ErrClosureSafeguards, want: http.StatusUnprocessableEntity, text: "Resolva os dependentes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			s.startErr = tc.err
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.StartExecution(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ref/executar", url.Values{"version": {"7"}, "execution_confirmed": {"yes"}}, CurrentUser{ID: actor}))
+			if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.text) {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestPrivacyReviewerCannotSeeExecutorPlanOrBlockers(t *testing.T) {
+	s := privacyHandlerFixture(t)
+	s.view.CanReview = true
+	s.view.CanViewExecution = false
+	s.view.Record.Status = "AWAITING_EXECUTION"
+	s.view.Plan = &pr.ExecutionPlan{Entries: []pr.ExecutionPlanEntry{{Category: "alpha", Disposition: "DELETE", Owner: "PRIVACY", Operations: []string{"PROFILE_IDENTITY_DELETE"}}}}
+	s.view.ExecutionBlockers = []string{"IDENTITY_CHANGED"}
+	w := httptest.NewRecorder()
+	PrivacyRequests{Service: s}.Detail(w, privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil, CurrentUser{ID: uuid.New()}))
+	for _, forbidden := range []string{"Plano de execução aprovado", "PROFILE_IDENTITY_DELETE", "Bloqueios atuais", "Iniciar processamento"} {
+		if strings.Contains(w.Body.String(), forbidden) {
+			t.Errorf("reviewer detail exposed %q", forbidden)
+		}
 	}
 }
 

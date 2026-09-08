@@ -12,6 +12,7 @@ import (
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 	"os"
@@ -59,7 +60,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = pool.Exec(ctx, string(baseline)); e != nil {
+	isolatedBaseline := strings.ReplaceAll(string(baseline), "public.", schemaName+".")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName)
+	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("privacy-test-password"), bcrypt.MinCost)
@@ -85,7 +88,13 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos"}
+	capabilities := map[string]bool{}
+	for _, profile := range executionProfiles {
+		for _, operation := range profile.Operations {
+			capabilities[operation] = true
+		}
+	}
+	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos", ExecutionCapabilities: capabilities}
 	p := testPolicy()
 	p.Version = "test-" + uuid.NewString()
 	p.WorkingRetentionDays = ApprovedWorkingRetentionDays
@@ -102,6 +111,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if e = s.GrantReviewer(ctx, owner, r, false); e != nil {
 			t.Fatal(e)
 		}
+	}
+	if e = s.GrantExecutor(ctx, owner, reviewerB, false); e != nil {
+		t.Fatal(e)
 	}
 	wrongRetention := p
 	wrongRetention.Version = "test-wrong-retention-" + uuid.NewString()
@@ -144,6 +156,69 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil || allowed {
 			t.Fatalf("missing account navigation: allowed=%v err=%v", allowed, err)
 		}
+		allowed, err = s.CanExecute(lookupCtx, reviewerB)
+		if err != nil || !allowed {
+			t.Fatalf("executor navigation: allowed=%v err=%v", allowed, err)
+		}
+		allowed, err = s.CanExecute(lookupCtx, owner)
+		if err != nil || allowed {
+			t.Fatalf("ordinary admin executor navigation: allowed=%v err=%v", allowed, err)
+		}
+	})
+	t.Run("execution-blockers-fail-closed-without-a-decision", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		account := dbgen.User{ID: uuid.New()}
+		blockers, err := s.executionViewBlockers(ctx, tx, dbgen.New(tx), dbgen.DataErasureRequest{ScopeKind: string(Categories)}, account, account, Verification{}, View{}, false)
+		if err != nil || !slices.Contains(blockers, "DECISION_AUTHORITY") {
+			t.Fatalf("missing decision blockers=%v err=%v", blockers, err)
+		}
+	})
+	t.Run("execution-helper-query-errors-fail-closed", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		q := dbgen.New(tx)
+		requestID, dependantID := uuid.New(), uuid.New()
+		request := dbgen.DataErasureRequest{ID: requestID, SubjectUserID: &dependantID, ScopeKind: string(AccountClosure)}
+		if reviewer(ctx, q, dbgen.User{}, time.Now()) || executor(ctx, q, dbgen.User{}, time.Now()) {
+			t.Fatal("ineligible account received privacy authority")
+		}
+		if _, err = executionClosureAccountIDs(cancelled, tx, q, request); err == nil {
+			t.Fatal("closure account query error was ignored")
+		}
+		if _, err = lockRelatedClosureExecutions(cancelled, tx, []dbgen.PrivacyRequestDependantResolution{{RelatedRequestID: &requestID}}); err == nil {
+			t.Fatal("related execution query error was ignored")
+		}
+		missingRelated, err := lockRelatedClosureExecutions(ctx, tx, []dbgen.PrivacyRequestDependantResolution{{RelatedRequestID: &requestID}})
+		if err != nil || len(missingRelated) != 0 {
+			t.Fatalf("missing related execution=%v err=%v", missingRelated, err)
+		}
+		if _, err = exactPersistedExecutionGraph(cancelled, tx, uuid.New(), executionPlanFixture(t)); err == nil {
+			t.Fatal("persisted graph query error was ignored")
+		}
+		if _, err = strictExecutionClosureSafeguards(cancelled, tx, q, request, dbgen.User{ID: dependantID}, map[uuid.UUID]dbgen.User{}, time.Now()); err == nil {
+			t.Fatal("closure safeguard query error was ignored")
+		}
+		if _, err = closureSafeguards(cancelled, q, request, dbgen.User{ID: dependantID}); err == nil {
+			t.Fatal("review closure safeguard query error was ignored")
+		}
+		if _, _, err = createExecutionWorkGraph(cancelled, q, uuid.New(), executionPlanFixture(t), time.Now()); err == nil {
+			t.Fatal("work graph query error was ignored")
+		}
+		if err = recordAccessRevocation(cancelled, q, uuid.New(), "STAFF_GRANT", "COACH", 1, uuid.New(), time.Now()); err == nil {
+			t.Fatal("access revocation query error was ignored")
+		}
+		if err = s.cutOffPrivacyAccount(cancelled, q, dbgen.PrivacyErasureExecution{ID: uuid.New(), RequestID: requestID}, dbgen.User{ID: dependantID}, reviewerB, time.Now()); err == nil {
+			t.Fatal("account cutoff query error was ignored")
+		}
 	})
 	submit := func(actor, subject uuid.UUID, kind ScopeKind) (dbgen.DataErasureRequest, error) {
 		scope := Scope{Kind: kind}
@@ -168,6 +243,139 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	for _, category := range p.Categories {
 		closureDecisions[category.Key] = CategoryDecision{Outcome: "APPROVE"}
 	}
+	t.Run("execution-view-revalidates-visible-blockers", func(t *testing.T) {
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Categorias aprovadas para a vista de execução.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, err := s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !view.CanViewExecution || !view.CanExecute || view.Plan == nil || len(view.ExecutionBlockers) != 0 {
+			t.Fatalf("ready execution view=%+v err=%v", view, err)
+		}
+
+		withoutCapabilities := s
+		withoutCapabilities.ExecutionCapabilities = nil
+		view, err = withoutCapabilities.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "CAPABILITIES_UNAVAILABLE") {
+			t.Fatalf("capability blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "ACTIVATION_DISABLED") {
+			t.Fatalf("activation blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM privacy_request_activation WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "ACTIVATION_DISABLED") {
+			t.Fatalf("missing activation blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at) VALUES(true,$1,true,true,$2,now())`, p.Version, owner); err != nil {
+			t.Fatal(err)
+		}
+		var originalGrantedAt time.Time
+		if err = pool.QueryRow(ctx, `SELECT granted_at FROM privacy_reviewer_grants WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA).Scan(&originalGrantedAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_reviewer_grants SET granted_at=(SELECT decided_at+interval '1 second' FROM data_erasure_requests WHERE id=$1) WHERE user_id=$2 AND revoked_at IS NULL`, request.ID, reviewerA); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "DECISION_AUTHORITY") {
+			t.Fatalf("decision authority blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_reviewer_grants SET granted_at=$2 WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA, originalGrantedAt); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerA, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "EXECUTOR_AUTHORITY_OR_SEPARATION") {
+			t.Fatalf("authority blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE users SET name='Identidade alterada',updated_at=updated_at+interval '1 second' WHERE id=$1`, subject); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || !slices.Contains(view.ExecutionBlockers, "IDENTITY_CHANGED") {
+			t.Fatalf("identity blockers=%v err=%v", view.ExecutionBlockers, err)
+		}
+
+		guardian, replacementGuardian := user(nil), user(nil)
+		dependant := user(&guardian)
+		represented, err := submit(guardian, dependant, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		represented = claimVerify(represented, true)
+		represented, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: represented.PublicRef, Version: represented.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Representação aprovada antes da mudança.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE users SET guardian_id=$2,updated_at=updated_at+interval '1 second' WHERE id=$1`, dependant, replacementGuardian); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, represented.PublicRef, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, blocker := range []string{"RELATIONSHIP_CHANGED", "REPRESENTATION_CHANGED"} {
+			if !slices.Contains(view.ExecutionBlockers, blocker) {
+				t.Errorf("representation blockers=%v missing=%s", view.ExecutionBlockers, blocker)
+			}
+		}
+
+		closingAdmin := user(nil)
+		if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, closingAdmin); err != nil {
+			t.Fatal(err)
+		}
+		closure, err := submit(closingAdmin, closingAdmin, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closure = claimVerify(closure, false)
+		closure, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: closure.PublicRef, Version: closure.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento aprovado para revalidar bloqueios.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = user(&closingAdmin)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, owner)
+			_, _ = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1`, closingAdmin)
+			_, _ = pool.Exec(ctx, `DELETE FROM sessions WHERE NOT subject_indexed`)
+		})
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1`, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,'legacy',now()+interval '1 hour',NULL,false)`, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+		view, err = s.View(ctx, reviewerB, closure.PublicRef, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, blocker := range []string{"ADMIN_CONTINUITY", "LEGACY_SESSIONS", "DEPENDANTS_UNRESOLVED"} {
+			if !slices.Contains(view.ExecutionBlockers, blocker) {
+				t.Errorf("closure blockers=%v missing=%s", view.ExecutionBlockers, blocker)
+			}
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM sessions WHERE NOT subject_indexed`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1`, closingAdmin); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("availability-and-operator-deactivation", func(t *testing.T) {
 		available, err := s.Available(ctx)
 		if err != nil || available.Version != p.Version {
@@ -205,6 +413,33 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		// production activation can bypass the unavailable #111 executor.
 		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
 			t.Fatal(err)
+		}
+	})
+	t.Run("executor-grants-require-adults-and-record-revocation", func(t *testing.T) {
+		guardian := user(nil)
+		minor := user(&guardian)
+		if err := s.GrantExecutor(ctx, owner, minor, false); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("minor executor grant error=%v", err)
+		}
+		candidate := user(nil)
+		if err := s.GrantExecutor(ctx, reviewerA, candidate, false); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("non-operator executor grant error=%v", err)
+		}
+		if err := s.GrantExecutor(ctx, owner, candidate, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.GrantExecutor(ctx, owner, candidate, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.GrantExecutor(ctx, owner, candidate, true); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("duplicate executor revocation error=%v", err)
+		}
+		var events int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM privacy_executor_grant_events event JOIN privacy_executor_grants executor_grant ON executor_grant.id=event.grant_id WHERE executor_grant.user_id=$1`, candidate).Scan(&events); err != nil || events != 2 {
+			t.Fatalf("executor grant events=%d err=%v", events, err)
+		}
+		if err := s.GrantExecutor(ctx, owner, uuid.New(), true); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("missing executor revocation error=%v", err)
 		}
 	})
 	t.Run("subjects-and-requester-list-recheck-relationships", func(t *testing.T) {
@@ -346,8 +581,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		invalid = base
 		invalid.ResolutionCode = "FORMAL_RESOLUTION"
 		invalid.DependantID = uuid.New()
-		if _, err = s.Change(ctx, invalid); !errors.Is(err, ErrForbidden) {
-			t.Fatalf("missing dependant: %v", err)
+		if _, err = s.Change(ctx, invalid); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("obsolete formal resolution: %v", err)
 		}
 		invalid = base
 		invalid.ResolutionCode = "VERIFIED_TRANSFER"
@@ -363,6 +598,12 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		valid := base
 		valid.ResolutionCode = "SEPARATE_APPROVED_REQUEST"
 		valid.RelatedReference = childRequest.PublicRef
+		if _, err = s.Change(ctx, valid); !errors.Is(err, ErrClosureSafeguards) {
+			t.Fatalf("merely approved related request: %v", err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: childRequest.PublicRef, Version: childRequest.Version, Confirmed: true}); err != nil {
+			t.Fatalf("start child closure: %v", err)
+		}
 		parentRequest, err = s.Change(ctx, valid)
 		if err != nil {
 			t.Fatal(err)
@@ -719,6 +960,51 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 		if _, err = closed.CanReview(ctx, actor); err == nil {
 			t.Fatal("closed pool navigation lookup succeeded")
+		}
+	})
+	t.Run("worker-query-errors-fail-closed", func(t *testing.T) {
+		wrongSchemaConfig, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrongSchemaConfig.ConnConfig.RuntimeParams["search_path"] = "pg_catalog"
+		wrongSchemaPool, err := pgxpool.NewWithConfig(ctx, wrongSchemaConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer wrongSchemaPool.Close()
+		worker := ExecutionWorker{Pool: wrongSchemaPool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}
+		lease := ExecutionLease{Job: ExecutionJob{PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
+			ID: uuid.New(), ExecutionID: uuid.New(), LeaseEpoch: 1, AttemptCount: 1,
+		}, ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New()}}
+		failure := ExecutionFailure{Classification: FailureTerminal, Stage: FailureStageExecute, Code: FailureActionFailed}
+		for name, call := range map[string]func() error{
+			"claim": func() error {
+				_, queryErr := worker.Claim(ctx)
+				return queryErr
+			},
+			"heartbeat": func() error {
+				_, queryErr := worker.Heartbeat(ctx, lease)
+				return queryErr
+			},
+			"checkpoint": func() error {
+				_, queryErr := worker.CompleteCheckpoint(ctx, lease, "IDENTITY_CLEAR", SupportedActionVersion)
+				return queryErr
+			},
+			"complete": func() error {
+				_, queryErr := worker.CompleteJob(ctx, lease)
+				return queryErr
+			},
+			"fail": func() error {
+				_, queryErr := worker.FailJob(ctx, lease, failure)
+				return queryErr
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				if err := call(); err == nil {
+					t.Fatal("missing worker schema error was ignored")
+				}
+			})
 		}
 	})
 	t.Run("receipt-auth-idempotency-atomic-outbox", func(t *testing.T) {
@@ -1095,6 +1381,19 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	t.Run("guardian-closure-and-final-admin", func(t *testing.T) {
 		guardian := user(nil)
 		minor := user(&guardian)
+		child, e := submit(guardian, minor, AccountClosure)
+		if e != nil {
+			t.Fatal(e)
+		}
+		child = claimVerify(child, true)
+		child, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: child.PublicRef, Version: child.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Pedido separado aprovado.", Decisions: closureDecisions})
+		if e != nil {
+			t.Fatal(e)
+		}
+		childExecution, e := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: child.PublicRef, Version: child.Version, Confirmed: true})
+		if e != nil {
+			t.Fatalf("start child closure: %v", e)
+		}
 		r, e := submit(guardian, guardian, AccountClosure)
 		if e != nil {
 			t.Fatal(e)
@@ -1104,7 +1403,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, e = s.Change(ctx, command); !errors.Is(e, ErrClosureSafeguards) {
 			t.Fatal(e)
 		}
-		r, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "resolve-dependant", DependantID: minor, ResolutionCode: "FORMAL_RESOLUTION", ResolutionExplanation: "Resolução formal verificada para o caso."})
+		r, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "resolve-dependant", DependantID: minor, ResolutionCode: "SEPARATE_APPROVED_REQUEST", RelatedReference: child.PublicRef, ResolutionExplanation: "Pedido separado verificado para o dependente."})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -1112,6 +1411,35 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		r, e = s.Change(ctx, command)
 		if e != nil || r.Status != "AWAITING_EXECUTION" {
 			t.Fatal(e)
+		}
+		view, viewErr := s.View(ctx, reviewerB, r.PublicRef, true)
+		if viewErr != nil || slices.Contains(view.ExecutionBlockers, "DEPENDANTS_UNRESOLVED") {
+			t.Fatalf("resolved dependant view blockers=%v err=%v", view.ExecutionBlockers, viewErr)
+		}
+		if _, e = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: r.PublicRef, Version: r.Version, Confirmed: true}); e != nil {
+			t.Fatalf("guardian closure with durable dependant execution: %v", e)
+		}
+		if _, e = pool.Exec(ctx, `INSERT INTO privacy_erasure_category_jobs(execution_id,plan_entry_position,entry_sha256,category_key,purpose_code,next_attempt_at,created_at,updated_at) VALUES($1,50,digest('orphan-job','sha256'),'orphan-job','orphan-purpose',clock_timestamp(),clock_timestamp(),clock_timestamp())`, childExecution.ID); e != nil {
+			t.Fatal(e)
+		}
+		graphTx, graphErr := pool.Begin(ctx)
+		if graphErr != nil {
+			t.Fatal(graphErr)
+		}
+		planRow, graphErr := dbgen.New(graphTx).GetPrivacyExecutionPlan(ctx, child.ID)
+		if graphErr != nil {
+			_ = graphTx.Rollback(ctx)
+			t.Fatal(graphErr)
+		}
+		childPlan, graphErr := ReadExecutionPlan(planRow)
+		if graphErr != nil {
+			_ = graphTx.Rollback(ctx)
+			t.Fatal(graphErr)
+		}
+		graphValid, graphErr := exactPersistedExecutionGraph(ctx, graphTx, childExecution.ID, childPlan)
+		_ = graphTx.Rollback(ctx)
+		if graphErr != nil || graphValid {
+			t.Fatalf("extra zero-checkpoint job accepted: valid=%v err=%v", graphValid, graphErr)
 		}
 		r, e = submit(owner, owner, AccountClosure)
 		if e != nil {
@@ -1122,6 +1450,172 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		command.Version = r.Version
 		if _, e = s.Change(ctx, command); !errors.Is(e, ErrClosureSafeguards) {
 			t.Fatal("last admin", e)
+		}
+	})
+	t.Run("administrator-revocation-and-closure-start-serialize", func(t *testing.T) {
+		closingAdmin, remainingAdmin := user(nil), user(nil)
+		for _, id := range []uuid.UUID{closingAdmin, remainingAdmin} {
+			if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		request, err := submit(closingAdmin, closingAdmin, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Decisão de encerramento aprovada.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Leave exactly the two fixture administrators in the protected set. Both
+		// closure start and role revocation must then serialize on the same DB lock.
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1 AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, owner); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		startResult := make(chan error, 1)
+		revokeResult := make(chan error, 1)
+		go func() {
+			<-start
+			_, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+			startResult <- startErr
+		}()
+		go func() {
+			<-start
+			_, revokeErr := pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1 AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, remainingAdmin)
+			revokeResult <- revokeErr
+		}()
+		close(start)
+		startErr, revokeErr := <-startResult, <-revokeResult
+		startSucceeded := startErr == nil
+		revokeSucceeded := revokeErr == nil
+		if startSucceeded == revokeSucceeded {
+			t.Fatalf("exactly one concurrent operation must succeed: start=%v revoke=%v", startErr, revokeErr)
+		}
+		if startErr != nil && !errors.Is(startErr, ErrClosureSafeguards) {
+			t.Fatalf("closure start failed outside last-admin safeguard: %v", startErr)
+		}
+		if revokeErr != nil {
+			var postgresErr *pgconn.PgError
+			if !errors.As(revokeErr, &postgresErr) || postgresErr.Code != "P0001" || postgresErr.Message != "last_active_administrator" {
+				t.Fatalf("administrator revocation failed outside DB invariant: %v", revokeErr)
+			}
+		}
+		var activeAdmins int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id JOIN users account ON account.id=assignment.user_id WHERE role.code='ADMIN' AND account.is_active`).Scan(&activeAdmins); err != nil {
+			t.Fatal(err)
+		}
+		if activeAdmins != 1 {
+			t.Fatalf("active administrators after race = %d, want 1", activeAdmins)
+		}
+		// Restore exactly the original shared administrator set for subsequent
+		// subtests. The isolated schema drops the two race-only accounts at test end.
+		if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=ANY($1) AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, []uuid.UUID{closingAdmin, remainingAdmin}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, mutation := range []string{"grant", "deactivate"} {
+		t.Run("administrator-"+mutation+"-and-closure-start-serialize", func(t *testing.T) {
+			closingAdmin, otherAdmin := user(nil), user(nil)
+			for _, id := range []uuid.UUID{closingAdmin, otherAdmin} {
+				if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request, err := submit(closingAdmin, closingAdmin, AccountClosure)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request = claimVerify(request, false)
+			request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Decisão concorrente aprovada.", Decisions: closureDecisions})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mutation == "grant" {
+				if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=ANY($1) AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, []uuid.UUID{owner, otherAdmin}); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1 AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, owner); err != nil {
+				t.Fatal(err)
+			}
+			start := make(chan struct{})
+			startResult, mutationResult := make(chan error, 1), make(chan error, 1)
+			go func() {
+				<-start
+				_, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+				startResult <- startErr
+			}()
+			go func() {
+				<-start
+				var mutationErr error
+				if mutation == "grant" {
+					_, mutationErr = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, otherAdmin)
+				} else {
+					_, mutationErr = pool.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1`, otherAdmin)
+				}
+				mutationResult <- mutationErr
+			}()
+			close(start)
+			startErr, mutationErr := <-startResult, <-mutationResult
+			if startErr != nil && !errors.Is(startErr, ErrClosureSafeguards) {
+				t.Fatalf("start failed outside safeguard: %v", startErr)
+			}
+			if mutation == "grant" && mutationErr != nil {
+				t.Fatalf("concurrent administrator grant failed: %v", mutationErr)
+			}
+			if mutation == "deactivate" && (startErr == nil) == (mutationErr == nil) {
+				t.Fatalf("exactly one deactivation/start operation must succeed: start=%v deactivate=%v", startErr, mutationErr)
+			}
+			var activeAdmins int
+			if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id JOIN users account ON account.id=assignment.user_id WHERE role.code='ADMIN' AND account.is_active`).Scan(&activeAdmins); err != nil || activeAdmins < 1 {
+				t.Fatalf("active administrator invariant count=%d err=%v", activeAdmins, err)
+			}
+			if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, owner); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=ANY($1) AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, []uuid.UUID{closingAdmin, otherAdmin}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("changed-dependant-relationship-blocks-closure-start", func(t *testing.T) {
+		guardian, replacement := user(nil), user(nil)
+		minor := user(&guardian)
+		newMinor := user(&replacement)
+		child, err := submit(guardian, minor, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		child = claimVerify(child, true)
+		child, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: child.PublicRef, Version: child.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Pedido dependente aprovado.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: child.PublicRef, Version: child.Version, Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		request, err := submit(guardian, guardian, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "resolve-dependant", DependantID: minor, ResolutionCode: "SEPARATE_APPROVED_REQUEST", RelatedReference: child.PublicRef, ResolutionExplanation: "Pedido separado verificado."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento do tutor aprovado.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE users SET guardian_id=$2,updated_at=clock_timestamp() WHERE id=$1`, newMinor, guardian); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrClosureSafeguards) {
+			t.Fatalf("changed dependant relationship start error=%v", err)
 		}
 	})
 	t.Run("deadlines-refusal-and-retention", func(t *testing.T) {
@@ -1263,6 +1757,691 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 		if reviewerAuditAfter != reviewerAuditBefore || activationAuditAfter != activationAuditBefore {
 			t.Fatalf("operator audit changed by expiry: reviewer %d/%d activation %d/%d", reviewerAuditBefore, reviewerAuditAfter, activationAuditBefore, activationAuditAfter)
+		}
+	})
+	t.Run("execution-handoff-is-atomic-idempotent-and-category-scoped", func(t *testing.T) {
+		actor := user(nil)
+		if err := s.GrantReviewer(ctx, owner, actor, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,decode('00','hex'),clock_timestamp()+interval '1 hour',$2,true)`, "category-"+actor.String(), actor); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO password_reset_tokens(user_id,email,token_digest,expires_at) VALUES($1,$2::text,digest($2::text,'sha256'),clock_timestamp()+interval '1 hour')`, actor, actor.String()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		var beforeCredential int64
+		if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, actor).Scan(&beforeCredential); err != nil {
+			t.Fatal(err)
+		}
+		request, err := submit(actor, actor, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Apagamento aprovado.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		executionView, err := s.View(ctx, reviewerB, request.PublicRef, true)
+		if err != nil || executionView.Execution == nil || executionView.Execution.ID != execution.ID {
+			t.Fatalf("post-start execution view=%+v err=%v", executionView, err)
+		}
+		stored, err := dbgen.New(pool).GetPrivacyRequestByRef(ctx, request.PublicRef)
+		if err != nil || stored.Status != string(Processing) {
+			t.Fatalf("request status=%q err=%v", stored.Status, err)
+		}
+		var active bool
+		var credential int64
+		var sessions, tokens, grants int
+		if err = pool.QueryRow(ctx, "SELECT is_active,credential_version FROM users WHERE id=$1", actor).Scan(&active, &credential); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM sessions WHERE user_id=$1),
+			(SELECT count(*) FROM password_reset_tokens WHERE user_id=$1 AND consumed_at IS NULL),
+			(SELECT count(*) FROM privacy_reviewer_grants WHERE user_id=$1 AND revoked_at IS NULL)`, actor).Scan(&sessions, &tokens, &grants); err != nil {
+			t.Fatal(err)
+		}
+		if !active || credential != beforeCredential || sessions != 1 || tokens != 1 || grants != 1 {
+			t.Fatalf("category execution changed access: active=%v credential=%d/%d sessions=%d tokens=%d grants=%d", active, beforeCredential, credential, sessions, tokens, grants)
+		}
+		counts, err := dbgen.New(pool).GetPrivacyErasureWorkSetCounts(ctx, execution.ID)
+		if err != nil || counts.JobCount != 2 || counts.CheckpointCount < 2 {
+			t.Fatalf("work graph=%+v err=%v", counts, err)
+		}
+		replayed, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil || replayed.ID != execution.ID {
+			t.Fatalf("idempotent replay=%+v err=%v", replayed, err)
+		}
+		capabilities := s.ExecutionCapabilities
+		s.ExecutionCapabilities = nil
+		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_executor_grants SET revoked_by=$2,revoked_at=clock_timestamp() WHERE user_id=$1 AND revoked_at IS NULL`, reviewerB, owner); err != nil {
+			t.Fatal(err)
+		}
+		replayed, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil || replayed.ID != execution.ID {
+			t.Fatalf("committed replay after mutable readiness changed=%+v err=%v", replayed, err)
+		}
+		s.ExecutionCapabilities = capabilities
+		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_executor_grants SET revoked_by=NULL,revoked_at=NULL WHERE user_id=$1`, reviewerB); err != nil {
+			t.Fatal(err)
+		}
+		var executions, notices int
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1", request.ID).Scan(&executions); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM email_outbox WHERE privacy_request_id=$1 AND message_type='PRIVACY_PROCESSING_STARTED'", request.ID).Scan(&notices); err != nil {
+			t.Fatal(err)
+		}
+		if executions != 1 || notices != 1 {
+			t.Fatalf("executions=%d notices=%d", executions, notices)
+		}
+	})
+	t.Run("execution-start-fails-closed-at-mutable-gates", func(t *testing.T) {
+		approved := func() dbgen.DataErasureRequest {
+			subject := user(nil)
+			request, err := submit(subject, subject, Categories)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request = claimVerify(request, false)
+			request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução aprovada para validar o fecho seguro.", Decisions: decisions})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return request
+		}
+		valid := func(request dbgen.DataErasureRequest, actor uuid.UUID) StartInput {
+			return StartInput{ActorID: actor, Reference: request.PublicRef, Version: request.Version, Confirmed: true}
+		}
+		if _, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: uuid.New(), Version: 2, Confirmed: true}); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("missing request error=%v", err)
+		}
+		request := approved()
+		disabled := s
+		disabled.Enabled = false
+		if _, err := disabled.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("disabled service error=%v", err)
+		}
+		request = approved()
+		withoutCapabilities := s
+		withoutCapabilities.ExecutionCapabilities = nil
+		if _, err := withoutCapabilities.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("missing capabilities error=%v", err)
+		}
+		request = approved()
+		if _, err := s.StartExecution(ctx, valid(request, *request.SubjectUserID)); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("subject executor separation error=%v", err)
+		}
+		request = approved()
+		if _, err := s.StartExecution(ctx, valid(request, user(nil))); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("missing executor grant error=%v", err)
+		}
+		request = approved()
+		if _, err := pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("disabled activation error=%v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		request = approved()
+		var grantedAt time.Time
+		if err := pool.QueryRow(ctx, `SELECT granted_at FROM privacy_reviewer_grants WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA).Scan(&grantedAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE privacy_reviewer_grants SET granted_at=(SELECT decided_at+interval '1 second' FROM data_erasure_requests WHERE id=$1) WHERE user_id=$2 AND revoked_at IS NULL`, request.ID, reviewerA); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("historical reviewer authority error=%v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE privacy_reviewer_grants SET granted_at=$2 WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA, grantedAt); err != nil {
+			t.Fatal(err)
+		}
+		request = approved()
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, user(nil))); !errors.Is(err, ErrExecutionConflict) {
+			t.Fatalf("divergent replay error=%v", err)
+		}
+		request = approved()
+		if _, err := pool.Exec(ctx, `UPDATE data_erasure_requests SET policy_snapshot='{}'::jsonb WHERE id=$1`, request.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrPolicyUnresolved) {
+			t.Fatalf("malformed policy snapshot error=%v", err)
+		}
+		request = approved()
+		if _, err := pool.Exec(ctx, `UPDATE data_erasure_requests SET status='RECEIVED' WHERE id=$1`, request.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("invalid execution status error=%v", err)
+		}
+	})
+	t.Run("execution-start-rolls-back-persistence-failures", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `CREATE OR REPLACE FUNCTION privacy_test_fail_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected privacy write failure'; END $$`); err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Exec(ctx, `DROP FUNCTION IF EXISTS privacy_test_fail_write() CASCADE`)
+		for _, table := range []string{"privacy_erasure_executions", "privacy_erasure_category_jobs", "privacy_erasure_job_checkpoints", "data_erasure_requests", "data_erasure_request_events", "email_outbox"} {
+			t.Run(table, func(t *testing.T) {
+				subject := user(nil)
+				request, err := submit(subject, subject, Categories)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request = claimVerify(request, false)
+				request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução aprovada para validar rollback integral.", Decisions: decisions})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = pool.Exec(ctx, `CREATE TRIGGER privacy_test_injected_failure BEFORE INSERT OR UPDATE ON `+table+` FOR EACH ROW EXECUTE FUNCTION privacy_test_fail_write()`); err != nil {
+					t.Fatal(err)
+				}
+				_, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+				if _, err = pool.Exec(ctx, `DROP TRIGGER privacy_test_injected_failure ON `+table); err != nil {
+					t.Fatal(err)
+				}
+				if startErr == nil {
+					t.Fatal("injected persistence failure was ignored")
+				}
+				var executions int
+				if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1`, request.ID).Scan(&executions); err != nil || executions != 0 {
+					t.Fatalf("rollback executions=%d err=%v", executions, err)
+				}
+			})
+		}
+		for _, table := range []string{"users", "sessions", "password_reset_tokens", "email_verification_tokens", "user_platform_roles", "staff_grants", "privacy_reviewer_grants", "privacy_executor_grants", "privacy_erasure_access_revocations"} {
+			t.Run("closure_"+table, func(t *testing.T) {
+				subject := user(nil)
+				if _, err := pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,decode('00','hex'),clock_timestamp()+interval '1 hour',$2,true)`, "fault-"+subject.String(), subject); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO password_reset_tokens(user_id,email,token_digest,expires_at) VALUES($1,$2::text,digest($2::text,'sha256'),clock_timestamp()+interval '1 hour')`, subject, subject.String()+"@example.test"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO email_verification_tokens(user_id,email,expires_at) VALUES($1,$2::text,clock_timestamp()+interval '1 hour')`, subject, subject.String()+"@example.test"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, subject); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, subject, owner); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, subject, owner); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,granted_by_id) VALUES($1,'MODERATOR',$2)`, subject, owner); err != nil {
+					t.Fatal(err)
+				}
+				request, err := submit(subject, subject, AccountClosure)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request = claimVerify(request, false)
+				request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento aprovado para validar rollback integral.", Decisions: closureDecisions})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = pool.Exec(ctx, `CREATE TRIGGER privacy_test_injected_failure BEFORE INSERT OR UPDATE OR DELETE ON `+table+` FOR EACH ROW EXECUTE FUNCTION privacy_test_fail_write()`); err != nil {
+					t.Fatal(err)
+				}
+				_, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+				if _, err = pool.Exec(ctx, `DROP TRIGGER privacy_test_injected_failure ON `+table); err != nil {
+					t.Fatal(err)
+				}
+				if startErr == nil {
+					t.Fatal("injected closure failure was ignored")
+				}
+				var executions int
+				if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1`, request.ID).Scan(&executions); err != nil || executions != 0 {
+					t.Fatalf("closure rollback executions=%d err=%v", executions, err)
+				}
+				if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1`, subject); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	})
+	t.Run("concurrent-account-closure-starts-cut-off-once", func(t *testing.T) {
+		subject := user(nil)
+		request, err := submit(subject, subject, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento concorrente aprovado.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var beforeCredential int64
+		if err = pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&beforeCredential); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,decode('00','hex'),clock_timestamp()+interval '1 hour',$2,true)`, "concurrent-"+subject.String(), subject); err != nil {
+			t.Fatal(err)
+		}
+		input := StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}
+		type result struct {
+			execution dbgen.PrivacyErasureExecution
+			err       error
+		}
+		results := make(chan result, 2)
+		start := make(chan struct{})
+		for range 2 {
+			go func() {
+				<-start
+				execution, startErr := s.StartExecution(ctx, input)
+				results <- result{execution: execution, err: startErr}
+			}()
+		}
+		close(start)
+		first, second := <-results, <-results
+		if first.err != nil || second.err != nil || first.execution.ID == uuid.Nil || first.execution.ID != second.execution.ID {
+			t.Fatalf("concurrent starts first=%+v second=%+v", first, second)
+		}
+		var credential int64
+		var active bool
+		var executions, sessions int
+		if err = pool.QueryRow(ctx, `SELECT credential_version,is_active FROM users WHERE id=$1`, subject).Scan(&credential, &active); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1),(SELECT count(*) FROM sessions WHERE user_id=$2)`, request.ID, subject).Scan(&executions, &sessions); err != nil {
+			t.Fatal(err)
+		}
+		if credential != beforeCredential+1 || active || executions != 1 || sessions != 0 {
+			t.Fatalf("concurrent cutoff credential=%d/%d active=%v executions=%d sessions=%d", beforeCredential, credential, active, executions, sessions)
+		}
+	})
+	t.Run("late-handoff-failure-rolls-back-graph-and-account-cutoff", func(t *testing.T) {
+		subject := user(nil)
+		request, err := submit(subject, subject, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento para teste de rollback.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,decode('00','hex'),clock_timestamp()+interval '1 hour',$2,true)`, "rollback-"+subject.String(), subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO password_reset_tokens(user_id,email,token_digest,expires_at) VALUES($1,$2::text,digest($2::text,'sha256'),clock_timestamp()+interval '1 hour')`, subject, subject.String()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		var verificationToken uuid.UUID
+		if err = pool.QueryRow(ctx, `INSERT INTO email_verification_tokens(user_id,email,expires_at) VALUES($1,$2::text,clock_timestamp()+interval '1 hour') RETURNING id`, subject, subject.String()+"@example.test").Scan(&verificationToken); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO email_outbox(verification_token_id) VALUES($1)`, verificationToken); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, subject, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, subject, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,granted_by_id) VALUES($1,'MODERATOR',$2)`, subject, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `CREATE FUNCTION reject_processing_notice() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.message_type='PRIVACY_PROCESSING_STARTED' THEN RAISE EXCEPTION 'injected_processing_notice_failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_processing_notice BEFORE INSERT ON email_outbox FOR EACH ROW EXECUTE FUNCTION reject_processing_notice()`); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_, _ = pool.Exec(ctx, `DROP TRIGGER IF EXISTS reject_processing_notice ON email_outbox; DROP FUNCTION IF EXISTS reject_processing_notice()`)
+		}()
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); err == nil {
+			t.Fatal("fault-injected handoff unexpectedly committed")
+		}
+		var status string
+		var active bool
+		var credential int64
+		var executions, jobs, sessions, resetTokens, verificationTokens, verificationNotices, roles, reviewerGrants, executorGrants, staffGrants, revocations, notices int
+		if err = pool.QueryRow(ctx, `SELECT status FROM data_erasure_requests WHERE id=$1`, request.ID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT is_active,credential_version FROM users WHERE id=$1`, subject).Scan(&active, &credential); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1),
+			(SELECT count(*) FROM privacy_erasure_category_jobs job JOIN privacy_erasure_executions execution ON execution.id=job.execution_id WHERE execution.request_id=$1),
+			(SELECT count(*) FROM sessions WHERE user_id=$2),
+			(SELECT count(*) FROM password_reset_tokens WHERE user_id=$2 AND consumed_at IS NULL),
+			(SELECT count(*) FROM email_verification_tokens WHERE user_id=$2 AND consumed_at IS NULL),
+			(SELECT count(*) FROM email_outbox outbox JOIN email_verification_tokens token ON token.id=outbox.verification_token_id WHERE token.user_id=$2 AND outbox.status='PENDING'),
+			(SELECT count(*) FROM user_platform_roles WHERE user_id=$2),
+			(SELECT count(*) FROM privacy_reviewer_grants WHERE user_id=$2 AND revoked_at IS NULL),
+			(SELECT count(*) FROM privacy_executor_grants WHERE user_id=$2 AND revoked_at IS NULL),
+			(SELECT count(*) FROM staff_grants WHERE user_id=$2 AND revoked_at IS NULL),
+			(SELECT count(*) FROM privacy_erasure_access_revocations revocation JOIN privacy_erasure_executions execution ON execution.id=revocation.execution_id WHERE execution.request_id=$1),
+			(SELECT count(*) FROM email_outbox WHERE privacy_request_id=$1 AND message_type='PRIVACY_PROCESSING_STARTED')`, request.ID, subject).
+			Scan(&executions, &jobs, &sessions, &resetTokens, &verificationTokens, &verificationNotices, &roles, &reviewerGrants, &executorGrants, &staffGrants, &revocations, &notices); err != nil {
+			t.Fatal(err)
+		}
+		if status != string(AwaitingExecution) || !active || credential != 1 || executions != 0 || jobs != 0 || sessions != 1 || resetTokens != 1 || verificationTokens != 1 || verificationNotices != 1 || roles != 1 || reviewerGrants != 1 || executorGrants != 1 || staffGrants != 1 || revocations != 0 || notices != 0 {
+			t.Fatalf("rollback status=%s active=%v credential=%d executions=%d jobs=%d sessions=%d reset=%d verification=%d verification_notices=%d roles=%d reviewers=%d executors=%d staff=%d revocations=%d notices=%d", status, active, credential, executions, jobs, sessions, resetTokens, verificationTokens, verificationNotices, roles, reviewerGrants, executorGrants, staffGrants, revocations, notices)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1`, subject); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("worker-retry-is-fenced-and-bounded", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução de repetição aprovada.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+		first, err := worker.Claim(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(first.Checkpoints) == 0 || first.Job.LeaseEpoch < 1 || first.Job.AttemptCount != 1 {
+			t.Fatalf("invalid first lease: %+v checkpoints=%d", first.Job, len(first.Checkpoints))
+		}
+		if _, err = worker.FailJob(ctx, first, ExecutionFailure{Classification: FailureRetryable, Stage: FailureStageExecute, Code: FailureDependencyUnavailable}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = worker.Heartbeat(ctx, first); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("released lease heartbeat error=%v", err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '1 hour' WHERE id<>$1 AND status='PENDING'`, first.Job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp() WHERE id=$1`, first.Job.ID); err != nil {
+			t.Fatal(err)
+		}
+		second, err := worker.Claim(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if second.Job.ID != first.Job.ID || second.Job.LeaseEpoch <= first.Job.LeaseEpoch || second.Job.AttemptCount != 2 {
+			t.Fatalf("retry lease not fenced: first=%+v second=%+v", first.Job, second.Job)
+		}
+		if _, err = worker.Heartbeat(ctx, first); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("superseded lease heartbeat error=%v", err)
+		}
+		execution, err := worker.FailJob(ctx, second, ExecutionFailure{Classification: FailureRetryable, Stage: FailureStageExecute, Code: FailureDependencyUnavailable})
+		if err != nil || execution.Status != "TERMINAL_FAILED" {
+			t.Fatalf("retry exhaustion execution=%+v err=%v", execution, err)
+		}
+		lifecycle, err := dbgen.New(pool).GetPrivacyRequestExecutionLifecycle(ctx, execution.RequestID)
+		if err != nil || lifecycle.Status != string(TerminalFailed) {
+			t.Fatalf("retry exhaustion request=%+v err=%v", lifecycle, err)
+		}
+		var failures int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_erasure_failures WHERE job_id=$1`, first.Job.ID).Scan(&failures); err != nil || failures != 2 {
+			t.Fatalf("structured failures=%d err=%v", failures, err)
+		}
+	})
+	t.Run("workers-claim-exclusively-heartbeat-recover-and-complete", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução concorrente aprovada.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		workers := []ExecutionWorker{
+			{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3},
+			{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3},
+		}
+		claims := make(chan ExecutionLease, 2)
+		errorsOut := make(chan error, 2)
+		start := make(chan struct{})
+		for index := range workers {
+			go func(worker ExecutionWorker) {
+				<-start
+				lease, claimErr := worker.Claim(ctx)
+				claims <- lease
+				errorsOut <- claimErr
+			}(workers[index])
+		}
+		close(start)
+		first, second := <-claims, <-claims
+		if err = <-errorsOut; err != nil {
+			t.Fatal(err)
+		}
+		if err = <-errorsOut; err != nil {
+			t.Fatal(err)
+		}
+		if first.Job.ID == uuid.Nil || second.Job.ID == uuid.Nil || first.Job.ID == second.Job.ID || first.Job.ExecutionID != execution.ID || second.Job.ExecutionID != execution.ID {
+			t.Fatalf("claims were not exclusive: first=%+v second=%+v", first.Job, second.Job)
+		}
+		workerByRef := map[uuid.UUID]ExecutionWorker{workers[0].WorkerRef: workers[0], workers[1].WorkerRef: workers[1]}
+		firstWorker := workerByRef[first.Job.WorkerRef]
+		secondWorker := workerByRef[second.Job.WorkerRef]
+		heartbeat, err := firstWorker.Heartbeat(ctx, first)
+		if err != nil || heartbeat.Epoch != first.Job.LeaseEpoch || !heartbeat.ExpiresAt.Valid {
+			t.Fatalf("heartbeat=%+v err=%v", heartbeat, err)
+		}
+		for _, checkpoint := range second.Checkpoints {
+			if _, err = secondWorker.CompleteCheckpoint(ctx, second, checkpoint.OperationCode, checkpoint.ActionVersion); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err = secondWorker.CompleteJob(ctx, second); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_job_leases SET heartbeat_at=acquired_at,expires_at=acquired_at+interval '1 millisecond' WHERE id=$1`, first.Job.ActiveLeaseID); err != nil {
+			t.Fatal(err)
+		}
+		recoveryWorker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}
+		recovered, err := recoveryWorker.Claim(ctx)
+		if err != nil || recovered.Job.ID != first.Job.ID || recovered.Job.LeaseEpoch <= first.Job.LeaseEpoch {
+			t.Fatalf("recovered=%+v err=%v", recovered.Job, err)
+		}
+		if _, err = firstWorker.CompleteCheckpoint(ctx, first, first.Checkpoints[0].OperationCode, first.Checkpoints[0].ActionVersion); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("stale checkpoint error=%v", err)
+		}
+		if _, err = firstWorker.CompleteJob(ctx, first); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("stale completion error=%v", err)
+		}
+		if _, err = firstWorker.FailJob(ctx, first, ExecutionFailure{Classification: FailureTerminal, Stage: FailureStageVerify, Code: FailureVerificationFailed}); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("stale failure error=%v", err)
+		}
+		missingOperation := ""
+		for operation := range capabilities {
+			if !slices.ContainsFunc(recovered.Checkpoints, func(checkpoint dbgen.PrivacyErasureJobCheckpoint) bool { return checkpoint.OperationCode == operation }) {
+				missingOperation = operation
+				break
+			}
+		}
+		if missingOperation != "" {
+			if _, err = recoveryWorker.CompleteCheckpoint(ctx, recovered, missingOperation, SupportedActionVersion); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("unbound checkpoint error=%v", err)
+			}
+		}
+		for _, checkpoint := range recovered.Checkpoints {
+			completedCheckpoint, checkpointErr := recoveryWorker.CompleteCheckpoint(ctx, recovered, checkpoint.OperationCode, checkpoint.ActionVersion)
+			if checkpointErr != nil {
+				t.Fatal(checkpointErr)
+			}
+			replayedCheckpoint, checkpointErr := recoveryWorker.CompleteCheckpoint(ctx, recovered, checkpoint.OperationCode, checkpoint.ActionVersion)
+			if checkpointErr != nil || replayedCheckpoint.ID != completedCheckpoint.ID {
+				t.Fatalf("checkpoint replay=%+v err=%v", replayedCheckpoint, checkpointErr)
+			}
+		}
+		completed, err := recoveryWorker.CompleteJob(ctx, recovered)
+		if err != nil || completed.Status != "SUCCEEDED" {
+			t.Fatalf("completed execution=%+v err=%v", completed, err)
+		}
+		openRequest, err := dbgen.New(pool).GetPrivacyRequestExecutionLifecycle(ctx, request.ID)
+		if err != nil || openRequest.Status != string(Processing) {
+			t.Fatalf("#248 completion gate request=%+v err=%v", openRequest, err)
+		}
+	})
+	t.Run("worker-claim-terminals-at-attempt-limit", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução para validar o limite de tentativas.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET attempt_count=2,next_attempt_at=clock_timestamp() WHERE execution_id=$1`, execution.ID); err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+		if _, err = worker.Claim(ctx); !errors.Is(err, ErrRetryExhausted) {
+			t.Fatalf("attempt limit claim error=%v", err)
+		}
+		stored, err := dbgen.New(pool).GetPrivacyErasureExecution(ctx, execution.ID)
+		if err != nil || stored.Status != "TERMINAL_FAILED" {
+			t.Fatalf("attempt limit execution=%+v err=%v", stored, err)
+		}
+	})
+	t.Run("worker-claim-terminals-tampered-work-graph", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução para validar adulteração do grafo.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET entry_sha256=decode(repeat('00',32),'hex'),next_attempt_at=clock_timestamp() WHERE execution_id=$1`, execution.ID); err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}
+		if _, err = worker.Claim(ctx); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("tampered graph claim error=%v", err)
+		}
+		stored, err := dbgen.New(pool).GetPrivacyErasureExecution(ctx, execution.ID)
+		if err != nil || stored.Status != "TERMINAL_FAILED" {
+			t.Fatalf("tampered graph execution=%+v err=%v", stored, err)
+		}
+	})
+	t.Run("account-closure-revalidates-admin-and-legacy-session-before-cutoff", func(t *testing.T) {
+		var priorRef uuid.UUID
+		var priorVersion int64
+		if err := pool.QueryRow(ctx, `SELECT public_ref,version FROM data_erasure_requests WHERE requester_user_id=$1 AND status IN ('RECEIVED','UNDER_REVIEW','AWAITING_EXECUTION','PARTIALLY_APPROVED')`, owner).Scan(&priorRef, &priorVersion); err == nil {
+			if _, err = s.Change(ctx, ReviewInput{ActorID: owner, Reference: priorRef, Version: priorVersion, Action: "cancel"}); err != nil {
+				t.Fatal(err)
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, reviewerB); err != nil {
+			t.Fatal(err)
+		}
+		request, err := submit(owner, owner, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento aprovado.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM user_platform_roles WHERE user_id=$1 AND role_id=(SELECT id FROM platform_roles WHERE code='ADMIN')`, reviewerB); err != nil {
+			t.Fatal(err)
+		}
+		input := StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}
+		if _, err = s.StartExecution(ctx, input); !errors.Is(err, ErrClosureSafeguards) {
+			t.Fatalf("last usable admin start error=%v", err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, reviewerB); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,subject_indexed) VALUES('legacy-privacy-session',decode('00','hex'),now()+interval '1 hour',false)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, input); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("legacy session start error=%v", err)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM sessions WHERE token='legacy-privacy-session'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES('indexed-privacy-session',decode('00','hex'),now()+interval '1 hour',$1,true)`, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO password_reset_tokens(user_id,email,token_digest,expires_at) VALUES($1,$2::text,digest($2::text,'sha256'),clock_timestamp()+interval '1 hour')`, owner, owner.String()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var active bool
+		var indexedSessions, ownerRoles, activeTokens int
+		if err = pool.QueryRow(ctx, "SELECT is_active FROM users WHERE id=$1", owner).Scan(&active); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM sessions WHERE user_id=$1", owner).Scan(&indexedSessions); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM user_platform_roles WHERE user_id=$1", owner).Scan(&ownerRoles); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, "SELECT count(*) FROM password_reset_tokens WHERE user_id=$1 AND consumed_at IS NULL", owner).Scan(&activeTokens); err != nil {
+			t.Fatal(err)
+		}
+		if active || indexedSessions != 0 || ownerRoles != 0 || activeTokens != 0 || execution.ID == uuid.Nil {
+			t.Fatalf("account cutoff incomplete: active=%v sessions=%d roles=%d active_tokens=%d execution=%s", active, indexedSessions, ownerRoles, activeTokens, execution.ID)
 		}
 	})
 }

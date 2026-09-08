@@ -30,6 +30,11 @@ func (s *fakePrivacyCommandService) GrantReviewer(_ context.Context, actor, targ
 	return s.err
 }
 
+func (s *fakePrivacyCommandService) GrantExecutor(_ context.Context, actor, target uuid.UUID, revoke bool) error {
+	s.call, s.actor, s.target, s.revoked = "executor", actor, target, revoke
+	return s.err
+}
+
 func (s *fakePrivacyCommandService) ImportPolicy(_ context.Context, actor uuid.UUID, policy privacyrequests.AdoptedPolicy) error {
 	s.call, s.actor, s.policy = "import", actor, policy
 	return s.err
@@ -97,6 +102,16 @@ func TestPrivacyCommandDispatchesValidatedSubcommands(t *testing.T) {
 				t.Fatal("revoke was not dispatched")
 			}
 		}},
+		{"grant executor", "executor", []string{"grant-executor", "--actor", actor.String(), "--user", target.String()}, func(t *testing.T, h *privacyCommandHarness) {
+			if h.service.actor != actor || h.service.target != target || h.service.revoked {
+				t.Fatalf("executor grant=%+v", h.service)
+			}
+		}},
+		{"revoke executor", "executor", []string{"revoke-executor", "--actor", actor.String(), "--user", target.String()}, func(t *testing.T, h *privacyCommandHarness) {
+			if !h.service.revoked {
+				t.Fatal("executor revoke was not dispatched")
+			}
+		}},
 		{"import policy", "import", []string{"import-policy", "--actor", actor.String(), "--file", "approved.json"}, func(t *testing.T, h *privacyCommandHarness) {
 			if h.service.policy.Version != "matrix-v1" {
 				t.Fatalf("policy=%+v", h.service.policy)
@@ -153,6 +168,7 @@ func TestPrivacyCommandRejectsInvalidInputBeforeOpeningDatabase(t *testing.T) {
 		{"positional argument", "unexpected privacy command arguments", []string{"expire", "--actor", actor.String(), "now"}, nil},
 		{"invalid actor", "--actor", []string{"expire", "--actor", "not-a-uuid"}, nil},
 		{"invalid reviewer", "--user", []string{"grant", "--actor", actor.String(), "--user", "not-a-uuid"}, nil},
+		{"invalid executor", "--user", []string{"grant-executor", "--actor", actor.String(), "--user", "not-a-uuid"}, nil},
 		{"missing policy version", "--policy", []string{"activate", "--actor", actor.String(), "--policy", " "}, nil},
 		{"invalid hold reference", "--reference", []string{"hold", "--actor", actor.String(), "--reference", "bad", "--owner", owner.String(), "--category", "identity-core", "--evidence", "record"}, nil},
 		{"missing policy file", "read policy file", []string{"import-policy", "--actor", actor.String(), "--file", "missing.json"}, nil},

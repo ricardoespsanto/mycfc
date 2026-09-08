@@ -309,6 +309,9 @@ log "preparing SHA $sha with digest $release_digest in the $candidate_slot slot"
 docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
+# Idempotent defence in depth; migrate already applies this boundary atomically
+# before committing any newly created privacy execution tables.
+docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap harden-db
 record_timeline_milestone migration-completed
 docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 	up -d --no-deps --force-recreate "$candidate_service"
