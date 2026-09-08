@@ -1,15 +1,59 @@
 package privacyrequests
 
 import (
+	"encoding/json"
 	"errors"
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
 func testPolicy() AdoptedPolicy {
-	return AdoptedPolicy{Version: "test-v1", AccountClosureEnabled: true, WorkingRetentionDays: 30, ResponseMonths: 1, ExtensionMonths: 2, Categories: []CatalogueEntry{{Key: "alpha", Label: "Categoria alfa", Action: "ERASE", Grounds: []Ground{{Code: "HOLD", Label: "Exceção aprovada"}}}, {Key: "beta", Label: "Categoria beta", Action: "ERASE", Grounds: []Ground{{Code: "HOLD", Label: "Exceção aprovada"}}}}}
+	p := AdoptedPolicy{Version: "test-v1", ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion, AccountClosureEnabled: true, WorkingRetentionDays: 30, ResponseMonths: 1, ExtensionMonths: 2}
+	keys := make([]string, 0, len(categoryContracts))
+	for key := range categoryContracts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		contract := categoryContracts[key]
+		owners := make([]string, 0, len(contract.Owners))
+		for owner := range contract.Owners {
+			owners = append(owners, owner)
+		}
+		sort.Strings(owners)
+		zero := int32(0)
+		rule := ExecutionRule{Profile: contract.DefaultProfile, LegalGround: "APPROVED_POLICY", Owner: owners[0], CompleteWithinDays: &zero, Fallback: "BLOCK"}
+		profile := executionProfiles[rule.Profile]
+		if profile.Disposition == "RESTRICT" || profile.Disposition == "EXPIRE" {
+			spec := categoryRetentionSpec(key, "APPROVE")
+			one, expiry := int32(1), spec.Max
+			rule.RetentionUnit, rule.ReviewAfter, rule.ExpireAfter = spec.Unit, &one, &expiry
+			for field := range profile.Fields {
+				rule.RetainedFields = append(rule.RetainedFields, field)
+			}
+			sort.Strings(rule.RetainedFields)
+		}
+		entry := CatalogueEntry{Key: key, Label: "Categoria " + key, Rule: rule}
+		for retentionProfile := range contract.RetentionProfiles {
+			one, expiry := int32(1), int32(90)
+			if contract.MaxGroundRetentionDays < expiry {
+				expiry = contract.MaxGroundRetentionDays
+			}
+			retention := ExecutionRule{Profile: retentionProfile, LegalGround: "LEGAL_HOLD", Owner: owners[0], CompleteWithinDays: &zero, RetentionUnit: calendarDayUnit, ReviewAfter: &one, ExpireAfter: &expiry, Fallback: "BLOCK"}
+			for field := range executionProfiles[retentionProfile].Fields {
+				retention.RetainedFields = append(retention.RetainedFields, field)
+			}
+			sort.Strings(retention.RetainedFields)
+			entry.Grounds = append(entry.Grounds, Ground{Code: "LEGAL_HOLD", Label: "Retenção legal aprovada", Rule: retention})
+		}
+		p.Categories = append(p.Categories, entry)
+	}
+	return p
 }
 func TestCalendarDeadlineClampsLisbonMonths(t *testing.T) {
 	l, _ := time.LoadLocation("Europe/Lisbon")
@@ -26,16 +70,17 @@ func TestCalendarDeadlineClampsLisbonMonths(t *testing.T) {
 }
 func TestCatalogueRejectsUnapprovedAndInventedDecisionGrounds(t *testing.T) {
 	p := testPolicy()
-	scope := Scope{Kind: Categories, Categories: []Category{"alpha", "beta"}}
-	partial := map[string]CategoryDecision{"alpha": {Outcome: "APPROVE"}, "beta": {Outcome: "RETAIN", Ground: "HOLD"}}
-	if _, e := p.Decisions(scope, partial, "partial"); e != nil {
+	scope := Scope{Kind: Categories, Categories: []Category{"identity-core", "profile-core"}}
+	partial := map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}
+	at := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	if _, _, e := p.DecisionPlan(scope, partial, "partial", at); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := p.Decisions(scope, partial, "approve"); e == nil {
+	if _, _, e := p.DecisionPlan(scope, partial, "approve", at); e == nil {
 		t.Fatal("partial accepted as full")
 	}
-	partial["beta"] = CategoryDecision{Outcome: "RETAIN", Ground: "invented"}
-	if _, e := p.Decisions(scope, partial, "partial"); e == nil {
+	partial["profile-core"] = CategoryDecision{Outcome: "RETAIN", Ground: "invented"}
+	if _, _, e := p.DecisionPlan(scope, partial, "partial", at); e == nil {
 		t.Fatal("invented ground")
 	}
 	for _, months := range []int32{0, 2, 12} {
@@ -58,6 +103,93 @@ func TestCatalogueRejectsUnapprovedAndInventedDecisionGrounds(t *testing.T) {
 	p.AccountClosureEnabled = false
 	if _, e := p.Snapshot(Scope{Kind: AccountClosure}); e == nil {
 		t.Fatal("unapproved closure")
+	}
+}
+
+func TestExecutablePolicyFailsClosedAndPlanIsDeterministic(t *testing.T) {
+	p := testPolicy()
+	identityIndex := slices.IndexFunc(p.Categories, func(category CatalogueEntry) bool { return category.Key == "identity-core" })
+	sessionIndex := slices.IndexFunc(p.Categories, func(category CatalogueEntry) bool { return category.Key == "sessions" })
+	for _, mutate := range []func(*AdoptedPolicy){
+		func(p *AdoptedPolicy) { p.ExecutorVersion = "future-executor/v9" },
+		func(p *AdoptedPolicy) { p.PlanSchemaVersion = "future-plan/v9" },
+		func(p *AdoptedPolicy) { p.Categories[0].Key = "unknown-category" },
+		func(p *AdoptedPolicy) { p.Categories[0].Rule.Profile = "UNKNOWN_PROFILE" },
+		func(p *AdoptedPolicy) { p.Categories[len(p.Categories)-1].Rule.Profile = "PROFILE_CLEAR_V1" },
+		func(p *AdoptedPolicy) { p.Categories[0].Rule.Fallback = "CONTINUE" },
+		func(p *AdoptedPolicy) { p.Categories[identityIndex].Grounds[0].Rule.RetainedFields = nil },
+		func(p *AdoptedPolicy) {
+			p.Categories[identityIndex].Grounds[0].Rule.RetainedFields = []string{"users.email"}
+		},
+		func(p *AdoptedPolicy) { p.Categories[0].Rule.CompleteWithinDays = nil },
+		func(p *AdoptedPolicy) { p.Categories[identityIndex].Grounds[0].Rule.ExpireAfter = nil },
+		func(p *AdoptedPolicy) { p.Categories[sessionIndex].Rule.RetentionUnit = calendarDayUnit },
+		func(p *AdoptedPolicy) { eleven := int32(11); p.Categories[sessionIndex].Rule.ExpireAfter = &eleven },
+	} {
+		candidate := testPolicy()
+		mutate(&candidate)
+		if candidate.Validate() == nil {
+			t.Fatalf("unsupported policy accepted: %+v", candidate)
+		}
+	}
+	scope := Scope{Kind: Categories, Categories: []Category{"identity-core", "profile-core"}}
+	at := time.Date(2026, 9, 8, 12, 0, 0, 123, time.FixedZone("test", 3600))
+	inputsA := map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}
+	inputsB := map[string]CategoryDecision{"profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}, "identity-core": {Outcome: "APPROVE"}}
+	_, planA, err := p.DecisionPlan(scope, inputsA, "partial", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, planB, err := p.DecisionPlan(scope, inputsB, "partial", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planA.RequestVersion, planB.RequestVersion = 2, 2
+	a, _ := json.Marshal(planA)
+	b, _ := json.Marshal(planB)
+	if string(a) != string(b) {
+		t.Fatalf("plan depends on map order:\n%s\n%s", a, b)
+	}
+	if planA.CreatedAt != "2026-09-08T11:00:00.000000123Z" || len(planA.Entries) != 2 || planA.Entries[1].RetentionAnchor != caseClosureAnchor || planA.Entries[1].RetentionUnit != calendarDayUnit || planA.Entries[1].ReviewAfter == nil || planA.Entries[1].ExpireAfter == nil || planA.Entries[1].ReviewAt != "" || planA.Entries[1].ExpireAt != "" {
+		t.Fatalf("incomplete frozen plan: %+v", planA)
+	}
+	requestID := uuid.New()
+	created, _ := time.Parse(time.RFC3339Nano, planA.CreatedAt)
+	row := dbgen.PrivacyRequestExecutionPlan{RequestID: requestID, PolicyVersion: p.Version, ExecutorVersion: SupportedExecutorVersion, SchemaVersion: SupportedPlanSchemaVersion, Plan: a, CreatedAt: stamp(created)}
+	row.PlanSha256 = executionPlanDigest(requestID, created, row.PolicyVersion, row.ExecutorVersion, row.SchemaVersion, a)
+	if _, err = ReadExecutionPlan(row); err != nil {
+		t.Fatalf("compiled plan rejected: %v", err)
+	}
+	row.RequestID = uuid.New()
+	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
+		t.Fatalf("transplanted plan accepted: %v", err)
+	}
+	row.RequestID = requestID
+	planA.Entries[0].Profile = "UNKNOWN_PROFILE"
+	row.Plan, _ = json.Marshal(planA)
+	row.PlanSha256 = executionPlanDigest(requestID, created, row.PolicyVersion, row.ExecutorVersion, row.SchemaVersion, row.Plan)
+	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
+		t.Fatalf("tampered plan accepted: %v", err)
+	}
+	planA.Entries[0].Profile = p.category(planA.Entries[0].Category).Rule.Profile
+	planA.Entries[0].Purpose = "INVENTED_PURPOSE"
+	row.Plan, _ = json.Marshal(planA)
+	row.PlanSha256 = executionPlanDigest(requestID, created, row.PolicyVersion, row.ExecutorVersion, row.SchemaVersion, row.Plan)
+	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
+		t.Fatalf("category-purpose remapping accepted: %v", err)
+	}
+}
+
+func TestRetentionSpecsPreserveApprovedUnits(t *testing.T) {
+	for category, want := range map[string]retentionSpec{
+		"backup-tombstones": {Anchor: caseClosureAnchor, Unit: "CALENDAR_MONTH", Max: 24},
+		"consent-evidence":  {Anchor: "CONSENT_END", Unit: "CALENDAR_YEAR", Max: 3},
+		"privacy-cases":     {Anchor: caseClosureAnchor, Unit: "CALENDAR_MONTH", Max: 24},
+		"sessions":          {Anchor: "SESSION_EXPIRY", Unit: "HOUR", Max: 12},
+	} {
+		if got := categoryRetentionSpec(category, "APPROVE"); got != want {
+			t.Errorf("%s spec=%+v want=%+v", category, got, want)
+		}
 	}
 }
 func TestPartialLifecycleNeverClosesOrRevokesAndChecksGuardians(t *testing.T) {

@@ -271,11 +271,11 @@ func (h PrivacyRequests) detail(w http.ResponseWriter, r *http.Request, status i
 		p.IdentityMethod = stringValue(rcr.IdentityMethod)
 		p.RepresentationMethod = stringValue(rcr.RepresentationMethod)
 		open := rcr.Status == "RECEIVED" || rcr.Status == "UNDER_REVIEW"
-		claimed := rcr.ClaimedBy != nil && *rcr.ClaimedBy == u.ID
-		p.CanClaim = management && open && !claimed
-		p.CanVerify = management && open && claimed
+		claimedByCurrentReviewer := rcr.ClaimedBy != nil && *rcr.ClaimedBy == u.ID
+		p.CanClaim = management && open && rcr.ClaimedBy == nil
+		p.CanVerify = management && open && claimedByCurrentReviewer
 		p.CanDecide = p.CanVerify && p.IdentityVerified && !p.ConflictFlag && (!p.Representative || p.RepresentationVerified)
-		p.CanExtend = management && claimed && !rcr.ExtendedDueAt.Valid && !h.now().After(rcr.DueAt.Time) && rcr.Status != "REFUSED" && rcr.Status != "CANCELLED"
+		p.CanExtend = management && open && claimedByCurrentReviewer && !rcr.ExtendedDueAt.Valid && !h.now().After(rcr.DueAt.Time)
 		p.IdentityMethods = []pages.PrivacyOption{{Value: "IN_PERSON", Label: "Presencial"}, {Value: "EXISTING_CHANNEL", Label: "Canal já verificado"}, {Value: "DOCUMENT_CHECK", Label: "Verificação documental"}}
 		p.RepresentationMethods = []pages.PrivacyOption{{Value: "IN_PERSON", Label: "Presencial"}, {Value: "DOCUMENT_CHECK", Label: "Verificação documental"}}
 		p.ResolutionOptions = []pages.PrivacyOption{{Value: "SEPARATE_APPROVED_REQUEST", Label: "Pedido separado aprovado"}, {Value: "FORMAL_RESOLUTION", Label: "Resolução formal verificada"}}

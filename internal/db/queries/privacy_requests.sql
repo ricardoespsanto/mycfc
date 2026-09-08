@@ -32,6 +32,13 @@ SELECT * FROM data_erasure_requests WHERE public_ref = sqlc.arg(public_ref) FOR 
 -- name: GetPrivacyRequestByIdempotency :one
 SELECT * FROM data_erasure_requests WHERE requester_user_id = sqlc.arg(requester_user_id) AND idempotency_key = sqlc.arg(idempotency_key);
 
+-- name: GetPrivacyExecutionPlan :one
+SELECT * FROM privacy_request_execution_plans WHERE request_id = sqlc.arg(request_id);
+
+-- name: CreatePrivacyExecutionPlan :one
+INSERT INTO privacy_request_execution_plans(request_id,policy_version,executor_version,schema_version,plan,plan_sha256,created_at)
+VALUES(sqlc.arg(request_id),sqlc.arg(policy_version),sqlc.arg(executor_version),sqlc.arg(schema_version),sqlc.arg(plan),sqlc.arg(plan_sha256),sqlc.arg(created_at)) RETURNING *;
+
 -- name: ListPrivacyRequestsForRequester :many
 SELECT * FROM data_erasure_requests WHERE requester_user_id = sqlc.arg(requester_user_id) ORDER BY received_at DESC,id DESC LIMIT 100;
 
@@ -90,8 +97,8 @@ VALUES(sqlc.arg(request_id),sqlc.arg(dependant_id),sqlc.arg(guardian_id_snapshot
 ON CONFLICT(request_id,dependant_id) DO UPDATE SET guardian_id_snapshot=EXCLUDED.guardian_id_snapshot,relationship_updated_at=EXCLUDED.relationship_updated_at,resolution_code=EXCLUDED.resolution_code,related_request_id=EXCLUDED.related_request_id,verified_by=EXCLUDED.verified_by,verified_at=EXCLUDED.verified_at,explanation=EXCLUDED.explanation RETURNING *;
 
 -- name: CreatePrivacyPolicy :one
-INSERT INTO privacy_request_policies(version,category_catalogue,account_closure_enabled,working_retention_days,response_months,extension_months,adopted_at,adopted_by,created_at)
-VALUES(sqlc.arg(version),sqlc.arg(category_catalogue),sqlc.arg(account_closure_enabled),sqlc.narg(working_retention_days),sqlc.arg(response_months),sqlc.arg(extension_months),sqlc.narg(adopted_at),sqlc.narg(adopted_by),sqlc.arg(created_at)) RETURNING *;
+INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,account_closure_enabled,working_retention_days,response_months,extension_months,adopted_at,adopted_by,created_at)
+VALUES(sqlc.arg(version),sqlc.arg(category_catalogue),sqlc.narg(executor_version),sqlc.narg(plan_schema_version),sqlc.arg(account_closure_enabled),sqlc.narg(working_retention_days),sqlc.arg(response_months),sqlc.arg(extension_months),sqlc.narg(adopted_at),sqlc.narg(adopted_by),sqlc.arg(created_at)) RETURNING *;
 
 -- name: GetPrivacyActivationForUpdate :one
 SELECT * FROM privacy_request_activation WHERE singleton = true FOR UPDATE;

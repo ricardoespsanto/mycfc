@@ -17,14 +17,18 @@ import (
 
 func runPrivacyCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("privacy requires grant, revoke, import-policy, activate, deactivate or expire")
+		return errors.New("privacy requires grant, revoke, import-policy, activate, deactivate, hold or expire")
 	}
 	flags := flag.NewFlagSet("privacy "+args[0], flag.ContinueOnError)
 	actorText := flags.String("actor", "", "active adult administrator UUID")
 	targetText := flags.String("user", "", "reviewer UUID")
 	file := flags.String("file", "", "approved policy JSON file")
 	version := flags.String("policy", "", "adopted policy version")
-	ready := flags.Bool("fulfilment-ready", false, "controller confirms evidenced fulfilment route")
+	referenceText := flags.String("reference", "", "privacy case public reference UUID")
+	ownerText := flags.String("owner", "", "active adult accountable for the retention exception")
+	reason := flags.String("reason", "", "retention exception reason: COMPLAINT or LEGAL_HOLD")
+	category := flags.String("category", "", "category from the frozen decision plan")
+	evidence := flags.String("evidence", "", "opaque evidence reference")
 	if e := flags.Parse(args[1:]); e != nil {
 		return e
 	}
@@ -82,7 +86,15 @@ func runPrivacyCommand(ctx context.Context, args []string) error {
 		if strings.TrimSpace(*version) == "" {
 			return errors.New("--policy is required")
 		}
-		if e = s.Activate(ctx, actor, *version, args[0] == "activate", *ready); e != nil {
+		if e = s.Activate(ctx, actor, *version, args[0] == "activate"); e != nil {
+			return e
+		}
+	case "hold":
+		hold, parseErr := parsePrivacyHold(*referenceText, *ownerText, *category, *reason, *evidence)
+		if parseErr != nil {
+			return parseErr
+		}
+		if e = s.AddRetentionException(ctx, actor, hold.reference, hold.owner, hold.category, hold.reason, hold.evidence); e != nil {
 			return e
 		}
 	case "expire":
@@ -95,4 +107,28 @@ func runPrivacyCommand(ctx context.Context, args []string) error {
 		return errors.New("unknown privacy command")
 	}
 	return nil
+}
+
+type privacyHold struct {
+	reference, owner           uuid.UUID
+	category, reason, evidence string
+}
+
+func parsePrivacyHold(referenceText, ownerText, categoryText, reasonText, evidenceText string) (privacyHold, error) {
+	reference, err := uuid.Parse(referenceText)
+	if err != nil {
+		return privacyHold{}, errors.New("valid --reference is required")
+	}
+	owner, err := uuid.Parse(ownerText)
+	if err != nil {
+		return privacyHold{}, errors.New("valid --owner is required")
+	}
+	hold := privacyHold{reference: reference, owner: owner, category: strings.TrimSpace(categoryText), reason: strings.ToUpper(strings.TrimSpace(reasonText)), evidence: strings.TrimSpace(evidenceText)}
+	if hold.category == "" {
+		return privacyHold{}, errors.New("--category is required")
+	}
+	if hold.evidence == "" {
+		return privacyHold{}, errors.New("--evidence is required")
+	}
+	return hold, nil
 }

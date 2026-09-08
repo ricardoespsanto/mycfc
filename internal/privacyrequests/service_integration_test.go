@@ -4,6 +4,7 @@ package privacyrequests
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +83,13 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos"}
 	p := testPolicy()
 	p.Version = "test-" + uuid.NewString()
+	p.WorkingRetentionDays = ApprovedWorkingRetentionDays
+	unsupported := p
+	unsupported.Version = "test-unsupported-" + uuid.NewString()
+	unsupported.ExecutorVersion = "privacy-erasure-executor/v9"
+	if e = s.ImportPolicy(ctx, owner, unsupported); !errors.Is(e, ErrPolicyUnresolved) {
+		t.Fatalf("unsupported executor policy imported: %v", e)
+	}
 	if e = s.ImportPolicy(ctx, owner, p); e != nil {
 		t.Fatal(e)
 	}
@@ -89,7 +98,22 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if e = s.Activate(ctx, owner, p.Version, true, true); e != nil {
+	wrongRetention := p
+	wrongRetention.Version = "test-wrong-retention-" + uuid.NewString()
+	wrongRetention.WorkingRetentionDays = ApprovedWorkingRetentionDays - 1
+	if e = s.ImportPolicy(ctx, owner, wrongRetention); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Activate(ctx, owner, wrongRetention.Version, true); !errors.Is(e, ErrPolicyUnresolved) {
+		t.Fatalf("activate wrong working retention: %v", e)
+	}
+	if e = s.Activate(ctx, owner, p.Version, true); !errors.Is(e, ErrExecutorUnavailable) {
+		t.Fatalf("activation trusted operator assertion: %v", e)
+	}
+	// Isolated integration fixture: production enablement remains impossible
+	// until #111 supplies validated live capabilities and evidence.
+	_, e = pool.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at) VALUES(true,$1,true,true,$2,now())`, p.Version, owner)
+	if e != nil {
 		t.Fatal(e)
 	}
 	t.Run("navigation-lookup-does-not-wait-for-workflow-lock", func(t *testing.T) {
@@ -119,7 +143,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	submit := func(actor, subject uuid.UUID, kind ScopeKind) (dbgen.DataErasureRequest, error) {
 		scope := Scope{Kind: kind}
 		if kind == Categories {
-			scope.Categories = []Category{"alpha", "beta"}
+			scope.Categories = []Category{"identity-core", "profile-core"}
 		}
 		return s.Submit(ctx, SubmitInput{ActorID: actor, SubjectID: subject, RequestKey: uuid.New(), CredentialVersion: 1, Password: "privacy-test-password", IP: actor.String(), PolicyVersion: p.Version, Scope: scope})
 	}
@@ -134,10 +158,14 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 		return r
 	}
-	decisions := map[string]CategoryDecision{"alpha": {Outcome: "APPROVE"}, "beta": {Outcome: "APPROVE"}}
+	decisions := map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "APPROVE"}}
+	closureDecisions := make(map[string]CategoryDecision, len(p.Categories))
+	for _, category := range p.Categories {
+		closureDecisions[category.Key] = CategoryDecision{Outcome: "APPROVE"}
+	}
 	t.Run("receipt-auth-idempotency-atomic-outbox", func(t *testing.T) {
 		actor := user(nil)
-		in := SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 1, Password: "wrong", IP: actor.String(), PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"alpha"}}}
+		in := SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 1, Password: "wrong", IP: actor.String(), PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"identity-core"}}}
 		if _, e = s.Submit(ctx, in); !errors.Is(e, ErrForbidden) {
 			t.Fatal(e)
 		}
@@ -189,7 +217,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		clock := s
 		now := time.Now().UTC()
 		clock.Now = func() time.Time { return now }
-		in := SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 0, Password: "privacy-test-password", IP: ip, PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"alpha"}}}
+		in := SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 0, Password: "privacy-test-password", IP: ip, PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"identity-core"}}}
 		if _, err := clock.Submit(ctx, in); !errors.Is(err, ErrForbidden) {
 			t.Fatalf("stale credential: %v", err)
 		}
@@ -221,7 +249,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		const sharedIP = "198.51.100.110"
 		for i := 0; i < 12; i++ {
 			actor := user(nil)
-			_, err := s.Submit(ctx, SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 1, Password: "privacy-test-password", IP: sharedIP, PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"alpha"}}})
+			_, err := s.Submit(ctx, SubmitInput{ActorID: actor, SubjectID: actor, RequestKey: uuid.New(), CredentialVersion: 1, Password: "privacy-test-password", IP: sharedIP, PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"identity-core"}}})
 			if err != nil {
 				t.Fatalf("valid shared-IP submission %d: %v", i+1, err)
 			}
@@ -391,10 +419,31 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		r = claimVerify(r, false)
-		r, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "partial", PolicyVersion: p.Version, Explanation: "Uma categoria aguarda conservação aprovada.", Decisions: map[string]CategoryDecision{"alpha": {Outcome: "APPROVE"}, "beta": {Outcome: "RETAIN", Ground: "HOLD"}}})
+		if r.ClaimedBy == nil {
+			t.Fatal("winning claim was not persisted")
+		}
+		winningReviewer := *r.ClaimedBy
+		r, e = s.Change(ctx, ReviewInput{ActorID: winningReviewer, Reference: r.PublicRef, Version: r.Version, Action: "verify", IdentityVerified: true, IdentityMethod: "IN_PERSON"})
+		if e != nil {
+			t.Fatal(e)
+		}
+		r, e = s.Change(ctx, ReviewInput{ActorID: winningReviewer, Reference: r.PublicRef, Version: r.Version, Action: "partial", PolicyVersion: p.Version, Explanation: "Uma categoria aguarda conservação aprovada.", Decisions: map[string]CategoryDecision{"identity-core": {Outcome: "APPROVE"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}})
 		if e != nil || r.Status != "PARTIALLY_APPROVED" || r.ClosedAt.Valid {
 			t.Fatal(r.Status, e)
+		}
+		planRow, e := dbgen.New(pool).GetPrivacyExecutionPlan(ctx, r.ID)
+		if e != nil || len(planRow.PlanSha256) != 32 || planRow.ExecutorVersion != SupportedExecutorVersion || planRow.SchemaVersion != SupportedPlanSchemaVersion {
+			t.Fatalf("missing executable plan: %+v %v", planRow, e)
+		}
+		var plan ExecutionPlan
+		if e = json.Unmarshal(planRow.Plan, &plan); e != nil || len(plan.Entries) != 2 || plan.Entries[0].Disposition != "DELETE" || plan.Entries[1].Disposition != "RESTRICT" || plan.Entries[1].RetentionAnchor != caseClosureAnchor || plan.Entries[1].ExpireAfter == nil || plan.Entries[1].ExpireAt != "" {
+			t.Fatalf("invalid executable plan: %+v %v", plan, e)
+		}
+		if _, e = pool.Exec(ctx, "UPDATE privacy_request_execution_plans SET plan=plan WHERE request_id=$1", r.ID); e == nil {
+			t.Fatal("executable plan was mutable")
+		}
+		if _, e = pool.Exec(ctx, "DELETE FROM privacy_request_execution_plans WHERE request_id=$1", r.ID); e == nil {
+			t.Fatal("executable plan was deleted before evidence expiry")
 		}
 		r, e = s.Change(ctx, ReviewInput{ActorID: actor, Reference: r.PublicRef, Version: r.Version, Action: "cancel"})
 		if e != nil || r.Status != "CANCELLED" || !r.EvidenceExpiresAt.Valid {
@@ -407,6 +456,54 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 		if _, e = pool.Exec(ctx, "DELETE FROM data_erasure_request_events WHERE request_id=$1", r.ID); e == nil {
 			t.Fatal("premature audit purge")
+		}
+	})
+	t.Run("decision-plan-is-atomic-with-case-and-event", func(t *testing.T) {
+		actor := user(nil)
+		r, err := submit(actor, actor, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = claimVerify(r, false)
+		_, err = pool.Exec(ctx, `INSERT INTO data_erasure_request_events(request_id,actor_role,actor_ref,action,reason_code,from_status,to_status,version,occurred_at) VALUES($1,'SYSTEM',$2,'IDENTITY_VERIFIED','VERIFICATION_RECORDED','UNDER_REVIEW','UNDER_REVIEW',$3,now())`, r.ID, uuid.New(), r.Version+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Decisão que deve reverter por conflito de auditoria.", Decisions: decisions})
+		if err == nil {
+			t.Fatal("decision unexpectedly committed")
+		}
+		stored, err := dbgen.New(pool).GetPrivacyRequestByRef(ctx, r.PublicRef)
+		if err != nil || stored.Status != "UNDER_REVIEW" || stored.Version != r.Version {
+			t.Fatalf("case escaped rollback: %+v %v", stored, err)
+		}
+		if _, err = dbgen.New(pool).GetPrivacyExecutionPlan(ctx, r.ID); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("plan escaped rollback: %v", err)
+		}
+	})
+	t.Run("claimed-case-cannot-be-stolen-or-extended-after-decision", func(t *testing.T) {
+		actor := user(nil)
+		r, err := submit(actor, actor, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "claim"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Change(ctx, ReviewInput{ActorID: reviewerB, Reference: r.PublicRef, Version: r.Version, Action: "claim"}); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("second reviewer reclaimed case: %v", err)
+		}
+		r, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "verify", IdentityVerified: true, IdentityMethod: "IN_PERSON"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Categorias aprovadas para execução.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "extend", ExtensionMonths: 1, ExtensionReason: "COMPLEXITY"}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("extended decided case: %v", err)
 		}
 	})
 	t.Run("guardian-disclosure-and-current-authority", func(t *testing.T) {
@@ -445,7 +542,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatal(e)
 		}
 		r = claimVerify(r, false)
-		command := ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Decisão explicada.", Decisions: decisions}
+		command := ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Decisão explicada.", Decisions: closureDecisions}
 		if _, e = s.Change(ctx, command); !errors.Is(e, ErrClosureSafeguards) {
 			t.Fatal(e)
 		}
@@ -480,6 +577,65 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if e != nil || openRequest.Status != "AWAITING_EXECUTION" {
 			t.Fatal(openRequest.Status, e)
 		}
+		heldActor := user(nil)
+		heldRequest, e := submit(heldActor, heldActor, Categories)
+		if e != nil {
+			t.Fatal(e)
+		}
+		heldRequest = claimVerify(heldRequest, false)
+		heldRequest, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: heldRequest.PublicRef, Version: heldRequest.Version, Action: "refuse", PolicyVersion: p.Version, Explanation: "Decisão recusada com conservação temporária por reclamação.", Decisions: map[string]CategoryDecision{"identity-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = s.AddRetentionException(ctx, owner, heldRequest.PublicRef, reviewerB, "identity-core", "LEGAL_HOLD", "legal-file-001"); e != nil {
+			t.Fatal(e)
+		}
+		if e = s.AddRetentionException(ctx, owner, heldRequest.PublicRef, reviewerB, "identity-core", "OTHER", "legal-file-002"); !errors.Is(e, ErrInvalid) {
+			t.Fatalf("invalid retention exception reason: %v", e)
+		}
+		if e = s.AddRetentionException(ctx, owner, heldRequest.PublicRef, owner, "profile-core", "LEGAL_HOLD", "legal-file-003"); !errors.Is(e, ErrForbidden) {
+			t.Fatalf("non-reviewer retention owner accepted: %v", e)
+		}
+		var heldCategory, heldPurpose, heldEvidence string
+		var heldFields []string
+		var heldReviewAt, heldExpiresAt time.Time
+		if e = pool.QueryRow(ctx, `SELECT category_key,purpose_code,retained_field_codes,evidence_ref,review_at,expires_at FROM privacy_request_retention_exceptions WHERE request_id=$1`, heldRequest.ID).Scan(&heldCategory, &heldPurpose, &heldFields, &heldEvidence, &heldReviewAt, &heldExpiresAt); e != nil {
+			t.Fatal(e)
+		}
+		if heldCategory != "identity-core" || heldPurpose != "ACCOUNT_IDENTITY" || !slices.Equal(heldFields, []string{"users.id"}) || heldEvidence != "legal-file-001" || !heldReviewAt.Before(heldExpiresAt) {
+			t.Fatalf("retention exception is not plan-derived: category=%q purpose=%q fields=%v evidence=%q review=%v expiry=%v", heldCategory, heldPurpose, heldFields, heldEvidence, heldReviewAt, heldExpiresAt)
+		}
+		if _, e = pool.Exec(ctx, "UPDATE data_erasure_requests SET working_expires_at=now()-interval '1 second',evidence_expires_at=now()-interval '1 second',closed_at=now()-interval '3 years' WHERE id=$1", heldRequest.ID); e != nil {
+			t.Fatal(e)
+		}
+		if _, e = pool.Exec(ctx, "DELETE FROM privacy_request_retention_exceptions WHERE request_id=$1", heldRequest.ID); e == nil {
+			t.Fatal("active retention exception was deletable after case evidence expiry")
+		}
+		heldResult, e := s.Expire(ctx, owner)
+		if e != nil || heldResult.WorkingRecords != 1 || heldResult.EvidenceRecords != 0 {
+			t.Fatalf("retention exception did not permit working scrub and block evidence expiry: result=%+v err=%v", heldResult, e)
+		}
+		var heldWorking bool
+		var heldExplanation string
+		var heldSubject *uuid.UUID
+		if e = pool.QueryRow(ctx, "SELECT working_erased_at IS NOT NULL,decision_explanation,subject_user_id FROM data_erasure_requests WHERE id=$1", heldRequest.ID).Scan(&heldWorking, &heldExplanation, &heldSubject); e != nil {
+			t.Fatal(e)
+		}
+		if !heldWorking || heldExplanation != "" || heldSubject != nil {
+			t.Fatalf("active category hold retained unrelated case working data: erased=%v explanation=%q subject=%v", heldWorking, heldExplanation, heldSubject)
+		}
+		cancelActor := user(nil)
+		cancelled, cancelErr := submit(cancelActor, cancelActor, Categories)
+		if cancelErr != nil {
+			t.Fatal(cancelErr)
+		}
+		cancelled, cancelErr = s.Change(ctx, ReviewInput{ActorID: cancelActor, Reference: cancelled.PublicRef, Version: cancelled.Version, Action: "cancel"})
+		if cancelErr != nil {
+			t.Fatal(cancelErr)
+		}
+		if e = s.AddRetentionException(ctx, owner, cancelled.PublicRef, reviewerB, "identity-core", "LEGAL_HOLD", "legal-file-cancelled"); !errors.Is(e, ErrInvalidTransition) {
+			t.Fatalf("cancelled case accepted category hold without a decision plan: %v", e)
+		}
 		var reviewerAuditBefore, activationAuditBefore int
 		if e = pool.QueryRow(ctx, "SELECT count(*) FROM privacy_reviewer_grant_events").Scan(&reviewerAuditBefore); e != nil {
 			t.Fatal(e)
@@ -500,7 +656,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "extend", ExtensionMonths: 1, ExtensionReason: "COMPLEXITY"}); e == nil {
 			t.Fatal("double extension")
 		}
-		r, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "refuse", PolicyVersion: p.Version, Explanation: "Exceção aprovada para ambas as categorias.", Decisions: map[string]CategoryDecision{"alpha": {Outcome: "RETAIN", Ground: "HOLD"}, "beta": {Outcome: "RETAIN", Ground: "HOLD"}}})
+		r, e = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: r.PublicRef, Version: r.Version, Action: "refuse", PolicyVersion: p.Version, Explanation: "Exceção aprovada para ambas as categorias.", Decisions: map[string]CategoryDecision{"identity-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}, "profile-core": {Outcome: "RETAIN", Ground: "LEGAL_HOLD"}}})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -522,6 +678,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if !working || explanation != "" || subject != nil {
 			t.Fatal("working data retained")
 		}
+		if _, e = dbgen.New(pool).GetPrivacyExecutionPlan(ctx, r.ID); e != nil {
+			t.Fatalf("non-identifying plan did not survive working scrub: %v", e)
+		}
 		_, e = pool.Exec(ctx, "UPDATE data_erasure_requests SET closed_at=now()-interval '3 years',evidence_expires_at=now()-interval '1 day' WHERE id=$1", r.ID)
 		if e != nil {
 			t.Fatal(e)
@@ -529,6 +688,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		result, e = s.Expire(ctx, owner)
 		if e != nil || result.EvidenceRecords != 1 {
 			t.Fatal(result, e)
+		}
+		if _, e = dbgen.New(pool).GetPrivacyExecutionPlan(ctx, r.ID); !errors.Is(e, pgx.ErrNoRows) {
+			t.Fatalf("plan survived evidence expiry: %v", e)
 		}
 		preserved, e := dbgen.New(pool).GetPrivacyRequestByRef(ctx, openRequest.PublicRef)
 		if e != nil || preserved.Status != "AWAITING_EXECUTION" || preserved.WorkingErasedAt.Valid {

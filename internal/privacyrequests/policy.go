@@ -8,20 +8,25 @@ import (
 	"unicode/utf8"
 )
 
+const ApprovedWorkingRetentionDays int32 = 90
+
 // CatalogueEntry is controller-approved metadata, never inferred from account data.
 type CatalogueEntry struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Description string   `json:"description"`
-	Action      string   `json:"action"`
-	Grounds     []Ground `json:"grounds"`
+	Key         string        `json:"key"`
+	Label       string        `json:"label"`
+	Description string        `json:"description"`
+	Rule        ExecutionRule `json:"rule"`
+	Grounds     []Ground      `json:"grounds"`
 }
 type Ground struct {
-	Code  string `json:"code"`
-	Label string `json:"label"`
+	Code  string        `json:"code"`
+	Label string        `json:"label"`
+	Rule  ExecutionRule `json:"rule"`
 }
 type AdoptedPolicy struct {
 	Version               string           `json:"version"`
+	ExecutorVersion       string           `json:"executor_version"`
+	PlanSchemaVersion     string           `json:"plan_schema_version"`
 	Categories            []CatalogueEntry `json:"categories"`
 	AccountClosureEnabled bool             `json:"account_closure_enabled"`
 	WorkingRetentionDays  int32            `json:"working_retention_days"`
@@ -31,9 +36,11 @@ type AdoptedPolicy struct {
 
 func ReadPolicy(row dbgen.PrivacyRequestPolicy) (AdoptedPolicy, error) {
 	p := AdoptedPolicy{Version: row.Version, AccountClosureEnabled: row.AccountClosureEnabled, ResponseMonths: row.ResponseMonths, ExtensionMonths: row.ExtensionMonths}
-	if !row.AdoptedAt.Valid || row.AdoptedBy == nil || row.WorkingRetentionDays == nil {
+	if !row.AdoptedAt.Valid || row.AdoptedBy == nil || row.WorkingRetentionDays == nil || row.ExecutorVersion == nil || row.PlanSchemaVersion == nil {
 		return p, ErrPolicyUnresolved
 	}
+	p.ExecutorVersion = *row.ExecutorVersion
+	p.PlanSchemaVersion = *row.PlanSchemaVersion
 	p.WorkingRetentionDays = *row.WorkingRetentionDays
 	if json.Unmarshal(row.CategoryCatalogue, &p.Categories) != nil || p.Validate() != nil {
 		return p, ErrPolicyUnresolved
@@ -41,22 +48,25 @@ func ReadPolicy(row dbgen.PrivacyRequestPolicy) (AdoptedPolicy, error) {
 	return p, nil
 }
 func (p AdoptedPolicy) Validate() error {
-	if !policyKey.MatchString(p.Version) || len(p.Version) > 80 || p.ResponseMonths != 1 || p.ExtensionMonths != 2 || p.WorkingRetentionDays < 1 || p.WorkingRetentionDays > 36500 || len(p.Categories) == 0 || len(p.Categories) > 50 {
+	if !policyKey.MatchString(p.Version) || len(p.Version) > 80 || p.ExecutorVersion != SupportedExecutorVersion || p.PlanSchemaVersion != SupportedPlanSchemaVersion || p.ResponseMonths != 1 || p.ExtensionMonths != 2 || p.WorkingRetentionDays < 1 || p.WorkingRetentionDays > 36500 || len(p.Categories) == 0 || len(p.Categories) > 50 {
 		return ErrPolicyUnresolved
 	}
 	seen := map[string]bool{}
 	for _, c := range p.Categories {
-		if !policyKey.MatchString(c.Key) || !policyKey.MatchString(c.Action) || seen[c.Key] || !bounded(c.Label, 200) || utf8.RuneCountInString(c.Description) > 1000 {
+		if !policyKey.MatchString(c.Key) || seen[c.Key] || !bounded(c.Label, 200) || utf8.RuneCountInString(c.Description) > 1000 || validateCategoryRule(c.Key, c.Rule, false) != nil {
 			return ErrPolicyUnresolved
 		}
 		seen[c.Key] = true
 		gs := map[string]bool{}
 		for _, g := range c.Grounds {
-			if !policyKey.MatchString(g.Code) || gs[g.Code] || !bounded(g.Label, 200) {
+			if !policyKey.MatchString(g.Code) || gs[g.Code] || !bounded(g.Label, 200) || g.Rule.LegalGround != g.Code || validateCategoryRule(c.Key, g.Rule, true) != nil {
 				return ErrPolicyUnresolved
 			}
 			gs[g.Code] = true
 		}
+	}
+	if p.AccountClosureEnabled && len(seen) != len(categoryContracts) {
+		return ErrPolicyUnresolved
 	}
 	return nil
 }
@@ -67,7 +77,8 @@ func (p AdoptedPolicy) Snapshot(scope Scope) (Policy, error) {
 	out := Policy{Version: p.Version, Adopted: true, Scope: scope.clone()}
 	for _, c := range p.Categories {
 		if scope.Kind == AccountClosure || containsCategory(scope.Categories, c.Key) {
-			out.Actions = append(out.Actions, CategoryAction{Category: Category(c.Key), Action: ActionCode(c.Action)})
+			profile := executionProfiles[c.Rule.Profile]
+			out.Actions = append(out.Actions, CategoryAction{Category: Category(c.Key), Action: ActionCode(profile.Disposition)})
 		}
 	}
 	if !out.validFor(scope) {
@@ -105,52 +116,4 @@ type CategoryDecision struct {
 	Outcome  string `json:"outcome"`
 	Ground   string `json:"ground,omitempty"`
 	Action   string `json:"action"`
-}
-
-func (p AdoptedPolicy) Decisions(scope Scope, inputs map[string]CategoryDecision, action string) ([]CategoryDecision, error) {
-	snapshot, err := p.Snapshot(scope)
-	if err != nil {
-		return nil, err
-	}
-	if len(inputs) != len(snapshot.Actions) {
-		return nil, ErrInvalid
-	}
-	approved := 0
-	out := make([]CategoryDecision, 0, len(inputs))
-	for _, a := range snapshot.Actions {
-		d, ok := inputs[string(a.Category)]
-		if !ok {
-			return nil, ErrInvalid
-		}
-		d.Category = string(a.Category)
-		d.Action = string(a.Action)
-		switch d.Outcome {
-		case "APPROVE":
-			if d.Ground != "" {
-				return nil, ErrInvalid
-			}
-			approved++
-		case "RETAIN":
-			found := false
-			for _, c := range p.Categories {
-				if c.Key == d.Category {
-					for _, g := range c.Grounds {
-						if g.Code == d.Ground {
-							found = true
-						}
-					}
-				}
-			}
-			if !found {
-				return nil, ErrPolicyUnresolved
-			}
-		default:
-			return nil, ErrInvalid
-		}
-		out = append(out, d)
-	}
-	if (action == "approve" && approved != len(out)) || (action == "partial" && (approved == 0 || approved == len(out))) || (action == "refuse" && approved != 0) {
-		return nil, ErrInvalid
-	}
-	return out, nil
 }

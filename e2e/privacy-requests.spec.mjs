@@ -32,7 +32,7 @@ async function register(page, tag) {
   return email;
 }
 
-async function newRequest(page, { closure = false, categories = ['e2e-alpha'], subject = null } = {}) {
+async function newRequest(page, { closure = false, categories = ['identity-core'], subject = null } = {}) {
   await page.goto('/perfil/privacidade/novo');
   await expect(page.locator('#policy_version')).toHaveValue('e2e-privacy-v1');
   if (subject) await page.getByLabel('Pessoa').selectOption(subject);
@@ -110,18 +110,18 @@ test('adult request validates with keyboard focus, deduplicates, sends a generic
   await expect(page.getByRole('link', { name: /Pedidos de apagamento/ })).toBeVisible();
   await newRequest(page);
   await accessibleAt320(page);
-  await page.locator('#category-e2e-alpha').uncheck();
+  await page.locator('#category-identity-core').uncheck();
   await page.getByRole('button', { name: 'Enviar pedido de apagamento' }).click();
   await expect(page.locator('.error-summary')).toBeFocused();
   await page.locator('.error-summary a[href="#categories"]').focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('#categories')).toBeFocused();
-  await page.locator('#category-e2e-alpha').check();
+  await page.locator('#category-identity-core').check();
   await page.getByLabel('Palavra-passe atual').fill('incorrect password');
   await page.getByRole('button', { name: 'Enviar pedido de apagamento' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('.error-summary')).toBeFocused();
-  await expect(page.locator('#category-e2e-alpha')).toBeChecked();
+  await expect(page.locator('#category-identity-core')).toBeChecked();
   const passwordError = page.locator('.error-summary a[href="#password"]');
   await passwordError.focus();
   await page.keyboard.press('Enter');
@@ -167,17 +167,15 @@ test('full closure is claimed, verified and approved while preserving access and
     await staff.page.getByLabel('Meses adicionais').selectOption('1');
     await staff.page.getByLabel('Motivo a comunicar ao requerente').selectOption('COMPLEXITY');
     await staff.page.getByRole('button', { name: 'Prorrogar e comunicar' }).click();
-    await stale.locator('#outcome_e2e-alpha').selectOption('APPROVE');
-    await stale.locator('#outcome_e2e-beta').selectOption('APPROVE');
+    for (const outcome of await stale.locator('select[id^="outcome_"]').all()) await outcome.selectOption('APPROVE');
     await stale.getByLabel('Explicação para o requerente').fill('Decisão obsoleta de teste');
     const rejected = stale.waitForResponse((r) => r.request().method() === 'POST' && r.url().includes(`/admin/privacidade/${ref}`));
     await stale.getByRole('button', { name: 'Aprovar — aguardar execução', exact: true }).click();
     expect((await rejected).status()).toBe(409);
     await expect(receipt(stale)).toContainText('Em análise');
     await stale.close();
-    await staff.page.locator('#outcome_e2e-alpha').selectOption('APPROVE');
-    await staff.page.locator('#outcome_e2e-beta').selectOption('APPROVE');
-    const explanation = 'As duas categorias sintéticas aguardam execução separada.';
+    for (const outcome of await staff.page.locator('select[id^="outcome_"]').all()) await outcome.selectOption('APPROVE');
+    const explanation = 'As categorias do pedido aguardam execução separada.';
     await staff.page.getByLabel('Explicação para o requerente').fill(explanation);
     await accessibleAt320(staff.page);
     await staff.page.getByRole('button', { name: 'Aprovar — aguardar execução', exact: true }).click();
@@ -196,22 +194,22 @@ for (const partial of [true, false]) {
   test(`${partial ? 'partial approval' : 'refusal'} records category grounds and a readable decision`, async ({ page, browser }) => {
     test.setTimeout(90000);
     const email = await register(page, partial ? 'partial' : 'refusal');
-    await newRequest(page, { categories: partial ? ['e2e-alpha', 'e2e-beta'] : ['e2e-alpha'] });
+    await newRequest(page, { categories: partial ? ['identity-core', 'profile-core'] : ['identity-core'] });
     const ref = await submit(page);
     const staff = await review(browser, ref);
     try {
       await verify(staff.page);
-      await staff.page.locator('#outcome_e2e-alpha').selectOption(partial ? 'APPROVE' : 'RETAIN');
-      const retained = partial ? 'e2e-beta' : 'e2e-alpha';
-      if (partial) await staff.page.locator('#outcome_e2e-beta').selectOption('RETAIN');
-      await staff.page.locator(`#ground_${retained}`).selectOption('e2e-hold');
+      await staff.page.locator('#outcome_identity-core').selectOption(partial ? 'APPROVE' : 'RETAIN');
+      const retained = partial ? 'profile-core' : 'identity-core';
+      if (partial) await staff.page.locator('#outcome_profile-core').selectOption('RETAIN');
+      await staff.page.locator(`#ground_${retained}`).selectOption('LEGAL_HOLD');
       const explanation = partial ? 'Conservação parcial exclusivamente sintética.' : 'Recusa exclusivamente sintética e fundamentada.';
       await staff.page.getByLabel('Explicação para o requerente').fill(explanation);
       await staff.page.getByRole('button', { name: partial ? 'Aprovar parcialmente' : 'Recusar com explicação', exact: true }).click();
       await page.reload();
       await expect(receipt(page)).toContainText(partial ? 'Parcialmente aprovado — a aguardar execução' : 'Recusado');
       await expect(page.getByText(explanation, { exact: true }).first()).toBeVisible();
-      await expect(page.getByText(/Fundamento sintético de conservação/)).toBeVisible();
+      await expect(page.getByText(/Conservação legal sintética/)).toBeVisible();
       genericMessages(await privacyMessages(email, 2), ref, explanation);
     } finally { await staff.context.close(); }
   });
@@ -252,7 +250,7 @@ test('guardian receives only a redacted receipt until representation is verified
     await verify(staff.page, true);
     await page.reload();
     await expect(page.getByRole('region', { name: 'Detalhes do pedido' })).toBeVisible();
-    await expect(page.getByText('Categoria sintética alfa', { exact: true })).toBeVisible();
+    await expect(page.getByText('Identidade da conta', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Cancelar pedido', exact: true }).click();
     await expect(receipt(page)).toContainText('Cancelado');
   } finally { await staff.context.close(); }

@@ -450,7 +450,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 		return zero, e
 	}
 	a, requester, subject := us[in.ActorID], us[*r.RequesterUserID], us[*r.SubjectUserID]
-	now := s.now()
+	now := s.now().UTC().Truncate(time.Microsecond)
 	checks := verification(r, requester, subject, now)
 	isReviewer := reviewer(ctx, q, a, now)
 	if in.Action == "cancel" {
@@ -478,6 +478,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 	before := r.Status
 	eventAction, reason := "", ""
 	notify := false
+	var executionPlan *ExecutionPlan
 	if in.Action != "cancel" && in.Action != "extend" && r.Status != "RECEIVED" && r.Status != "UNDER_REVIEW" {
 		return zero, ErrInvalidTransition
 	}
@@ -486,6 +487,9 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 	}
 	switch in.Action {
 	case "claim":
+		if r.ClaimedBy != nil {
+			return zero, ErrInvalidTransition
+		}
 		r.Status = "UNDER_REVIEW"
 		r.ClaimedBy = &a.ID
 		r.ReviewedAt = stamp(now)
@@ -525,7 +529,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 			reason = "REPRESENTATION_CONFLICT"
 		}
 	case "extend":
-		if r.ExtendedDueAt.Valid || now.After(r.DueAt.Time) || in.ExtensionMonths < 1 || in.ExtensionMonths > 2 || !slices.Contains([]string{"COMPLEXITY", "REQUEST_VOLUME"}, in.ExtensionReason) {
+		if (r.Status != "RECEIVED" && r.Status != "UNDER_REVIEW") || r.ExtendedDueAt.Valid || now.After(r.DueAt.Time) || in.ExtensionMonths < 1 || in.ExtensionMonths > 2 || !slices.Contains([]string{"COMPLEXITY", "REQUEST_VOLUME"}, in.ExtensionReason) {
 			return zero, ErrInvalid
 		}
 		r.ExtendedDueAt = stamp(CalendarDeadline(r.ReceivedAt.Time, 1+in.ExtensionMonths))
@@ -554,10 +558,12 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 			if in.PolicyVersion != p.Version || !bounded(in.Explanation, 2000) {
 				return zero, ErrInvalid
 			}
-			decisions, e := p.Decisions(scope, in.Decisions, in.Action)
+			decisions, plan, e := p.DecisionPlan(scope, in.Decisions, in.Action, now)
 			if e != nil {
 				return zero, e
 			}
+			plan.RequestVersion = r.Version + 1
+			executionPlan = &plan
 			r.CategoryDecisions, _ = json.Marshal(decisions)
 			r.DecisionExplanation = strings.TrimSpace(in.Explanation)
 			cmd.Action = Approve
@@ -610,6 +616,20 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 	r, e = saveCase(ctx, q, r, in.Version)
 	if e != nil {
 		return zero, e
+	}
+	if executionPlan != nil {
+		planJSON, marshalErr := json.Marshal(executionPlan)
+		if marshalErr != nil {
+			return zero, ErrPolicyUnresolved
+		}
+		digest := executionPlanDigest(r.ID, now, executionPlan.PolicyVersion, executionPlan.ExecutorVersion, executionPlan.SchemaVersion, planJSON)
+		storedPlan, createErr := q.CreatePrivacyExecutionPlan(ctx, dbgen.CreatePrivacyExecutionPlanParams{RequestID: r.ID, PolicyVersion: executionPlan.PolicyVersion, ExecutorVersion: executionPlan.ExecutorVersion, SchemaVersion: executionPlan.SchemaVersion, Plan: planJSON, PlanSha256: digest, CreatedAt: stamp(now)})
+		if createErr != nil {
+			return zero, createErr
+		}
+		if _, e = ReadExecutionPlan(storedPlan); e != nil {
+			return zero, e
+		}
 	}
 	role := "REVIEWER"
 	if in.Action == "cancel" {

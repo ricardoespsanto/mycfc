@@ -114,14 +114,54 @@ func (q *Queries) CountPrivacyActiveAdministrators(ctx context.Context) (int64, 
 	return count, err
 }
 
+const createPrivacyExecutionPlan = `-- name: CreatePrivacyExecutionPlan :one
+INSERT INTO privacy_request_execution_plans(request_id,policy_version,executor_version,schema_version,plan,plan_sha256,created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING request_id, policy_version, executor_version, schema_version, plan, plan_sha256, created_at
+`
+
+type CreatePrivacyExecutionPlanParams struct {
+	RequestID       uuid.UUID          `json:"request_id"`
+	PolicyVersion   string             `json:"policy_version"`
+	ExecutorVersion string             `json:"executor_version"`
+	SchemaVersion   string             `json:"schema_version"`
+	Plan            []byte             `json:"plan"`
+	PlanSha256      []byte             `json:"plan_sha256"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreatePrivacyExecutionPlan(ctx context.Context, arg CreatePrivacyExecutionPlanParams) (PrivacyRequestExecutionPlan, error) {
+	row := q.db.QueryRow(ctx, createPrivacyExecutionPlan,
+		arg.RequestID,
+		arg.PolicyVersion,
+		arg.ExecutorVersion,
+		arg.SchemaVersion,
+		arg.Plan,
+		arg.PlanSha256,
+		arg.CreatedAt,
+	)
+	var i PrivacyRequestExecutionPlan
+	err := row.Scan(
+		&i.RequestID,
+		&i.PolicyVersion,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.Plan,
+		&i.PlanSha256,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createPrivacyPolicy = `-- name: CreatePrivacyPolicy :one
-INSERT INTO privacy_request_policies(version,category_catalogue,account_closure_enabled,working_retention_days,response_months,extension_months,adopted_at,adopted_by,created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING version, category_catalogue, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by, created_at
+INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,account_closure_enabled,working_retention_days,response_months,extension_months,adopted_at,adopted_by,created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING version, category_catalogue, executor_version, plan_schema_version, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by, created_at
 `
 
 type CreatePrivacyPolicyParams struct {
 	Version               string             `json:"version"`
 	CategoryCatalogue     []byte             `json:"category_catalogue"`
+	ExecutorVersion       *string            `json:"executor_version"`
+	PlanSchemaVersion     *string            `json:"plan_schema_version"`
 	AccountClosureEnabled bool               `json:"account_closure_enabled"`
 	WorkingRetentionDays  *int32             `json:"working_retention_days"`
 	ResponseMonths        int32              `json:"response_months"`
@@ -135,6 +175,8 @@ func (q *Queries) CreatePrivacyPolicy(ctx context.Context, arg CreatePrivacyPoli
 	row := q.db.QueryRow(ctx, createPrivacyPolicy,
 		arg.Version,
 		arg.CategoryCatalogue,
+		arg.ExecutorVersion,
+		arg.PlanSchemaVersion,
 		arg.AccountClosureEnabled,
 		arg.WorkingRetentionDays,
 		arg.ResponseMonths,
@@ -147,6 +189,8 @@ func (q *Queries) CreatePrivacyPolicy(ctx context.Context, arg CreatePrivacyPoli
 	err := row.Scan(
 		&i.Version,
 		&i.CategoryCatalogue,
+		&i.ExecutorVersion,
+		&i.PlanSchemaVersion,
 		&i.AccountClosureEnabled,
 		&i.WorkingRetentionDays,
 		&i.ResponseMonths,
@@ -321,8 +365,27 @@ func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (PrivacyReq
 	return i, err
 }
 
+const getPrivacyExecutionPlan = `-- name: GetPrivacyExecutionPlan :one
+SELECT request_id, policy_version, executor_version, schema_version, plan, plan_sha256, created_at FROM privacy_request_execution_plans WHERE request_id = $1
+`
+
+func (q *Queries) GetPrivacyExecutionPlan(ctx context.Context, requestID uuid.UUID) (PrivacyRequestExecutionPlan, error) {
+	row := q.db.QueryRow(ctx, getPrivacyExecutionPlan, requestID)
+	var i PrivacyRequestExecutionPlan
+	err := row.Scan(
+		&i.RequestID,
+		&i.PolicyVersion,
+		&i.ExecutorVersion,
+		&i.SchemaVersion,
+		&i.Plan,
+		&i.PlanSha256,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getPrivacyPolicy = `-- name: GetPrivacyPolicy :one
-SELECT version, category_catalogue, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by, created_at FROM privacy_request_policies WHERE version = $1
+SELECT version, category_catalogue, executor_version, plan_schema_version, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by, created_at FROM privacy_request_policies WHERE version = $1
 `
 
 func (q *Queries) GetPrivacyPolicy(ctx context.Context, version string) (PrivacyRequestPolicy, error) {
@@ -331,6 +394,8 @@ func (q *Queries) GetPrivacyPolicy(ctx context.Context, version string) (Privacy
 	err := row.Scan(
 		&i.Version,
 		&i.CategoryCatalogue,
+		&i.ExecutorVersion,
+		&i.PlanSchemaVersion,
 		&i.AccountClosureEnabled,
 		&i.WorkingRetentionDays,
 		&i.ResponseMonths,

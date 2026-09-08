@@ -104,3 +104,22 @@ func TestPrivacyDetailDeniedDoesNotExposeCase(t *testing.T) {
 		t.Fatalf("unauthorized response %d", w.Code)
 	}
 }
+
+func TestPrivacyDetailDoesNotOfferAnotherReviewersCaseActions(t *testing.T) {
+	s := privacyHandlerFixture(t)
+	s.view.Record.Status = "UNDER_REVIEW"
+	s.view.Record.DueAt = pgtype.Timestamptz{Time: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), Valid: true}
+	otherReviewer := uuid.New()
+	s.view.Record.ClaimedBy = &otherReviewer
+	r := privacyHandlerRequest(http.MethodGet, "/admin/privacidade/11000000-0000-0000-0000-000000000001", nil)
+	w := httptest.NewRecorder()
+	PrivacyRequests{Service: s, Now: func() time.Time { return time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC) }}.Detail(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	for _, action := range []string{"Assumir análise", "Guardar verificação", "Prorrogar prazo"} {
+		if strings.Contains(w.Body.String(), action) {
+			t.Errorf("offered %q for another reviewer's case", action)
+		}
+	}
+}

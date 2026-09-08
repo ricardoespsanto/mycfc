@@ -1903,6 +1903,16 @@ type PrivacyRequestDependantResolution struct {
 	Explanation           string             `json:"explanation"`
 }
 
+type PrivacyRequestExecutionPlan struct {
+	RequestID       uuid.UUID          `json:"request_id"`
+	PolicyVersion   string             `json:"policy_version"`
+	ExecutorVersion string             `json:"executor_version"`
+	SchemaVersion   string             `json:"schema_version"`
+	Plan            []byte             `json:"plan"`
+	PlanSha256      []byte             `json:"plan_sha256"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type PrivacyRequestMaintenanceEvent struct {
 	ID              uuid.UUID          `json:"id"`
 	ActorRef        uuid.UUID          `json:"actor_ref"`
@@ -1914,6 +1924,8 @@ type PrivacyRequestMaintenanceEvent struct {
 type PrivacyRequestPolicy struct {
 	Version               string             `json:"version"`
 	CategoryCatalogue     []byte             `json:"category_catalogue"`
+	ExecutorVersion       *string            `json:"executor_version"`
+	PlanSchemaVersion     *string            `json:"plan_schema_version"`
 	AccountClosureEnabled bool               `json:"account_closure_enabled"`
 	WorkingRetentionDays  *int32             `json:"working_retention_days"`
 	ResponseMonths        int32              `json:"response_months"`
@@ -1921,6 +1933,21 @@ type PrivacyRequestPolicy struct {
 	AdoptedAt             pgtype.Timestamptz `json:"adopted_at"`
 	AdoptedBy             *uuid.UUID         `json:"adopted_by"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyRequestRetentionException struct {
+	ID                 uuid.UUID          `json:"id"`
+	RequestID          uuid.UUID          `json:"request_id"`
+	OwnerRef           uuid.UUID          `json:"owner_ref"`
+	ActorRef           uuid.UUID          `json:"actor_ref"`
+	CategoryKey        string             `json:"category_key"`
+	PurposeCode        string             `json:"purpose_code"`
+	RetainedFieldCodes []string           `json:"retained_field_codes"`
+	EvidenceRef        string             `json:"evidence_ref"`
+	ReasonCode         string             `json:"reason_code"`
+	ReviewAt           pgtype.Timestamptz `json:"review_at"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
 type PrivacyReviewerGrant struct {

@@ -1,24 +1,25 @@
 # Privacy requests: decision packet for #110
 
-Date: 2026-09-07. Status: the human approved the first four operating choices below on 2026-09-07. Retention-matrix adoption, named reviewer grants, public activation and release remain separate. No GitHub update is implied.
+Date: 2026-09-08. Status: the human approved the first four operating choices on 2026-09-07, then approved a 90-day identifiable working-record period, made completion of the evidenced #111 executor mandatory for activation, and approved the consent, identity, participation-action and periods, technical-retention, backup/restore and external-provider governance groups on 2026-09-08. Source tagging as `v1.14.0` was subsequently approved; external legal/category facts, factual provider evidence, named reviewer grants, merge, public activation and deployment remain separate.
 
 ## Outcome and current boundary
 
 An adult can request and track erasure, and a specifically authorized reviewer can verify identity, resolve dependant relationships, and record an explained decision. The workflow must not claim data was erased before the separate #111 executor completes its required work.
 
-Public legal pages and registration consent corrections have shipped. #109 remains open for retention-matrix sign-off. Existing account-to-dependant links do not establish verified legal representation. Existing credential versions provide the session-revocation foundation.
+Public legal pages and registration consent corrections have shipped. #109 remains open for external legal/category facts, factual provider evidence and the post-acceptance implementation audit. Privacy-case records, consent evidence, core identity, participation/history actions and internal periods, technical retention, backup/restoration and provider governance were approved on 7–8 September 2026. Existing account-to-dependant links do not establish verified legal representation. Existing credential versions provide the session-revocation foundation.
 
 ## Approved operating choices and remaining evidence
 
-Approval covers explicit privacy-review capability, access preserved until actual closure execution, verified representation and no orphaned dependants, and 24 months of minimal closed-case evidence. It does not assign authority to any account or approve the wider retention matrix. The approval/evidence column below preserves the remaining operational requirements; the four product choices themselves need no further approval.
+Approval covers explicit privacy-review capability, access preserved until actual closure execution, verified representation and no orphaned dependants, 90 days of identifiable closed-case working records, 24 months of minimal closed-case evidence, the internal matrix groups listed below, and a mandatory completed #111 executor before activation. It does not assign authority to any account, settle external legal/category facts, verify provider evidence or adopt a production catalogue. The approval/evidence column below preserves those remaining requirements; the approved product choices themselves need no further approval.
 
 | Decision | Product choice | Remaining evidence |
 |---|---|---|
 | Reviewer authority | Introduce an explicit privacy-case capability, granted and revoked with an actor audit. General administrator access alone grants no case access. Prevent self-review and self-approval. | CFC designates the authorized reviewer(s) and grant authority; no account is granted access by this proposal. |
 | Account access | Submission and approval preserve access. Only an explicit start-processing operation for account closure disables authentication and revokes sessions, atomically with accepting execution work. Category-only erasure preserves account access unless the approved category requires a specific restriction. | Approved; enforce atomically at the future executor boundary. |
 | Minors and adult closure | Allow a request to be received through the existing relationship, but require case-specific verification of representation before a decision or disclosure. A conflict pauses dependent actions. Adult closure cannot proceed until every dependant has a verified transfer or separate approved resolution. | Policy approved; designate who validates representation and record evidence for each actual case. Do not treat a browser ID or existing guardian link as proof. |
-| Minimum case evidence | Retain minimal reference, dates, decision/result codes and evidence expiry for 24 months after case closure; remove active subject/requester links when execution permits. Keep identifiable working records separately and only while necessary. A documented exception must have an owner, reason and expiry. | Duration approved as a product policy, not a claim about a legally required period. Working-record retention and individual exceptions remain separate. |
-| Retention matrix | Review and adopt each applicable category/action/period in `docs/legal/matriz-conservacao.md`; capture the approved matrix version on every decision. Keep unresolved external contracts, sporting/insurance obligations and backup periods explicitly unresolved. | Category-level sign-off and the outstanding operational evidence. Approval of the four choices above does not approve this matrix. |
+| Case records | Retain identifiable working records for 90 calendar days after case closure. Retain minimal reference, dates, decision/result codes and evidence expiry for 24 months after closure; remove active subject/requester links when execution permits. Any complaint or legal-hold exception must record an owner, reason and explicit expiry. | Durations approved as product policy, not a claim about a legally required period. Apply and periodically review every individual exception. |
+| Retention matrix | Review and adopt each applicable category/action/period in `docs/legal/matriz-conservacao.md`; capture the approved matrix version on every decision. Privacy-case records, consent evidence, core identity, participation/history actions and internal periods, technical retention, backup/restore policy and provider governance are approved. Policy approval does not represent implementation or provider evidence. | Confirm external federation, insurance, accident, fiscal/payment, liability and health-basis facts plus provider contracts, regions, subprocessors, transfers, settings and other operational evidence. |
+| Fulfilment route | Do not activate the public workflow until #111 provides a completed, tested and evidenced executor. A manual fulfilment route is not sufficient for activation. | Complete #111, including restore-safe deletion-ledger replay and object-version deletion evidence. |
 
 ## Proposed story scope
 
@@ -49,9 +50,9 @@ Excluded: actual cross-store deletion, provider revocation, object-version clean
 
 ## Delivery and evidence
 
-Before exposing the workflow, approve the exact selectable category scopes from the adopted matrix and a schedule for identifiable working explanations distinct from minimal closed-case evidence. Name an alternate reviewer for conflicts. Preserve the original receipt date through identity verification; revoke representative case access when the underlying relationship or authority ends.
+Before exposing the workflow, approve the exact selectable category scopes from the adopted matrix and configure the approved 90-calendar-day schedule for identifiable working explanations, distinct from minimal closed-case evidence. Name an alternate reviewer for conflicts. Preserve the original receipt date through identity verification; revoke representative case access when the underlying relationship or authority ends.
 
-Public activation also requires a functioning #111 executor or a separately approved, evidenced manual fulfilment route. Do not accumulate live approved cases behind an unavailable executor. Preparation of #110 can proceed independently, but narrowing its currently recorded dependency on #109 requires an approved issue update.
+Public activation requires the completed, tested and evidenced #111 executor. A manual fulfilment route is not sufficient. Do not accumulate live approved cases behind an unavailable executor. Preparation of #110 can proceed independently, but narrowing its currently recorded dependency on #109 requires an approved issue update.
 
 Suggested existing label: enhancement. Keep #110 as the request/review story and #111 as execution. Do not close #109 until its remaining acceptance evidence exists.
 
@@ -65,7 +66,7 @@ The application now provides the member routes under `/perfil/privacidade` and c
 
 Durable reviewer grants, immutable policy import and activation audit are operated through `cmd/server privacy`. Intake also requires recent password confirmation and the current credential version, with bounded actor and network throttling. Guardian access is recalculated from the current relationship and is redacted until case-specific authority is verified. Notifications use sealed recipient/contact payloads and generic SMTP content so delivery does not depend on a surviving account and does not expose the case in mail or operational logs.
 
-Closed identifiable working material expires on the adopted working-record schedule, while minimal evidence expires 24 calendar months after closure. The explicit maintenance command preserves open awaiting-execution cases plus reviewer and activation audit. `docs/privacy-request-operations.md` records activation, handling, retention and rollback procedures.
+Closed identifiable working material expires 90 calendar days after closure, while minimal evidence expires 24 calendar months after closure. A documented complaint or legal-hold exception requires an owner, reason and explicit expiry. The explicit maintenance command preserves open awaiting-execution cases plus reviewer and activation audit. `docs/privacy-request-operations.md` records activation, handling, retention and rollback procedures.
 
 The workflow remains disabled by default. Synthetic browser fixtures do not adopt production policy, appoint real reviewers or prove fulfilment readiness. Actual erasure, provider/object cleanup and deletion-ledger replay remain #111.
 
