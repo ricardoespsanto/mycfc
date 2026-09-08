@@ -178,6 +178,19 @@ func TestMemberCreateSuccessPreservesValidatedCollectionReturn(t *testing.T) {
 	}
 }
 
+func TestMemberCreateDependentUsesValidatedGuardianValue(t *testing.T) {
+	guardianID := uuid.New()
+	store := &memberWorkflowStore{member: dbgen.GetMemberForAdminRow{ID: guardianID, IsActive: true}}
+	values := url.Values{"account_type": {"dependent"}, "name": {"Rita Segura"}, "date_of_birth": {"2014-01-02"}, "guardian_id": {guardianID.String()}}
+	request := httptest.NewRequest(http.MethodPost, "/admin/membros/criar", strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	(Members{Store: store, Location: time.UTC}).Create(response, request)
+	if response.Code != http.StatusSeeOther || store.createDependent.GuardianID != guardianID || store.createDependent.Name != "Rita Segura" {
+		t.Fatalf("response=%d dependent=%+v", response.Code, store.createDependent)
+	}
+}
+
 func TestMemberWritesMapDuplicateAndUnexpectedPersistenceFailures(t *testing.T) {
 	memberID, guardianID, actorID := uuid.New(), uuid.New(), uuid.New()
 	adultValues := url.Values{"account_type": {"adult"}, "name": {"Ana Segura"}, "date_of_birth": {"1990-01-02"}, "email": {"ana.segura@example.test"}, "password": {"segredo temporario 7"}, "password_confirmation": {"segredo temporario 7"}}
@@ -441,6 +454,7 @@ type memberWorkflowStore struct {
 	deactivated        uuid.UUID
 	credential         dbgen.IssueMinorCredentialParams
 	createAdultErr     error
+	createDependent    dbgen.CreateDependentUserParams
 	createDependentErr error
 	deactivateErr      error
 	credentialErr      error
@@ -461,7 +475,8 @@ func (s *memberWorkflowStore) CreateSeason(_ context.Context, params dbgen.Creat
 func (s *memberWorkflowStore) CreateAdultUser(context.Context, dbgen.CreateAdultUserParams) (dbgen.CreateAdultUserRow, error) {
 	return dbgen.CreateAdultUserRow{}, s.createAdultErr
 }
-func (s *memberWorkflowStore) CreateDependentUser(context.Context, dbgen.CreateDependentUserParams) (dbgen.CreateDependentUserRow, error) {
+func (s *memberWorkflowStore) CreateDependentUser(_ context.Context, params dbgen.CreateDependentUserParams) (dbgen.CreateDependentUserRow, error) {
+	s.createDependent = params
 	return dbgen.CreateDependentUserRow{}, s.createDependentErr
 }
 func (s *memberWorkflowStore) ListMembershipProgrammes(context.Context) ([]dbgen.Programme, error) {

@@ -505,6 +505,75 @@ func TestPrivacyExecutionUsesSeparateConfirmedExecutorAction(t *testing.T) {
 	}
 }
 
+func TestPrivacyExecutionBlockersUseBoundedPublicCopy(t *testing.T) {
+	for code, want := range map[string]string{
+		"EXECUTOR_AUTHORITY_OR_SEPARATION": "pessoa executora autorizada",
+		"IDENTITY_CHANGED":                 "verificação de identidade",
+		"RELATIONSHIP_CHANGED":             "relação atual",
+		"REPRESENTATION_CHANGED":           "representação está incompleta",
+		"DECISION_AUTHORITY":               "autoridade histórica",
+		"CAPABILITIES_UNAVAILABLE":         "operações exigidas",
+		"ACTIVATION_DISABLED":              "execução permanece desativada",
+		"ADMIN_CONTINUITY":                 "última pessoa administradora",
+		"LEGACY_SESSIONS":                  "sessões antigas",
+		"DEPENDANTS_UNRESOLVED":            "dependentes sem transferência",
+		"FUTURE_PRIVATE_DETAIL":            "bloqueio de segurança",
+	} {
+		if got := privacyExecutionBlocker(code); !strings.Contains(got, want) {
+			t.Errorf("blocker %s=%q want substring %q", code, got, want)
+		}
+	}
+}
+
+func TestPrivacyExecutionRejectsMalformedInputsAndMapsFailures(t *testing.T) {
+	actor := uuid.New()
+	t.Run("malformed form", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/admin/privacidade/ref/executar", privacyBrokenBody{})
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+		w := httptest.NewRecorder()
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.StartExecution(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status=%d", w.Code)
+		}
+	})
+	for _, tc := range []struct{ name, ref, version string }{
+		{name: "invalid reference", ref: "invalid", version: "7"},
+		{name: "invalid version", ref: uuid.NewString(), version: "seven"},
+		{name: "non-positive version", ref: uuid.NewString(), version: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ref/executar", url.Values{"version": {tc.version}}, CurrentUser{ID: actor})
+			r.SetPathValue("ref", tc.ref)
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: privacyHandlerFixture(t)}.StartExecution(w, r)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status=%d", w.Code)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		text string
+	}{
+		{name: "forbidden", err: pr.ErrForbidden, want: http.StatusNotFound, text: "Página não encontrada"},
+		{name: "executor unavailable", err: pr.ErrExecutorUnavailable, want: http.StatusUnprocessableEntity, text: "execução não pode começar"},
+		{name: "closure safeguard", err: pr.ErrClosureSafeguards, want: http.StatusUnprocessableEntity, text: "Resolva os dependentes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := privacyHandlerFixture(t)
+			s.startErr = tc.err
+			w := httptest.NewRecorder()
+			PrivacyRequests{Service: s}.StartExecution(w, privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ref/executar", url.Values{"version": {"7"}, "execution_confirmed": {"yes"}}, CurrentUser{ID: actor}))
+			if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.text) {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestPrivacyReviewerCannotSeeExecutorPlanOrBlockers(t *testing.T) {
 	s := privacyHandlerFixture(t)
 	s.view.CanReview = true

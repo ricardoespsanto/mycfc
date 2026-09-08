@@ -47,6 +47,9 @@ func scopeOf(r dbgen.DataErasureRequest) Scope {
 	return Scope{Kind: ScopeKind(r.ScopeKind), Categories: cs}
 }
 func (s Service) begin(ctx context.Context) (pgx.Tx, *dbgen.Queries, error) {
+	if s.Pool == nil {
+		return nil, nil, ErrInvalid
+	}
 	tx, e := s.Pool.Begin(ctx)
 	if e != nil {
 		return nil, nil, e

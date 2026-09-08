@@ -12,6 +12,7 @@ import (
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func executionPlanFixture(t *testing.T) ExecutionPlan {
@@ -93,6 +94,16 @@ func TestExecutionWorkGraphFailsClosed(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func TestExecutionPersistenceHelpersRejectInvalidPlansBeforeDatabaseAccess(t *testing.T) {
+	if _, _, err := createExecutionWorkGraph(context.Background(), nil, uuid.New(), ExecutionPlan{}, time.Now()); !errors.Is(err, ErrExecutorUnavailable) {
+		t.Fatalf("invalid creation plan error=%v", err)
+	}
+	valid, err := exactPersistedExecutionGraph(context.Background(), nil, uuid.New(), ExecutionPlan{})
+	if err != nil || valid {
+		t.Fatalf("invalid persisted plan valid=%v err=%v", valid, err)
 	}
 }
 
@@ -183,6 +194,19 @@ func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	registryWithUnknown := map[string]bool{"FUTURE_UNREGISTERED_ACTION": true}
 	if (Service{ExecutionCapabilities: registryWithUnknown}).ExecutionCapabilitiesReady(unknown) {
 		t.Fatal("registry entry outside the closed operation vocabulary enabled execution")
+	}
+
+	missingOperations := plan
+	missingOperations.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
+	missingOperations.Entries[0].Operations = nil
+	if (Service{ExecutionCapabilities: all}).ExecutionCapabilitiesReady(missingOperations) {
+		t.Fatal("entry without operations enabled execution")
+	}
+	wrongVersion := plan
+	wrongVersion.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
+	wrongVersion.Entries[0].ActionVersion = "privacy-erasure-action/v999"
+	if (Service{ExecutionCapabilities: all}).ExecutionCapabilitiesReady(wrongVersion) {
+		t.Fatal("unsupported action version enabled execution")
 	}
 }
 
@@ -404,5 +428,84 @@ func TestExecutionEntryPointsRejectUntrustedIdentifiersBeforeDatabaseAccess(t *t
 	}
 	if _, err := worker.Heartbeat(context.Background(), ExecutionLease{}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("heartbeat error=%v", err)
+	}
+	if _, err := worker.CompleteCheckpoint(context.Background(), ExecutionLease{}, "UNKNOWN", SupportedActionVersion); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("checkpoint error=%v", err)
+	}
+	if _, err := worker.CompleteJob(context.Background(), ExecutionLease{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("complete error=%v", err)
+	}
+	if _, err := worker.FailJob(context.Background(), ExecutionLease{}, ExecutionFailure{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("failure error=%v", err)
+	}
+	if err := worker.failInTransaction(context.Background(), nil, nil, ExecutionLease{}, ExecutionFailure{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("transaction failure error=%v", err)
+	}
+	if err := service.GrantExecutor(context.Background(), uuid.Nil, uuid.New(), false); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("grant error=%v", err)
+	}
+	validInput := StartInput{ActorID: uuid.New(), Reference: uuid.New(), Version: 2, Confirmed: true}
+	if _, err := service.StartExecution(context.Background(), validInput); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing pool start error=%v", err)
+	}
+	closedPool, err := pgxpool.New(context.Background(), "postgres://unused:unused@127.0.0.1:1/unused?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPool.Close()
+	if _, err = (Service{Pool: closedPool}).StartExecution(context.Background(), validInput); err == nil {
+		t.Fatal("closed service pool error was ignored")
+	}
+}
+
+func TestExecutionWorkerDefaultsBoundsAndClosedPoolErrors(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://unused:unused@127.0.0.1:1/unused?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New()}
+	if worker.leaseDuration() != defaultExecutionLeaseDuration || worker.maxAttempts() != defaultExecutionMaxAttempts || !worker.valid() {
+		t.Fatal("valid defaults rejected")
+	}
+	explicit := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+	if explicit.leaseDuration() != time.Minute || explicit.maxAttempts() != 2 || !explicit.valid() {
+		t.Fatal("valid explicit bounds rejected")
+	}
+	for _, invalid := range []ExecutionWorker{
+		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Millisecond},
+		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: 2 * time.Hour},
+		{Pool: pool, WorkerRef: uuid.New(), MaxAttempts: 101},
+	} {
+		if invalid.valid() {
+			t.Fatalf("invalid worker accepted: %+v", invalid)
+		}
+	}
+	jobID, executionID := uuid.New(), uuid.New()
+	lease := ExecutionLease{Job: ExecutionJob{PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
+		ID: jobID, ExecutionID: executionID, LeaseEpoch: 1, AttemptCount: 1,
+	}, ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New()}}
+	failure := ExecutionFailure{Classification: FailureTerminal, Stage: FailureStageExecute, Code: FailureActionFailed}
+	for name, call := range map[string]func() error{
+		"claim":     func() error { _, err := worker.Claim(context.Background()); return err },
+		"heartbeat": func() error { _, err := worker.Heartbeat(context.Background(), lease); return err },
+		"checkpoint": func() error {
+			_, err := worker.CompleteCheckpoint(context.Background(), lease, "IDENTITY_CLEAR", SupportedActionVersion)
+			return err
+		},
+		"complete": func() error { _, err := worker.CompleteJob(context.Background(), lease); return err },
+		"fail":     func() error { _, err := worker.FailJob(context.Background(), lease, failure); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil {
+				t.Fatal("closed pool error was not propagated")
+			}
+		})
+	}
+	if retryDelay(0) != time.Minute {
+		t.Fatal("non-positive attempts must use the first bounded delay")
+	}
+	if err := recordAccessRevocation(context.Background(), nil, uuid.New(), "STAFF_GRANT", "COACH", 0, uuid.New(), time.Now()); err != nil {
+		t.Fatalf("zero revocation count error=%v", err)
 	}
 }

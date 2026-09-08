@@ -9,16 +9,29 @@ import (
 	"github.com/alexedwards/scs/pgxstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type database interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type delegateStore interface {
+	FindCtx(context.Context, string) ([]byte, bool, error)
+	CommitCtx(context.Context, string, []byte, time.Time) error
+	DeleteCtx(context.Context, string) error
+	AllCtx(context.Context) (map[string][]byte, error)
+	StopCleanup()
+}
 
 // PostgresStore preserves the SCS opaque payload while maintaining a separate,
 // indexed subject reference for security revocation. No other session value is
 // copied into relational columns.
 type PostgresStore struct {
-	pool     *pgxpool.Pool
+	pool     database
 	codec    scs.Codec
-	delegate *pgxstore.PostgresStore
+	delegate delegateStore
 }
 
 func New(pool *pgxpool.Pool, codec scs.Codec) *PostgresStore {
@@ -51,8 +64,8 @@ func (s *PostgresStore) AllCtx(ctx context.Context) (map[string][]byte, error) {
 	return s.delegate.AllCtx(ctx)
 }
 
-// The context-free methods satisfy scs.Store. SCS uses the context-aware
-// variants above; these remain safe for direct use in tests and tools.
+// Find satisfies scs.Store. SCS uses the context-aware variants above; these
+// context-free methods remain safe for direct use in tests and tools.
 func (s *PostgresStore) Find(token string) ([]byte, bool, error) {
 	return s.FindCtx(context.Background(), token)
 }

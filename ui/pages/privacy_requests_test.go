@@ -184,17 +184,17 @@ func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
 	if len(fields) != 2 || fields[0].Field != "password" || fields[1].Field != "privacy-request-form" {
 		t.Fatalf("new-form error targets=%+v", fields)
 	}
-	page := PrivacyRequestDetailPage{CanVerify: true, CanDecide: true, CanExtend: true, Representative: true,
+	page := PrivacyRequestDetailPage{CanVerify: true, CanDecide: true, CanExtend: true, CanExecute: true, Representative: true,
 		Categories: []PrivacyCategory{{Key: "photos"}}, Errors: validation.FieldErrors{
 			"identity_method": "identity", "representation_method": "representation", "explanation": "explanation",
 			"outcome_photos": "outcome", "ground_photos": "ground", "extension_months": "months",
-			"extension_reason": "reason", "unexpected": "unexpected",
+			"extension_reason": "reason", "execution_confirmed": "confirmation", "unexpected": "unexpected",
 		}}
 	targets := map[string]bool{}
 	for _, item := range privacyDetailErrors(page) {
 		targets[item.Field] = true
 	}
-	for _, want := range []string{"identity_method", "representation_method", "explanation", "outcome_photos", "ground_photos", "extension_months", "extension_reason", "privacy-receipt"} {
+	for _, want := range []string{"identity_method", "representation_method", "explanation", "outcome_photos", "ground_photos", "extension_months", "extension_reason", "execution_confirmed", "privacy-receipt"} {
 		if !targets[want] {
 			t.Errorf("detail error target missing %q: %+v", want, targets)
 		}
