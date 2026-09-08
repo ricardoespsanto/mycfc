@@ -197,21 +197,33 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 			started := time.Now()
 			recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(recorder, r)
-			remoteIP := ""
-			if address, ok := RemoteIP(r.Context()); ok {
-				remoteIP = address.String()
+			path, route := r.URL.Path, r.Pattern
+			privacy := false
+			for _, prefix := range []string{"/perfil/privacidade", "/admin/privacidade"} {
+				if path == prefix || strings.HasPrefix(path, prefix+"/") {
+					path, route, privacy = prefix+"/*", prefix+"/*", true
+					break
+				}
 			}
-			logger.InfoContext(r.Context(), "http request",
+			attributes := []any{
 				"method", r.Method,
-				"path", r.URL.Path,
-				"route", r.Pattern,
+				"path", path,
+				"route", route,
 				"status", recorder.status,
 				"bytes", recorder.bytes,
 				"duration_ms", time.Since(started).Milliseconds(),
 				"request_id", RequestID(r.Context()),
-				"remote_ip", remoteIP,
-				"user_id", UserID(r.Context()),
-			)
+			}
+			// Privacy case references and actor/network identifiers belong neither
+			// in access logs nor in unmatched-route diagnostics.
+			if !privacy {
+				remoteIP := ""
+				if address, ok := RemoteIP(r.Context()); ok {
+					remoteIP = address.String()
+				}
+				attributes = append(attributes, "remote_ip", remoteIP, "user_id", UserID(r.Context()))
+			}
+			logger.InfoContext(r.Context(), "http request", attributes...)
 		})
 	}
 }

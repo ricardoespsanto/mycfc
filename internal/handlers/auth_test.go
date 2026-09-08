@@ -28,6 +28,15 @@ type featureFlagLookup struct {
 	err  error
 }
 
+type privacyReviewLookup struct {
+	allowed bool
+	err     error
+}
+
+func (l privacyReviewLookup) CanReview(context.Context, uuid.UUID) (bool, error) {
+	return l.allowed, l.err
+}
+
 func (l featureFlagLookup) ListFeatureFlags(context.Context) ([]dbgen.ListFeatureFlagsRow, error) {
 	return l.rows, l.err
 }
@@ -151,6 +160,35 @@ func TestAuthAllowsSessionFromCurrentCredentialVersion(t *testing.T) {
 	})))
 	if response := authenticatedRequestVersion(t, sessions, id.String(), 2, handler); response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestAuthLoadsPrivacyReviewerCapabilityAndFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lookup  PrivacyReviewLookup
+		want    int
+		allowed bool
+	}{
+		{name: "reviewer", lookup: privacyReviewLookup{allowed: true}, want: http.StatusNoContent, allowed: true},
+		{name: "ordinary member", lookup: privacyReviewLookup{}, want: http.StatusNoContent},
+		{name: "lookup unavailable", lookup: privacyReviewLookup{err: errors.New("privacy grants unavailable")}, want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := uuid.New()
+			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true}}, Privacy: tc.lookup, Sessions: scs.New()}
+			handler := auth.Load(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				user, ok := CurrentUserFromContext(r.Context())
+				if !ok || user.CanReviewPrivacy != tc.allowed {
+					t.Fatalf("privacy capability=%v user=%+v", ok, user)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			response := authenticatedRequest(t, auth.Sessions, id.String(), handler)
+			if response.Code != tc.want {
+				t.Fatalf("status=%d want=%d", response.Code, tc.want)
+			}
+		})
 	}
 }
 

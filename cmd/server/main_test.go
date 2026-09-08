@@ -72,6 +72,46 @@ func TestConfigDatabaseURLEscapesCredentials(t *testing.T) {
 	}
 }
 
+func TestMainDispatchesPrivacyCommand(t *testing.T) {
+	previousArgs := os.Args
+	previousCommand := executePrivacyCommand
+	t.Cleanup(func() {
+		os.Args = previousArgs
+		executePrivacyCommand = previousCommand
+	})
+	os.Args = []string{"mycfc", "privacy", "expire", "--actor", "test-actor"}
+	var got []string
+	executePrivacyCommand = func(_ context.Context, args []string) error {
+		got = append(got, args...)
+		return nil
+	}
+
+	main()
+
+	if strings.Join(got, " ") != "expire --actor test-actor" {
+		t.Fatalf("privacy arguments = %q", got)
+	}
+}
+
+func TestRunServerCommandDispatchesDatabaseCommand(t *testing.T) {
+	if err := runServerCommand(context.Background(), []string{"not-a-command"}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("database command error = %v", err)
+	}
+}
+
+func TestRunServerCommandRedactsPrivacyErrors(t *testing.T) {
+	previousCommand := executePrivacyCommand
+	t.Cleanup(func() { executePrivacyCommand = previousCommand })
+	executePrivacyCommand = func(context.Context, []string) error {
+		return errors.New("private database detail")
+	}
+
+	err := runServerCommand(context.Background(), []string{"privacy", "expire"})
+	if err == nil || err.Error() != "privacy operator command failed" {
+		t.Fatalf("privacy command error = %v", err)
+	}
+}
+
 func TestConfigDatabaseURLAcceptsDatabaseURL(t *testing.T) {
 	cfg := config.Config{DatabaseURL: config.Secret("postgres://user:password@localhost:5432/mycfc?sslmode=disable")}
 

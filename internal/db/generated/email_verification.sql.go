@@ -46,13 +46,14 @@ WITH candidate AS (
   FROM email_outbox outbox
   LEFT JOIN email_verification_tokens verification ON verification.id = outbox.verification_token_id
   LEFT JOIN password_reset_tokens reset ON reset.id = outbox.password_reset_token_id
-  JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
+  LEFT JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= $1)
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < $2))
-    AND COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
+    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION') OR (
+      COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > $1
     AND account.is_active = true AND account.is_dependent = false
-    AND account.email = COALESCE(verification.email, reset.email)
+    AND account.email = COALESCE(verification.email, reset.email)))
   ORDER BY outbox.next_attempt_at, outbox.created_at, outbox.id
   FOR UPDATE OF outbox SKIP LOCKED
   LIMIT 1
@@ -64,8 +65,8 @@ LEFT JOIN email_verification_tokens verification ON verification.id = (SELECT ve
 LEFT JOIN password_reset_tokens reset ON reset.id = (SELECT password_reset_token_id FROM email_outbox WHERE id = candidate.id)
 WHERE outbox.id = candidate.id
 RETURNING outbox.id, outbox.message_type, outbox.verification_token_id, outbox.password_reset_token_id,
-  outbox.sealed_payload, outbox.attempts, COALESCE(verification.user_id, reset.user_id) AS user_id,
-  COALESCE(verification.email, reset.email)::text AS email, COALESCE(verification.expires_at, reset.expires_at) AS expires_at
+  outbox.sealed_payload, outbox.attempts, COALESCE(verification.user_id, reset.user_id, outbox.privacy_requester_id, '00000000-0000-0000-0000-000000000000'::uuid) AS user_id,
+  COALESCE(verification.email, reset.email, '')::text AS email, COALESCE(verification.expires_at, reset.expires_at) AS expires_at
 `
 
 type ClaimEmailOutboxParams struct {

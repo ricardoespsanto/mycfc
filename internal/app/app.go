@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -188,7 +190,7 @@ func New(ctx context.Context) (*Application, error) {
 	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
 	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter(), Logger: logger}
-	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, Logger: logger}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, Logger: logger}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
 		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)
@@ -223,7 +225,10 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation))
+	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos"}
+	auth.Privacy = privacyService
+	privacy := handlers.PrivacyRequests{Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL}
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, privacy))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

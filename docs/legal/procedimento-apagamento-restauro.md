@@ -1,6 +1,6 @@
 # Procedimento de apagamento, fornecedores, objetos e restauro
 
-Estado: proposta `2026-09-04`. Documento operacional interno para #111.
+Estado: política de backup/restauro aprovada em `2026-09-08`; implementação e prova pendentes no #111.
 
 ## Condições de início
 
@@ -31,13 +31,15 @@ Manter lista de notificações necessárias, fundamento de dispensa, tentativas 
 
 Este procedimento descreve o controlo a implementar; **não é uma descrição de capacidade já existente**. Atualmente, o bucket versionado de backups não expira versões não correntes e o ensaio de restauro não reaplica tombstones. Do mesmo modo, uma operação comum de eliminação de fotografia pode deixar versões antigas no armazenamento versionado. Um caso não pode ser declarado tecnicamente concluído com base nestes passos até #111 fechar e testar essas lacunas.
 
-- Backups permanecem cifrados, isolados do serviço e sujeitos ao calendário aprovado; não prometer edição in-place.
-- O ledger de tombstones fica fora do conjunto restaurado ou tem cópia independente e duração superior a 365 dias enquanto esse for o backup mensal máximo.
+- Backups permanecem cifrados, isolados do serviço e sujeitos ao calendário aprovado: diários por 30 dias e mensais por 365 dias; não prometer edição in-place. Versões não correntes e marcadores são eliminados até 24 horas após a janela aplicável.
+- O ledger de tombstones fica cifrado fora do conjunto restaurado, ou com cópia independente, durante 24 meses.
+- Backups Hetzner ficam limitados a sete cópias diárias rotativas. Um snapshot manual exige responsável, motivo e expiração não superior a 30 dias.
 - Um restauro inicia em rede/ambiente isolado, com aplicação impedida de servir tráfego.
+- Email, integrações externas e acesso de utilizadores permanecem bloqueados durante o restauro.
 - Restaurar base, validar integridade, aplicar migrações, importar o ledger mais recente e reaplicar todos os apagamentos cujo dado possa existir no ponto restaurado.
 - Verificar amostras e contagens por categoria, objetos e sessões; só então obter dupla aprovação operacional e abrir tráfego.
 - Registar exercício sem nomes, emails, IP, dados médicos, chaves de objeto ou IDs de fornecedor.
 
 ## Alertas e evidência
 
-Alertar trabalhos bloqueados, repetição esgotada, prazo legal em risco e incompatibilidade ledger/backup. Fazer exercício anual com utilizador sintético maximamente ligado. Guardar resultado, versão da matriz, tempos, falhas e correções; nunca dados reais de atleta.
+Alertar trabalhos bloqueados, repetição esgotada, prazo legal em risco e incompatibilidade ledger/backup. Fazer exercício anual com utilizador sintético maximamente ligado e repetir após qualquer alteração material ao backup, restauro ou executor. Guardar resultado, versão da matriz, tempos, falhas e correções; nunca dados reais de atleta.

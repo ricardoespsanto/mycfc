@@ -1,0 +1,318 @@
+package pages
+
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+templ PrivacyRequests(page PrivacyRequestsPage) {
+	@components.Base(page.Meta, privacyRequestsContent(page))
+}
+
+templ privacyRequestsContent(page PrivacyRequestsPage) {
+	@components.PageHeader("Privacidade", "Pedidos de apagamento", "Acompanhe a receção, a análise e a decisão sobre cada pedido.", nil)
+	@components.StatusMessage(page.Success, "success")
+	@components.StatusMessage(page.Conflict, "error")
+	if page.Management {
+		@privacyQueueFilters(page)
+	}
+	if page.MinorRights {
+		@privacyMinorNotice(page.ContactURL)
+	} else {
+		if page.CanSubmit && !page.Management {
+			<p><a class="action action--primary" href="/perfil/privacidade/novo">Novo pedido</a></p>
+		}
+		<section class="module" aria-label="Pedidos de apagamento">
+			if len(page.Items) == 0 {
+				@components.EmptyState("Sem pedidos", "Os pedidos recebidos aparecerão aqui para acompanhamento.")
+			} else {
+				@components.RecordList("Pedidos de apagamento") {
+					for _, item := range page.Items {
+						<li class="record-item record-item--stacked">
+							<div class="record-item__copy">
+								<h2><a href={ templ.SafeURL(item.URL) }>{ item.Reference }</a></h2>
+								<p>Recebido em { item.ReceivedAt }</p>
+								<p>{ privacyStatus(item.Status) }</p>
+								if page.Management {
+									<p>Prazo de resposta: { item.DueAt }</p>
+									if item.DeadlineWarning != "" {
+										<p class="status-message status-message--error">{ item.DeadlineWarning }</p>
+									}
+								}
+							</div>
+						</li>
+					}
+				}
+			}
+		</section>
+		<p><a href={ templ.SafeURL(privacyContact(page.ContactURL)) }>Contactar o clube sobre os meus direitos</a></p>
+	}
+}
+
+templ PrivacyMinorRights(page PrivacyRequestsPage) {
+	@components.Base(page.Meta, privacyMinorRightsContent(page))
+}
+
+templ privacyMinorRightsContent(page PrivacyRequestsPage) {
+	@components.PageHeader("Privacidade", "Os teus direitos", "", nil)
+	@privacyMinorNotice(page.ContactURL)
+}
+
+templ privacyMinorNotice(contactURL string) {
+	<section class="module"><h2>A tua privacidade</h2><p><a href="/legal/privacidade-menores">Lê o aviso de privacidade para menores</a></p><p><a href={ templ.SafeURL(privacyContact(contactURL)) }>Fala com o clube sobre os teus dados e os teus direitos</a></p></section>
+}
+
+templ PrivacyRequestNew(page PrivacyRequestNewPage) {
+	@components.Base(page.Meta, privacyRequestNewContent(page))
+}
+
+templ privacyRequestNewContent(page PrivacyRequestNewPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "privacy-new", TitleID: "privacy-new-title", Eyebrow: "Privacidade", Title: "Novo pedido de apagamento", Description: "O pedido será analisado antes de qualquer apagamento.", ReturnURL: "/perfil/privacidade"}) {
+		<p>A submissão mantém o acesso à conta. Para pedidos relativos a menores, o clube terá de verificar a autoridade de representação antes de divulgar detalhes ou decidir.</p>
+		<form id="privacy-request-form" tabindex="-1" method="post" action="/perfil/privacidade/novo" class="form-layout">
+			@page.Meta.CSRFField
+			<input id="policy_version" type="hidden" name="policy_version" value={ page.PolicyVersion }/>
+			<input id="request_key" type="hidden" name="request_key" value={ page.RequestKey }/>
+			@components.ErrorSummary(privacyErrors(page.Errors))
+			@components.RequiredNote()
+			@components.FormSection("A quem diz respeito", "Selecione a pessoa a que se refere o pedido.") {
+				@components.FieldLabel("subject_id", "Pessoa", true)
+				<select id="subject_id" name="subject_id" required aria-invalid?={ page.Errors["subject_id"] != "" } aria-describedby="subject_id-error">
+					for _, subject := range page.Subjects {
+						<option value={ subject.Value } selected?={ subject.Value == page.SubjectID }>{ subject.Label }</option>
+					}
+				</select>
+				@components.FieldErrorMessage("subject_id", page.Errors["subject_id"])
+			}
+			@components.FormSection("Âmbito do pedido", "O encerramento da conta e o apagamento de categorias são pedidos diferentes.") {
+				@components.FieldLabel("scope_kind", "Âmbito", true)
+				<select id="scope_kind" name="scope_kind" required aria-invalid?={ page.Errors["scope_kind"] != "" } aria-describedby="scope_kind-error">
+					<option value="">Selecione</option>
+					if page.AccountClosureEnabled {
+						<option value="ACCOUNT_CLOSURE" selected?={ page.ScopeKind == "ACCOUNT_CLOSURE" }>Encerramento da conta</option>
+					}
+					<option value="CATEGORIES" selected?={ page.ScopeKind == "CATEGORIES" }>Categorias de dados</option>
+				</select>
+				@components.FieldErrorMessage("scope_kind", page.Errors["scope_kind"])
+				<fieldset id="categories" tabindex="-1" aria-invalid?={ page.Errors["categories"] != "" } aria-describedby="categories-error">
+					<legend>Categorias — selecione apenas para um pedido por categorias</legend>
+					for _, category := range page.Categories {
+						<label for={ "category-" + category.Key }><input type="checkbox" id={ "category-" + category.Key } name="categories" value={ category.Key } checked?={ category.Selected }/>{ category.Label }</label>
+						if category.Description != "" {
+							<p>{ category.Description }</p>
+						}
+					}
+				</fieldset>
+				@components.FieldErrorMessage("categories", page.Errors["categories"])
+				<p>Versão da política: { page.PolicyVersion }</p>
+			}
+			@components.FormSection("Confirme a sua identidade", "Introduza a sua palavra-passe atual para confirmar o pedido.") {
+				@components.FieldLabel("password", "Palavra-passe atual", true)
+				<input id="password" name="password" type="password" autocomplete="current-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-error"/>
+				@components.FieldErrorMessage("password", page.Errors["password"])
+			}
+			<button class="action action--primary" type="submit">Enviar pedido de apagamento</button>
+		</form>
+	}
+}
+
+templ PrivacyRequestDetail(page PrivacyRequestDetailPage) {
+	@components.Base(page.Meta, privacyRequestDetailContent(page))
+}
+
+templ privacyRequestDetailContent(page PrivacyRequestDetailPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "privacy-detail", TitleID: "privacy-detail-title", Eyebrow: "Privacidade", Title: "Pedido de apagamento", ReturnURL: privacyBase(page.Management)}) {
+		if !page.SafeReceipt {
+			@components.StatusMessage(page.Success, "success")
+			@components.StatusMessage(page.Conflict, "error")
+		}
+		if !page.SafeReceipt {
+			@components.ErrorSummary(privacyDetailErrors(page))
+		}
+		<section id="privacy-receipt" tabindex="-1" class="module" aria-label="Recibo do pedido"><dl><dt>Referência</dt><dd>{ page.Reference }</dd><dt>Recebido em</dt><dd>{ page.ReceivedAt }</dd><dt>Estado</dt><dd>{ privacyStatus(page.Status) }</dd></dl></section>
+		if !page.SafeReceipt {
+			<section class="module" aria-label="Detalhes do pedido">
+				<dl><dt>Pessoa</dt><dd>{ page.SubjectName }</dd><dt>Requerente</dt><dd>{ page.RequesterName }</dd><dt>Âmbito</dt><dd>{ page.ScopeLabel }</dd><dt>Versão da política</dt><dd>{ page.PolicyVersion }</dd><dt>Prazo de resposta</dt><dd>{ page.DueAt }</dd></dl>
+				if page.Status == "AWAITING_EXECUTION" || page.Status == "PARTIALLY_APPROVED" {
+					<p class="callout">Os dados ainda não foram apagados.</p>
+				}
+				for _, category := range page.Categories {
+					<p><strong>{ category.Label }</strong> { category.Description }</p>
+					if category.Outcome != "" {
+						<p>
+							{ privacyOutcome(category.Outcome) }
+							if category.Ground != "" {
+								<span>— { privacyOptionLabel(category.Grounds, category.Ground) }</span>
+							}
+						</p>
+					}
+				}
+				if page.Explanation != "" {
+					<h2>Explicação da decisão</h2>
+					<p>{ page.Explanation }</p>
+				}
+			</section>
+			if len(page.History) > 0 {
+				<section class="module" aria-label="Histórico do pedido">
+					<h2>Histórico</h2>
+					<ol>
+						for _, event := range page.History {
+							<li>
+								<p>{ event.At } — { event.Label }</p>
+								if event.Explanation != "" {
+									<p>{ event.Explanation }</p>
+								}
+							</li>
+						}
+					</ol>
+				</section>
+			}
+			if page.Management {
+				@privacyReviewForms(page)
+			}
+		}
+		if page.CanCancel {
+			<section class="module">
+				<h2>Cancelar o pedido</h2>
+				<p>O cancelamento retira este pedido de análise.</p>
+				<form method="post" action={ templ.SafeURL("/perfil/privacidade/" + page.Reference + "/cancelar") }>
+					@page.Meta.CSRFField
+					<input type="hidden" name="version" value={ page.Version }/><button type="submit" class="action action--secondary">Cancelar pedido</button>
+				</form>
+			</section>
+		}
+		<p><a href={ templ.SafeURL(privacyContact(page.ContactURL)) }>Contactar o clube sobre este pedido</a></p>
+	}
+}
+
+templ privacyReviewForms(page PrivacyRequestDetailPage) {
+	if page.CanClaim {
+		<form method="post" action={ templ.SafeURL(privacyBase(true) + "/" + page.Reference) }>
+			@privacyVersion(page)
+			<button class="action action--primary" name="action" value="claim" type="submit">Assumir análise</button>
+		</form>
+	}
+	if page.CanVerify {
+		<section class="module">
+			<h2>Verificação</h2>
+			<form class="form-layout" method="post" action={ templ.SafeURL(privacyBase(true) + "/" + page.Reference) }>
+				@privacyVersion(page)
+				@components.FieldErrorMessage("identity_method", page.Errors["identity_method"])
+				@components.FieldLabel("identity_method", "Método de verificação", false)
+				<select id="identity_method" name="identity_method" aria-invalid?={ page.Errors["identity_method"] != "" } aria-describedby="identity_method-error">
+					<option value="">Selecione</option>
+					for _, option := range page.IdentityMethods {
+						<option value={ option.Value } selected?={ page.IdentityMethod == option.Value }>{ option.Label }</option>
+					}
+				</select>
+				<label><input type="checkbox" name="identity_verified" value="yes" checked?={ page.IdentityVerified }/>Identidade verificada</label>
+				if page.Representative {
+					@components.FieldErrorMessage("representation_method", page.Errors["representation_method"])
+					<label for="representation_method">Método de verificação da representação</label>
+					<select id="representation_method" name="representation_method" aria-invalid?={ page.Errors["representation_method"] != "" } aria-describedby="representation_method-error">
+						<option value="">Selecione</option>
+						for _, option := range page.RepresentationMethods {
+							<option value={ option.Value } selected?={ page.RepresentationMethod == option.Value }>{ option.Label }</option>
+						}
+					</select>
+					<label><input type="checkbox" name="representation_verified" value="yes" checked?={ page.RepresentationVerified }/>Autoridade de representação verificada para este pedido</label>
+				}
+				<label><input type="checkbox" name="conflict" value="yes" checked?={ page.ConflictFlag }/>Existe um conflito que impede a decisão</label>
+				<button class="action action--secondary" name="action" value="identity-needed" type="submit">Solicitar verificação</button><button class="action action--primary" name="action" value="verify" type="submit">Guardar verificação</button>
+			</form>
+		</section>
+	}
+	if len(page.Dependants) > 0 {
+		<section class="module">
+			<h2>Resolução dos menores a cargo</h2>
+			<p>O encerramento exige uma resolução verificada para cada menor a cargo.</p>
+			for _, dependant := range page.Dependants {
+				<h3>{ dependant.Name }</h3>
+				<p>{ dependant.Resolution } { dependant.ResolvedAt }</p>
+				if dependant.CanResolve {
+					<form class="form-layout" method="post" action={ templ.SafeURL(privacyBase(true) + "/" + page.Reference) }>
+						@privacyVersion(page)
+						<input type="hidden" name="dependant_id" value={ dependant.ID }/>
+						<label for={ "resolution-" + dependant.ID }>Resolução verificada</label>
+						<select id={ "resolution-" + dependant.ID } name="resolution_code" required>
+							<option value="">Selecione</option>
+							for _, option := range page.ResolutionOptions {
+								<option value={ option.Value }>{ option.Label }</option>
+							}
+						</select>
+						<label for={ "related_ref-" + dependant.ID }>Referência do pedido relacionado, se aplicável</label><input id={ "related_ref-" + dependant.ID } name="related_ref" maxlength="80"/>
+						<label for={ "resolution_explanation-" + dependant.ID }>Justificação da resolução</label><textarea id={ "resolution_explanation-" + dependant.ID } name="resolution_explanation" maxlength="2000" required></textarea>
+						<button class="action action--secondary" name="action" value="resolve-dependant" type="submit">Registar resolução</button>
+					</form>
+				}
+			}
+		</section>
+	}
+	if page.CanDecide {
+		<section class="module">
+			<h2>Decisão</h2>
+			<p>A aprovação mantém o acesso à conta e aguarda execução. Não confirma o apagamento.</p>
+			<form class="form-layout" method="post" action={ templ.SafeURL(privacyBase(true) + "/" + page.Reference) }>
+				@privacyVersion(page)
+				<input type="hidden" name="policy_version" value={ page.PolicyVersion }/>
+				for _, category := range page.Categories {
+					@components.FormSection(category.Label, category.Description) {
+						<label for={ "outcome_" + category.Key }>Decisão para a categoria</label><select id={ "outcome_" + category.Key } name={ "outcome_" + category.Key } aria-invalid?={ page.Errors["outcome_" + category.Key] != "" } aria-describedby={ "outcome_" + category.Key + "-error" }><option value="">Selecione</option><option value="APPROVE" selected?={ category.Outcome == "APPROVE" }>Aprovar apagamento</option><option value="RETAIN" selected?={ category.Outcome == "RETAIN" }>Conservar</option></select>
+						@components.FieldErrorMessage("outcome_" + category.Key, page.Errors["outcome_" + category.Key])
+						<label for={ "ground_" + category.Key }>Fundamento de conservação</label>
+						<select id={ "ground_" + category.Key } name={ "ground_" + category.Key } aria-invalid?={ page.Errors["ground_" + category.Key] != "" } aria-describedby={ "ground_" + category.Key + "-error" }>
+							<option value="">Não aplicável</option>
+							for _, ground := range category.Grounds {
+								<option value={ ground.Value } selected?={ category.Ground == ground.Value }>{ ground.Label }</option>
+							}
+						</select>
+						@components.FieldErrorMessage("ground_" + category.Key, page.Errors["ground_" + category.Key])
+					}
+				}
+				@components.FieldErrorMessage("explanation", page.Errors["explanation"])
+				<label for="explanation">Explicação para o requerente</label><textarea id="explanation" name="explanation" maxlength="2000" required aria-invalid?={ page.Errors["explanation"] != "" } aria-describedby="explanation-help explanation-error">{ page.Explanation }</textarea>
+				<p id="explanation-help">Explique a decisão sem incluir documentos de identidade, dados de saúde ou outros detalhes desnecessários.</p>
+				<button class="action action--primary" name="action" value="approve" type="submit">Aprovar — aguardar execução</button><button class="action action--secondary" name="action" value="partial" type="submit">Aprovar parcialmente</button><button class="action action--secondary" name="action" value="refuse" type="submit">Recusar com explicação</button>
+			</form>
+		</section>
+	}
+	if page.CanExtend {
+		<section class="module">
+			<h2>Prorrogar o prazo</h2>
+			<form class="form-layout" method="post" action={ templ.SafeURL(privacyBase(true) + "/" + page.Reference) }>
+				@privacyVersion(page)
+				@components.FieldErrorMessage("extension_months", page.Errors["extension_months"])
+				<label for="extension_months">Meses adicionais</label><select id="extension_months" name="extension_months" aria-invalid?={ page.Errors["extension_months"] != "" } aria-describedby="extension_months-error" required><option value="1">1 mês</option><option value="2">2 meses</option></select>@components.FieldErrorMessage("extension_reason", page.Errors["extension_reason"])
+				<label for="extension_reason">Motivo a comunicar ao requerente</label><select id="extension_reason" name="extension_reason" aria-invalid?={ page.Errors["extension_reason"] != "" } aria-describedby="extension_reason-error" required><option value="">Selecione</option><option value="COMPLEXITY">Complexidade do pedido</option><option value="REQUEST_VOLUME">Número de pedidos</option></select><button class="action action--secondary" name="action" value="extend" type="submit">Prorrogar e comunicar</button>
+			</form>
+		</section>
+	}
+}
+
+templ privacyVersion(page PrivacyRequestDetailPage) {
+	@page.Meta.CSRFField
+	<input type="hidden" name="version" value={ page.Version }/>
+}
+
+templ privacyQueueFilters(page PrivacyRequestsPage) {
+	<form method="get" action="/admin/privacidade" class="form-layout" aria-label="Filtrar pedidos">
+		@components.FieldLabel("status", "Estado", false)
+		<select id="status" name="status">
+			<option value="">Todos os estados</option>
+			for _, option := range page.StatusOptions {
+				<option value={ option.Value } selected?={ page.StatusFilter == option.Value }>{ option.Label }</option>
+			}
+		</select>
+		@components.FieldLabel("deadline", "Prazo de resposta", false)
+		<select id="deadline" name="deadline">
+			<option value="">Todos os prazos</option>
+			for _, option := range page.DeadlineOptions {
+				<option value={ option.Value } selected?={ page.DeadlineFilter == option.Value }>{ option.Label }</option>
+			}
+		</select>
+		@components.FieldLabel("order", "Ordenar por", false)
+		<select id="order" name="order">
+			for _, option := range page.OrderOptions {
+				<option value={ option.Value } selected?={ page.Order == option.Value }>{ option.Label }</option>
+			}
+		</select>
+		<button type="submit" class="action action--secondary">Aplicar filtros</button>
+	</form>
+}

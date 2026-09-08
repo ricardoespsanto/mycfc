@@ -15,7 +15,7 @@ import (
 
 var fingerprintedAsset = regexp.MustCompile(`-[0-9a-f]{12}\.(?:css|js|png)$`)
 
-func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, structuredTraining handlers.StructuredTraining, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation) http.Handler {
+func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing handlers.Landing, login handlers.Login, registration handlers.Registration, emailVerification handlers.EmailVerification, passwordRecovery handlers.PasswordRecovery, auth handlers.Auth, dashboard handlers.Dashboard, repair handlers.Repair, events handlers.Events, announcements handlers.Announcements, training handlers.Training, structuredTraining handlers.StructuredTraining, members handlers.Members, profile handlers.Profile, news handlers.News, suggestions handlers.Suggestions, photoAlbums handlers.PhotoAlbums, foundation handlers.Foundation, privacyHandlers ...handlers.PrivacyRequests) http.Handler {
 	mux := http.NewServeMux()
 	health := handlers.Health{DB: pool}
 	system := handlers.System(foundation)
@@ -45,6 +45,17 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /recuperar-palavra-passe/repor", auth.AnonymousOnly(http.HandlerFunc(passwordRecovery.ResetPost)))
 	mux.HandleFunc("GET /verificar-email", emailVerification.Confirm)
 	mux.Handle("POST /logout", auth.RequireAuthenticated(http.HandlerFunc(auth.Logout)))
+	if len(privacyHandlers) > 0 {
+		privacy := privacyHandlers[0]
+		mux.Handle("GET /perfil/privacidade", auth.RequireAuthenticated(http.HandlerFunc(privacy.Index)))
+		mux.Handle("GET /perfil/privacidade/novo", auth.RequireAuthenticated(http.HandlerFunc(privacy.New)))
+		mux.Handle("POST /perfil/privacidade/novo", auth.RequireAuthenticated(http.HandlerFunc(privacy.Submit)))
+		mux.Handle("GET /perfil/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Detail)))
+		mux.Handle("POST /perfil/privacidade/{ref}/cancelar", auth.RequireAuthenticated(http.HandlerFunc(privacy.Change)))
+		mux.Handle("GET /admin/privacidade", auth.RequireAuthenticated(http.HandlerFunc(privacy.Index)))
+		mux.Handle("GET /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Detail)))
+		mux.Handle("POST /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Change)))
+	}
 	mux.Handle("GET /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Get)))
 	mux.Handle("POST /perfil", auth.RequireAuthenticated(http.HandlerFunc(profile.Post)))
 	mux.Handle("POST /perfil/email-verificacao/reenviar", auth.RequireAuthenticated(http.HandlerFunc(emailVerification.Resend)))
