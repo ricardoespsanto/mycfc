@@ -88,7 +88,7 @@ func TestPrivacyWorkerFailsClosedOnInvalidPayloadOrUnsupportedSender(t *testing.
 func TestPrivacyWorkerRetriesWithoutLoggingSensitiveSMTPError(t *testing.T) {
 	for _, permanent := range []bool{false, true} {
 		store, key, now := privacyDeliveryFixture(t, "PRIVACY_DECISION")
-		var sendErr error = errors.New("network error for private-recipient@example.test https://mycfc.example/legal/direitos")
+		sendErr := errors.New("network error for private-recipient@example.test https://mycfc.example/legal/direitos")
 		if permanent {
 			sendErr = &textproto.Error{Code: 550, Msg: sendErr.Error()}
 		}

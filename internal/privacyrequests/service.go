@@ -38,7 +38,6 @@ func (s Service) now() time.Time {
 	return time.Now().UTC()
 }
 func stamp(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: !t.IsZero()} }
-func ptr[T any](v T) *T                    { return &v }
 func scopeOf(r dbgen.DataErasureRequest) Scope {
 	cs := make([]Category, len(r.Categories))
 	for i, c := range r.Categories {
