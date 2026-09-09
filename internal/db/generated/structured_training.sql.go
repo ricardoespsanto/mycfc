@@ -566,7 +566,7 @@ type CreateTrainingCopyEventParams struct {
 	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
 	DestinationKind string             `json:"destination_kind"`
 	DestinationID   uuid.UUID          `json:"destination_id"`
-	CopiedByID      uuid.UUID          `json:"copied_by_id"`
+	CopiedByID      *uuid.UUID         `json:"copied_by_id"`
 }
 
 func (q *Queries) CreateTrainingCopyEvent(ctx context.Context, arg CreateTrainingCopyEventParams) error {
@@ -691,12 +691,12 @@ RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapsh
 `
 
 type CreateTrainingPrescriptionParams struct {
-	PublicationID  uuid.UUID `json:"publication_id"`
-	Snapshot       []byte    `json:"snapshot"`
-	SnapshotSha256 string    `json:"snapshot_sha256"`
-	SessionID      uuid.UUID `json:"session_id"`
-	MembershipID   uuid.UUID `json:"membership_id"`
-	AthleteUserID  uuid.UUID `json:"athlete_user_id"`
+	PublicationID  uuid.UUID  `json:"publication_id"`
+	Snapshot       []byte     `json:"snapshot"`
+	SnapshotSha256 string     `json:"snapshot_sha256"`
+	SessionID      uuid.UUID  `json:"session_id"`
+	MembershipID   uuid.UUID  `json:"membership_id"`
+	AthleteUserID  *uuid.UUID `json:"athlete_user_id"`
 }
 
 func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (TrainingPrescription, error) {
@@ -2898,7 +2898,7 @@ type ListStructuredTrainingPublicationMembersParams struct {
 
 type ListStructuredTrainingPublicationMembersRow struct {
 	MembershipID  uuid.UUID   `json:"membership_id"`
-	AthleteUserID uuid.UUID   `json:"athlete_user_id"`
+	AthleteUserID *uuid.UUID  `json:"athlete_user_id"`
 	AthleteName   string      `json:"athlete_name"`
 	StartsOn      pgtype.Date `json:"starts_on"`
 	EndsOn        pgtype.Date `json:"ends_on"`

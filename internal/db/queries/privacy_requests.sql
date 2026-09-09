@@ -216,6 +216,11 @@ SELECT id,status,version FROM data_erasure_requests WHERE id=sqlc.arg(id);
 -- name: CallPrivacyWorkerSync :one
 SELECT privacy_worker_sync(sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref))::uuid;
 
+-- name: CallPrivacyWorkerExecuteCheckpoint :one
+SELECT id FROM (
+ SELECT privacy_worker_execute_checkpoint(sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),sqlc.arg(operation_code),sqlc.arg(action_version))::uuid AS id
+) result WHERE id IS NOT NULL;
+
 -- name: TransitionPrivacyRequestExecutionStatus :one
 UPDATE data_erasure_requests SET status=sqlc.arg(to_status),version=version+1,
 closed_at=sqlc.narg(closed_at),evidence_expires_at=sqlc.narg(evidence_expires_at),working_expires_at=sqlc.narg(working_expires_at),updated_at=sqlc.arg(updated_at)

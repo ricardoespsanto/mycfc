@@ -147,11 +147,11 @@ const createUserMembership = `-- name: CreateUserMembership :one
 INSERT INTO user_memberships (
     user_id, season_id, programme_id, team_id, competition_category_id, starts_on, ends_on
 ) VALUES (
-    $1, $2, $3, $4,
+    $1::uuid, $2, $3, $4,
     $5, $6, $7
 )
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at
+          starts_on, ends_on, created_at, updated_at, principal_id
 `
 
 type CreateUserMembershipParams struct {
@@ -186,13 +186,14 @@ func (q *Queries) CreateUserMembership(ctx context.Context, arg CreateUserMember
 		&i.EndsOn,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrincipalID,
 	)
 	return i, err
 }
 
 const endCurrentSeasonMembership = `-- name: EndCurrentSeasonMembership :execrows
 UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
-WHERE user_id = $1 AND season_id = $2
+WHERE user_id = $1::uuid AND season_id = $2
   AND programme_id = $3 AND starts_on <= CURRENT_DATE
   AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
 `
@@ -291,7 +292,7 @@ const listActiveMembershipProgrammeCodesForUser = `-- name: ListActiveMembership
 SELECT programme.code
 FROM user_memberships membership
 JOIN programmes programme ON programme.id = membership.programme_id
-WHERE membership.user_id = $1
+WHERE membership.user_id = $1::uuid
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY programme.code
@@ -338,7 +339,7 @@ JOIN seasons season ON season.id = membership.season_id
 JOIN programmes programme ON programme.id = membership.programme_id
 LEFT JOIN teams team ON team.id = membership.team_id
 LEFT JOIN competition_categories category ON category.id = membership.competition_category_id
-WHERE membership.user_id = $1
+WHERE membership.user_id = $1::uuid
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY season.starts_on DESC, programme.name_pt, team.name NULLS FIRST
@@ -460,11 +461,11 @@ func (q *Queries) ListModalitiesForMembership(ctx context.Context, membershipID 
 
 const upsertCurrentSeasonMembership = `-- name: UpsertCurrentSeasonMembership :one
 INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-VALUES ($1, $2, $3, $4)
+VALUES ($1::uuid, $2, $3, $4)
 ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
 SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at
+          starts_on, ends_on, created_at, updated_at, principal_id
 `
 
 type UpsertCurrentSeasonMembershipParams struct {
@@ -493,6 +494,7 @@ func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertC
 		&i.EndsOn,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrincipalID,
 	)
 	return i, err
 }

@@ -163,14 +163,15 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	}
 	joined := strings.Join(conn.statements, "\n")
 	for _, expected := range []string{
-		`privacy_erasure_job_checkpoints, privacy_erasure_failures FROM PUBLIC`,
-		`REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`,
+		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records FROM PUBLIC`,
+		`REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid)`,
 		`privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 		`privacy_request_execution_plans TO "mycfc_privacy_executor"`,
 		`GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_executor"`,
+		`REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM "mycfc_privacy_executor"`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("hardening statements missing %q", expected)
@@ -184,6 +185,7 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`GRANT INSERT ON TABLE privacy_reviewer_grants`,
 		`GRANT INSERT ON TABLE privacy_executor_grants`,
 		`GRANT INSERT ON TABLE privacy_erasure_executions TO "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_worker_complete_checkpoint`,
 		`ON TABLE users TO "mycfc_privacy_executor"`,
 		`ON TABLE user_platform_roles TO "mycfc_privacy_executor"`,
 		`ON TABLE staff_grants TO "mycfc_privacy_executor"`,
@@ -258,7 +260,7 @@ func TestApplyBaselineAndHardenAppliesBoundaryBeforeCommit(t *testing.T) {
 		t.Fatal("migration transaction was not committed")
 	}
 	joined := strings.Join(tx.statements, "\n")
-	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`) ||
+	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`) ||
 		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) {
 		t.Fatalf("transaction did not contain role boundary: %s", joined)
 	}

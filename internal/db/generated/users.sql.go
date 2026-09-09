@@ -552,9 +552,10 @@ WITH issued AS (
     INSERT INTO minor_credential_audit (minor_user_id, guardian_user_id, actor_user_id, action, issued_login_id)
     SELECT id, $4, $5, $6, $1
     FROM issued
-    RETURNING minor_user_id
+    RETURNING id
 )
-SELECT minor_user_id FROM audited
+SELECT issued.id FROM issued
+WHERE EXISTS (SELECT 1 FROM audited)
 `
 
 type IssueMinorCredentialParams struct {
@@ -575,9 +576,9 @@ func (q *Queries) IssueMinorCredential(ctx context.Context, arg IssueMinorCreden
 		arg.ActorUserID,
 		arg.Action,
 	)
-	var minor_user_id uuid.UUID
-	err := row.Scan(&minor_user_id)
-	return minor_user_id, err
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const listActiveAdultsForAdmin = `-- name: ListActiveAdultsForAdmin :many

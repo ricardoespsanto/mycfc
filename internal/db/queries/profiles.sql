@@ -1,6 +1,6 @@
 -- name: EnsureMemberProfile :exec
 INSERT INTO member_profiles (user_id)
-SELECT id FROM users WHERE id = sqlc.arg(user_id)
+SELECT id FROM users WHERE id = sqlc.arg(user_id) AND is_active AND erased_at IS NULL
 ON CONFLICT (user_id) DO NOTHING;
 
 -- name: GetMemberProfile :one
@@ -17,10 +17,10 @@ SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_
        p.created_at, p.updated_at
 FROM users u
 JOIN member_profiles p ON p.user_id = u.id
-WHERE u.id = sqlc.arg(user_id);
+WHERE u.id = sqlc.arg(user_id) AND u.erased_at IS NULL;
 
 -- name: UpdateMemberProfile :one
-UPDATE member_profiles SET
+UPDATE member_profiles AS profile SET
     phone = sqlc.arg(phone), address_line1 = sqlc.arg(address_line1),
     address_line2 = sqlc.arg(address_line2), postcode = sqlc.arg(postcode),
     locality = sqlc.arg(locality), country_code = sqlc.arg(country_code),
@@ -35,7 +35,8 @@ UPDATE member_profiles SET
     allergies = sqlc.arg(allergies), medical_conditions = sqlc.arg(medical_conditions),
     medication = sqlc.arg(medication), activity_restrictions = sqlc.arg(activity_restrictions),
     medical_notes = sqlc.arg(medical_notes), updated_at = clock_timestamp()
-WHERE user_id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at)
+WHERE profile.user_id = sqlc.arg(user_id) AND profile.updated_at = sqlc.arg(expected_updated_at)
+  AND EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id) AND erased_at IS NULL)
 RETURNING user_id, phone, address_line1, address_line2, postcode, locality,
           country_code, nationality_code, club_member_number, federation_licence_number,
           emergency_contact_name, emergency_contact_relationship, emergency_contact_phone,
@@ -48,7 +49,7 @@ RETURNING user_id, phone, address_line1, address_line2, postcode, locality,
 UPDATE users SET name = sqlc.arg(name), email = sqlc.narg(email),
     email_verified_at = CASE WHEN email IS DISTINCT FROM sqlc.narg(email) THEN NULL ELSE email_verified_at END,
     date_of_birth = sqlc.arg(date_of_birth), updated_at = clock_timestamp()
-WHERE id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at)
+WHERE id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at) AND erased_at IS NULL
 RETURNING updated_at;
 
 -- name: CreateMemberProfileAudit :one
@@ -57,16 +58,18 @@ VALUES (sqlc.arg(actor_user_id), sqlc.arg(subject_user_id), sqlc.arg(action), sq
 RETURNING id;
 
 -- name: UpdateMemberProfilePhoto :one
-UPDATE member_profiles SET photo_object_key = sqlc.arg(photo_object_key),
+UPDATE member_profiles AS profile SET photo_object_key = sqlc.arg(photo_object_key),
     photo_content_type = sqlc.arg(photo_content_type), photo_size_bytes = sqlc.arg(photo_size_bytes),
     photo_consent_form_id = sqlc.arg(photo_consent_form_id), updated_at = clock_timestamp()
-WHERE user_id = sqlc.arg(user_id)
+WHERE profile.user_id = sqlc.arg(user_id)
+  AND EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id) AND erased_at IS NULL)
 RETURNING updated_at;
 
 -- name: ClearMemberProfilePhoto :one
-UPDATE member_profiles SET photo_object_key = NULL, photo_content_type = NULL,
+UPDATE member_profiles AS profile SET photo_object_key = NULL, photo_content_type = NULL,
     photo_size_bytes = NULL, photo_consent_form_id = NULL, updated_at = clock_timestamp()
-WHERE user_id = sqlc.arg(user_id) AND photo_object_key IS NOT NULL
+WHERE profile.user_id = sqlc.arg(user_id) AND profile.photo_object_key IS NOT NULL
+  AND EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id) AND erased_at IS NULL)
 RETURNING updated_at;
 
 -- name: GetMemberAvatar :one
@@ -80,6 +83,7 @@ LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
   AND c.document_version = sqlc.arg(document_version)
   AND c.document_sha256 = sqlc.arg(document_sha256)
 WHERE u.id = sqlc.arg(user_id)
+  AND u.erased_at IS NULL
   AND (u.is_active OR sqlc.arg(is_admin)::boolean)
 ;
 
@@ -89,5 +93,5 @@ SELECT u.id,
        (p.photo_object_key IS NOT NULL)::boolean AS has_photo
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
-WHERE u.guardian_id = sqlc.arg(guardian_id) AND u.is_active AND u.is_dependent
+WHERE u.guardian_id = sqlc.arg(guardian_id) AND u.is_active AND u.is_dependent AND u.erased_at IS NULL
 ORDER BY lower(u.name), u.id;

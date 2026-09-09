@@ -72,7 +72,7 @@ func (h Dashboard) CreateEquipment(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	_, err = h.Equipment.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: objectKey, ImageContentType: contentType, ImageSizeBytes: size, ActorUserID: user.ID})
+	_, err = h.Equipment.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: objectKey, ImageContentType: contentType, ImageSizeBytes: size, ActorUserID: &user.ID})
 	if isUniqueViolation(err) {
 		h.deleteEquipmentObject(r, objectKey)
 		form.Errors.Add("asset_tag", "Já existe um equipamento com este identificador.")
@@ -164,7 +164,7 @@ func (h Dashboard) UpdateEquipment(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	_, err = h.Equipment.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}, AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: imageKey, ImageContentType: imageType, ImageSizeBytes: imageSize, ActorUserID: user.ID})
+	_, err = h.Equipment.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}, AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: imageKey, ImageContentType: imageType, ImageSizeBytes: imageSize, ActorUserID: &user.ID})
 	if isUniqueViolation(err) {
 		h.deleteEquipmentObject(r, newKey)
 		form.Errors.Add("asset_tag", "Já existe um equipamento com este identificador.")
@@ -265,9 +265,9 @@ func (h Dashboard) changeEquipmentLifecycle(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 	var err error
 	if retire {
-		_, err = h.Equipment.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: expectedUpdatedAt, ActorUserID: user.ID})
+		_, err = h.Equipment.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: expectedUpdatedAt, ActorUserID: &user.ID})
 	} else {
-		_, err = h.Equipment.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: id, ActorUserID: user.ID})
+		_, err = h.Equipment.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: id, ActorUserID: &user.ID})
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		if retire {

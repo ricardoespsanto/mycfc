@@ -13,9 +13,10 @@ import (
 )
 
 const clearMemberProfilePhoto = `-- name: ClearMemberProfilePhoto :one
-UPDATE member_profiles SET photo_object_key = NULL, photo_content_type = NULL,
+UPDATE member_profiles AS profile SET photo_object_key = NULL, photo_content_type = NULL,
     photo_size_bytes = NULL, photo_consent_form_id = NULL, updated_at = clock_timestamp()
-WHERE user_id = $1 AND photo_object_key IS NOT NULL
+WHERE profile.user_id = $1 AND profile.photo_object_key IS NOT NULL
+  AND EXISTS (SELECT 1 FROM users WHERE id = $1 AND erased_at IS NULL)
 RETURNING updated_at
 `
 
@@ -33,10 +34,10 @@ RETURNING id
 `
 
 type CreateMemberProfileAuditParams struct {
-	ActorUserID   uuid.UUID `json:"actor_user_id"`
-	SubjectUserID uuid.UUID `json:"subject_user_id"`
-	Action        string    `json:"action"`
-	ChangedFields []string  `json:"changed_fields"`
+	ActorUserID   *uuid.UUID `json:"actor_user_id"`
+	SubjectUserID *uuid.UUID `json:"subject_user_id"`
+	Action        string     `json:"action"`
+	ChangedFields []string   `json:"changed_fields"`
 }
 
 func (q *Queries) CreateMemberProfileAudit(ctx context.Context, arg CreateMemberProfileAuditParams) (uuid.UUID, error) {
@@ -53,7 +54,7 @@ func (q *Queries) CreateMemberProfileAudit(ctx context.Context, arg CreateMember
 
 const ensureMemberProfile = `-- name: EnsureMemberProfile :exec
 INSERT INTO member_profiles (user_id)
-SELECT id FROM users WHERE id = $1
+SELECT id FROM users WHERE id = $1 AND is_active AND erased_at IS NULL
 ON CONFLICT (user_id) DO NOTHING
 `
 
@@ -73,6 +74,7 @@ LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
   AND c.document_version = $1
   AND c.document_sha256 = $2
 WHERE u.id = $3
+  AND u.erased_at IS NULL
   AND (u.is_active OR $4::boolean)
 `
 
@@ -123,7 +125,7 @@ SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_
        p.created_at, p.updated_at
 FROM users u
 JOIN member_profiles p ON p.user_id = u.id
-WHERE u.id = $1
+WHERE u.id = $1 AND u.erased_at IS NULL
 `
 
 type GetMemberProfileRow struct {
@@ -213,7 +215,7 @@ SELECT u.id,
        (p.photo_object_key IS NOT NULL)::boolean AS has_photo
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
-WHERE u.guardian_id = $1 AND u.is_active AND u.is_dependent
+WHERE u.guardian_id = $1 AND u.is_active AND u.is_dependent AND u.erased_at IS NULL
 ORDER BY lower(u.name), u.id
 `
 
@@ -247,7 +249,7 @@ const updateMemberIdentity = `-- name: UpdateMemberIdentity :one
 UPDATE users SET name = $1, email = $2,
     email_verified_at = CASE WHEN email IS DISTINCT FROM $2 THEN NULL ELSE email_verified_at END,
     date_of_birth = $3, updated_at = clock_timestamp()
-WHERE id = $4 AND updated_at = $5
+WHERE id = $4 AND updated_at = $5 AND erased_at IS NULL
 RETURNING updated_at
 `
 
@@ -273,7 +275,7 @@ func (q *Queries) UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIden
 }
 
 const updateMemberProfile = `-- name: UpdateMemberProfile :one
-UPDATE member_profiles SET
+UPDATE member_profiles AS profile SET
     phone = $1, address_line1 = $2,
     address_line2 = $3, postcode = $4,
     locality = $5, country_code = $6,
@@ -288,7 +290,8 @@ UPDATE member_profiles SET
     allergies = $15, medical_conditions = $16,
     medication = $17, activity_restrictions = $18,
     medical_notes = $19, updated_at = clock_timestamp()
-WHERE user_id = $20 AND updated_at = $21
+WHERE profile.user_id = $20 AND profile.updated_at = $21
+  AND EXISTS (SELECT 1 FROM users WHERE id = $20 AND erased_at IS NULL)
 RETURNING user_id, phone, address_line1, address_line2, postcode, locality,
           country_code, nationality_code, club_member_number, federation_licence_number,
           emergency_contact_name, emergency_contact_relationship, emergency_contact_phone,
@@ -379,10 +382,11 @@ func (q *Queries) UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfi
 }
 
 const updateMemberProfilePhoto = `-- name: UpdateMemberProfilePhoto :one
-UPDATE member_profiles SET photo_object_key = $1,
+UPDATE member_profiles AS profile SET photo_object_key = $1,
     photo_content_type = $2, photo_size_bytes = $3,
     photo_consent_form_id = $4, updated_at = clock_timestamp()
-WHERE user_id = $5
+WHERE profile.user_id = $5
+  AND EXISTS (SELECT 1 FROM users WHERE id = $5 AND erased_at IS NULL)
 RETURNING updated_at
 `
 

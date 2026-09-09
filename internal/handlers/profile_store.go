@@ -91,7 +91,7 @@ func (s PostgresProfileStore) View(ctx context.Context, actorID, subjectID uuid.
 		if !canViewProfile(result, actorID, isAdmin) {
 			return pgx.ErrNoRows
 		}
-		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: actorID, SubjectUserID: subjectID, Action: "SENSITIVE_VIEW", ChangedFields: []string{}})
+		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &actorID, SubjectUserID: &subjectID, Action: "SENSITIVE_VIEW", ChangedFields: []string{}})
 		return err
 	})
 	return result, err
@@ -154,7 +154,7 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 			} else if err != nil {
 				return err
 			}
-			if _, err := q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: input.ActorID, SubjectUserID: input.SubjectID, Action: "IDENTITY_UPDATED", ChangedFields: input.IdentityFields}); err != nil {
+			if _, err := q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &input.ActorID, SubjectUserID: &input.SubjectID, Action: "IDENTITY_UPDATED", ChangedFields: input.IdentityFields}); err != nil {
 				return err
 			}
 			if emailChanged {
@@ -168,7 +168,7 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 		} else if err != nil {
 			return err
 		}
-		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: input.ActorID, SubjectUserID: input.SubjectID, Action: "PROFILE_UPDATED", ChangedFields: input.ChangedFields})
+		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &input.ActorID, SubjectUserID: &input.SubjectID, Action: "PROFILE_UPDATED", ChangedFields: input.ChangedFields})
 		return err
 	})
 }
@@ -240,7 +240,7 @@ func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoU
 		if oldKey != nil {
 			action = "PHOTO_REPLACED"
 		}
-		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: input.ActorID, SubjectUserID: input.SubjectID, Action: action, ChangedFields: []string{"photo"}})
+		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &input.ActorID, SubjectUserID: &input.SubjectID, Action: action, ChangedFields: []string{"photo"}})
 		return err
 	})
 	return oldKey, err
@@ -263,7 +263,7 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 		if _, err := q.ClearMemberProfilePhoto(ctx, subjectID); err != nil {
 			return err
 		}
-		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: actorID, SubjectUserID: subjectID, Action: "PHOTO_REMOVED", ChangedFields: []string{"photo"}})
+		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &actorID, SubjectUserID: &subjectID, Action: "PHOTO_REMOVED", ChangedFields: []string{"photo"}})
 		return err
 	})
 	return oldKey, err

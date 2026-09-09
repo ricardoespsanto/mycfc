@@ -2801,7 +2801,9 @@ func (h StructuredTraining) structuredPublicationStates(ctx context.Context, aud
 		}
 		athletes := map[uuid.UUID]bool{}
 		for _, recipient := range recipients {
-			athletes[recipient.AthleteUserID] = true
+			if recipient.AthleteUserID != nil {
+				athletes[*recipient.AthleteUserID] = true
+			}
 		}
 		status := "Rascunho nunca publicado"
 		if row.PublishedRevision > 0 {
@@ -2892,6 +2894,9 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 	}
 	result := make([]StructuredPrescriptionInput, 0, len(recipients))
 	for _, recipient := range recipients {
+		if recipient.AthleteUserID == nil {
+			continue
+		}
 		session, ok := sessions[recipient.SessionID]
 		if !ok {
 			continue
@@ -2912,7 +2917,7 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 			return nil, err
 		}
 		digest := sha256.Sum256(encoded)
-		result = append(result, StructuredPrescriptionInput{SessionID: recipient.SessionID, MembershipID: recipient.MembershipID, AthleteUserID: recipient.AthleteUserID, Snapshot: encoded, SnapshotSHA256: fmt.Sprintf("%x", digest)})
+		result = append(result, StructuredPrescriptionInput{SessionID: recipient.SessionID, MembershipID: recipient.MembershipID, AthleteUserID: *recipient.AthleteUserID, Snapshot: encoded, SnapshotSHA256: fmt.Sprintf("%x", digest)})
 	}
 	return result, nil
 }

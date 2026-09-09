@@ -59,6 +59,12 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		{"worker cannot mutate access revocations", executorRole, "privacy_erasure_access_revocations", "INSERT", false},
 		{"worker cannot mutate plan", executorRole, "privacy_request_execution_plans", "UPDATE", false},
 		{"worker cannot read request events", executorRole, "data_erasure_request_events", "SELECT", false},
+		{"web cannot read restricted records", appRole, "privacy_erasure_restricted_records", "SELECT", false},
+		{"web cannot read pseudonymous principals", appRole, "privacy_pseudonymous_principals", "SELECT", false},
+		{"worker reads retention anchors", executorRole, "privacy_erasure_retention_anchors", "SELECT", true},
+		{"worker cannot update memberships", executorRole, "user_memberships", "UPDATE", false},
+		{"worker cannot update equipment audit", executorRole, "equipment_audit_events", "UPDATE", false},
+		{"worker cannot update pseudonymous principals", executorRole, "privacy_pseudonymous_principals", "UPDATE", false},
 	} {
 		t.Run(check.name, func(t *testing.T) {
 			var got bool
@@ -97,12 +103,15 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			}
 		})
 	}
-	var canExecute bool
-	if err := tx.QueryRow(ctx, `SELECT has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE')`, executorRole).Scan(&canExecute); err != nil {
+	var canExecute, canMutate, canBypass bool
+	if err := tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute {
-		t.Fatal("worker cannot execute fenced claim routine")
+	if !canExecute || !canMutate || canBypass {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v", canExecute, canMutate, canBypass)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)

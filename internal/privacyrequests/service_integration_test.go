@@ -9,18 +9,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPrivacyServiceTransactions(t *testing.T) {
@@ -94,6 +96,13 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			capabilities[operation] = true
 		}
 	}
+	productionRelationalCapabilities := relationalExecutableOperations
+	testRelationalCapabilities := maps.Clone(productionRelationalCapabilities)
+	for operation := range capabilities {
+		testRelationalCapabilities[operation] = true
+	}
+	relationalExecutableOperations = testRelationalCapabilities
+	defer func() { relationalExecutableOperations = productionRelationalCapabilities }()
 	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos", ExecutionCapabilities: capabilities}
 	p := testPolicy()
 	p.Version = "test-" + uuid.NewString()
@@ -243,6 +252,438 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	for _, category := range p.Categories {
 		closureDecisions[category.Key] = CategoryDecision{Outcome: "APPROVE"}
 	}
+	t.Run("unsupported-account-closure-cannot-start-or-cut-off-access", func(t *testing.T) {
+		saved := relationalExecutableOperations
+		relationalExecutableOperations = productionRelationalCapabilities
+		defer func() { relationalExecutableOperations = saved }()
+		subject := user(nil)
+		request, err := submit(subject, subject, AccountClosure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Encerramento bloqueado por operações sem implementação.", Decisions: closureDecisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var beforeCredential int64
+		if err = pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&beforeCredential); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("unsupported closure start error=%v", err)
+		}
+		var active bool
+		var credential int64
+		var executions int
+		if err = pool.QueryRow(ctx, `SELECT is_active,credential_version,(SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$2) FROM users WHERE id=$1`, subject, request.ID).Scan(&active, &credential, &executions); err != nil {
+			t.Fatal(err)
+		}
+		if !active || credential != beforeCredential || executions != 0 {
+			t.Fatalf("unsupported closure mutated access active=%v credential=%d/%d executions=%d", active, credential, beforeCredential, executions)
+		}
+		if _, err = s.Change(ctx, ReviewInput{ActorID: subject, Reference: request.PublicRef, Version: request.Version, Action: "cancel"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("audit-actor-anonymisation-is-fenced-non-linking-and-idempotent", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		var subjectEmail string
+		var credentialVersion int64
+		if err := pool.QueryRow(ctx, `SELECT email::text,credential_version FROM users WHERE id=$1`, subject).Scan(&subjectEmail, &credentialVersion); err != nil {
+			t.Fatal(err)
+		}
+		equipmentID := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO equipment(id,asset_tag,name,type,status) VALUES($1,$2,'Barco auditado','Boat','Operational')`, equipmentID, "AUD-"+uuid.NewString()[:8]); err != nil {
+			t.Fatal(err)
+		}
+		canary := subject.String() + " Pessoa teste " + subjectEmail
+		if _, err := pool.Exec(ctx, `INSERT INTO equipment_audit_events(equipment_id,actor_user_id,action,before_state,after_state)
+			VALUES($1,$2,'CREATED',jsonb_build_object($4::text,$3::text,'asset_tag','kept'),jsonb_build_object('nested',jsonb_build_array($3::text),'status','Operational'))`, equipmentID, subject, canary, subject.String()); err != nil {
+			t.Fatal(err)
+		}
+		albumID := uuid.New()
+		albumTx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = albumTx.Exec(ctx, `INSERT INTO photo_albums(id,title,created_by_id) VALUES($1,'Álbum auditado',$2)`, albumID, subject); err != nil {
+			_ = albumTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err = albumTx.Exec(ctx, `INSERT INTO photo_album_programme_audiences(album_id,programme_id) SELECT $1,id FROM programmes WHERE code='Leisure'`, albumID); err != nil {
+			_ = albumTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err = albumTx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO member_profile_audit_events(actor_user_id,subject_user_id,action,changed_fields)
+			VALUES($1,$1,'SENSITIVE_VIEW','{}')`, subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO feature_flag_events(feature_key,previous_mode,new_mode,actor_user_id)
+			VALUES('suggestions','ENABLED','ADMIN_ONLY',$1)`, subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE equipment_audit_events SET occurred_at=occurred_at WHERE actor_user_id=$1`, subject); err == nil {
+			t.Fatal("ordinary audit mutation bypassed append-only protection")
+		}
+		request, err := s.Submit(ctx, SubmitInput{ActorID: subject, SubjectID: subject, RequestKey: uuid.New(), CredentialVersion: credentialVersion, Password: "privacy-test-password", IP: subject.String(), PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"audit-evidence"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Anonimização de auditoria aprovada.", Decisions: map[string]CategoryDecision{"audit-evidence": {Outcome: "APPROVE"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+		lease, err := worker.Claim(ctx)
+		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 1 || lease.Checkpoints[0].OperationCode != "AUDIT_ACTOR_ANONYMIZE" {
+			t.Fatalf("audit lease=%+v checkpoints=%+v err=%v", lease.Job, lease.Checkpoints, err)
+		}
+
+		executorRole := "privacy_audit_executor_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		executorPassword := "audit-executor-test-password"
+		if _, err = admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{executorRole}.Sanitize()+" LOGIN PASSWORD '"+executorPassword+"'"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = admin.Exec(ctx, "DROP ROLE "+pgx.Identifier{executorRole}.Sanitize()) }()
+		if _, err = pool.Exec(ctx, "GRANT USAGE ON SCHEMA "+schema+" TO "+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+schema+`.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) TO `+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		executorConfig, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executorConfig.User, executorConfig.Password = executorRole, executorPassword
+		executorConfig.RuntimeParams["search_path"] = schemaName + ",public"
+		executorConn, err := pgx.ConnectConfig(ctx, executorConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer executorConn.Close(ctx)
+		checkpoint := lease.Checkpoints[0]
+		var checkpointID uuid.UUID
+		if err = executorConn.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, worker.WorkerRef, checkpoint.OperationCode, checkpoint.ActionVersion).Scan(&checkpointID); err != nil {
+			t.Fatal(err)
+		}
+		if checkpointID != checkpoint.ID {
+			t.Fatalf("checkpoint id=%s want=%s", checkpointID, checkpoint.ID)
+		}
+		var active bool
+		var afterCredential int64
+		var principalCount, liveReferenceCount, unsanitizedCount int
+		if err = pool.QueryRow(ctx, `SELECT is_active,credential_version FROM users WHERE id=$1`, subject).Scan(&active, &afterCredential); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_pseudonymous_principals WHERE purpose='AUDIT'`).Scan(&principalCount); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM equipment_audit_events WHERE actor_user_id=$1)+
+			(SELECT count(*) FROM member_profile_audit_events WHERE actor_user_id=$1 OR subject_user_id=$1)+
+			(SELECT count(*) FROM feature_flag_events WHERE actor_user_id=$1)`, subject).Scan(&liveReferenceCount); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM equipment_audit_events
+			WHERE equipment_id=$1 AND EXISTS(
+			 SELECT 1 FROM unnest(ARRAY[$2::text,$3::text,$4::text]) canary
+			 WHERE lower(before_state::text) LIKE '%'||lower(canary)||'%'
+			    OR lower(after_state::text) LIKE '%'||lower(canary)||'%'
+			)`, equipmentID, subject.String(), "Pessoa teste", subjectEmail).Scan(&unsanitizedCount); err != nil {
+			t.Fatal(err)
+		}
+		if !active || afterCredential != credentialVersion || principalCount != 1 || liveReferenceCount != 0 || unsanitizedCount != 0 {
+			t.Fatalf("audit result active=%v credential=%d/%d principals=%d live_refs=%d canaries=%d", active, afterCredential, credentialVersion, principalCount, liveReferenceCount, unsanitizedCount)
+		}
+		auditQueries := dbgen.New(pool)
+		equipmentEvents, err := auditQueries.ListEquipmentAuditEvents(ctx, dbgen.ListEquipmentAuditEventsParams{EquipmentID: equipmentID, RowLimit: 10})
+		if err != nil || len(equipmentEvents) != 1 || equipmentEvents[0].ActorName != "Utilizador removido" {
+			t.Fatalf("pseudonymous equipment audit was hidden or identified: events=%+v err=%v", equipmentEvents, err)
+		}
+		albumEvents, err := auditQueries.ListPhotoAlbumAuditEvents(ctx, albumID)
+		if err != nil || len(albumEvents) != 1 || albumEvents[0].ActorUserID != nil || albumEvents[0].ActorName != "Utilizador removido" {
+			t.Fatalf("pseudonymous album audit was hidden or identified: events=%+v err=%v", albumEvents, err)
+		}
+		featureEvents, err := auditQueries.ListFeatureFlagEvents(ctx, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		featureVisible := false
+		for _, event := range featureEvents {
+			if event.FeatureKey == "suggestions" && event.ActorUserID == nil && event.ActorName == "Utilizador removido" {
+				featureVisible = true
+				break
+			}
+		}
+		if !featureVisible {
+			t.Fatalf("pseudonymous feature audit was hidden or identified: events=%+v", featureEvents)
+		}
+		if err = executorConn.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, worker.WorkerRef, checkpoint.OperationCode, checkpoint.ActionVersion).Scan(&checkpointID); err != nil {
+			t.Fatal(err)
+		}
+		var replayPrincipalCount int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_pseudonymous_principals WHERE purpose='AUDIT'`).Scan(&replayPrincipalCount); err != nil || replayPrincipalCount != principalCount {
+			t.Fatalf("replay principals=%d/%d err=%v", replayPrincipalCount, principalCount, err)
+		}
+	})
+	t.Run("membership-history-revokes-current-and-pseudonymises-preserved-history", func(t *testing.T) {
+		savedCapabilities := relationalExecutableOperations
+		relationalExecutableOperations = productionRelationalCapabilities
+		defer func() { relationalExecutableOperations = savedCapabilities }()
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		unrelated := user(nil)
+		var credentialVersion int64
+		if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&credentialVersion); err != nil {
+			t.Fatal(err)
+		}
+		programmeID := uuid.New()
+		if err := pool.QueryRow(ctx, `SELECT id FROM programmes WHERE code='Leisure'`).Scan(&programmeID); err != nil {
+			t.Fatal(err)
+		}
+		historySeason, activeSeason, futureSeason, unrelatedSeason := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+		seasonSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		if _, err := pool.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES
+			($1,$5||'H','Histórico','2020-01-01','2020-12-31'),
+			($2,$5||'A','Atual',CURRENT_DATE-30,CURRENT_DATE+30),
+			($3,$5||'F','Futuro',CURRENT_DATE+1,CURRENT_DATE+365),
+			($4,$5||'U','Não relacionado','2019-01-01','2019-12-31')`, historySeason, activeSeason, futureSeason, unrelatedSeason, seasonSuffix); err != nil {
+			t.Fatal(err)
+		}
+		historyMembership, activeMembership, futureMembership, unrelatedMembership := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES
+			($1,$5,$6,$10,'2020-01-01','2020-12-31'),
+			($2,$5,$7,$10,CURRENT_DATE-1,NULL),
+			($3,$5,$8,$10,CURRENT_DATE+1,NULL),
+			($4,$9,$11,$10,'2019-01-01','2019-12-31')`, historyMembership, activeMembership, futureMembership, unrelatedMembership, subject, historySeason, activeSeason, futureSeason, unrelated, programmeID, unrelatedSeason); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO membership_modalities(membership_id,modality_id)
+			SELECT membership_id,id FROM (VALUES($1::uuid),($2::uuid),($3::uuid),($4::uuid)) memberships(membership_id)
+			CROSS JOIN LATERAL (SELECT id FROM modalities WHERE code='K1') modality`, historyMembership, activeMembership, futureMembership, unrelatedMembership); err != nil {
+			t.Fatal(err)
+		}
+		groupID := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO training_groups(id,name,programme_id,created_by_id) VALUES($1,'Grupo futuro',$2,$3)`, groupID, programmeID, owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, groupID, futureMembership, owner); err != nil {
+			t.Fatal(err)
+		}
+
+		request, err := s.Submit(ctx, SubmitInput{ActorID: subject, SubjectID: subject, RequestKey: uuid.New(), CredentialVersion: credentialVersion, Password: "privacy-test-password", IP: subject.String(), PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"membership-history"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Histórico associativo aprovado para pseudonimização.", Decisions: map[string]CategoryDecision{"membership-history": {Outcome: "APPROVE"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+		lease, err := worker.Claim(ctx)
+		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 2 {
+			t.Fatalf("membership lease=%+v checkpoints=%+v err=%v", lease.Job, lease.Checkpoints, err)
+		}
+		if lease.Checkpoints[0].OperationCode != "MEMBERSHIP_ACTIVE_REVOKE" || lease.Checkpoints[1].OperationCode != "MEMBERSHIP_HISTORY_ANONYMIZE" {
+			t.Fatalf("membership checkpoint order=%+v", lease.Checkpoints)
+		}
+
+		executorRole := "privacy_membership_executor_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		executorPassword := "membership-executor-test-password"
+		if _, err = admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{executorRole}.Sanitize()+" LOGIN PASSWORD '"+executorPassword+"'"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = admin.Exec(ctx, "DROP ROLE "+pgx.Identifier{executorRole}.Sanitize()) }()
+		if _, err = pool.Exec(ctx, "GRANT USAGE ON SCHEMA "+schema+" TO "+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+schema+`.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) TO `+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		executorConfig, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executorConfig.User, executorConfig.Password = executorRole, executorPassword
+		executorConfig.RuntimeParams["search_path"] = schemaName + ",public"
+		executorConn, err := pgx.ConnectConfig(ctx, executorConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer executorConn.Close(ctx)
+		executeCheckpoint := func(checkpoint dbgen.PrivacyErasureJobCheckpoint) {
+			t.Helper()
+			var checkpointID uuid.UUID
+			if err = executorConn.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, worker.WorkerRef, checkpoint.OperationCode, checkpoint.ActionVersion).Scan(&checkpointID); err != nil {
+				t.Fatal(err)
+			}
+			if checkpointID != checkpoint.ID {
+				t.Fatalf("checkpoint id=%s want=%s", checkpointID, checkpoint.ID)
+			}
+		}
+		executeCheckpoint(lease.Checkpoints[0])
+		lateMembership := uuid.New()
+		if _, err = pool.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,$4,CURRENT_DATE+1)`, lateMembership, subject, futureSeason, programmeID); err == nil || !strings.Contains(err.Error(), "privacy_membership_erasure_in_progress") {
+			t.Fatalf("membership attachment race was not blocked: %v", err)
+		}
+		executeCheckpoint(lease.Checkpoints[1])
+
+		var active bool
+		var afterCredential int64
+		if err = pool.QueryRow(ctx, `SELECT is_active,credential_version FROM users WHERE id=$1`, subject).Scan(&active, &afterCredential); err != nil {
+			t.Fatal(err)
+		}
+		var principalID uuid.UUID
+		if err = pool.QueryRow(ctx, `SELECT id FROM privacy_pseudonymous_principals WHERE purpose='MEMBERSHIP'`).Scan(&principalID); err != nil {
+			t.Fatal(err)
+		}
+		var preservedCount, futureCount, futureLinks, unrelatedCount int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships
+			WHERE id IN($1,$2) AND user_id IS NULL AND principal_id=$3
+			  AND (id<>$2 OR ends_on=CURRENT_DATE-1)`, historyMembership, activeMembership, principalID).Scan(&preservedCount); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE id=$1`, futureMembership).Scan(&futureCount); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM training_group_members WHERE membership_id=$1)+
+			(SELECT count(*) FROM membership_modalities WHERE membership_id=$1)`, futureMembership).Scan(&futureLinks); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships membership
+			JOIN membership_modalities modality ON modality.membership_id=membership.id
+			WHERE membership.id=$1 AND membership.user_id=$2 AND membership.principal_id IS NULL`, unrelatedMembership, unrelated).Scan(&unrelatedCount); err != nil {
+			t.Fatal(err)
+		}
+		if !active || afterCredential != credentialVersion || preservedCount != 2 || futureCount != 0 || futureLinks != 0 || unrelatedCount != 1 {
+			t.Fatalf("membership result active=%v credential=%d/%d preserved=%d future=%d future_links=%d unrelated=%d", active, afterCredential, credentialVersion, preservedCount, futureCount, futureLinks, unrelatedCount)
+		}
+		for _, checkpoint := range lease.Checkpoints {
+			var checkpointID uuid.UUID
+			if err = executorConn.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, worker.WorkerRef, checkpoint.OperationCode, checkpoint.ActionVersion).Scan(&checkpointID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var replayPrincipalCount int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM privacy_pseudonymous_principals WHERE purpose='MEMBERSHIP'`).Scan(&replayPrincipalCount); err != nil || replayPrincipalCount != 1 {
+			t.Fatalf("membership replay principals=%d err=%v", replayPrincipalCount, err)
+		}
+	})
+	t.Run("relational-postcondition-failure-rolls-back-destructive-checkpoint", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
+			t.Fatal(err)
+		}
+		subject := user(nil)
+		var credentialVersion int64
+		if err := pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&credentialVersion); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO training_logs(user_id,occurred_at,duration_seconds,distance_metres,notes)
+			VALUES($1,clock_timestamp(),600,1000,'resultado original')`, subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO performance_metrics(user_id,metric_type,label_pt,value,unit_pt,measured_at)
+			VALUES($1,'Distance_Metres','Distância',1000,'m',clock_timestamp())`, subject); err != nil {
+			t.Fatal(err)
+		}
+		request, err := s.Submit(ctx, SubmitInput{ActorID: subject, SubjectID: subject, RequestKey: uuid.New(), CredentialVersion: credentialVersion, Password: "privacy-test-password", IP: subject.String(), PolicyVersion: p.Version, Scope: Scope{Kind: Categories, Categories: []Category{"training-results"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Resultados aprovados para ensaio de rollback.", Decisions: map[string]CategoryDecision{"training-results": {Outcome: "APPROVE"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
+		lease, err := worker.Claim(ctx)
+		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 1 || lease.Checkpoints[0].OperationCode != "TRAINING_RESULT_DELETE" {
+			t.Fatalf("rollback lease=%+v checkpoints=%+v err=%v", lease.Job, lease.Checkpoints, err)
+		}
+
+		functionName := "test_restore_training_log_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		triggerName := "test_restore_training_log_trigger_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		qualifiedFunction := schema + "." + pgx.Identifier{functionName}.Sanitize()
+		qualifiedTrigger := pgx.Identifier{triggerName}.Sanitize()
+		if _, err = pool.Exec(ctx, `CREATE FUNCTION `+qualifiedFunction+`() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+			 INSERT INTO training_logs(user_id,occurred_at,duration_seconds,distance_metres,notes)
+			 VALUES(OLD.user_id,clock_timestamp(),600,1000,'forçar falha de verificação');
+			 RETURN OLD;
+			END $$`); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = pool.Exec(ctx, `DROP FUNCTION `+qualifiedFunction+`() CASCADE`) }()
+		if _, err = pool.Exec(ctx, `CREATE TRIGGER `+qualifiedTrigger+` BEFORE DELETE ON performance_metrics FOR EACH ROW EXECUTE FUNCTION `+qualifiedFunction+`() `); err != nil {
+			t.Fatal(err)
+		}
+
+		executorRole := "privacy_rollback_executor_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		executorPassword := "rollback-executor-test-password"
+		if _, err = admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{executorRole}.Sanitize()+" LOGIN PASSWORD '"+executorPassword+"'"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = admin.Exec(ctx, "DROP ROLE "+pgx.Identifier{executorRole}.Sanitize()) }()
+		if _, err = pool.Exec(ctx, "GRANT USAGE ON SCHEMA "+schema+" TO "+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+schema+`.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) TO `+pgx.Identifier{executorRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		executorConfig, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executorConfig.User, executorConfig.Password = executorRole, executorPassword
+		executorConfig.RuntimeParams["search_path"] = schemaName + ",public"
+		executorConn, err := pgx.ConnectConfig(ctx, executorConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer executorConn.Close(ctx)
+		checkpoint := lease.Checkpoints[0]
+		var checkpointID uuid.UUID
+		err = executorConn.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, worker.WorkerRef, checkpoint.OperationCode, checkpoint.ActionVersion).Scan(&checkpointID)
+		if err == nil || !strings.Contains(err.Error(), "privacy_relational_verification_failed") {
+			t.Fatalf("destructive checkpoint did not fail verification: %v", err)
+		}
+		var logs, metrics int
+		var checkpointStatus string
+		if err = pool.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM training_logs WHERE user_id=$1),
+			(SELECT count(*) FROM performance_metrics WHERE user_id=$1),
+			(SELECT status FROM privacy_erasure_job_checkpoints WHERE id=$2)`, subject, checkpoint.ID).Scan(&logs, &metrics, &checkpointStatus); err != nil {
+			t.Fatal(err)
+		}
+		if logs != 1 || metrics != 1 || checkpointStatus != "PENDING" {
+			t.Fatalf("failed checkpoint escaped rollback: logs=%d metrics=%d status=%s", logs, metrics, checkpointStatus)
+		}
+	})
 	t.Run("execution-view-revalidates-visible-blockers", func(t *testing.T) {
 		subject := user(nil)
 		request, err := submit(subject, subject, Categories)
@@ -2226,46 +2667,34 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		workers := []ExecutionWorker{
-			{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3},
-			{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3},
+		workers := []ExecutionWorker{{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}, {Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}}
+		type claimResult struct {
+			lease ExecutionLease
+			err   error
 		}
-		claims := make(chan ExecutionLease, 2)
-		errorsOut := make(chan error, 2)
+		claims := make(chan claimResult, 2)
 		start := make(chan struct{})
 		for index := range workers {
 			go func(worker ExecutionWorker) {
 				<-start
 				lease, claimErr := worker.Claim(ctx)
-				claims <- lease
-				errorsOut <- claimErr
+				claims <- claimResult{lease: lease, err: claimErr}
 			}(workers[index])
 		}
 		close(start)
-		first, second := <-claims, <-claims
-		if err = <-errorsOut; err != nil {
-			t.Fatal(err)
+		one, two := <-claims, <-claims
+		if one.err != nil && two.err == nil {
+			one, two = two, one
 		}
-		if err = <-errorsOut; err != nil {
-			t.Fatal(err)
-		}
-		if first.Job.ID == uuid.Nil || second.Job.ID == uuid.Nil || first.Job.ID == second.Job.ID || first.Job.ExecutionID != execution.ID || second.Job.ExecutionID != execution.ID {
-			t.Fatalf("claims were not exclusive: first=%+v second=%+v", first.Job, second.Job)
+		first := one.lease
+		if one.err != nil || !errors.Is(two.err, pgx.ErrNoRows) || first.Job.ID == uuid.Nil || first.Job.ExecutionID != execution.ID || first.Job.PlanEntryPosition != 1 {
+			t.Fatalf("ordered concurrent claims first=%+v first_err=%v blocked_err=%v", first.Job, one.err, two.err)
 		}
 		workerByRef := map[uuid.UUID]ExecutionWorker{workers[0].WorkerRef: workers[0], workers[1].WorkerRef: workers[1]}
 		firstWorker := workerByRef[first.Job.WorkerRef]
-		secondWorker := workerByRef[second.Job.WorkerRef]
 		heartbeat, err := firstWorker.Heartbeat(ctx, first)
 		if err != nil || heartbeat.Epoch != first.Job.LeaseEpoch || !heartbeat.ExpiresAt.Valid {
 			t.Fatalf("heartbeat=%+v err=%v", heartbeat, err)
-		}
-		for _, checkpoint := range second.Checkpoints {
-			if _, err = secondWorker.CompleteCheckpoint(ctx, second, checkpoint.OperationCode, checkpoint.ActionVersion); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err = secondWorker.CompleteJob(ctx, second); err != nil {
-			t.Fatal(err)
 		}
 		if _, err = pool.Exec(ctx, `UPDATE privacy_erasure_job_leases SET heartbeat_at=acquired_at,expires_at=acquired_at+interval '1 millisecond' WHERE id=$1`, first.Job.ActiveLeaseID); err != nil {
 			t.Fatal(err)
@@ -2307,8 +2736,42 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			}
 		}
 		completed, err := recoveryWorker.CompleteJob(ctx, recovered)
+		if err != nil || completed.Status != "RUNNING" {
+			t.Fatalf("first ordered job completion=%+v err=%v", completed, err)
+		}
+		second, err := recoveryWorker.Claim(ctx)
+		if err != nil || second.Job.PlanEntryPosition != 2 || second.Job.ExecutionID != execution.ID {
+			t.Fatalf("second ordered claim=%+v err=%v", second.Job, err)
+		}
+		for _, checkpoint := range second.Checkpoints {
+			if _, err = recoveryWorker.CompleteCheckpoint(ctx, second, checkpoint.OperationCode, checkpoint.ActionVersion); err != nil {
+				t.Fatal(err)
+			}
+		}
+		completed, err = recoveryWorker.CompleteJob(ctx, second)
 		if err != nil || completed.Status != "SUCCEEDED" {
 			t.Fatalf("completed execution=%+v err=%v", completed, err)
+		}
+		var tombstoneName string
+		var tombstoneEmail, tombstonePassword *string
+		var tombstoned, active, visible bool
+		var profileRows int
+		if err = pool.QueryRow(ctx, `SELECT name,email,password_hash,erased_at IS NOT NULL,is_active,leaderboard_visible,
+			(SELECT count(*) FROM member_profiles WHERE user_id=users.id) FROM users WHERE id=$1`, subject).
+			Scan(&tombstoneName, &tombstoneEmail, &tombstonePassword, &tombstoned, &active, &visible, &profileRows); err != nil {
+			t.Fatal(err)
+		}
+		if tombstoneName != "Conta eliminada" || tombstoneEmail != nil || tombstonePassword != nil || !tombstoned || active || visible || profileRows != 0 {
+			t.Fatalf("invalid tombstone name=%q email=%v password=%v erased=%v active=%v visible=%v profiles=%d", tombstoneName, tombstoneEmail, tombstonePassword, tombstoned, active, visible, profileRows)
+		}
+		if err = dbgen.New(pool).EnsureMemberProfile(ctx, subject); err != nil {
+			t.Fatal(err)
+		}
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM member_profiles WHERE user_id=$1`, subject).Scan(&profileRows); err != nil || profileRows != 0 {
+			t.Fatalf("tombstoned profile recreated rows=%d err=%v", profileRows, err)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO training_logs(user_id,occurred_at,duration_seconds,distance_metres) VALUES($1,clock_timestamp(),60,0)`, subject); err == nil {
+			t.Fatal("subject-owned write attached to tombstoned user")
 		}
 		openRequest, err := dbgen.New(pool).GetPrivacyRequestExecutionLifecycle(ctx, request.ID)
 		if err != nil || openRequest.Status != string(Processing) {

@@ -1474,11 +1474,12 @@ type Announcement struct {
 }
 
 type AnnouncementAuditEvent struct {
-	ID             uuid.UUID          `json:"id"`
-	AnnouncementID uuid.UUID          `json:"announcement_id"`
-	Action         string             `json:"action"`
-	ActorUserID    uuid.UUID          `json:"actor_user_id"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	ID               uuid.UUID          `json:"id"`
+	AnnouncementID   uuid.UUID          `json:"announcement_id"`
+	Action           string             `json:"action"`
+	ActorUserID      *uuid.UUID         `json:"actor_user_id"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+	ActorPrincipalID *uuid.UUID         `json:"actor_principal_id"`
 }
 
 type AnnouncementDelivery struct {
@@ -1634,12 +1635,13 @@ type Equipment struct {
 type EquipmentAuditEvent struct {
 	ID                     uuid.UUID          `json:"id"`
 	EquipmentID            uuid.UUID          `json:"equipment_id"`
-	ActorUserID            uuid.UUID          `json:"actor_user_id"`
+	ActorUserID            *uuid.UUID         `json:"actor_user_id"`
 	Action                 string             `json:"action"`
 	BeforeState            []byte             `json:"before_state"`
 	AfterState             []byte             `json:"after_state"`
 	AffectedMaintenanceIds []uuid.UUID        `json:"affected_maintenance_ids"`
 	OccurredAt             pgtype.Timestamptz `json:"occurred_at"`
+	ActorPrincipalID       *uuid.UUID         `json:"actor_principal_id"`
 }
 
 type Event struct {
@@ -1688,12 +1690,13 @@ type FeatureFlag struct {
 }
 
 type FeatureFlagEvent struct {
-	ID           uuid.UUID               `json:"id"`
-	FeatureKey   string                  `json:"feature_key"`
-	PreviousMode FeatureAvailabilityMode `json:"previous_mode"`
-	NewMode      FeatureAvailabilityMode `json:"new_mode"`
-	ActorUserID  uuid.UUID               `json:"actor_user_id"`
-	OccurredAt   pgtype.Timestamptz      `json:"occurred_at"`
+	ID               uuid.UUID               `json:"id"`
+	FeatureKey       string                  `json:"feature_key"`
+	PreviousMode     FeatureAvailabilityMode `json:"previous_mode"`
+	NewMode          FeatureAvailabilityMode `json:"new_mode"`
+	ActorUserID      *uuid.UUID              `json:"actor_user_id"`
+	OccurredAt       pgtype.Timestamptz      `json:"occurred_at"`
+	ActorPrincipalID *uuid.UUID              `json:"actor_principal_id"`
 }
 
 type GymBlockPrescription struct {
@@ -1768,12 +1771,14 @@ type MemberProfile struct {
 }
 
 type MemberProfileAuditEvent struct {
-	ID            uuid.UUID          `json:"id"`
-	ActorUserID   uuid.UUID          `json:"actor_user_id"`
-	SubjectUserID uuid.UUID          `json:"subject_user_id"`
-	Action        string             `json:"action"`
-	ChangedFields []string           `json:"changed_fields"`
-	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+	ID                 uuid.UUID          `json:"id"`
+	ActorUserID        *uuid.UUID         `json:"actor_user_id"`
+	SubjectUserID      *uuid.UUID         `json:"subject_user_id"`
+	Action             string             `json:"action"`
+	ChangedFields      []string           `json:"changed_fields"`
+	OccurredAt         pgtype.Timestamptz `json:"occurred_at"`
+	ActorPrincipalID   *uuid.UUID         `json:"actor_principal_id"`
+	SubjectPrincipalID *uuid.UUID         `json:"subject_principal_id"`
 }
 
 type MembershipModality struct {
@@ -1783,13 +1788,16 @@ type MembershipModality struct {
 }
 
 type MinorCredentialAudit struct {
-	ID             uuid.UUID          `json:"id"`
-	MinorUserID    uuid.UUID          `json:"minor_user_id"`
-	GuardianUserID uuid.UUID          `json:"guardian_user_id"`
-	ActorUserID    uuid.UUID          `json:"actor_user_id"`
-	Action         string             `json:"action"`
-	IssuedLoginID  string             `json:"issued_login_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                  uuid.UUID          `json:"id"`
+	MinorUserID         *uuid.UUID         `json:"minor_user_id"`
+	GuardianUserID      *uuid.UUID         `json:"guardian_user_id"`
+	ActorUserID         *uuid.UUID         `json:"actor_user_id"`
+	Action              string             `json:"action"`
+	IssuedLoginID       string             `json:"issued_login_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	MinorPrincipalID    *uuid.UUID         `json:"minor_principal_id"`
+	GuardianPrincipalID *uuid.UUID         `json:"guardian_principal_id"`
+	ActorPrincipalID    *uuid.UUID         `json:"actor_principal_id"`
 }
 
 type Modality struct {
@@ -1844,11 +1852,12 @@ type PhotoAlbum struct {
 }
 
 type PhotoAlbumAuditEvent struct {
-	ID          uuid.UUID          `json:"id"`
-	AlbumID     uuid.UUID          `json:"album_id"`
-	Action      string             `json:"action"`
-	ActorUserID uuid.UUID          `json:"actor_user_id"`
-	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+	ID               uuid.UUID          `json:"id"`
+	AlbumID          uuid.UUID          `json:"album_id"`
+	Action           string             `json:"action"`
+	ActorUserID      *uuid.UUID         `json:"actor_user_id"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+	ActorPrincipalID *uuid.UUID         `json:"actor_principal_id"`
 }
 
 type PhotoAlbumProgrammeAudience struct {
@@ -1941,6 +1950,8 @@ type PrivacyErasureJobCheckpoint struct {
 	CompletedByAttemptID *uuid.UUID         `json:"completed_by_attempt_id"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+	AffectedRows         *int64             `json:"affected_rows"`
+	ResultSha256         []byte             `json:"result_sha256"`
 }
 
 type PrivacyErasureJobLease struct {
@@ -1953,6 +1964,28 @@ type PrivacyErasureJobLease struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	ReleasedAt  pgtype.Timestamptz `json:"released_at"`
 	Outcome     *string            `json:"outcome"`
+}
+
+type PrivacyErasureRestrictedRecord struct {
+	ExecutionID  uuid.UUID          `json:"execution_id"`
+	CategoryKey  string             `json:"category_key"`
+	SubjectRef   uuid.UUID          `json:"subject_ref"`
+	RetainedData []byte             `json:"retained_data"`
+	ReviewAt     pgtype.Timestamptz `json:"review_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyErasureRetentionAnchor struct {
+	ExecutionID        uuid.UUID          `json:"execution_id"`
+	CategoryKey        string             `json:"category_key"`
+	AnchorCode         string             `json:"anchor_code"`
+	AnchorAt           pgtype.Timestamptz `json:"anchor_at"`
+	ReviewAt           pgtype.Timestamptz `json:"review_at"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	RetainedFieldCodes []string           `json:"retained_field_codes"`
+	WorkerRef          uuid.UUID          `json:"worker_ref"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
 }
 
 type PrivacyExecutorGrant struct {
@@ -1970,6 +2003,12 @@ type PrivacyExecutorGrantEvent struct {
 	ActorRef   uuid.UUID          `json:"actor_ref"`
 	Action     string             `json:"action"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyPseudonymousPrincipal struct {
+	ID        uuid.UUID          `json:"id"`
+	Purpose   string             `json:"purpose"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type PrivacyRequestActivation struct {
@@ -2126,12 +2165,13 @@ type StaffGrant struct {
 }
 
 type StaffGrantAuditEvent struct {
-	ID           uuid.UUID          `json:"id"`
-	StaffGrantID uuid.UUID          `json:"staff_grant_id"`
-	Action       string             `json:"action"`
-	ActorUserID  uuid.UUID          `json:"actor_user_id"`
-	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
-	Reason       *string            `json:"reason"`
+	ID               uuid.UUID          `json:"id"`
+	StaffGrantID     uuid.UUID          `json:"staff_grant_id"`
+	Action           string             `json:"action"`
+	ActorUserID      *uuid.UUID         `json:"actor_user_id"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+	Reason           *string            `json:"reason"`
+	ActorPrincipalID *uuid.UUID         `json:"actor_principal_id"`
 }
 
 type Suggestion struct {
@@ -2183,14 +2223,15 @@ type Team struct {
 }
 
 type TrainingCopyEvent struct {
-	ID              uuid.UUID          `json:"id"`
-	SourceKind      string             `json:"source_kind"`
-	SourceID        uuid.UUID          `json:"source_id"`
-	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
-	DestinationKind string             `json:"destination_kind"`
-	DestinationID   uuid.UUID          `json:"destination_id"`
-	CopiedByID      uuid.UUID          `json:"copied_by_id"`
-	CopiedAt        pgtype.Timestamptz `json:"copied_at"`
+	ID                  uuid.UUID          `json:"id"`
+	SourceKind          string             `json:"source_kind"`
+	SourceID            uuid.UUID          `json:"source_id"`
+	SourceUpdatedAt     pgtype.Timestamptz `json:"source_updated_at"`
+	DestinationKind     string             `json:"destination_kind"`
+	DestinationID       uuid.UUID          `json:"destination_id"`
+	CopiedByID          *uuid.UUID         `json:"copied_by_id"`
+	CopiedAt            pgtype.Timestamptz `json:"copied_at"`
+	CopiedByPrincipalID *uuid.UUID         `json:"copied_by_principal_id"`
 }
 
 type TrainingCycle struct {
@@ -2433,11 +2474,13 @@ type User struct {
 	LeaderboardVisible bool               `json:"leaderboard_visible"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ErasedAt           pgtype.Timestamptz `json:"erased_at"`
+	ErasureExecutionID *uuid.UUID         `json:"erasure_execution_id"`
 }
 
 type UserMembership struct {
 	ID                    uuid.UUID          `json:"id"`
-	UserID                uuid.UUID          `json:"user_id"`
+	UserID                *uuid.UUID         `json:"user_id"`
 	SeasonID              uuid.UUID          `json:"season_id"`
 	ProgrammeID           uuid.UUID          `json:"programme_id"`
 	TeamID                *uuid.UUID         `json:"team_id"`
@@ -2446,6 +2489,7 @@ type UserMembership struct {
 	EndsOn                pgtype.Date        `json:"ends_on"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	PrincipalID           *uuid.UUID         `json:"principal_id"`
 }
 
 type UserPlatformRole struct {

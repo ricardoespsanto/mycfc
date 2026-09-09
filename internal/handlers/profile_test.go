@@ -83,7 +83,7 @@ func TestPostgresProfileStoreSavePhotoCreatesConsentAndAuditsReplacement(t *test
 		t.Fatalf("photo args=%#v", photoArgs)
 	}
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
-	if len(auditArgs) != 4 || auditArgs[0] != actorID || auditArgs[1] != subjectID || auditArgs[2] != "PHOTO_REPLACED" {
+	if len(auditArgs) != 4 || auditArgs[0] == nil || *auditArgs[0].(*uuid.UUID) != actorID || auditArgs[1] == nil || *auditArgs[1].(*uuid.UUID) != subjectID || auditArgs[2] != "PHOTO_REPLACED" {
 		t.Fatalf("audit args=%#v", auditArgs)
 	}
 }
@@ -141,7 +141,7 @@ func TestPostgresProfileStoreRemovePhotoClearsObjectReferenceAndAudits(t *testin
 		t.Fatalf("removed=%v error=%v committed=%t query=%#v", removed, err, tx.committed, tx.queryCalls)
 	}
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
-	if len(auditArgs) != 4 || auditArgs[0] != subjectID || auditArgs[1] != subjectID || auditArgs[2] != "PHOTO_REMOVED" {
+	if len(auditArgs) != 4 || auditArgs[0] == nil || *auditArgs[0].(*uuid.UUID) != subjectID || auditArgs[1] == nil || *auditArgs[1].(*uuid.UUID) != subjectID || auditArgs[2] != "PHOTO_REMOVED" {
 		t.Fatalf("audit args=%#v", auditArgs)
 	}
 }
@@ -175,7 +175,7 @@ func TestPostgresProfileStoreViewAuditsAuthorizedSensitiveRead(t *testing.T) {
 		t.Fatalf("profile=%#v error=%v committed=%t exec=%#v query=%#v", profile, err, tx.committed, tx.execCalls, tx.queryCalls)
 	}
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
-	if len(auditArgs) != 4 || auditArgs[0] != subjectID || auditArgs[1] != subjectID || auditArgs[2] != "SENSITIVE_VIEW" {
+	if len(auditArgs) != 4 || auditArgs[0] == nil || *auditArgs[0].(*uuid.UUID) != subjectID || auditArgs[1] == nil || *auditArgs[1].(*uuid.UUID) != subjectID || auditArgs[2] != "SENSITIVE_VIEW" {
 		t.Fatalf("audit args=%#v", auditArgs)
 	}
 }
