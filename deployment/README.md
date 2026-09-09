@@ -32,14 +32,6 @@ GIT_SHA=<40-lowercase-hex-commit>
 POSTGRES_DB=<database-name>
 POSTGRES_USER=<bootstrap-superuser>
 POSTGRES_PASSWORD=<bootstrap-superuser-password>
-APP_DB_USER=<restricted-application-user>
-APP_DB_PASSWORD=<restricted-application-password>
-MIGRATION_DB_USER=<schema-migration-user>
-MIGRATION_DB_PASSWORD=<schema-migration-password>
-
-# Leave unset until #248 receives separate production activation approval.
-# PRIVACY_EXECUTOR_DB_USER=<restricted-privacy-worker-user>
-# PRIVACY_EXECUTOR_DB_PASSWORD=<restricted-privacy-worker-password>
 
 AWS_REGION=<aws-region>
 AWS_ACCESS_KEY_ID=<aws-access-key-id>
@@ -66,7 +58,7 @@ COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
 DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
-`POSTGRES_*`, `APP_DB_*`, and `MIGRATION_DB_*` remain in the host bootstrap file because PostgreSQL itself and the one-off release role/migration containers need credentials before the application can start. The web application reads its database users and passwords from AWS instead. #244 also supports an optional, distinct `PRIVACY_EXECUTOR_DB_*` PostgreSQL login, but this source release does not install or start a privacy worker. Keep those values unset until #248 has separately approved the production credential, service, capabilities, evidence and activation. Never add the executor password to `/mycfc/production/app-secrets`, which the web identity can read. The optional database role has read-only access to the immutable execution context and can mutate worker state only through the fenced `privacy_worker_*` routines. It receives no table DML, no access to accounts, roles or grants, sessions, authentication tokens, the email outbox, or access-revocation creation; account cutoff remains in the atomic web-side `StartExecution` transaction.
+Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. #244 supports an optional distinct privacy-executor PostgreSQL login, but this source release does not install or start a privacy worker. #248 must separately approve and provision that credential through a worker-only AWS identity and secret; never add the executor password to `/mycfc/production/app-secrets`, which the web identity can read.
 
 ## Required AWS configuration
 
@@ -192,7 +184,7 @@ aws logs tail /mycfc/production/deployment --region eu-west-1 --since 1h
 sudo /opt/mycfc/deployment/release-status.sh
 ```
 
-`release-status.sh` reports only operational identifiers: the latest eligible tag/SHA/digest, running SHA/digest, active slot, last agent result, atomically associated attempt digest/result/time, quarantine marker, release age, and one of `current`, `pending`, `delayed`, `failed`, or `quarantined`. It also reports the tag-and-digest-associated release-tag timestamp, agent-start, ECR-detection, verified-pull, migration, candidate-readiness, traffic-switch, and completion timestamps plus tag-start-to-stage durations. The encoded tag time is a conservative publication-start proxy; the matching GitHub deployment summary records the authoritative post-promotion `published_at` value for accepted latency evidence. Associating results and timelines with immutable release identity prevents an older attempt from misclassifying a newer release. The command never prints either credential file.
+`release-status.sh` reports only operational identifiers: the latest eligible tag/SHA/digest, running SHA/digest, active slot, last agent result, atomically associated attempt digest/result/time, quarantine marker, release age, and one of `current`, `pending`, `delayed`, `failed`, or `quarantined`. It also reports the tag-and-digest-associated release-tag timestamp, agent-start, ECR-detection, verified-pull, migration, candidate-readiness, traffic-switch, and completion timestamps plus tag-start-to-stage durations. The encoded tag time is a conservative publication-start proxy; the matching GitHub deployment summary records the authoritative post-promotion `published_at` value for accepted latency evidence. Associating results and timelines with immutable release identity prevents an older attempt from misclassifying a newer release. Structured `event=deployment_*` journal and CloudWatch lines identify the selected release, current phase, duration, slot, rollback boundary, and non-secret database role configuration; the command never prints either credential file.
 
 The source timer polls every 30 seconds with up to 10 seconds of jitter and one second of scheduling accuracy, for a 41-second scheduling bound; a release with no pickup evidence is delayed after 60 seconds. This timer must not be installed or restarted on production without separate release approval. After an approved rollout, record the pickup p90 plus the ECR/API request rate, host load/wakeups, and journal/CloudWatch log volume described in `docs/delivery-performance.md`. Investigate any `failed`, `delayed`, or `quarantined` result using the journal and CloudWatch logs.
 

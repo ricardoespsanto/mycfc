@@ -312,7 +312,7 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 		"migration database user": credentials.MigrationUsername,
 	} {
 		if !postgresIdentifier.MatchString(value) {
-			return fmt.Errorf("%s must be a PostgreSQL identifier", name)
+			return fmt.Errorf("%s %q must be a PostgreSQL identifier", name, value)
 		}
 	}
 	if credentials.AppUsername == credentials.MigrationUsername {
@@ -328,7 +328,7 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 	}
 	if executorUser != "" {
 		if !postgresIdentifier.MatchString(credentials.PrivacyExecutorUsername) {
-			return errors.New("privacy executor database user must be a PostgreSQL identifier")
+			return fmt.Errorf("privacy executor database user %q must be a PostgreSQL identifier", credentials.PrivacyExecutorUsername)
 		}
 		if credentials.PrivacyExecutorUsername == credentials.AppUsername || credentials.PrivacyExecutorUsername == credentials.MigrationUsername {
 			return errors.New("privacy executor, app, and migration database users must differ")

@@ -80,13 +80,15 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		}
 		defer conn.Close(ctx)
 		databaseName := connectionConfig.Database
+		credentials := databaseRoleCredentialsFromEnvironment()
+		logDatabaseCommandConfiguration(command, "environment", connectionConfig.Host, databaseName, connectionConfig.User, credentials)
 		switch command {
 		case "bootstrap-db":
-			return db.BootstrapRoles(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
+			return db.BootstrapRoles(ctx, conn, databaseName, credentials)
 		case "migrate":
-			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
+			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
 		case "harden-db":
-			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, databaseRoleCredentialsFromEnvironment())
+			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, credentials)
 		}
 	}
 
@@ -116,6 +118,11 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		MigrationUsername: cfg.MigrationDBUser,
 		MigrationPassword: cfg.MigrationDBPassword.Value(),
 	}
+	connectionRole := cfg.MigrationDBUser
+	if command == "bootstrap-db" || command == "harden-db" {
+		connectionRole = cfg.PostgresUser
+	}
+	logDatabaseCommandConfiguration(command, "aws_remote", cfg.DBHost, cfg.DBName, connectionRole, credentials)
 	if command == "bootstrap-db" {
 		return db.BootstrapRoles(ctx, conn, cfg.DBName, credentials)
 	}
@@ -123,6 +130,19 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
 	}
 	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+}
+
+func logDatabaseCommandConfiguration(command, source, host, databaseName, connectionRole string, credentials db.RoleCredentials) {
+	slog.Info("database command configured",
+		"command", command,
+		"config_source", source,
+		"database_host", host,
+		"database_name", databaseName,
+		"connection_role", connectionRole,
+		"app_role", credentials.AppUsername,
+		"migration_role", credentials.MigrationUsername,
+		"privacy_executor_configured", credentials.PrivacyExecutorUsername != "",
+	)
 }
 
 func databaseRoleCredentialsFromEnvironment() db.RoleCredentials {
