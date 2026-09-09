@@ -1,3 +1,5 @@
+//go:build integration
+
 package privacyrequests
 
 // relationalUserReferenceInventory is the reviewed #245 disposition for every
