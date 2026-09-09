@@ -96,7 +96,7 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 // Keeping this separate from BootstrapRoles makes the required post-migration
 // ordering explicit and allows a disabled rollout with no executor credential.
 func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, databaseName string, credentials RoleCredentials) error {
-	if err := validateBootstrapInput(databaseName, credentials); err != nil {
+	if err := validateDatabaseRoleIdentifiers(databaseName, credentials); err != nil {
 		return err
 	}
 	app := quoteIdentifier(credentials.AppUsername)
@@ -153,7 +153,7 @@ func ApplyBaseline(ctx context.Context, conn baselineConnection) error {
 // created execution table from inheriting the web role's broad default DML
 // privileges for even a brief post-migration window.
 func ApplyBaselineAndHarden(ctx context.Context, conn baselineConnection, databaseName string, credentials RoleCredentials) error {
-	if err := validateBootstrapInput(databaseName, credentials); err != nil {
+	if err := validateDatabaseRoleIdentifiers(databaseName, credentials); err != nil {
 		return err
 	}
 	return applyBaseline(ctx, conn, func(ctx context.Context, tx pgx.Tx) error {
@@ -306,6 +306,21 @@ func migrationVersion(path string) string {
 }
 
 func validateBootstrapInput(databaseName string, credentials RoleCredentials) error {
+	if err := validateDatabaseRoleIdentifiers(databaseName, credentials); err != nil {
+		return err
+	}
+	if strings.TrimSpace(credentials.AppPassword) == "" || strings.TrimSpace(credentials.MigrationPassword) == "" {
+		return errors.New("database role passwords must not be empty")
+	}
+	executorUser := strings.TrimSpace(credentials.PrivacyExecutorUsername)
+	executorPassword := strings.TrimSpace(credentials.PrivacyExecutorPassword)
+	if (executorUser == "") != (executorPassword == "") {
+		return errors.New("privacy executor database user and password must either both be set or both be empty")
+	}
+	return nil
+}
+
+func validateDatabaseRoleIdentifiers(databaseName string, credentials RoleCredentials) error {
 	for name, value := range map[string]string{
 		"database name":           databaseName,
 		"app database user":       credentials.AppUsername,
@@ -318,14 +333,7 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 	if credentials.AppUsername == credentials.MigrationUsername {
 		return errors.New("app and migration database users must differ")
 	}
-	if strings.TrimSpace(credentials.AppPassword) == "" || strings.TrimSpace(credentials.MigrationPassword) == "" {
-		return errors.New("database role passwords must not be empty")
-	}
 	executorUser := strings.TrimSpace(credentials.PrivacyExecutorUsername)
-	executorPassword := strings.TrimSpace(credentials.PrivacyExecutorPassword)
-	if (executorUser == "") != (executorPassword == "") {
-		return errors.New("privacy executor database user and password must either both be set or both be empty")
-	}
 	if executorUser != "" {
 		if !postgresIdentifier.MatchString(credentials.PrivacyExecutorUsername) {
 			return fmt.Errorf("privacy executor database user %q must be a PostgreSQL identifier", credentials.PrivacyExecutorUsername)
