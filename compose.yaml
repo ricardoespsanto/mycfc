@@ -136,7 +136,7 @@ services:
     networks: [mycfc]
 
   e2e:
-    image: mcr.microsoft.com/playwright:v1.62.0-noble
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
     profiles: [e2e]
     working_dir: /workspace
     environment:
@@ -200,7 +200,7 @@ services:
     networks: [mycfc]
 
   ui-review-capture:
-    image: mcr.microsoft.com/playwright:v1.62.0-noble
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
     profiles: [ui-review]
     working_dir: /workspace
     environment:
