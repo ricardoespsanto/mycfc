@@ -100,7 +100,7 @@ func TestCreateEquipmentPersistsActorAndRedirects(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/fleet#equipment-inventory" {
 		t.Fatalf("response = %d %q", w.Code, w.Header().Get("Location"))
 	}
-	if store.createParams.ActorUserID != userID || store.createParams.AssetTag != "B-01" || store.createParams.Status != "Maintenance" {
+	if store.createParams.ActorUserID == nil || *store.createParams.ActorUserID != userID || store.createParams.AssetTag != "B-01" || store.createParams.Status != "Maintenance" {
 		t.Fatalf("params = %#v", store.createParams)
 	}
 }
@@ -287,7 +287,7 @@ func TestEquipmentEditAndUpdateRenderCurrentRecordAndWriteAuditedChange(t *testi
 		t.Fatalf("update = %d %q", updateResponse.Code, updateResponse.Header().Get("Location"))
 	}
 	p := store.updateParams
-	if p.EquipmentID != id || p.ActorUserID != actor || p.Name != "K1 revisto" || p.Status != "Maintenance" || p.Notes != "Vistoria concluída" || !p.ExpectedUpdatedAt.Valid || !p.ExpectedUpdatedAt.Time.Equal(now) {
+	if p.EquipmentID != id || p.ActorUserID == nil || *p.ActorUserID != actor || p.Name != "K1 revisto" || p.Status != "Maintenance" || p.Notes != "Vistoria concluída" || !p.ExpectedUpdatedAt.Valid || !p.ExpectedUpdatedAt.Time.Equal(now) {
 		t.Fatalf("updated params = %#v", p)
 	}
 }
@@ -426,10 +426,10 @@ func TestEquipmentLifecycleUsesAuditedMutations(t *testing.T) {
 			if w.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d", w.Code)
 			}
-			if tc.retire && (store.retireParams.EquipmentID != id || store.retireParams.ActorUserID != actor || !store.retireParams.ExpectedUpdatedAt.Valid || !store.retireParams.ExpectedUpdatedAt.Time.Equal(now)) {
+			if tc.retire && (store.retireParams.EquipmentID != id || store.retireParams.ActorUserID == nil || *store.retireParams.ActorUserID != actor || !store.retireParams.ExpectedUpdatedAt.Valid || !store.retireParams.ExpectedUpdatedAt.Time.Equal(now)) {
 				t.Fatalf("retire = %#v", store.retireParams)
 			}
-			if !tc.retire && (store.reactivateParams.EquipmentID != id || store.reactivateParams.ActorUserID != actor) {
+			if !tc.retire && (store.reactivateParams.EquipmentID != id || store.reactivateParams.ActorUserID == nil || *store.reactivateParams.ActorUserID != actor) {
 				t.Fatalf("reactivate = %#v", store.reactivateParams)
 			}
 		})

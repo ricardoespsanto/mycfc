@@ -23,7 +23,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609080003_privacy_worker_api"
+	baselineIncludesThrough = "202609090001_privacy_relational_erasure"
 )
 
 type RoleCredentials struct {
@@ -101,6 +101,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	}
 	app := quoteIdentifier(credentials.AppUsername)
 	executionTables := strings.Join([]string{
+		"privacy_pseudonymous_principals",
 		"privacy_erasure_executions",
 		"privacy_erasure_access_revocations",
 		"privacy_erasure_category_jobs",
@@ -108,6 +109,8 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		"privacy_erasure_job_attempts",
 		"privacy_erasure_job_checkpoints",
 		"privacy_erasure_failures",
+		"privacy_erasure_retention_anchors",
+		"privacy_erasure_restricted_records",
 	}, ", ")
 	webHandoffTables := strings.Join([]string{
 		"privacy_erasure_executions",
@@ -131,9 +134,10 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
 			namedStatement{"revoke privacy executor table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + executor},
 			namedStatement{"revoke privacy executor sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + executor},
+			namedStatement{"revoke legacy checkpoint bypass", "REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM " + executor},
 			namedStatement{"grant privacy executor execution reads", "GRANT SELECT ON TABLE " + executionTables + ", privacy_request_execution_plans TO " + executor},
 			namedStatement{"grant privacy executor request lifecycle reads", "GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests TO " + executor},
-			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
+			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 		)
 	}
 	for _, statement := range statements {

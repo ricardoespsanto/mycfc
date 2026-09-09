@@ -172,9 +172,10 @@ func (q *Queries) GetVisiblePhotoAlbum(ctx context.Context, arg GetVisiblePhotoA
 }
 
 const listPhotoAlbumAuditEvents = `-- name: ListPhotoAlbumAuditEvents :many
-SELECT e.id, e.album_id, e.action, e.actor_user_id, u.name AS actor_name, e.occurred_at
+SELECT e.id, e.album_id, e.action, e.actor_user_id,
+       COALESCE(u.name, 'Utilizador removido')::text AS actor_name, e.occurred_at
 FROM photo_album_audit_events e
-JOIN users u ON u.id = e.actor_user_id
+LEFT JOIN users u ON u.id = e.actor_user_id
 WHERE e.album_id = $1
 ORDER BY e.occurred_at, e.id
 `
@@ -183,7 +184,7 @@ type ListPhotoAlbumAuditEventsRow struct {
 	ID          uuid.UUID          `json:"id"`
 	AlbumID     uuid.UUID          `json:"album_id"`
 	Action      string             `json:"action"`
-	ActorUserID uuid.UUID          `json:"actor_user_id"`
+	ActorUserID *uuid.UUID         `json:"actor_user_id"`
 	ActorName   string             `json:"actor_name"`
 	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
 }

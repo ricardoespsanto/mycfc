@@ -20,10 +20,10 @@ func executionPlanFixture(t *testing.T) ExecutionPlan {
 	policy := testPolicy()
 	at := time.Date(2026, time.September, 8, 10, 0, 0, 0, time.UTC)
 	_, plan, err := policy.DecisionPlan(
-		Scope{Kind: Categories, Categories: []Category{"identity-core", "membership-history"}},
+		Scope{Kind: Categories, Categories: []Category{"identity-core", "profile-core"}},
 		map[string]CategoryDecision{
-			"identity-core":      {Outcome: "APPROVE"},
-			"membership-history": {Outcome: "APPROVE"},
+			"identity-core": {Outcome: "APPROVE"},
+			"profile-core":  {Outcome: "APPROVE"},
 		},
 		"approve",
 		at,
@@ -66,6 +66,42 @@ func TestExecutionWorkGraphExactlyMirrorsImmutablePlan(t *testing.T) {
 				t.Fatalf("checkpoint %d/%d did not preserve the allowlisted operation: %+v", entryIndex, operationIndex, checkpoint)
 			}
 		}
+	}
+}
+
+func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(t *testing.T) {
+	policy := testPolicy()
+	created := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	_, plan, err := policy.DecisionPlan(
+		Scope{Kind: Categories, Categories: []Category{"membership-history", "training-prescriptions"}},
+		map[string]CategoryDecision{
+			"membership-history":     {Outcome: "APPROVE"},
+			"training-prescriptions": {Outcome: "APPROVE"},
+		},
+		"approve",
+		created,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Entries) != 2 || plan.Entries[0].Category != "training-prescriptions" || plan.Entries[1].Category != "membership-history" {
+		t.Fatalf("unsafe membership dependency order: %+v", plan.Entries)
+	}
+	plan.RequestVersion = 2
+	plan.Entries[0], plan.Entries[1] = plan.Entries[1], plan.Entries[0]
+	payload, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := uuid.New()
+	row := dbgen.PrivacyRequestExecutionPlan{
+		RequestID: requestID, PolicyVersion: policy.Version,
+		ExecutorVersion: SupportedExecutorVersion, SchemaVersion: SupportedPlanSchemaVersion,
+		Plan: payload, PlanSha256: executionPlanDigest(requestID, created, policy.Version, SupportedExecutorVersion, SupportedPlanSchemaVersion, payload),
+		CreatedAt: pgtype.Timestamptz{Time: created, Valid: true},
+	}
+	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
+		t.Fatalf("legacy unsafe dependency order accepted: %v", err)
 	}
 }
 
@@ -175,6 +211,12 @@ func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	if !(Service{ExecutionCapabilities: all}).ExecutionCapabilitiesReady(plan) {
 		t.Fatal("complete explicit capability registry did not enable execution")
 	}
+	knownButUnsafe := plan
+	knownButUnsafe.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
+	knownButUnsafe.Entries[0].Operations = []string{"AUDIT_ACTOR_ANONYMIZE"}
+	if (Service{ExecutionCapabilities: map[string]bool{"AUDIT_ACTOR_ANONYMIZE": true}}).ExecutionCapabilitiesReady(knownButUnsafe) {
+		t.Fatal("known but unimplemented relational operation enabled execution start")
+	}
 
 	disabled := make(map[string]bool, len(all))
 	for operation := range all {
@@ -250,6 +292,32 @@ func TestClaimedWorkRequiresFencedAllowlistedCheckpoints(t *testing.T) {
 			test.mutate(&candidateJob, candidateRows)
 			if err := validateClaimedWork(candidateJob, candidateRows); !errors.Is(err, ErrExecutorUnavailable) {
 				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestUnimplementedAnonymisationCannotBeClaimedOrCheckpointed(t *testing.T) {
+	for _, operation := range []string{"AUDIT_ACTOR_ANONYMIZE"} {
+		t.Run(operation, func(t *testing.T) {
+			jobID := uuid.New()
+			job := ExecutionJob{
+				PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
+					ID: jobID, ExecutionID: uuid.New(), EntrySha256: make([]byte, sha256.Size),
+					CategoryKey: "blocked-category", PurposeCode: "BLOCKED_PURPOSE", Status: "LEASED", LeaseEpoch: 1, AttemptCount: 1,
+				},
+				ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New(),
+			}
+			checkpoints := []dbgen.PrivacyErasureJobCheckpoint{{JobID: jobID, OperationPosition: 1, OperationCode: operation, ActionVersion: SupportedActionVersion, Status: "PENDING"}}
+			if !supportedOperation(operation) || relationalExecutableOperation(operation) {
+				t.Fatalf("operation vocabulary/executable boundary is wrong")
+			}
+			if err := validateClaimedWork(job, checkpoints); !errors.Is(err, ErrExecutorUnavailable) {
+				t.Fatalf("unsafe anonymisation claim error=%v", err)
+			}
+			worker := ExecutionWorker{WorkerRef: uuid.New()}
+			if _, err := worker.CompleteCheckpoint(context.Background(), ExecutionLease{Job: job, Checkpoints: checkpoints}, operation, SupportedActionVersion); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("unsafe anonymisation checkpoint error=%v", err)
 			}
 		})
 	}

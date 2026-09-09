@@ -247,7 +247,7 @@ func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T)
 		t.Fatal(err)
 	}
 	joined := strings.Join(connection.sql, "\n")
-	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_erasure_executions`) ||
+	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`) ||
 		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) {
 		t.Fatalf("hardening statements=%#v", connection.sql)
 	}

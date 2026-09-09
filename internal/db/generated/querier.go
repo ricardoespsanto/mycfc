@@ -29,6 +29,7 @@ type Querier interface {
 	AssignTrainingCycleChild(ctx context.Context, arg AssignTrainingCycleChildParams) (int64, error)
 	AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error)
 	AuthorizePrivacyErasureJobLease(ctx context.Context, arg AuthorizePrivacyErasureJobLeaseParams) (PrivacyErasureJobLease, error)
+	CallPrivacyWorkerExecuteCheckpoint(ctx context.Context, arg CallPrivacyWorkerExecuteCheckpointParams) (uuid.UUID, error)
 	CallPrivacyWorkerSync(ctx context.Context, arg CallPrivacyWorkerSyncParams) (uuid.UUID, error)
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
 	CanCoachManageTrainingPlan(ctx context.Context, arg CanCoachManageTrainingPlanParams) (bool, error)

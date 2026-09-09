@@ -287,7 +287,7 @@ func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx conte
 	for _, prescription := range input.Prescriptions {
 		if _, err = queries.CreateTrainingPrescription(ctx, dbgen.CreateTrainingPrescriptionParams{
 			PublicationID: publication.ID, SessionID: prescription.SessionID, MembershipID: prescription.MembershipID,
-			AthleteUserID: prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
+			AthleteUserID: &prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
 		}); err != nil {
 			return publication, err
 		}
@@ -547,11 +547,11 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context
 			if restoreErr != nil {
 				return cycle, restoreErr
 			}
-			if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+			if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: &input.ActorID}); err != nil {
 				return cycle, err
 			}
 		}
-		if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: sourceWeek.ID, SourceUpdatedAt: sourceWeek.UpdatedAt, DestinationKind: "WEEK", DestinationID: created.ID, CopiedByID: input.ActorID}); err != nil {
+		if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: sourceWeek.ID, SourceUpdatedAt: sourceWeek.UpdatedAt, DestinationKind: "WEEK", DestinationID: created.ID, CopiedByID: &input.ActorID}); err != nil {
 			return cycle, err
 		}
 		createdPlans = append(createdPlans, created)
@@ -574,7 +574,7 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context
 			return cycle, errStructuredTrainingCycleScope
 		}
 	}
-	if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: source.ID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "CYCLE", DestinationID: cycle.ID, CopiedByID: input.ActorID}); err != nil {
+	if err = queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "CYCLE", SourceID: source.ID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "CYCLE", DestinationID: cycle.ID, CopiedByID: &input.ActorID}); err != nil {
 		return cycle, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -772,7 +772,7 @@ func (s PostgresStructuredTrainingStore) InsertTrainingRoutine(ctx context.Conte
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: input.Routine.ID, SourceUpdatedAt: input.Routine.UpdatedAt, DestinationKind: destinationKind, DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: input.Routine.ID, SourceUpdatedAt: input.Routine.UpdatedAt, DestinationKind: destinationKind, DestinationID: destinationID, CopiedByID: &input.ActorID}); err != nil {
 		return uuid.Nil, err
 	}
 	return destinationID, tx.Commit(ctx)
@@ -793,7 +793,7 @@ func (s PostgresStructuredTrainingStore) CopyTrainingBlock(ctx context.Context, 
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "BLOCK", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "BLOCK", DestinationID: destinationID, CopiedByID: actorID}); err != nil {
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "BLOCK", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "BLOCK", DestinationID: destinationID, CopiedByID: &actorID}); err != nil {
 		return uuid.Nil, err
 	}
 	return destinationID, tx.Commit(ctx)
@@ -814,7 +814,7 @@ func (s PostgresStructuredTrainingStore) CopyTrainingSession(ctx context.Context
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "SESSION", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: actorID}); err != nil {
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "SESSION", SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: &actorID}); err != nil {
 		return uuid.Nil, err
 	}
 	return destinationID, tx.Commit(ctx)
@@ -838,7 +838,7 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingDay(ctx context.C
 		if err != nil {
 			return copied, err
 		}
-		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "DAY", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "DAY", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: &input.ActorID}); err != nil {
 			return copied, err
 		}
 		copied++
@@ -877,11 +877,11 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.
 		if err != nil {
 			return plan, err
 		}
-		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: input.ActorID}); err != nil {
+		if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: row.ID, SourceUpdatedAt: row.UpdatedAt, DestinationKind: "SESSION", DestinationID: destinationID, CopiedByID: &input.ActorID}); err != nil {
 			return plan, err
 		}
 	}
-	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: input.SourcePlanID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "WEEK", DestinationID: plan.ID, CopiedByID: input.ActorID}); err != nil {
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "WEEK", SourceID: input.SourcePlanID, SourceUpdatedAt: source.UpdatedAt, DestinationKind: "WEEK", DestinationID: plan.ID, CopiedByID: &input.ActorID}); err != nil {
 		return plan, err
 	}
 	return plan, tx.Commit(ctx)

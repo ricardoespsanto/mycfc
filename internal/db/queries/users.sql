@@ -149,9 +149,10 @@ WITH issued AS (
     INSERT INTO minor_credential_audit (minor_user_id, guardian_user_id, actor_user_id, action, issued_login_id)
     SELECT id, sqlc.arg(guardian_user_id), sqlc.arg(actor_user_id), sqlc.arg(action), sqlc.arg(minor_login_id)
     FROM issued
-    RETURNING minor_user_id
+    RETURNING id
 )
-SELECT minor_user_id FROM audited;
+SELECT issued.id FROM issued
+WHERE EXISTS (SELECT 1 FROM audited);
 
 -- name: GetActiveAccountByID :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,

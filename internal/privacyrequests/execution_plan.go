@@ -316,10 +316,28 @@ func (p AdoptedPolicy) DecisionPlan(scope Scope, inputs map[string]CategoryDecis
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
+	// Prescriptions retain both membership and athlete identifiers. Delete them
+	// before membership history is pseudonymised so the latter never preserves
+	// a reverse identity path. Membership is last because its processing guard
+	// prevents new memberships or prescriptions once execution has started.
+	sort.SliceStable(plan.Entries, func(i, j int) bool {
+		return executionCategoryPriority(plan.Entries[i].Category) < executionCategoryPriority(plan.Entries[j].Category)
+	})
 	if (action == "approve" && approved != len(decisions)) || (action == "partial" && (approved == 0 || approved == len(decisions))) || (action == "refuse" && approved != 0) {
 		return nil, empty, ErrInvalid
 	}
 	return decisions, plan, nil
+}
+
+func executionCategoryPriority(category string) int {
+	switch category {
+	case "training-prescriptions":
+		return -1
+	case "membership-history":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // ReadExecutionPlan is the only supported handoff to the future executor. It
@@ -340,7 +358,13 @@ func ReadExecutionPlan(row dbgen.PrivacyRequestExecutionPlan) (ExecutionPlan, er
 	}
 	seen := map[string]bool{}
 	approved := 0
+	previousCategoryPriority := -2
 	for _, entry := range plan.Entries {
+		categoryPriority := executionCategoryPriority(entry.Category)
+		if categoryPriority < previousCategoryPriority {
+			return ExecutionPlan{}, ErrPolicyUnresolved
+		}
+		previousCategoryPriority = categoryPriority
 		profile, ok := executionProfiles[entry.Profile]
 		contract, categoryOK := categoryContracts[entry.Category]
 		due, dueErr := time.Parse(time.RFC3339Nano, entry.DueAt)

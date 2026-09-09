@@ -14,10 +14,11 @@ import (
 
 const listFeatureFlagEvents = `-- name: ListFeatureFlagEvents :many
 SELECT e.id, e.feature_key, e.previous_mode::text AS previous_mode,
-       e.new_mode::text AS new_mode, e.actor_user_id, u.name AS actor_name,
+       e.new_mode::text AS new_mode, e.actor_user_id,
+       COALESCE(u.name, 'Utilizador removido')::text AS actor_name,
        e.occurred_at
 FROM feature_flag_events e
-JOIN users u ON u.id = e.actor_user_id
+LEFT JOIN users u ON u.id = e.actor_user_id
 ORDER BY e.occurred_at DESC, e.id DESC
 LIMIT $1
 `
@@ -27,7 +28,7 @@ type ListFeatureFlagEventsRow struct {
 	FeatureKey   string             `json:"feature_key"`
 	PreviousMode string             `json:"previous_mode"`
 	NewMode      string             `json:"new_mode"`
-	ActorUserID  uuid.UUID          `json:"actor_user_id"`
+	ActorUserID  *uuid.UUID         `json:"actor_user_id"`
 	ActorName    string             `json:"actor_name"`
 	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
 }

@@ -232,7 +232,7 @@ func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
 			return false
 		}
 		for _, operation := range entry.Operations {
-			if !supportedOperation(operation) || !s.ExecutionCapabilities[operation] {
+			if !supportedOperation(operation) || !relationalExecutableOperation(operation) || !s.ExecutionCapabilities[operation] {
 				return false
 			}
 		}
@@ -587,6 +587,24 @@ func supportedOperation(operation string) bool {
 	return false
 }
 
+// relationalExecutableOperations is deliberately narrower than the versioned
+// plan vocabulary. A known plan code is not executable until its exact
+// category postcondition has a real relational implementation.
+var relationalExecutableOperations = map[string]bool{
+	"ACTIVITY_CONNECTION_DISCONNECT": true, "ACTIVITY_SUBJECT_DELETE": true,
+	"ANNOUNCEMENT_DELIVERY_DELETE": true, "AUTH_ACCESS_REVOKE": true,
+	"AUTH_TOKEN_DELETE": true, "DEPENDANT_RELATIONSHIP_DELETE": true,
+	"EVENT_RESPONSE_DELETE": true, "IDENTITY_CLEAR": true,
+	"MEMBERSHIP_ACTIVE_REVOKE": true, "MEMBERSHIP_HISTORY_ANONYMIZE": true, "PROFILE_HEALTH_DELETE": true,
+	"PROFILE_IDENTITY_DELETE": true, "REPAIR_REPORTER_ANONYMIZE": true,
+	"SUGGESTION_SUBJECT_DELETE": true, "TRAINING_PRESCRIPTION_DELETE": true,
+	"TRAINING_RESULT_DELETE": true,
+}
+
+func relationalExecutableOperation(operation string) bool {
+	return relationalExecutableOperations[operation]
+}
+
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {
 	legacy, err := q.CountActiveUnindexedPrivacySessions(ctx)
 	if err != nil {
@@ -833,7 +851,7 @@ func (w ExecutionWorker) Heartbeat(ctx context.Context, lease ExecutionLease) (d
 
 func (w ExecutionWorker) CompleteCheckpoint(ctx context.Context, lease ExecutionLease, operationCode, actionVersion string) (dbgen.PrivacyErasureJobCheckpoint, error) {
 	var zero dbgen.PrivacyErasureJobCheckpoint
-	if !w.valid() || !validLease(lease) || !supportedOperation(operationCode) || actionVersion != SupportedActionVersion {
+	if !w.valid() || !validLease(lease) || !supportedOperation(operationCode) || !relationalExecutableOperation(operationCode) || actionVersion != SupportedActionVersion {
 		return zero, ErrInvalid
 	}
 	tx, err := w.Pool.Begin(ctx)
@@ -859,9 +877,10 @@ func (w ExecutionWorker) CompleteCheckpoint(ctx context.Context, lease Execution
 	if selected.Status == "SUCCEEDED" {
 		return *selected, tx.Commit(ctx)
 	}
-	var checkpointID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM (SELECT privacy_worker_complete_checkpoint($1,$2,$3,$4,$5,$6,$7) AS id) result WHERE id IS NOT NULL`,
-		lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, w.WorkerRef, operationCode, actionVersion).Scan(&checkpointID)
+	checkpointID, err := q.CallPrivacyWorkerExecuteCheckpoint(ctx, dbgen.CallPrivacyWorkerExecuteCheckpointParams{
+		JobID: lease.Job.ID, LeaseID: lease.Job.ActiveLeaseID, AttemptID: lease.Job.ActiveAttemptID,
+		LeaseEpoch: lease.Job.LeaseEpoch, WorkerRef: w.WorkerRef, OperationCode: operationCode, ActionVersion: actionVersion,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return zero, ErrLeaseLost
 	}
@@ -984,7 +1003,7 @@ func validateClaimedWork(job ExecutionJob, checkpoints []dbgen.PrivacyErasureJob
 	seen := make(map[string]bool, len(checkpoints))
 	for index, checkpoint := range checkpoints {
 		if checkpoint.JobID != job.ID || checkpoint.OperationPosition != int16(index+1) || checkpoint.ActionVersion != SupportedActionVersion ||
-			!supportedOperation(checkpoint.OperationCode) || seen[checkpoint.OperationCode] ||
+			!supportedOperation(checkpoint.OperationCode) || !relationalExecutableOperation(checkpoint.OperationCode) || seen[checkpoint.OperationCode] ||
 			(checkpoint.Status != "PENDING" && checkpoint.Status != "SUCCEEDED") {
 			return ErrExecutorUnavailable
 		}

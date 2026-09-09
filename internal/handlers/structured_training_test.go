@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+func testUUIDPtr(value uuid.UUID) *uuid.UUID { return &value }
+
 type structuredTrainingStoreStub struct {
 	StructuredTrainingStore
 	manageable         bool
@@ -2732,7 +2734,7 @@ func TestStructuredPublicationStatesCalculateRecipientChangeCounts(t *testing.T)
 	planID, sessionID, membershipID, athleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	week := pages.StructuredTrainingWeek{ID: planID.String(), Title: "Semana 1", Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água"}}}
-	store := &structuredTrainingStoreStub{publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID}}}
+	store := &structuredTrainingStoreStub{publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}}}
 	h := StructuredTraining{Store: store, Location: time.UTC}
 	states := h.structuredPublicationStates(context.Background(), []pages.StructuredTrainingAudience{{GroupName: "Competição", Weeks: []pages.StructuredTrainingWeek{week}}}, []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, Title: "Semana 1", SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}}, nil)
 	if len(states) != 1 || states[0].Status != "Rascunho nunca publicado" || states[0].AthleteCount != 1 || states[0].PrescriptionCount != 1 || states[0].AddedCount != 1 {
@@ -2747,9 +2749,9 @@ func TestStructuredPublicationStatesDistinguishesAddedChangedRemovedAndUnchanged
 	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	week := pages.StructuredTrainingWeek{ID: planID.String(), Title: "Semana 1", Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água"}}}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
-		{SessionID: sessionID, MembershipID: firstMembership, AthleteUserID: firstAthlete},
-		{SessionID: sessionID, MembershipID: secondMembership, AthleteUserID: secondAthlete},
-		{SessionID: sessionID, MembershipID: thirdMembership, AthleteUserID: thirdAthlete},
+		{SessionID: sessionID, MembershipID: firstMembership, AthleteUserID: testUUIDPtr(firstAthlete)},
+		{SessionID: sessionID, MembershipID: secondMembership, AthleteUserID: testUUIDPtr(secondAthlete)},
+		{SessionID: sessionID, MembershipID: thirdMembership, AthleteUserID: testUUIDPtr(thirdAthlete)},
 	}
 	candidates, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Competição"}, week, recipients, nil)
 	if err != nil || len(candidates) != 3 {
@@ -2784,7 +2786,7 @@ func TestBuildStructuredPublicationBuildsImmutableRecipientSnapshot(t *testing.T
 	planTitle, sessionTitle := "Semana 1", "Água"
 	store := &structuredTrainingStoreStub{
 		publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID}},
+		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
 		overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
 	}
 	h := StructuredTraining{Store: store, Location: time.UTC}
@@ -2801,7 +2803,7 @@ func TestPublishStructuredPlanPersistsFreshPrivateRecipientRevision(t *testing.T
 	store := &structuredTrainingStoreStub{
 		weekOK:             true,
 		publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID}},
+		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
 		overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
 	}
 	h := StructuredTraining{Store: store, Location: time.UTC}
@@ -2840,7 +2842,7 @@ func TestPublishStructuredPlanReportsOptimisticConflictAndServiceFailures(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			store := &structuredTrainingStoreStub{weekOK: true, publishErr: tc.err,
 				publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-				publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID}},
+				publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
 				overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
 			}
 			response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/estruturados/planos/"+planID.String()+"/publicar", values, "id", planID.String(), (StructuredTraining{Store: store, Location: time.UTC}).PublishPlan)
@@ -2859,7 +2861,7 @@ func TestPublishStructuredPlanFailsClosedBeforePersistingInvalidPublicationInput
 		return structuredTrainingStoreStub{
 			weekOK:             true,
 			publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-			publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID}},
+			publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
 			overviewRows: []dbgen.ListStructuredTrainingOverviewForManagerRow{{
 				GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true},
 				SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true},
@@ -3556,8 +3558,8 @@ func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownS
 		Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água", Modalities: []string{"WATER"}}},
 	}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
-		{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: athleteID},
-		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New()},
+		{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)},
+		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New())},
 	}
 
 	inputs, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Cadetes"}, week, recipients, nil)

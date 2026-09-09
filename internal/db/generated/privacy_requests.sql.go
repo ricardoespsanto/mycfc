@@ -167,6 +167,37 @@ func (q *Queries) AuthorizePrivacyErasureJobLease(ctx context.Context, arg Autho
 	return i, err
 }
 
+const callPrivacyWorkerExecuteCheckpoint = `-- name: CallPrivacyWorkerExecuteCheckpoint :one
+SELECT id FROM (
+ SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)::uuid AS id
+) result WHERE id IS NOT NULL
+`
+
+type CallPrivacyWorkerExecuteCheckpointParams struct {
+	JobID         uuid.UUID `json:"job_id"`
+	LeaseID       uuid.UUID `json:"lease_id"`
+	AttemptID     uuid.UUID `json:"attempt_id"`
+	LeaseEpoch    int64     `json:"lease_epoch"`
+	WorkerRef     uuid.UUID `json:"worker_ref"`
+	OperationCode string    `json:"operation_code"`
+	ActionVersion string    `json:"action_version"`
+}
+
+func (q *Queries) CallPrivacyWorkerExecuteCheckpoint(ctx context.Context, arg CallPrivacyWorkerExecuteCheckpointParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, callPrivacyWorkerExecuteCheckpoint,
+		arg.JobID,
+		arg.LeaseID,
+		arg.AttemptID,
+		arg.LeaseEpoch,
+		arg.WorkerRef,
+		arg.OperationCode,
+		arg.ActionVersion,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const callPrivacyWorkerSync = `-- name: CallPrivacyWorkerSync :one
 SELECT privacy_worker_sync($1,$2,$3,$4,$5)::uuid
 `
@@ -348,7 +379,7 @@ func (q *Queries) CreatePrivacyErasureExecution(ctx context.Context, arg CreateP
 const createPrivacyErasureJobCheckpoint = `-- name: CreatePrivacyErasureJobCheckpoint :one
 INSERT INTO privacy_erasure_job_checkpoints(job_id,operation_position,operation_code,action_version,created_at)
 VALUES($1,$2,$3,$4,$5)
-RETURNING id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at
+RETURNING id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at, affected_rows, result_sha256
 `
 
 type CreatePrivacyErasureJobCheckpointParams struct {
@@ -378,6 +409,8 @@ func (q *Queries) CreatePrivacyErasureJobCheckpoint(ctx context.Context, arg Cre
 		&i.CompletedByAttemptID,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.AffectedRows,
+		&i.ResultSha256,
 	)
 	return i, err
 }
@@ -557,7 +590,7 @@ func (q *Queries) DeletePrivacySessionsByUser(ctx context.Context, userID *uuid.
 
 const disablePrivacyAccountForExecution = `-- name: DisablePrivacyAccountForExecution :one
 UPDATE users SET is_active=false,credential_version=credential_version+1,updated_at=$1
-WHERE id=$2 AND is_active RETURNING id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at
+WHERE id=$2 AND is_active RETURNING id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id
 `
 
 type DisablePrivacyAccountForExecutionParams struct {
@@ -583,6 +616,8 @@ func (q *Queries) DisablePrivacyAccountForExecution(ctx context.Context, arg Dis
 		&i.LeaderboardVisible,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ErasedAt,
+		&i.ErasureExecutionID,
 	)
 	return i, err
 }
@@ -630,7 +665,7 @@ func (q *Queries) ExpireLegacyPrivacySessionsBy(ctx context.Context) (int64, err
 }
 
 const getPrivacyAccountForUpdate = `-- name: GetPrivacyAccountForUpdate :one
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id FROM users WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
@@ -651,6 +686,8 @@ func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) 
 		&i.LeaderboardVisible,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ErasedAt,
+		&i.ErasureExecutionID,
 	)
 	return i, err
 }
@@ -792,7 +829,7 @@ func (q *Queries) GetPrivacyErasureExecutionForUpdate(ctx context.Context, id uu
 }
 
 const getPrivacyErasureJobCheckpoint = `-- name: GetPrivacyErasureJobCheckpoint :one
-SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at FROM privacy_erasure_job_checkpoints WHERE id=$1
+SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at, affected_rows, result_sha256 FROM privacy_erasure_job_checkpoints WHERE id=$1
 `
 
 func (q *Queries) GetPrivacyErasureJobCheckpoint(ctx context.Context, id uuid.UUID) (PrivacyErasureJobCheckpoint, error) {
@@ -808,6 +845,8 @@ func (q *Queries) GetPrivacyErasureJobCheckpoint(ctx context.Context, id uuid.UU
 		&i.CompletedByAttemptID,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.AffectedRows,
+		&i.ResultSha256,
 	)
 	return i, err
 }
@@ -1280,7 +1319,7 @@ func (q *Queries) ListPrivacyDependantResolutions(ctx context.Context, requestID
 }
 
 const listPrivacyDependantsForUpdate = `-- name: ListPrivacyDependantsForUpdate :many
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at FROM users WHERE guardian_id = $1 ORDER BY id FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id FROM users WHERE guardian_id = $1 ORDER BY id FOR UPDATE
 `
 
 func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID *uuid.UUID) ([]User, error) {
@@ -1307,6 +1346,8 @@ func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID
 			&i.LeaderboardVisible,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ErasedAt,
+			&i.ErasureExecutionID,
 		); err != nil {
 			return nil, err
 		}
@@ -1389,7 +1430,7 @@ func (q *Queries) ListPrivacyErasureCategoryJobs(ctx context.Context, executionI
 }
 
 const listPrivacyErasureJobCheckpoints = `-- name: ListPrivacyErasureJobCheckpoints :many
-SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at FROM privacy_erasure_job_checkpoints WHERE job_id=$1 ORDER BY operation_position
+SELECT id, job_id, operation_position, operation_code, action_version, status, completed_by_attempt_id, created_at, completed_at, affected_rows, result_sha256 FROM privacy_erasure_job_checkpoints WHERE job_id=$1 ORDER BY operation_position
 `
 
 func (q *Queries) ListPrivacyErasureJobCheckpoints(ctx context.Context, jobID uuid.UUID) ([]PrivacyErasureJobCheckpoint, error) {
@@ -1411,6 +1452,8 @@ func (q *Queries) ListPrivacyErasureJobCheckpoints(ctx context.Context, jobID uu
 			&i.CompletedByAttemptID,
 			&i.CreatedAt,
 			&i.CompletedAt,
+			&i.AffectedRows,
+			&i.ResultSha256,
 		); err != nil {
 			return nil, err
 		}

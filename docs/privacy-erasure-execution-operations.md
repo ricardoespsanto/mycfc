@@ -1,6 +1,6 @@
 # Privacy-erasure execution operations
 
-Issue #244 provides the execution control plane, not the destructive category handlers. Keep `PRIVACY_REQUESTS_ENABLED=false` in production until #248 supplies, tests and approves every handler and the completion-evidence verifier.
+Issue #244 provides the execution control plane. Issue #245 adds the first relational category handlers, while unsupported, cross-store, completion and activation paths continue to fail closed. Keep `PRIVACY_REQUESTS_ENABLED=false` in production until #248 supplies, tests and approves every remaining handler and the completion-evidence verifier.
 
 ## Security boundary
 
@@ -14,7 +14,7 @@ Issue #244 provides the execution control plane, not the destructive category ha
 
 1. Back up and verify the database in the normal release procedure.
 2. Bootstrap the application, migration and optional privacy-worker roles.
-3. Apply migrations through `202609080003_privacy_worker_api` with the migration role. The migrate command applies the schema and privacy privilege boundary in one transaction; do not split those steps.
+3. Apply migrations through `202609090001_privacy_relational_erasure` with the migration role. The migrate command applies the schema and privacy privilege boundary in one transaction; do not split those steps.
 4. Reapply the idempotent hardening command after migration as a defence-in-depth release check. Do not serve a candidate until it succeeds.
 5. Verify that the web role cannot mutate worker-owned state and that the worker role cannot alter requests, plans, grants or unrelated tables.
 6. Keep privacy-request production activation disabled. A schema deployment alone must not start work.

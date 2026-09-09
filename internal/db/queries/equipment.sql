@@ -115,9 +115,10 @@ FROM updated;
 
 -- name: ListEquipmentAuditEvents :many
 SELECT a.id, a.equipment_id, a.action, a.before_state, a.after_state,
-       a.affected_maintenance_ids, a.occurred_at, u.name AS actor_name
+       a.affected_maintenance_ids, a.occurred_at,
+       COALESCE(u.name, 'Utilizador removido')::text AS actor_name
 FROM equipment_audit_events a
-JOIN users u ON u.id = a.actor_user_id
+LEFT JOIN users u ON u.id = a.actor_user_id
 WHERE a.equipment_id = sqlc.arg(equipment_id)
 ORDER BY a.occurred_at DESC, a.id DESC
 LIMIT sqlc.arg(row_limit);

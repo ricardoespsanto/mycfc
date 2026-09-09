@@ -78,8 +78,9 @@ WHERE id = sqlc.arg(id) AND status = 'OPEN' AND updated_at = sqlc.arg(expected_u
 RETURNING id, title, description, status, created_by_id, archived_by_id, archived_at, created_at, updated_at;
 
 -- name: ListPhotoAlbumAuditEvents :many
-SELECT e.id, e.album_id, e.action, e.actor_user_id, u.name AS actor_name, e.occurred_at
+SELECT e.id, e.album_id, e.action, e.actor_user_id,
+       COALESCE(u.name, 'Utilizador removido')::text AS actor_name, e.occurred_at
 FROM photo_album_audit_events e
-JOIN users u ON u.id = e.actor_user_id
+LEFT JOIN users u ON u.id = e.actor_user_id
 WHERE e.album_id = sqlc.arg(album_id)
 ORDER BY e.occurred_at, e.id;

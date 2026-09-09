@@ -28,15 +28,15 @@ FROM created
 `
 
 type CreateEquipmentWithAuditParams struct {
-	AssetTag         string    `json:"asset_tag"`
-	Name             string    `json:"name"`
-	Type             string    `json:"type"`
-	Status           string    `json:"status"`
-	Notes            string    `json:"notes"`
-	ImageObjectKey   *string   `json:"image_object_key"`
-	ImageContentType *string   `json:"image_content_type"`
-	ImageSizeBytes   *int64    `json:"image_size_bytes"`
-	ActorUserID      uuid.UUID `json:"actor_user_id"`
+	AssetTag         string     `json:"asset_tag"`
+	Name             string     `json:"name"`
+	Type             string     `json:"type"`
+	Status           string     `json:"status"`
+	Notes            string     `json:"notes"`
+	ImageObjectKey   *string    `json:"image_object_key"`
+	ImageContentType *string    `json:"image_content_type"`
+	ImageSizeBytes   *int64     `json:"image_size_bytes"`
+	ActorUserID      *uuid.UUID `json:"actor_user_id"`
 }
 
 type CreateEquipmentWithAuditRow struct {
@@ -109,9 +109,10 @@ func (q *Queries) GetEquipmentByID(ctx context.Context, id uuid.UUID) (Equipment
 
 const listEquipmentAuditEvents = `-- name: ListEquipmentAuditEvents :many
 SELECT a.id, a.equipment_id, a.action, a.before_state, a.after_state,
-       a.affected_maintenance_ids, a.occurred_at, u.name AS actor_name
+       a.affected_maintenance_ids, a.occurred_at,
+       COALESCE(u.name, 'Utilizador removido')::text AS actor_name
 FROM equipment_audit_events a
-JOIN users u ON u.id = a.actor_user_id
+LEFT JOIN users u ON u.id = a.actor_user_id
 WHERE a.equipment_id = $1
 ORDER BY a.occurred_at DESC, a.id DESC
 LIMIT $2
@@ -278,8 +279,8 @@ FROM updated
 `
 
 type ReactivateEquipmentWithAuditParams struct {
-	EquipmentID uuid.UUID `json:"equipment_id"`
-	ActorUserID uuid.UUID `json:"actor_user_id"`
+	EquipmentID uuid.UUID  `json:"equipment_id"`
+	ActorUserID *uuid.UUID `json:"actor_user_id"`
 }
 
 type ReactivateEquipmentWithAuditRow struct {
@@ -348,7 +349,7 @@ FROM updated
 type RetireEquipmentWithAuditParams struct {
 	EquipmentID       uuid.UUID          `json:"equipment_id"`
 	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
-	ActorUserID       uuid.UUID          `json:"actor_user_id"`
+	ActorUserID       *uuid.UUID         `json:"actor_user_id"`
 }
 
 type RetireEquipmentWithAuditRow struct {
@@ -420,7 +421,7 @@ type UpdateEquipmentWithAuditParams struct {
 	ImageObjectKey    *string            `json:"image_object_key"`
 	ImageContentType  *string            `json:"image_content_type"`
 	ImageSizeBytes    *int64             `json:"image_size_bytes"`
-	ActorUserID       uuid.UUID          `json:"actor_user_id"`
+	ActorUserID       *uuid.UUID         `json:"actor_user_id"`
 }
 
 type UpdateEquipmentWithAuditRow struct {

@@ -44,11 +44,11 @@ RETURNING id, season_id, programme_id, code, name, created_at;
 INSERT INTO user_memberships (
     user_id, season_id, programme_id, team_id, competition_category_id, starts_on, ends_on
 ) VALUES (
-    sqlc.arg(user_id), sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.narg(team_id),
+    sqlc.arg(user_id)::uuid, sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.narg(team_id),
     sqlc.narg(competition_category_id), sqlc.arg(starts_on), sqlc.narg(ends_on)
 )
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at;
+          starts_on, ends_on, created_at, updated_at, principal_id;
 
 -- name: AddMembershipModality :exec
 INSERT INTO membership_modalities (membership_id, modality_id)
@@ -56,15 +56,15 @@ VALUES (sqlc.arg(membership_id), sqlc.arg(modality_id));
 
 -- name: UpsertCurrentSeasonMembership :one
 INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-VALUES (sqlc.arg(user_id), sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.arg(starts_on))
+VALUES (sqlc.arg(user_id)::uuid, sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.arg(starts_on))
 ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
 SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at;
+          starts_on, ends_on, created_at, updated_at, principal_id;
 
 -- name: EndCurrentSeasonMembership :execrows
 UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
-WHERE user_id = sqlc.arg(user_id) AND season_id = sqlc.arg(season_id)
+WHERE user_id = sqlc.arg(user_id)::uuid AND season_id = sqlc.arg(season_id)
   AND programme_id = sqlc.arg(programme_id) AND starts_on <= CURRENT_DATE
   AND (ends_on IS NULL OR ends_on >= CURRENT_DATE);
 
@@ -89,7 +89,7 @@ JOIN seasons season ON season.id = membership.season_id
 JOIN programmes programme ON programme.id = membership.programme_id
 LEFT JOIN teams team ON team.id = membership.team_id
 LEFT JOIN competition_categories category ON category.id = membership.competition_category_id
-WHERE membership.user_id = sqlc.arg(user_id)
+WHERE membership.user_id = sqlc.arg(user_id)::uuid
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY season.starts_on DESC, programme.name_pt, team.name NULLS FIRST;
@@ -98,7 +98,7 @@ ORDER BY season.starts_on DESC, programme.name_pt, team.name NULLS FIRST;
 SELECT programme.code
 FROM user_memberships membership
 JOIN programmes programme ON programme.id = membership.programme_id
-WHERE membership.user_id = sqlc.arg(user_id)
+WHERE membership.user_id = sqlc.arg(user_id)::uuid
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY programme.code;

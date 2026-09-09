@@ -82,17 +82,17 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	queries := dbgen.New(pool)
-	created, err := queries.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: "IT-" + uuid.NewString()[:8], Name: "K1 de integração", Type: "Boat", Status: "Operational", Notes: "Azul", ActorUserID: actorID})
+	created, err := queries.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: "IT-" + uuid.NewString()[:8], Name: "K1 de integração", Type: "Boat", Status: "Operational", Notes: "Azul", ActorUserID: &actorID})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	updated, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "K1 atualizado", Type: "Boat", Status: "Maintenance", Notes: "Casco revisto", ActorUserID: actorID})
+	updated, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "K1 atualizado", Type: "Boat", Status: "Maintenance", Notes: "Casco revisto", ActorUserID: &actorID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "Alteração obsoleta", Type: "Boat", Status: "Operational", ActorUserID: actorID}); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := queries.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, AssetTag: created.AssetTag, Name: "Alteração obsoleta", Type: "Boat", Status: "Operational", ActorUserID: &actorID}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale update error = %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 	}
 
 	if _, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{
-		EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, ActorUserID: actorID,
+		EquipmentID: created.ID, ExpectedUpdatedAt: created.UpdatedAt, ActorUserID: &actorID,
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale retirement error = %v, want no rows", err)
 	}
@@ -138,7 +138,7 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 	}
 
 	retired, err := queries.RetireEquipmentWithAudit(ctx, dbgen.RetireEquipmentWithAuditParams{
-		EquipmentID: created.ID, ExpectedUpdatedAt: updated.UpdatedAt, ActorUserID: actorID,
+		EquipmentID: created.ID, ExpectedUpdatedAt: updated.UpdatedAt, ActorUserID: &actorID,
 	})
 	if err != nil || retired.Status != "Retired" {
 		t.Fatalf("retired = %#v, err = %v", retired, err)
@@ -177,7 +177,7 @@ func TestEquipmentManagementAuditsAndPreservesOperationalHistory(t *testing.T) {
 			t.Fatal("retired equipment remained operational")
 		}
 	}
-	reactivated, err := queries.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: created.ID, ActorUserID: actorID})
+	reactivated, err := queries.ReactivateEquipmentWithAudit(ctx, dbgen.ReactivateEquipmentWithAuditParams{EquipmentID: created.ID, ActorUserID: &actorID})
 	if err != nil || reactivated.Status != "Operational" {
 		t.Fatalf("reactivated = %#v, err = %v", reactivated, err)
 	}
@@ -1137,7 +1137,7 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: routine.ID, SourceUpdatedAt: routine.UpdatedAt, DestinationKind: "SESSION", DestinationID: copiedSessionID, CopiedByID: actorID}); err != nil {
+	if err := queries.CreateTrainingCopyEvent(ctx, dbgen.CreateTrainingCopyEventParams{SourceKind: "ROUTINE", SourceID: routine.ID, SourceUpdatedAt: routine.UpdatedAt, DestinationKind: "SESSION", DestinationID: copiedSessionID, CopiedByID: &actorID}); err != nil {
 		t.Fatal(err)
 	}
 	var copiedExerciseID uuid.UUID
@@ -1201,7 +1201,7 @@ func TestMemberProfileOptimisticUpdateAndImmutableAudit(t *testing.T) {
 	if _, err := queries.UpdateMemberProfile(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale profile update error = %v", err)
 	}
-	auditID, err := queries.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: userID, SubjectUserID: userID, Action: "PROFILE_UPDATED", ChangedFields: []string{"phone", "medical_declaration"}})
+	auditID, err := queries.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &userID, SubjectUserID: &userID, Action: "PROFILE_UPDATED", ChangedFields: []string{"phone", "medical_declaration"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1343,7 +1343,7 @@ func TestFeatureFlagsUseDefaultsConcurrencyAndImmutableAudit(t *testing.T) {
 		t.Fatalf("feature events = %#v, err = %v", events, err)
 	}
 	event := events[0]
-	if event.FeatureKey != "suggestions" || event.PreviousMode != "ENABLED" || event.NewMode != "ADMIN_ONLY" || event.ActorUserID != actorID {
+	if event.FeatureKey != "suggestions" || event.PreviousMode != "ENABLED" || event.NewMode != "ADMIN_ONLY" || event.ActorUserID == nil || *event.ActorUserID != actorID {
 		t.Fatalf("feature event = %#v", event)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE feature_flag_events SET new_mode = 'DISABLED' WHERE id = $1`, event.ID); err == nil {
