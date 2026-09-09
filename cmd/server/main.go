@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	_ "time/tzdata"
 
 	"github.com/cfcoimbra/mycfc/internal/app"
@@ -81,7 +82,16 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		defer conn.Close(ctx)
 		databaseName := connectionConfig.Database
 		credentials := databaseRoleCredentialsFromEnvironment()
-		logDatabaseCommandConfiguration(command, "environment", connectionConfig.Host, databaseName, connectionConfig.User, credentials)
+		configSource := "environment"
+		if os.Getenv("APP_ENV") == "production" && !databaseRoleCredentialsComplete(credentials) {
+			cfg, loadErr := loadDatabaseCommandConfig(ctx)
+			if loadErr != nil {
+				return fmt.Errorf("load production database role configuration: %w", loadErr)
+			}
+			credentials = databaseRoleCredentialsFromConfig(cfg)
+			configSource = "environment_connection+aws_remote_roles"
+		}
+		logDatabaseCommandConfiguration(command, configSource, connectionConfig.Host, databaseName, connectionConfig.User, credentials)
 		switch command {
 		case "bootstrap-db":
 			return db.BootstrapRoles(ctx, conn, databaseName, credentials)
@@ -112,12 +122,7 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	defer conn.Close(ctx)
 
-	credentials := db.RoleCredentials{
-		AppUsername:       cfg.DBUser,
-		AppPassword:       cfg.DBPassword.Value(),
-		MigrationUsername: cfg.MigrationDBUser,
-		MigrationPassword: cfg.MigrationDBPassword.Value(),
-	}
+	credentials := databaseRoleCredentialsFromConfig(cfg)
 	connectionRole := cfg.MigrationDBUser
 	if command == "bootstrap-db" || command == "harden-db" {
 		connectionRole = cfg.PostgresUser
@@ -130,6 +135,22 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
 	}
 	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+}
+
+func databaseRoleCredentialsFromConfig(cfg config.Config) db.RoleCredentials {
+	return db.RoleCredentials{
+		AppUsername:       cfg.DBUser,
+		AppPassword:       cfg.DBPassword.Value(),
+		MigrationUsername: cfg.MigrationDBUser,
+		MigrationPassword: cfg.MigrationDBPassword.Value(),
+	}
+}
+
+func databaseRoleCredentialsComplete(credentials db.RoleCredentials) bool {
+	return strings.TrimSpace(credentials.AppUsername) != "" &&
+		strings.TrimSpace(credentials.AppPassword) != "" &&
+		strings.TrimSpace(credentials.MigrationUsername) != "" &&
+		strings.TrimSpace(credentials.MigrationPassword) != ""
 }
 
 func logDatabaseCommandConfiguration(command, source, host, databaseName, connectionRole string, credentials db.RoleCredentials) {
