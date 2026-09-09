@@ -269,6 +269,54 @@ func TestRunDatabaseCommandMigratesUsingExplicitEnvironmentConnection(t *testing
 	}
 }
 
+func TestRunDatabaseCommandLoadsProductionRolesWhenExplicitConnectionHasIncompleteRoles(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("APP_DB_USER", "")
+	t.Setenv("APP_DB_PASSWORD", "")
+	t.Setenv("MIGRATION_DB_USER", "mycfc_migrate")
+	t.Setenv("MIGRATION_DB_PASSWORD", "connection-secret")
+	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig
+	t.Cleanup(func() {
+		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
+	})
+	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
+		return config.Config{
+			DBUser: "mycfc_app", DBPassword: config.Secret("app-secret"),
+			MigrationDBUser: "mycfc_migrate", MigrationDBPassword: config.Secret("migration-secret"),
+		}, nil
+	}
+	connection := &databaseCommandConnectionFake{tx: databaseMigrationTransactionFake{}}
+	connectDatabaseCommand = func(_ context.Context, rawURL string) (databaseCommandConnection, error) {
+		if rawURL != "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable" {
+			t.Fatalf("database URL=%q", rawURL)
+		}
+		return connection, nil
+	}
+	if err := runDatabaseCommand(t.Context(), "migrate"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunDatabaseCommandReturnsProductionRoleConfigurationFailure(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("APP_DB_USER", "")
+	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig
+	t.Cleanup(func() {
+		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
+	})
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) {
+		return &databaseCommandConnectionFake{}, nil
+	}
+	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
+		return config.Config{}, errors.New("remote roles unavailable")
+	}
+	if err := runDatabaseCommand(t.Context(), "migrate"); err == nil || !strings.Contains(err.Error(), "remote roles unavailable") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestRunDatabaseCommandFallsBackToValidatedConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_HOST", "")
