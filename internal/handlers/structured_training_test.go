@@ -3559,6 +3559,7 @@ func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownS
 	}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
 		{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)},
+		{SessionID: sessionID, MembershipID: uuid.New()},
 		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New())},
 	}
 
