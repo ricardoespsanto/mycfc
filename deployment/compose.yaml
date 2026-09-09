@@ -1,17 +1,20 @@
 name: mycfc-production
 
+x-production-config: &production-config
+  APP_ENV: production
+  APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
+  GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
+  APP_RELEASED_AT: ${APP_RELEASED_AT:-}
+  AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+
 x-app: &app
   image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
   environment:
-    APP_ENV: production
-    APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
-    GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
-    APP_RELEASED_AT: ${APP_RELEASED_AT:-}
+    <<: *production-config
     PORT: "8080"
-    AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
-    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
-    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
-    AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     S3_BUCKET_NAME: ${S3_BUCKET_NAME:?set S3_BUCKET_NAME in /etc/mycfc/mycfc.env}
     GALLERY_URL: ${GALLERY_URL:?set GALLERY_URL in /etc/mycfc/mycfc.env}
     CONSENT_TERMS_VERSION: ${CONSENT_TERMS_VERSION:?set CONSENT_TERMS_VERSION in /etc/mycfc/mycfc.env}
@@ -70,19 +73,7 @@ services:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     command: ["bootstrap-db"]
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
-      DB_USER: ${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}
-      DB_SSLMODE: disable
-      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
-      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      # Optional until #248 separately approves and provisions the worker.
-      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
-      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
+      <<: *production-config
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,18 +84,7 @@ services:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     command: ["migrate"]
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
-      DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
-      DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      DB_SSLMODE: disable
-      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in /etc/mycfc/mycfc.env}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      MIGRATION_DB_USER: ${MIGRATION_DB_USER:?set MIGRATION_DB_USER in /etc/mycfc/mycfc.env}
-      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in /etc/mycfc/mycfc.env}
-      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
-      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
+      <<: *production-config
     depends_on:
       postgres:
         condition: service_healthy

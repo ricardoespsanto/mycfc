@@ -296,6 +296,14 @@ func TestValidateBootstrapInput(t *testing.T) {
 	}
 }
 
+func TestValidateBootstrapInputIdentifiesInvalidNonSecretValue(t *testing.T) {
+	credentials := RoleCredentials{AppUsername: "stale-app-role", AppPassword: "app-password", MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password"}
+	err := validateBootstrapInput("mycfc", credentials)
+	if err == nil || !strings.Contains(err.Error(), `app database user "stale-app-role"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRoleStatementQuotesCredentials(t *testing.T) {
 	statement := roleStatement("app_user", "secret'with quote")
 	if !strings.Contains(statement, `"app_user"`) || !strings.Contains(statement, `'secret''with quote'`) {

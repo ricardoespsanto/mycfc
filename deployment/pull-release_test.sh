@@ -2,6 +2,7 @@
 set -eu
 
 deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+compose_file="$deployment_dir/compose.yaml"
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 fake_bin="$work_dir/bin"
@@ -163,6 +164,12 @@ awk '
 	/release_deployment-completed/ { completed = NR }
 	END { exit !(agent < detected && detected < pulled && pulled < migrated && migrated < ready && ready < switched && switched < completed) }
 ' "$success_case/events.log"
+for phase in postgres_ready database_bootstrap database_migrate database_harden candidate_start candidate_validation traffic_switch post_switch_validation; do
+	grep -q "event=deployment_phase_started phase=$phase" "$success_case/events.log"
+	grep -q "event=deployment_phase_completed phase=$phase" "$success_case/events.log"
+done
+grep -q 'event=release_selected .*active_slot=legacy' "$success_case/events.log"
+grep -q 'event=deployment_succeeded .*slot=blue' "$success_case/events.log"
 grep -q 'reverse_proxy app-blue:8080' "$success_case/state/caddy-upstream.caddy"
 grep -q '^MYCFC_IMAGE=.*bbbbbbbb' "$success_case/mycfc.env"
 grep -q -- '--profile blue up -d --no-deps --force-recreate app-blue' "$success_case/docker.log"
@@ -195,6 +202,7 @@ test -s "$failure_case/state/release-image-pulled-at"
 test -s "$failure_case/state/release-migration-completed-at"
 test ! -f "$failure_case/state/release-candidate-ready-at"
 grep -q -- '--profile blue stop app-blue' "$failure_case/docker.log"
+grep -q 'event=deployment_failed phase=candidate_validation exit_status=1 .*candidate_started=true route_switched=false' "$failure_case/events.log"
 
 post_switch_case="$work_dir/post-switch-failure"
 setup_case "$post_switch_case"
@@ -211,6 +219,7 @@ test -s "$post_switch_case/state/release-traffic-switched-at"
 test ! -f "$post_switch_case/state/release-deployment-completed-at"
 grep -q -- '--profile blue stop app-blue' "$post_switch_case/docker.log"
 test "$(grep -c 'exec -T caddy caddy reload' "$post_switch_case/docker.log")" -ge 2
+grep -q 'event=deployment_failed phase=post_switch_validation exit_status=1 .*candidate_started=true route_switched=true' "$post_switch_case/events.log"
 
 : >"$failure_case/docker.log"
 detected_before=$(cat "$failure_case/state/release-detected-at")
@@ -236,5 +245,16 @@ if grep -q 'application-secret\|release-secret' "$success_case/events.log" "$fai
 	printf '%s\n' 'release timeline leaked a credential' >&2
 	exit 1
 fi
+
+database_service_config=$(sed -n '/^  db-bootstrap:/,/^  caddy:/p' "$compose_file")
+if printf '%s\n' "$database_service_config" | grep -Eq 'APP_DB_|MIGRATION_DB_|^[[:space:]]+DB_(HOST|PORT|NAME|USER|PASSWORD|SSLMODE):'; then
+	printf '%s\n' 'production database jobs must not consume duplicated host database settings' >&2
+	exit 1
+fi
+test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 2
+production_config=$(sed -n '/^x-production-config:/,/^x-app:/p' "$compose_file")
+for field in APP_ENV APP_VERSION GIT_SHA AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+	printf '%s\n' "$production_config" | grep -q "^[[:space:]]*$field:"
+done
 
 printf '%s\n' 'pull-release tests passed'

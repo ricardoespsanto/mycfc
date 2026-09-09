@@ -27,10 +27,22 @@ candidate_service=
 candidate_started=false
 route_switched=false
 release_updated=false
+current_phase=initialization
 
 log() {
 	printf '%s\n' "$*"
 	logger -t mycfc-pull-release -- "$*"
+}
+
+run_phase() {
+	phase=$1
+	shift
+	current_phase=$phase
+	phase_started_epoch=$(date +%s)
+	log "event=deployment_phase_started phase=$phase sha=${sha:-unknown} digest=${release_digest:-unknown} slot=${candidate_slot:-unknown}"
+	"$@"
+	phase_duration_seconds=$(($(date +%s) - phase_started_epoch))
+	log "event=deployment_phase_completed phase=$phase duration_seconds=$phase_duration_seconds sha=${sha:-unknown} digest=${release_digest:-unknown} slot=${candidate_slot:-unknown}"
 }
 
 write_state_value() {
@@ -129,6 +141,9 @@ check_caddy_path() {
 rollback() {
 	status=$?
 	trap - EXIT HUP INT TERM
+	if [ "$status" -ne 0 ]; then
+		log "event=deployment_failed phase=$current_phase exit_status=$status sha=${sha:-unknown} digest=${release_digest:-unknown} slot=${candidate_slot:-unknown} candidate_started=$candidate_started route_switched=$route_switched"
+	fi
 	if [ "$route_switched" = true ] && [ -n "$route_backup" ] && [ -f "$route_backup" ]; then
 		log 'candidate failed after traffic switch; restoring the previous Caddy upstream'
 		temporary=$(mktemp "$state_dir/.upstream.XXXXXX")
@@ -239,6 +254,7 @@ esac
 begin_release_timeline "$released_at"
 record_attempt checking
 trap rollback EXIT HUP INT TERM
+log "event=release_selected tag=$release_tag digest=$release_digest active_slot=$active_slot"
 if [ -f "$failed_digest_file" ] && [ "$(cat "$failed_digest_file")" = "$release_digest" ]; then
 	record_attempt quarantined
 	log "release $release_digest previously failed validation; waiting for a replacement release"
@@ -305,18 +321,21 @@ export APP_RELEASED_AT="$released_at"
 export GIT_SHA="$sha"
 release_updated=true
 
-log "preparing SHA $sha with digest $release_digest in the $candidate_slot slot"
-docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
-docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
-docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
+log "event=release_preparing sha=$sha digest=$release_digest candidate_slot=$candidate_slot active_slot=$active_slot"
+run_phase postgres_ready docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
+run_phase database_bootstrap docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
+run_phase database_migrate docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
 # Idempotent defence in depth; migrate already applies this boundary atomically
 # before committing any newly created privacy execution tables.
-docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap harden-db
+run_phase database_harden docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap harden-db
 record_timeline_milestone migration-completed
-docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
+run_phase candidate_start docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 	up -d --no-deps --force-recreate "$candidate_service"
 candidate_started=true
 
+current_phase=candidate_validation
+candidate_validation_started_epoch=$(date +%s)
+log "event=deployment_phase_started phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
 candidate_ready=false
 for _ in $(seq 1 30); do
 	candidate_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$candidate_container" 2>/dev/null || true)
@@ -348,7 +367,12 @@ if ! curl -fsS -o /dev/null "http://$candidate_ip:8080$asset_path"; then
 	exit 1
 fi
 record_timeline_milestone candidate-ready
+candidate_validation_duration_seconds=$(($(date +%s) - candidate_validation_started_epoch))
+log "event=deployment_phase_completed phase=$current_phase duration_seconds=$candidate_validation_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
+log "event=candidate_validated sha=$sha digest=$release_digest slot=$candidate_slot address=$candidate_ip asset=$asset_path"
 
+current_phase=traffic_switch
+log "event=deployment_phase_started phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
 route_backup=$(mktemp "$runtime_dir/mycfc-caddy-upstream.XXXXXX")
 cp "$upstream_file" "$route_backup"
 caddy_running=$(docker inspect --format '{{.State.Running}}' mycfc-production-caddy-1 2>/dev/null || true)
@@ -360,13 +384,20 @@ else
 	docker compose --env-file "$env_file" -f "$compose_file" up -d --no-deps caddy
 fi
 record_timeline_milestone traffic-switched
+log "event=deployment_phase_completed phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
+log "event=traffic_switched sha=$sha digest=$release_digest from_slot=$active_slot to_slot=$candidate_slot"
 
+current_phase=post_switch_validation
+post_switch_started_epoch=$(date +%s)
+log "event=deployment_phase_started phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
 for path in /health/live /health/ready /login "$asset_path"; do
 	if ! check_caddy_path "$path"; then
 		log "post-switch Caddy check failed for $path"
 		exit 1
 	fi
 done
+post_switch_duration_seconds=$(($(date +%s) - post_switch_started_epoch))
+log "event=deployment_phase_completed phase=$current_phase duration_seconds=$post_switch_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
 
 write_state_value "$active_slot_file" "$candidate_slot"
 rm -f "$failed_digest_file" "$route_backup"
@@ -376,4 +407,4 @@ release_updated=false
 trap - EXIT HUP INT TERM
 record_attempt succeeded
 record_timeline_milestone deployment-completed
-log "deployed SHA $sha with digest $release_digest in the $candidate_slot slot"
+log "event=deployment_succeeded sha=$sha digest=$release_digest slot=$candidate_slot"
