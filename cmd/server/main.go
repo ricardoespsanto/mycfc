@@ -32,6 +32,8 @@ var (
 	executePrivacyCommand     = runPrivacyCommand
 )
 
+const legacyProductionAppDatabaseRole = "mycfc_app"
+
 func main() {
 	ctx := context.Background()
 	if len(os.Args) > 1 && os.Args[1] != "serve" {
@@ -83,7 +85,15 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		databaseName := connectionConfig.Database
 		credentials := databaseRoleCredentialsFromEnvironment()
 		configSource := "environment"
-		if os.Getenv("APP_ENV") == "production" && !databaseRoleCredentialsComplete(credentials) {
+		if command == "migrate" && !databaseRoleIdentifiersComplete(credentials) {
+			if strings.TrimSpace(credentials.AppUsername) == "" {
+				credentials.AppUsername = legacyProductionAppDatabaseRole
+			}
+			if strings.TrimSpace(credentials.MigrationUsername) == "" {
+				credentials.MigrationUsername = connectionConfig.User
+			}
+			configSource = "environment_connection+legacy_role_contract"
+		} else if os.Getenv("APP_ENV") == "production" && !databaseRoleCredentialsComplete(credentials) {
 			cfg, loadErr := loadDatabaseCommandConfig(ctx)
 			if loadErr != nil {
 				return fmt.Errorf("load production database role configuration: %w", loadErr)
@@ -151,6 +161,11 @@ func databaseRoleCredentialsComplete(credentials db.RoleCredentials) bool {
 		strings.TrimSpace(credentials.AppPassword) != "" &&
 		strings.TrimSpace(credentials.MigrationUsername) != "" &&
 		strings.TrimSpace(credentials.MigrationPassword) != ""
+}
+
+func databaseRoleIdentifiersComplete(credentials db.RoleCredentials) bool {
+	return strings.TrimSpace(credentials.AppUsername) != "" &&
+		strings.TrimSpace(credentials.MigrationUsername) != ""
 }
 
 func logDatabaseCommandConfiguration(command, source, host, databaseName, connectionRole string, credentials db.RoleCredentials) {

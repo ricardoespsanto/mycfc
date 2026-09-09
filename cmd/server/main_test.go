@@ -269,22 +269,19 @@ func TestRunDatabaseCommandMigratesUsingExplicitEnvironmentConnection(t *testing
 	}
 }
 
-func TestRunDatabaseCommandLoadsProductionRolesWhenExplicitConnectionHasIncompleteRoles(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
+func TestRunDatabaseCommandUsesLegacyRoleContractWhenMigrationConnectionHasNoRoles(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("APP_DB_USER", "")
 	t.Setenv("APP_DB_PASSWORD", "")
-	t.Setenv("MIGRATION_DB_USER", "mycfc_migrate")
-	t.Setenv("MIGRATION_DB_PASSWORD", "connection-secret")
+	t.Setenv("MIGRATION_DB_USER", "")
+	t.Setenv("MIGRATION_DB_PASSWORD", "")
 	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig
 	t.Cleanup(func() {
 		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
 	})
 	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
-		return config.Config{
-			DBUser: "mycfc_app", DBPassword: config.Secret("app-secret"),
-			MigrationDBUser: "mycfc_migrate", MigrationDBPassword: config.Secret("migration-secret"),
-		}, nil
+		t.Fatal("legacy migration compatibility must not require AWS configuration")
+		return config.Config{}, nil
 	}
 	connection := &databaseCommandConnectionFake{tx: databaseMigrationTransactionFake{}}
 	connectDatabaseCommand = func(_ context.Context, rawURL string) (databaseCommandConnection, error) {
@@ -295,25 +292,6 @@ func TestRunDatabaseCommandLoadsProductionRolesWhenExplicitConnectionHasIncomple
 	}
 	if err := runDatabaseCommand(t.Context(), "migrate"); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestRunDatabaseCommandReturnsProductionRoleConfigurationFailure(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("DATABASE_URL", "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable")
-	t.Setenv("APP_DB_USER", "")
-	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig
-	t.Cleanup(func() {
-		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
-	})
-	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) {
-		return &databaseCommandConnectionFake{}, nil
-	}
-	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
-		return config.Config{}, errors.New("remote roles unavailable")
-	}
-	if err := runDatabaseCommand(t.Context(), "migrate"); err == nil || !strings.Contains(err.Error(), "remote roles unavailable") {
-		t.Fatalf("error=%v", err)
 	}
 }
 
