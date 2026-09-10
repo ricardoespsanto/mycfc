@@ -135,6 +135,7 @@ func TestSecurityHeadersProtectPasswordRecoveryResponses(t *testing.T) {
 	}{
 		{path: "/recuperar-palavra-passe", referrer: "strict-origin-when-cross-origin"},
 		{path: "/recuperar-palavra-passe/repor?token=secret", referrer: "no-referrer"},
+		{path: "/privacidade/conclusao/never-log-this", referrer: "no-referrer"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
@@ -243,6 +244,7 @@ func TestAccessLogRedactsPrivacyRoutesAndActorIdentifiers(t *testing.T) {
 		"/perfil/privacidade", "/perfil/privacidade/novo",
 		"/perfil/privacidade/11000000-0000-0000-0000-000000000001",
 		"/admin/privacidade/11000000-0000-0000-0000-000000000001/unknown",
+		"/privacidade/conclusao/one-use-secret-token",
 	} {
 		t.Run(path, func(t *testing.T) {
 			var logs bytes.Buffer
@@ -251,12 +253,12 @@ func TestAccessLogRedactsPrivacyRoutesAndActorIdentifiers(t *testing.T) {
 			ctx := WithRemoteIP(context.Background(), netip.MustParseAddr("203.0.113.92"))
 			ctx = WithUserID(ctx, "private-actor")
 			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path+"?explanation=private-note", nil).WithContext(ctx))
-			for _, secret := range []string{"11000000", "203.0.113.92", "private-actor", "private-note", "remote_ip", "user_id", "/unknown", "/novo"} {
+			for _, secret := range []string{"11000000", "one-use-secret-token", "203.0.113.92", "private-actor", "private-note", "remote_ip", "user_id", "/unknown", "/novo"} {
 				if strings.Contains(logs.String(), secret) {
 					t.Fatalf("privacy value %q leaked: %s", secret, logs.String())
 				}
 			}
-			if !strings.Contains(logs.String(), `privacidade/*`) || !strings.Contains(logs.String(), `"status":404`) {
+			if !strings.Contains(logs.String(), `"path":"/`) || !strings.Contains(logs.String(), `privacidade`) || !strings.Contains(logs.String(), `/*"`) || !strings.Contains(logs.String(), `"status":404`) {
 				t.Fatalf("missing normalized route/status: %s", logs.String())
 			}
 		})

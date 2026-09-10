@@ -4,6 +4,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"sort"
+	"strconv"
 )
 
 type PrivacyOption struct{ Value, Label string }
@@ -33,6 +34,34 @@ type PrivacyRequestNewPage struct {
 	Categories                                                  []PrivacyCategory
 	SubjectID, PolicyVersion, ScopeKind, RequestKey, ContactURL string
 	Errors                                                      validation.FieldErrors
+}
+type PrivacyCompletionDetailPage struct {
+	Meta                                                                  components.PageMeta
+	Reference, CompletedAt, ManifestSHA256, ContactURL, ConfirmationNonce string
+	Categories, Checkpoints, ObjectTargets, ProviderTargets               int32
+	Confirm, Unavailable                                                  bool
+}
+type PrivacyControlLookupPage struct {
+	Meta             components.PageMeta
+	Reference, Error string
+}
+type PrivacyControlJob struct {
+	ID, CategoryCode, PurposeCode, Status, AttemptCount string
+	FailureStage, FailureCode, ProposedAt               string
+	CanPropose, CanApprove                              bool
+}
+type PrivacyCompletionControlPage struct {
+	Meta                                                                  components.PageMeta
+	Reference, RequestStatus, ExecutionStatus, Success, Error, ContactURL string
+	Jobs                                                                  []PrivacyControlJob
+}
+type PrivacyActivationEvidence struct{ ID, Kind, ObservedAt string }
+type PrivacyActivationControlPage struct {
+	Meta                                    components.PageMeta
+	PolicyVersion, Success, Error           string
+	Ready, CanPropose, CanRenew, CanApprove bool
+	Evidence                                []PrivacyActivationEvidence
+	ProposedAt                              string
 }
 type PrivacyDependant struct {
 	ID, Name, Resolution, ResolvedAt string
@@ -111,6 +140,77 @@ func privacyContact(url string) string {
 		return url
 	}
 	return "/legal/direitos"
+}
+
+func privacyCount(value int32) string { return strconv.FormatInt(int64(value), 10) }
+
+func privacyControlStatus(status string) string {
+	switch status {
+	case "PENDING":
+		return "Pendente"
+	case "LEASED", "RUNNING", "PROCESSING":
+		return "Em processamento"
+	case "RETRYABLE_FAILED":
+		return "Nova tentativa pendente"
+	case "TERMINAL_FAILED":
+		return "Intervenção necessária"
+	case "SUCCEEDED", "COMPLETED":
+		return "Concluído"
+	default:
+		return "Estado indisponível"
+	}
+}
+
+func privacyFailureStage(stage string) string {
+	switch stage {
+	case "SYNC":
+		return "Sincronização"
+	case "EXECUTE":
+		return "Execução"
+	case "VERIFY":
+		return "Verificação"
+	default:
+		return "Etapa protegida"
+	}
+}
+
+func privacyFailureCode(code string) string {
+	switch code {
+	case "ACTION_FAILED":
+		return "ACTION_FAILED — a operação não terminou"
+	case "DEPENDENCY_UNAVAILABLE":
+		return "DEPENDENCY_UNAVAILABLE — dependência indisponível"
+	case "UNSUPPORTED_OPERATION":
+		return "UNSUPPORTED_OPERATION — operação não suportada"
+	case "VERIFICATION_FAILED":
+		return "VERIFICATION_FAILED — verificação sem sucesso"
+	case "RETRY_LIMIT_REACHED":
+		return "RETRY_LIMIT_REACHED — limite de tentativas atingido"
+	default:
+		return "OPERATIONAL_FAILURE — falha operacional protegida"
+	}
+}
+
+func privacyEvidenceKind(kind string) string {
+	switch kind {
+	case "RESTORE":
+		return "Restauro isolado"
+	case "INFRASTRUCTURE":
+		return "Infraestrutura"
+	case "PROVIDER":
+		return "Destinatários externos"
+	case "SCHEMA":
+		return "Esquema de dados"
+	default:
+		return "Evidência não reconhecida"
+	}
+}
+
+func privacyReadyLabel(ready bool) string {
+	if ready {
+		return "Ativo"
+	}
+	return "Inativo"
 }
 
 func privacyDetailErrors(page PrivacyRequestDetailPage) []components.FieldError {

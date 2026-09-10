@@ -104,6 +104,57 @@ function genericMessages(messages, ref, explanation = '') {
   }
 }
 
+test('completion detail link is public, generic when unavailable, private and accessible at 320px', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL, viewport: { width: 320, height: 720 } });
+  const page = await context.newPage();
+  try {
+    const token = 'must-never-appear-in-the-rendered-page';
+    const response = await page.goto(`/privacidade/conclusao/${token}`);
+    expect(response.status()).toBe(404);
+    expect(response.headers()['cache-control']).toBe('no-store');
+    expect(response.headers()['referrer-policy']).toBe('no-referrer');
+    expect(response.headers()['x-robots-tag']).toBe('noindex, nofollow, noarchive');
+    await expect(page.getByRole('heading', { name: 'Ligação indisponível', exact: true })).toBeVisible();
+    await expect(page.getByText('Esta ligação é inválida, já foi utilizada ou expirou.')).toBeVisible();
+    await expect(page.locator('body')).not.toContainText(token);
+    await accessibleAt320(page);
+  } finally { await context.close(); }
+});
+
+test('privacy execution controls expose bounded evidence with keyboard focus, reflow and no-JavaScript lookup', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL, viewport: { width: 320, height: 720 } });
+  const page = await context.newPage();
+  try {
+    await login(page, executor);
+    await page.goto('/admin/privacidade/controlo');
+    await page.getByLabel('Referência do pedido').fill('not-a-reference');
+    await page.getByRole('button', { name: 'Consultar estado técnico' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.error-summary')).toBeFocused();
+    await expect(page.getByText('Introduza uma referência de pedido válida.').first()).toBeVisible();
+    await accessibleAt320(page);
+
+    await page.goto('/admin/privacidade/ativacao');
+    await expect(page.getByRole('heading', { name: 'Ativação do processamento', exact: true })).toBeVisible();
+    await expect(page.getByText('Restauro isolado', { exact: true })).toBeVisible();
+    await expect(page.getByText('Infraestrutura', { exact: true })).toBeVisible();
+    await expect(page.getByText('Destinatários externos', { exact: true })).toBeVisible();
+    await expect(page.getByText('Esquema de dados', { exact: true })).toBeVisible();
+    await expect(page.locator('input[type="file"], textarea')).toHaveCount(0);
+    await accessibleAt320(page);
+  } finally { await context.close(); }
+
+  const noScriptContext = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 320, height: 720 } });
+  const noScript = await noScriptContext.newPage();
+  try {
+    await login(noScript, executor);
+    await noScript.goto('/admin/privacidade/controlo');
+    await noScript.getByLabel('Referência do pedido').fill('still-not-a-reference');
+    await noScript.getByRole('button', { name: 'Consultar estado técnico' }).click();
+    await expect(noScript.getByText('Introduza uma referência de pedido válida.').first()).toBeVisible();
+  } finally { await noScriptContext.close(); }
+});
+
 test('adult request validates with keyboard focus, deduplicates, sends a generic receipt and cancels without losing login', async ({ page }) => {
   test.setTimeout(120000);
   const email = await register(page, 'receipt');
