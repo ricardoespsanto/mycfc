@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/google/uuid"
@@ -91,6 +92,97 @@ func TestObjectTargetProtectorRejectsMalformedInputsWithoutEchoingSecrets(t *tes
 	if _, err := protector.SealObjectKey(ObjectTargetBinding{}, secret); !errors.Is(err, ErrObjectTargetCrypto) || bytes.Contains([]byte(err.Error()), []byte(secret)) {
 		t.Fatalf("seal err=%v", err)
 	}
+	if _, err := protector.DigestObjectKey(uuid.Nil, "private-media", secret); !errors.Is(err, ErrObjectTargetCrypto) || bytes.Contains([]byte(err.Error()), []byte(secret)) {
+		t.Fatalf("digest err=%v", err)
+	}
+	if _, err := OpenObjectTargetEnvelope(private.Bytes(), objectTargetTestBinding(), ObjectTargetEnvelope{}); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("malformed envelope err=%v", err)
+	}
+}
+
+func TestObjectTargetProtectorRejectsInvalidKeysAndEntropyFailures(t *testing.T) {
+	if _, err := NewX25519ObjectTargetProtector("target-key", bytes.Repeat([]byte{1}, 31), "digest-key", bytes.Repeat([]byte{2}, 32)); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("invalid public key err=%v", err)
+	}
+
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector, err := NewX25519ObjectTargetProtector("target-key", private.PublicKey().Bytes(), "digest-key", bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector.random = failingReader{}
+	if _, err = protector.SealObjectKey(objectTargetTestBinding(), "profiles/member/photo.png"); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("ephemeral entropy failure err=%v", err)
+	}
+
+	protector.random = nonceFailReader{}
+	if _, err = protector.SealObjectKey(objectTargetTestBinding(), "profiles/member/photo.png"); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("nonce entropy failure err=%v", err)
+	}
+
+	lowOrderProtector, err := NewX25519ObjectTargetProtector("target-key", make([]byte, 32), "digest-key", bytes.Repeat([]byte{4}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lowOrderProtector.SealObjectKey(objectTargetTestBinding(), "profiles/member/photo.png"); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("low-order public key err=%v", err)
+	}
+}
+
+func TestOpenObjectTargetEnvelopeRejectsMalformedPrivateAndLowOrderKeys(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector, err := NewX25519ObjectTargetProtector("target-key", private.PublicKey().Bytes(), "digest-key", bytes.Repeat([]byte{5}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := objectTargetTestBinding()
+	envelope, err := protector.SealObjectKey(binding, "repairs/private/photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenObjectTargetEnvelope([]byte{1}, binding, envelope); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("malformed private key err=%v", err)
+	}
+	envelope.Encapsulation = make([]byte, 32)
+	if _, err = OpenObjectTargetEnvelope(private.Bytes(), binding, envelope); !errors.Is(err, ErrObjectTargetCrypto) {
+		t.Fatalf("low-order encapsulation err=%v", err)
+	}
+}
+
+func TestDecodeObjectTargetFieldsRejectsMalformedPayloads(t *testing.T) {
+	for _, payload := range [][]byte{
+		{0, 0, 0},
+		{0, 0, 0, 2, 'a'},
+		append(encodeFields("one", "two"), 0),
+	} {
+		if _, ok := decodeFields(payload, 2); ok {
+			t.Fatalf("malformed payload accepted: %v", payload)
+		}
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+type nonceFailReader struct{}
+
+func (nonceFailReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 12 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	for index := range buffer {
+		buffer[index] = byte(index + 1)
+	}
+	return len(buffer), nil
 }
 
 func objectTargetTestBinding() ObjectTargetBinding {
