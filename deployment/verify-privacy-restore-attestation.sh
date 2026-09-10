@@ -55,7 +55,7 @@ if ! jq -e --arg expected_digest "$expected_digest" --arg expected_policy "$expe
 	and (.valid_until | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 	and (.auth_hmac_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
 	and (.schema_migration_digest | type == "string" and test("^[0-9a-f]{64}$"))
-	and (.contracts == {backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v3",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"})
+	and (.contracts == {backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v4",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"})
 	and (.backup | type == "object" and (keys | sort == ["created_at","dump","manifest"]))
 	and (.backup.created_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 	and (all([.backup.manifest,.backup.dump,.evidence][];
@@ -68,23 +68,30 @@ if ! jq -e --arg expected_digest "$expected_digest" --arg expected_policy "$expe
 	and (.ledger.input_source == "LIVE_LEDGER" or .ledger.input_source == "SYNTHETIC_BOOTSTRAP")
 	and (.ledger.inventory_sha256 | test("^[0-9a-f]{64}$"))
 	and (.ledger.object_count | type == "number" and . >= 0 and floor == .)
-	and (.candidate | type == "object" and (keys | sort == ["absence_verified_count","already_applied_count","closure_v3_count","erasure_effective_at_verified_count","failed_count","imported_count","intent_only_count","legacy_closure_v2_count","non_replayable_v1_count","object_count","replayed_count","result_sha256","synthetic_replayed_count"]))
+	and (.candidate | type == "object" and (keys | sort == ["absence_verified_count","already_applied_count","closure_v4_count","erasure_effective_at_verified_count","failed_count","imported_count","intent_only_count","legacy_closure_v2_count","membership_count","membership_postcondition_contract","membership_postcondition_sha256","membership_postcondition_verified_count","non_replayable_v1_count","object_count","replayed_count","result_sha256","synthetic_replayed_count","variation_count"]))
 	and (.candidate.result_sha256 | test("^[0-9a-f]{64}$"))
-	and (all(.candidate | to_entries[] | select(.key != "result_sha256") | .value; type == "number" and . >= 0 and floor == .))
+	and (all(.candidate | to_entries[] | select(.key != "result_sha256" and .key != "membership_postcondition_contract" and .key != "membership_postcondition_sha256") | .value; type == "number" and . >= 0 and floor == .))
+	and .candidate.membership_postcondition_contract == "mycfc/membership-history-postcondition/v1"
+	and (.candidate.membership_postcondition_sha256 | test("^[0-9a-f]{64}$"))
 	and .candidate.object_count == .ledger.object_count and .candidate.replayed_count > 0
 	and .candidate.replayed_count == (.candidate.imported_count + .candidate.already_applied_count)
 	and .candidate.absence_verified_count == .candidate.replayed_count
-	and .candidate.closure_v3_count == .candidate.replayed_count
+	and .candidate.closure_v4_count == .candidate.replayed_count
 	and .candidate.erasure_effective_at_verified_count == .candidate.replayed_count
+	and .candidate.membership_postcondition_verified_count == .candidate.replayed_count
 	and .candidate.non_replayable_v1_count == 0 and .candidate.intent_only_count == 0 and .candidate.legacy_closure_v2_count == 0 and .candidate.failed_count == 0
 	and (if .ledger.input_source == "LIVE_LEDGER" then .candidate.synthetic_replayed_count == 0 else .candidate.synthetic_replayed_count == .candidate.replayed_count end)
-	and (.observer | type == "object" and (keys | sort == ["closure_v3_count","consent_clock_verified_count","erasure_effective_at_verified_count","evidence_sha256","expected_checkpoint_count","image_digest","provider_absent_count","replay_count","source_already_applied_count","succeeded_checkpoint_count","synthetic_count","verified_run_count"]))
+	and (.observer | type == "object" and (keys | sort == ["closure_v4_count","consent_clock_verified_count","erasure_effective_at_verified_count","evidence_sha256","expected_checkpoint_count","image_digest","membership_count","membership_postcondition_contract","membership_postcondition_sha256","membership_postcondition_verified_count","provider_absent_count","replay_count","source_already_applied_count","succeeded_checkpoint_count","synthetic_count","variation_count","verified_run_count"]))
 	and .observer.image_digest == $expected_observer_digest and (.observer.evidence_sha256 | test("^[0-9a-f]{64}$"))
 	and .observer.replay_count == .candidate.replayed_count and .observer.source_already_applied_count == .candidate.already_applied_count
 	and .observer.synthetic_count == .candidate.synthetic_replayed_count and .observer.verified_run_count == .candidate.replayed_count
 	and .observer.expected_checkpoint_count > 0 and .observer.succeeded_checkpoint_count == .observer.expected_checkpoint_count
 	and .observer.provider_absent_count == .candidate.replayed_count and .observer.consent_clock_verified_count == .candidate.replayed_count
-	and .observer.closure_v3_count == .candidate.replayed_count and .observer.erasure_effective_at_verified_count == .candidate.replayed_count
+	and .observer.closure_v4_count == .candidate.replayed_count and .observer.erasure_effective_at_verified_count == .candidate.replayed_count
+	and .observer.membership_postcondition_contract == .candidate.membership_postcondition_contract
+	and .observer.membership_postcondition_sha256 == .candidate.membership_postcondition_sha256
+	and .observer.membership_postcondition_verified_count == .candidate.replayed_count
+	and .observer.membership_count == .candidate.membership_count and .observer.variation_count == .candidate.variation_count
 ' "$attestation_file" >/dev/null; then
 	fail
 fi

@@ -455,7 +455,7 @@ fi
 jq -e --arg source "$ledger_input_source" --arg policy "$PRIVACY_ACTIVATION_POLICY_VERSION" \
 	--arg executor "$privacy_executor_version" --arg plan "$privacy_plan_schema_version" --arg image "$image_digest" \
 	--arg inventory "$ledger_inventory_sha256" --argjson objects "$ledger_object_count" '
-		(keys | sort == ["absence_verified_count","already_applied_count","closure_v3_count","contract","erasure_effective_at_verified_count","executor_version","failed_count","image_digest","imported_count","input_source","intent_only_count","inventory_sha256","legacy_closure_v2_count","non_replayable_v1_count","object_count","plan_schema_version","policy_version","replayed_count","result","schema_migration_digest","synthetic_replayed_count"])
+		(keys | sort == ["absence_verified_count","already_applied_count","closure_v4_count","contract","erasure_effective_at_verified_count","executor_version","failed_count","image_digest","imported_count","input_source","intent_only_count","inventory_sha256","legacy_closure_v2_count","membership_count","membership_postcondition_contract","membership_postcondition_sha256","membership_postcondition_verified_count","non_replayable_v1_count","object_count","plan_schema_version","policy_version","replayed_count","result","schema_migration_digest","synthetic_replayed_count","variation_count"])
 		and .contract == "mycfc/privacy-restore-replay-result/v2"
 		and .result == "SUCCEEDED"
 		and .input_source == $source
@@ -475,14 +475,20 @@ jq -e --arg source "$ledger_input_source" --arg policy "$PRIVACY_ACTIVATION_POLI
 		and (.already_applied_count | type == "number" and . >= 0 and floor == .)
 		and (.absence_verified_count | type == "number" and . >= 0 and floor == .)
 		and (.synthetic_replayed_count | type == "number" and . >= 0 and floor == .)
-		and (.closure_v3_count | type == "number" and . >= 0 and floor == .)
+		and (.closure_v4_count | type == "number" and . >= 0 and floor == .)
 		and (.erasure_effective_at_verified_count | type == "number" and . >= 0 and floor == .)
+		and .membership_postcondition_contract == "mycfc/membership-history-postcondition/v1"
+		and (.membership_postcondition_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+		and (.membership_postcondition_verified_count | type == "number" and . >= 0 and floor == .)
+		and (.membership_count | type == "number" and . >= 0 and floor == .)
+		and (.variation_count | type == "number" and . >= 0 and floor == .)
 		and .replayed_count > 0
 		and .object_count >= .replayed_count
 		and .replayed_count == (.imported_count + .already_applied_count)
 		and .absence_verified_count == .replayed_count
-		and .closure_v3_count == .replayed_count
+		and .closure_v4_count == .replayed_count
 		and .erasure_effective_at_verified_count == .replayed_count
+		and .membership_postcondition_verified_count == .replayed_count
 		and (if $source == "LIVE_LEDGER" then .synthetic_replayed_count == 0 else .synthetic_replayed_count == .replayed_count end)
 	' "$replay_result" >/dev/null
 
@@ -502,8 +508,13 @@ jq -e --slurpfile candidate "$replay_result" '
 	.replay_count == $candidate[0].replayed_count
 	and .source_already_applied_count == $candidate[0].already_applied_count
 	and .synthetic_count == $candidate[0].synthetic_replayed_count
-	and .closure_v3_count == $candidate[0].closure_v3_count
+	and .closure_v4_count == $candidate[0].closure_v4_count
 	and .erasure_effective_at_verified_count == $candidate[0].erasure_effective_at_verified_count
+	and .membership_postcondition_contract == $candidate[0].membership_postcondition_contract
+	and .membership_postcondition_sha256 == $candidate[0].membership_postcondition_sha256
+	and .membership_postcondition_verified_count == $candidate[0].membership_postcondition_verified_count
+	and .membership_count == $candidate[0].membership_count
+	and .variation_count == $candidate[0].variation_count
 ' "$observer_result" >/dev/null
 
 observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -530,7 +541,7 @@ jq -n --slurpfile candidate "$replay_result" --slurpfile observer "$observer_res
 	--arg ledger_input_contract 'mycfc/privacy-restore-ledger-input/v2' \
 	--arg replay_result_contract 'mycfc/privacy-restore-replay-result/v2' \
 	--arg replay_contract 'relational-erasure-replay/v1' \
-	--arg closure_contract 'restore-tombstone-closure/v3' \
+	--arg closure_contract 'restore-tombstone-closure/v4' \
 	--arg synthetic_fixture_contract 'mycfc/privacy-restore-synthetic-fixture/v1' \
 	--arg manifest_ref "$manifest_ref" --arg manifest_sha256 "$manifest_sha256" \
 	--arg dump_ref "$dump_ref" --arg dump_sha256 "$dump_sha256" \
@@ -580,7 +591,7 @@ jq -n \
 	--arg candidate_result_sha256 "$candidate_result_sha256" \
 	--arg kms_key_arn "$BACKUP_KMS_KEY_ID" \
 	--arg evidence_ref "$evidence_ref" --arg evidence_sha256 "$evidence_sha256" --argjson evidence_size "$evidence_size" \
-	'{contract:$contract,result:$result,observed_at:$observed_at,valid_until:$valid_until,policy_version:$policy_version,executor_version:$executor_version,plan_schema_version:$plan_schema_version,image_digest:$image_digest,schema_migration_digest:$schema_migration_digest,contracts:{backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v3",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"},backup:{created_at:$backup_created_at,manifest:{ref:$manifest_ref,sha256:$manifest_sha256,checksum_sha256:$manifest_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$manifest_size},dump:{ref:$dump_ref,sha256:$dump_sha256,checksum_sha256:$dump_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$dump_size}},ledger:{input_source:$ledger_input_source,inventory_sha256:$ledger_inventory_sha256,object_count:$ledger_object_count},candidate:{result_sha256:$candidate_result_sha256,object_count:$candidate[0].object_count,imported_count:$candidate[0].imported_count,replayed_count:$candidate[0].replayed_count,already_applied_count:$candidate[0].already_applied_count,non_replayable_v1_count:$candidate[0].non_replayable_v1_count,absence_verified_count:$candidate[0].absence_verified_count,synthetic_replayed_count:$candidate[0].synthetic_replayed_count,closure_v3_count:$candidate[0].closure_v3_count,intent_only_count:$candidate[0].intent_only_count,legacy_closure_v2_count:$candidate[0].legacy_closure_v2_count,erasure_effective_at_verified_count:$candidate[0].erasure_effective_at_verified_count,failed_count:$candidate[0].failed_count},observer:$observer[0],evidence:{ref:$evidence_ref,sha256:$evidence_sha256,checksum_sha256:$evidence_sha256,kms_key_arn:$kms_key_arn,size_bytes:$evidence_size}}' \
+	'{contract:$contract,result:$result,observed_at:$observed_at,valid_until:$valid_until,policy_version:$policy_version,executor_version:$executor_version,plan_schema_version:$plan_schema_version,image_digest:$image_digest,schema_migration_digest:$schema_migration_digest,contracts:{backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v4",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"},backup:{created_at:$backup_created_at,manifest:{ref:$manifest_ref,sha256:$manifest_sha256,checksum_sha256:$manifest_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$manifest_size},dump:{ref:$dump_ref,sha256:$dump_sha256,checksum_sha256:$dump_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$dump_size}},ledger:{input_source:$ledger_input_source,inventory_sha256:$ledger_inventory_sha256,object_count:$ledger_object_count},candidate:{result_sha256:$candidate_result_sha256,object_count:$candidate[0].object_count,imported_count:$candidate[0].imported_count,replayed_count:$candidate[0].replayed_count,already_applied_count:$candidate[0].already_applied_count,non_replayable_v1_count:$candidate[0].non_replayable_v1_count,absence_verified_count:$candidate[0].absence_verified_count,synthetic_replayed_count:$candidate[0].synthetic_replayed_count,closure_v4_count:$candidate[0].closure_v4_count,intent_only_count:$candidate[0].intent_only_count,legacy_closure_v2_count:$candidate[0].legacy_closure_v2_count,erasure_effective_at_verified_count:$candidate[0].erasure_effective_at_verified_count,membership_postcondition_contract:$candidate[0].membership_postcondition_contract,membership_postcondition_sha256:$candidate[0].membership_postcondition_sha256,membership_postcondition_verified_count:$candidate[0].membership_postcondition_verified_count,membership_count:$candidate[0].membership_count,variation_count:$candidate[0].variation_count,failed_count:$candidate[0].failed_count},observer:$observer[0],evidence:{ref:$evidence_ref,sha256:$evidence_sha256,checksum_sha256:$evidence_sha256,kms_key_arn:$kms_key_arn,size_bytes:$evidence_size}}' \
 	>"$work_dir/attestation-payload.json"
 attestation_canonical=$(jq -Sc . "$work_dir/attestation-payload.json")
 attestation_hmac=$(hmac_sha256 "$attestation_canonical" "$attestation_auth_key_file")

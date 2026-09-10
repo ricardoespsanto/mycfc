@@ -141,9 +141,11 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 	case "RESTORE":
 		artifact["evidence_ref"], artifact["schema_migration_digest"] = "s3://fixture/restore?versionId=v1", digest
 		artifact["restore_input_source"], artifact["restore_input_contract"] = "LIVE_LEDGER", "mycfc/privacy-restore-ledger-input/v2"
-		artifact["restore_replay_contract"], artifact["restore_closure_contract"] = "relational-erasure-replay/v1", "restore-tombstone-closure/v3"
+		artifact["restore_replay_contract"], artifact["restore_closure_contract"] = "relational-erasure-replay/v1", "restore-tombstone-closure/v4"
 		artifact["restore_candidate_sha256"], artifact["restore_inventory_sha256"], artifact["restore_observer_sha256"] = digest, digest, digest
 		artifact["restore_object_count"], artifact["restore_replayed_count"], artifact["restore_synthetic_count"] = 1, 1, 0
+		artifact["restore_membership_postcondition_contract"], artifact["restore_membership_postcondition_sha256"] = "mycfc/membership-history-postcondition/v1", digest
+		artifact["restore_membership_postcondition_verified_count"], artifact["restore_membership_count"], artifact["restore_variation_count"] = 1, 0, 0
 	case "INFRASTRUCTURE":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/infrastructure?versionId=v1", "fixture-key"
 		artifact["production_state_serial"], artifact["hetzner_state_serial"] = 1, 1
@@ -158,7 +160,7 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 		artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 1, digest
 	case "SCHEMA":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609100014_privacy_activation_broker"
+		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609100015_privacy_membership_postcondition"
 	}
 	return artifact
 }

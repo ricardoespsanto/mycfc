@@ -24,15 +24,17 @@ func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
 	}
 }
 
-func TestActivationBrokerMigrationIsExactBaselineTailAndPurgesInheritedACLs(t *testing.T) {
+func TestActivationBrokerMigrationIsExactBaselineSegmentAndPurgesInheritedACLs(t *testing.T) {
 	migration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	marker := "-- #248 trusted activation boundary."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || baselineSchema[index:] != string(migration) {
-		t.Fatal("activation broker migration is not the exact baseline tail")
+	v4Marker := "-- Baseline through 202609100015_privacy_membership_postcondition."
+	v4Index := strings.LastIndex(baselineSchema, v4Marker)
+	if index < 0 || v4Index <= index || strings.TrimSpace(baselineSchema[index:v4Index]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("activation broker migration is not the exact baseline segment")
 	}
 	for _, required := range []string{
 		"aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner)))",
@@ -47,6 +49,23 @@ func TestActivationBrokerMigrationIsExactBaselineTailAndPurgesInheritedACLs(t *t
 	} {
 		if !strings.Contains(string(migration), required) {
 			t.Fatalf("activation broker migration missing %q", required)
+		}
+	}
+}
+
+func TestMembershipPostconditionMigrationIsRepresentedByFreshBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609100015_privacy_membership_postcondition.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"restore-tombstone-closure/v4", "mycfc/membership-history-postcondition/v1",
+		"membership_history_source_rows", "membership_history_replay_postconditions",
+		"privacy_worker_execute_checkpoint_inner_015", "proc.proname IN('privacy_worker_execute_checkpoint'",
+		"privacy_inner_capability_revoke_failed",
+	} {
+		if !strings.Contains(string(migration), required) || !strings.Contains(baselineSchema, required) {
+			t.Fatalf("membership postcondition migration or baseline missing %q", required)
 		}
 	}
 }

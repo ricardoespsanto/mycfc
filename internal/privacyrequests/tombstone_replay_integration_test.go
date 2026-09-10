@@ -78,6 +78,7 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 	record.SubjectUserID = subject
 	record.ExecutionStart = time.Now().UTC()
 	record.Replay.Operations = []string{"AUTH_ACCESS_REVOKE", "AUTH_TOKEN_DELETE", "PROFILE_IDENTITY_DELETE", "PROVIDER_LOCAL_FENCE", "IDENTITY_CLEAR"}
+	record.Replay.MembershipHistoryPostcondition = databaseMembershipPostcondition(t, ctx, tx, nil, record.ExecutionStart)
 	closedAt := record.ExecutionStart.Add(time.Hour)
 	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt,
 		EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
@@ -90,6 +91,26 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 		t.Fatal(err)
 	}
 	worker := TombstoneReplayWorker{Store: tx, WorkerRef: uuid.New()}
+	if _, err = tx.Exec(ctx, "SAVEPOINT corrupt_ordinary_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	corruptSealed, sealErr := protector.SealClosure(corruptClosureMembershipDigest(closure))
+	if sealErr != nil {
+		t.Fatal(sealErr)
+	}
+	corruptAuthenticated, authenticateErr := AuthenticateReplayTombstone(privateKey, listedTombstoneFixture(corruptSealed))
+	if authenticateErr != nil {
+		t.Fatal(authenticateErr)
+	}
+	if _, replayErr := worker.Replay(ctx, corruptAuthenticated); !errors.Is(replayErr, ErrTombstoneReplayUnavailable) {
+		t.Fatalf("corrupt ordinary membership postcondition error=%v", replayErr)
+	}
+	if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT corrupt_ordinary_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "RELEASE SAVEPOINT corrupt_ordinary_postcondition"); err != nil {
+		t.Fatal(err)
+	}
 	result, err := worker.Replay(ctx, authenticated)
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +242,7 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 	record.ExecutionID, record.RequestID, record.RequestRef, record.SubjectUserID = executionID, requestID, requestRef, subject
 	record.PlanSHA256, record.ExecutionStart = planDigest, effective.Add(-time.Minute)
 	record.Replay.Operations = []string{"AUTH_TOKEN_DELETE", "PROFILE_IDENTITY_DELETE", "PROVIDER_LOCAL_FENCE", "IDENTITY_CLEAR"}
+	record.Replay.MembershipHistoryPostcondition = databaseMembershipPostcondition(t, ctx, tx, nil, effective)
 	closedAt := effective.Add(time.Hour)
 	sealed, err := protector.SealClosure(TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: effective})
 	if err != nil {
@@ -232,7 +254,31 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := (TombstoneReplayWorker{Store: tx, WorkerRef: uuid.New()}).Replay(ctx, authenticated)
+	worker := TombstoneReplayWorker{Store: tx, WorkerRef: uuid.New()}
+	if _, err = tx.Exec(ctx, "SAVEPOINT corrupt_already_applied_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	corruptSealed, sealErr := protector.SealClosure(corruptClosureMembershipDigest(TombstoneClosure{Version: TombstoneClosureVersion,
+		Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: effective}))
+	if sealErr != nil {
+		t.Fatal(sealErr)
+	}
+	corruptListed := listedTombstoneFixture(corruptSealed)
+	corruptListed.RetainUntil = corruptSealed.RetainUntil
+	corruptAuthenticated, authenticateErr := AuthenticateReplayTombstone(privateKey, corruptListed)
+	if authenticateErr != nil {
+		t.Fatal(authenticateErr)
+	}
+	if _, replayErr := worker.Replay(ctx, corruptAuthenticated); !errors.Is(replayErr, ErrTombstoneReplayUnavailable) {
+		t.Fatalf("corrupt already-applied membership postcondition error=%v", replayErr)
+	}
+	if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT corrupt_already_applied_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "RELEASE SAVEPOINT corrupt_already_applied_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := worker.Replay(ctx, authenticated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +302,34 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 		!ceasedAt.Equal(effective) || !expiresAt.Equal(effective.AddDate(3, 0, 0)) {
 		t.Fatalf("outcome=%s evidence=%d checkpoints=%d clocks=%s/%s/%s", outcome, evidenceCount, affected, erasedAt, ceasedAt, expiresAt)
 	}
+}
+
+func corruptClosureMembershipDigest(closure TombstoneClosure) TombstoneClosure {
+	record := closure.Tombstone
+	replay := *record.Replay
+	postcondition := *replay.MembershipHistoryPostcondition
+	postcondition.SHA256 = bytes.Clone(postcondition.SHA256)
+	postcondition.SHA256[len(postcondition.SHA256)-1] ^= 0xff
+	replay.MembershipHistoryPostcondition = &postcondition
+	record.Replay = &replay
+	closure.Tombstone = record
+	return closure
+}
+
+func databaseMembershipPostcondition(t *testing.T, ctx context.Context, tx pgx.Tx, membershipIDs []uuid.UUID, effectiveAt time.Time) *MembershipHistoryPostcondition {
+	t.Helper()
+	var contract string
+	var digest []byte
+	var membershipCount, variationCount int64
+	if err := tx.QueryRow(ctx, `SELECT contract,postcondition_sha256,membership_count,variation_count
+		FROM privacy_membership_history_compute($1::uuid[],$2,false)`, membershipIDs, effectiveAt).
+		Scan(&contract, &digest, &membershipCount, &variationCount); err != nil {
+		t.Fatal(err)
+	}
+	if membershipCount < 0 || variationCount < 0 {
+		t.Fatal("negative membership postcondition count")
+	}
+	return &MembershipHistoryPostcondition{Contract: contract, SHA256: digest, MembershipCount: uint64(membershipCount), VariationCount: uint64(variationCount)}
 }
 
 func TestReplayDatabaseAPIsRejectUnauthenticatedVersionsUnsupportedOperationsAndOutOfOrderCheckpoints(t *testing.T) {

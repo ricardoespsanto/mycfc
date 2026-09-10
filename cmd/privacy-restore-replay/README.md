@@ -83,15 +83,18 @@ duplicated in inventory metadata. The
 command derives kind, locator key ID, and 32-byte locator digest from the
 encrypted envelope's bounded discovery header, then binds and cross-checks all
 three through AEAD additional authenticated data before import. Strictly shaped
-v1 envelopes can only increment `non_replayable_v1_count`; they are never
-imported or replayed.
+v1 envelopes are recognized only to reject the whole inventory before the
+database boundary; they are never imported or replayed, and every successful
+result therefore has `non_replayable_v1_count` zero.
 
 The command authenticates and selects the entire inventory before crossing a
 database boundary. Every selected entry must be a current
-`restore-tombstone-closure/v3` containing the exact
-`relational-erasure-replay/v1` prescription. An intent-only record or readable
-legacy closure-v2 makes the complete inventory ineligible and causes zero replay
-calls or attestation writes.
+`restore-tombstone-closure/v4` containing the exact
+`relational-erasure-replay/v1` prescription and authenticated
+`mycfc/membership-history-postcondition/v1` digest. Intent-only records and
+readable closure-v1 through closure-v3 records remain decryptable for diagnosis,
+but make the complete inventory ineligible and cause zero replay calls or
+attestation writes.
 
 ## Output contract
 
@@ -115,10 +118,15 @@ On complete success the command exclusively creates a mode `0600` JSON file:
   "non_replayable_v1_count": 0,
   "absence_verified_count": 1,
   "synthetic_replayed_count": 0,
-  "closure_v3_count": 1,
+  "closure_v4_count": 1,
   "intent_only_count": 0,
   "legacy_closure_v2_count": 0,
   "erasure_effective_at_verified_count": 1,
+  "membership_postcondition_contract": "mycfc/membership-history-postcondition/v1",
+  "membership_postcondition_sha256": "lowercase SHA-256 hex",
+  "membership_postcondition_verified_count": 1,
+  "membership_count": 1,
+  "variation_count": 1,
   "failed_count": 0
 }
 ```
@@ -129,8 +137,12 @@ selected current erasure that cannot be authenticated, imported, replayed, and
 verified prevents creation of a success attestation. Current activation
 evidence additionally requires `intent_only_count`, `legacy_closure_v2_count`,
 `non_replayable_v1_count`, and `failed_count` to be zero;
-`closure_v3_count`, `erasure_effective_at_verified_count`, and
-`absence_verified_count` must each equal `replayed_count`.
+`closure_v4_count`, `erasure_effective_at_verified_count`,
+`membership_postcondition_verified_count`, and `absence_verified_count` must
+each equal `replayed_count`. The aggregate membership postcondition digest is
+the SHA-256 of the version frame followed by the sorted authenticated 32-byte
+per-replay digests; counts cover the exact captured historical membership and
+retained variation rows.
 
 `schema_migration_digest` is SHA-256 of the UTF-8 migration versions returned
 by `SELECT version FROM mycfc_meta.schema_migrations ORDER BY version`, joined

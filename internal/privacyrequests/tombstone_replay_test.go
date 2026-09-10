@@ -62,7 +62,7 @@ func TestReplayAuthenticationRequiresExactClosureRetention(t *testing.T) {
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
 	sealed, err := protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
+		Version: TombstoneClosureVersion, Tombstone: currentClosureFixture(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)

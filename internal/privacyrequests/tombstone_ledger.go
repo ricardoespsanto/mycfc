@@ -9,6 +9,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -30,19 +31,21 @@ import (
 )
 
 const (
-	TombstoneRecordVersionV1   = "restore-tombstone/v1"
-	TombstoneClosureVersionV1  = "restore-tombstone-closure/v1"
-	TombstoneEnvelopeVersionV1 = "x25519-aes256gcm-hkdfsha256/v1"
-	TombstoneRecordVersion     = "restore-tombstone/v2"
-	TombstoneClosureVersionV2  = "restore-tombstone-closure/v2"
-	TombstoneClosureVersion    = "restore-tombstone-closure/v3"
-	TombstoneEnvelopeVersion   = "x25519-aes256gcm-hkdfsha256/v2"
-	TombstoneReplayVersion     = "relational-erasure-replay/v1"
-	SyntheticRestoreFixtureV1  = "mycfc/privacy-restore-synthetic-fixture/v1"
-	tombstoneAlgorithm         = "X25519-HKDF-SHA256-AES-256-GCM"
-	maxTombstonePayloadBytes   = 1 << 20
-	maxBrokerRequestBytes      = 2 << 20
-	maxBrokerResponseBytes     = 8 << 10
+	TombstoneRecordVersionV1              = "restore-tombstone/v1"
+	TombstoneClosureVersionV1             = "restore-tombstone-closure/v1"
+	TombstoneEnvelopeVersionV1            = "x25519-aes256gcm-hkdfsha256/v1"
+	TombstoneRecordVersion                = "restore-tombstone/v2"
+	TombstoneClosureVersionV2             = "restore-tombstone-closure/v2"
+	TombstoneClosureVersionV3             = "restore-tombstone-closure/v3"
+	TombstoneClosureVersion               = "restore-tombstone-closure/v4"
+	TombstoneEnvelopeVersion              = "x25519-aes256gcm-hkdfsha256/v2"
+	TombstoneReplayVersion                = "relational-erasure-replay/v1"
+	SyntheticRestoreFixtureV1             = "mycfc/privacy-restore-synthetic-fixture/v1"
+	MembershipHistoryPostconditionVersion = "mycfc/membership-history-postcondition/v1"
+	tombstoneAlgorithm                    = "X25519-HKDF-SHA256-AES-256-GCM"
+	maxTombstonePayloadBytes              = 1 << 20
+	maxBrokerRequestBytes                 = 2 << 20
+	maxBrokerResponseBytes                = 8 << 10
 )
 
 var (
@@ -70,9 +73,20 @@ type RestoreTombstone struct {
 // RelationalReplayPrescription is deliberately limited to versioned local
 // database operations. It contains no object-store or provider instructions.
 type RelationalReplayPrescription struct {
-	Version       string   `json:"version"`
-	ActionVersion string   `json:"action_version"`
-	Operations    []string `json:"operations"`
+	Version                        string                          `json:"version"`
+	ActionVersion                  string                          `json:"action_version"`
+	Operations                     []string                        `json:"operations"`
+	MembershipHistoryPostcondition *MembershipHistoryPostcondition `json:"membership_history_postcondition,omitempty"`
+}
+
+// MembershipHistoryPostcondition authenticates the complete retained
+// relational membership history without carrying a principal or subject
+// identifier. Counts are bounded before conversion from database bigint.
+type MembershipHistoryPostcondition struct {
+	Contract        string `json:"contract"`
+	SHA256          []byte `json:"sha256"`
+	MembershipCount uint64 `json:"membership_count"`
+	VariationCount  uint64 `json:"variation_count"`
 }
 
 type TombstoneEnvelope struct {
@@ -130,7 +144,8 @@ func NewTombstoneProtector(keyID string, publicKey []byte, locatorKeyID string, 
 }
 
 func (p *TombstoneProtector) Seal(record RestoreTombstone) (SealedTombstone, error) {
-	if p == nil || p.publicKey == nil || p.random == nil || !validReplayableRestoreTombstone(record) {
+	if p == nil || p.publicKey == nil || p.random == nil || !validReplayableRestoreTombstone(record) ||
+		record.Replay.MembershipHistoryPostcondition != nil {
 		return SealedTombstone{}, ErrTombstoneInvalid
 	}
 	plaintext, err := json.Marshal(record)
@@ -142,7 +157,7 @@ func (p *TombstoneProtector) Seal(record RestoreTombstone) (SealedTombstone, err
 
 func (p *TombstoneProtector) SealClosure(closure TombstoneClosure) (SealedTombstone, error) {
 	if p == nil || p.publicKey == nil || p.random == nil || closure.Version != TombstoneClosureVersion ||
-		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
+		!validReplayableRestoreTombstone(closure.Tombstone) || !validMembershipHistoryPostcondition(closure.Tombstone.Replay.MembershipHistoryPostcondition) || closure.ClosedAt.IsZero() ||
 		closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
 		return SealedTombstone{}, ErrTombstoneInvalid
@@ -265,11 +280,12 @@ func OpenRestoreTombstoneClosureV2(privateKey []byte, locatorKeyID string, locat
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil ||
-		(closure.Version != TombstoneClosureVersionV2 && closure.Version != TombstoneClosureVersion) ||
+		(closure.Version != TombstoneClosureVersionV2 && closure.Version != TombstoneClosureVersionV3 && closure.Version != TombstoneClosureVersion) ||
 		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) ||
-		(closure.Version == TombstoneClosureVersionV2 && !closure.ErasureEffectiveAt.IsZero()) ||
-		(closure.Version == TombstoneClosureVersion && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt))) {
+		(closure.Version == TombstoneClosureVersionV2 && (!closure.ErasureEffectiveAt.IsZero() || closure.Tombstone.Replay.MembershipHistoryPostcondition != nil)) ||
+		(closure.Version == TombstoneClosureVersionV3 && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) || closure.Tombstone.Replay.MembershipHistoryPostcondition != nil)) ||
+		(closure.Version == TombstoneClosureVersion && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) || !validMembershipHistoryPostcondition(closure.Tombstone.Replay.MembershipHistoryPostcondition))) {
 		return zero, ErrTombstoneInvalid
 	}
 	return closure, nil
@@ -367,6 +383,17 @@ func validReplayPrescription(prescription *RelationalReplayPrescription) bool {
 		seen[operation] = true
 	}
 	return true
+}
+
+func validMembershipHistoryPostcondition(postcondition *MembershipHistoryPostcondition) bool {
+	return postcondition != nil && postcondition.Contract == MembershipHistoryPostconditionVersion &&
+		len(postcondition.SHA256) == sha256.Size && postcondition.MembershipCount <= 10000 && postcondition.VariationCount <= 100000
+}
+
+func equalMembershipHistoryPostcondition(left, right *MembershipHistoryPostcondition) bool {
+	return validMembershipHistoryPostcondition(left) && validMembershipHistoryPostcondition(right) &&
+		left.Contract == right.Contract && left.MembershipCount == right.MembershipCount && left.VariationCount == right.VariationCount &&
+		subtle.ConstantTimeCompare(left.SHA256, right.SHA256) == 1
 }
 
 func tombstoneAADV1(kind string, executionID uuid.UUID, keyID string) []byte {
@@ -646,15 +673,25 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		return ErrTombstoneInvalid
 	}
 	q := dbgen.New(w.Store)
-	row, err := q.PreparePrivacyTombstoneClosureV3(ctx, dbgen.PreparePrivacyTombstoneClosureV3Params{ExecutionID: executionID, WorkerRef: w.WorkerRef})
+	row, err := q.PreparePrivacyTombstoneClosureV4(ctx, dbgen.PreparePrivacyTombstoneClosureV4Params{ExecutionID: executionID, WorkerRef: w.WorkerRef})
 	if err != nil {
 		return ErrTombstoneUnavailable
+	}
+	membershipCount, ok := boundedPostconditionCount(row.MembershipCount, 10000)
+	if !ok {
+		return ErrTombstoneInvalid
+	}
+	variationCount, ok := boundedPostconditionCount(row.VariationCount, 100000)
+	if !ok {
+		return ErrTombstoneInvalid
 	}
 	record := RestoreTombstone{
 		Version: TombstoneRecordVersion, ExecutionID: row.ExecutionID, RequestID: row.RequestID, RequestRef: row.RequestRef,
 		SubjectUserID: row.SubjectUserID, PlanSHA256: bytes.Clone(row.PlanSha256), WorksetSHA256: bytes.Clone(row.WorksetSha256),
 		ExecutionStart: row.ExecutionStartedAt.Time,
-		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: replayOperationsWithProviderFence(row.ReplayOperations)},
+		Replay: &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: replayOperationsWithProviderFence(row.ReplayOperations),
+			MembershipHistoryPostcondition: &MembershipHistoryPostcondition{Contract: row.MembershipPostconditionContract,
+				SHA256: bytes.Clone(row.MembershipPostconditionSha256), MembershipCount: membershipCount, VariationCount: variationCount}},
 	}
 	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: row.ClosedAt.Time, EvidenceExpiresAt: row.EvidenceExpiresAt.Time, ErasureEffectiveAt: row.ErasureEffectiveAt.Time}
 	sealed, err := w.Protector.SealClosure(closure)
@@ -665,7 +702,7 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 	if err != nil {
 		return err
 	}
-	_, err = q.ConfirmPrivacyTombstoneClosureV3(ctx, dbgen.ConfirmPrivacyTombstoneClosureV3Params{
+	_, err = q.ConfirmPrivacyTombstoneClosureV4(ctx, dbgen.ConfirmPrivacyTombstoneClosureV4Params{
 		ExecutionID: executionID, WorkerRef: w.WorkerRef, LedgerVersion: closure.Version, EncryptionKeyID: sealed.Envelope.KeyID,
 		LocatorKeyID: receipt.LocatorKeyID, LocatorDigest: receipt.LocatorDigest, ObjectVersionID: receipt.ObjectVersion,
 		CiphertextSha256: receipt.CiphertextSHA, SizeBytes: receipt.SizeBytes, WrittenAt: stamp(receipt.WrittenAt), VerifiedAt: stamp(receipt.VerifiedAt),
@@ -674,6 +711,13 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		return ErrTombstoneUnavailable
 	}
 	return nil
+}
+
+func boundedPostconditionCount(value, maximum int64) (uint64, bool) {
+	if value < 0 || value > maximum {
+		return 0, false
+	}
+	return uint64(value), true
 }
 
 // Every newly emitted v2 prescription fences restored provider state locally,

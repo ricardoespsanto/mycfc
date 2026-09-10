@@ -38,7 +38,7 @@ for value in "$policy_version" "$executor_version" "$plan_schema_version"; do
 	fi
 done
 
-query="SELECT replay_count,source_already_applied_count,synthetic_count,verified_run_count,expected_checkpoint_count,succeeded_checkpoint_count,provider_absent_count,consent_clock_verified_count,closure_v3_count,erasure_effective_at_verified_count,encode(evidence_sha256,'hex') FROM privacy_restore_observe_inventory(:'input_source',decode(:'inventory_sha256','hex'),decode(:'schema_migration_digest','hex'),:'policy_version',:'executor_version',:'plan_schema_version',:'image_digest');"
+query="SELECT replay_count,source_already_applied_count,synthetic_count,verified_run_count,expected_checkpoint_count,succeeded_checkpoint_count,provider_absent_count,consent_clock_verified_count,closure_v4_count,erasure_effective_at_verified_count,membership_postcondition_contract,encode(membership_postcondition_sha256,'hex'),membership_postcondition_verified_count,membership_count,variation_count,encode(evidence_sha256,'hex') FROM privacy_restore_observe_inventory(:'input_source',decode(:'inventory_sha256','hex'),decode(:'schema_migration_digest','hex'),:'policy_version',:'executor_version',:'plan_schema_version',:'image_digest');"
 DATABASE_URL=$PRIVACY_RESTORE_OBSERVER_DATABASE_URL
 export DATABASE_URL
 result=$(docker run --rm --network "$PRIVACY_RESTORE_OBSERVER_NETWORK" \
@@ -51,18 +51,20 @@ result=$(docker run --rm --network "$PRIVACY_RESTORE_OBSERVER_NETWORK" \
 if [ "$(printf '%s\n' "$result" | sed '/^$/d' | wc -l | tr -d ' ')" -ne 1 ]; then
 	fail
 fi
-IFS='|' read -r replay_count source_already_applied_count synthetic_count verified_run_count expected_checkpoint_count succeeded_checkpoint_count provider_absent_count consent_clock_verified_count closure_v3_count erasure_effective_at_verified_count evidence_sha256 extra <<EOF
+IFS='|' read -r replay_count source_already_applied_count synthetic_count verified_run_count expected_checkpoint_count succeeded_checkpoint_count provider_absent_count consent_clock_verified_count closure_v4_count erasure_effective_at_verified_count membership_postcondition_contract membership_postcondition_sha256 membership_postcondition_verified_count membership_count variation_count evidence_sha256 extra <<EOF
 $result
 EOF
 if [ -n "$extra" ]; then fail; fi
-for value in "$replay_count" "$source_already_applied_count" "$synthetic_count" "$verified_run_count" "$expected_checkpoint_count" "$succeeded_checkpoint_count" "$provider_absent_count" "$consent_clock_verified_count" "$closure_v3_count" "$erasure_effective_at_verified_count"; do
+for value in "$replay_count" "$source_already_applied_count" "$synthetic_count" "$verified_run_count" "$expected_checkpoint_count" "$succeeded_checkpoint_count" "$provider_absent_count" "$consent_clock_verified_count" "$closure_v4_count" "$erasure_effective_at_verified_count" "$membership_postcondition_verified_count" "$membership_count" "$variation_count"; do
 	case "$value" in '' | *[!0-9]*) fail ;; esac
 done
 if [ "$replay_count" -lt 1 ] || [ "$source_already_applied_count" -gt "$replay_count" ] ||
 	[ "$verified_run_count" -ne "$replay_count" ] || [ "$expected_checkpoint_count" -lt 1 ] ||
 	[ "$expected_checkpoint_count" -ne "$succeeded_checkpoint_count" ] || [ "$provider_absent_count" -ne "$replay_count" ] ||
-	[ "$consent_clock_verified_count" -ne "$replay_count" ] || [ "$closure_v3_count" -ne "$replay_count" ] ||
-	[ "$erasure_effective_at_verified_count" -ne "$replay_count" ] || ! printf '%s' "$evidence_sha256" | grep -Eq '^[0-9a-f]{64}$'; then
+	[ "$consent_clock_verified_count" -ne "$replay_count" ] || [ "$closure_v4_count" -ne "$replay_count" ] ||
+	[ "$erasure_effective_at_verified_count" -ne "$replay_count" ] || [ "$membership_postcondition_verified_count" -ne "$replay_count" ] ||
+	[ "$membership_postcondition_contract" != 'mycfc/membership-history-postcondition/v1' ] ||
+	! printf '%s:%s' "$membership_postcondition_sha256" "$evidence_sha256" | grep -Eq '^[0-9a-f]{64}:[0-9a-f]{64}$'; then
 	fail
 fi
 case "$input_source:$synthetic_count" in
@@ -83,6 +85,10 @@ jq -cn \
 	--argjson succeeded_checkpoint_count "$succeeded_checkpoint_count" \
 	--argjson provider_absent_count "$provider_absent_count" \
 	--argjson consent_clock_verified_count "$consent_clock_verified_count" \
-	--argjson closure_v3_count "$closure_v3_count" \
+	--argjson closure_v4_count "$closure_v4_count" \
 	--argjson erasure_effective_at_verified_count "$erasure_effective_at_verified_count" \
-	'{image_digest:$image_digest,replay_count:$replay_count,source_already_applied_count:$source_already_applied_count,synthetic_count:$synthetic_count,verified_run_count:$verified_run_count,expected_checkpoint_count:$expected_checkpoint_count,succeeded_checkpoint_count:$succeeded_checkpoint_count,provider_absent_count:$provider_absent_count,consent_clock_verified_count:$consent_clock_verified_count,closure_v3_count:$closure_v3_count,erasure_effective_at_verified_count:$erasure_effective_at_verified_count,evidence_sha256:$evidence_sha256}'
+	--arg membership_postcondition_contract "$membership_postcondition_contract" \
+	--arg membership_postcondition_sha256 "$membership_postcondition_sha256" \
+	--argjson membership_postcondition_verified_count "$membership_postcondition_verified_count" \
+	--argjson membership_count "$membership_count" --argjson variation_count "$variation_count" \
+	'{image_digest:$image_digest,replay_count:$replay_count,source_already_applied_count:$source_already_applied_count,synthetic_count:$synthetic_count,verified_run_count:$verified_run_count,expected_checkpoint_count:$expected_checkpoint_count,succeeded_checkpoint_count:$succeeded_checkpoint_count,provider_absent_count:$provider_absent_count,consent_clock_verified_count:$consent_clock_verified_count,closure_v4_count:$closure_v4_count,erasure_effective_at_verified_count:$erasure_effective_at_verified_count,membership_postcondition_contract:$membership_postcondition_contract,membership_postcondition_sha256:$membership_postcondition_sha256,membership_postcondition_verified_count:$membership_postcondition_verified_count,membership_count:$membership_count,variation_count:$variation_count,evidence_sha256:$evidence_sha256}'

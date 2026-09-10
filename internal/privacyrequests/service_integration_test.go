@@ -54,13 +54,15 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 		common["restore_input_source"] = "LIVE_LEDGER"
 		common["restore_input_contract"] = "mycfc/privacy-restore-ledger-input/v2"
 		common["restore_replay_contract"] = "relational-erasure-replay/v1"
-		common["restore_closure_contract"] = "restore-tombstone-closure/v3"
+		common["restore_closure_contract"] = "restore-tombstone-closure/v4"
 		common["restore_candidate_sha256"] = value
 		common["restore_inventory_sha256"] = value
 		common["restore_object_count"] = 1
 		common["restore_replayed_count"] = 1
 		common["restore_synthetic_count"] = 0
 		common["restore_observer_sha256"] = value
+		common["restore_membership_postcondition_contract"], common["restore_membership_postcondition_sha256"] = "mycfc/membership-history-postcondition/v1", value
+		common["restore_membership_postcondition_verified_count"], common["restore_membership_count"], common["restore_variation_count"] = 1, 0, 0
 	case "INFRASTRUCTURE":
 		contract = "mycfc/privacy-infrastructure-posture/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/infrastructure?versionId=v1", "fixture-key"
@@ -78,7 +80,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609100014_privacy_activation_broker"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609100015_privacy_membership_postcondition"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}

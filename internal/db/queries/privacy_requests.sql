@@ -320,6 +320,17 @@ SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS 
  prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations
 FROM privacy_tombstone_prepare_closure_v3(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
 
+-- name: PreparePrivacyTombstoneClosureV4 :one
+SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS request_id,prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations,
+ prepared.membership_postcondition_contract::text AS membership_postcondition_contract,
+ prepared.membership_postcondition_sha256::bytea AS membership_postcondition_sha256,
+ prepared.membership_count::bigint AS membership_count,prepared.variation_count::bigint AS variation_count
+FROM privacy_tombstone_prepare_closure_v4(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
 -- name: ConfirmPrivacyTombstoneClosure :one
 SELECT privacy_tombstone_confirm_closure_v2(
  sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),
@@ -329,6 +340,12 @@ SELECT privacy_tombstone_confirm_closure_v2(
 
 -- name: ConfirmPrivacyTombstoneClosureV3 :one
 SELECT privacy_tombstone_confirm_closure_v3(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),
+ sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ConfirmPrivacyTombstoneClosureV4 :one
+SELECT privacy_tombstone_confirm_closure_v4(
  sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),
  sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
 )::uuid;
@@ -352,6 +369,17 @@ SELECT privacy_restore_import_authenticated_v2_hardened(
  sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
 )::uuid;
 
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened :one
+SELECT privacy_restore_import_authenticated_v4_hardened(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.arg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(erasure_effective_at),sqlc.arg(closure_version),sqlc.narg(synthetic_fixture),sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],
+ sqlc.arg(prescription_sha256),sqlc.arg(record_sha256),sqlc.arg(membership_postcondition_contract),sqlc.arg(membership_postcondition_sha256),
+ sqlc.arg(membership_count),sqlc.arg(variation_count)
+)::uuid;
+
 -- name: BeginPrivacyRestoreReplay :one
 SELECT privacy_restore_begin_replay(sqlc.arg(import_id),sqlc.arg(worker_ref))::uuid;
 
@@ -362,8 +390,14 @@ FROM privacy_restore_begin_replay_hardened(sqlc.arg(import_id),sqlc.arg(worker_r
 -- name: CreatePrivacyRestoreSyntheticFixture :one
 SELECT fixture.source_execution_id::uuid,fixture.source_request_id::uuid,fixture.source_request_ref::uuid,
  fixture.subject_user_id::uuid,fixture.plan_sha256::bytea,fixture.workset_sha256::bytea,
- fixture.erasure_effective_at::timestamptz,fixture.operations::text[]
+ fixture.erasure_effective_at::timestamptz,fixture.operations::text[],fixture.membership_postcondition_contract::text,
+ fixture.membership_postcondition_sha256::bytea,fixture.membership_count::bigint,fixture.variation_count::bigint
 FROM privacy_restore_create_synthetic_fixture(sqlc.arg(worker_ref)) AS fixture;
+
+-- name: GetPrivacyRestoreMembershipPostcondition :one
+SELECT postcondition.membership_postcondition_contract::text,postcondition.membership_postcondition_sha256::bytea,
+ postcondition.membership_count::bigint,postcondition.variation_count::bigint
+FROM privacy_restore_membership_postcondition(sqlc.arg(run_id)) AS postcondition;
 
 -- name: PrivacyRestoreReplayAlreadyApplied :one
 SELECT EXISTS(
@@ -384,6 +418,16 @@ SELECT privacy_restore_record_inventory_attestation(
  sqlc.arg(plan_schema_version),sqlc.arg(image_digest),sqlc.arg(run_ids)::uuid[],sqlc.arg(object_count),sqlc.arg(imported_count),
  sqlc.arg(replayed_count),sqlc.arg(already_applied_count),sqlc.arg(absence_verified_count),sqlc.arg(synthetic_replayed_count)
  ,sqlc.arg(closure_v3_count),sqlc.arg(intent_only_count),sqlc.arg(legacy_closure_v2_count),sqlc.arg(erasure_effective_at_verified_count)
+)::bytea;
+
+-- name: RecordPrivacyRestoreReplayInventoryAttestationV4 :one
+SELECT privacy_restore_record_inventory_attestation_v4(
+ sqlc.arg(input_source),sqlc.arg(inventory_sha256),sqlc.arg(schema_migration_digest),sqlc.arg(policy_version),sqlc.arg(executor_version),
+ sqlc.arg(plan_schema_version),sqlc.arg(image_digest),sqlc.arg(run_ids)::uuid[],sqlc.arg(object_count),sqlc.arg(imported_count),
+ sqlc.arg(replayed_count),sqlc.arg(already_applied_count),sqlc.arg(absence_verified_count),sqlc.arg(synthetic_replayed_count),
+ sqlc.arg(closure_v4_count),sqlc.arg(intent_only_count),sqlc.arg(legacy_closure_v2_count),sqlc.arg(erasure_effective_at_verified_count),
+ sqlc.arg(membership_postcondition_contract),sqlc.arg(membership_postcondition_sha256),sqlc.arg(membership_postcondition_verified_count),
+ sqlc.arg(membership_count),sqlc.arg(variation_count)
 )::bytea;
 
 -- name: AuthorizePrivacyErasureJobLease :one
