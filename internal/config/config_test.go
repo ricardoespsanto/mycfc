@@ -38,6 +38,21 @@ func TestPrivacyUploadKeysAreOptionalButAtomic(t *testing.T) {
 	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
 		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
 	}
+	invalidPublic := complete
+	invalidPublic.PrivacyUploadPublicKeyB64 = "not-base64"
+	if _, _, _, err = invalidPublic.PrivacyUploadKeys(); err == nil || !strings.Contains(err.Error(), "PUBLIC_KEY") {
+		t.Fatalf("invalid public key error=%v", err)
+	}
+	invalidDigest := complete
+	invalidDigest.PrivacyUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+	if _, _, _, err = invalidDigest.PrivacyUploadKeys(); err == nil || !strings.Contains(err.Error(), "DIGEST_KEY") {
+		t.Fatalf("invalid digest key error=%v", err)
+	}
+	cfg := validConfig()
+	cfg.PrivacyUploadEncryptionKeyID = "partial"
+	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_UPLOAD_KEYS") {
+		t.Fatalf("validation error=%v", err)
+	}
 }
 
 type recordingSecretGetter struct {

@@ -52,6 +52,15 @@ func TestRepairPostNoPhotoCreatesAndRedirects(t *testing.T) {
 	}
 }
 
+func TestRepairPhotoFailsClosedWithoutUploadProvenanceService(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
+	response := repairResponse(t, Repair{Store: store}, userID, equipmentID, pngPhoto(t), false)
+	if response.Code != http.StatusInternalServerError || store.creates != 0 {
+		t.Fatalf("response=%d creates=%d", response.Code, store.creates)
+	}
+}
+
 func TestRepairPostFromAdminFleetRedirectsBackToAdminFleet(t *testing.T) {
 	userID, equipmentID := uuid.New(), uuid.New()
 	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}

@@ -2,8 +2,12 @@ package privacyrequests
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"testing"
 	"time"
@@ -109,6 +113,99 @@ func TestUploadIntentProtectorRejectsWrongFamiliesAndInvalidBindingsWithoutSecre
 	if _, err := protector.DigestUploadObjectKey("bad service", secret); !errors.Is(err, ErrUploadIntentCrypto) {
 		t.Fatalf("digest error = %v", err)
 	}
+}
+
+func TestUploadIntentCryptoRejectsInvalidKeysEntropyAndEnvelopeStructure(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                   string
+		encryptionID, digestID string
+		publicKey, digestKey   []byte
+	}{
+		{name: "encryption id", encryptionID: "bad id", digestID: "digest", publicKey: private.PublicKey().Bytes(), digestKey: bytes.Repeat([]byte{1}, 32)},
+		{name: "digest id", encryptionID: "upload", digestID: "bad id", publicKey: private.PublicKey().Bytes(), digestKey: bytes.Repeat([]byte{1}, 32)},
+		{name: "short digest", encryptionID: "upload", digestID: "digest", publicKey: private.PublicKey().Bytes(), digestKey: []byte("short")},
+		{name: "invalid public key", encryptionID: "upload", digestID: "digest", publicKey: bytes.Repeat([]byte{1}, 31), digestKey: bytes.Repeat([]byte{1}, 32)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewX25519UploadIntentProtector(tc.encryptionID, tc.publicKey, tc.digestID, tc.digestKey); !errors.Is(err, ErrUploadIntentCrypto) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+
+	binding := uploadIntentTestBinding("MEMBER_PROFILE_PHOTO")
+	protector, err := NewX25519UploadIntentProtector("upload-key", private.PublicKey().Bytes(), "digest-key", bytes.Repeat([]byte{2}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector.random = errorReader{}
+	if _, err = protector.SealUploadObjectKey(binding, "profiles/photo.png"); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("entropy error=%v", err)
+	}
+	protector.random = rand.Reader
+	if _, err = protector.SealUploadObjectKey(binding, ""); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("empty key error=%v", err)
+	}
+	lowOrder, err := NewX25519UploadIntentProtector("upload-key", make([]byte, 32), "digest-key", bytes.Repeat([]byte{2}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lowOrder.SealUploadObjectKey(binding, "profiles/photo.png"); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("low-order recipient error=%v", err)
+	}
+
+	validEnvelope, err := protector.SealUploadObjectKey(binding, "profiles/photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidEnvelope := validEnvelope
+	invalidEnvelope.Version = "wrong-version"
+	if _, err = OpenUploadIntentEnvelope(private.Bytes(), binding, invalidEnvelope); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("envelope version error=%v", err)
+	}
+	if _, err = OpenUploadIntentEnvelope(bytes.Repeat([]byte{1}, 31), binding, validEnvelope); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("private key error=%v", err)
+	}
+	lowOrderEnvelope := validEnvelope
+	lowOrderEnvelope.Encapsulation = make([]byte, 32)
+	if _, err = OpenUploadIntentEnvelope(private.Bytes(), binding, lowOrderEnvelope); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("low-order encapsulation error=%v", err)
+	}
+	malformed := sealUploadIntentPlaintext(t, private.PublicKey(), binding, "upload-key", encodeFields("wrong-locator-version", "profiles/photo.png"))
+	if _, err = OpenUploadIntentEnvelope(private.Bytes(), binding, malformed); !errors.Is(err, ErrUploadIntentCrypto) {
+		t.Fatalf("plaintext structure error=%v", err)
+	}
+}
+
+func sealUploadIntentPlaintext(t *testing.T, recipient *ecdh.PublicKey, binding UploadIntentBinding, keyID string, plaintext []byte) ObjectTargetEnvelope {
+	t.Helper()
+	ephemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := ephemeral.ECDH(recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := encodeUploadIntentBinding(binding, keyID)
+	key, err := hkdf.Key(sha256.New, shared, nil, string(append([]byte(uploadIntentKeyVersion+"\x00"), aad...)), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{3}, aead.NonceSize())
+	return ObjectTargetEnvelope{Version: UploadIntentEnvelopeVersion, Algorithm: objectTargetAlgorithm, KeyID: keyID, Encapsulation: ephemeral.PublicKey().Bytes(), Nonce: nonce, Ciphertext: aead.Seal(nil, nonce, plaintext, aad)}
 }
 
 func uploadIntentTestBinding(sourceKind string) UploadIntentBinding {

@@ -114,6 +114,21 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 	if !errors.Is(err, writeErr) || tx.committed || tx.argsFor("CreateMemberProfileAudit") != nil {
 		t.Fatalf("SavePhoto error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 	}
+
+	attachErr := errors.New("upload attach unavailable")
+	tx = &profileTransactionFake{subjectID: subjectID, execErrs: map[string]error{"AttachPrivacyUploadIntent": attachErr}}
+	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
+	if !errors.Is(err, attachErr) || tx.committed {
+		t.Fatalf("attach error=%v committed=%t", err, tx.committed)
+	}
+
+	invalidUpload := testPreparedUpload("profiles/new.png", "image/png", 42)
+	invalidUpload.HoldToken = nil
+	tx = &profileTransactionFake{subjectID: subjectID}
+	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: invalidUpload, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
+	if !errors.Is(err, privacyrequests.ErrUploadProvenanceUnavailable) || tx.committed {
+		t.Fatalf("invalid provenance error=%v committed=%t", err, tx.committed)
+	}
 }
 
 func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *testing.T) {
@@ -155,6 +170,27 @@ func TestPostgresProfileStoreRefusesPhotoChangesWithoutEligibleState(t *testing.
 		removed, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
 		if !errors.Is(err, pgx.ErrNoRows) || removed != nil || tx.committed || len(tx.argsFor("CreateMemberProfileAudit")) != 0 {
 			t.Fatalf("removed=%v error=%v committed=%t calls=%#v", removed, err, tx.committed, tx.queryCalls)
+		}
+	})
+
+	t.Run("remove legacy photo", func(t *testing.T) {
+		subjectID := uuid.New()
+		oldKey := "profiles/legacy.png"
+		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
+		if !errors.Is(err, privacyrequests.ErrUploadProvenanceUnavailable) || tx.committed {
+			t.Fatalf("error=%v committed=%t", err, tx.committed)
+		}
+	})
+
+	t.Run("remove lifecycle failure", func(t *testing.T) {
+		subjectID, intentID := uuid.New(), uuid.New()
+		oldKey := "profiles/tracked.png"
+		removeErr := errors.New("cleanup transition unavailable")
+		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID, execErrs: map[string]error{"RemovePrivacyUploadIntent": removeErr}}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
+		if !errors.Is(err, removeErr) || tx.committed {
+			t.Fatalf("error=%v committed=%t", err, tx.committed)
 		}
 	})
 
@@ -503,6 +539,7 @@ type profileTransactionFake struct {
 	activityRestrictions string
 	medicalNotes         string
 	queryErrs            map[string]error
+	execErrs             map[string]error
 	execCalls            []profileSQLCall
 	queryCalls           []profileSQLCall
 	committed            bool
@@ -521,6 +558,11 @@ func (tx *profileTransactionFake) QueryRow(_ context.Context, query string, args
 }
 func (tx *profileTransactionFake) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	tx.execCalls = append(tx.execCalls, profileSQLCall{query: query, args: args})
+	for name, err := range tx.execErrs {
+		if strings.Contains(query, name) {
+			return pgconn.CommandTag{}, err
+		}
+	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 func (tx *profileTransactionFake) Commit(context.Context) error { tx.committed = true; return nil }

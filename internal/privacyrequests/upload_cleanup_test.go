@@ -11,14 +11,17 @@ import (
 
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type uploadCleanupStoreFake struct {
-	claim    UploadCleanupClaim
-	claimErr error
-	complete *UploadCleanupResult
-	failed   bool
-	retry    bool
+	claim       UploadCleanupClaim
+	claimErr    error
+	complete    *UploadCleanupResult
+	failed      bool
+	retry       bool
+	completeErr error
+	failErr     error
 }
 
 func (s *uploadCleanupStoreFake) Claim(context.Context, time.Duration, uuid.UUID) (UploadCleanupClaim, error) {
@@ -26,11 +29,11 @@ func (s *uploadCleanupStoreFake) Claim(context.Context, time.Duration, uuid.UUID
 }
 func (s *uploadCleanupStoreFake) Complete(_ context.Context, result UploadCleanupResult) error {
 	s.complete = &result
-	return nil
+	return s.completeErr
 }
 func (s *uploadCleanupStoreFake) Fail(_ context.Context, _ UploadCleanupClaim, _ uuid.UUID, retryable bool, _ time.Duration) error {
 	s.failed, s.retry = true, retryable
-	return nil
+	return s.failErr
 }
 
 type uploadCleanupObjectsFake struct {
@@ -83,6 +86,55 @@ func TestUploadCleanupWorkerBoundsRetriesAndFailsClosedOnCiphertext(t *testing.T
 				t.Fatalf("worked=%t err=%v failed=%t retry=%t complete=%#v", worked, err, store.failed, store.retry, store.complete)
 			}
 		})
+	}
+}
+
+func TestUploadCleanupWorkerCoversUnavailableEmptyAndStoreFailurePaths(t *testing.T) {
+	if worked, err := (UploadCleanupWorker{}).RunOnce(context.Background()); worked || !errors.Is(err, ErrUploadCleanupUnavailable) {
+		t.Fatalf("unavailable worker worked=%t err=%v", worked, err)
+	}
+	workerRef := uuid.New()
+	base := UploadCleanupWorker{Objects: &uploadCleanupObjectsFake{}, WorkerRef: workerRef, PrivateKey: bytes.Repeat([]byte{1}, 32), TranscriptKeyID: "evidence-v1", TranscriptKey: bytes.Repeat([]byte{2}, 32)}
+	base.Store = &uploadCleanupStoreFake{claimErr: pgx.ErrNoRows}
+	if worked, err := base.RunOnce(context.Background()); worked || err != nil {
+		t.Fatalf("empty claim worked=%t err=%v", worked, err)
+	}
+	base.Store = &uploadCleanupStoreFake{claimErr: errors.New("claim unavailable")}
+	if worked, err := base.RunOnce(context.Background()); worked || !errors.Is(err, ErrUploadCleanupFailed) {
+		t.Fatalf("claim failure worked=%t err=%v", worked, err)
+	}
+
+	claim, privateKey := cleanupWorkerClaim(t)
+	corrupt := claim
+	corrupt.Envelope.Ciphertext = bytes.Clone(claim.Envelope.Ciphertext)
+	corrupt.Envelope.Ciphertext[0] ^= 0xff
+	base.PrivateKey = privateKey
+	base.Store = &uploadCleanupStoreFake{claim: corrupt, failErr: errors.New("fence lost")}
+	if worked, err := base.RunOnce(context.Background()); !worked || !errors.Is(err, ErrUploadCleanupFailed) {
+		t.Fatalf("ciphertext failure worked=%t err=%v", worked, err)
+	}
+	base.Store = &uploadCleanupStoreFake{claim: claim, failErr: errors.New("fence lost")}
+	base.Objects = &uploadCleanupObjectsFake{err: storage.ErrVersionDeletion}
+	if worked, err := base.RunOnce(context.Background()); !worked || !errors.Is(err, ErrUploadCleanupFailed) {
+		t.Fatalf("delete failure worked=%t err=%v", worked, err)
+	}
+	base.Store = &uploadCleanupStoreFake{claim: claim, completeErr: errors.New("fence lost")}
+	base.Objects = &uploadCleanupObjectsFake{evidence: storage.VersionDeletionEvidence{ListCalls: 2, StableChecks: 2}}
+	if worked, err := base.RunOnce(context.Background()); !worked || !errors.Is(err, ErrUploadCleanupFailed) {
+		t.Fatalf("completion failure worked=%t err=%v", worked, err)
+	}
+}
+
+func TestPostgresUploadCleanupStoreRequiresDatabase(t *testing.T) {
+	store := PostgresUploadCleanupStore{}
+	if _, err := store.Claim(context.Background(), time.Minute, uuid.New()); !errors.Is(err, ErrUploadCleanupUnavailable) {
+		t.Fatalf("claim error=%v", err)
+	}
+	if err := store.Complete(context.Background(), UploadCleanupResult{}); !errors.Is(err, ErrUploadCleanupUnavailable) {
+		t.Fatalf("complete error=%v", err)
+	}
+	if err := store.Fail(context.Background(), UploadCleanupClaim{}, uuid.New(), false, 0); !errors.Is(err, ErrUploadCleanupUnavailable) {
+		t.Fatalf("fail error=%v", err)
 	}
 }
 

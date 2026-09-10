@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
 )
@@ -131,3 +133,115 @@ func TestUploadCoordinatorFailsClosedWhenUnavailableOrEntropyFails(t *testing.T)
 type errorReader struct{}
 
 func (errorReader) Read([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
+
+type uploadProtectorFake struct {
+	sealErr, digestErr error
+}
+
+func (p uploadProtectorFake) SealUploadObjectKey(UploadIntentBinding, string) (ObjectTargetEnvelope, error) {
+	return ObjectTargetEnvelope{}, p.sealErr
+}
+func (p uploadProtectorFake) DigestUploadObjectKey(string, string) (ObjectTargetDigest, error) {
+	return ObjectTargetDigest{}, p.digestErr
+}
+
+func TestUploadCoordinatorCoversLifecycleFailurePaths(t *testing.T) {
+	now := time.Date(2026, 9, 10, 15, 0, 0, 0, time.UTC)
+	photo := storage.ValidatedPhoto{Bytes: []byte("x"), ContentType: "image/png", Extension: "png", Size: 1}
+	input := UploadInput{ActorUserID: uuid.New(), SourceKind: "EQUIPMENT_PHOTO", SourceRef: uuid.New()}
+	objects := &uploadObjectStoreFake{}
+	for _, tc := range []struct {
+		name      string
+		store     *uploadIntentStoreFake
+		protector UploadIntentProtector
+	}{
+		{name: "begin", store: &uploadIntentStoreFake{beginErr: errors.New("begin")}, protector: uploadProtectorFake{}},
+		{name: "seal", store: &uploadIntentStoreFake{clock: UploadIntentClock{CreatedAt: now, CleanupAfter: now.Add(24 * time.Hour), HoldEpoch: 1}}, protector: uploadProtectorFake{sealErr: errors.New("seal")}},
+		{name: "digest", store: &uploadIntentStoreFake{clock: UploadIntentClock{CreatedAt: now, CleanupAfter: now.Add(24 * time.Hour), HoldEpoch: 1}}, protector: uploadProtectorFake{digestErr: errors.New("digest")}},
+		{name: "finalize", store: &uploadIntentStoreFake{clock: UploadIntentClock{CreatedAt: now, CleanupAfter: now.Add(24 * time.Hour), HoldEpoch: 1}, finalizeErr: errors.New("finalize")}, protector: uploadProtectorFake{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objects.steps = &tc.store.steps
+			_, err := (UploadCoordinator{Store: tc.store, Objects: objects, Protector: tc.protector, Now: func() time.Time { return now }, Random: bytes.NewReader(bytes.Repeat([]byte{4}, 32))}).Upload(context.Background(), input, photo)
+			if !errors.Is(err, ErrUploadProvenanceFailed) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	coordinator := UploadCoordinator{Store: &uploadIntentStoreFake{}}
+	if err := coordinator.AttachmentFailed(context.Background(), PreparedUpload{}); !errors.Is(err, ErrUploadProvenanceUnavailable) {
+		t.Fatalf("unavailable attachment cleanup error=%v", err)
+	}
+	upload := PreparedUpload{IntentID: uuid.New(), HoldToken: bytes.Repeat([]byte{3}, 32)}
+	if err := coordinator.AttachmentFailed(context.Background(), upload); err != nil {
+		t.Fatalf("attachment cleanup error=%v", err)
+	}
+	coordinator.Store = &uploadIntentStoreFake{cleanupErr: errors.New("cleanup")}
+	if err := coordinator.AttachmentFailed(context.Background(), upload); !errors.Is(err, ErrUploadProvenanceFailed) {
+		t.Fatalf("failed attachment cleanup error=%v", err)
+	}
+	if _, err := coordinator.objectKey("UNKNOWN", "png"); !errors.Is(err, ErrUploadProvenanceFailed) {
+		t.Fatalf("source error=%v", err)
+	}
+	if _, err := coordinator.objectKey("EQUIPMENT_PHOTO", "gif"); !errors.Is(err, ErrUploadProvenanceFailed) {
+		t.Fatalf("extension error=%v", err)
+	}
+}
+
+type uploadIntentQueriesFake struct {
+	payload []byte
+	err     error
+}
+
+func (q uploadIntentQueriesFake) BeginPrivacyUploadIntent(context.Context, dbgen.BeginPrivacyUploadIntentParams) ([]byte, error) {
+	return q.payload, q.err
+}
+func (q uploadIntentQueriesFake) FinalizePrivacyUploadIntent(context.Context, dbgen.FinalizePrivacyUploadIntentParams) error {
+	return q.err
+}
+func (q uploadIntentQueriesFake) ConfirmPrivacyUploadPut(context.Context, dbgen.ConfirmPrivacyUploadPutParams) error {
+	return q.err
+}
+func (q uploadIntentQueriesFake) MarkPrivacyUploadCleanup(context.Context, dbgen.MarkPrivacyUploadCleanupParams) error {
+	return q.err
+}
+
+func TestPostgresUploadIntentStoreValidatesClockAndDelegates(t *testing.T) {
+	ctx := context.Background()
+	input := UploadIntentBegin{IntentID: uuid.New(), ActorUserID: uuid.New(), SourceRef: uuid.New()}
+	store := PostgresUploadIntentStore{}
+	if _, err := store.Begin(ctx, input); !errors.Is(err, ErrUploadProvenanceUnavailable) {
+		t.Fatalf("nil begin error=%v", err)
+	}
+	if err := store.Finalize(ctx, UploadIntentProtectedRecord{}); !errors.Is(err, ErrUploadProvenanceUnavailable) {
+		t.Fatalf("nil finalize error=%v", err)
+	}
+	if err := store.ConfirmPut(ctx, uuid.New(), nil); !errors.Is(err, ErrUploadProvenanceUnavailable) {
+		t.Fatalf("nil confirm error=%v", err)
+	}
+	if err := store.MarkCleanup(ctx, uuid.New(), nil, "PUT_FAILED"); !errors.Is(err, ErrUploadProvenanceUnavailable) {
+		t.Fatalf("nil cleanup error=%v", err)
+	}
+	store.Queries = uploadIntentQueriesFake{payload: []byte("not-json")}
+	if _, err := store.Begin(ctx, input); !errors.Is(err, ErrUploadProvenanceFailed) {
+		t.Fatalf("malformed clock error=%v", err)
+	}
+	now := time.Date(2026, 9, 10, 15, 0, 0, 0, time.UTC)
+	payload, err := json.Marshal(map[string]any{"created_at": now, "cleanup_after": now.Add(24 * time.Hour), "hold_epoch": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Queries = uploadIntentQueriesFake{payload: payload}
+	if clock, err := store.Begin(ctx, input); err != nil || !clock.CreatedAt.Equal(now) {
+		t.Fatalf("clock=%#v err=%v", clock, err)
+	}
+	if err := store.Finalize(ctx, UploadIntentProtectedRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ConfirmPut(ctx, uuid.New(), bytes.Repeat([]byte{1}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkCleanup(ctx, uuid.New(), bytes.Repeat([]byte{1}, 32), "PUT_FAILED"); err != nil {
+		t.Fatal(err)
+	}
+}
