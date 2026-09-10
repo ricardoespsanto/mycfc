@@ -2007,6 +2007,16 @@ type PrivacyExecutorGrantEvent struct {
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type PrivacyOutboxDeliveryEvidence struct {
+	OutboxID    uuid.UUID          `json:"outbox_id"`
+	MessageType string             `json:"message_type"`
+	FinalStatus string             `json:"final_status"`
+	Attempts    int32              `json:"attempts"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	TerminalAt  pgtype.Timestamptz `json:"terminal_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
 type PrivacyProtectedObjectCaptureSet struct {
 	ExecutionID         uuid.UUID          `json:"execution_id"`
 	JobID               uuid.UUID          `json:"job_id"`
@@ -2160,6 +2170,42 @@ type PrivacyProtectedObjectUploadIntentReservation struct {
 	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 }
 
+type PrivacyProtectedRestoreTombstoneClosureIntent struct {
+	ExecutionID       uuid.UUID          `json:"execution_id"`
+	ClosedAt          pgtype.Timestamptz `json:"closed_at"`
+	EvidenceExpiresAt pgtype.Timestamptz `json:"evidence_expires_at"`
+	PreparedAt        pgtype.Timestamptz `json:"prepared_at"`
+}
+
+type PrivacyProtectedRestoreTombstoneClosureReceipt struct {
+	ExecutionID      uuid.UUID          `json:"execution_id"`
+	LedgerVersion    string             `json:"ledger_version"`
+	EncryptionKeyID  string             `json:"encryption_key_id"`
+	LocatorKeyID     string             `json:"locator_key_id"`
+	LocatorDigest    []byte             `json:"locator_digest"`
+	ObjectVersionID  string             `json:"object_version_id"`
+	CiphertextSha256 []byte             `json:"ciphertext_sha256"`
+	SizeBytes        int64              `json:"size_bytes"`
+	WrittenAt        pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedRestoreTombstoneReceipt struct {
+	ExecutionID      uuid.UUID          `json:"execution_id"`
+	RequestID        uuid.UUID          `json:"request_id"`
+	LedgerVersion    string             `json:"ledger_version"`
+	EncryptionKeyID  string             `json:"encryption_key_id"`
+	LocatorKeyID     string             `json:"locator_key_id"`
+	LocatorDigest    []byte             `json:"locator_digest"`
+	ObjectVersionID  string             `json:"object_version_id"`
+	CiphertextSha256 []byte             `json:"ciphertext_sha256"`
+	SizeBytes        int64              `json:"size_bytes"`
+	WrittenAt        pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type PrivacyPseudonymousPrincipal struct {
 	ID        uuid.UUID          `json:"id"`
 	Purpose   string             `json:"purpose"`
@@ -2247,6 +2293,25 @@ type PrivacyRequestRetentionException struct {
 	ReviewAt           pgtype.Timestamptz `json:"review_at"`
 	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyRetentionRun struct {
+	ID                            uuid.UUID          `json:"id"`
+	WorkerRef                     uuid.UUID          `json:"worker_ref"`
+	StartedAt                     pgtype.Timestamptz `json:"started_at"`
+	FinishedAt                    pgtype.Timestamptz `json:"finished_at"`
+	BatchLimit                    int32              `json:"batch_limit"`
+	SessionsDeleted               int32              `json:"sessions_deleted"`
+	TokensDeleted                 int32              `json:"tokens_deleted"`
+	OutboxStopped                 int32              `json:"outbox_stopped"`
+	OutboxPayloadsDeleted         int32              `json:"outbox_payloads_deleted"`
+	OutboxEvidenceDeleted         int32              `json:"outbox_evidence_deleted"`
+	ConsentNetworkScrubbed        int32              `json:"consent_network_scrubbed"`
+	EventResponsesDeleted         int32              `json:"event_responses_deleted"`
+	AnnouncementDeliveriesDeleted int32              `json:"announcement_deliveries_deleted"`
+	SuggestionsDeleted            int32              `json:"suggestions_deleted"`
+	PrivacyWorkingScrubbed        int32              `json:"privacy_working_scrubbed"`
+	AuthLimitsDeleted             int32              `json:"auth_limits_deleted"`
 }
 
 type PrivacyReviewerGrant struct {

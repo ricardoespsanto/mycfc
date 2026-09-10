@@ -222,6 +222,59 @@ SELECT * FROM privacy_erasure_job_leases WHERE id=sqlc.arg(id);
 -- name: GetPrivacyErasureJobCheckpoint :one
 SELECT * FROM privacy_erasure_job_checkpoints WHERE id=sqlc.arg(id);
 
+-- name: PreparePrivacyRestoreTombstone :one
+SELECT prepared.execution_id::uuid AS execution_id,
+ prepared.request_id::uuid AS request_id,
+ prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,
+ prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,
+ prepared.execution_started_at::timestamptz AS execution_started_at
+FROM privacy_tombstone_prepare(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS prepared;
+
+-- name: ConfirmPrivacyRestoreTombstone :one
+SELECT privacy_tombstone_confirm(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),sqlc.arg(locator_digest),
+ sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: RunPrivacyRetention :one
+SELECT retained.run_id::uuid AS run_id,
+ retained.sessions_deleted::integer AS sessions_deleted,
+ retained.tokens_deleted::integer AS tokens_deleted,
+ retained.outbox_stopped::integer AS outbox_stopped,
+ retained.outbox_payloads_deleted::integer AS outbox_payloads_deleted,
+ retained.outbox_evidence_deleted::integer AS outbox_evidence_deleted,
+ retained.consent_network_scrubbed::integer AS consent_network_scrubbed,
+ retained.event_responses_deleted::integer AS event_responses_deleted,
+ retained.announcement_deliveries_deleted::integer AS announcement_deliveries_deleted,
+ retained.suggestions_deleted::integer AS suggestions_deleted,
+ retained.privacy_working_scrubbed::integer AS privacy_working_scrubbed,
+ retained.auth_limits_deleted::integer AS auth_limits_deleted
+FROM privacy_retention_run(sqlc.arg(worker_ref),sqlc.arg(batch_limit)) AS retained;
+
+-- name: PreparePrivacyTombstoneClosure :one
+SELECT prepared.execution_id::uuid AS execution_id,
+ prepared.request_id::uuid AS request_id,
+ prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,
+ prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,
+ prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,
+ prepared.evidence_expires_at::timestamptz AS evidence_expires_at
+FROM privacy_tombstone_prepare_closure(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
+-- name: ConfirmPrivacyTombstoneClosure :one
+SELECT privacy_tombstone_confirm_closure(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),
+ sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
 -- name: AuthorizePrivacyErasureJobLease :one
 SELECT lease.*
 FROM privacy_erasure_job_leases lease

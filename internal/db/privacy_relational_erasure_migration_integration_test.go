@@ -29,15 +29,23 @@ func TestPrivacyRelationalErasureForwardMigrationAppliesToExactPriorSchema(t *te
 	defer conn.Close(ctx)
 
 	schemaName := "privacy_relational_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	protectedSchemaName := "privacy_protected_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	schema := pgx.Identifier{schemaName}.Sanitize()
 	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") }()
+	defer func() {
+		_, _ = conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
+		_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{protectedSchemaName}.Sanitize()+" CASCADE")
+	}()
 	if _, err = conn.Exec(ctx, "SET search_path TO "+schema+",public"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.PgConn().Exec(ctx, baselineSchema).ReadAll(); err != nil {
+	isolatedBaseline := strings.ReplaceAll(baselineSchema, "public.", schemaName+".")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog, public", "pg_catalog, "+schemaName+", public")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
+	if _, err = conn.PgConn().Exec(ctx, isolatedBaseline).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
 	}
 	if _, err = conn.Exec(ctx, pre245SchemaRollback); err != nil {

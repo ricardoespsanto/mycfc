@@ -1359,7 +1359,7 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION privacy_worker_execute_checkpoint(
+CREATE FUNCTION privacy_worker_execute_checkpoint_without_tombstone_guard(
  p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE checkpoint_ref uuid; subject_ref uuid; execution_ref uuid; principal_ref uuid; category text; entry jsonb;
@@ -1659,7 +1659,7 @@ WHERE EXISTS(SELECT 1 FROM execution_started);
 $$;
 
 REVOKE ALL ON TABLE privacy_pseudonymous_principals,privacy_erasure_retention_anchors,privacy_erasure_restricted_records FROM PUBLIC;
-REVOKE ALL ON FUNCTION privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
 DO $$
 DECLARE role_name text;
 BEGIN
@@ -2551,3 +2551,224 @@ REVOKE ALL ON FUNCTION public.privacy_media_subject_lock(uuid),public.privacy_ex
  public.privacy_execution_complete_object_capture(uuid,text),public.privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid),
  public.privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
  public.privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+-- #247 restore-independent tombstone receipt foundation.
+CREATE TABLE privacy_protected.restore_tombstone_receipts (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ request_id uuid NOT NULL REFERENCES public.data_erasure_requests(id) ON DELETE RESTRICT,
+ ledger_version varchar(40) NOT NULL CHECK(ledger_version='restore-tombstone/v1'),
+ encryption_key_id varchar(80) NOT NULL CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_key_id varchar(80) NOT NULL CHECK(locator_key_id=btrim(locator_key_id) AND locator_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_digest bytea NOT NULL CHECK(octet_length(locator_digest)=32),
+ object_version_id varchar(1024) NOT NULL CHECK(object_version_id=btrim(object_version_id) AND char_length(object_version_id) BETWEEN 1 AND 1024),
+ ciphertext_sha256 bytea NOT NULL CHECK(octet_length(ciphertext_sha256)=32),
+ size_bytes bigint NOT NULL CHECK(size_bytes BETWEEN 1 AND 1048576),
+ written_at timestamptz NOT NULL, verified_at timestamptz NOT NULL,
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(), CHECK(verified_at>=written_at),
+ UNIQUE(request_id), UNIQUE(locator_key_id,locator_digest)
+);
+CREATE TRIGGER privacy_restore_tombstone_receipts_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_receipts FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.restore_tombstone_closure_intents (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ closed_at timestamptz NOT NULL,evidence_expires_at timestamptz NOT NULL,prepared_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(evidence_expires_at=closed_at+interval '24 months')
+);
+CREATE TRIGGER privacy_restore_tombstone_closure_intents_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_closure_intents FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TABLE privacy_protected.restore_tombstone_closure_receipts (
+ execution_id uuid PRIMARY KEY REFERENCES privacy_protected.restore_tombstone_closure_intents(execution_id) ON DELETE RESTRICT,
+ ledger_version varchar(40) NOT NULL CHECK(ledger_version='restore-tombstone-closure/v1'),
+ encryption_key_id varchar(80) NOT NULL CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_key_id varchar(80) NOT NULL CHECK(locator_key_id=btrim(locator_key_id) AND locator_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_digest bytea NOT NULL CHECK(octet_length(locator_digest)=32),object_version_id varchar(1024) NOT NULL CHECK(object_version_id=btrim(object_version_id) AND char_length(object_version_id) BETWEEN 1 AND 1024),
+ ciphertext_sha256 bytea NOT NULL CHECK(octet_length(ciphertext_sha256)=32),size_bytes bigint NOT NULL CHECK(size_bytes BETWEEN 1 AND 1048576),
+ written_at timestamptz NOT NULL,verified_at timestamptz NOT NULL,recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),CHECK(verified_at>=written_at),UNIQUE(locator_key_id,locator_digest)
+);
+CREATE TRIGGER privacy_restore_tombstone_closure_receipts_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_closure_receipts FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION public.privacy_tombstone_prepare(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+ digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,'|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),execution.accepted_at
+ FROM privacy_erasure_job_leases lease
+ JOIN privacy_erasure_category_jobs selected_job ON selected_job.id=lease.job_id AND selected_job.lease_epoch=lease.epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=selected_job.id
+ JOIN privacy_erasure_executions execution ON execution.id=selected_job.execution_id
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE selected_job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref
+ AND selected_job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp()
+ AND selected_job.category_key='backup-tombstones' AND EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints selected_checkpoint
+  WHERE selected_checkpoint.job_id=selected_job.id AND selected_checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND selected_checkpoint.action_version='v1' AND selected_checkpoint.status='PENDING')
+ AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id;
+$$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,
+ p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid; execution_ref uuid; request_ref uuid; existing privacy_protected.restore_tombstone_receipts%ROWTYPE;
+BEGIN
+ SELECT checkpoint.id,job.execution_id,execution.request_id INTO checkpoint_ref,execution_ref,request_ref
+ FROM privacy_erasure_category_jobs job JOIN privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=job.id
+ JOIN privacy_erasure_executions execution ON execution.id=job.execution_id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref AND job.status='LEASED'
+ AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp() AND job.category_key='backup-tombstones'
+ AND checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND checkpoint.action_version='v1' FOR UPDATE OF job,lease,attempt,checkpoint;
+ IF checkpoint_ref IS NULL OR p_ledger_version<>'restore-tombstone/v1'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_receipts WHERE execution_id=execution_ref;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_receipts(execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(execution_ref,request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.request_id,existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_conflict'; END IF;
+ UPDATE privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_by_attempt_id=p_attempt_id,completed_at=clock_timestamp(),affected_rows=1,
+  result_sha256=digest(p_ciphertext_sha256||convert_to(p_object_version_id,'UTF8'),'sha256') WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_tombstone_prepare_closure(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+#variable_conflict use_column
+DECLARE v_closed_at timestamptz;
+BEGIN
+ IF p_execution_id IS NULL OR p_worker_ref IS NULL OR NOT EXISTS(SELECT 1 FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+  WHERE execution.id=p_execution_id AND execution.status='SUCCEEDED' AND request.status IN ('PROCESSING','RETRYABLE_FAILED')
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+  AND EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution.id))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_unavailable'; END IF;
+ v_closed_at:=clock_timestamp();
+ INSERT INTO privacy_protected.restore_tombstone_closure_intents(execution_id,closed_at,evidence_expires_at)
+ VALUES(p_execution_id,v_closed_at,v_closed_at+interval '24 months') ON CONFLICT(execution_id) DO NOTHING;
+ RETURN QUERY SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+  digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,'|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),
+  execution.accepted_at,intent.closed_at,intent.evidence_expires_at
+ FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ JOIN privacy_protected.restore_tombstone_closure_intents intent ON intent.execution_id=execution.id
+ WHERE execution.id=p_execution_id AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id,intent.closed_at,intent.evidence_expires_at;
+END; $$;
+CREATE FUNCTION public.privacy_tombstone_confirm_closure(p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE; existing privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+BEGIN
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id;
+ IF intent.execution_id IS NULL OR p_worker_ref IS NULL OR p_ledger_version<>'restore-tombstone-closure/v1'
+ OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+ OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id)
+ OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024 OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(p_execution_id,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+ IS DISTINCT FROM ROW(p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_conflict'; END IF;
+ RETURN p_execution_id;
+END; $$;
+
+REVOKE ALL ON FUNCTION public.privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+CREATE FUNCTION public.privacy_worker_execute_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE execution_ref uuid;
+BEGIN
+	SELECT job.execution_id INTO execution_ref FROM privacy_erasure_category_jobs job
+	JOIN privacy_erasure_job_leases lease ON lease.id=p_lease_id AND lease.job_id=job.id AND lease.epoch=p_lease_epoch
+	JOIN privacy_erasure_job_attempts attempt ON attempt.id=p_attempt_id AND attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_lease_epoch
+	WHERE job.id=p_job_id AND job.status='LEASED' AND lease.worker_ref=p_worker_ref AND lease.released_at IS NULL
+	 AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL FOR UPDATE OF job,lease,attempt;
+	IF NOT FOUND THEN RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version); END IF;
+ IF p_operation_code<>'BACKUP_TOMBSTONE_REPLAY' AND NOT EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution_ref)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_tombstone_required'; END IF;
+ RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+END; $$;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_prepare_closure(uuid,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+
+-- #247 bounded conservative retention maintenance.
+CREATE TABLE privacy_retention_runs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),worker_ref uuid NOT NULL,started_at timestamptz NOT NULL,finished_at timestamptz NOT NULL,
+ batch_limit integer NOT NULL CHECK(batch_limit BETWEEN 1 AND 10000),sessions_deleted integer NOT NULL CHECK(sessions_deleted>=0),tokens_deleted integer NOT NULL CHECK(tokens_deleted>=0),
+ outbox_stopped integer NOT NULL CHECK(outbox_stopped>=0),outbox_payloads_deleted integer NOT NULL CHECK(outbox_payloads_deleted>=0),outbox_evidence_deleted integer NOT NULL CHECK(outbox_evidence_deleted>=0),
+ consent_network_scrubbed integer NOT NULL CHECK(consent_network_scrubbed>=0),event_responses_deleted integer NOT NULL CHECK(event_responses_deleted>=0),
+ announcement_deliveries_deleted integer NOT NULL CHECK(announcement_deliveries_deleted>=0),suggestions_deleted integer NOT NULL CHECK(suggestions_deleted>=0),
+ privacy_working_scrubbed integer NOT NULL CHECK(privacy_working_scrubbed>=0),auth_limits_deleted integer NOT NULL CHECK(auth_limits_deleted>=0),CHECK(finished_at>=started_at)
+);
+CREATE TABLE privacy_outbox_delivery_evidence (
+ outbox_id uuid PRIMARY KEY,message_type varchar(30) NOT NULL,final_status varchar(20) NOT NULL CHECK(final_status IN ('SENT','FAILED','CANCELLED')),
+ attempts integer NOT NULL CHECK(attempts>=0),created_at timestamptz NOT NULL,terminal_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,CHECK(expires_at=created_at+interval '90 days')
+);
+CREATE INDEX privacy_outbox_delivery_evidence_expiry_idx ON privacy_outbox_delivery_evidence(expires_at,outbox_id);
+CREATE INDEX email_verification_tokens_retention_idx ON email_verification_tokens((GREATEST(expires_at,COALESCE(consumed_at,expires_at))),id);
+CREATE INDEX password_reset_tokens_retention_idx ON password_reset_tokens((GREATEST(expires_at,COALESCE(consumed_at,expires_at))),id);
+CREATE INDEX event_responses_retention_idx ON event_responses(event_id,user_id);
+CREATE INDEX announcement_deliveries_retention_idx ON announcement_deliveries(delivered_at,announcement_id,user_id);
+CREATE INDEX suggestions_retention_idx ON suggestions(responded_at,id) WHERE status IN ('DECLINED','COMPLETED');
+CREATE FUNCTION privacy_retention_run(p_worker_ref uuid,p_batch_limit integer)
+RETURNS TABLE(run_id uuid,sessions_deleted integer,tokens_deleted integer,outbox_stopped integer,outbox_payloads_deleted integer,outbox_evidence_deleted integer,
+ consent_network_scrubbed integer,event_responses_deleted integer,announcement_deliveries_deleted integer,suggestions_deleted integer,privacy_working_scrubbed integer,auth_limits_deleted integer)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_now timestamptz:=clock_timestamp();v_started timestamptz:=v_now;
+BEGIN
+ IF p_worker_ref IS NULL OR p_batch_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy retention input rejected'; END IF;
+ IF NOT pg_try_advisory_xact_lock(247,247) THEN RAISE EXCEPTION USING ERRCODE='55P03',MESSAGE='privacy retention already running'; END IF;
+ run_id:=gen_random_uuid();sessions_deleted:=0;tokens_deleted:=0;outbox_stopped:=0;outbox_payloads_deleted:=0;outbox_evidence_deleted:=0;
+ consent_network_scrubbed:=0;event_responses_deleted:=0;announcement_deliveries_deleted:=0;suggestions_deleted:=0;privacy_working_scrubbed:=0;auth_limits_deleted:=0;
+ WITH candidate AS (SELECT token FROM sessions WHERE expiry<=v_now ORDER BY expiry,token FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM sessions row USING candidate WHERE row.token=candidate.token;GET DIAGNOSTICS sessions_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM email_outbox WHERE created_at<=v_now-interval '7 days' AND status IN ('PENDING','SENDING') ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE email_outbox row SET status='FAILED',claimed_at=NULL,last_error=NULL,updated_at=v_now FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_stopped=ROW_COUNT;
+ WITH candidate AS MATERIALIZED (SELECT id FROM email_outbox WHERE created_at<=v_now-interval '30 days' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ evidence AS (INSERT INTO privacy_outbox_delivery_evidence(outbox_id,message_type,final_status,attempts,created_at,terminal_at,expires_at)
+  SELECT row.id,row.message_type,CASE WHEN row.status IN ('SENT','FAILED','CANCELLED') THEN row.status ELSE 'FAILED' END,row.attempts,row.created_at,COALESCE(row.sent_at,row.updated_at,row.created_at),row.created_at+interval '90 days'
+  FROM email_outbox row JOIN candidate USING(id) ON CONFLICT(outbox_id) DO NOTHING RETURNING outbox_id)
+ DELETE FROM email_outbox row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_payloads_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT outbox_id FROM privacy_outbox_delivery_evidence WHERE expires_at<=v_now ORDER BY expires_at,outbox_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_outbox_delivery_evidence row USING candidate WHERE row.outbox_id=candidate.outbox_id;GET DIAGNOSTICS outbox_evidence_deleted=ROW_COUNT;
+ WITH verification AS (SELECT id FROM email_verification_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ deleted_verification AS (DELETE FROM email_verification_tokens row USING verification WHERE row.id=verification.id RETURNING 1),
+ reset AS (SELECT id FROM password_reset_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ deleted_reset AS (DELETE FROM password_reset_tokens row USING reset WHERE row.id=reset.id RETURNING 1)
+ SELECT (SELECT count(*) FROM deleted_verification)+(SELECT count(*) FROM deleted_reset) INTO tokens_deleted;
+ WITH candidate AS (SELECT id FROM consent_forms WHERE date_signed<=v_now-interval '12 months' AND (ip_address IS NOT NULL OR user_agent<>'') ORDER BY date_signed,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE consent_forms row SET ip_address=NULL,user_agent='' FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS consent_network_scrubbed=ROW_COUNT;
+ WITH candidate AS (SELECT response.event_id,response.user_id FROM event_responses response JOIN events event ON event.id=response.event_id WHERE event.ends_at<=v_now-interval '90 days' ORDER BY event.ends_at,response.event_id,response.user_id FOR UPDATE OF response SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM event_responses row USING candidate WHERE row.event_id=candidate.event_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS event_responses_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT announcement_id,user_id FROM announcement_deliveries WHERE delivered_at<=v_now-interval '90 days' ORDER BY delivered_at,announcement_id,user_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM announcement_deliveries row USING candidate WHERE row.announcement_id=candidate.announcement_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS announcement_deliveries_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM suggestions WHERE status IN ('DECLINED','COMPLETED') AND responded_at<=v_now-interval '12 months' ORDER BY responded_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM suggestions row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS suggestions_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM data_erasure_requests WHERE status IN ('REFUSED','CANCELLED','COMPLETED') AND working_expires_at<=v_now AND working_erased_at IS NULL ORDER BY working_expires_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ removed_mail AS (DELETE FROM email_outbox row USING candidate WHERE row.privacy_request_id=candidate.id RETURNING row.id),
+ removed_dependants AS (DELETE FROM privacy_request_dependant_resolutions row USING candidate WHERE row.request_id=candidate.id RETURNING 1)
+ UPDATE data_erasure_requests row SET decision_explanation='',category_decisions='[]',categories='{}',policy_snapshot=NULL,policy_version=NULL,
+ identity_verified_at=NULL,identity_verified_by=NULL,identity_method=NULL,representation_verified_at=NULL,representation_verified_by=NULL,representation_method=NULL,
+ representation_guardian_id=NULL,representation_relationship_updated_at=NULL,representation_conflict=false,requester_user_id=NULL,subject_user_id=NULL,claimed_by=NULL,decided_by=NULL,working_erased_at=v_now
+ FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS privacy_working_scrubbed=ROW_COUNT;
+ WITH candidate AS (SELECT bucket FROM privacy_request_auth_limits WHERE window_start<v_now-interval '1 day' ORDER BY window_start,bucket FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_request_auth_limits row USING candidate WHERE row.bucket=candidate.bucket;GET DIAGNOSTICS auth_limits_deleted=ROW_COUNT;
+ INSERT INTO privacy_retention_runs VALUES(run_id,p_worker_ref,v_started,clock_timestamp(),p_batch_limit,sessions_deleted,tokens_deleted,outbox_stopped,outbox_payloads_deleted,
+ outbox_evidence_deleted,consent_network_scrubbed,event_responses_deleted,announcement_deliveries_deleted,suggestions_deleted,privacy_working_scrubbed,auth_limits_deleted);
+ RETURN NEXT;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_retention_run(uuid,integer) FROM PUBLIC;
+REVOKE ALL ON TABLE privacy_retention_runs,privacy_outbox_delivery_evidence FROM PUBLIC;
