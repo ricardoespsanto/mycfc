@@ -47,9 +47,15 @@ func TestPrivacyExecutionLifecycleForwardMigrationPreservesPriorRows(t *testing.
 	if _, err = conn.PgConn().Exec(ctx, isolatedBaseline).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
 	}
-	// Remove the later #247 additions before reconstructing the exact pre-#244
-	// shape. The original relational worker implementation was renamed by #247.
+	// Remove the later #247/#248 additions before reconstructing the exact
+	// pre-#244 shape. The original relational worker implementation was renamed
+	// by #247.
 	if _, err = conn.Exec(ctx, `
+		DROP TRIGGER privacy_activation_evidence_guard ON privacy_request_activation;
+		DROP FUNCTION guard_privacy_activation_evidence();
+		ALTER TABLE privacy_request_activation DROP CONSTRAINT privacy_activation_requires_evidence_approval,DROP COLUMN approval_id;
+		DROP TABLE privacy_terminal_requeue_approvals,privacy_terminal_requeue_proposals,privacy_activation_approvals,privacy_activation_proposals,privacy_activation_evidence,
+		 privacy_completion_access_links,privacy_erasure_completion_manifests CASCADE;
 		DROP FUNCTION privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);
 		DROP FUNCTION privacy_tombstone_prepare_closure(uuid,uuid);
 		DROP FUNCTION privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);

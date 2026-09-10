@@ -29,6 +29,8 @@ WHERE outbox.status IN ('PENDING', 'SENDING')
         AND (token.consumed_at IS NOT NULL OR token.expires_at <= $1
           OR account.is_active = false OR account.is_dependent = true OR account.email <> token.email)
     ))
+    OR
+    (outbox.message_type = 'PRIVACY_COMPLETED' AND NOT privacy_completion_notice_deliverable(outbox.privacy_request_id,$1))
   )
 `
 
@@ -49,11 +51,12 @@ WITH candidate AS (
   LEFT JOIN users account ON account.id = COALESCE(verification.user_id, reset.user_id)
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= $1)
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < $2))
-    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION', 'PRIVACY_PROCESSING_STARTED') OR (
+    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION', 'PRIVACY_PROCESSING_STARTED', 'PRIVACY_COMPLETED') OR (
       COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > $1
     AND account.is_active = true AND account.is_dependent = false
     AND account.email = COALESCE(verification.email, reset.email)))
+    AND (outbox.message_type <> 'PRIVACY_COMPLETED' OR privacy_completion_notice_deliverable(outbox.privacy_request_id,$1))
   ORDER BY outbox.next_attempt_at, outbox.created_at, outbox.id
   FOR UPDATE OF outbox SKIP LOCKED
   LIMIT 1

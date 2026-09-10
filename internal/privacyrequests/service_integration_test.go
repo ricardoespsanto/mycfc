@@ -34,6 +34,35 @@ type executionVersionedStoreRecorder struct {
 	evidence storage.VersionDeletionEvidence
 }
 
+func activatePrivacyIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, adminID, executorID uuid.UUID, policyVersion string) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	contracts := map[string]string{
+		"RESTORE":        "mycfc/privacy-restore-drill-attestation/v1",
+		"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
+		"PROVIDER":       "mycfc/privacy-provider-registry/v1",
+		"SCHEMA":         "mycfc/schema-migration-inventory/v1",
+	}
+	evidenceIDs := make([]uuid.UUID, 0, len(contracts))
+	for kind, contract := range contracts {
+		digest := sha256.Sum256([]byte(kind + contract + uuid.NewString()))
+		var evidenceID uuid.UUID
+		if err := pool.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminID, kind, digest[:], contract, now).Scan(&evidenceID); err != nil {
+			t.Fatal(err)
+		}
+		evidenceIDs = append(evidenceIDs, evidenceID)
+	}
+	var proposalID uuid.UUID
+	var activationDigest []byte
+	if err := pool.QueryRow(ctx, `SELECT proposal_id,activation_sha256 FROM privacy_activation_propose($1,$2,$3)`, executorID, policyVersion, evidenceIDs).Scan(&proposalID, &activationDigest); err != nil {
+		t.Fatal(err)
+	}
+	var approvalID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT privacy_activation_approve($1,$2,$3)`, adminID, proposalID, activationDigest).Scan(&approvalID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (s *executionVersionedStoreRecorder) DeleteAllVersions(_ context.Context, key string) (storage.VersionDeletionEvidence, error) {
 	s.key = key
 	return s.evidence, nil
@@ -176,12 +205,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	if e = s.Activate(ctx, owner, p.Version, true); !errors.Is(e, ErrExecutorUnavailable) {
 		t.Fatalf("activation trusted operator assertion: %v", e)
 	}
-	// Isolated integration fixture: production enablement remains impossible
-	// until #111 supplies validated live capabilities and evidence.
-	_, e = pool.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at) VALUES(true,$1,true,true,$2,now())`, p.Version, owner)
-	if e != nil {
-		t.Fatal(e)
-	}
+	// Isolated integration fixture follows the same digest-bound evidence and
+	// distinct approval path as production; it does not use the legacy boolean.
+	activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 	t.Run("navigation-lookup-does-not-wait-for-workflow-lock", func(t *testing.T) {
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -763,9 +789,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil || !slices.Contains(view.ExecutionBlockers, "ACTIVATION_DISABLED") {
 			t.Fatalf("missing activation blockers=%v err=%v", view.ExecutionBlockers, err)
 		}
-		if _, err = pool.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at) VALUES(true,$1,true,true,$2,now())`, p.Version, owner); err != nil {
-			t.Fatal(err)
-		}
+		activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 		var originalGrantedAt time.Time
 		if err = pool.QueryRow(ctx, `SELECT granted_at FROM privacy_reviewer_grants WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA).Scan(&originalGrantedAt); err != nil {
 			t.Fatal(err)

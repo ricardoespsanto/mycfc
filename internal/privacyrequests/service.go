@@ -113,6 +113,10 @@ func activePolicy(ctx context.Context, q *dbgen.Queries) (AdoptedPolicy, error) 
 	if e != nil || !a.Enabled || !a.FulfilmentReady {
 		return AdoptedPolicy{}, ErrPolicyUnresolved
 	}
+	ready, e := q.PrivacyActivationReady(ctx, a.PolicyVersion)
+	if e != nil || !ready {
+		return AdoptedPolicy{}, ErrPolicyUnresolved
+	}
 	r, e := q.GetPrivacyPolicy(ctx, a.PolicyVersion)
 	if e != nil {
 		return AdoptedPolicy{}, ErrPolicyUnresolved
@@ -449,7 +453,7 @@ func (s Service) executionViewBlockers(ctx context.Context, tx pgx.Tx, q *dbgen.
 			return nil, err
 		}
 		add("ACTIVATION_DISABLED")
-	} else if !executionActivationReady(activation) {
+	} else if ready, readyErr := q.PrivacyActivationReady(ctx, activation.PolicyVersion); !executionActivationReady(activation) || readyErr != nil || !ready {
 		add("ACTIVATION_DISABLED")
 	}
 	if r.ScopeKind != string(AccountClosure) {

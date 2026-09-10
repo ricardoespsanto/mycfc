@@ -45,7 +45,7 @@ func privacyDeliveryFixture(t *testing.T, kind string) (*deliveryStoreFake, []by
 }
 
 func TestPrivacyWorkerDeliversToSealedRecipientWithoutAccount(t *testing.T) {
-	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED"} {
+	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED", "PRIVACY_COMPLETED"} {
 		t.Run(kind, func(t *testing.T) {
 			store, key, now := privacyDeliveryFixture(t, kind)
 			sender := &privacySenderFake{}
@@ -108,13 +108,19 @@ func TestPrivacyWorkerRetriesWithoutLoggingSensitiveSMTPError(t *testing.T) {
 }
 
 func TestPrivacyNotificationProvidesPublicContactWithoutDisclosingDecision(t *testing.T) {
-	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED"} {
+	for _, kind := range []string{"PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED", "PRIVACY_COMPLETED"} {
 		subject, plain, rich, err := privacyNotificationMessage(kind, "https://mycfc.example/legal/direitos?lang=pt&source=email")
 		if err != nil || subject == "" {
 			t.Fatalf("notification construction failed: %v", err)
 		}
-		if !strings.Contains(plain, "mesmo sem acesso à conta") || !strings.Contains(plain, "/legal/direitos") || !strings.Contains(rich, "&amp;source=email") {
+		if !strings.Contains(plain, "/legal/direitos") || !strings.Contains(rich, "&amp;source=email") {
 			t.Fatal("public after-closure contact or HTML escaping missing")
+		}
+		if kind != "PRIVACY_COMPLETED" && !strings.Contains(plain, "mesmo sem acesso à conta") {
+			t.Fatal("ordinary privacy notice omitted the after-closure rights channel")
+		}
+		if kind == "PRIVACY_COMPLETED" && (!strings.Contains(plain, "utilização única") || !strings.Contains(plain, "24 horas")) {
+			t.Fatal("completion notice omitted the one-use expiry boundary")
 		}
 		for _, forbidden := range []string{"/perfil/", "APPROVED", "REFUSED", "medical", "subject_id"} {
 			if strings.Contains(subject+plain+rich, forbidden) {

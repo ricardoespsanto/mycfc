@@ -119,6 +119,10 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if err != nil || !executionActivationReady(activation) {
 		return zero, ErrExecutorUnavailable
 	}
+	ready, err := q.PrivacyActivationReady(ctx, activation.PolicyVersion)
+	if err != nil || !ready {
+		return zero, ErrExecutorUnavailable
+	}
 	if r.Version != in.Version {
 		return zero, ErrStaleVersion
 	}
@@ -211,6 +215,13 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 		return zero, err
 	}
 	if err = s.enqueue(ctx, q, updated, requester, event.ID, "PRIVACY_PROCESSING_STARTED", now); err != nil {
+		return zero, err
+	}
+	var capturedExecutionID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT privacy_execution_capture_completion_notice($1,$2)`, execution.ID, event.ID).Scan(&capturedExecutionID); err != nil || capturedExecutionID != execution.ID {
+		if err == nil {
+			err = ErrExecutorUnavailable
+		}
 		return zero, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -789,7 +800,11 @@ func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
 	}
 	job := ExecutionJob{PrivacyErasureCategoryJob: jobRow, ActiveLeaseID: leaseID, WorkerRef: leaseRow.WorkerRef, LeaseExpiresAt: leaseRow.ExpiresAt, ActiveAttemptID: attemptID}
 	lease := ExecutionLease{Job: job}
-	if job.AttemptCount > w.maxAttempts() {
+	var attemptAllowed bool
+	if err = tx.QueryRow(ctx, `SELECT attempt_count <= $2 + manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE id=$1`, job.ID, w.maxAttempts()).Scan(&attemptAllowed); err != nil {
+		return zero, err
+	}
+	if !attemptAllowed {
 		failure := ExecutionFailure{Classification: FailureTerminal, Stage: FailureStageExecute, Code: FailureRetryLimitReached}
 		if err = w.failInTransaction(ctx, tx, q, lease, failure); err != nil {
 			return zero, err
@@ -975,7 +990,11 @@ func (w ExecutionWorker) failInTransaction(ctx context.Context, tx pgx.Tx, q *db
 		return ErrInvalid
 	}
 	classification := string(failure.Classification)
-	if lease.Job.AttemptCount >= w.maxAttempts() {
+	var manualAttemptAllowance int32
+	if err := tx.QueryRow(ctx, `SELECT manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE id=$1`, lease.Job.ID).Scan(&manualAttemptAllowance); err != nil {
+		return err
+	}
+	if lease.Job.AttemptCount >= w.maxAttempts()+manualAttemptAllowance {
 		classification = string(FailureTerminal)
 	}
 	retryMilliseconds := int64(0)

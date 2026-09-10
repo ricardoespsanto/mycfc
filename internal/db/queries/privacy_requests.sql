@@ -1,6 +1,9 @@
 -- name: GetPrivacyActivation :one
 SELECT * FROM privacy_request_activation WHERE singleton = true;
 
+-- name: PrivacyActivationReady :one
+SELECT privacy_activation_ready(sqlc.arg(policy_version));
+
 -- name: GetPrivacyPolicy :one
 SELECT * FROM privacy_request_policies WHERE version = sqlc.arg(version);
 

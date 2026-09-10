@@ -1881,6 +1881,44 @@ type PlatformRole struct {
 	NamePt string    `json:"name_pt"`
 }
 
+type PrivacyActivationApproval struct {
+	ID               uuid.UUID          `json:"id"`
+	ProposalID       uuid.UUID          `json:"proposal_id"`
+	ActivationSha256 []byte             `json:"activation_sha256"`
+	ApprovedByRef    uuid.UUID          `json:"approved_by_ref"`
+	ApprovedAt       pgtype.Timestamptz `json:"approved_at"`
+}
+
+type PrivacyActivationEvidence struct {
+	ID             uuid.UUID          `json:"id"`
+	Kind           string             `json:"kind"`
+	EvidenceSha256 []byte             `json:"evidence_sha256"`
+	ReferenceCode  string             `json:"reference_code"`
+	ObservedAt     pgtype.Timestamptz `json:"observed_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	RecordedByRef  uuid.UUID          `json:"recorded_by_ref"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyActivationProposal struct {
+	ID                uuid.UUID          `json:"id"`
+	PolicyVersion     string             `json:"policy_version"`
+	EvidenceIds       []uuid.UUID        `json:"evidence_ids"`
+	EvidenceSetSha256 []byte             `json:"evidence_set_sha256"`
+	ActivationSha256  []byte             `json:"activation_sha256"`
+	ProposedByRef     uuid.UUID          `json:"proposed_by_ref"`
+	ProposedAt        pgtype.Timestamptz `json:"proposed_at"`
+}
+
+type PrivacyCompletionAccessLink struct {
+	ID          uuid.UUID          `json:"id"`
+	ExecutionID uuid.UUID          `json:"execution_id"`
+	TokenSha256 []byte             `json:"token_sha256"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	UsedAt      pgtype.Timestamptz `json:"used_at"`
+}
+
 type PrivacyErasureAccessRevocation struct {
 	ID             uuid.UUID          `json:"id"`
 	ExecutionID    uuid.UUID          `json:"execution_id"`
@@ -1892,19 +1930,36 @@ type PrivacyErasureAccessRevocation struct {
 }
 
 type PrivacyErasureCategoryJob struct {
-	ID                uuid.UUID          `json:"id"`
-	ExecutionID       uuid.UUID          `json:"execution_id"`
-	PlanEntryPosition int16              `json:"plan_entry_position"`
-	EntrySha256       []byte             `json:"entry_sha256"`
-	CategoryKey       string             `json:"category_key"`
-	PurposeCode       string             `json:"purpose_code"`
-	Status            string             `json:"status"`
-	NextAttemptAt     pgtype.Timestamptz `json:"next_attempt_at"`
-	LeaseEpoch        int64              `json:"lease_epoch"`
-	AttemptCount      int32              `json:"attempt_count"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ID                     uuid.UUID          `json:"id"`
+	ExecutionID            uuid.UUID          `json:"execution_id"`
+	PlanEntryPosition      int16              `json:"plan_entry_position"`
+	EntrySha256            []byte             `json:"entry_sha256"`
+	CategoryKey            string             `json:"category_key"`
+	PurposeCode            string             `json:"purpose_code"`
+	Status                 string             `json:"status"`
+	NextAttemptAt          pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseEpoch             int64              `json:"lease_epoch"`
+	AttemptCount           int32              `json:"attempt_count"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt            pgtype.Timestamptz `json:"completed_at"`
+	ManualAttemptAllowance int32              `json:"manual_attempt_allowance"`
+}
+
+type PrivacyErasureCompletionManifest struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	RequestID           uuid.UUID          `json:"request_id"`
+	ManifestVersion     string             `json:"manifest_version"`
+	PlanSha256          []byte             `json:"plan_sha256"`
+	Manifest            []byte             `json:"manifest"`
+	ManifestSha256      []byte             `json:"manifest_sha256"`
+	CategoryCount       int32              `json:"category_count"`
+	CheckpointCount     int32              `json:"checkpoint_count"`
+	ObjectTargetCount   int32              `json:"object_target_count"`
+	ProviderTargetCount int32              `json:"provider_target_count"`
+	CompletedByRef      uuid.UUID          `json:"completed_by_ref"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	EvidenceExpiresAt   pgtype.Timestamptz `json:"evidence_expires_at"`
 }
 
 type PrivacyErasureExecution struct {
@@ -2019,6 +2074,12 @@ type PrivacyOutboxDeliveryEvidence struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	TerminalAt  pgtype.Timestamptz `json:"terminal_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+type PrivacyProtectedCompletionNoticeTarget struct {
+	ExecutionID    uuid.UUID          `json:"execution_id"`
+	SealedDelivery []byte             `json:"sealed_delivery"`
+	CapturedAt     pgtype.Timestamptz `json:"captured_at"`
 }
 
 type PrivacyProtectedObjectCaptureSet struct {
@@ -2375,6 +2436,7 @@ type PrivacyRequestActivation struct {
 	FulfilmentReady bool               `json:"fulfilment_ready"`
 	UpdatedBy       uuid.UUID          `json:"updated_by"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ApprovalID      *uuid.UUID         `json:"approval_id"`
 }
 
 type PrivacyRequestActivationEvent struct {
@@ -2489,6 +2551,25 @@ type PrivacyReviewerGrantEvent struct {
 	ActorRef   uuid.UUID          `json:"actor_ref"`
 	Action     string             `json:"action"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyTerminalRequeueApproval struct {
+	ProposalID     uuid.UUID          `json:"proposal_id"`
+	ProposalSha256 []byte             `json:"proposal_sha256"`
+	ApprovedByRef  uuid.UUID          `json:"approved_by_ref"`
+	ApprovedAt     pgtype.Timestamptz `json:"approved_at"`
+}
+
+type PrivacyTerminalRequeueProposal struct {
+	ID                       uuid.UUID          `json:"id"`
+	JobID                    uuid.UUID          `json:"job_id"`
+	ExecutionID              uuid.UUID          `json:"execution_id"`
+	FailureID                uuid.UUID          `json:"failure_id"`
+	ExpectedExecutionVersion int64              `json:"expected_execution_version"`
+	ExpectedLeaseEpoch       int64              `json:"expected_lease_epoch"`
+	ProposalSha256           []byte             `json:"proposal_sha256"`
+	ProposedByRef            uuid.UUID          `json:"proposed_by_ref"`
+	ProposedAt               pgtype.Timestamptz `json:"proposed_at"`
 }
 
 type Programme struct {
