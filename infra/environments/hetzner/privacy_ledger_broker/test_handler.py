@@ -19,9 +19,9 @@ class BrokerTests(unittest.TestCase):
         self.event = {
             "kind": "intent",
             "locator_key_id": "locator-key-v1",
-            "locator_digest": "a" * 64,
+            "locator_digest": base64.b64encode(b"a" * 32).decode(),
             "payload": base64.b64encode(self.payload).decode(),
-            "checksum_sha256": self.digest,
+            "checksum": self.digest,
         }
         self.env = patch.dict(os.environ, {
             "LEDGER_BUCKET": "ledger",
@@ -89,8 +89,8 @@ class BrokerTests(unittest.TestCase):
     def test_rejects_bad_locator_checksum_and_retention(self):
         client = Mock()
         for change in (
-            {"locator_digest": "../secret"},
-            {"checksum_sha256": base64.b64encode(b"x" * 32).decode()},
+            {"locator_digest": base64.b64encode(b"short").decode()},
+            {"checksum": base64.b64encode(b"x" * 32).decode()},
             {"kind": "closure", "retain_until": (datetime.now(timezone.utc) + timedelta(days=800)).isoformat().replace("+00:00", "Z")},
         ):
             bad = {**self.event, **change}
