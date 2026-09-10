@@ -42,9 +42,11 @@ const (
 	defaultMaxAttempts       = int32(5)
 	defaultCompletionBatch   = int32(10)
 	maximumKeyFileBytes      = 1 << 20
+	activationRequiredExit   = 3
 )
 
 var safeIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$`)
+var errActivationRequired = errors.New("privacy worker activation is required")
 
 type workerConfig struct {
 	databaseURL, region, bucket, s3Endpoint, brokerFunction, logGroup, detailBaseURL string
@@ -89,9 +91,30 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Getenv, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "privacy_worker_failed")
-		os.Exit(1)
+		message, status := failureStatus(err)
+		fmt.Fprintln(os.Stderr, message)
+		os.Exit(status)
 	}
+}
+
+func failureStatus(err error) (string, int) {
+	if errors.Is(err, errActivationRequired) {
+		return "privacy_worker_readiness_activation_required", activationRequiredExit
+	}
+	return "privacy_worker_failed", 1
+}
+
+func activationReadinessError(command string, ready bool, err error) error {
+	if err != nil {
+		return errors.New("check evidence-bound privacy activation readiness")
+	}
+	if ready {
+		return nil
+	}
+	if command == "readiness" {
+		return errActivationRequired
+	}
+	return errors.New("evidence-bound privacy activation is not ready")
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, output io.Writer) error {
@@ -124,8 +147,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 
 	completion := privacyrequests.CompletionWorker{Pool: pool, WorkerRef: workerRef, Key: cfg.completionDelivery, DetailBaseURL: cfg.detailBaseURL}
 	ready, err := completion.ActivationReady(ctx)
-	if err != nil || !ready {
-		return errors.New("evidence-bound privacy activation is not ready")
+	if err = activationReadinessError(args[0], ready, err); err != nil {
+		return err
 	}
 	if args[0] == "readiness" {
 		fmt.Fprintln(output, "privacy_worker_readiness_ready")

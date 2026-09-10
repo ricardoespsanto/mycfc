@@ -14,7 +14,16 @@ cat >"$test_dir/bin/docker" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$DOCKER_CALLS"
 case "$*" in
-	*privacy-worker\ readiness) printf '%s\n' 'privacy_worker_readiness_ready' ;;
+	*privacy-worker\ readiness)
+		case "${TEST_DOCKER_READINESS_RESULT:-ready}" in
+			ready) printf '%s\n' 'privacy_worker_readiness_ready' ;;
+			inactive)
+				printf '%s\n' 'privacy_worker_readiness_activation_required' >&2
+				exit 3
+				;;
+			error) exit 1 ;;
+		esac
+		;;
 esac
 EOF
 chmod 0755 "$test_dir/bin/stat" "$test_dir/bin/docker"
@@ -42,5 +51,31 @@ if grep -q 'PRIVACY_EXECUTOR_DATABASE_URL' "$DOCKER_CALLS"; then
 	printf '%s\n' 'worker runner exposed the database credential' >&2
 	exit 1
 fi
+
+if PATH="$test_dir/bin:$PATH" \
+	MYCFC_ENV_FILE="$test_dir/main.env" \
+	MYCFC_PRIVACY_WORKER_ENV_FILE="$test_dir/worker.env" \
+	MYCFC_DEPLOYMENT_DIR="$script_dir" \
+	TEST_DOCKER_READINESS_RESULT=inactive \
+	sh "$script_dir/privacy-worker.sh" readiness; then
+	printf '%s\n' 'activation-required readiness unexpectedly succeeded' >&2
+	exit 1
+else
+	status=$?
+fi
+[ "$status" -eq 3 ] || { printf '%s\n' 'activation-required readiness exit was not preserved' >&2; exit 1; }
+
+if PATH="$test_dir/bin:$PATH" \
+	MYCFC_ENV_FILE="$test_dir/main.env" \
+	MYCFC_PRIVACY_WORKER_ENV_FILE="$test_dir/worker.env" \
+	MYCFC_DEPLOYMENT_DIR="$script_dir" \
+	TEST_DOCKER_READINESS_RESULT=error \
+	sh "$script_dir/privacy-worker.sh" readiness; then
+	printf '%s\n' 'genuine readiness error unexpectedly succeeded' >&2
+	exit 1
+else
+	status=$?
+fi
+[ "$status" -eq 1 ] || { printf '%s\n' 'genuine readiness error exit was not preserved' >&2; exit 1; }
 
 printf '%s\n' 'privacy worker deployment tests passed'

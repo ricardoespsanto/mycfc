@@ -21,6 +21,7 @@ lock_file="$runtime_dir/mycfc-pull-release.lock"
 restore_drill_command=${MYCFC_RESTORE_DRILL_COMMAND:-$deployment_dir/postgres-restore-drill.sh}
 restore_attestation_verify_command=${MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND:-$deployment_dir/verify-privacy-restore-attestation.sh}
 privacy_worker_command=${MYCFC_PRIVACY_WORKER_COMMAND:-$deployment_dir/privacy-worker.sh}
+privacy_worker_activation_required_status=3
 agent_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 backup_file=
 route_backup=
@@ -149,6 +150,12 @@ verify_privacy_worker_active() {
 		fi
 		sleep 1
 	done
+}
+
+verify_privacy_worker_inactive() {
+	if systemctl is-active --quiet mycfc-privacy-worker.service; then
+		return 1
+	fi
 }
 
 rollback() {
@@ -446,9 +453,26 @@ post_switch_duration_seconds=$(($(date +%s) - post_switch_started_epoch))
 log "event=deployment_phase_completed phase=$current_phase duration_seconds=$post_switch_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
 
 if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-	run_phase privacy_worker_readiness "$privacy_worker_command" readiness
-	run_phase privacy_worker_restart systemctl restart mycfc-privacy-worker.service
-	run_phase privacy_worker_verify verify_privacy_worker_active
+	current_phase=privacy_worker_readiness
+	privacy_worker_readiness_started_epoch=$(date +%s)
+	log "event=deployment_phase_started phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
+	if "$privacy_worker_command" readiness; then
+		privacy_worker_readiness_duration_seconds=$(($(date +%s) - privacy_worker_readiness_started_epoch))
+		log "event=deployment_phase_completed phase=$current_phase outcome=ready duration_seconds=$privacy_worker_readiness_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
+		run_phase privacy_worker_restart systemctl restart mycfc-privacy-worker.service
+		run_phase privacy_worker_verify verify_privacy_worker_active
+	else
+		privacy_worker_readiness_status=$?
+		if [ "$privacy_worker_readiness_status" -ne "$privacy_worker_activation_required_status" ]; then
+			exit "$privacy_worker_readiness_status"
+		fi
+		privacy_worker_readiness_duration_seconds=$(($(date +%s) - privacy_worker_readiness_started_epoch))
+		log "event=deployment_phase_completed phase=$current_phase outcome=activation-required duration_seconds=$privacy_worker_readiness_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
+		run_phase privacy_worker_stage_inactive docker compose --env-file "$env_file" -f "$compose_file" --profile privacy-worker \
+			create --no-build --no-deps --force-recreate privacy-worker
+		run_phase privacy_worker_verify_inactive verify_privacy_worker_inactive
+		log "event=privacy_worker_activation_required worker_state=stopped readiness_exit_status=$privacy_worker_readiness_status sha=$sha digest=$release_digest slot=$candidate_slot"
+	fi
 fi
 
 write_state_value "$active_slot_file" "$candidate_slot"

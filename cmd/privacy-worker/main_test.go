@@ -85,6 +85,37 @@ func TestLoadConfigFailsClosedAndRequiresEveryMountedKey(t *testing.T) {
 	}
 }
 
+func TestActivationReadinessDistinguishesInactiveFromErrors(t *testing.T) {
+	if err := activationReadinessError("readiness", true, nil); err != nil {
+		t.Fatalf("ready activation returned error: %v", err)
+	}
+
+	inactive := activationReadinessError("readiness", false, nil)
+	if !errors.Is(inactive, errActivationRequired) {
+		t.Fatalf("inactive readiness error = %v", inactive)
+	}
+	message, status := failureStatus(inactive)
+	if message != "privacy_worker_readiness_activation_required" || status != activationRequiredExit {
+		t.Fatalf("inactive failure status = (%q, %d)", message, status)
+	}
+
+	for name, err := range map[string]error{
+		"database error": activationReadinessError("readiness", false, errors.New("database unavailable")),
+		"serve inactive": activationReadinessError("serve", false, nil),
+		"config error":   errors.New("privacy worker configuration rejected"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if errors.Is(err, errActivationRequired) {
+				t.Fatalf("error was classified as activation required: %v", err)
+			}
+			message, status := failureStatus(err)
+			if message != "privacy_worker_failed" || status != 1 {
+				t.Fatalf("failure status = (%q, %d)", message, status)
+			}
+		})
+	}
+}
+
 func TestEventSinkWritesSortedAggregateEvidenceAndRejectsDeliveryFailure(t *testing.T) {
 	client := &logClientFake{}
 	var output bytes.Buffer
