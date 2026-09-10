@@ -4342,7 +4342,7 @@ CREATE FUNCTION privacy_activation_control_snapshot(p_actor uuid)
 RETURNS TABLE(policy_version text,ready boolean,evidence_id uuid,evidence_kind text,evidence_observed_at timestamptz,
  proposal_id uuid,proposal_sha256 bytea,proposal_created_at timestamptz,can_propose boolean,can_renew boolean,can_approve boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-DECLARE actor_executor boolean;actor_admin boolean;selected_policy text;pending privacy_activation_proposals%ROWTYPE;current_evidence integer;
+DECLARE actor_executor boolean;actor_admin boolean;selected_policy text;pending privacy_activation_proposals%ROWTYPE;current_evidence integer;renewal_evidence boolean;
 BEGIN
  SELECT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
    WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent),
@@ -4361,11 +4361,22 @@ BEGIN
   SELECT DISTINCT ON(evidence.kind) evidence.kind FROM privacy_activation_evidence evidence WHERE evidence.expires_at>clock_timestamp()
   ORDER BY evidence.kind,evidence.observed_at DESC,evidence.id DESC
  ) current_rows;
+ SELECT EXISTS(
+  SELECT 1 FROM (
+   SELECT DISTINCT ON(evidence.kind) evidence.id,evidence.kind
+   FROM privacy_activation_evidence evidence WHERE evidence.expires_at>clock_timestamp()
+   ORDER BY evidence.kind,evidence.observed_at DESC,evidence.id DESC
+  ) latest
+  JOIN privacy_request_activation activation ON activation.singleton AND activation.enabled AND activation.policy_version=selected_policy
+  JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  WHERE NOT latest.id=ANY(proposal.evidence_ids)
+ ) INTO renewal_evidence;
  RETURN QUERY
  SELECT selected_policy,privacy_activation_ready(selected_policy),evidence.id,evidence.kind::text,evidence.observed_at,
   pending.id,pending.activation_sha256,pending.proposed_at,
   (actor_executor AND current_evidence=4 AND pending.id IS NULL AND NOT privacy_activation_ready(selected_policy)),
-  (actor_executor AND current_evidence=4 AND pending.id IS NULL AND privacy_activation_ready(selected_policy)),
+  (actor_executor AND current_evidence=4 AND pending.id IS NULL AND privacy_activation_ready(selected_policy) AND renewal_evidence),
   (actor_admin AND pending.id IS NOT NULL AND pending.proposed_by_ref<>p_actor)
  FROM (SELECT true singleton) seed LEFT JOIN LATERAL(
   SELECT DISTINCT ON(candidate.kind) candidate.id,candidate.kind,candidate.observed_at FROM privacy_activation_evidence candidate

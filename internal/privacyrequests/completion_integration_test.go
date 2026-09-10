@@ -256,14 +256,15 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 			"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 		}
 		ids := make([]uuid.UUID, 0, 4)
+		initialObservedAt := now.Add(-time.Hour)
 		for kind, contract := range contracts {
 			digest := sha256.Sum256([]byte(kind + contract))
 			var id uuid.UUID
-			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminA, kind, digest[:], contract, now).Scan(&id); err != nil {
+			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminA, kind, digest[:], contract, initialObservedAt).Scan(&id); err != nil {
 				t.Fatal(err)
 			}
 			var repeatedID uuid.UUID
-			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminB, kind, digest[:], contract, now).Scan(&repeatedID); err != nil || repeatedID != id {
+			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminB, kind, digest[:], contract, initialObservedAt).Scan(&repeatedID); err != nil || repeatedID != id {
 				t.Fatalf("idempotent evidence %s repeated=%s original=%s err=%v", kind, repeatedID, id, err)
 			}
 			ids = append(ids, id)
@@ -310,10 +311,18 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 			t.Fatalf("activation readiness web=%t worker=%t err=%v", enabled, ready, err)
 		}
 		var canRenew bool
-		if err = tx.QueryRow(ctx, `SELECT ready,can_propose,can_renew FROM privacy_activation_control_snapshot($1) LIMIT 1`, executor).Scan(&ready, &snapshotCanPropose, &canRenew); err != nil || !ready || snapshotCanPropose || !canRenew {
+		if err = tx.QueryRow(ctx, `SELECT ready,can_propose,can_renew FROM privacy_activation_control_snapshot($1) LIMIT 1`, executor).Scan(&ready, &snapshotCanPropose, &canRenew); err != nil || !ready || snapshotCanPropose || canRenew {
 			t.Fatalf("activation renewal ready=%t propose=%t renew=%t err=%v", ready, snapshotCanPropose, canRenew, err)
 		}
 		expectDatabaseError(`SELECT proposal_id FROM privacy_activation_propose($1,$2,$3)`, executor, policy, ids)
+		newSchemaDigest := sha256.Sum256([]byte("renewed-schema-evidence"))
+		var renewedSchemaID uuid.UUID
+		if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,'SCHEMA',$2,'mycfc/schema-migration-inventory/v1',$3)`, adminA, newSchemaDigest[:], now).Scan(&renewedSchemaID); err != nil {
+			t.Fatal(err)
+		}
+		if err = tx.QueryRow(ctx, `SELECT can_renew FROM privacy_activation_control_snapshot($1) LIMIT 1`, executor).Scan(&canRenew); err != nil || !canRenew {
+			t.Fatalf("activation newer evidence renew=%t err=%v", canRenew, err)
+		}
 		if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_evidence DISABLE TRIGGER privacy_activation_evidence_immutable`); err != nil {
 			t.Fatal(err)
 		}
