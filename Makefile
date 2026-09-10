@@ -135,6 +135,7 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/release-status_test.sh
 	sh deployment/publish-release-image_test.sh
 	sh deployment/postgres-backup-version-cleanup_test.sh
+	sh deployment/hetzner-backup-posture_test.sh
 	$(MAKE) test-privacy-ledger-broker
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
