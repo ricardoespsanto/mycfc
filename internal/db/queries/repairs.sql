@@ -18,19 +18,19 @@ INSERT INTO repair_requests (
 )
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
-          image_size_bytes, date_reported, updated_at, resolved_at;
+          image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at;
 
 -- name: GetRepairByIdempotencyKey :one
 SELECT id, idempotency_key, equipment_id, reported_by_id,
        issue_description, status, image_object_key, image_content_type,
-       image_size_bytes, date_reported, updated_at, resolved_at
+       image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 FROM repair_requests
 WHERE idempotency_key = sqlc.arg(idempotency_key);
 
 -- name: GetRepairRequestByID :one
 SELECT id, idempotency_key, equipment_id, reported_by_id,
        issue_description, status, image_object_key, image_content_type,
-       image_size_bytes, date_reported, updated_at, resolved_at
+       image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 FROM repair_requests
 WHERE id = sqlc.arg(id);
 
@@ -94,4 +94,4 @@ WHERE id = sqlc.arg(id)
   AND status = sqlc.arg(expected_status)
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
-          image_size_bytes, date_reported, updated_at, resolved_at;
+          image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at;

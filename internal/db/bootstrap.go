@@ -23,7 +23,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609100001_equipment_audit_image_sanitization"
+	baselineIncludesThrough = "202609100003_privacy_upload_intent_foundation"
 )
 
 type RoleCredentials struct {
@@ -120,7 +120,13 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	}, ", ")
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
+		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
+		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
+		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
+		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
+		{"revoke web protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + app},
 		{"grant web execution reads", "GRANT SELECT ON TABLE " + webHandoffTables + " TO " + app},
 		{"grant web execution insert", "GRANT INSERT (request_id, plan_sha256, executor_version, schema_version, request_version_at_start, started_by_ref, accepted_at, updated_at) ON TABLE privacy_erasure_executions TO " + app},
 		{"grant web access revocation insert", "GRANT INSERT (execution_id, grant_kind, capability_code, revoked_count, actor_ref, occurred_at) ON TABLE privacy_erasure_access_revocations TO " + app},
@@ -132,6 +138,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		statements = append(statements,
 			namedStatement{"revoke privacy executor schema creation", "REVOKE CREATE ON SCHEMA public FROM " + executor},
 			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
+			namedStatement{"revoke privacy executor protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + executor},
+			namedStatement{"revoke privacy executor protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + executor},
+			namedStatement{"revoke privacy executor protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + executor},
 			namedStatement{"revoke privacy executor table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + executor},
 			namedStatement{"revoke privacy executor sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + executor},
 			namedStatement{"revoke legacy checkpoint bypass", "REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM " + executor},

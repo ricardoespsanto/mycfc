@@ -123,7 +123,7 @@ CREATE TRIGGER users_active_guardian_attachment BEFORE INSERT OR UPDATE OF guard
 CREATE TRIGGER email_verification_tokens_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON email_verification_tokens FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
 CREATE TRIGGER password_reset_tokens_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON password_reset_tokens FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
 CREATE TRIGGER user_platform_roles_active_subject_attachment BEFORE INSERT OR UPDATE OF user_id ON user_platform_roles FOR EACH ROW EXECUTE FUNCTION require_active_privacy_attachment_subject();
-CREATE TABLE equipment (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), asset_tag varchar(40) NOT NULL UNIQUE, name varchar(120) NOT NULL, type equipment_type NOT NULL, status equipment_status NOT NULL DEFAULT 'Operational', notes text NOT NULL DEFAULT '', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT equipment_asset_tag_valid CHECK (asset_tag = btrim(asset_tag) AND char_length(asset_tag) BETWEEN 2 AND 40), CONSTRAINT equipment_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT equipment_notes_valid CHECK (char_length(notes) <= 4000), CONSTRAINT equipment_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT equipment_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760));
+CREATE TABLE equipment (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), asset_tag varchar(40) NOT NULL UNIQUE, name varchar(120) NOT NULL, type equipment_type NOT NULL, status equipment_status NOT NULL DEFAULT 'Operational', notes text NOT NULL DEFAULT '', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, image_upload_intent_id uuid NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT equipment_asset_tag_valid CHECK (asset_tag = btrim(asset_tag) AND char_length(asset_tag) BETWEEN 2 AND 40), CONSTRAINT equipment_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT equipment_notes_valid CHECK (char_length(notes) <= 4000), CONSTRAINT equipment_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT equipment_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760));
 CREATE INDEX equipment_status_type_idx ON equipment (status, type);
 CREATE TABLE equipment_audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, action varchar(20) NOT NULL CHECK (action IN ('CREATED', 'UPDATED', 'RETIRED', 'REACTIVATED')), before_state jsonb NULL, after_state jsonb NOT NULL, affected_maintenance_ids uuid[] NOT NULL DEFAULT '{}', occurred_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX equipment_audit_events_equipment_occurred_idx ON equipment_audit_events (equipment_id, occurred_at DESC, id DESC);
@@ -151,7 +151,7 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER equipment_audit_image_sanitization_trigger BEFORE INSERT ON equipment_audit_events FOR EACH ROW EXECUTE FUNCTION sanitize_equipment_audit_image_state();
-CREATE TABLE repair_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), idempotency_key uuid NOT NULL UNIQUE, equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, reported_by_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, issue_description varchar(2000) NOT NULL, status repair_status NOT NULL DEFAULT 'Pendente', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, date_reported timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL, CONSTRAINT repair_description_valid CHECK (issue_description = btrim(issue_description) AND char_length(issue_description) BETWEEN 10 AND 2000), CONSTRAINT repair_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT repair_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760), CONSTRAINT repair_resolution_valid CHECK ((status = 'Resolvido' AND resolved_at IS NOT NULL) OR (status <> 'Resolvido' AND resolved_at IS NULL)));
+CREATE TABLE repair_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), idempotency_key uuid NOT NULL UNIQUE, equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, reported_by_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, issue_description varchar(2000) NOT NULL, status repair_status NOT NULL DEFAULT 'Pendente', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, image_upload_intent_id uuid NULL, date_reported timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL, CONSTRAINT repair_description_valid CHECK (issue_description = btrim(issue_description) AND char_length(issue_description) BETWEEN 10 AND 2000), CONSTRAINT repair_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT repair_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760), CONSTRAINT repair_resolution_valid CHECK ((status = 'Resolvido' AND resolved_at IS NOT NULL) OR (status <> 'Resolvido' AND resolved_at IS NULL)));
 CREATE INDEX repair_status_date_idx ON repair_requests (status, date_reported DESC); CREATE INDEX repair_equipment_id_idx ON repair_requests (equipment_id); CREATE INDEX repair_reported_by_id_idx ON repair_requests (reported_by_id);
 CREATE TABLE consent_forms (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, granted_by_user_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, consent_type consent_type NOT NULL, document_version varchar(40) NOT NULL, document_sha256 char(64) NOT NULL, is_accepted boolean NOT NULL, date_signed timestamptz NOT NULL DEFAULT now(), ip_address inet NULL, user_agent varchar(512) NOT NULL DEFAULT '', CONSTRAINT consent_version_valid CHECK (document_version = btrim(document_version) AND char_length(document_version) BETWEEN 1 AND 40), CONSTRAINT consent_sha256_valid CHECK (document_sha256 ~ '^[0-9a-f]{64}$'), CONSTRAINT consent_accepted_true CHECK (is_accepted), CONSTRAINT consent_user_agent_valid CHECK (char_length(user_agent) <= 512));
 CREATE INDEX consent_user_type_date_idx ON consent_forms (user_id, consent_type, date_signed DESC);
@@ -162,7 +162,7 @@ CREATE TABLE member_profiles (
  club_member_number varchar(60) NULL, federation_licence_number varchar(60) NULL,
  emergency_contact_name varchar(120) NOT NULL DEFAULT '', emergency_contact_relationship varchar(80) NOT NULL DEFAULT '', emergency_contact_phone varchar(32) NOT NULL DEFAULT '', emergency_contact_alternate_phone varchar(32) NOT NULL DEFAULT '',
  medical_declaration medical_declaration NOT NULL DEFAULT 'UNKNOWN', allergies varchar(2000) NOT NULL DEFAULT '', medical_conditions varchar(2000) NOT NULL DEFAULT '', medication varchar(2000) NOT NULL DEFAULT '', activity_restrictions varchar(2000) NOT NULL DEFAULT '', medical_notes varchar(2000) NOT NULL DEFAULT '',
- photo_object_key varchar(512) NULL, photo_content_type varchar(100) NULL, photo_size_bytes bigint NULL, photo_consent_form_id uuid NULL REFERENCES consent_forms(id) ON DELETE RESTRICT,
+ photo_object_key varchar(512) NULL, photo_content_type varchar(100) NULL, photo_size_bytes bigint NULL, photo_consent_form_id uuid NULL REFERENCES consent_forms(id) ON DELETE RESTRICT, photo_upload_intent_id uuid NULL,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
  CONSTRAINT member_profiles_phone_valid CHECK (phone = '' OR (phone ~ '^[+]?[0-9][0-9 ().-]*[0-9]$' AND char_length(regexp_replace(phone, '[^0-9]', '', 'g')) BETWEEN 7 AND 15)),
  CONSTRAINT member_profiles_emergency_phone_valid CHECK (emergency_contact_phone = '' OR (emergency_contact_phone ~ '^[+]?[0-9][0-9 ().-]*[0-9]$' AND char_length(regexp_replace(emergency_contact_phone, '[^0-9]', '', 'g')) BETWEEN 7 AND 15)),
@@ -657,7 +657,8 @@ CREATE TABLE privacy_erasure_category_jobs (
  CHECK (category_key=btrim(category_key) AND category_key ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
  CHECK (purpose_code=btrim(purpose_code) AND purpose_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
  CHECK (updated_at>=created_at), CHECK ((status='SUCCEEDED')=(completed_at IS NOT NULL)), CHECK (completed_at IS NULL OR completed_at>=created_at),
- UNIQUE(execution_id,category_key), UNIQUE(execution_id,plan_entry_position)
+ UNIQUE(execution_id,category_key), UNIQUE(execution_id,plan_entry_position),
+ CONSTRAINT privacy_erasure_category_jobs_target_binding_unique UNIQUE(id,execution_id,entry_sha256,category_key)
 );
 CREATE INDEX privacy_erasure_category_jobs_claim_idx ON privacy_erasure_category_jobs(status,next_attempt_at,created_at,id) WHERE status IN ('PENDING','RETRY_WAIT','LEASED');
 
@@ -694,9 +695,102 @@ CREATE TABLE privacy_erasure_job_checkpoints (
  CHECK (action_version=btrim(action_version) AND action_version ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,39}$'),
  CHECK ((status='PENDING' AND completed_by_attempt_id IS NULL AND completed_at IS NULL) OR (status='SUCCEEDED' AND completed_by_attempt_id IS NOT NULL AND completed_at IS NOT NULL)),
  CHECK (completed_at IS NULL OR completed_at>=created_at),
- UNIQUE(job_id,operation_position), UNIQUE(job_id,operation_code,action_version)
+ UNIQUE(job_id,operation_position), UNIQUE(job_id,operation_code,action_version),
+ CONSTRAINT privacy_erasure_job_checkpoints_target_binding_unique UNIQUE(id,job_id,operation_code,action_version)
 );
 CREATE INDEX privacy_erasure_job_checkpoints_pending_idx ON privacy_erasure_job_checkpoints(job_id,operation_position) WHERE status='PENDING';
+
+-- Locator envelopes and keyed correlation tokens are kept outside public so
+-- neither the web role nor the shared worker role can inherit table access.
+-- Future executor/schema versions reach these records only through fenced
+-- SECURITY DEFINER routines; this v1-compatible migration is intentionally
+-- inert and does not activate object deletion.
+CREATE SCHEMA IF NOT EXISTS privacy_protected;
+REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC;
+CREATE TABLE IF NOT EXISTS privacy_protected.object_targets (
+ id uuid PRIMARY KEY, execution_id uuid NOT NULL, job_id uuid NOT NULL, checkpoint_id uuid NOT NULL,
+ plan_entry_sha256 bytea NOT NULL CHECK (octet_length(plan_entry_sha256)=32),
+ category_key varchar(120) NOT NULL, service_code varchar(120) NOT NULL,
+ target_kind varchar(40) NOT NULL CHECK (target_kind='OBJECT_KEY'),
+ source_kind varchar(40) NOT NULL CHECK (source_kind IN ('MEMBER_PROFILE_PHOTO','REPAIR_ATTACHMENT','EQUIPMENT_PHOTO')),
+ source_ref uuid NOT NULL,
+ operation_code varchar(120) NOT NULL CHECK (operation_code='OBJECT_VERSION_DELETE'),
+ action_version varchar(40) NOT NULL CHECK (action_version='v1'),
+ provider_contract_version varchar(40) NOT NULL CHECK (provider_contract_version='s3-versioned/v1'),
+ envelope_version varchar(80) NOT NULL CHECK (envelope_version='x25519-aes256gcm-hkdfsha256/v1'),
+ algorithm varchar(80) NOT NULL CHECK (algorithm='X25519-HKDF-SHA256-AES-256-GCM'),
+ encryption_key_id varchar(80) NOT NULL, encapsulation bytea NOT NULL CHECK (octet_length(encapsulation)=32),
+ nonce bytea NOT NULL CHECK (octet_length(nonce)=12), ciphertext bytea NOT NULL CHECK (octet_length(ciphertext) BETWEEN 17 AND 2048),
+ created_at timestamptz NOT NULL,
+ CHECK (category_key=btrim(category_key) AND category_key ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (service_code=btrim(service_code) AND service_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (encryption_key_id=btrim(encryption_key_id) AND encryption_key_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ FOREIGN KEY(job_id,execution_id,plan_entry_sha256,category_key) REFERENCES privacy_erasure_category_jobs(id,execution_id,entry_sha256,category_key) ON DELETE RESTRICT,
+ FOREIGN KEY(checkpoint_id,job_id,operation_code,action_version) REFERENCES privacy_erasure_job_checkpoints(id,job_id,operation_code,action_version) ON DELETE RESTRICT,
+ UNIQUE(id,job_id), UNIQUE(id,execution_id,service_code,target_kind), UNIQUE(encryption_key_id,encapsulation)
+);
+CREATE INDEX IF NOT EXISTS privacy_object_targets_checkpoint_idx ON privacy_protected.object_targets(checkpoint_id,id);
+CREATE TABLE IF NOT EXISTS privacy_protected.object_target_digests (
+ target_id uuid NOT NULL, execution_id uuid NOT NULL REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,
+ service_code varchar(120) NOT NULL, target_kind varchar(40) NOT NULL CHECK (target_kind='OBJECT_KEY'),
+ digest_key_id varchar(80) NOT NULL, locator_digest bytea NOT NULL CHECK (octet_length(locator_digest)=32), created_at timestamptz NOT NULL,
+ PRIMARY KEY(target_id,digest_key_id),
+ FOREIGN KEY(target_id,execution_id,service_code,target_kind) REFERENCES privacy_protected.object_targets(id,execution_id,service_code,target_kind) ON DELETE RESTRICT,
+ CHECK (service_code=btrim(service_code) AND service_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (digest_key_id=btrim(digest_key_id) AND digest_key_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ UNIQUE(execution_id,service_code,target_kind,digest_key_id,locator_digest)
+);
+CREATE TABLE IF NOT EXISTS privacy_protected.object_evidence (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), target_id uuid NOT NULL, job_id uuid NOT NULL,
+ attempt_id uuid NOT NULL, evidence_version varchar(40) NOT NULL CHECK (evidence_version='s3-absence/v1'),
+ outcome_code varchar(40) NOT NULL CHECK (outcome_code='ABSENCE_VERIFIED'),
+ deleted_version_count integer NOT NULL CHECK (deleted_version_count>=0),
+ deleted_marker_count integer NOT NULL CHECK (deleted_marker_count>=0),
+ list_call_count integer NOT NULL CHECK (list_call_count>=2),
+ stable_empty_check_count integer NOT NULL CHECK (stable_empty_check_count>=2),
+ transcript_key_id varchar(80) NOT NULL, transcript_digest bytea NOT NULL CHECK (octet_length(transcript_digest)=32),
+ occurred_at timestamptz NOT NULL,
+ FOREIGN KEY(target_id,job_id) REFERENCES privacy_protected.object_targets(id,job_id) ON DELETE RESTRICT,
+ FOREIGN KEY(attempt_id,job_id) REFERENCES privacy_erasure_job_attempts(id,job_id) ON DELETE RESTRICT,
+ CHECK (transcript_key_id=btrim(transcript_key_id) AND transcript_key_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ UNIQUE(target_id)
+);
+CREATE TABLE IF NOT EXISTS privacy_protected.object_upload_intents (
+ id uuid PRIMARY KEY, subject_user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ provenance_actor_user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ source_kind varchar(40) NOT NULL CHECK (source_kind IN ('MEMBER_PROFILE_PHOTO','REPAIR_ATTACHMENT','EQUIPMENT_PHOTO')),
+ source_ref uuid NOT NULL, service_code varchar(120) NOT NULL,
+ target_kind varchar(40) NOT NULL CHECK (target_kind='OBJECT_KEY'),
+ provider_contract_version varchar(40) NOT NULL CHECK (provider_contract_version='s3-versioned/v1'),
+ envelope_version varchar(80) NOT NULL CHECK (envelope_version='x25519-aes256gcm-hkdfsha256/upload-intent-v1'),
+ algorithm varchar(80) NOT NULL CHECK (algorithm='X25519-HKDF-SHA256-AES-256-GCM'),
+ encryption_key_id varchar(80) NOT NULL, encapsulation bytea NOT NULL CHECK (octet_length(encapsulation)=32),
+ nonce bytea NOT NULL CHECK (octet_length(nonce)=12), ciphertext bytea NOT NULL CHECK (octet_length(ciphertext) BETWEEN 17 AND 2048),
+ digest_key_id varchar(80) NOT NULL, locator_digest bytea NOT NULL CHECK (octet_length(locator_digest)=32),
+ content_type varchar(100) NOT NULL CHECK (content_type IN ('image/jpeg','image/png','image/webp')),
+ size_bytes bigint NOT NULL CHECK (size_bytes BETWEEN 1 AND 10485760), cleanup_after timestamptz NOT NULL, created_at timestamptz NOT NULL,
+ CHECK (service_code=btrim(service_code) AND service_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK (encryption_key_id=btrim(encryption_key_id) AND encryption_key_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK (digest_key_id=btrim(digest_key_id) AND digest_key_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK ((source_kind IN ('MEMBER_PROFILE_PHOTO','REPAIR_ATTACHMENT') AND subject_user_id IS NOT NULL) OR (source_kind='EQUIPMENT_PHOTO' AND subject_user_id IS NULL)),
+ CHECK (cleanup_after>created_at), UNIQUE(digest_key_id,locator_digest), UNIQUE(encryption_key_id,encapsulation)
+);
+CREATE TABLE IF NOT EXISTS privacy_protected.object_upload_intent_events (
+ intent_id uuid NOT NULL REFERENCES privacy_protected.object_upload_intents(id) ON DELETE RESTRICT,
+ sequence integer NOT NULL CHECK (sequence > 0),
+ status varchar(30) NOT NULL CHECK (status IN ('PREPARED','PUT_CONFIRMED','ATTACHED','CLEANUP_REQUIRED','ABSENCE_VERIFIED')),
+ reason_code varchar(40) NOT NULL CHECK (reason_code IN ('UPLOAD_RESERVED','PUT_ACKNOWLEDGED','POINTER_ATTACHED','PUT_AMBIGUOUS','PUT_FAILED','ATTACH_FAILED','POINTER_SUPERSEDED','POINTER_REMOVED','CLEANUP_CONFIRMED')),
+ occurred_at timestamptz NOT NULL,
+ CHECK ((status='PREPARED' AND reason_code='UPLOAD_RESERVED')
+     OR (status='PUT_CONFIRMED' AND reason_code='PUT_ACKNOWLEDGED')
+     OR (status='ATTACHED' AND reason_code='POINTER_ATTACHED')
+     OR (status='CLEANUP_REQUIRED' AND reason_code IN ('PUT_AMBIGUOUS','PUT_FAILED','ATTACH_FAILED','POINTER_SUPERSEDED','POINTER_REMOVED'))
+     OR (status='ABSENCE_VERIFIED' AND reason_code='CLEANUP_CONFIRMED')),
+ PRIMARY KEY(intent_id,sequence)
+);
+ALTER TABLE member_profiles ADD CONSTRAINT member_profiles_photo_upload_intent_fk FOREIGN KEY(photo_upload_intent_id) REFERENCES privacy_protected.object_upload_intents(id) ON DELETE RESTRICT;
+ALTER TABLE repair_requests ADD CONSTRAINT repair_requests_image_upload_intent_fk FOREIGN KEY(image_upload_intent_id) REFERENCES privacy_protected.object_upload_intents(id) ON DELETE RESTRICT;
+ALTER TABLE equipment ADD CONSTRAINT equipment_image_upload_intent_fk FOREIGN KEY(image_upload_intent_id) REFERENCES privacy_protected.object_upload_intents(id) ON DELETE RESTRICT;
 
 CREATE TABLE privacy_erasure_failures (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
@@ -718,6 +812,23 @@ CREATE TRIGGER privacy_erasure_job_leases_no_delete BEFORE DELETE ON privacy_era
 CREATE TRIGGER privacy_erasure_job_attempts_no_delete BEFORE DELETE ON privacy_erasure_job_attempts FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
 CREATE TRIGGER privacy_erasure_job_checkpoints_no_delete BEFORE DELETE ON privacy_erasure_job_checkpoints FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
 CREATE TRIGGER privacy_erasure_failures_immutable BEFORE UPDATE OR DELETE ON privacy_erasure_failures FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_targets'::regclass AND tgname='privacy_object_targets_immutable') THEN
+  CREATE TRIGGER privacy_object_targets_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_targets FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_target_digests'::regclass AND tgname='privacy_object_target_digests_immutable') THEN
+  CREATE TRIGGER privacy_object_target_digests_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_target_digests FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_evidence'::regclass AND tgname='privacy_object_evidence_immutable') THEN
+  CREATE TRIGGER privacy_object_evidence_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_evidence FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_upload_intents'::regclass AND tgname='privacy_object_upload_intents_immutable') THEN
+  CREATE TRIGGER privacy_object_upload_intents_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_upload_intents FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_upload_intent_events'::regclass AND tgname='privacy_object_upload_intent_events_immutable') THEN
+  CREATE TRIGGER privacy_object_upload_intent_events_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_upload_intent_events FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+END; $$;
 CREATE TABLE data_erasure_request_events (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), request_id uuid NOT NULL REFERENCES data_erasure_requests(id) ON DELETE RESTRICT,
  actor_role varchar(20) NOT NULL CHECK (actor_role IN ('REQUESTER','REVIEWER','EXECUTOR','SYSTEM')), actor_ref uuid NOT NULL,
