@@ -20,7 +20,7 @@ WITH created AS (
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, after_state)
     SELECT id, $9, 'CREATED',
-           jsonb_build_object('asset_tag', asset_tag, 'name', name, 'type', type, 'status', status, 'notes', notes, 'image_object_key', image_object_key, 'image_content_type', image_content_type, 'image_size_bytes', image_size_bytes)
+           jsonb_build_object('asset_tag', asset_tag, 'name', name, 'type', type, 'status', status, 'notes', notes, 'has_image', image_object_key IS NOT NULL, 'image_content_type', image_content_type, 'image_size_bytes', image_size_bytes)
     FROM created
 )
 SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at
@@ -270,8 +270,8 @@ WITH previous AS MATERIALIZED (
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state)
     SELECT u.id, $2, 'REACTIVATED',
-           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'image_object_key', p.image_object_key, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
-           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'image_object_key', u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes)
+           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'has_image', p.image_object_key IS NOT NULL, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
+           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'has_image', u.image_object_key IS NOT NULL, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes)
     FROM updated u JOIN previous p ON p.id = u.id
 )
 SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at
@@ -338,8 +338,8 @@ WITH previous AS MATERIALIZED (
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state, affected_maintenance_ids)
     SELECT u.id, $3, 'RETIRED',
-           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'image_object_key', p.image_object_key, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
-           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'image_object_key', u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes), c.ids
+           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'has_image', p.image_object_key IS NOT NULL, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
+           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'has_image', u.image_object_key IS NOT NULL, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes), c.ids
     FROM updated u JOIN previous p ON p.id = u.id CROSS JOIN cancelled_ids c
 )
 SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at
@@ -402,8 +402,8 @@ WITH previous AS MATERIALIZED (
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state)
     SELECT u.id, $11, 'UPDATED',
-           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'image_object_key', p.image_object_key, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
-           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'image_object_key', u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes)
+           jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'has_image', p.image_object_key IS NOT NULL, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
+           jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'has_image', u.image_object_key IS NOT NULL, 'image_changed', p.image_object_key IS DISTINCT FROM u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes)
     FROM updated u JOIN previous p ON p.id = u.id
 )
 SELECT id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, created_at, updated_at

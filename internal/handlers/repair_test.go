@@ -274,14 +274,30 @@ func (s *repairStoreFake) ListRepairRequestsForMembers(context.Context, dbgen.Li
 	return s.memberRepairs, s.listRepairsErr
 }
 
-type repairObjectStoreFake struct{ puts, deletes int }
+type repairObjectStoreFake struct {
+	puts, deletes int
+	deleteErr     error
+}
 
 func (s *repairObjectStoreFake) PutObject(_ context.Context, _ string, _ string, _ int64, body io.Reader) error {
 	s.puts++
 	_, _ = io.Copy(io.Discard, body)
 	return nil
 }
-func (s *repairObjectStoreFake) DeleteObject(context.Context, string) error { s.deletes++; return nil }
+func (s *repairObjectStoreFake) DeleteObject(context.Context, string) error {
+	s.deletes++
+	return s.deleteErr
+}
 func (s *repairObjectStoreFake) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return "", nil
+}
+
+func TestRepairObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
+	logs := captureDefaultLogs(t)
+	secretKey := "repairs/private-do-not-log.png"
+	h := Repair{Objects: &repairObjectStoreFake{deleteErr: errors.New("delete failed for " + secretKey)}}
+	h.deleteObject(httptest.NewRequest(http.MethodPost, "/repairs", nil), secretKey)
+	if strings.Contains(logs.String(), secretKey) || !strings.Contains(logs.String(), "delete repair photo") {
+		t.Fatalf("cleanup log = %q", logs.String())
+	}
 }

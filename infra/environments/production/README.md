@@ -4,6 +4,8 @@ The ECS/RDS/ALB runtime was retired. This module manages the private repair-phot
 
 Use the existing remote backend and run `terraform plan` before applying a retained-resource change. Do not restore retired runtime resources from this module.
 
+The optional privacy-worker source is disabled by default and creates no credentials, secret value, service, timer, alarm, or activation. Its three separate infrastructure, version-deletion, and metadata-rewrite gates and rollback procedure are documented in [`../../../docs/privacy-worker-infrastructure.md`](../../../docs/privacy-worker-infrastructure.md). Source delivery does not authorize a Terraform apply or live erasure.
+
 ## Amazon SES provisioning
 
 SES is provisioned in `eu-west-1` for the production `domain_name`. Terraform creates:

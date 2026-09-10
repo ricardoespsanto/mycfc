@@ -176,8 +176,7 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := fmt.Sprintf("profiles/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), photo.Extension)
-	uploadCtx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: actor.ID.String()})
-	if err := h.Objects.PutObject(uploadCtx, key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
+	if err := h.Objects.PutObject(r.Context(), key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
@@ -512,7 +511,7 @@ func (h Profile) deleteObject(r *http.Request, key *string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := h.Objects.DeleteObject(ctx, *key); err != nil {
-		slog.Error("delete profile photo", "object_key", *key, "request_id", httpx.RequestID(r.Context()), "error", err)
+		slog.Error("delete profile photo", "request_id", httpx.RequestID(r.Context()), "outcome", "failed")
 	}
 }
 func (h Profile) now() time.Time {

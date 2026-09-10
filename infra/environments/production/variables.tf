@@ -251,6 +251,34 @@ variable "alarm_email" {
   }
 }
 
+variable "privacy_worker_infrastructure_enabled" {
+  type        = bool
+  default     = false
+  description = "Provision the inert privacy-worker IAM user, permissions boundary, empty secret container, and dedicated log group. This does not create credentials or start a worker."
+}
+
+variable "privacy_worker_s3_deletion_enabled" {
+  type        = bool
+  default     = false
+  description = "Grant the provisioned privacy-worker identity prefix-scoped version listing and version deletion permissions."
+
+  validation {
+    condition     = !var.privacy_worker_s3_deletion_enabled || var.privacy_worker_infrastructure_enabled
+    error_message = "privacy_worker_s3_deletion_enabled requires privacy_worker_infrastructure_enabled."
+  }
+}
+
+variable "privacy_worker_metadata_rewrite_enabled" {
+  type        = bool
+  default     = false
+  description = "Grant the provisioned privacy-worker identity read-version and retained-copy write permissions for repair and equipment metadata rewrites."
+
+  validation {
+    condition     = !var.privacy_worker_metadata_rewrite_enabled || (var.privacy_worker_infrastructure_enabled && var.privacy_worker_s3_deletion_enabled)
+    error_message = "privacy_worker_metadata_rewrite_enabled requires both privacy_worker_infrastructure_enabled and privacy_worker_s3_deletion_enabled."
+  }
+}
+
 check "production_input_validation" {
   assert {
     condition     = var.environment == "production" && can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$", var.aws_region)) && can(regex("^[a-z][a-z0-9-]{1,30}$", var.project_name)) && can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.domain_name))

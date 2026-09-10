@@ -129,6 +129,28 @@ CREATE TABLE equipment_audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid
 CREATE INDEX equipment_audit_events_equipment_occurred_idx ON equipment_audit_events (equipment_id, occurred_at DESC, id DESC);
 CREATE FUNCTION prevent_equipment_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'equipment audit events are append-only'; END; $$;
 CREATE TRIGGER equipment_audit_events_immutable_trigger BEFORE UPDATE OR DELETE ON equipment_audit_events FOR EACH ROW EXECUTE FUNCTION prevent_equipment_audit_mutation();
+CREATE FUNCTION sanitize_equipment_audit_image_state() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE original_before jsonb; original_after jsonb;
+BEGIN
+ original_before:=NEW.before_state; original_after:=NEW.after_state;
+ NEW.before_state:=CASE WHEN original_before IS NULL THEN NULL ELSE
+  (original_before-'image_object_key')||jsonb_build_object('has_image',CASE
+   WHEN original_before?'image_object_key' THEN original_before->'image_object_key'<>'null'::jsonb
+   WHEN jsonb_typeof(original_before->'has_image')='boolean' THEN (original_before->>'has_image')::boolean
+   ELSE false END) END;
+ NEW.after_state:=(original_after-'image_object_key')||jsonb_build_object(
+  'has_image',CASE
+   WHEN original_after?'image_object_key' THEN original_after->'image_object_key'<>'null'::jsonb
+   WHEN jsonb_typeof(original_after->'has_image')='boolean' THEN (original_after->>'has_image')::boolean
+   ELSE false END,
+  'image_changed',CASE
+   WHEN original_before?'image_object_key' OR original_after?'image_object_key' THEN original_before->'image_object_key' IS DISTINCT FROM original_after->'image_object_key'
+   WHEN jsonb_typeof(original_after->'image_changed')='boolean' THEN (original_after->>'image_changed')::boolean
+   ELSE false END);
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER equipment_audit_image_sanitization_trigger BEFORE INSERT ON equipment_audit_events FOR EACH ROW EXECUTE FUNCTION sanitize_equipment_audit_image_state();
 CREATE TABLE repair_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), idempotency_key uuid NOT NULL UNIQUE, equipment_id uuid NOT NULL REFERENCES equipment(id) ON DELETE RESTRICT, reported_by_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, issue_description varchar(2000) NOT NULL, status repair_status NOT NULL DEFAULT 'Pendente', image_object_key varchar(512) NULL, image_content_type varchar(100) NULL, image_size_bytes bigint NULL, date_reported timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL, CONSTRAINT repair_description_valid CHECK (issue_description = btrim(issue_description) AND char_length(issue_description) BETWEEN 10 AND 2000), CONSTRAINT repair_image_metadata_complete CHECK ((image_object_key IS NULL AND image_content_type IS NULL AND image_size_bytes IS NULL) OR (image_object_key IS NOT NULL AND image_content_type IS NOT NULL AND image_size_bytes IS NOT NULL)), CONSTRAINT repair_image_size_valid CHECK (image_size_bytes IS NULL OR image_size_bytes BETWEEN 1 AND 10485760), CONSTRAINT repair_resolution_valid CHECK ((status = 'Resolvido' AND resolved_at IS NOT NULL) OR (status <> 'Resolvido' AND resolved_at IS NULL)));
 CREATE INDEX repair_status_date_idx ON repair_requests (status, date_reported DESC); CREATE INDEX repair_equipment_id_idx ON repair_requests (equipment_id); CREATE INDEX repair_reported_by_id_idx ON repair_requests (reported_by_id);
 CREATE TABLE consent_forms (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, granted_by_user_id uuid NULL REFERENCES users(id) ON DELETE SET NULL, consent_type consent_type NOT NULL, document_version varchar(40) NOT NULL, document_sha256 char(64) NOT NULL, is_accepted boolean NOT NULL, date_signed timestamptz NOT NULL DEFAULT now(), ip_address inet NULL, user_agent varchar(512) NOT NULL DEFAULT '', CONSTRAINT consent_version_valid CHECK (document_version = btrim(document_version) AND char_length(document_version) BETWEEN 1 AND 40), CONSTRAINT consent_sha256_valid CHECK (document_sha256 ~ '^[0-9a-f]{64}$'), CONSTRAINT consent_accepted_true CHECK (is_accepted), CONSTRAINT consent_user_agent_valid CHECK (char_length(user_agent) <= 512));

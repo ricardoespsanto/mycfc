@@ -38,12 +38,13 @@ type equipmentForm struct {
 }
 
 type equipmentSnapshot struct {
-	AssetTag       string  `json:"asset_tag"`
-	Name           string  `json:"name"`
-	Type           string  `json:"type"`
-	Status         string  `json:"status"`
-	Notes          string  `json:"notes"`
-	ImageObjectKey *string `json:"image_object_key"`
+	AssetTag     string `json:"asset_tag"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	Status       string `json:"status"`
+	Notes        string `json:"notes"`
+	HasImage     bool   `json:"has_image"`
+	ImageChanged bool   `json:"image_changed"`
 }
 
 func (h Dashboard) CreateEquipment(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +374,7 @@ func (h Dashboard) renderEquipmentPhotoError(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, photo *storage.ValidatedPhoto) (*string, *string, *int64, bool) {
+func (h Dashboard) uploadEquipmentPhoto(r *http.Request, _ CurrentUser, photo *storage.ValidatedPhoto) (*string, *string, *int64, bool) {
 	if photo == nil {
 		return nil, nil, nil, true
 	}
@@ -381,8 +382,7 @@ func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, photo
 		return nil, nil, nil, false
 	}
 	key := fmt.Sprintf("equipment/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), photo.Extension)
-	ctx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
-	if err := h.Objects.PutObject(ctx, key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
+	if err := h.Objects.PutObject(r.Context(), key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
 		return nil, nil, nil, false
 	}
 	return &key, &photo.ContentType, &photo.Size, true
@@ -395,7 +395,7 @@ func (h Dashboard) deleteEquipmentObject(r *http.Request, key *string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := h.Objects.DeleteObject(ctx, *key); err != nil {
-		slog.Error("delete equipment photo", "object_key", *key, "request_id", httpx.RequestID(r.Context()), "error", err)
+		slog.Error("delete equipment photo", "request_id", httpx.RequestID(r.Context()), "outcome", "failed")
 	}
 }
 
@@ -555,17 +555,10 @@ func equipmentChanges(action string, before, after equipmentSnapshot) []string {
 	add("Tipo", equipmentTypeName(before.Type), equipmentTypeName(after.Type))
 	add("Estado", equipmentStatusName(before.Status), equipmentStatusName(after.Status))
 	add("Notas", before.Notes, after.Notes)
-	if !sameOptionalString(before.ImageObjectKey, after.ImageObjectKey) {
+	if before.HasImage != after.HasImage || after.ImageChanged {
 		changes = append(changes, "Fotografia atualizada")
 	}
 	return changes
-}
-
-func sameOptionalString(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
 }
 
 func equipmentTypeName(value string) string {
