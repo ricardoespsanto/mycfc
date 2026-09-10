@@ -5,6 +5,12 @@ github_repo       = "mycfc"
 alarm_email       = "operations@example.com"
 release_agent_cutover_complete = false
 
+# Privacy-worker source is inert by default. These are separate operational gates;
+# enabling any of them does not install or start a worker.
+privacy_worker_infrastructure_enabled = false
+privacy_worker_s3_deletion_enabled    = false
+privacy_worker_metadata_rewrite_enabled = false
+
 calendar_competition_id = "competition@example.com"
 calendar_training_id    = "training@example.com"
 calendar_social_id      = "social@example.com"

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -9,6 +10,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+)
+
+var (
+	ErrObjectUpload   = errors.New("object upload failed")
+	ErrObjectDeletion = errors.New("object deletion failed")
 )
 
 type S3Store struct {
@@ -29,7 +35,6 @@ func (s *S3Store) PutObject(ctx context.Context, key, contentType string, size i
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	metadata := uploadMetadata(ctx)
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:               aws.String(s.bucket),
 		Key:                  aws.String(key),
@@ -37,13 +42,9 @@ func (s *S3Store) PutObject(ctx context.Context, key, contentType string, size i
 		ContentLength:        aws.Int64(size),
 		ContentType:          aws.String(contentType),
 		ServerSideEncryption: types.ServerSideEncryptionAes256,
-		Metadata: map[string]string{
-			"request-id":          metadata.RequestID,
-			"uploaded-by-user-id": metadata.UserID,
-		},
 	})
 	if err != nil {
-		return fmt.Errorf("put repair photo: %w", err)
+		return ErrObjectUpload
 	}
 	return nil
 }
@@ -54,7 +55,7 @@ func (s *S3Store) DeleteObject(ctx context.Context, key string) error {
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return fmt.Errorf("delete object: %w", err)
+		return ErrObjectDeletion
 	}
 	return nil
 }

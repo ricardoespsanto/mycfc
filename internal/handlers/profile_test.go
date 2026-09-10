@@ -624,6 +624,16 @@ func (s *profileObjectStoreFake) PresignGet(context.Context, string, time.Durati
 
 var _ storage.ObjectStore = (*profileObjectStoreFake)(nil)
 
+func TestProfileObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
+	logs := captureDefaultLogs(t)
+	secretKey := "profiles/private-do-not-log.png"
+	h := Profile{Objects: &profileObjectStoreFake{deleteErr: errors.New("delete failed for " + secretKey)}}
+	h.deleteObject(httptest.NewRequest(http.MethodPost, "/perfil/fotografia", nil), &secretKey)
+	if strings.Contains(logs.String(), secretKey) || !strings.Contains(logs.String(), "delete profile photo") {
+		t.Fatalf("cleanup log = %q", logs.String())
+	}
+}
+
 func (profilePageStore) Avatar(context.Context, dbgen.GetMemberAvatarParams) (dbgen.GetMemberAvatarRow, error) {
 	return dbgen.GetMemberAvatarRow{}, nil
 }

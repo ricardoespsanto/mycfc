@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -482,15 +483,14 @@ func TestEquipmentRetirementPreviewAndConfirmation(t *testing.T) {
 }
 
 func TestEquipmentAuditRenderingUsesReadableMetadataWithoutLosingChangeDetail(t *testing.T) {
-	beforeKey, afterKey := "equipment/before.png", "equipment/after.png"
-	before := []byte(`{"asset_tag":"B-01","name":"K1","type":"Boat","status":"Operational","notes":"Azul","image_object_key":"equipment/before.png"}`)
-	after := []byte(`{"asset_tag":"B-02","name":"K2","type":"Paddle","status":"Maintenance","notes":"Revisto","image_object_key":"equipment/after.png"}`)
+	before := []byte(`{"asset_tag":"B-01","name":"K1","type":"Boat","status":"Operational","notes":"Azul","has_image":true}`)
+	after := []byte(`{"asset_tag":"B-02","name":"K2","type":"Paddle","status":"Maintenance","notes":"Revisto","has_image":true,"image_changed":true}`)
 	rows := []dbgen.ListEquipmentAuditEventsRow{{Action: "UPDATED", ActorName: "Admin", OccurredAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC), Valid: true}, BeforeState: before, AfterState: after, AffectedMaintenanceIds: []uuid.UUID{uuid.New()}}}
 	items := equipmentAuditItems(rows, time.UTC)
 	if len(items) != 1 || items[0].Action != "Equipamento atualizado" || items[0].CancelledMaintenance != 1 || !strings.Contains(strings.Join(items[0].Changes, "|"), "Identificador: B-01 → B-02") || !strings.Contains(strings.Join(items[0].Changes, "|"), "Fotografia atualizada") {
 		t.Fatalf("items = %#v", items)
 	}
-	if !sameOptionalString(&beforeKey, &beforeKey) || sameOptionalString(&beforeKey, &afterKey) || equipmentTypeName("Vehicle") != "Veículo" || equipmentStatusName("Retired") != "Retirado" || equipmentAuditAction("UNKNOWN") != "UNKNOWN" {
+	if equipmentTypeName("Vehicle") != "Veículo" || equipmentStatusName("Retired") != "Retirado" || equipmentAuditAction("UNKNOWN") != "UNKNOWN" {
 		t.Fatal("equipment audit display helpers returned an unexpected value")
 	}
 }
@@ -512,6 +512,25 @@ func TestEquipmentObjectCleanupAndAuditActionLabels(t *testing.T) {
 			t.Errorf("equipmentAuditAction(%q)=%q, want %q", action, got, want)
 		}
 	}
+}
+
+func TestEquipmentObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
+	logs := captureDefaultLogs(t)
+	secretKey := "equipment/private-do-not-log.png"
+	objects := &repairObjectStoreFake{deleteErr: errors.New("delete failed for " + secretKey)}
+	(Dashboard{Objects: objects}).deleteEquipmentObject(httptest.NewRequest(http.MethodPost, "/admin/fleet/equipment", nil), &secretKey)
+	if strings.Contains(logs.String(), secretKey) || !strings.Contains(logs.String(), "delete equipment photo") {
+		t.Fatalf("cleanup log = %q", logs.String())
+	}
+}
+
+func captureDefaultLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &logs
 }
 
 func equipmentRequest(method, path string, values url.Values, userID uuid.UUID) *http.Request {

@@ -182,9 +182,8 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		objectKey = fmt.Sprintf("repairs/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), validated.Extension)
-		uploadCtx := storage.WithUploadMetadata(r.Context(), storage.UploadMetadata{RequestID: httpx.RequestID(r.Context()), UserID: user.ID.String()})
-		if err := h.Objects.PutObject(uploadCtx, objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
-			h.internal(w, r, err)
+		if err := h.Objects.PutObject(r.Context(), objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
+			h.internal(w, r, storage.ErrObjectUpload)
 			return
 		}
 		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &objectKey, &validated.ContentType, &validated.Size
@@ -301,7 +300,7 @@ func (h Repair) deleteObject(r *http.Request, key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := h.Objects.DeleteObject(ctx, key); err != nil {
-		slog.Error("delete repair photo after database failure", "object_key", key, "request_id", httpx.RequestID(r.Context()), "error", err)
+		slog.Error("delete repair photo after database failure", "request_id", httpx.RequestID(r.Context()), "outcome", "failed")
 	}
 }
 func (h Repair) now() time.Time {

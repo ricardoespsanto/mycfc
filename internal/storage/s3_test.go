@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func TestS3StorePutObjectSendsPrivateUploadMetadata(t *testing.T) {
+func TestS3StorePutObjectOmitsIdentifyingUploadMetadata(t *testing.T) {
 	type receivedRequest struct {
 		method string
 		path   string
@@ -32,8 +33,7 @@ func TestS3StorePutObjectSendsPrivateUploadMetadata(t *testing.T) {
 	defer server.Close()
 
 	store := NewS3Store(testS3Client(t, server.URL), "private-photos")
-	ctx := WithUploadMetadata(context.Background(), UploadMetadata{RequestID: "request-123", UserID: "user-456"})
-	if err := store.PutObject(ctx, "repairs/one.png", "image/png", 4, strings.NewReader("data")); err != nil {
+	if err := store.PutObject(context.Background(), "repairs/one.png", "image/png", 4, strings.NewReader("data")); err != nil {
 		t.Fatalf("PutObject() error = %v", err)
 	}
 
@@ -44,8 +44,10 @@ func TestS3StorePutObjectSendsPrivateUploadMetadata(t *testing.T) {
 	if got.header.Get("Content-Type") != "image/png" || got.header.Get("X-Amz-Server-Side-Encryption") != "AES256" {
 		t.Fatalf("upload headers = %#v", got.header)
 	}
-	if got.header.Get("X-Amz-Meta-Request-Id") != "request-123" || got.header.Get("X-Amz-Meta-Uploaded-By-User-Id") != "user-456" {
-		t.Fatalf("metadata headers = %#v", got.header)
+	for name := range got.header {
+		if strings.HasPrefix(strings.ToLower(name), "x-amz-meta-") {
+			t.Fatalf("identifying metadata header %q was sent", name)
+		}
 	}
 	if got.body != "data" {
 		t.Fatalf("body = %q", got.body)
@@ -53,16 +55,17 @@ func TestS3StorePutObjectSendsPrivateUploadMetadata(t *testing.T) {
 }
 
 func TestS3StoreWrapsServiceFailures(t *testing.T) {
+	secretKey := "repairs/private-do-not-log.png"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "unavailable for "+secretKey, http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
 	store := NewS3Store(testS3Client(t, server.URL), "private-photos")
-	if err := store.PutObject(context.Background(), "repairs/one.png", "image/png", 4, strings.NewReader("data")); err == nil || !strings.Contains(err.Error(), "put repair photo") {
+	if err := store.PutObject(context.Background(), secretKey, "image/png", 4, strings.NewReader("data")); !errors.Is(err, ErrObjectUpload) || strings.Contains(err.Error(), secretKey) {
 		t.Fatalf("PutObject() error = %v", err)
 	}
-	if err := store.DeleteObject(context.Background(), "repairs/one.png"); err == nil || !strings.Contains(err.Error(), "delete object") {
+	if err := store.DeleteObject(context.Background(), secretKey); !errors.Is(err, ErrObjectDeletion) || strings.Contains(err.Error(), secretKey) {
 		t.Fatalf("DeleteObject() error = %v", err)
 	}
 }
