@@ -1,6 +1,11 @@
 locals {
-  privacy_restore_ledger_bucket = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-privacy-ledger"
-  privacy_restore_prefix        = "tombstones/"
+  privacy_restore_ledger_bucket  = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-privacy-ledger"
+  privacy_restore_prefix         = "tombstones/"
+  privacy_restore_closure_prefix = "tombstones/closures/"
+  privacy_restore_writer_name    = "${local.name}-privacy-restore-writer"
+  privacy_restore_reader_name    = "${local.name}-privacy-restore-reader"
+  privacy_restore_writer_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_writer_name}"
+  privacy_restore_reader_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_reader_name}"
 
   privacy_restore_writer_actions = [
     "s3:GetObjectVersion",
@@ -9,6 +14,80 @@ locals {
   privacy_restore_reader_actions = [
     "s3:GetObjectVersion",
   ]
+  privacy_restore_writer_kms_actions = [
+    "kms:Decrypt",
+    "kms:Encrypt",
+    "kms:GenerateDataKey",
+  ]
+  privacy_restore_reader_kms_actions = [
+    "kms:Decrypt",
+  ]
+  privacy_restore_key_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AccountKeyAdministration"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "kms:CancelKeyDeletion",
+          "kms:CreateAlias",
+          "kms:CreateGrant",
+          "kms:DeleteAlias",
+          "kms:DescribeKey",
+          "kms:DisableKey",
+          "kms:DisableKeyRotation",
+          "kms:EnableKey",
+          "kms:EnableKeyRotation",
+          "kms:GetKeyPolicy",
+          "kms:GetKeyRotationStatus",
+          "kms:ListGrants",
+          "kms:ListResourceTags",
+          "kms:ListRetirableGrants",
+          "kms:PutKeyPolicy",
+          "kms:RevokeGrant",
+          "kms:ScheduleKeyDeletion",
+          "kms:TagResource",
+          "kms:UntagResource",
+          "kms:UpdateAlias",
+          "kms:UpdateKeyDescription",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "LedgerWriterCryptographyOnly"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = local.privacy_restore_writer_kms_actions
+        Resource = "*"
+        Condition = {
+          ArnEquals = { "aws:PrincipalArn" = local.privacy_restore_writer_arn }
+          StringEquals = {
+            "kms:EncryptionContext:aws:s3:arn" = "arn:aws:s3:::${local.privacy_restore_ledger_bucket}"
+          }
+        }
+      },
+      {
+        Sid    = "LedgerReaderDecryptOnly"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = local.privacy_restore_reader_kms_actions
+        Resource = "*"
+        Condition = {
+          ArnEquals = { "aws:PrincipalArn" = local.privacy_restore_reader_arn }
+          StringEquals = {
+            "kms:EncryptionContext:aws:s3:arn" = "arn:aws:s3:::${local.privacy_restore_ledger_bucket}"
+          }
+        }
+      },
+    ]
+  })
 }
 
 resource "aws_kms_key" "privacy_restore_ledger" {
@@ -17,6 +96,7 @@ resource "aws_kms_key" "privacy_restore_ledger" {
   description             = "SSE-KMS boundary for the independently encrypted ${local.name} privacy restore ledger"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = local.privacy_restore_key_policy
 
   lifecycle {
     prevent_destroy = true
@@ -103,9 +183,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "privacy_restore_ledger" {
   rule {
     id     = "expire-ledger-after-evidence-window"
     status = "Enabled"
-    filter { prefix = local.privacy_restore_prefix }
+    filter { prefix = local.privacy_restore_closure_prefix }
     expiration { days = 731 }
-    noncurrent_version_expiration { noncurrent_days = 731 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+  }
+
+  rule {
+    id     = "remove-expired-ledger-delete-markers"
+    status = "Enabled"
+    filter { prefix = local.privacy_restore_closure_prefix }
+    expiration { expired_object_delete_marker = true }
   }
 }
 
@@ -127,6 +214,54 @@ data "aws_iam_policy_document" "privacy_restore_ledger_bucket" {
       values   = ["false"]
     }
   }
+
+  statement {
+    sid       = "DenyMissingKMSHeader"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "s3:x-amz-server-side-encryption"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "DenyIncorrectKMSEncryption"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:x-amz-server-side-encryption"
+      values   = ["aws:kms"]
+    }
+  }
+
+  statement {
+    sid       = "DenyWrongKMSKey"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values   = [aws_kms_key.privacy_restore_ledger[0].arn]
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "privacy_restore_ledger" {
@@ -137,13 +272,76 @@ resource "aws_s3_bucket_policy" "privacy_restore_ledger" {
 }
 
 resource "aws_iam_user" "privacy_restore_writer" {
-  count = var.privacy_restore_infrastructure_enabled ? 1 : 0
-  name  = "${local.name}-privacy-restore-writer"
+  count                = var.privacy_restore_infrastructure_enabled ? 1 : 0
+  name                 = local.privacy_restore_writer_name
+  permissions_boundary = aws_iam_policy.privacy_restore_writer_boundary[0].arn
 }
 
 resource "aws_iam_user" "privacy_restore_reader" {
+  count                = var.privacy_restore_infrastructure_enabled ? 1 : 0
+  name                 = local.privacy_restore_reader_name
+  permissions_boundary = aws_iam_policy.privacy_restore_reader_boundary[0].arn
+}
+
+data "aws_iam_policy_document" "privacy_restore_writer_boundary" {
   count = var.privacy_restore_infrastructure_enabled ? 1 : 0
-  name  = "${local.name}-privacy-restore-reader"
+
+  statement {
+    effect    = "Allow"
+    actions   = local.privacy_restore_writer_actions
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.privacy_restore_writer_kms_actions
+    resources = [aws_kms_key.privacy_restore_ledger[0].arn]
+  }
+}
+
+resource "aws_iam_policy" "privacy_restore_writer_boundary" {
+  count       = var.privacy_restore_infrastructure_enabled ? 1 : 0
+  name        = "${local.privacy_restore_writer_name}-boundary"
+  description = "Maximum append-and-verify permissions for the privacy restore ledger writer"
+  policy      = data.aws_iam_policy_document.privacy_restore_writer_boundary[0].json
+
+  lifecycle { prevent_destroy = true }
+}
+
+data "aws_iam_policy_document" "privacy_restore_reader_boundary" {
+  count = var.privacy_restore_infrastructure_enabled ? 1 : 0
+
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:ListBucketVersions"]
+    resources = [aws_s3_bucket.privacy_restore_ledger[0].arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${local.privacy_restore_prefix}*"]
+    }
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.privacy_restore_reader_actions
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.privacy_restore_reader_kms_actions
+    resources = [aws_kms_key.privacy_restore_ledger[0].arn]
+  }
+}
+
+resource "aws_iam_policy" "privacy_restore_reader_boundary" {
+  count       = var.privacy_restore_infrastructure_enabled ? 1 : 0
+  name        = "${local.privacy_restore_reader_name}-boundary"
+  description = "Maximum offline replay permissions for the privacy restore ledger reader"
+  policy      = data.aws_iam_policy_document.privacy_restore_reader_boundary[0].json
+
+  lifecycle { prevent_destroy = true }
 }
 
 data "aws_iam_policy_document" "privacy_restore_writer" {
@@ -163,7 +361,7 @@ data "aws_iam_policy_document" "privacy_restore_writer" {
     content {
       sid       = "EncryptLedgerObjects"
       effect    = "Allow"
-      actions   = ["kms:Encrypt", "kms:GenerateDataKey"]
+      actions   = local.privacy_restore_writer_kms_actions
       resources = [aws_kms_key.privacy_restore_ledger[0].arn]
     }
   }
@@ -198,7 +396,7 @@ data "aws_iam_policy_document" "privacy_restore_reader" {
     content {
       sid       = "DecryptLedgerObjectsOffline"
       effect    = "Allow"
-      actions   = ["kms:Decrypt"]
+      actions   = local.privacy_restore_reader_kms_actions
       resources = [aws_kms_key.privacy_restore_ledger[0].arn]
     }
   }

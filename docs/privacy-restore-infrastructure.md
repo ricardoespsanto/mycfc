@@ -6,17 +6,17 @@ Issue #247 defines a restore-independent tombstone ledger so an erased identity 
 
 `privacy_restore_infrastructure_enabled` provisions a dedicated versioned S3 bucket, a customer-managed KMS key, two IAM users without access keys, and two-year compliance-mode Object Lock. This switch alone grants neither user access.
 
-`privacy_restore_ledger_write_enabled` grants the isolated ledger writer only append, exact-version verification, encryption and data-key operations under `tombstones/`. `privacy_restore_ledger_replay_enabled` separately grants the offline restore reader only version listing, exact-version reads and decryption. Neither policy permits ordinary current-object reads, object deletion, Object Lock bypass, KMS administration, backup access, or unrelated AWS services.
+`privacy_restore_ledger_write_enabled` grants the isolated ledger writer only append, exact-version verification, encryption, decryption for read-back verification, and data-key operations under `tombstones/`. `privacy_restore_ledger_replay_enabled` separately grants the offline restore reader only version listing, exact-version reads and decryption. Permissions boundaries cap both identities even if another policy is attached later, and the KMS key policy restricts cryptographic use to the two exact identities and ledger encryption context. Neither policy permits ordinary current-object reads, object deletion, Object Lock bypass, KMS administration, backup access, or unrelated AWS services.
 
 Terraform does not create access keys or place credentials in state. Credential creation, installation and rotation require an approved operational change. The web application must never receive either identity.
 
 ## Retention and irreversibility
 
-Every ledger object is versioned, encrypted with the dedicated KMS key and protected by compliance-mode Object Lock for two years. Lifecycle expiry is set to 731 days so it cannot shorten the approved 24-month evidence window. The bucket and KMS key also use Terraform destroy protection.
+Every ledger object is versioned, explicitly encrypted with the dedicated KMS key and protected by compliance-mode Object Lock for two years. The bucket rejects uploads that omit the KMS headers or select another key. Pre-destructive intent records and closure records use separate immutable keys: open intents cannot age out, while the closure record starts a fresh two-year protection period from verified closure. Lifecycle expiry is set to 731 days with one-day noncurrent cleanup and expired-marker cleanup, avoiding a second two-year retention period. The bucket and KMS key also use Terraform destroy protection.
 
 Compliance-mode retention cannot be shortened or bypassed, including by the AWS account root user. Review the exact plan, bucket name, region, key policy and cost before applying the infrastructure gate.
 
-The PostgreSQL backup bucket lifecycle separately expires non-current versions after one day and removes expired delete markers. Current daily and monthly backup retention remains 30 and 365 days. These rules implement the adopted S3 posture in source; a reviewed production plan and post-apply inspection are still required before claiming the live posture.
+The separately gated PostgreSQL backup lifecycle expires non-current versions after one day and removes expired delete markers. Current daily and monthly backup retention remains 30 and 365 days. S3 lifecycle timing is asynchronous and cannot prove a strict 24-hour maximum by itself, so the gate is only a best-effort backstop; an exact-version scheduled cleaner and authoritative relisting evidence remain required. A reviewed production plan and post-apply inspection are still required before changing or claiming the live posture.
 
 ## Required rollout sequence
 

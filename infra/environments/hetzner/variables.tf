@@ -70,3 +70,9 @@ variable "privacy_restore_ledger_replay_enabled" {
     error_message = "privacy_restore_ledger_replay_enabled requires privacy_restore_infrastructure_enabled."
   }
 }
+
+variable "postgres_backup_noncurrent_expiration_enabled" {
+  description = "Enable best-effort S3 lifecycle cleanup of non-current PostgreSQL backup versions and expired delete markers. Requires a separately reviewed destructive plan."
+  type        = bool
+  default     = false
+}

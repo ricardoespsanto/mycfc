@@ -46,6 +46,43 @@ run "defaults_are_inert" {
   }
 }
 
+run "backup_version_expiration_is_inert" {
+  command = plan
+
+  plan_options {
+    target = [aws_s3_bucket_lifecycle_configuration.postgres_backups]
+  }
+
+  assert {
+    condition = (
+      !var.postgres_backup_noncurrent_expiration_enabled &&
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 2
+    )
+    error_message = "A routine plan must retain only the existing current daily/monthly backup rules."
+  }
+}
+
+run "backup_version_expiration_requires_its_gate" {
+  command = plan
+
+  variables {
+    postgres_backup_noncurrent_expiration_enabled = true
+  }
+
+  plan_options {
+    target = [aws_s3_bucket_lifecycle_configuration.postgres_backups]
+  }
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 4 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "expire-noncurrent-backup-versions"]).noncurrent_version_expiration[0].noncurrent_days == 1 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "remove-expired-backup-delete-markers"]).expiration[0].expired_object_delete_marker
+    )
+    error_message = "The destructive backup rules must appear only behind their explicit gate."
+  }
+}
+
 run "write_access_requires_infrastructure" {
   command = plan
 
@@ -100,12 +137,34 @@ run "infrastructure_is_protected_but_has_no_access" {
     error_message = "The restore ledger must use versioning and two-year compliance-mode object lock."
   }
 
+
+  assert {
+    condition = (
+      one([for rule in aws_s3_bucket_lifecycle_configuration.privacy_restore_ledger[0].rule : rule if rule.id == "expire-ledger-after-evidence-window"]).expiration[0].days == 731 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.privacy_restore_ledger[0].rule : rule if rule.id == "expire-ledger-after-evidence-window"]).noncurrent_version_expiration[0].noncurrent_days == 1 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.privacy_restore_ledger[0].rule : rule if rule.id == "remove-expired-ledger-delete-markers"]).expiration[0].expired_object_delete_marker
+    )
+    error_message = "Ledger payloads must not receive a second two-year noncurrent retention period."
+  }
+
   assert {
     condition = (
       length(aws_iam_user_policy.privacy_restore_writer) == 0 &&
       length(aws_iam_user_policy.privacy_restore_reader) == 0
     )
     error_message = "Provisioning the ledger must not grant write or replay access."
+  }
+
+
+  assert {
+    condition = toset(local.privacy_restore_writer_kms_actions) == toset([
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      ]) && toset(local.privacy_restore_reader_kms_actions) == toset([
+      "kms:Decrypt",
+    ])
+    error_message = "The writer must be able to verify ciphertext and the replay identity must be decrypt-only."
   }
 }
 
@@ -147,7 +206,9 @@ run "access_allowlists_are_exact" {
         ] : !contains(concat(
           local.privacy_restore_writer_actions,
           local.privacy_restore_reader_actions,
-          ["s3:ListBucketVersions", "kms:Encrypt", "kms:GenerateDataKey", "kms:Decrypt"],
+          ["s3:ListBucketVersions"],
+          local.privacy_restore_writer_kms_actions,
+          local.privacy_restore_reader_kms_actions,
       ), denied)
     ])
     error_message = "The privacy restore roles contain a destructive, wildcard, or ordinary object permission."

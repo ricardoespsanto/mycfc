@@ -81,22 +81,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "postgres_backups" {
     expiration { days = 365 }
   }
 
-  rule {
-    id     = "expire-noncurrent-backup-versions"
-    status = "Enabled"
+  dynamic "rule" {
+    for_each = var.postgres_backup_noncurrent_expiration_enabled ? [1] : []
 
-    filter { prefix = "" }
+    content {
+      id     = "expire-noncurrent-backup-versions"
+      status = "Enabled"
 
-    noncurrent_version_expiration { noncurrent_days = 1 }
+      filter { prefix = "" }
+
+      noncurrent_version_expiration { noncurrent_days = 1 }
+    }
   }
 
-  rule {
-    id     = "remove-expired-backup-delete-markers"
-    status = "Enabled"
+  dynamic "rule" {
+    for_each = var.postgres_backup_noncurrent_expiration_enabled ? [1] : []
 
-    filter { prefix = "" }
+    content {
+      id     = "remove-expired-backup-delete-markers"
+      status = "Enabled"
 
-    expiration { expired_object_delete_marker = true }
+      filter { prefix = "" }
+
+      expiration { expired_object_delete_marker = true }
+    }
   }
 }
 
