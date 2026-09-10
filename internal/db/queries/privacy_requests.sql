@@ -201,6 +201,20 @@ SELECT privacy_execution_materialize_object_target(
 -- name: CompletePrivacyObjectCapture :one
 SELECT privacy_execution_complete_object_capture(sqlc.arg(execution_id),sqlc.arg(category_key)) AS target_count;
 
+-- name: MaterializePrivacyProviderTarget :one
+SELECT privacy_execution_materialize_provider_target(
+ sqlc.arg(target_id),sqlc.arg(connection_id),sqlc.arg(execution_id),sqlc.arg(job_id),sqlc.arg(checkpoint_id),sqlc.arg(plan_entry_sha256),sqlc.arg(category_key),
+ sqlc.arg(service_code),sqlc.arg(provider_role),sqlc.arg(provider_contract_version),sqlc.arg(target_version),sqlc.arg(local_state),
+ sqlc.arg(registry_evidence_key_id),sqlc.arg(registry_evidence_digest),sqlc.arg(target_envelope_version),sqlc.arg(target_algorithm),
+ sqlc.arg(target_encryption_key_id),sqlc.arg(target_encapsulation),sqlc.arg(target_nonce),sqlc.arg(target_ciphertext),
+ sqlc.narg(credential_envelope_version),sqlc.narg(credential_algorithm),sqlc.narg(credential_encryption_key_id),sqlc.narg(credential_encapsulation),
+ sqlc.narg(credential_nonce),sqlc.narg(credential_ciphertext),sqlc.narg(credential_commitment_key_id),sqlc.narg(credential_source_commitment),
+ sqlc.arg(digest_key_id),sqlc.arg(target_digest)
+) AS target_id;
+
+-- name: CompletePrivacyProviderCapture :one
+SELECT privacy_execution_complete_provider_capture(sqlc.arg(execution_id),sqlc.arg(category_key)) AS target_count;
+
 -- name: RecordPrivacyWorkerObjectEvidence :one
 SELECT id FROM (SELECT privacy_worker_record_object_evidence(
  sqlc.arg(target_id),sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
@@ -210,6 +224,18 @@ SELECT id FROM (SELECT privacy_worker_record_object_evidence(
 
 -- name: CompletePrivacyWorkerObjectCheckpoint :one
 SELECT id FROM (SELECT privacy_worker_complete_object_checkpoint(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS id) completed WHERE id IS NOT NULL;
+
+-- name: RecordPrivacyWorkerProviderEvidence :one
+SELECT id FROM (SELECT privacy_worker_record_provider_evidence(
+ sqlc.arg(target_id),sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(outcome_code),sqlc.arg(adapter_attempts),sqlc.arg(evidence_code),sqlc.narg(recipient_role),sqlc.narg(channel_code),
+ sqlc.narg(notification_code),sqlc.narg(reason_code),sqlc.narg(guidance_code),sqlc.arg(transcript_key_id),sqlc.arg(transcript_digest)
+) AS id) recorded WHERE id IS NOT NULL;
+
+-- name: CompletePrivacyWorkerProviderCheckpoint :one
+SELECT id FROM (SELECT privacy_worker_complete_provider_checkpoint(
  sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
 ) AS id) completed WHERE id IS NOT NULL;
 

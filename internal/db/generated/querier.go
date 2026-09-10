@@ -54,8 +54,10 @@ type Querier interface {
 	CompleteEmailOutbox(ctx context.Context, arg CompleteEmailOutboxParams) (int64, error)
 	CompleteMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CompletePrivacyObjectCapture(ctx context.Context, arg CompletePrivacyObjectCaptureParams) (int32, error)
+	CompletePrivacyProviderCapture(ctx context.Context, arg CompletePrivacyProviderCaptureParams) (int32, error)
 	CompletePrivacyUploadCleanup(ctx context.Context, arg CompletePrivacyUploadCleanupParams) error
 	CompletePrivacyWorkerObjectCheckpoint(ctx context.Context, arg CompletePrivacyWorkerObjectCheckpointParams) (uuid.UUID, error)
+	CompletePrivacyWorkerProviderCheckpoint(ctx context.Context, arg CompletePrivacyWorkerProviderCheckpointParams) (uuid.UUID, error)
 	ConfirmPrivacyRestoreTombstone(ctx context.Context, arg ConfirmPrivacyRestoreTombstoneParams) (uuid.UUID, error)
 	ConfirmPrivacyTombstoneClosure(ctx context.Context, arg ConfirmPrivacyTombstoneClosureParams) (uuid.UUID, error)
 	ConfirmPrivacyUploadPut(ctx context.Context, arg ConfirmPrivacyUploadPutParams) error
@@ -301,6 +303,7 @@ type Querier interface {
 	MarkPrivacyUploadCleanup(ctx context.Context, arg MarkPrivacyUploadCleanupParams) error
 	MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedActivityDeletedParams) (SyncedActivity, error)
 	MaterializePrivacyObjectTarget(ctx context.Context, arg MaterializePrivacyObjectTargetParams) (uuid.UUID, error)
+	MaterializePrivacyProviderTarget(ctx context.Context, arg MaterializePrivacyProviderTargetParams) (uuid.UUID, error)
 	MoveGymExercise(ctx context.Context, arg MoveGymExerciseParams) (bool, error)
 	MoveTrainingSegmentBlock(ctx context.Context, arg MoveTrainingSegmentBlockParams) (bool, error)
 	MoveTrainingSessionSegment(ctx context.Context, arg MoveTrainingSessionSegmentParams) (bool, error)
@@ -314,6 +317,7 @@ type Querier interface {
 	RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error)
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
 	RecordPrivacyWorkerObjectEvidence(ctx context.Context, arg RecordPrivacyWorkerObjectEvidenceParams) (uuid.UUID, error)
+	RecordPrivacyWorkerProviderEvidence(ctx context.Context, arg RecordPrivacyWorkerProviderEvidenceParams) (uuid.UUID, error)
 	RemovePrivacyUploadIntent(ctx context.Context, arg RemovePrivacyUploadIntentParams) error
 	ResolvePasswordResetToken(ctx context.Context, arg ResolvePasswordResetTokenParams) (ResolvePasswordResetTokenRow, error)
 	RestoreTrainingBlock(ctx context.Context, arg RestoreTrainingBlockParams) (uuid.UUID, error)

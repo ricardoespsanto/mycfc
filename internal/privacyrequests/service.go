@@ -31,6 +31,8 @@ type Service struct {
 	Now                   func() time.Time
 	ExecutionCapabilities map[string]bool
 	ObjectTargets         ObjectTargetProtector
+	ProviderRegistry      *ProviderExecutionRegistry
+	ProviderTargets       ProviderTargetProtector
 }
 
 func (s Service) now() time.Time {
