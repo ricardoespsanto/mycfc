@@ -12,8 +12,8 @@ set +a
 : "${BACKUP_S3_BUCKET:?set BACKUP_S3_BUCKET in the protected environment file}"
 
 export AWS_SHARED_CREDENTIALS_FILE="$credentials_file"
-export AWS_PROFILE=${AWS_PROFILE:-mycfc-backup}
-export AWS_REGION=${AWS_REGION:-eu-west-1}
+export AWS_PROFILE="${AWS_PROFILE:-mycfc-backup}"
+export AWS_REGION="${AWS_REGION:-eu-west-1}"
 export AWS_PAGER=""
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
