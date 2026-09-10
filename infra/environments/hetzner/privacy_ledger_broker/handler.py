@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 
 KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$")
-MAX_PAYLOAD_BYTES = 64 * 1024
+MAX_PAYLOAD_BYTES = 1 << 20
 
 
 def _fail(message):

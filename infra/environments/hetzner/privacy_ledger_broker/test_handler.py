@@ -54,6 +54,9 @@ class BrokerTests(unittest.TestCase):
         client.head_object.return_value = self.head()
         receipt = handler.handler(self.event, None, client)
         self.assertEqual(receipt["object_version"], "v1")
+        self.assertEqual(receipt["kind"], "intent")
+        self.assertEqual(receipt["locator_digest"], self.event["locator_digest"])
+        self.assertNotIn("retain_until", receipt)
         client.put_object.assert_called_once()
         self.assertEqual(client.put_object.call_args.kwargs["IfNoneMatch"], "*")
         self.assertEqual(client.put_object.call_args.kwargs["SSEKMSKeyId"], os.environ["LEDGER_KMS_KEY_ARN"])
@@ -65,7 +68,8 @@ class BrokerTests(unittest.TestCase):
         client = Mock()
         client.put_object.return_value = {"VersionId": "v1"}
         client.head_object.return_value = self.head(closure=True)
-        handler.handler(self.event, None, client)
+        receipt = handler.handler(self.event, None, client)
+        self.assertEqual(receipt["retain_until"], self.event["retain_until"])
         args = client.put_object.call_args.kwargs
         self.assertEqual(args["ObjectLockMode"], "COMPLIANCE")
         self.assertEqual(args["ObjectLockRetainUntilDate"], datetime.fromisoformat(self.event["retain_until"].replace("Z", "+00:00")))
