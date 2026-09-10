@@ -28,7 +28,9 @@ type Querier interface {
 	ArchivePhotoAlbum(ctx context.Context, arg ArchivePhotoAlbumParams) (PhotoAlbum, error)
 	AssignTrainingCycleChild(ctx context.Context, arg AssignTrainingCycleChildParams) (int64, error)
 	AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error)
+	AttachPrivacyUploadIntent(ctx context.Context, arg AttachPrivacyUploadIntentParams) error
 	AuthorizePrivacyErasureJobLease(ctx context.Context, arg AuthorizePrivacyErasureJobLeaseParams) (PrivacyErasureJobLease, error)
+	BeginPrivacyUploadIntent(ctx context.Context, arg BeginPrivacyUploadIntentParams) ([]byte, error)
 	CallPrivacyWorkerExecuteCheckpoint(ctx context.Context, arg CallPrivacyWorkerExecuteCheckpointParams) (uuid.UUID, error)
 	CallPrivacyWorkerSync(ctx context.Context, arg CallPrivacyWorkerSyncParams) (uuid.UUID, error)
 	CanCoachManageEvent(ctx context.Context, arg CanCoachManageEventParams) (bool, error)
@@ -50,6 +52,8 @@ type Querier interface {
 	CompleteActivitySyncJob(ctx context.Context, arg CompleteActivitySyncJobParams) (ActivitySyncJob, error)
 	CompleteEmailOutbox(ctx context.Context, arg CompleteEmailOutboxParams) (int64, error)
 	CompleteMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
+	CompletePrivacyUploadCleanup(ctx context.Context, arg CompletePrivacyUploadCleanupParams) error
+	ConfirmPrivacyUploadPut(ctx context.Context, arg ConfirmPrivacyUploadPutParams) error
 	ConfirmWaitlistedResponse(ctx context.Context, arg ConfirmWaitlistedResponseParams) (int64, error)
 	ConsumeEmailVerification(ctx context.Context, arg ConsumeEmailVerificationParams) (uuid.UUID, error)
 	ConsumePasswordResetToken(ctx context.Context, arg ConsumePasswordResetTokenParams) (uuid.UUID, error)
@@ -121,6 +125,8 @@ type Querier interface {
 	ExpireNews(ctx context.Context, id uuid.UUID) (int64, error)
 	FailActivitySyncJob(ctx context.Context, arg FailActivitySyncJobParams) (ActivitySyncJob, error)
 	FailEmailOutbox(ctx context.Context, arg FailEmailOutboxParams) (int64, error)
+	FailPrivacyUploadCleanup(ctx context.Context, arg FailPrivacyUploadCleanupParams) error
+	FinalizePrivacyUploadIntent(ctx context.Context, arg FinalizePrivacyUploadIntentParams) error
 	FindPasswordResetAccountByEmail(ctx context.Context, email *string) (FindPasswordResetAccountByEmailRow, error)
 	GetAccountByEmail(ctx context.Context, email *string) (GetAccountByEmailRow, error)
 	GetActiveAccountByID(ctx context.Context, id uuid.UUID) (GetActiveAccountByIDRow, error)
@@ -285,6 +291,7 @@ type Querier interface {
 	LockTrainingCycles(ctx context.Context, cycleIds []uuid.UUID) ([]TrainingCycle, error)
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
 	MarkPrivacySessionIndexed(ctx context.Context, arg MarkPrivacySessionIndexedParams) (int64, error)
+	MarkPrivacyUploadCleanup(ctx context.Context, arg MarkPrivacyUploadCleanupParams) error
 	MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedActivityDeletedParams) (SyncedActivity, error)
 	MoveGymExercise(ctx context.Context, arg MoveGymExerciseParams) (bool, error)
 	MoveTrainingSegmentBlock(ctx context.Context, arg MoveTrainingSegmentBlockParams) (bool, error)
@@ -295,6 +302,7 @@ type Querier interface {
 	RecordActivityConnectionError(ctx context.Context, arg RecordActivityConnectionErrorParams) (ActivityConnection, error)
 	RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error)
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
+	RemovePrivacyUploadIntent(ctx context.Context, arg RemovePrivacyUploadIntentParams) error
 	ResolvePasswordResetToken(ctx context.Context, arg ResolvePasswordResetTokenParams) (ResolvePasswordResetTokenRow, error)
 	RestoreTrainingBlock(ctx context.Context, arg RestoreTrainingBlockParams) (uuid.UUID, error)
 	RestoreTrainingSegment(ctx context.Context, arg RestoreTrainingSegmentParams) (uuid.UUID, error)

@@ -17,6 +17,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
@@ -61,12 +62,12 @@ func TestPostgresProfileStoreSavePhotoCreatesConsentAndAuditsReplacement(t *test
 	oldKey := "profiles/old.png"
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, oldPhotoKey: &oldKey}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
-	old, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: actorID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true, UserAgent: "MyCFCoimbra test"})
+	old, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: actorID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true, UserAgent: "MyCFCoimbra test"})
 
 	if err != nil || old == nil || *old != oldKey || !tx.committed {
 		t.Fatalf("old=%v error=%v committed=%t", old, err, tx.committed)
 	}
-	if len(tx.execCalls) != 1 || len(tx.queryCalls) != 4 {
+	if len(tx.execCalls) != 2 || len(tx.queryCalls) != 4 {
 		t.Fatalf("exec=%#v query=%#v", tx.execCalls, tx.queryCalls)
 	}
 	consentArgs := tx.argsFor("CreateConsentForm")
@@ -74,12 +75,13 @@ func TestPostgresProfileStoreSavePhotoCreatesConsentAndAuditsReplacement(t *test
 		t.Fatalf("consent args=%#v", consentArgs)
 	}
 	photoArgs := tx.argsFor("UpdateMemberProfilePhoto")
-	if len(photoArgs) != 5 {
+	if len(photoArgs) != 6 {
 		t.Fatalf("photo args=%#v", photoArgs)
 	}
 	key, keyOK := photoArgs[0].(*string)
 	photoConsent, consentOK := photoArgs[3].(*uuid.UUID)
-	if !keyOK || *key != "profiles/new.png" || !consentOK || *photoConsent != consentID || photoArgs[4] != subjectID {
+	intent, intentOK := photoArgs[4].(*uuid.UUID)
+	if !keyOK || *key != "profiles/new.png" || !consentOK || *photoConsent != consentID || !intentOK || intent == nil || photoArgs[5] != subjectID {
 		t.Fatalf("photo args=%#v", photoArgs)
 	}
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
@@ -92,7 +94,7 @@ func TestPostgresProfileStoreSavePhotoRequiresCurrentConsentBeforeWrite(t *testi
 	subjectID := uuid.New()
 	tx := &profileTransactionFake{subjectID: subjectID}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
-	_, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest"})
+	_, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest"})
 	if !errors.Is(err, ErrConsentRequired) || tx.committed || len(tx.queryCalls) != 1 {
 		t.Fatalf("error=%v committed=%t query=%#v", err, tx.committed, tx.queryCalls)
 	}
@@ -108,7 +110,7 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 
 	writeErr := errors.New("photo update unavailable")
 	tx := &profileTransactionFake{subjectID: subjectID, currentConsent: true, queryErrs: map[string]error{"UpdateMemberProfilePhoto": writeErr}}
-	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/new.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
+	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
 	if !errors.Is(err, writeErr) || tx.committed || tx.argsFor("CreateMemberProfileAudit") != nil {
 		t.Fatalf("SavePhoto error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 	}
@@ -117,12 +119,12 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *testing.T) {
 	subjectID, consentID := uuid.New(), uuid.New()
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, currentConsent: true}
-	_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, ObjectKey: "profiles/current-consent.png", ContentType: "image/png", Size: 42, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
+	_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/current-consent.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
 	if err != nil || !tx.committed || tx.argsFor("CreateConsentForm") == nil {
 		t.Fatalf("error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 	}
 	photoArgs := tx.argsFor("UpdateMemberProfilePhoto")
-	if len(photoArgs) != 5 {
+	if len(photoArgs) != 6 {
 		t.Fatalf("photo args=%#v", photoArgs)
 	}
 	storedConsent, ok := photoArgs[3].(*uuid.UUID)
@@ -132,9 +134,9 @@ func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *test
 }
 
 func TestPostgresProfileStoreRemovePhotoClearsObjectReferenceAndAudits(t *testing.T) {
-	subjectID := uuid.New()
+	subjectID, intentID := uuid.New(), uuid.New()
 	oldKey := "profiles/old.png"
-	tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey}
+	tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
 	removed, err := store.RemovePhoto(context.Background(), subjectID, subjectID, false)
 	if err != nil || removed == nil || *removed != oldKey || !tx.committed || len(tx.queryCalls) != 3 {
@@ -159,7 +161,7 @@ func TestPostgresProfileStoreRefusesPhotoChangesWithoutEligibleState(t *testing.
 	t.Run("administrator cannot grant another person's consent", func(t *testing.T) {
 		subjectID := uuid.New()
 		tx := &profileTransactionFake{subjectID: subjectID}
-		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: uuid.New(), SubjectID: subjectID, IsAdmin: true, ObjectKey: "profiles/admin.png", AcceptConsent: true})
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: uuid.New(), SubjectID: subjectID, IsAdmin: true, Upload: testPreparedUpload("profiles/admin.png", "image/png", 42), AcceptConsent: true})
 		if !errors.Is(err, ErrConsentRequired) || tx.committed || tx.argsFor("CreateConsentForm") != nil {
 			t.Fatalf("error=%v committed=%t calls=%#v", err, tx.committed, tx.queryCalls)
 		}
@@ -392,7 +394,7 @@ func TestPostgresProfileStoreSelectsInjectedDatabaseAndFailsClosedForForeignActo
 	if err := store.Update(context.Background(), ProfileUpdate{ActorID: foreignActor, SubjectID: tx.subjectID, Profile: dbgen.UpdateMemberProfileParams{}}); !errors.Is(err, ErrProfileForbidden) {
 		t.Fatalf("foreign update error=%v", err)
 	}
-	if _, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: foreignActor, SubjectID: tx.subjectID, ObjectKey: "profiles/foreign.png"}); !errors.Is(err, ErrProfileForbidden) {
+	if _, err := store.SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: foreignActor, SubjectID: tx.subjectID, Upload: testPreparedUpload("profiles/foreign.png", "image/png", 42)}); !errors.Is(err, ErrProfileForbidden) {
 		t.Fatalf("foreign upload error=%v", err)
 	}
 	if _, err := store.RemovePhoto(context.Background(), foreignActor, tx.subjectID, false); !errors.Is(err, ErrProfileForbidden) {
@@ -473,6 +475,10 @@ type profileObjectStoreFake struct {
 	presignErr    error
 }
 
+func testPreparedUpload(key, contentType string, size int64) privacyrequests.PreparedUpload {
+	return privacyrequests.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{7}, 32), ObjectKey: key, ContentType: contentType, SizeBytes: size}
+}
+
 type profileSQLCall struct {
 	query string
 	args  []any
@@ -483,6 +489,7 @@ type profileTransactionFake struct {
 	subjectID            uuid.UUID
 	consentID            uuid.UUID
 	oldPhotoKey          *string
+	oldPhotoIntentID     *uuid.UUID
 	email                *string
 	currentConsent       bool
 	healthConsent        bool
@@ -503,7 +510,7 @@ type profileTransactionFake struct {
 
 func (tx *profileTransactionFake) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
 	tx.queryCalls = append(tx.queryCalls, profileSQLCall{query: query, args: args})
-	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent, guardianID: tx.guardianID, isDependent: tx.isDependent, dateOfBirth: tx.dateOfBirth, medicalDeclaration: tx.medicalDeclaration, allergies: tx.allergies, medicalConditions: tx.medicalConditions, medication: tx.medication, activityRestrictions: tx.activityRestrictions, medicalNotes: tx.medicalNotes}
+	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, oldPhotoIntentID: tx.oldPhotoIntentID, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent, guardianID: tx.guardianID, isDependent: tx.isDependent, dateOfBirth: tx.dateOfBirth, medicalDeclaration: tx.medicalDeclaration, allergies: tx.allergies, medicalConditions: tx.medicalConditions, medication: tx.medication, activityRestrictions: tx.activityRestrictions, medicalNotes: tx.medicalNotes}
 	for name, err := range tx.queryErrs {
 		if strings.Contains(query, name) {
 			row.err = err
@@ -532,6 +539,7 @@ type profileTransactionRow struct {
 	subjectID            uuid.UUID
 	consentID            uuid.UUID
 	oldPhotoKey          *string
+	oldPhotoIntentID     *uuid.UUID
 	email                *string
 	currentConsent       bool
 	healthConsent        bool
@@ -574,6 +582,7 @@ func (row profileTransactionRow) Scan(dest ...any) error {
 		*dest[27].(*string) = row.activityRestrictions
 		*dest[28].(*string) = row.medicalNotes
 		*dest[29].(**string) = row.oldPhotoKey
+		*dest[33].(**uuid.UUID) = row.oldPhotoIntentID
 	case strings.Contains(row.query, "CreateConsentForm"):
 		*dest[0].(*uuid.UUID) = row.consentID
 	case strings.Contains(row.query, "UpdateMemberProfilePhoto"):
@@ -621,8 +630,20 @@ func (s *profileObjectStoreFake) DeleteObject(context.Context, string) error {
 func (s *profileObjectStoreFake) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return s.presignedURL, s.presignErr
 }
+func (s *profileObjectStoreFake) Upload(_ context.Context, input privacyrequests.UploadInput, photo storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error) {
+	s.puts++
+	if s.putErr != nil {
+		return privacyrequests.PreparedUpload{}, s.putErr
+	}
+	return testPreparedUpload(strings.ToLower(input.SourceKind)+"/photo."+photo.Extension, photo.ContentType, photo.Size), nil
+}
+func (s *profileObjectStoreFake) AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error {
+	s.deletes++
+	return s.deleteErr
+}
 
 var _ storage.ObjectStore = (*profileObjectStoreFake)(nil)
+var _ UploadService = (*profileObjectStoreFake)(nil)
 
 func TestProfileObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
 	logs := captureDefaultLogs(t)
@@ -946,7 +967,7 @@ func TestProfilePhotoUploadRemovalAndAvatarFallbackArePrivate(t *testing.T) {
 	upload = upload.WithContext(context.WithValue(upload.Context(), currentUserKey{}, actor))
 	uploadResponse := httptest.NewRecorder()
 	h.UploadPhoto(uploadResponse, upload)
-	if uploadResponse.Code != http.StatusSeeOther || objects.puts != 1 || objects.deletes != 1 || store.photo.SubjectID != userID || !store.photo.AcceptConsent || store.photo.ObjectKey == "" {
+	if uploadResponse.Code != http.StatusSeeOther || objects.puts != 1 || objects.deletes != 0 || store.photo.SubjectID != userID || !store.photo.AcceptConsent || store.photo.Upload.ObjectKey == "" {
 		t.Fatalf("upload=%d puts=%d deletes=%d photo=%+v", uploadResponse.Code, objects.puts, objects.deletes, store.photo)
 	}
 
@@ -983,7 +1004,7 @@ func TestProfilePhotoUploadRemovalAndAvatarFallbackArePrivate(t *testing.T) {
 	remove = remove.WithContext(context.WithValue(remove.Context(), currentUserKey{}, actor))
 	removeResponse := httptest.NewRecorder()
 	h.RemovePhoto(removeResponse, remove)
-	if removeResponse.Code != http.StatusSeeOther || objects.deletes != 2 {
+	if removeResponse.Code != http.StatusSeeOther || objects.deletes != 0 {
 		t.Fatalf("remove=%d deletes=%d", removeResponse.Code, objects.deletes)
 	}
 }

@@ -14,7 +14,7 @@ SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_
        p.allergies, p.medical_conditions, p.medication,
        p.activity_restrictions, p.medical_notes, p.photo_object_key,
        p.photo_content_type, p.photo_size_bytes, p.photo_consent_form_id,
-       p.created_at, p.updated_at
+       p.photo_upload_intent_id, p.created_at, p.updated_at
 FROM users u
 JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = sqlc.arg(user_id) AND u.erased_at IS NULL;
@@ -60,15 +60,18 @@ RETURNING id;
 -- name: UpdateMemberProfilePhoto :one
 UPDATE member_profiles AS profile SET photo_object_key = sqlc.arg(photo_object_key),
     photo_content_type = sqlc.arg(photo_content_type), photo_size_bytes = sqlc.arg(photo_size_bytes),
-    photo_consent_form_id = sqlc.arg(photo_consent_form_id), updated_at = clock_timestamp()
+    photo_consent_form_id = sqlc.arg(photo_consent_form_id),
+    photo_upload_intent_id = sqlc.arg(photo_upload_intent_id), updated_at = clock_timestamp()
 WHERE profile.user_id = sqlc.arg(user_id)
   AND EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id) AND erased_at IS NULL)
 RETURNING updated_at;
 
 -- name: ClearMemberProfilePhoto :one
 UPDATE member_profiles AS profile SET photo_object_key = NULL, photo_content_type = NULL,
-    photo_size_bytes = NULL, photo_consent_form_id = NULL, updated_at = clock_timestamp()
+    photo_size_bytes = NULL, photo_consent_form_id = NULL, photo_upload_intent_id = NULL,
+    updated_at = clock_timestamp()
 WHERE profile.user_id = sqlc.arg(user_id) AND profile.photo_object_key IS NOT NULL
+  AND profile.photo_upload_intent_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM users WHERE id = sqlc.arg(user_id) AND erased_at IS NULL)
 RETURNING updated_at;
 

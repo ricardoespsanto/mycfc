@@ -14,39 +14,50 @@ import (
 
 const createRepairRequest = `-- name: CreateRepairRequest :one
 INSERT INTO repair_requests (
+    id,
     idempotency_key,
     equipment_id,
     reported_by_id,
     issue_description,
     image_object_key,
     image_content_type,
-    image_size_bytes
-) VALUES (
+    image_size_bytes,
+    image_upload_intent_id
+) SELECT
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6,
-    $7
-)
+    $6::varchar(512),
+    $7::varchar(100),
+    $8::bigint,
+    CASE WHEN privacy_upload_attach($9, $10, NULL, 'REPAIR_ATTACHMENT', $1,
+      $6::text, $7::text, $8::bigint) IS NULL
+         THEN $9::uuid ELSE $9::uuid END
+WHERE $6::varchar(512) IS NULL
+   OR ($9::uuid IS NOT NULL AND $10::bytea IS NOT NULL)
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
           image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 `
 
 type CreateRepairRequestParams struct {
-	IdempotencyKey   uuid.UUID  `json:"idempotency_key"`
-	EquipmentID      uuid.UUID  `json:"equipment_id"`
-	ReportedByID     *uuid.UUID `json:"reported_by_id"`
-	IssueDescription string     `json:"issue_description"`
-	ImageObjectKey   *string    `json:"image_object_key"`
-	ImageContentType *string    `json:"image_content_type"`
-	ImageSizeBytes   *int64     `json:"image_size_bytes"`
+	ID                  uuid.UUID  `json:"id"`
+	IdempotencyKey      uuid.UUID  `json:"idempotency_key"`
+	EquipmentID         uuid.UUID  `json:"equipment_id"`
+	ReportedByID        *uuid.UUID `json:"reported_by_id"`
+	IssueDescription    string     `json:"issue_description"`
+	ImageObjectKey      *string    `json:"image_object_key"`
+	ImageContentType    *string    `json:"image_content_type"`
+	ImageSizeBytes      *int64     `json:"image_size_bytes"`
+	ImageUploadIntentID *uuid.UUID `json:"image_upload_intent_id"`
+	UploadHoldToken     []byte     `json:"upload_hold_token"`
 }
 
 func (q *Queries) CreateRepairRequest(ctx context.Context, arg CreateRepairRequestParams) (RepairRequest, error) {
 	row := q.db.QueryRow(ctx, createRepairRequest,
+		arg.ID,
 		arg.IdempotencyKey,
 		arg.EquipmentID,
 		arg.ReportedByID,
@@ -54,6 +65,8 @@ func (q *Queries) CreateRepairRequest(ctx context.Context, arg CreateRepairReque
 		arg.ImageObjectKey,
 		arg.ImageContentType,
 		arg.ImageSizeBytes,
+		arg.ImageUploadIntentID,
+		arg.UploadHoldToken,
 	)
 	var i RepairRequest
 	err := row.Scan(

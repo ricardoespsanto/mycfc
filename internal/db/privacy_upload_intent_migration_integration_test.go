@@ -25,6 +25,12 @@ func TestPrivacyUploadIntentFoundationMigrationIsAdditiveProtectedAndImmutable(t
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 
+	if _, err = tx.Exec(ctx, `
+		DROP TRIGGER privacy_upload_profile_pointer_deferred ON member_profiles;
+		DROP TRIGGER privacy_upload_repair_pointer_deferred ON repair_requests;
+		DROP TRIGGER privacy_upload_equipment_pointer_deferred ON equipment`); err != nil {
+		t.Fatal(err)
+	}
 	equipmentID := uuid.New()
 	if _, err = tx.Exec(ctx, `INSERT INTO equipment(id,asset_tag,name,type) VALUES($1,$2,'Migration fixture','Boat')`, equipmentID, "migration-"+uuid.NewString()[:8]); err != nil {
 		t.Fatal(err)
@@ -36,6 +42,11 @@ func TestPrivacyUploadIntentFoundationMigrationIsAdditiveProtectedAndImmutable(t
 		ALTER TABLE member_profiles DROP COLUMN photo_upload_intent_id;
 		ALTER TABLE repair_requests DROP COLUMN image_upload_intent_id;
 		ALTER TABLE equipment DROP COLUMN image_upload_intent_id;
+		DROP TABLE privacy_protected.object_upload_absence_evidence;
+		DROP TABLE privacy_protected.object_upload_cleanup_attempts;
+		DROP TABLE privacy_protected.object_upload_cleanup_jobs;
+		DROP TABLE privacy_protected.object_upload_intent_holds;
+		DROP TABLE privacy_protected.object_upload_intent_reservations;
 		DROP TABLE privacy_protected.object_upload_intent_events;
 		DROP TABLE privacy_protected.object_upload_intents`); err != nil {
 		t.Fatal(err)

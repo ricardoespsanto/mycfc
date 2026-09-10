@@ -24,6 +24,22 @@ type recordingParameterGetter struct {
 	empty   bool
 }
 
+func TestPrivacyUploadKeysAreOptionalButAtomic(t *testing.T) {
+	if _, _, configured, err := (Config{}).PrivacyUploadKeys(); err != nil || configured {
+		t.Fatalf("empty configuration configured=%t err=%v", configured, err)
+	}
+	partial := Config{PrivacyUploadEncryptionKeyID: "upload-key-v1"}
+	if _, _, configured, err := partial.PrivacyUploadKeys(); err == nil || !configured {
+		t.Fatalf("partial configuration configured=%t err=%v", configured, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	complete := Config{PrivacyUploadPublicKeyB64: encoded, PrivacyUploadEncryptionKeyID: "upload-key-v1", PrivacyUploadDigestKeyID: "upload-digest-v1", PrivacyUploadDigestKeyB64: Secret(encoded)}
+	publicKey, digestKey, configured, err := complete.PrivacyUploadKeys()
+	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
+		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
+	}
+}
+
 type recordingSecretGetter struct {
 	output *secretsmanager.GetSecretValueOutput
 	err    error

@@ -14,12 +14,18 @@ import (
 
 const createEquipmentWithAudit = `-- name: CreateEquipmentWithAudit :one
 WITH created AS (
-    INSERT INTO equipment (asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO equipment (id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, image_upload_intent_id)
+    SELECT $1, $2, $3, $4, $5, $6,
+           $7::varchar(512), $8, $9, attached.intent_id
+    FROM (SELECT $10::uuid AS intent_id,
+                 privacy_upload_attach($10, $11, NULL, 'EQUIPMENT_PHOTO', $1,
+                   $7::text, $8::text, $9::bigint)) attached
+    WHERE $7::varchar(512) IS NULL
+       OR ($10::uuid IS NOT NULL AND $11::bytea IS NOT NULL)
     RETURNING id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, image_upload_intent_id, created_at, updated_at
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, after_state)
-    SELECT id, $9, 'CREATED',
+    SELECT id, $12, 'CREATED',
            jsonb_build_object('asset_tag', asset_tag, 'name', name, 'type', type, 'status', status, 'notes', notes, 'has_image', image_object_key IS NOT NULL, 'image_content_type', image_content_type, 'image_size_bytes', image_size_bytes)
     FROM created
 )
@@ -28,15 +34,18 @@ FROM created
 `
 
 type CreateEquipmentWithAuditParams struct {
-	AssetTag         string     `json:"asset_tag"`
-	Name             string     `json:"name"`
-	Type             string     `json:"type"`
-	Status           string     `json:"status"`
-	Notes            string     `json:"notes"`
-	ImageObjectKey   *string    `json:"image_object_key"`
-	ImageContentType *string    `json:"image_content_type"`
-	ImageSizeBytes   *int64     `json:"image_size_bytes"`
-	ActorUserID      *uuid.UUID `json:"actor_user_id"`
+	ID                  uuid.UUID  `json:"id"`
+	AssetTag            string     `json:"asset_tag"`
+	Name                string     `json:"name"`
+	Type                string     `json:"type"`
+	Status              string     `json:"status"`
+	Notes               string     `json:"notes"`
+	ImageObjectKey      *string    `json:"image_object_key"`
+	ImageContentType    *string    `json:"image_content_type"`
+	ImageSizeBytes      *int64     `json:"image_size_bytes"`
+	ImageUploadIntentID *uuid.UUID `json:"image_upload_intent_id"`
+	UploadHoldToken     []byte     `json:"upload_hold_token"`
+	ActorUserID         *uuid.UUID `json:"actor_user_id"`
 }
 
 type CreateEquipmentWithAuditRow struct {
@@ -56,6 +65,7 @@ type CreateEquipmentWithAuditRow struct {
 
 func (q *Queries) CreateEquipmentWithAudit(ctx context.Context, arg CreateEquipmentWithAuditParams) (CreateEquipmentWithAuditRow, error) {
 	row := q.db.QueryRow(ctx, createEquipmentWithAudit,
+		arg.ID,
 		arg.AssetTag,
 		arg.Name,
 		arg.Type,
@@ -64,6 +74,8 @@ func (q *Queries) CreateEquipmentWithAudit(ctx context.Context, arg CreateEquipm
 		arg.ImageObjectKey,
 		arg.ImageContentType,
 		arg.ImageSizeBytes,
+		arg.ImageUploadIntentID,
+		arg.UploadHoldToken,
 		arg.ActorUserID,
 	)
 	var i CreateEquipmentWithAuditRow
@@ -403,14 +415,24 @@ WITH previous AS MATERIALIZED (
 ), updated AS (
     UPDATE equipment e
     SET asset_tag = $3, name = $4, type = $5,
-        status = $6, notes = $7, image_object_key = $8,
-        image_content_type = $9, image_size_bytes = $10, updated_at = now()
+        status = $6, notes = $7, image_object_key = $8::varchar(512),
+        image_content_type = $9, image_size_bytes = $10,
+        image_upload_intent_id = COALESCE(attached.intent_id, p.image_upload_intent_id), updated_at = now()
     FROM previous p
+    LEFT JOIN LATERAL (
+        SELECT $11::uuid AS intent_id,
+               privacy_upload_attach($11, $12, p.image_upload_intent_id, 'EQUIPMENT_PHOTO', $1,
+                 $8::text, $9::text, $10::bigint)
+        WHERE $12::bytea IS NOT NULL
+    ) attached ON true
     WHERE e.id = p.id
+      AND (p.image_object_key IS NOT DISTINCT FROM $8::varchar(512)
+        OR ((p.image_object_key IS NULL OR p.image_upload_intent_id IS NOT NULL)
+          AND $11::uuid IS NOT NULL AND $12::bytea IS NOT NULL))
     RETURNING e.id, e.asset_tag, e.name, e.type, e.status, e.notes, e.image_object_key, e.image_content_type, e.image_size_bytes, e.image_upload_intent_id, e.created_at, e.updated_at
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state)
-    SELECT u.id, $11, 'UPDATED',
+    SELECT u.id, $13, 'UPDATED',
            jsonb_build_object('asset_tag', p.asset_tag, 'name', p.name, 'type', p.type, 'status', p.status, 'notes', p.notes, 'has_image', p.image_object_key IS NOT NULL, 'image_content_type', p.image_content_type, 'image_size_bytes', p.image_size_bytes),
            jsonb_build_object('asset_tag', u.asset_tag, 'name', u.name, 'type', u.type, 'status', u.status, 'notes', u.notes, 'has_image', u.image_object_key IS NOT NULL, 'image_changed', p.image_object_key IS DISTINCT FROM u.image_object_key, 'image_content_type', u.image_content_type, 'image_size_bytes', u.image_size_bytes)
     FROM updated u JOIN previous p ON p.id = u.id
@@ -420,17 +442,19 @@ FROM updated
 `
 
 type UpdateEquipmentWithAuditParams struct {
-	EquipmentID       uuid.UUID          `json:"equipment_id"`
-	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
-	AssetTag          string             `json:"asset_tag"`
-	Name              string             `json:"name"`
-	Type              string             `json:"type"`
-	Status            string             `json:"status"`
-	Notes             string             `json:"notes"`
-	ImageObjectKey    *string            `json:"image_object_key"`
-	ImageContentType  *string            `json:"image_content_type"`
-	ImageSizeBytes    *int64             `json:"image_size_bytes"`
-	ActorUserID       *uuid.UUID         `json:"actor_user_id"`
+	EquipmentID         uuid.UUID          `json:"equipment_id"`
+	ExpectedUpdatedAt   pgtype.Timestamptz `json:"expected_updated_at"`
+	AssetTag            string             `json:"asset_tag"`
+	Name                string             `json:"name"`
+	Type                string             `json:"type"`
+	Status              string             `json:"status"`
+	Notes               string             `json:"notes"`
+	ImageObjectKey      *string            `json:"image_object_key"`
+	ImageContentType    *string            `json:"image_content_type"`
+	ImageSizeBytes      *int64             `json:"image_size_bytes"`
+	ImageUploadIntentID *uuid.UUID         `json:"image_upload_intent_id"`
+	UploadHoldToken     []byte             `json:"upload_hold_token"`
+	ActorUserID         *uuid.UUID         `json:"actor_user_id"`
 }
 
 type UpdateEquipmentWithAuditRow struct {
@@ -460,6 +484,8 @@ func (q *Queries) UpdateEquipmentWithAudit(ctx context.Context, arg UpdateEquipm
 		arg.ImageObjectKey,
 		arg.ImageContentType,
 		arg.ImageSizeBytes,
+		arg.ImageUploadIntentID,
+		arg.UploadHoldToken,
 		arg.ActorUserID,
 	)
 	var i UpdateEquipmentWithAuditRow

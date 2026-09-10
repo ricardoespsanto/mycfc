@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
@@ -39,6 +39,7 @@ type RepairStore interface {
 type Repair struct {
 	Store           RepairStore
 	Objects         storage.ObjectStore
+	Uploads         UploadService
 	Sessions        *scs.SessionManager
 	MaxRequestBytes int64
 	MaxPhotoBytes   int64
@@ -166,8 +167,9 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := dbgen.CreateRepairRequestParams{IdempotencyKey: key, EquipmentID: equipmentID, ReportedByID: &user.ID, IssueDescription: form.Description}
-	objectKey := ""
+	repairID := uuid.New()
+	params := dbgen.CreateRepairRequestParams{ID: repairID, IdempotencyKey: key, EquipmentID: equipmentID, ReportedByID: &user.ID, IssueDescription: form.Description}
+	var upload privacyrequests.PreparedUpload
 	if photo != nil {
 		file, err := photo.Open()
 		if err != nil {
@@ -181,17 +183,32 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 			h.validation(w, r, form)
 			return
 		}
-		objectKey = fmt.Sprintf("repairs/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), validated.Extension)
-		if err := h.Objects.PutObject(r.Context(), objectKey, validated.ContentType, validated.Size, bytes.NewReader(validated.Bytes)); err != nil {
+		uploader := h.Uploads
+		if uploader == nil {
+			uploader, _ = h.Objects.(UploadService)
+		}
+		if uploader == nil {
+			h.internal(w, r, privacyrequests.ErrUploadProvenanceUnavailable)
+			return
+		}
+		upload, err = uploader.Upload(r.Context(), privacyrequests.UploadInput{SubjectUserID: &user.ID, ActorUserID: user.ID, SourceKind: "REPAIR_ATTACHMENT", SourceRef: repairID}, validated)
+		if err != nil {
 			h.internal(w, r, storage.ErrObjectUpload)
 			return
 		}
-		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &objectKey, &validated.ContentType, &validated.Size
+		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &upload.ObjectKey, &upload.ContentType, &upload.SizeBytes
+		params.ImageUploadIntentID, params.UploadHoldToken = &upload.IntentID, upload.HoldToken
 	}
 	repair, err := h.Store.CreateRepairRequest(ctx, params)
 	if err != nil {
-		if objectKey != "" {
-			h.deleteObject(r, objectKey)
+		if upload.IntentID != uuid.Nil {
+			uploader := h.Uploads
+			if uploader == nil {
+				uploader, _ = h.Objects.(UploadService)
+			}
+			if uploader != nil {
+				_ = uploader.AttachmentFailed(context.WithoutCancel(r.Context()), upload)
+			}
 		}
 		if isUniqueViolation(err) {
 			existing, lookupErr := h.Store.GetRepairByIdempotencyKey(ctx, key)

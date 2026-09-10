@@ -2056,6 +2056,40 @@ type PrivacyProtectedObjectTargetDigest struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type PrivacyProtectedObjectUploadAbsenceEvidence struct {
+	IntentID              uuid.UUID          `json:"intent_id"`
+	AttemptID             uuid.UUID          `json:"attempt_id"`
+	LeaseEpoch            int64              `json:"lease_epoch"`
+	EvidenceVersion       string             `json:"evidence_version"`
+	DeletedVersionCount   int32              `json:"deleted_version_count"`
+	DeletedMarkerCount    int32              `json:"deleted_marker_count"`
+	ListCallCount         int32              `json:"list_call_count"`
+	StableEmptyCheckCount int32              `json:"stable_empty_check_count"`
+	TranscriptKeyID       string             `json:"transcript_key_id"`
+	TranscriptDigest      []byte             `json:"transcript_digest"`
+	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyProtectedObjectUploadCleanupAttempt struct {
+	ID         uuid.UUID          `json:"id"`
+	IntentID   uuid.UUID          `json:"intent_id"`
+	LeaseEpoch int64              `json:"lease_epoch"`
+	WorkerRef  uuid.UUID          `json:"worker_ref"`
+	AcquiredAt pgtype.Timestamptz `json:"acquired_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	ReleasedAt pgtype.Timestamptz `json:"released_at"`
+	Outcome    *string            `json:"outcome"`
+}
+
+type PrivacyProtectedObjectUploadCleanupJob struct {
+	IntentID      uuid.UUID          `json:"intent_id"`
+	Status        string             `json:"status"`
+	LeaseEpoch    int64              `json:"lease_epoch"`
+	AttemptCount  int32              `json:"attempt_count"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type PrivacyProtectedObjectUploadIntent struct {
 	ID                      uuid.UUID          `json:"id"`
 	SubjectUserID           *uuid.UUID         `json:"subject_user_id"`
@@ -2073,6 +2107,7 @@ type PrivacyProtectedObjectUploadIntent struct {
 	Ciphertext              []byte             `json:"ciphertext"`
 	DigestKeyID             string             `json:"digest_key_id"`
 	LocatorDigest           []byte             `json:"locator_digest"`
+	LocatorCommitment       []byte             `json:"locator_commitment"`
 	ContentType             string             `json:"content_type"`
 	SizeBytes               int64              `json:"size_bytes"`
 	CleanupAfter            pgtype.Timestamptz `json:"cleanup_after"`
@@ -2085,6 +2120,30 @@ type PrivacyProtectedObjectUploadIntentEvent struct {
 	Status     string             `json:"status"`
 	ReasonCode string             `json:"reason_code"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyProtectedObjectUploadIntentHold struct {
+	IntentID    uuid.UUID          `json:"intent_id"`
+	HoldEpoch   int64              `json:"hold_epoch"`
+	TokenDigest []byte             `json:"token_digest"`
+	HeldUntil   pgtype.Timestamptz `json:"held_until"`
+	ReleasedAt  pgtype.Timestamptz `json:"released_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PrivacyProtectedObjectUploadIntentReservation struct {
+	ID                    uuid.UUID          `json:"id"`
+	SubjectUserID         *uuid.UUID         `json:"subject_user_id"`
+	ProvenanceActorUserID uuid.UUID          `json:"provenance_actor_user_id"`
+	SourceKind            string             `json:"source_kind"`
+	SourceRef             uuid.UUID          `json:"source_ref"`
+	ServiceCode           string             `json:"service_code"`
+	ContentType           string             `json:"content_type"`
+	SizeBytes             int64              `json:"size_bytes"`
+	TokenDigest           []byte             `json:"token_digest"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	CleanupAfter          pgtype.Timestamptz `json:"cleanup_after"`
+	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 }
 
 type PrivacyPseudonymousPrincipal struct {

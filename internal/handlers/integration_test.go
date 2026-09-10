@@ -895,7 +895,17 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 	}
 	consentVersion, consentSHA := "profile-v1", strings.Repeat("c", 64)
 	key := "profiles/integration/photo.png"
-	if _, err := store.SavePhoto(ctx, ProfilePhotoUpdate{ActorID: guardianID, SubjectID: guardianID, ObjectKey: key, ContentType: "image/png", Size: 128, ConsentVersion: consentVersion, ConsentSHA256: consentSHA, AcceptConsent: true, UserAgent: "integration-test"}); err != nil {
+	upload := testPreparedUpload(key, "image/png", 128)
+	if _, err := pool.Exec(ctx, `SELECT privacy_upload_begin($1,$2,$3,'MEMBER_PROFILE_PHOTO',$2,'private-media','image/png',128,$4)`, upload.IntentID, guardianID, guardianID, upload.HoldToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT privacy_upload_finalize($1,$2,'x25519-aes256gcm-hkdfsha256/upload-intent-v1','X25519-HKDF-SHA256-AES-256-GCM','upload-key-test',$3,$4,$5,'upload-digest-test',$6,digest(convert_to($7,'UTF8'),'sha256'))`, upload.IntentID, upload.HoldToken, bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 12), bytes.Repeat([]byte{3}, 32), bytes.Repeat([]byte{4}, 32), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT privacy_upload_confirm_put($1,$2)`, upload.IntentID, upload.HoldToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SavePhoto(ctx, ProfilePhotoUpdate{ActorID: guardianID, SubjectID: guardianID, Upload: upload, ConsentVersion: consentVersion, ConsentSHA256: consentSHA, AcceptConsent: true, UserAgent: "integration-test"}); err != nil {
 		t.Fatal(err)
 	}
 	avatar, err := store.Avatar(ctx, dbgen.GetMemberAvatarParams{UserID: guardianID, DocumentVersion: consentVersion, DocumentSha256: consentSHA})
