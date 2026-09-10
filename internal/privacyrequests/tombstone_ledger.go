@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
@@ -31,12 +33,16 @@ const (
 	TombstoneClosureVersion  = "restore-tombstone-closure/v1"
 	TombstoneEnvelopeVersion = "x25519-aes256gcm-hkdfsha256/v1"
 	tombstoneAlgorithm       = "X25519-HKDF-SHA256-AES-256-GCM"
+	maxTombstonePayloadBytes = 1 << 20
+	maxBrokerRequestBytes    = 2 << 20
+	maxBrokerResponseBytes   = 8 << 10
 )
 
 var (
 	ErrTombstoneUnavailable = errors.New("privacy restore tombstone unavailable")
 	ErrTombstoneInvalid     = errors.New("privacy restore tombstone invalid")
 	ledgerPrefix            = regexp.MustCompile(`^[a-z0-9][a-z0-9/_-]{0,119}/$`)
+	tombstoneLambdaFunction = regexp.MustCompile(`^(?:[A-Za-z0-9_-]{1,64}|arn:(?:aws|aws-us-gov|aws-cn):lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]+)?)$`)
 )
 
 // RestoreTombstone is the minimum replay identity. It deliberately excludes
@@ -258,14 +264,130 @@ type TombstoneLedger interface {
 	Write(context.Context, SealedTombstone) (TombstoneLedgerReceipt, error)
 }
 
+type tombstoneLambdaAPI interface {
+	Invoke(context.Context, *awslambda.InvokeInput, ...func(*awslambda.Options)) (*awslambda.InvokeOutput, error)
+}
+
+type tombstoneBrokerRequest struct {
+	Kind          string     `json:"kind"`
+	LocatorKeyID  string     `json:"locator_key_id"`
+	LocatorDigest []byte     `json:"locator_digest"`
+	Payload       []byte     `json:"payload"`
+	Checksum      []byte     `json:"checksum"`
+	RetainUntil   *time.Time `json:"retain_until,omitempty"`
+}
+
+type tombstoneBrokerResponse struct {
+	Kind             string     `json:"kind"`
+	LocatorKeyID     string     `json:"locator_key_id"`
+	LocatorDigest    []byte     `json:"locator_digest"`
+	ObjectVersion    string     `json:"object_version"`
+	CiphertextSHA256 []byte     `json:"ciphertext_sha256"`
+	SizeBytes        int64      `json:"size_bytes"`
+	WrittenAt        time.Time  `json:"written_at"`
+	VerifiedAt       time.Time  `json:"verified_at"`
+	RetainUntil      *time.Time `json:"retain_until,omitempty"`
+}
+
+// LambdaTombstoneLedger is the production adapter. The application can invoke
+// only one configured broker and sends it only encrypted, bounded material.
+// The broker owns all S3 permissions and returns an independently verifiable
+// immutable-object receipt.
+type LambdaTombstoneLedger struct {
+	client       tombstoneLambdaAPI
+	functionName string
+}
+
+func NewLambdaTombstoneLedger(client tombstoneLambdaAPI, functionName string) (*LambdaTombstoneLedger, error) {
+	functionName = strings.TrimSpace(functionName)
+	if client == nil || !tombstoneLambdaFunction.MatchString(functionName) {
+		return nil, ErrTombstoneInvalid
+	}
+	return &LambdaTombstoneLedger{client: client, functionName: functionName}, nil
+}
+
+func (l *LambdaTombstoneLedger) Write(ctx context.Context, sealed SealedTombstone) (TombstoneLedgerReceipt, error) {
+	var zero TombstoneLedgerReceipt
+	if l == nil || l.client == nil || !validSealedTombstone(sealed) {
+		return zero, ErrTombstoneInvalid
+	}
+	request := tombstoneBrokerRequest{
+		Kind: sealed.Kind, LocatorKeyID: sealed.LocatorKeyID, LocatorDigest: bytes.Clone(sealed.Locator),
+		Payload: bytes.Clone(sealed.Encoded), Checksum: bytes.Clone(sealed.SHA256),
+	}
+	if sealed.Kind == "closure" {
+		retainUntil := sealed.RetainUntil.UTC()
+		request.RetainUntil = &retainUntil
+	}
+	payload, err := json.Marshal(request)
+	if err != nil || len(payload) == 0 || len(payload) > maxBrokerRequestBytes {
+		return zero, ErrTombstoneInvalid
+	}
+	output, err := l.client.Invoke(ctx, &awslambda.InvokeInput{
+		FunctionName: aws.String(l.functionName), InvocationType: lambdatypes.InvocationTypeRequestResponse,
+		LogType: lambdatypes.LogTypeNone, Payload: payload,
+	})
+	if err != nil || output == nil || output.StatusCode != 200 || output.FunctionError != nil ||
+		len(output.Payload) == 0 || len(output.Payload) > maxBrokerResponseBytes {
+		return zero, ErrTombstoneUnavailable
+	}
+	var response tombstoneBrokerResponse
+	decoder := json.NewDecoder(bytes.NewReader(output.Payload))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&response); err != nil {
+		return zero, ErrTombstoneUnavailable
+	}
+	if err = ensureJSONEOF(decoder); err != nil || !validBrokerResponse(response, sealed) {
+		return zero, ErrTombstoneUnavailable
+	}
+	return TombstoneLedgerReceipt{
+		LocatorKeyID: response.LocatorKeyID, LocatorDigest: bytes.Clone(response.LocatorDigest),
+		ObjectVersion: response.ObjectVersion, CiphertextSHA: bytes.Clone(response.CiphertextSHA256),
+		SizeBytes: response.SizeBytes, WrittenAt: response.WrittenAt.UTC(), VerifiedAt: response.VerifiedAt.UTC(),
+	}, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra json.RawMessage
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return ErrTombstoneInvalid
+}
+
+func validSealedTombstone(sealed SealedTombstone) bool {
+	digest := sha256.Sum256(sealed.Encoded)
+	return (sealed.Kind == "intent" || sealed.Kind == "closure") && len(sealed.Locator) == sha256.Size &&
+		len(sealed.SHA256) == sha256.Size && len(sealed.Encoded) > 0 && len(sealed.Encoded) <= maxTombstonePayloadBytes &&
+		hmac.Equal(digest[:], sealed.SHA256) && policyKey.MatchString(sealed.LocatorKeyID) && ((sealed.Kind == "closure" && !sealed.RetainUntil.IsZero()) ||
+		(sealed.Kind == "intent" && sealed.RetainUntil.IsZero()))
+}
+
+func validBrokerResponse(response tombstoneBrokerResponse, sealed SealedTombstone) bool {
+	if response.Kind != sealed.Kind || response.LocatorKeyID != sealed.LocatorKeyID ||
+		!hmac.Equal(response.LocatorDigest, sealed.Locator) || !hmac.Equal(response.CiphertextSHA256, sealed.SHA256) ||
+		response.SizeBytes != int64(len(sealed.Encoded)) || response.ObjectVersion == "" ||
+		response.ObjectVersion != strings.TrimSpace(response.ObjectVersion) || len(response.ObjectVersion) > 1024 ||
+		response.WrittenAt.IsZero() || response.VerifiedAt.IsZero() || response.VerifiedAt.Before(response.WrittenAt) {
+		return false
+	}
+	if sealed.Kind == "intent" {
+		return response.RetainUntil == nil
+	}
+	return response.RetainUntil != nil && response.RetainUntil.Equal(sealed.RetainUntil.UTC()) &&
+		!response.VerifiedAt.After(sealed.RetainUntil.UTC())
+}
+
 type tombstoneS3API interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
-// S3TombstoneLedger writes one immutable, conditionally-created object per
-// execution and verifies the exact version and checksum before returning a DB
-// receipt. It emits no identifiers in metadata or object keys.
+// S3TombstoneLedger is a non-production adapter for integration tests and
+// controlled repair tooling. Production composition must use
+// LambdaTombstoneLedger so the long-lived application role has no S3 ledger or
+// object-retention permissions.
 type S3TombstoneLedger struct {
 	client tombstoneS3API
 	bucket string
@@ -283,7 +405,7 @@ func NewS3TombstoneLedger(client tombstoneS3API, bucket, prefix string) (*S3Tomb
 
 func (s *S3TombstoneLedger) Write(ctx context.Context, sealed SealedTombstone) (TombstoneLedgerReceipt, error) {
 	var zero TombstoneLedgerReceipt
-	if s == nil || s.client == nil || (sealed.Kind != "intent" && sealed.Kind != "closure") || len(sealed.Locator) != sha256.Size || len(sealed.SHA256) != sha256.Size || len(sealed.Encoded) == 0 || !policyKey.MatchString(sealed.LocatorKeyID) || (sealed.Kind == "closure" && sealed.RetainUntil.IsZero()) || (sealed.Kind == "intent" && !sealed.RetainUntil.IsZero()) {
+	if s == nil || s.client == nil || !validSealedTombstone(sealed) {
 		return zero, ErrTombstoneInvalid
 	}
 	writtenAt := s.now().UTC()
