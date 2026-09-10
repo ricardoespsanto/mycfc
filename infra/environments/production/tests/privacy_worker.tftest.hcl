@@ -218,6 +218,40 @@ run "backup_cleanup_failure_alerts_immediately" {
   }
 }
 
+run "repair_retention_backstop_and_alarm_are_exact" {
+  command = plan
+
+  plan_options {
+    target = [
+      aws_s3_bucket_lifecycle_configuration.repairs,
+      aws_cloudwatch_log_metric_filter.privacy_retention_failure,
+      aws_cloudwatch_metric_alarm.privacy_retention_failure,
+    ]
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_lifecycle_configuration.repairs.rule[0].filter[0].prefix == "repairs/" &&
+      aws_s3_bucket_lifecycle_configuration.repairs.rule[0].expiration[0].days == 30 &&
+      aws_s3_bucket_lifecycle_configuration.repairs.rule[0].noncurrent_version_expiration[0].noncurrent_days == 1 &&
+      aws_s3_bucket_lifecycle_configuration.repairs.rule[0].abort_incomplete_multipart_upload[0].days_after_initiation == 7
+    )
+    error_message = "Repair photos require the 30-day current and one-day noncurrent lifecycle backstop under the exact repair prefix."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_retention_failure.pattern, "privacy_retention_sla_breach") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_retention_failure.pattern, "privacy_retention_backlog_breach") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_retention_failure.pattern, "privacy_retention_failed") &&
+      aws_cloudwatch_metric_alarm.privacy_retention_failure.evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_retention_failure.datapoints_to_alarm == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_retention_failure.period == 60
+    )
+    error_message = "A retention failure or SLA breach must alert in the next one-minute period."
+  }
+}
+
 run "privacy_restore_drill_failures_alert_immediately" {
   command = plan
 

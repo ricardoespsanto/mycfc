@@ -110,6 +110,17 @@ case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
 	*) printf '%s\n' 'PRIVACY_RESTORE_PROMOTION_GATE_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
 
+case "${PRIVACY_RETENTION_ENABLED:-false}" in
+	true)
+		if [ ! -f /etc/mycfc/privacy-retention.env ] || [ "$(stat -c '%u:%a' /etc/mycfc/privacy-retention.env)" != '0:600' ]; then
+			printf '%s\n' '/etc/mycfc/privacy-retention.env must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'PRIVACY_RETENTION_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
 case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
 	true)
 		if [ ! -f /etc/mycfc/hetzner-read/token ] || [ "$(stat -c '%u:%a' /etc/mycfc/hetzner-read/token)" != '0:600' ]; then
@@ -144,6 +155,7 @@ chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
 chmod 0755 "$deployment_dir/hetzner-backup-posture.sh"
 chmod 0755 "$deployment_dir/postgres-restore-drill.sh"
 chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
+chmod 0755 "$deployment_dir/privacy-retention.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
@@ -154,6 +166,8 @@ install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.service" /etc/syst
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.timer" /etc/systemd/system/mycfc-hetzner-backup-posture.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.service" /etc/systemd/system/mycfc-postgres-restore-drill.service
 install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.timer" /etc/systemd/system/mycfc-postgres-restore-drill.timer
+install -m 0644 "$deployment_dir/mycfc-privacy-retention.service" /etc/systemd/system/mycfc-privacy-retention.service
+install -m 0644 "$deployment_dir/mycfc-privacy-retention.timer" /etc/systemd/system/mycfc-privacy-retention.timer
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
@@ -171,6 +185,11 @@ if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" = true ]; then
 	systemctl enable --now mycfc-postgres-restore-drill.timer
 else
 	systemctl disable --now mycfc-postgres-restore-drill.timer >/dev/null 2>&1 || true
+fi
+if [ "${PRIVACY_RETENTION_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-privacy-retention.timer
+else
+	systemctl disable --now mycfc-privacy-retention.timer >/dev/null 2>&1 || true
 fi
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy

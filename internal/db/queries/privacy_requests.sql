@@ -276,12 +276,25 @@ SELECT retained.run_id::uuid AS run_id,
  retained.outbox_payloads_deleted::integer AS outbox_payloads_deleted,
  retained.outbox_evidence_deleted::integer AS outbox_evidence_deleted,
  retained.consent_network_scrubbed::integer AS consent_network_scrubbed,
+ retained.consent_evidence_deleted::integer AS consent_evidence_deleted,
+ retained.audit_events_pseudonymized::integer AS audit_events_pseudonymized,
+ retained.repair_attachments_queued::integer AS repair_attachments_queued,
  retained.event_responses_deleted::integer AS event_responses_deleted,
  retained.announcement_deliveries_deleted::integer AS announcement_deliveries_deleted,
  retained.suggestions_deleted::integer AS suggestions_deleted,
  retained.privacy_working_scrubbed::integer AS privacy_working_scrubbed,
  retained.auth_limits_deleted::integer AS auth_limits_deleted
 FROM privacy_retention_run(sqlc.arg(worker_ref),sqlc.arg(batch_limit)) AS retained;
+
+-- name: GetPrivacyRetentionStatus :one
+SELECT status.due_count::bigint AS due_count,
+ status.oldest_due_age_seconds::bigint AS oldest_due_age_seconds,
+ status.repair_due_count::bigint AS repair_due_count,
+ status.repair_overdue_count::bigint AS repair_overdue_count,
+ status.repair_terminal_failures::bigint AS repair_terminal_failures,
+ status.repair_legacy_due_count::bigint AS repair_legacy_due_count,
+ status.last_run_age_seconds::bigint AS last_run_age_seconds
+FROM privacy_retention_status() AS status;
 
 -- name: PreparePrivacyTombstoneClosure :one
 SELECT prepared.execution_id::uuid AS execution_id,

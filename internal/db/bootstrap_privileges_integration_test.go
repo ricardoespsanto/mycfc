@@ -34,6 +34,9 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err = tx.Exec(ctx, `DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_retention') THEN CREATE ROLE mycfc_privacy_retention NOLOGIN; END IF; END $$`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = tx.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid) TO `+quoteIdentifier(appRole)); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +171,25 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v provider_capture=%v provider_materialize=%v provider_complete=%v provider_list=%v",
 			appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects,
 			appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders)
+	}
+	var retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage bool
+	var retentionRuns, retentionStatus, retentionInternal, retentionCleanup bool
+	if err = tx.QueryRow(ctx, `SELECT
+	 (SELECT rolcanlogin FROM pg_roles WHERE rolname='mycfc_privacy_retention'),
+	 has_table_privilege('mycfc_privacy_retention','users','SELECT'),
+	 has_table_privilege('mycfc_privacy_retention','privacy_retention_runs','SELECT'),
+	 has_schema_privilege('mycfc_privacy_retention','privacy_protected','USAGE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_run(uuid,integer)','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_status()','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_pseudonymize_audit(integer)','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE')`).Scan(
+		&retentionLogin, &retentionReadsUsers, &retentionReadsRuns, &retentionProtectedUsage,
+		&retentionRuns, &retentionStatus, &retentionInternal, &retentionCleanup); err != nil {
+		t.Fatal(err)
+	}
+	if retentionLogin || retentionReadsUsers || retentionReadsRuns || retentionProtectedUsage || !retentionRuns || !retentionStatus || retentionInternal || retentionCleanup {
+		t.Fatalf("retention boundary login=%v users=%v runs_table=%v protected=%v run=%v status=%v internal=%v cleanup=%v",
+			retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage, retentionRuns, retentionStatus, retentionInternal, retentionCleanup)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)

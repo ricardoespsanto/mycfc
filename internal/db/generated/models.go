@@ -1524,16 +1524,19 @@ type CompetitionDocument struct {
 }
 
 type ConsentForm struct {
-	ID              uuid.UUID          `json:"id"`
-	UserID          uuid.UUID          `json:"user_id"`
-	GrantedByUserID *uuid.UUID         `json:"granted_by_user_id"`
-	ConsentType     string             `json:"consent_type"`
-	DocumentVersion string             `json:"document_version"`
-	DocumentSha256  string             `json:"document_sha256"`
-	IsAccepted      bool               `json:"is_accepted"`
-	DateSigned      pgtype.Timestamptz `json:"date_signed"`
-	IpAddress       *netip.Addr        `json:"ip_address"`
-	UserAgent       string             `json:"user_agent"`
+	ID                uuid.UUID          `json:"id"`
+	UserID            uuid.UUID          `json:"user_id"`
+	GrantedByUserID   *uuid.UUID         `json:"granted_by_user_id"`
+	ConsentType       string             `json:"consent_type"`
+	DocumentVersion   string             `json:"document_version"`
+	DocumentSha256    string             `json:"document_sha256"`
+	IsAccepted        bool               `json:"is_accepted"`
+	DateSigned        pgtype.Timestamptz `json:"date_signed"`
+	IpAddress         *netip.Addr        `json:"ip_address"`
+	UserAgent         string             `json:"user_agent"`
+	CeasedAt          pgtype.Timestamptz `json:"ceased_at"`
+	CessationReason   *string            `json:"cessation_reason"`
+	EvidenceExpiresAt pgtype.Timestamptz `json:"evidence_expires_at"`
 }
 
 type DataErasureRequest struct {
@@ -2465,6 +2468,9 @@ type PrivacyRetentionRun struct {
 	SuggestionsDeleted            int32              `json:"suggestions_deleted"`
 	PrivacyWorkingScrubbed        int32              `json:"privacy_working_scrubbed"`
 	AuthLimitsDeleted             int32              `json:"auth_limits_deleted"`
+	ConsentEvidenceDeleted        int32              `json:"consent_evidence_deleted"`
+	AuditEventsPseudonymized      int32              `json:"audit_events_pseudonymized"`
+	RepairAttachmentsQueued       int32              `json:"repair_attachments_queued"`
 }
 
 type PrivacyReviewerGrant struct {

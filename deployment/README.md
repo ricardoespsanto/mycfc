@@ -49,6 +49,9 @@ PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN=<exact-ledger-KMS-key-ARN>
 PRIVACY_RESTORE_DRILL_ENABLED=false
 PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=false
 
+# Independent bounded retention maintenance; remains inert by default.
+PRIVACY_RETENTION_ENABLED=false
+
 GALLERY_URL=https://example.com/gallery
 
 CONSENT_TERMS_VERSION=2026-09-06
@@ -66,6 +69,8 @@ DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
 Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. #244 supports an optional distinct privacy-executor PostgreSQL login, but this source release does not install or start a privacy worker. #248 must separately approve and provision that credential through a worker-only AWS identity and secret; never add the executor password to `/mycfc/production/app-secrets`, which the web identity can read.
+
+The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
 
 ## Required AWS configuration
 

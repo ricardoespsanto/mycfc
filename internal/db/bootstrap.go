@@ -23,7 +23,8 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609100009_privacy_provider_execution"
+	baselineIncludesThrough = "202609100010_privacy_retention_completion"
+	privacyRetentionRole    = "mycfc_privacy_retention"
 )
 
 type RoleCredentials struct {
@@ -58,13 +59,16 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
 		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
 		{"configure migration role", roleStatement(credentials.MigrationUsername, credentials.MigrationPassword)},
+		{"configure privacy retention capability role", noLoginRoleStatement(privacyRetentionRole)},
 		{"grant migration membership", "GRANT " + migration + " TO CURRENT_USER"},
 		{"revoke public database access", "REVOKE ALL ON DATABASE " + database + " FROM PUBLIC"},
 		{"grant database access", "GRANT CONNECT, CREATE ON DATABASE " + database + " TO " + migration},
 		{"grant app database access", "GRANT CONNECT ON DATABASE " + database + " TO " + app},
+		{"grant privacy retention database access", "GRANT CONNECT ON DATABASE " + database + " TO " + quoteIdentifier(privacyRetentionRole)},
 		{"revoke public schema access", "REVOKE ALL ON SCHEMA public FROM PUBLIC"},
 		{"set public schema owner", "ALTER SCHEMA public OWNER TO " + migration},
 		{"grant app schema usage", "GRANT USAGE ON SCHEMA public TO " + app},
+		{"grant privacy retention schema usage", "GRANT USAGE ON SCHEMA public TO " + quoteIdentifier(privacyRetentionRole)},
 		{"create metadata schema", "CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration},
 		{"set metadata schema owner", "ALTER SCHEMA mycfc_meta OWNER TO " + migration},
 		{"revoke public metadata access", "REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC"},
@@ -100,6 +104,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		return err
 	}
 	app := quoteIdentifier(credentials.AppUsername)
+	retention := quoteIdentifier(privacyRetentionRole)
 	executionTables := strings.Join([]string{
 		"privacy_pseudonymous_principals",
 		"privacy_erasure_executions",
@@ -112,6 +117,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		"privacy_erasure_retention_anchors",
 		"privacy_erasure_restricted_records",
 	}, ", ")
+	retentionTables := "privacy_retention_runs, privacy_outbox_delivery_evidence"
 	webHandoffTables := strings.Join([]string{
 		"privacy_erasure_executions",
 		"privacy_erasure_access_revocations",
@@ -120,10 +126,13 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	}, ", ")
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
+		{"revoke public retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
+		{"restrict web consent evidence writes", "REVOKE UPDATE, DELETE ON TABLE consent_forms FROM " + app},
 		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + app},
@@ -139,6 +148,14 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke web provider worker routines", "REVOKE EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
 		{"grant web provider capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) TO " + app},
 		{"revoke web restore and retention routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea), privacy_retention_run(uuid,integer) FROM " + app},
+		{"revoke web retention internals", "REVOKE EXECUTE ON FUNCTION privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_status() FROM " + app},
+		{"grant web consent cessation", "GRANT EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz) TO " + app},
+		{"revoke privacy retention table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + retention},
+		{"revoke privacy retention protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + retention},
+		{"revoke privacy retention sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + retention},
+		{"revoke privacy retention protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + retention},
+		{"revoke privacy retention internals", "REVOKE EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz), privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer) FROM " + retention},
+		{"grant privacy retention fixed API", "GRANT EXECUTE ON FUNCTION privacy_retention_run(uuid,integer), privacy_retention_status() TO " + retention},
 	}
 	if privacyExecutorConfigured(credentials) {
 		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
@@ -161,7 +178,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"grant privacy executor provider routines", "GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 			namedStatement{"revoke privacy executor legacy and offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) FROM " + executor},
 			namedStatement{"grant privacy executor tombstone routines", "GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) TO " + executor},
-			namedStatement{"revoke privacy executor retention routine", "REVOKE EXECUTE ON FUNCTION privacy_retention_run(uuid,integer) FROM " + executor},
+			namedStatement{"revoke privacy executor retention routine", "REVOKE EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz), privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_run(uuid,integer), privacy_retention_status() FROM " + executor},
 		)
 	}
 	for _, statement := range statements {
@@ -381,6 +398,12 @@ func roleStatement(username, password string) string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
 		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
 		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD " + quoteLiteral(password) + "; END $$"
+}
+
+func noLoginRoleStatement(username string) string {
+	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
+		"CREATE ROLE " + quoteIdentifier(username) + " NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
+		"ALTER ROLE " + quoteIdentifier(username) + " WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END $$"
 }
 
 func transferOwnershipStatement(migrationUsername string) string {

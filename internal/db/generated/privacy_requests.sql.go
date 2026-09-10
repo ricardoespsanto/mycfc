@@ -1394,6 +1394,42 @@ func (q *Queries) GetPrivacyRequestForUpdate(ctx context.Context, publicRef uuid
 	return i, err
 }
 
+const getPrivacyRetentionStatus = `-- name: GetPrivacyRetentionStatus :one
+SELECT status.due_count::bigint AS due_count,
+ status.oldest_due_age_seconds::bigint AS oldest_due_age_seconds,
+ status.repair_due_count::bigint AS repair_due_count,
+ status.repair_overdue_count::bigint AS repair_overdue_count,
+ status.repair_terminal_failures::bigint AS repair_terminal_failures,
+ status.repair_legacy_due_count::bigint AS repair_legacy_due_count,
+ status.last_run_age_seconds::bigint AS last_run_age_seconds
+FROM privacy_retention_status() AS status
+`
+
+type GetPrivacyRetentionStatusRow struct {
+	DueCount               int64 `json:"due_count"`
+	OldestDueAgeSeconds    int64 `json:"oldest_due_age_seconds"`
+	RepairDueCount         int64 `json:"repair_due_count"`
+	RepairOverdueCount     int64 `json:"repair_overdue_count"`
+	RepairTerminalFailures int64 `json:"repair_terminal_failures"`
+	RepairLegacyDueCount   int64 `json:"repair_legacy_due_count"`
+	LastRunAgeSeconds      int64 `json:"last_run_age_seconds"`
+}
+
+func (q *Queries) GetPrivacyRetentionStatus(ctx context.Context) (GetPrivacyRetentionStatusRow, error) {
+	row := q.db.QueryRow(ctx, getPrivacyRetentionStatus)
+	var i GetPrivacyRetentionStatusRow
+	err := row.Scan(
+		&i.DueCount,
+		&i.OldestDueAgeSeconds,
+		&i.RepairDueCount,
+		&i.RepairOverdueCount,
+		&i.RepairTerminalFailures,
+		&i.RepairLegacyDueCount,
+		&i.LastRunAgeSeconds,
+	)
+	return i, err
+}
+
 const getPrivacyReviewerGrantForShare = `-- name: GetPrivacyReviewerGrantForShare :one
 SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id FROM privacy_reviewer_grants WHERE user_id = $1 AND revoked_at IS NULL FOR SHARE
 `
@@ -2538,6 +2574,9 @@ SELECT retained.run_id::uuid AS run_id,
  retained.outbox_payloads_deleted::integer AS outbox_payloads_deleted,
  retained.outbox_evidence_deleted::integer AS outbox_evidence_deleted,
  retained.consent_network_scrubbed::integer AS consent_network_scrubbed,
+ retained.consent_evidence_deleted::integer AS consent_evidence_deleted,
+ retained.audit_events_pseudonymized::integer AS audit_events_pseudonymized,
+ retained.repair_attachments_queued::integer AS repair_attachments_queued,
  retained.event_responses_deleted::integer AS event_responses_deleted,
  retained.announcement_deliveries_deleted::integer AS announcement_deliveries_deleted,
  retained.suggestions_deleted::integer AS suggestions_deleted,
@@ -2559,6 +2598,9 @@ type RunPrivacyRetentionRow struct {
 	OutboxPayloadsDeleted         int32     `json:"outbox_payloads_deleted"`
 	OutboxEvidenceDeleted         int32     `json:"outbox_evidence_deleted"`
 	ConsentNetworkScrubbed        int32     `json:"consent_network_scrubbed"`
+	ConsentEvidenceDeleted        int32     `json:"consent_evidence_deleted"`
+	AuditEventsPseudonymized      int32     `json:"audit_events_pseudonymized"`
+	RepairAttachmentsQueued       int32     `json:"repair_attachments_queued"`
 	EventResponsesDeleted         int32     `json:"event_responses_deleted"`
 	AnnouncementDeliveriesDeleted int32     `json:"announcement_deliveries_deleted"`
 	SuggestionsDeleted            int32     `json:"suggestions_deleted"`
@@ -2577,6 +2619,9 @@ func (q *Queries) RunPrivacyRetention(ctx context.Context, arg RunPrivacyRetenti
 		&i.OutboxPayloadsDeleted,
 		&i.OutboxEvidenceDeleted,
 		&i.ConsentNetworkScrubbed,
+		&i.ConsentEvidenceDeleted,
+		&i.AuditEventsPseudonymized,
+		&i.RepairAttachmentsQueued,
 		&i.EventResponsesDeleted,
 		&i.AnnouncementDeliveriesDeleted,
 		&i.SuggestionsDeleted,

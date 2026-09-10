@@ -158,7 +158,7 @@ func TestPrivacyUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) 
 	if _, err = conn.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Rebound upload pointer',$2,'hash','1990-01-01')`, reboundProfileID, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.Exec(ctx, `UPDATE member_profiles SET user_id=$2 WHERE user_id=$1`, actorID, reboundProfileID); err == nil || !strings.Contains(err.Error(), "upload pointer invariant rejected") {
+	if _, err = conn.Exec(ctx, `UPDATE member_profiles SET user_id=$2 WHERE user_id=$1`, actorID, reboundProfileID); err == nil || (!strings.Contains(err.Error(), "upload pointer invariant rejected") && !strings.Contains(err.Error(), "profile_photo_active_consent_required")) {
 		t.Fatalf("profile source identity rebinding error=%v", err)
 	}
 	if err = q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: profileIntent, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: actorID}); err == nil {
