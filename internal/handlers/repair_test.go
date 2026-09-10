@@ -276,13 +276,14 @@ func (s *repairStoreFake) ListRepairRequestsForMembers(context.Context, dbgen.Li
 
 type repairObjectStoreFake struct {
 	puts, deletes int
+	putErr        error
 	deleteErr     error
 }
 
 func (s *repairObjectStoreFake) PutObject(_ context.Context, _ string, _ string, _ int64, body io.Reader) error {
 	s.puts++
 	_, _ = io.Copy(io.Discard, body)
-	return nil
+	return s.putErr
 }
 func (s *repairObjectStoreFake) DeleteObject(context.Context, string) error {
 	s.deletes++
@@ -299,5 +300,22 @@ func TestRepairObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
 	h.deleteObject(httptest.NewRequest(http.MethodPost, "/repairs", nil), secretKey)
 	if strings.Contains(logs.String(), secretKey) || !strings.Contains(logs.String(), "delete repair photo") {
 		t.Fatalf("cleanup log = %q", logs.String())
+	}
+}
+
+func TestRepairUploadFailureLogsOnlyStableError(t *testing.T) {
+	logs := captureDefaultLogs(t)
+	secret := "provider failure containing private details"
+	userID, equipmentID := uuid.New(), uuid.New()
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
+	objects := &repairObjectStoreFake{putErr: errors.New(secret)}
+
+	response := repairResponse(t, Repair{Store: store, Objects: objects}, userID, equipmentID, pngPhoto(t), false)
+
+	if response.Code != http.StatusInternalServerError || store.creates != 0 {
+		t.Fatalf("status = %d, creates = %d", response.Code, store.creates)
+	}
+	if strings.Contains(logs.String(), secret) || !strings.Contains(logs.String(), "object upload failed") {
+		t.Fatalf("upload log = %q", logs.String())
 	}
 }
