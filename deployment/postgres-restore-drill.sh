@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 backup_credentials_file=${MYCFC_BACKUP_CREDENTIALS_FILE:-/etc/mycfc/backup-aws/credentials}
@@ -50,6 +51,7 @@ set +a
 : "${BACKUP_KMS_KEY_ID:?}"
 : "${PRIVACY_RESTORE_LEDGER_BUCKET:?}"
 : "${PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN:?}"
+: "${PRIVACY_ACTIVATION_POLICY_VERSION:?}"
 : "${POSTGRES_DB:?}"
 
 case "$BACKUP_KMS_KEY_ID" in
@@ -77,6 +79,12 @@ if ! printf '%s' "$candidate_image" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
 	printf '%s\n' 'The restore drill requires an immutable image digest.' >&2
 	exit 1
 fi
+if ! printf '%s' "$PRIVACY_ACTIVATION_POLICY_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'; then
+	printf '%s\n' 'The restore drill requires the current privacy policy version.' >&2
+	exit 1
+fi
+privacy_executor_version=privacy-erasure-executor/v2
+privacy_plan_schema_version=privacy-erasure-plan/v2
 
 check_secret_file() {
 	file=$1
@@ -128,6 +136,14 @@ hmac_sha256() {
 	input=$1
 	printf '%s' "$input" |
 		python3 -c 'import hashlib,hmac,pathlib,sys; key=bytes.fromhex(pathlib.Path(sys.argv[1]).read_text().strip()); sys.stdout.write(hmac.new(key,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' "$2"
+}
+
+s3_version_ref() {
+	python3 -c 'import sys,urllib.parse; print("s3://"+sys.argv[1]+"/"+sys.argv[2]+"?versionId="+urllib.parse.quote_plus(sys.argv[3],safe=""))' "$1" "$2" "$3"
+}
+
+checksum_base64_to_hex() {
+	printf '%s' "$1" | base64 -d | od -An -v -tx1 | tr -d ' \n'
 }
 
 normalize_rfc3339() {
@@ -189,12 +205,14 @@ validate_backup_candidate() {
 	[ "$manifest_checksum" = "$(jq -r .ChecksumSHA256 "$manifest_head")" ] || return 1
 
 	jq -e --arg database "$POSTGRES_DB" --arg manifest_key "$manifest_key" '
-		(type == "object") and (keys | sort == ["auth_hmac_sha256","ciphertext","contract","created_at","database","dump_key","dump_version","iv","sha256"])
-		and .contract == "mycfc/postgres-backup/v2"
+		(type == "object") and (keys | sort == ["auth_hmac_sha256","cipher","ciphertext","contract","created_at","database","dump_key","dump_version","kdf","kdf_iterations","sha256"])
+		and .contract == "mycfc/postgres-backup/v3"
 		and .database == $database
 		and (.created_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 		and (.ciphertext | type == "string" and length > 0)
-		and (.iv | type == "string" and test("^[0-9a-f]{32}$"))
+		and .cipher == "AES-256-CBC"
+		and .kdf == "PBKDF2-HMAC-SHA256"
+		and .kdf_iterations == 600000
 		and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
 		and (.auth_hmac_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
 		and (.dump_version | type == "string" and length > 0 and length <= 1024)
@@ -231,6 +249,8 @@ while IFS="$(printf '\t')" read -r candidate_modified candidate_key candidate_ve
 		selected_manifest="$work_dir/manifest.json"
 		cp "$work_dir/candidate-manifest.json" "$selected_manifest"
 		cp "$work_dir/candidate-dump.enc" "$work_dir/dump.enc"
+		cp "$work_dir/candidate-manifest-head.json" "$work_dir/manifest-head.json"
+		cp "$work_dir/candidate-dump-head.json" "$work_dir/dump-head.json"
 		selected_manifest_key=$candidate_key
 		selected_manifest_version=$candidate_version
 		selected_dump_key=$(jq -r .dump_key "$selected_manifest")
@@ -285,7 +305,7 @@ if [ "$ledger_object_count" -gt "$ledger_max_objects" ] || [ "$ledger_total_byte
 	exit 1
 fi
 
-printf '%s\n' '{"contract":"mycfc/privacy-restore-ledger-input/v1","objects":[]}' >"$work_dir/ledger-building.json"
+printf '%s\n' '{"contract":"mycfc/privacy-restore-ledger-input/v2","source":"LIVE_LEDGER","objects":[]}' >"$work_dir/ledger-building.json"
 ledger_index=0
 while IFS="$(printf '\t')" read -r ledger_key ledger_version listed_size; do
 	[ -n "$ledger_key" ] || continue
@@ -344,6 +364,11 @@ log_event "privacy_restore_ledger_prefetched object_count=$ledger_object_count i
 # internal Docker network. They receive no SMTP/provider/runtime AWS settings.
 docker network create --internal "$network" >/dev/null
 restore_password=$(openssl rand -hex 32)
+observer_password=$(openssl rand -hex 32)
+observer_user=mycfc_restore_observer
+PRIVACY_RESTORE_OBSERVER_DB_USER=$observer_user
+PRIVACY_RESTORE_OBSERVER_DB_PASSWORD=$observer_password
+export PRIVACY_RESTORE_OBSERVER_DB_USER PRIVACY_RESTORE_OBSERVER_DB_PASSWORD
 POSTGRES_PASSWORD="$restore_password" docker run -d --name "$database_container" --network "$network" \
 	-e POSTGRES_PASSWORD -e POSTGRES_DB=mycfc_restore postgres:16.9-alpine3.21 >/dev/null
 ready=false
@@ -361,55 +386,104 @@ fi
 
 jq -r .ciphertext "$selected_manifest" | base64 -d >"$work_dir/key.enc"
 backup_aws kms decrypt --ciphertext-blob "fileb://$work_dir/key.enc" --output json | jq -r .Plaintext | base64 -d | od -An -v -tx1 | tr -d ' \n' >"$work_dir/key.hex"
-openssl enc -d -aes-256-cbc -K "$(cat "$work_dir/key.hex")" -iv "$(jq -r .iv "$selected_manifest")" -nosalt -in "$work_dir/dump.enc" -out "$work_dir/dump"
+chmod 0600 "$work_dir/key.hex"
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -pass "file:$work_dir/key.hex" -in "$work_dir/dump.enc" -out "$work_dir/dump"
 docker cp "$work_dir/dump" "$database_container":/tmp/dump >/dev/null
 docker exec "$database_container" pg_restore --exit-on-error --no-owner --no-acl -U postgres -d mycfc_restore /tmp/dump
 docker exec "$database_container" psql -v ON_ERROR_STOP=1 -U postgres -d mycfc_restore -c 'CREATE ROLE mycfc_restore_app NOLOGIN' >/dev/null
+PRIVACY_RESTORE_OBSERVER_DB_PASSWORD=$observer_password
+export PRIVACY_RESTORE_OBSERVER_DB_PASSWORD
+docker exec -e PRIVACY_RESTORE_OBSERVER_DB_PASSWORD "$database_container" sh -ec \
+	'printf "CREATE ROLE mycfc_restore_observer LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD '\''%s'\'';\n" "$PRIVACY_RESTORE_OBSERVER_DB_PASSWORD" | exec psql -v ON_ERROR_STOP=1 -U postgres -d mycfc_restore' >/dev/null
 
 database_url="postgres://postgres:$restore_password@$database_container:5432/mycfc_restore?sslmode=disable"
 DATABASE_URL="$database_url" docker run --rm --network "$network" \
 	-e DATABASE_URL \
 	-e APP_DB_USER=mycfc_restore_app \
 	-e MIGRATION_DB_USER=postgres \
+	-e PRIVACY_RESTORE_OBSERVER_DB_USER \
+	-e PRIVACY_RESTORE_OBSERVER_DB_PASSWORD \
 	"$candidate_image" migrate
 
 cp "$replay_private_key_file" "$work_dir/tombstone-replay.key"
-chmod 0444 "$work_dir/ledger.json"
 chown 65532:65532 "$work_dir/tombstone-replay.key"
 chmod 0400 "$work_dir/tombstone-replay.key"
+image_digest=${candidate_image##*@}
+ledger_input="$work_dir/ledger.json"
+ledger_input_source=LIVE_LEDGER
+if [ "$ledger_object_count" -eq 0 ]; then
+	DATABASE_URL="$database_url" docker run --rm --network "$network" --entrypoint /app/privacy-restore-replay \
+		-e DATABASE_URL \
+		--mount "type=bind,src=$work_dir/tombstone-replay.key,dst=/run/secrets/tombstone-replay-key,readonly" \
+		--mount "type=bind,src=$output_dir,dst=/output" \
+		"$candidate_image" \
+		--isolated-restore \
+		--bootstrap-synthetic-fixture \
+		--private-key-file /run/secrets/tombstone-replay-key \
+		--synthetic-ledger-output /output/ledger.json
+	ledger_input="$output_dir/ledger.json"
+	ledger_input_source=SYNTHETIC_BOOTSTRAP
+	if [ ! -f "$ledger_input" ]; then
+		printf '%s\n' 'Synthetic restore fixture was not produced.' >&2
+		exit 1
+	fi
+	ledger_inventory_sha256=$(jq -er '.inventory_sha256 | strings | select(test("^[0-9a-f]{64}$"))' "$ledger_input")
+	ledger_object_count=$(jq -er '.objects | length | select(. > 0 and . <= 1024)' "$ledger_input")
+fi
+chmod 0444 "$ledger_input"
+
 DATABASE_URL="$database_url" docker run --rm --network "$network" --entrypoint /app/privacy-restore-replay \
 	-e DATABASE_URL \
-	--mount "type=bind,src=$work_dir/ledger.json,dst=/input/ledger.json,readonly" \
+	--mount "type=bind,src=$ledger_input,dst=/input/ledger.json,readonly" \
 	--mount "type=bind,src=$work_dir/tombstone-replay.key,dst=/run/secrets/tombstone-replay-key,readonly" \
 	--mount "type=bind,src=$output_dir,dst=/output" \
 	"$candidate_image" \
 	--isolated-restore \
 	--ledger-input /input/ledger.json \
 	--private-key-file /run/secrets/tombstone-replay-key \
-	--attestation-output /output/replay.json
+	--attestation-output /output/replay.json \
+	--policy-version "$PRIVACY_ACTIVATION_POLICY_VERSION" \
+	--executor-version "$privacy_executor_version" \
+	--plan-schema-version "$privacy_plan_schema_version" \
+	--image-digest "$image_digest"
 
 replay_result="$output_dir/replay.json"
 if [ ! -f "$replay_result" ]; then
 	printf '%s\n' 'Offline replay did not produce a result.' >&2
 	exit 1
 fi
-jq -e --arg inventory "$ledger_inventory_sha256" --argjson objects "$ledger_object_count" '
-		(keys | sort == ["absence_verified_count","already_applied_count","contract","failed_count","imported_count","inventory_sha256","non_replayable_v1_count","object_count","replayed_count","result","schema_migration_digest"])
-		and .contract == "mycfc/privacy-restore-replay-result/v1"
+jq -e --arg source "$ledger_input_source" --arg policy "$PRIVACY_ACTIVATION_POLICY_VERSION" \
+	--arg executor "$privacy_executor_version" --arg plan "$privacy_plan_schema_version" --arg image "$image_digest" \
+	--arg inventory "$ledger_inventory_sha256" --argjson objects "$ledger_object_count" '
+		(keys | sort == ["absence_verified_count","already_applied_count","closure_v3_count","contract","erasure_effective_at_verified_count","executor_version","failed_count","image_digest","imported_count","input_source","intent_only_count","inventory_sha256","legacy_closure_v2_count","non_replayable_v1_count","object_count","plan_schema_version","policy_version","replayed_count","result","schema_migration_digest","synthetic_replayed_count"])
+		and .contract == "mycfc/privacy-restore-replay-result/v2"
 		and .result == "SUCCEEDED"
+		and .input_source == $source
+		and .policy_version == $policy
+		and .executor_version == $executor
+		and .plan_schema_version == $plan
+		and .image_digest == $image
 		and .inventory_sha256 == $inventory
 		and .object_count == $objects
 		and .non_replayable_v1_count == 0
+		and .intent_only_count == 0
+		and .legacy_closure_v2_count == 0
 		and .failed_count == 0
 		and (.schema_migration_digest | type == "string" and test("^[0-9a-f]{64}$"))
 		and (.imported_count | type == "number" and . >= 0 and floor == .)
 		and (.replayed_count | type == "number" and . >= 0 and floor == .)
 		and (.already_applied_count | type == "number" and . >= 0 and floor == .)
 		and (.absence_verified_count | type == "number" and . >= 0 and floor == .)
+		and (.synthetic_replayed_count | type == "number" and . >= 0 and floor == .)
+		and (.closure_v3_count | type == "number" and . >= 0 and floor == .)
+		and (.erasure_effective_at_verified_count | type == "number" and . >= 0 and floor == .)
 		and .replayed_count > 0
 		and .object_count >= .replayed_count
 		and .replayed_count == (.imported_count + .already_applied_count)
 		and .absence_verified_count == .replayed_count
+		and .closure_v3_count == .replayed_count
+		and .erasure_effective_at_verified_count == .replayed_count
+		and (if $source == "LIVE_LEDGER" then .synthetic_replayed_count == 0 else .synthetic_replayed_count == .replayed_count end)
 	' "$replay_result" >/dev/null
 
 schema_versions=$(docker exec "$database_container" psql -v ON_ERROR_STOP=1 -U postgres -d mycfc_restore -Atc "SELECT version FROM mycfc_meta.schema_migrations ORDER BY version")
@@ -419,43 +493,101 @@ if [ "$schema_migration_digest" != "$(jq -r .schema_migration_digest "$replay_re
 	exit 1
 fi
 
-completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-completed_epoch=$(date -u -d "$completed_at" +%s)
-valid_until=$(date -u -d "@$((completed_epoch + 7776000))" +%Y-%m-%dT%H:%M:%SZ)
+observer_database_url="postgres://$observer_user:$observer_password@$database_container:5432/mycfc_restore?sslmode=disable"
+observer_result="$work_dir/observer.json"
+PRIVACY_RESTORE_OBSERVER_DATABASE_URL="$observer_database_url" PRIVACY_RESTORE_OBSERVER_NETWORK="$network" \
+	"$(dirname "$0")/privacy-restore-observer.sh" "$ledger_input_source" "$ledger_inventory_sha256" "$schema_migration_digest" \
+	"$PRIVACY_ACTIVATION_POLICY_VERSION" "$privacy_executor_version" "$privacy_plan_schema_version" "$image_digest" >"$observer_result"
+jq -e --slurpfile candidate "$replay_result" '
+	.replay_count == $candidate[0].replayed_count
+	and .source_already_applied_count == $candidate[0].already_applied_count
+	and .synthetic_count == $candidate[0].synthetic_replayed_count
+	and .closure_v3_count == $candidate[0].closure_v3_count
+	and .erasure_effective_at_verified_count == $candidate[0].erasure_effective_at_verified_count
+' "$observer_result" >/dev/null
+
+observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+observed_epoch=$(date -u -d "$observed_at" +%s)
+valid_until=$(date -u -d "@$((observed_epoch + 7776000))" +%Y-%m-%dT%H:%M:%SZ)
 manifest_sha256=$(sha256sum "$selected_manifest" | awk '{print $1}')
-manifest_key_sha256=$(printf '%s' "$selected_manifest_key" | sha256sum | awk '{print $1}')
-dump_key_sha256=$(printf '%s' "$selected_dump_key" | sha256sum | awk '{print $1}')
+dump_sha256=$(jq -r .sha256 "$selected_manifest")
+manifest_checksum_sha256=$(checksum_base64_to_hex "$(jq -r .ChecksumSHA256 "$work_dir/manifest-head.json")")
+dump_checksum_sha256=$(checksum_base64_to_hex "$(jq -r .ChecksumSHA256 "$work_dir/dump-head.json")")
+[ "$manifest_checksum_sha256" = "$manifest_sha256" ]
+[ "$dump_checksum_sha256" = "$dump_sha256" ]
+manifest_ref=$(s3_version_ref "$BACKUP_S3_BUCKET" "$selected_manifest_key" "$selected_manifest_version")
+dump_ref=$(s3_version_ref "$BACKUP_S3_BUCKET" "$selected_dump_key" "$selected_dump_version")
+manifest_size=$(jq -er '.ContentLength | numbers | select(. > 0)' "$work_dir/manifest-head.json")
+dump_size=$(jq -er '.ContentLength | numbers | select(. > 0)' "$work_dir/dump-head.json")
 backup_created_at=$(jq -r .created_at "$selected_manifest")
-image_digest=${candidate_image##*@}
+
+# Persist the exact non-identifying candidate and independent observer source
+# evidence before signing the activation envelope. The versioned object avoids
+# the circularity of attempting to include an S3 VersionId in its own body.
+jq -n --slurpfile candidate "$replay_result" --slurpfile observer "$observer_result" \
+	--arg contract 'mycfc/privacy-restore-evidence-bundle/v1' \
+	--arg backup_contract 'mycfc/postgres-backup/v3' \
+	--arg ledger_input_contract 'mycfc/privacy-restore-ledger-input/v2' \
+	--arg replay_result_contract 'mycfc/privacy-restore-replay-result/v2' \
+	--arg replay_contract 'relational-erasure-replay/v1' \
+	--arg closure_contract 'restore-tombstone-closure/v3' \
+	--arg synthetic_fixture_contract 'mycfc/privacy-restore-synthetic-fixture/v1' \
+	--arg manifest_ref "$manifest_ref" --arg manifest_sha256 "$manifest_sha256" \
+	--arg dump_ref "$dump_ref" --arg dump_sha256 "$dump_sha256" \
+	--arg ledger_inventory_sha256 "$ledger_inventory_sha256" --argjson ledger_object_count "$ledger_object_count" \
+	'{contract:$contract,contracts:{backup:$backup_contract,ledger_input:$ledger_input_contract,replay_result:$replay_result_contract,replay:$replay_contract,closure:$closure_contract,synthetic_fixture:$synthetic_fixture_contract},backup:{manifest:{ref:$manifest_ref,sha256:$manifest_sha256},dump:{ref:$dump_ref,sha256:$dump_sha256}},ledger:{inventory_sha256:$ledger_inventory_sha256,object_count:$ledger_object_count},candidate:$candidate[0],observer:$observer[0]}' \
+	>"$work_dir/evidence-bundle.json"
+evidence_sha256=$(sha256sum "$work_dir/evidence-bundle.json" | awk '{print $1}')
+evidence_checksum=$(openssl dgst -sha256 -binary "$work_dir/evidence-bundle.json" | base64 | tr -d '\n')
+evidence_key="restore-evidence/$observed_at-$evidence_sha256.json"
+evidence_version=$(backup_aws s3api put-object \
+	--bucket "$BACKUP_S3_BUCKET" --key "$evidence_key" --body "$work_dir/evidence-bundle.json" \
+	--content-type application/json --checksum-algorithm SHA256 --checksum-sha256 "$evidence_checksum" \
+	--if-none-match '*' --server-side-encryption aws:kms --ssekms-key-id "$BACKUP_KMS_KEY_ID" --output json | jq -er '.VersionId | strings | select(length > 0)')
+evidence_head="$work_dir/evidence-head.json"
+backup_aws s3api head-object --bucket "$BACKUP_S3_BUCKET" --key "$evidence_key" --version-id "$evidence_version" --checksum-mode ENABLED --output json >"$evidence_head"
+jq -e --arg version "$evidence_version" --arg checksum "$evidence_checksum" --arg kms "$BACKUP_KMS_KEY_ID" '
+	.VersionId == $version and .ChecksumSHA256 == $checksum and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms
+	and (.ContentLength | type == "number" and . > 0 and . <= 1048576)
+' "$evidence_head" >/dev/null
+evidence_ref=$(s3_version_ref "$BACKUP_S3_BUCKET" "$evidence_key" "$evidence_version")
+evidence_size=$(jq -r .ContentLength "$evidence_head")
+candidate_result_sha256=$(sha256sum "$replay_result" | awk '{print $1}')
 
 jq -n \
-	--arg contract 'mycfc/privacy-restore-drill-attestation/v1' \
+	--slurpfile candidate "$replay_result" --slurpfile observer "$observer_result" \
+	--arg contract 'mycfc/privacy-restore-drill-attestation/v2' \
 	--arg result SUCCEEDED \
-	--arg completed_at "$completed_at" \
+	--arg observed_at "$observed_at" \
 	--arg valid_until "$valid_until" \
+	--arg policy_version "$PRIVACY_ACTIVATION_POLICY_VERSION" \
+	--arg executor_version "$privacy_executor_version" \
+	--arg plan_schema_version "$privacy_plan_schema_version" \
 	--arg image_digest "$image_digest" \
 	--arg backup_created_at "$backup_created_at" \
-	--arg manifest_key_sha256 "$manifest_key_sha256" \
-	--arg manifest_version "$selected_manifest_version" \
+	--arg manifest_ref "$manifest_ref" \
 	--arg manifest_sha256 "$manifest_sha256" \
-	--arg dump_key_sha256 "$dump_key_sha256" \
-	--arg dump_version "$selected_dump_version" \
-	--arg dump_sha256 "$(jq -r .sha256 "$selected_manifest")" \
+	--arg manifest_checksum_sha256 "$manifest_checksum_sha256" \
+	--argjson manifest_size "$manifest_size" \
+	--arg dump_ref "$dump_ref" \
+	--arg dump_sha256 "$dump_sha256" \
+	--arg dump_checksum_sha256 "$dump_checksum_sha256" \
+	--argjson dump_size "$dump_size" \
 	--arg schema_migration_digest "$schema_migration_digest" \
+	--arg ledger_input_source "$ledger_input_source" \
 	--arg ledger_inventory_sha256 "$ledger_inventory_sha256" \
 	--argjson ledger_object_count "$ledger_object_count" \
-	--argjson imported_count "$(jq -r .imported_count "$replay_result")" \
-	--argjson replayed_count "$(jq -r .replayed_count "$replay_result")" \
-	--argjson already_applied_count "$(jq -r .already_applied_count "$replay_result")" \
-	--argjson absence_verified_count "$(jq -r .absence_verified_count "$replay_result")" \
-	'{contract:$contract,result:$result,completed_at:$completed_at,valid_until:$valid_until,image_digest:$image_digest,backup:{created_at:$backup_created_at,manifest_key_sha256:$manifest_key_sha256,manifest_version:$manifest_version,manifest_sha256:$manifest_sha256,dump_key_sha256:$dump_key_sha256,dump_version:$dump_version,dump_sha256:$dump_sha256},schema_migration_digest:$schema_migration_digest,ledger:{inventory_sha256:$ledger_inventory_sha256,object_count:$ledger_object_count},replay:{imported_count:$imported_count,replayed_count:$replayed_count,already_applied_count:$already_applied_count,absence_verified_count:$absence_verified_count}}' \
+	--arg candidate_result_sha256 "$candidate_result_sha256" \
+	--arg kms_key_arn "$BACKUP_KMS_KEY_ID" \
+	--arg evidence_ref "$evidence_ref" --arg evidence_sha256 "$evidence_sha256" --argjson evidence_size "$evidence_size" \
+	'{contract:$contract,result:$result,observed_at:$observed_at,valid_until:$valid_until,policy_version:$policy_version,executor_version:$executor_version,plan_schema_version:$plan_schema_version,image_digest:$image_digest,schema_migration_digest:$schema_migration_digest,contracts:{backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v3",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"},backup:{created_at:$backup_created_at,manifest:{ref:$manifest_ref,sha256:$manifest_sha256,checksum_sha256:$manifest_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$manifest_size},dump:{ref:$dump_ref,sha256:$dump_sha256,checksum_sha256:$dump_checksum_sha256,kms_key_arn:$kms_key_arn,size_bytes:$dump_size}},ledger:{input_source:$ledger_input_source,inventory_sha256:$ledger_inventory_sha256,object_count:$ledger_object_count},candidate:{result_sha256:$candidate_result_sha256,object_count:$candidate[0].object_count,imported_count:$candidate[0].imported_count,replayed_count:$candidate[0].replayed_count,already_applied_count:$candidate[0].already_applied_count,non_replayable_v1_count:$candidate[0].non_replayable_v1_count,absence_verified_count:$candidate[0].absence_verified_count,synthetic_replayed_count:$candidate[0].synthetic_replayed_count,closure_v3_count:$candidate[0].closure_v3_count,intent_only_count:$candidate[0].intent_only_count,legacy_closure_v2_count:$candidate[0].legacy_closure_v2_count,erasure_effective_at_verified_count:$candidate[0].erasure_effective_at_verified_count,failed_count:$candidate[0].failed_count},observer:$observer[0],evidence:{ref:$evidence_ref,sha256:$evidence_sha256,checksum_sha256:$evidence_sha256,kms_key_arn:$kms_key_arn,size_bytes:$evidence_size}}' \
 	>"$work_dir/attestation-payload.json"
 attestation_canonical=$(jq -Sc . "$work_dir/attestation-payload.json")
 attestation_hmac=$(hmac_sha256 "$attestation_canonical" "$attestation_auth_key_file")
 jq --arg auth_hmac_sha256 "$attestation_hmac" '. + {auth_hmac_sha256:$auth_hmac_sha256}' "$work_dir/attestation-payload.json" >"$work_dir/attestation.json"
 attestation_sha256=$(sha256sum "$work_dir/attestation.json" | awk '{print $1}')
 
-attestation_key="restore-attestations/$(date -u -d "$completed_at" +%Y-%m-%dT%H-%M-%SZ)-$attestation_sha256.json"
+attestation_key="restore-attestations/$(date -u -d "$observed_at" +%Y-%m-%dT%H-%M-%SZ)-$attestation_sha256.json"
 attestation_checksum=$(openssl dgst -sha256 -binary "$work_dir/attestation.json" | base64 | tr -d '\n')
 attestation_version=$(backup_aws s3api put-object \
 	--bucket "$BACKUP_S3_BUCKET" --key "$attestation_key" --body "$work_dir/attestation.json" \
@@ -476,4 +608,4 @@ temporary=$(mktemp "$attestation_dir/.latest.XXXXXX")
 install -m 0600 "$work_dir/attestation.json" "$temporary"
 mv "$temporary" "$attestation_target"
 
-log_event "privacy_restore_drill_succeeded attestation_sha256=$attestation_sha256 backup_age_seconds=$((completed_epoch - $(date -u -d "$backup_created_at" +%s))) ledger_object_count=$ledger_object_count replayed_count=$(jq -r .replayed_count "$replay_result") absence_verified_count=$(jq -r .absence_verified_count "$replay_result")"
+log_event "privacy_restore_drill_succeeded attestation_sha256=$attestation_sha256 backup_age_seconds=$((observed_epoch - $(date -u -d "$backup_created_at" +%s))) ledger_object_count=$ledger_object_count replayed_count=$(jq -r .replayed_count "$replay_result") absence_verified_count=$(jq -r .absence_verified_count "$replay_result")"

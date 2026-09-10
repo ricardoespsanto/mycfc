@@ -143,6 +143,75 @@ resource "aws_cloudwatch_metric_alarm" "privacy_retention_failure" {
   depends_on = [aws_cloudwatch_log_metric_filter.privacy_retention_failure]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "privacy_worker_failure" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-worker-failure"
+  pattern        = "%event=privacy_worker_terminal_failure|event=privacy_worker_aged_nonterminal_breach|event=privacy_worker_completion_unavailable%"
+  log_group_name = aws_cloudwatch_log_group.privacy_worker[0].name
+
+  metric_transformation {
+    name          = "PrivacyWorkerFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_worker_failure" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-worker-failure"
+  alarm_description   = "The privacy worker reached a terminal job failure, found work non-terminal for more than 15 minutes, or could not seal a completed execution."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyWorkerFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_worker_failure]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_worker_heartbeat" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-worker-heartbeat"
+  pattern        = "\"event=privacy_worker_heartbeat\""
+  log_group_name = aws_cloudwatch_log_group.privacy_worker[0].name
+
+  metric_transformation {
+    name      = "PrivacyWorkerHeartbeat"
+    namespace = "MyCFC/Privacy"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_worker_heartbeat_missing" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-worker-heartbeat-missing"
+  alarm_description   = "The activated privacy worker has not emitted an aggregate heartbeat for two consecutive five-minute periods."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyWorkerHeartbeat"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }

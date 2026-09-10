@@ -24,6 +24,33 @@ func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
 	}
 }
 
+func TestActivationBrokerMigrationIsExactBaselineTailAndPurgesInheritedACLs(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "-- #248 trusted activation boundary."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || baselineSchema[index:] != string(migration) {
+		t.Fatal("activation broker migration is not the exact baseline tail")
+	}
+	for _, required := range []string{
+		"aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner)))",
+		"proc.proname LIKE '%\\_inner\\_013'",
+		"privacy_inner_capability_revoke_failed",
+		"session_user<>'mycfc_privacy_activation_broker'",
+		"session_user<>'mycfc_privacy_activation_disable'",
+		"activation_signed_approvals",
+		"p_executor_envelope_raw",
+		"p_executor_envelope->>'issued_at'",
+		"p_executor_envelope->>'nonce'",
+	} {
+		if !strings.Contains(string(migration), required) {
+			t.Fatalf("activation broker migration missing %q", required)
+		}
+	}
+}
+
 type bootstrapTransactionFake struct {
 	pgx.Tx
 	versions   []string
@@ -147,6 +174,8 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		AppUsername: "mycfc_app", AppPassword: "app-password",
 		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
 		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+		PrivacyActivationBrokerUsername: "mycfc_privacy_activation_broker", PrivacyActivationBrokerPassword: "broker-password",
+		PrivacyActivationDisableUsername: "mycfc_privacy_activation_disable", PrivacyActivationDisablePassword: "disable-password",
 	}
 	conn := &bootstrapRoleConnectionFake{}
 	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
@@ -157,6 +186,8 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		`CREATE ROLE "mycfc_privacy_executor" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
 		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_executor"`,
 		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_executor"`,
+		`CREATE ROLE "mycfc_privacy_activation_broker" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`CREATE ROLE "mycfc_privacy_activation_disable" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("bootstrap statements missing %q", expected)
@@ -377,6 +408,17 @@ func TestValidateBootstrapInput(t *testing.T) {
 		}},
 		{"observer identifier invalid", func(c *RoleCredentials) {
 			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = "privacy-observer", "secret"
+		}},
+		{"broker without executor and disable", func(c *RoleCredentials) {
+			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "mycfc_privacy_activation_broker", "secret"
+		}},
+		{"executor without broker and disable", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+		}},
+		{"wrong broker identity", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "other_broker", "secret"
+			c.PrivacyActivationDisableUsername, c.PrivacyActivationDisablePassword = "mycfc_privacy_activation_disable", "secret"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

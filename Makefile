@@ -137,9 +137,12 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/postgres-backup_test.sh
 	sh deployment/postgres-backup-version-cleanup_test.sh
 	sh deployment/postgres-restore-drill_test.sh
+	sh deployment/privacy-restore-observer_test.sh
 	sh deployment/verify-privacy-restore-attestation_test.sh
 	sh deployment/hetzner-backup-posture_test.sh
 	sh deployment/privacy-retention_test.sh
+	sh deployment/privacy-worker_test.sh
+	sh deployment/privacy-activation_test.sh
 	$(MAKE) test-privacy-ledger-broker
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services

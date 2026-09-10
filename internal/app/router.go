@@ -60,8 +60,6 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 		mux.Handle("POST /admin/privacidade/controlo/{ref}/reagendar", auth.RequireAuthenticated(http.HandlerFunc(privacy.ProposeTerminalRequeue)))
 		mux.Handle("POST /admin/privacidade/controlo/{ref}/reagendar/aprovar", auth.RequireAuthenticated(http.HandlerFunc(privacy.ApproveTerminalRequeue)))
 		mux.Handle("GET /admin/privacidade/ativacao", auth.RequireAuthenticated(http.HandlerFunc(privacy.ActivationControl)))
-		mux.Handle("POST /admin/privacidade/ativacao/propor", auth.RequireAuthenticated(http.HandlerFunc(privacy.ProposeActivation)))
-		mux.Handle("POST /admin/privacidade/ativacao/aprovar", auth.RequireAuthenticated(http.HandlerFunc(privacy.ApproveActivation)))
 		mux.Handle("GET /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Detail)))
 		mux.Handle("POST /admin/privacidade/{ref}", auth.RequireAuthenticated(http.HandlerFunc(privacy.Change)))
 		mux.Handle("POST /admin/privacidade/{ref}/executar", auth.RequireAuthenticated(http.HandlerFunc(privacy.StartExecution)))

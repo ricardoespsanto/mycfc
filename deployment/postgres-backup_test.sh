@@ -43,6 +43,11 @@ case "$*" in
 	*) printf '%s\n' 'unexpected docker invocation' >&2; exit 1 ;;
 esac
 EOF
+cat >"$work_dir/bin/openssl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$TEST_OPENSSL_LOG"
+exec "$REAL_OPENSSL" "$@"
+EOF
 cat >"$work_dir/bin/aws" <<'EOF'
 #!/bin/sh
 if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
@@ -79,6 +84,9 @@ esac
 EOF
 chmod +x "$work_dir/bin"/*
 : >"$work_dir/aws.log"
+: >"$work_dir/openssl.log"
+REAL_OPENSSL=$(command -v openssl)
+export REAL_OPENSSL
 
 env PATH="$work_dir/bin:$PATH" \
 	MYCFC_ENV_FILE="$work_dir/mycfc.env" \
@@ -86,12 +94,16 @@ env PATH="$work_dir/bin:$PATH" \
 	MYCFC_BACKUP_CREDENTIALS_FILE="$work_dir/credentials" \
 	MYCFC_BACKUP_MANIFEST_AUTH_KEY_FILE="$work_dir/manifest.key" \
 	TEST_AWS_LOG="$work_dir/aws.log" \
+	TEST_OPENSSL_LOG="$work_dir/openssl.log" \
 	TEST_CREDENTIALS="$work_dir/credentials" \
 	TEST_MANIFEST="$work_dir/uploaded-manifest.json" \
-	sh "$deployment_dir/postgres-backup.sh"
+	sh -x "$deployment_dir/postgres-backup.sh" 2>"$work_dir/trace.log"
 
 jq -e '
-	.contract == "mycfc/postgres-backup/v2"
+	.contract == "mycfc/postgres-backup/v3"
+	and .cipher == "AES-256-CBC"
+	and .kdf == "PBKDF2-HMAC-SHA256"
+	and .kdf_iterations == 600000
 	and .created_at == "2026-09-02T02:15:00Z"
 	and .dump_key == "daily/2026-09-02T02-15-00Z.dump.enc"
 	and .dump_version == "dump-version"
@@ -107,5 +119,11 @@ if grep -q 'monthly/' "$work_dir/aws.log"; then
 	printf '%s\n' 'Non-monthly backup unexpectedly wrote a monthly recovery point.' >&2
 	exit 1
 fi
+data_key_hex=3030303030303030303030303030303030303030303030303030303030303030
+if grep -Fq -- '-K ' "$work_dir/openssl.log" || grep -Fq "$data_key_hex" "$work_dir/openssl.log" "$work_dir/trace.log"; then
+	printf '%s\n' 'KMS plaintext data key reached OpenSSL argv or shell tracing' >&2
+	exit 1
+fi
+grep -Eq 'enc -aes-256-cbc .* -pass file:/var/tmp/mycfc-backup\.' "$work_dir/openssl.log"
 
 printf '%s\n' 'postgres backup authentication tests passed'

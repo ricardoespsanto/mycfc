@@ -7,9 +7,6 @@ locals {
   privacy_worker_rewrite_source_prefixes = ["repairs/*", "equipment/*"]
   privacy_worker_retained_prefixes       = ["repairs/retained/*", "equipment/retained/*"]
 
-  privacy_worker_secret_actions = [
-    "secretsmanager:GetSecretValue",
-  ]
   privacy_worker_log_write_actions = [
     "logs:CreateLogStream",
     "logs:PutLogEvents",
@@ -25,6 +22,9 @@ locals {
   ]
   privacy_worker_rewrite_write_actions = [
     "s3:PutObject",
+  ]
+  privacy_worker_ledger_broker_actions = [
+    "lambda:InvokeFunction",
   ]
 }
 
@@ -56,13 +56,6 @@ resource "aws_cloudwatch_log_group" "privacy_worker" {
 
 data "aws_iam_policy_document" "privacy_worker_boundary" {
   count = var.privacy_worker_infrastructure_enabled ? 1 : 0
-
-  statement {
-    sid       = "ReadOnlyWorkerSecret"
-    effect    = "Allow"
-    actions   = local.privacy_worker_secret_actions
-    resources = [aws_secretsmanager_secret.privacy_worker[0].arn]
-  }
 
   statement {
     sid       = "WriteOnlyWorkerLogs"
@@ -120,6 +113,17 @@ data "aws_iam_policy_document" "privacy_worker_boundary" {
       resources = [for prefix in local.privacy_worker_retained_prefixes : "${aws_s3_bucket.repairs.arn}/${prefix}"]
     }
   }
+
+  dynamic "statement" {
+    for_each = var.privacy_worker_ledger_broker_invoke_enabled ? [1] : []
+
+    content {
+      sid       = "InvokeOnlyRestoreLedgerBroker"
+      effect    = "Allow"
+      actions   = local.privacy_worker_ledger_broker_actions
+      resources = [var.privacy_worker_ledger_broker_function_arn]
+    }
+  }
 }
 
 resource "aws_iam_policy" "privacy_worker_boundary" {
@@ -149,13 +153,6 @@ resource "aws_iam_user" "privacy_worker" {
 
 data "aws_iam_policy_document" "privacy_worker" {
   count = var.privacy_worker_infrastructure_enabled ? 1 : 0
-
-  statement {
-    sid       = "ReadWorkerSecret"
-    effect    = "Allow"
-    actions   = local.privacy_worker_secret_actions
-    resources = [aws_secretsmanager_secret.privacy_worker[0].arn]
-  }
 
   statement {
     sid       = "WriteWorkerLogs"
@@ -213,6 +210,17 @@ data "aws_iam_policy_document" "privacy_worker" {
       resources = [for prefix in local.privacy_worker_retained_prefixes : "${aws_s3_bucket.repairs.arn}/${prefix}"]
     }
   }
+
+  dynamic "statement" {
+    for_each = var.privacy_worker_ledger_broker_invoke_enabled ? [1] : []
+
+    content {
+      sid       = "InvokeRestoreLedgerBroker"
+      effect    = "Allow"
+      actions   = local.privacy_worker_ledger_broker_actions
+      resources = [var.privacy_worker_ledger_broker_function_arn]
+    }
+  }
 }
 
 resource "aws_iam_user_policy" "privacy_worker" {
@@ -221,6 +229,16 @@ resource "aws_iam_user_policy" "privacy_worker" {
   name   = "privacy-worker"
   user   = aws_iam_user.privacy_worker[0].name
   policy = data.aws_iam_policy_document.privacy_worker[0].json
+
+  lifecycle {
+    precondition {
+      condition = !var.privacy_worker_ledger_broker_invoke_enabled || startswith(
+        var.privacy_worker_ledger_broker_function_arn,
+        "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:",
+      )
+      error_message = "The privacy worker broker must belong to the configured production AWS account and region."
+    }
+  }
 }
 
 output "privacy_worker_user_name" {

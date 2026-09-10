@@ -399,7 +399,7 @@ func TestPrivacyControlLookupAndActivationUseCurrentServerSnapshot(t *testing.T)
 	r = privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/ativacao", nil, CurrentUser{ID: actor, CanExecutePrivacy: true})
 	w = httptest.NewRecorder()
 	h.ActivationControl(w, r)
-	for _, want := range []string{"policy-v2", "Restauro isolado", "Infraestrutura", "Destinatários externos", "Esquema de dados", "Propor ativação"} {
+	for _, want := range []string{"policy-v2", "Restauro isolado", "Infraestrutura", "Destinatários externos", "Esquema de dados"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Errorf("activation page missing %q", want)
 		}
@@ -407,21 +407,8 @@ func TestPrivacyControlLookupAndActivationUseCurrentServerSnapshot(t *testing.T)
 	if strings.Contains(w.Body.String(), "auth_hmac") || strings.Contains(w.Body.String(), `name="evidence_id"`) {
 		t.Fatal("activation page exposed trusted evidence input")
 	}
-
-	post := privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ativacao/propor", url.Values{"confirmed": {"yes"}}, CurrentUser{ID: actor, CanExecutePrivacy: true})
-	w = httptest.NewRecorder()
-	h.ProposeActivation(w, post)
-	if w.Code != http.StatusSeeOther || s.activationPolicy != "policy-v2" || len(s.activationEvidence) != 4 || !strings.Contains(w.Header().Get("Location"), "resultado=proposta") {
-		t.Fatalf("activation proposal status=%d policy=%q evidence=%v location=%q", w.Code, s.activationPolicy, s.activationEvidence, w.Header().Get("Location"))
-	}
-
-	proposal := &pr.ControlProposal{ID: uuid.New(), Digest: bytes.Repeat([]byte{4}, 32), ProposedAt: time.Now()}
-	s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2", Evidence: evidence, PendingProposal: proposal, CanApprove: true}
-	post = privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/ativacao/aprovar", url.Values{"confirmed": {"yes"}}, CurrentUser{ID: actor, IsAdmin: true})
-	w = httptest.NewRecorder()
-	h.ApproveActivation(w, post)
-	if w.Code != http.StatusSeeOther || s.activationApprovalActor != actor || s.activationApprovalProposal != proposal.ID || !bytes.Equal(s.activationApprovalDigest, proposal.Digest) || !strings.Contains(w.Header().Get("Location"), "resultado=aprovada") {
-		t.Fatalf("activation approval status=%d actor=%s proposal=%s digest=%x location=%q", w.Code, s.activationApprovalActor, s.activationApprovalProposal, s.activationApprovalDigest, w.Header().Get("Location"))
+	if strings.Contains(w.Body.String(), "Propor ativação") || strings.Contains(w.Body.String(), "Aprovar e ativar") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/propor") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/aprovar") {
+		t.Fatal("read-only activation page exposed a mutation control")
 	}
 }
 

@@ -43,8 +43,6 @@ type PrivacyRequestStore interface {
 	ProposeTerminalRequeue(context.Context, uuid.UUID, uuid.UUID) (pr.TerminalRequeueProposal, error)
 	ApproveTerminalRequeue(context.Context, uuid.UUID, uuid.UUID, []byte) error
 	ActivationControlSnapshot(context.Context, uuid.UUID) (pr.ActivationControlSnapshot, error)
-	ProposeActivation(context.Context, uuid.UUID, string, []uuid.UUID) (pr.ActivationProposal, error)
-	ApproveActivation(context.Context, uuid.UUID, uuid.UUID, []byte) error
 }
 type PrivacyRequests struct {
 	Service               PrivacyRequestStore
@@ -386,8 +384,7 @@ func (h PrivacyRequests) renderActivationControl(w http.ResponseWriter, r *http.
 		return
 	}
 	page := pages.PrivacyActivationControlPage{
-		Meta: h.meta(r), PolicyVersion: snapshot.PolicyVersion, Ready: snapshot.Ready, CanPropose: snapshot.CanPropose,
-		CanRenew: snapshot.CanRenew, CanApprove: snapshot.CanApprove, Error: actionError,
+		Meta: h.meta(r), PolicyVersion: snapshot.PolicyVersion, Ready: snapshot.Ready, Error: actionError,
 	}
 	switch r.URL.Query().Get("resultado") {
 	case "":
@@ -406,62 +403,6 @@ func (h PrivacyRequests) renderActivationControl(w http.ResponseWriter, r *http.
 		page.ProposedAt = privacyDate(snapshot.PendingProposal.ProposedAt)
 	}
 	h.render(w, r, status, pages.PrivacyActivationControl(page))
-}
-
-func (h PrivacyRequests) ProposeActivation(w http.ResponseWriter, r *http.Request) {
-	h.activationAction(w, r, false)
-}
-
-func (h PrivacyRequests) ApproveActivation(w http.ResponseWriter, r *http.Request) {
-	h.activationAction(w, r, true)
-}
-
-func (h PrivacyRequests) activationAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	privacyHeaders(w)
-	if err := r.ParseForm(); err != nil {
-		h.System.RequestRejected(w, r)
-		return
-	}
-	if r.PostForm.Get("confirmed") != "yes" {
-		h.renderActivationControl(w, r, http.StatusUnprocessableEntity, "Confirme a revisão antes de continuar.")
-		return
-	}
-	u, _ := CurrentUserFromContext(r.Context())
-	snapshot, err := h.Service.ActivationControlSnapshot(r.Context(), u.ID)
-	if err != nil {
-		h.controlFailure(w, r, err)
-		return
-	}
-	if approve {
-		if !snapshot.CanApprove || snapshot.PendingProposal == nil {
-			h.renderActivationControl(w, r, http.StatusUnprocessableEntity, "A ação já não está disponível. Atualize os comprovativos e volte a rever.")
-			return
-		}
-		err = h.Service.ApproveActivation(r.Context(), u.ID, snapshot.PendingProposal.ID, snapshot.PendingProposal.Digest)
-	} else {
-		if (!snapshot.CanPropose && !snapshot.CanRenew) || snapshot.PendingProposal != nil || len(snapshot.Evidence) != 4 {
-			h.renderActivationControl(w, r, http.StatusUnprocessableEntity, "A ação já não está disponível. Atualize os comprovativos e volte a rever.")
-			return
-		}
-		evidenceIDs := make([]uuid.UUID, 0, len(snapshot.Evidence))
-		for _, evidence := range snapshot.Evidence {
-			evidenceIDs = append(evidenceIDs, evidence.ID)
-		}
-		_, err = h.Service.ProposeActivation(r.Context(), u.ID, snapshot.PolicyVersion, evidenceIDs)
-	}
-	if err != nil {
-		if errors.Is(err, pr.ErrActivationUnavailable) || errors.Is(err, pr.ErrInvalid) {
-			h.renderActivationControl(w, r, http.StatusUnprocessableEntity, "A ação já não está disponível. Atualize os comprovativos e volte a rever.")
-			return
-		}
-		h.controlFailure(w, r, err)
-		return
-	}
-	result := "proposta"
-	if approve {
-		result = "aprovada"
-	}
-	http.Redirect(w, r, "/admin/privacidade/ativacao?resultado="+result, http.StatusSeeOther)
 }
 
 func (h PrivacyRequests) controlFailure(w http.ResponseWriter, r *http.Request, err error) {

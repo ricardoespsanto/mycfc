@@ -20,12 +20,12 @@ key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 printf '%s\n' "$key" >"$work_dir/key"
 image='registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-valid_until=$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
+valid_until=$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)
 
 jq -n \
-	--arg completed_at "$now" \
+	--arg observed_at "$now" \
 	--arg valid_until "$valid_until" \
-	'{contract:"mycfc/privacy-restore-drill-attestation/v1",result:"SUCCEEDED",completed_at:$completed_at,valid_until:$valid_until,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",backup:{created_at:"2026-09-01T02:15:00Z",manifest_key_sha256:("b"*64),manifest_version:"manifest-version",manifest_sha256:("c"*64),dump_key_sha256:("d"*64),dump_version:"dump-version",dump_sha256:("e"*64)},schema_migration_digest:("f"*64),ledger:{inventory_sha256:("1"*64),object_count:2},replay:{imported_count:1,replayed_count:1,already_applied_count:0,absence_verified_count:1}}' \
+	'{contract:"mycfc/privacy-restore-drill-attestation/v2",result:"SUCCEEDED",observed_at:$observed_at,valid_until:$valid_until,policy_version:"privacy-policy-v1",executor_version:"privacy-erasure-executor/v2",plan_schema_version:"privacy-erasure-plan/v2",image_digest:"sha256:"+("a"*64),schema_migration_digest:("f"*64),contracts:{backup:"mycfc/postgres-backup/v3",ledger_input:"mycfc/privacy-restore-ledger-input/v2",replay_result:"mycfc/privacy-restore-replay-result/v2",replay:"relational-erasure-replay/v1",closure:"restore-tombstone-closure/v3",synthetic_fixture:"mycfc/privacy-restore-synthetic-fixture/v1"},backup:{created_at:"2026-09-01T02:15:00Z",manifest:{ref:"s3://test/manifest?versionId=v1",sha256:("b"*64),checksum_sha256:("b"*64),kms_key_arn:"arn:aws:kms:eu-west-1:123456789012:key/test",size_bytes:128},dump:{ref:"s3://test/dump?versionId=v2",sha256:("c"*64),checksum_sha256:("c"*64),kms_key_arn:"arn:aws:kms:eu-west-1:123456789012:key/test",size_bytes:256}},ledger:{input_source:"LIVE_LEDGER",inventory_sha256:("1"*64),object_count:1},candidate:{result_sha256:("2"*64),object_count:1,imported_count:1,replayed_count:1,already_applied_count:0,non_replayable_v1_count:0,absence_verified_count:1,synthetic_replayed_count:0,closure_v3_count:1,intent_only_count:0,legacy_closure_v2_count:0,erasure_effective_at_verified_count:1,failed_count:0},observer:{image_digest:"sha256:9f2364d2e5382f9ec8689d36d09292e6d3e442c55b83304206d6b179e56157c5",replay_count:1,source_already_applied_count:0,synthetic_count:0,verified_run_count:1,expected_checkpoint_count:5,succeeded_checkpoint_count:5,provider_absent_count:1,consent_clock_verified_count:1,closure_v3_count:1,erasure_effective_at_verified_count:1,evidence_sha256:("3"*64)},evidence:{ref:"s3://test/evidence?versionId=v3",sha256:("4"*64),checksum_sha256:("4"*64),kms_key_arn:"arn:aws:kms:eu-west-1:123456789012:key/test",size_bytes:512}}' \
 	>"$work_dir/payload.json"
 canonical=$(jq -Sc . "$work_dir/payload.json")
 hmac=$(printf '%s' "$canonical" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key" -binary | od -An -v -tx1 | tr -d ' \n')
@@ -35,6 +35,7 @@ run_verify() {
 	env PATH="$work_dir/bin:$PATH" \
 		MYCFC_RESTORE_ATTESTATION_FILE="$work_dir/attestation.json" \
 		MYCFC_RESTORE_ATTESTATION_AUTH_KEY_FILE="$work_dir/key" \
+		PRIVACY_ACTIVATION_POLICY_VERSION=privacy-policy-v1 \
 		sh "$deployment_dir/verify-privacy-restore-attestation.sh" "$1"
 }
 

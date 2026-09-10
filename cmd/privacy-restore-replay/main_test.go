@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,13 +22,16 @@ import (
 
 	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/hkdf"
 )
 
 type replayEngineFake struct {
-	results []privacyrequests.TombstoneReplayResult
-	err     error
-	calls   int
-	closure bool
+	results     []privacyrequests.TombstoneReplayResult
+	err         error
+	calls       int
+	schemaCalls int
+	recordCalls int
+	closure     bool
 }
 
 var testReplayBindings = replayBindings{PolicyVersion: "policy-v1", ExecutorVersion: "executor-v1", PlanSchemaVersion: "plan-v1", ImageDigest: "sha256:" + strings.Repeat("a", 64)}
@@ -39,6 +46,7 @@ func (f *replayEngineFake) Replay(_ context.Context, authenticated privacyreques
 }
 
 func (f *replayEngineFake) SchemaMigrationDigest(context.Context) (string, error) {
+	f.schemaCalls++
 	if f.err != nil {
 		return "", f.err
 	}
@@ -46,6 +54,7 @@ func (f *replayEngineFake) SchemaMigrationDigest(context.Context) (string, error
 }
 
 func (f *replayEngineFake) RecordAttestation(context.Context, replayAttestation, []uuid.UUID) error {
+	f.recordCalls++
 	return f.err
 }
 
@@ -79,6 +88,81 @@ func inventoryObject(sealed privacyrequests.SealedTombstone, keyByte byte) ledge
 		CiphertextSHA256: hex.EncodeToString(sealed.SHA256), SizeBytes: int64(len(sealed.Encoded)), Payload: sealed.Encoded,
 		WrittenAt: writtenAt, VerifiedAt: writtenAt.Add(time.Second), RetainUntil: retainUntil,
 	}
+}
+
+func sealLegacyClosureV2ForTest(t *testing.T, privateKey []byte, record privacyrequests.RestoreTombstone) privacyrequests.SealedTombstone {
+	t.Helper()
+	const (
+		algorithm    = "X25519-HKDF-SHA256-AES-256-GCM"
+		envelopeV2   = "x25519-aes256gcm-hkdfsha256/v2"
+		keyID        = "restore-key-v2"
+		locatorKeyID = "locator-key-v2"
+	)
+	closedAt := record.ExecutionStart.Add(time.Hour)
+	closure := privacyrequests.TombstoneClosure{
+		Version: privacyrequests.TombstoneClosureVersionV2, Tombstone: record,
+		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+	}
+	plaintext, err := json.Marshal(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := ecdh.X25519().NewPrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ephemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := ephemeral.ECDH(private.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator := bytes.Repeat([]byte{0x77}, sha256.Size)
+	aad := encodeTestFields("mycfc/restore-tombstone-aad/v2", "closure", envelopeV2, algorithm, keyID, locatorKeyID, hex.EncodeToString(locator))
+	key := make([]byte, 32)
+	if _, err = io.ReadFull(hkdf.New(sha256.New, shared, nil, aad), key); err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err = rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	envelope := privacyrequests.TombstoneEnvelope{
+		Version: envelopeV2, Algorithm: algorithm, KeyID: keyID, Kind: "closure",
+		LocatorKeyID: locatorKeyID, LocatorDigest: locator,
+		Encapsulation: ephemeral.PublicKey().Bytes(), Nonce: nonce,
+		Ciphertext: aead.Seal(nil, nonce, plaintext, aad),
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	return privacyrequests.SealedTombstone{
+		Kind: "closure", LocatorKeyID: locatorKeyID, Locator: locator,
+		Envelope: envelope, Encoded: encoded, SHA256: digest[:], RetainUntil: closure.EvidenceExpiresAt,
+	}
+}
+
+func encodeTestFields(fields ...string) []byte {
+	var encoded bytes.Buffer
+	for _, field := range fields {
+		if err := binary.Write(&encoded, binary.BigEndian, uint32(len(field))); err != nil {
+			panic(err)
+		}
+		_, _ = encoded.WriteString(field)
+	}
+	return encoded.Bytes()
 }
 
 func TestExecuteReplayPrefersClosureAndEmitsOnlyNonIdentifyingCounts(t *testing.T) {
@@ -156,6 +240,52 @@ func TestExecuteReplayDoesNotDowngradeTamperedV2ToLegacy(t *testing.T) {
 	engine := &replayEngineFake{}
 	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: inventoryDigest, Objects: objects}, privateKey, engine, testReplayBindings); err == nil || engine.calls != 0 {
 		t.Fatalf("downgraded envelope accepted: err=%v calls=%d", err, engine.calls)
+	}
+}
+
+func TestExecuteReplayPreflightsMixedInventoryBeforeDatabaseMutation(t *testing.T) {
+	protector, privateKey, currentRecord := replayFixture(t)
+	closedAt := currentRecord.ExecutionStart.Add(time.Hour)
+	currentClosure, err := protector.SealClosure(privacyrequests.TombstoneClosure{
+		Version: privacyrequests.TombstoneClosureVersion, Tombstone: currentRecord,
+		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: currentRecord.ExecutionStart,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := currentRecord
+	legacyRecord.ExecutionID = uuid.New()
+	legacyRecord.RequestID = uuid.New()
+	legacyRecord.RequestRef = uuid.New()
+	legacyRecord.SubjectUserID = uuid.New()
+	legacyClosure := sealLegacyClosureV2ForTest(t, privateKey, legacyRecord)
+	intentRecord := currentRecord
+	intentRecord.ExecutionID = uuid.New()
+	intentRecord.RequestID = uuid.New()
+	intentRecord.RequestRef = uuid.New()
+	intentRecord.SubjectUserID = uuid.New()
+	intent, err := protector.Seal(intentRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := []ledgerInventoryObject{
+		inventoryObject(currentClosure, 0x11),
+		inventoryObject(legacyClosure, 0x12),
+		inventoryObject(intent, 0x13),
+	}
+	digest, err := inventoryMetadataDigest(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &replayEngineFake{}
+	_, err = executeReplay(t.Context(), ledgerInventory{
+		Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects,
+	}, privateKey, engine, testReplayBindings)
+	if err == nil {
+		t.Fatal("mixed current, legacy-closure, and intent inventory was accepted")
+	}
+	if engine.calls != 0 || engine.schemaCalls != 0 || engine.recordCalls != 0 {
+		t.Fatalf("database boundary crossed before whole-set preflight: replay=%d schema=%d record=%d", engine.calls, engine.schemaCalls, engine.recordCalls)
 	}
 }
 

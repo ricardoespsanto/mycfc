@@ -373,6 +373,16 @@ func executeReplay(ctx context.Context, inventory ledgerInventory, privateKey []
 	if len(selected) == 0 {
 		return replayAttestation{}, errors.New("no replayable v2 ledger objects")
 	}
+	// Preflight the entire selected set before crossing any database boundary.
+	// Intent-only and legacy closure-v2 records remain readable for recovery
+	// diagnosis, but only authenticated closure-v3 records are eligible for a
+	// current replay attestation. Checking here prevents a mixed inventory from
+	// partially mutating the isolated restore before the final count invariant.
+	for _, authenticated := range selected {
+		if !authenticated.IsCurrentClosure() {
+			return replayAttestation{}, errors.New("ledger inventory is not current replay eligible")
+		}
+	}
 	runIDs := make([]uuid.UUID, 0, len(selected))
 	for _, authenticated := range selected {
 		result, err := engine.Replay(ctx, authenticated)
