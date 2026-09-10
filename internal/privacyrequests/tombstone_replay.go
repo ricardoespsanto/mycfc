@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -39,21 +40,22 @@ type ListedTombstoneObject struct {
 // AuthenticatedReplayTombstone has no public fields so callers cannot bypass
 // AEAD verification and construct an importable prescription directly.
 type AuthenticatedReplayTombstone struct {
-	kind               string
-	locatorKeyID       string
-	locatorDigest      []byte
-	ciphertextSHA256   []byte
-	objectVersion      string
-	writtenAt          time.Time
-	verifiedAt         time.Time
-	retainUntil        time.Time
-	effectiveAt        time.Time
-	closureVersion     string
-	envelopeVersion    string
-	encryptionKeyID    string
-	record             RestoreTombstone
-	prescriptionSHA256 []byte
-	recordSHA256       []byte
+	kind                   string
+	locatorKeyID           string
+	locatorDigest          []byte
+	ciphertextSHA256       []byte
+	objectVersion          string
+	writtenAt              time.Time
+	verifiedAt             time.Time
+	retainUntil            time.Time
+	effectiveAt            time.Time
+	closureVersion         string
+	envelopeVersion        string
+	encryptionKeyID        string
+	record                 RestoreTombstone
+	prescriptionSHA256     []byte
+	basePrescriptionSHA256 []byte
+	recordSHA256           []byte
 }
 
 func (a AuthenticatedReplayTombstone) OpaqueReplayID() string {
@@ -75,7 +77,7 @@ func (a AuthenticatedReplayTombstone) SameReplay(other AuthenticatedReplayTombst
 	return a.record.ExecutionID == other.record.ExecutionID && a.record.RequestID == other.record.RequestID &&
 		a.record.RequestRef == other.record.RequestRef && a.record.SubjectUserID == other.record.SubjectUserID &&
 		a.record.ExecutionStart.Equal(other.record.ExecutionStart) && hmac.Equal(a.record.PlanSHA256, other.record.PlanSHA256) &&
-		hmac.Equal(a.record.WorksetSHA256, other.record.WorksetSHA256) && hmac.Equal(a.prescriptionSHA256, other.prescriptionSHA256)
+		hmac.Equal(a.record.WorksetSHA256, other.record.WorksetSHA256) && hmac.Equal(a.basePrescriptionSHA256, other.basePrescriptionSHA256)
 }
 
 func AuthenticateReplayTombstone(privateKey []byte, listed ListedTombstoneObject) (AuthenticatedReplayTombstone, error) {
@@ -109,22 +111,23 @@ func AuthenticateReplayTombstone(privateKey []byte, listed ListedTombstoneObject
 	effectiveAt := time.Time{}
 	closureVersion := ""
 	if kind == "intent" {
-		if err = decodeStrictJSON(plaintext, &record); err != nil || !validReplayableRestoreTombstone(record) {
+		if err = decodeStrictJSON(plaintext, &record); err != nil || !validReplayableRestoreTombstone(record) || record.Replay.MembershipHistoryPostcondition != nil {
 			return zero, ErrTombstoneReplayInvalid
 		}
 		effectiveAt = record.ExecutionStart
 	} else {
 		var closure TombstoneClosure
-		if err = decodeStrictJSON(plaintext, &closure); err != nil || (closure.Version != TombstoneClosureVersionV2 && closure.Version != TombstoneClosureVersion) ||
+		if err = decodeStrictJSON(plaintext, &closure); err != nil || (closure.Version != TombstoneClosureVersionV2 && closure.Version != TombstoneClosureVersionV3 && closure.Version != TombstoneClosureVersion) ||
 			!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
 			!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) || !listed.RetainUntil.Equal(closure.EvidenceExpiresAt) ||
-			(closure.Version == TombstoneClosureVersionV2 && !closure.ErasureEffectiveAt.IsZero()) ||
-			(closure.Version == TombstoneClosureVersion && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt))) {
+			(closure.Version == TombstoneClosureVersionV2 && (!closure.ErasureEffectiveAt.IsZero() || closure.Tombstone.Replay.MembershipHistoryPostcondition != nil)) ||
+			(closure.Version == TombstoneClosureVersionV3 && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) || closure.Tombstone.Replay.MembershipHistoryPostcondition != nil)) ||
+			(closure.Version == TombstoneClosureVersion && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) || !validMembershipHistoryPostcondition(closure.Tombstone.Replay.MembershipHistoryPostcondition))) {
 			return zero, ErrTombstoneReplayInvalid
 		}
 		record = closure.Tombstone
 		closureVersion = closure.Version
-		if closure.Version == TombstoneClosureVersion {
+		if closure.Version != TombstoneClosureVersionV2 {
 			effectiveAt = closure.ErasureEffectiveAt
 		} else {
 			effectiveAt = record.ExecutionStart
@@ -135,13 +138,20 @@ func AuthenticateReplayTombstone(privateKey []byte, listed ListedTombstoneObject
 		return zero, ErrTombstoneReplayInvalid
 	}
 	prescriptionDigest := sha256.Sum256(prescription)
+	basePrescription, err := json.Marshal(RelationalReplayPrescription{
+		Version: record.Replay.Version, ActionVersion: record.Replay.ActionVersion, Operations: record.Replay.Operations,
+	})
+	if err != nil {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	basePrescriptionDigest := sha256.Sum256(basePrescription)
 	recordDigest := sha256.Sum256(plaintext)
 	return AuthenticatedReplayTombstone{
 		kind: kind, locatorKeyID: locatorKeyID, locatorDigest: bytes.Clone(locatorDigest),
 		ciphertextSHA256: bytes.Clone(listed.Checksum), objectVersion: listed.ObjectVersion,
 		writtenAt: listed.WrittenAt.UTC(), verifiedAt: listed.VerifiedAt.UTC(), retainUntil: listed.RetainUntil.UTC(), effectiveAt: effectiveAt.UTC(), closureVersion: closureVersion,
 		envelopeVersion: envelope.Version, encryptionKeyID: envelope.KeyID, record: record,
-		prescriptionSHA256: prescriptionDigest[:], recordSHA256: recordDigest[:],
+		prescriptionSHA256: prescriptionDigest[:], basePrescriptionSHA256: basePrescriptionDigest[:], recordSHA256: recordDigest[:],
 	}, nil
 }
 
@@ -163,10 +173,11 @@ type TombstoneReplayWorker struct {
 }
 
 type TombstoneReplayResult struct {
-	RunID          uuid.UUID
-	AlreadyApplied bool
-	Synthetic      bool
-	ClosureVersion string
+	RunID                          uuid.UUID
+	AlreadyApplied                 bool
+	Synthetic                      bool
+	ClosureVersion                 string
+	MembershipHistoryPostcondition MembershipHistoryPostcondition
 }
 
 func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated AuthenticatedReplayTombstone) (TombstoneReplayResult, error) {
@@ -182,7 +193,11 @@ func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated Authent
 	if authenticated.record.SyntheticFixture != "" {
 		syntheticFixture = &authenticated.record.SyntheticFixture
 	}
-	importID, err := q.ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened(ctx, dbgen.ImportAuthenticatedPrivacyRestoreTombstoneV2HardenedParams{
+	postcondition := authenticated.record.Replay.MembershipHistoryPostcondition
+	if authenticated.kind != "closure" || authenticated.closureVersion != TombstoneClosureVersion || !validMembershipHistoryPostcondition(postcondition) {
+		return TombstoneReplayResult{}, ErrTombstoneReplayInvalid
+	}
+	importID, err := q.ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened(ctx, dbgen.ImportAuthenticatedPrivacyRestoreTombstoneV4HardenedParams{
 		WorkerRef: w.WorkerRef, Kind: authenticated.kind, RecordVersion: authenticated.record.Version,
 		EnvelopeVersion: authenticated.envelopeVersion, EncryptionKeyID: authenticated.encryptionKeyID,
 		LocatorKeyID: authenticated.locatorKeyID, LocatorDigest: bytes.Clone(authenticated.locatorDigest),
@@ -193,9 +208,11 @@ func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated Authent
 		PlanSha256: bytes.Clone(authenticated.record.PlanSHA256), WorksetSha256: bytes.Clone(authenticated.record.WorksetSHA256),
 		ExecutionStartedAt: stamp(authenticated.record.ExecutionStart), ReplayVersion: authenticated.record.Replay.Version,
 		ErasureEffectiveAt: stamp(authenticated.effectiveAt), SyntheticFixture: syntheticFixture,
-		ClosureVersion: nullableString(authenticated.closureVersion),
+		ClosureVersion: authenticated.closureVersion,
 		ActionVersion:  authenticated.record.Replay.ActionVersion, Operations: append([]string(nil), authenticated.record.Replay.Operations...),
 		PrescriptionSha256: bytes.Clone(authenticated.prescriptionSHA256), RecordSha256: bytes.Clone(authenticated.recordSHA256),
+		MembershipPostconditionContract: postcondition.Contract, MembershipPostconditionSha256: bytes.Clone(postcondition.SHA256),
+		MembershipCount: int64(postcondition.MembershipCount), VariationCount: int64(postcondition.VariationCount),
 	})
 	if err != nil {
 		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
@@ -205,7 +222,7 @@ func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated Authent
 		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
 	}
 	if run.OutcomeCode != "" {
-		return TombstoneReplayResult{RunID: run.BegunRunID, AlreadyApplied: run.OutcomeCode == "ALREADY_APPLIED_SOURCE", Synthetic: authenticated.IsSynthetic(), ClosureVersion: authenticated.closureVersion}, nil
+		return w.verifiedResult(ctx, q, run.BegunRunID, run.OutcomeCode == "ALREADY_APPLIED_SOURCE", authenticated)
 	}
 	for index, operation := range authenticated.record.Replay.Operations {
 		if _, err = q.ExecutePrivacyRestoreReplayCheckpoint(ctx, dbgen.ExecutePrivacyRestoreReplayCheckpointParams{
@@ -215,7 +232,19 @@ func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated Authent
 			return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
 		}
 	}
-	return TombstoneReplayResult{RunID: run.BegunRunID, Synthetic: authenticated.IsSynthetic(), ClosureVersion: authenticated.closureVersion}, nil
+	return w.verifiedResult(ctx, q, run.BegunRunID, false, authenticated)
+}
+
+func (w TombstoneReplayWorker) verifiedResult(ctx context.Context, q *dbgen.Queries, runID uuid.UUID, alreadyApplied bool, authenticated AuthenticatedReplayTombstone) (TombstoneReplayResult, error) {
+	row, err := q.GetPrivacyRestoreMembershipPostcondition(ctx, runID)
+	expected := authenticated.record.Replay.MembershipHistoryPostcondition
+	if err != nil || row.PostconditionMembershipPostconditionContract != expected.Contract || row.PostconditionMembershipCount < 0 || row.PostconditionVariationCount < 0 ||
+		uint64(row.PostconditionMembershipCount) != expected.MembershipCount || uint64(row.PostconditionVariationCount) != expected.VariationCount ||
+		subtle.ConstantTimeCompare(row.PostconditionMembershipPostconditionSha256, expected.SHA256) != 1 {
+		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
+	}
+	return TombstoneReplayResult{RunID: runID, AlreadyApplied: alreadyApplied, Synthetic: authenticated.IsSynthetic(),
+		ClosureVersion: authenticated.closureVersion, MembershipHistoryPostcondition: *expected}, nil
 }
 
 func nullableString(value string) *string {
@@ -230,7 +259,7 @@ func validAuthenticatedReplayTombstone(authenticated AuthenticatedReplayTombston
 		authenticated.envelopeVersion == TombstoneEnvelopeVersion && policyKey.MatchString(authenticated.encryptionKeyID) &&
 		policyKey.MatchString(authenticated.locatorKeyID) && len(authenticated.locatorDigest) == sha256.Size &&
 		len(authenticated.ciphertextSHA256) == sha256.Size && len(authenticated.prescriptionSHA256) == sha256.Size &&
-		len(authenticated.recordSHA256) == sha256.Size && validReplayableRestoreTombstone(authenticated.record) &&
+		len(authenticated.basePrescriptionSHA256) == sha256.Size && len(authenticated.recordSHA256) == sha256.Size && validReplayableRestoreTombstone(authenticated.record) &&
 		authenticated.objectVersion != "" && !authenticated.writtenAt.IsZero() && !authenticated.effectiveAt.IsZero() && !authenticated.verifiedAt.Before(authenticated.writtenAt) &&
 		((authenticated.kind == "intent" && authenticated.retainUntil.IsZero()) ||
 			(authenticated.kind == "closure" && !authenticated.retainUntil.IsZero() && !authenticated.verifiedAt.After(authenticated.retainUntil)))

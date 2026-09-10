@@ -115,7 +115,7 @@ func TestSchemaObservationMatchesExactMigrationInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if observation.SchemaMigrationDigest != db.EmbeddedMigrationDigest() || observation.MigrationCount != len(db.EmbeddedMigrationInventory())-1 ||
-		observation.BaselineThrough != "202609100014_privacy_activation_broker" {
+		observation.BaselineThrough != "202609100015_privacy_membership_postcondition" {
 		t.Fatalf("unexpected schema observation: %#v", observation)
 	}
 	if err := os.WriteFile(versionsPath, append(versions, '\n'), 0o600); err != nil {

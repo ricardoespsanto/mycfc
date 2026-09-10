@@ -98,27 +98,32 @@ type ledgerInventoryObject struct {
 }
 
 type replayAttestation struct {
-	Contract                        string `json:"contract"`
-	Result                          string `json:"result"`
-	InputSource                     string `json:"input_source"`
-	PolicyVersion                   string `json:"policy_version"`
-	ExecutorVersion                 string `json:"executor_version"`
-	PlanSchemaVersion               string `json:"plan_schema_version"`
-	ImageDigest                     string `json:"image_digest"`
-	SchemaMigrationDigest           string `json:"schema_migration_digest"`
-	InventorySHA256                 string `json:"inventory_sha256"`
-	ObjectCount                     int    `json:"object_count"`
-	ImportedCount                   int    `json:"imported_count"`
-	ReplayedCount                   int    `json:"replayed_count"`
-	AlreadyAppliedCount             int    `json:"already_applied_count"`
-	NonReplayableV1Count            int    `json:"non_replayable_v1_count"`
-	AbsenceVerifiedCount            int    `json:"absence_verified_count"`
-	SyntheticReplayedCount          int    `json:"synthetic_replayed_count"`
-	ClosureV3Count                  int    `json:"closure_v3_count"`
-	IntentOnlyCount                 int    `json:"intent_only_count"`
-	LegacyClosureV2Count            int    `json:"legacy_closure_v2_count"`
-	ErasureEffectiveAtVerifiedCount int    `json:"erasure_effective_at_verified_count"`
-	FailedCount                     int    `json:"failed_count"`
+	Contract                             string `json:"contract"`
+	Result                               string `json:"result"`
+	InputSource                          string `json:"input_source"`
+	PolicyVersion                        string `json:"policy_version"`
+	ExecutorVersion                      string `json:"executor_version"`
+	PlanSchemaVersion                    string `json:"plan_schema_version"`
+	ImageDigest                          string `json:"image_digest"`
+	SchemaMigrationDigest                string `json:"schema_migration_digest"`
+	InventorySHA256                      string `json:"inventory_sha256"`
+	ObjectCount                          int    `json:"object_count"`
+	ImportedCount                        int    `json:"imported_count"`
+	ReplayedCount                        int    `json:"replayed_count"`
+	AlreadyAppliedCount                  int    `json:"already_applied_count"`
+	NonReplayableV1Count                 int    `json:"non_replayable_v1_count"`
+	AbsenceVerifiedCount                 int    `json:"absence_verified_count"`
+	SyntheticReplayedCount               int    `json:"synthetic_replayed_count"`
+	ClosureV4Count                       int    `json:"closure_v4_count"`
+	IntentOnlyCount                      int    `json:"intent_only_count"`
+	LegacyClosureV2Count                 int    `json:"legacy_closure_v2_count"`
+	ErasureEffectiveAtVerifiedCount      int    `json:"erasure_effective_at_verified_count"`
+	MembershipPostconditionContract      string `json:"membership_postcondition_contract"`
+	MembershipPostconditionSHA256        string `json:"membership_postcondition_sha256"`
+	MembershipPostconditionVerifiedCount int    `json:"membership_postcondition_verified_count"`
+	MembershipCount                      uint64 `json:"membership_count"`
+	VariationCount                       uint64 `json:"variation_count"`
+	FailedCount                          int    `json:"failed_count"`
 }
 
 func run(ctx context.Context, args []string) error {
@@ -303,14 +308,18 @@ func (e databaseReplayEngine) RecordAttestation(ctx context.Context, attestation
 	if err != nil {
 		return errors.New("record restore replay attestation")
 	}
-	_, err = dbgen.New(e.pool).RecordPrivacyRestoreReplayInventoryAttestation(ctx, dbgen.RecordPrivacyRestoreReplayInventoryAttestationParams{
+	_, err = dbgen.New(e.pool).RecordPrivacyRestoreReplayInventoryAttestationV4(ctx, dbgen.RecordPrivacyRestoreReplayInventoryAttestationV4Params{
 		InputSource: attestation.InputSource, InventorySha256: digest, SchemaMigrationDigest: mustDecodeHex(attestation.SchemaMigrationDigest),
 		PolicyVersion: attestation.PolicyVersion, ExecutorVersion: attestation.ExecutorVersion, PlanSchemaVersion: attestation.PlanSchemaVersion, ImageDigest: attestation.ImageDigest,
 		RunIds: runIDs, ObjectCount: int32(attestation.ObjectCount),
 		ImportedCount: int32(attestation.ImportedCount), ReplayedCount: int32(attestation.ReplayedCount), AlreadyAppliedCount: int32(attestation.AlreadyAppliedCount),
 		AbsenceVerifiedCount: int32(attestation.AbsenceVerifiedCount), SyntheticReplayedCount: int32(attestation.SyntheticReplayedCount),
-		ClosureV3Count: int32(attestation.ClosureV3Count), IntentOnlyCount: int32(attestation.IntentOnlyCount), LegacyClosureV2Count: int32(attestation.LegacyClosureV2Count),
-		ErasureEffectiveAtVerifiedCount: int32(attestation.ErasureEffectiveAtVerifiedCount),
+		ClosureV4Count: int32(attestation.ClosureV4Count), IntentOnlyCount: int32(attestation.IntentOnlyCount), LegacyClosureV2Count: int32(attestation.LegacyClosureV2Count),
+		ErasureEffectiveAtVerifiedCount:      int32(attestation.ErasureEffectiveAtVerifiedCount),
+		MembershipPostconditionContract:      attestation.MembershipPostconditionContract,
+		MembershipPostconditionSha256:        mustDecodeHex(attestation.MembershipPostconditionSHA256),
+		MembershipPostconditionVerifiedCount: int32(attestation.MembershipPostconditionVerifiedCount),
+		MembershipCount:                      int64(attestation.MembershipCount), VariationCount: int64(attestation.VariationCount),
 	})
 	if err != nil {
 		return errors.New("record restore replay attestation")
@@ -373,9 +382,12 @@ func executeReplay(ctx context.Context, inventory ledgerInventory, privateKey []
 	if len(selected) == 0 {
 		return replayAttestation{}, errors.New("no replayable v2 ledger objects")
 	}
+	if attestation.NonReplayableV1Count != 0 {
+		return replayAttestation{}, errors.New("ledger inventory is not current replay eligible")
+	}
 	// Preflight the entire selected set before crossing any database boundary.
-	// Intent-only and legacy closure-v2 records remain readable for recovery
-	// diagnosis, but only authenticated closure-v3 records are eligible for a
+	// Intent-only and legacy closure-v2/v3 records remain readable for recovery
+	// diagnosis, but only authenticated closure-v4 records are eligible for a
 	// current replay attestation. Checking here prevents a mixed inventory from
 	// partially mutating the isolated restore before the final count invariant.
 	for _, authenticated := range selected {
@@ -384,6 +396,7 @@ func executeReplay(ctx context.Context, inventory ledgerInventory, privateKey []
 		}
 	}
 	runIDs := make([]uuid.UUID, 0, len(selected))
+	postconditions := make([]privacyrequests.MembershipHistoryPostcondition, 0, len(selected))
 	for _, authenticated := range selected {
 		result, err := engine.Replay(ctx, authenticated)
 		if err != nil {
@@ -397,13 +410,26 @@ func executeReplay(ctx context.Context, inventory ledgerInventory, privateKey []
 		}
 		switch result.ClosureVersion {
 		case privacyrequests.TombstoneClosureVersion:
-			attestation.ClosureV3Count++
+			attestation.ClosureV4Count++
 		case privacyrequests.TombstoneClosureVersionV2:
 			attestation.LegacyClosureV2Count++
 		default:
 			attestation.IntentOnlyCount++
 		}
 		attestation.ErasureEffectiveAtVerifiedCount++
+		if result.MembershipHistoryPostcondition.Contract != privacyrequests.MembershipHistoryPostconditionVersion ||
+			len(result.MembershipHistoryPostcondition.SHA256) != sha256.Size ||
+			result.MembershipHistoryPostcondition.MembershipCount > 10000 || result.MembershipHistoryPostcondition.VariationCount > 100000 {
+			return replayAttestation{}, errors.New("membership postcondition verification failed")
+		}
+		attestation.MembershipPostconditionVerifiedCount++
+		if ^uint64(0)-attestation.MembershipCount < result.MembershipHistoryPostcondition.MembershipCount ||
+			^uint64(0)-attestation.VariationCount < result.MembershipHistoryPostcondition.VariationCount {
+			return replayAttestation{}, errors.New("membership postcondition count overflow")
+		}
+		attestation.MembershipCount += result.MembershipHistoryPostcondition.MembershipCount
+		attestation.VariationCount += result.MembershipHistoryPostcondition.VariationCount
+		postconditions = append(postconditions, result.MembershipHistoryPostcondition)
 		if result.AlreadyApplied {
 			attestation.AlreadyAppliedCount++
 		} else {
@@ -418,16 +444,36 @@ func executeReplay(ctx context.Context, inventory ledgerInventory, privateKey []
 		attestation.AbsenceVerifiedCount != attestation.ReplayedCount || attestation.FailedCount != 0 ||
 		(inventory.Source == "LIVE_LEDGER" && attestation.SyntheticReplayedCount != 0) ||
 		(inventory.Source == "SYNTHETIC_BOOTSTRAP" && attestation.SyntheticReplayedCount != attestation.ReplayedCount) ||
-		attestation.ClosureV3Count != attestation.ReplayedCount || attestation.IntentOnlyCount != 0 || attestation.LegacyClosureV2Count != 0 ||
-		attestation.ErasureEffectiveAtVerifiedCount != attestation.ReplayedCount {
+		attestation.ClosureV4Count != attestation.ReplayedCount || attestation.IntentOnlyCount != 0 || attestation.LegacyClosureV2Count != 0 ||
+		attestation.ErasureEffectiveAtVerifiedCount != attestation.ReplayedCount || attestation.MembershipPostconditionVerifiedCount != attestation.ReplayedCount {
 		return replayAttestation{}, errors.New("restore replay attestation invariant failed")
 	}
+	attestation.MembershipPostconditionContract = privacyrequests.MembershipHistoryPostconditionVersion
+	attestation.MembershipPostconditionSHA256 = membershipPostconditionSetDigest(postconditions)
 	attestation.SchemaMigrationDigest = digest
 	if err = engine.RecordAttestation(ctx, attestation, runIDs); err != nil {
 		return replayAttestation{}, errors.New("restore replay attestation persistence failed")
 	}
 	attestation.Result = "SUCCEEDED"
 	return attestation, nil
+}
+
+func membershipPostconditionSetDigest(postconditions []privacyrequests.MembershipHistoryPostcondition) string {
+	digests := make([][]byte, len(postconditions))
+	for index := range postconditions {
+		digests[index] = bytes.Clone(postconditions[index].SHA256)
+	}
+	sort.Slice(digests, func(i, j int) bool { return bytes.Compare(digests[i], digests[j]) < 0 })
+	encoded := frameMembershipPostcondition([]byte("mycfc/membership-history-postcondition-set/v1"))
+	for _, digest := range digests {
+		encoded = append(encoded, frameMembershipPostcondition(digest)...)
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func frameMembershipPostcondition(value []byte) []byte {
+	return append([]byte{byte(len(value) >> 24), byte(len(value) >> 16), byte(len(value) >> 8), byte(len(value))}, value...)
 }
 
 func policyValue(value string) bool {
@@ -460,6 +506,9 @@ func createSyntheticFixture(ctx context.Context, pool *pgxpool.Pool, privateKey 
 	if err != nil {
 		return ledgerInventory{}, errors.New("create synthetic restore fixture")
 	}
+	if fixture.FixtureMembershipCount < 0 || fixture.FixtureMembershipCount > 10000 || fixture.FixtureVariationCount < 0 || fixture.FixtureVariationCount > 100000 {
+		return ledgerInventory{}, errors.New("invalid synthetic membership postcondition")
+	}
 	key, err := ecdh.X25519().NewPrivateKey(privateKey)
 	if err != nil {
 		return ledgerInventory{}, errors.New("open synthetic replay key")
@@ -475,7 +524,10 @@ func createSyntheticFixture(ctx context.Context, pool *pgxpool.Pool, privateKey 
 	record := privacyrequests.RestoreTombstone{Version: privacyrequests.TombstoneRecordVersion, ExecutionID: fixture.FixtureSourceExecutionID,
 		RequestID: fixture.FixtureSourceRequestID, RequestRef: fixture.FixtureSourceRequestRef, SubjectUserID: fixture.FixtureSubjectUserID,
 		PlanSHA256: fixture.FixturePlanSha256, WorksetSHA256: fixture.FixtureWorksetSha256, ExecutionStart: fixture.FixtureErasureEffectiveAt.Time,
-		SyntheticFixture: privacyrequests.SyntheticRestoreFixtureV1, Replay: &privacyrequests.RelationalReplayPrescription{Version: privacyrequests.TombstoneReplayVersion, ActionVersion: privacyrequests.SupportedActionVersion, Operations: fixture.FixtureOperations}}
+		SyntheticFixture: privacyrequests.SyntheticRestoreFixtureV1, Replay: &privacyrequests.RelationalReplayPrescription{Version: privacyrequests.TombstoneReplayVersion,
+			ActionVersion: privacyrequests.SupportedActionVersion, Operations: fixture.FixtureOperations,
+			MembershipHistoryPostcondition: &privacyrequests.MembershipHistoryPostcondition{Contract: fixture.FixtureMembershipPostconditionContract,
+				SHA256: fixture.FixtureMembershipPostconditionSha256, MembershipCount: uint64(fixture.FixtureMembershipCount), VariationCount: uint64(fixture.FixtureVariationCount)}}}
 	closedAt := time.Now().UTC()
 	sealed, err := protector.SealClosure(privacyrequests.TombstoneClosure{Version: privacyrequests.TombstoneClosureVersion, Tombstone: record,
 		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: fixture.FixtureErasureEffectiveAt.Time})

@@ -63,6 +63,7 @@ type Querier interface {
 	ConfirmPrivacyRestoreTombstone(ctx context.Context, arg ConfirmPrivacyRestoreTombstoneParams) (uuid.UUID, error)
 	ConfirmPrivacyTombstoneClosure(ctx context.Context, arg ConfirmPrivacyTombstoneClosureParams) (uuid.UUID, error)
 	ConfirmPrivacyTombstoneClosureV3(ctx context.Context, arg ConfirmPrivacyTombstoneClosureV3Params) (uuid.UUID, error)
+	ConfirmPrivacyTombstoneClosureV4(ctx context.Context, arg ConfirmPrivacyTombstoneClosureV4Params) (uuid.UUID, error)
 	ConfirmPrivacyUploadPut(ctx context.Context, arg ConfirmPrivacyUploadPutParams) error
 	ConfirmWaitlistedResponse(ctx context.Context, arg ConfirmWaitlistedResponseParams) (int64, error)
 	ConsumeEmailVerification(ctx context.Context, arg ConsumeEmailVerificationParams) (uuid.UUID, error)
@@ -184,6 +185,7 @@ type Querier interface {
 	GetPrivacyRequestByRef(ctx context.Context, publicRef uuid.UUID) (DataErasureRequest, error)
 	GetPrivacyRequestExecutionLifecycle(ctx context.Context, id uuid.UUID) (GetPrivacyRequestExecutionLifecycleRow, error)
 	GetPrivacyRequestForUpdate(ctx context.Context, publicRef uuid.UUID) (DataErasureRequest, error)
+	GetPrivacyRestoreMembershipPostcondition(ctx context.Context, runID uuid.UUID) (GetPrivacyRestoreMembershipPostconditionRow, error)
 	GetPrivacyRetentionStatus(ctx context.Context) (GetPrivacyRetentionStatusRow, error)
 	GetPrivacyReviewerGrantForShare(ctx context.Context, userID uuid.UUID) (PrivacyReviewerGrant, error)
 	GetProgrammeByCode(ctx context.Context, code string) (Programme, error)
@@ -215,6 +217,7 @@ type Querier interface {
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
 	ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2Params) (uuid.UUID, error)
 	ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2HardenedParams) (uuid.UUID, error)
+	ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV4HardenedParams) (uuid.UUID, error)
 	InvalidatePrivacyAccountTokens(ctx context.Context, arg InvalidatePrivacyAccountTokensParams) (InvalidatePrivacyAccountTokensRow, error)
 	IsPrivacyAdministrator(ctx context.Context, userID uuid.UUID) (bool, error)
 	IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error)
@@ -316,6 +319,7 @@ type Querier interface {
 	PreparePrivacyRestoreTombstone(ctx context.Context, arg PreparePrivacyRestoreTombstoneParams) (PreparePrivacyRestoreTombstoneRow, error)
 	PreparePrivacyTombstoneClosure(ctx context.Context, arg PreparePrivacyTombstoneClosureParams) (PreparePrivacyTombstoneClosureRow, error)
 	PreparePrivacyTombstoneClosureV3(ctx context.Context, arg PreparePrivacyTombstoneClosureV3Params) (PreparePrivacyTombstoneClosureV3Row, error)
+	PreparePrivacyTombstoneClosureV4(ctx context.Context, arg PreparePrivacyTombstoneClosureV4Params) (PreparePrivacyTombstoneClosureV4Row, error)
 	PrivacyActivationReady(ctx context.Context, policyVersion string) (bool, error)
 	PrivacyRestoreReplayAlreadyApplied(ctx context.Context, arg PrivacyRestoreReplayAlreadyAppliedParams) (bool, error)
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
@@ -325,6 +329,7 @@ type Querier interface {
 	RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error)
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
 	RecordPrivacyRestoreReplayInventoryAttestation(ctx context.Context, arg RecordPrivacyRestoreReplayInventoryAttestationParams) ([]byte, error)
+	RecordPrivacyRestoreReplayInventoryAttestationV4(ctx context.Context, arg RecordPrivacyRestoreReplayInventoryAttestationV4Params) ([]byte, error)
 	RecordPrivacyWorkerObjectEvidence(ctx context.Context, arg RecordPrivacyWorkerObjectEvidenceParams) (uuid.UUID, error)
 	RecordPrivacyWorkerProviderEvidence(ctx context.Context, arg RecordPrivacyWorkerProviderEvidenceParams) (uuid.UUID, error)
 	RemovePrivacyUploadIntent(ctx context.Context, arg RemovePrivacyUploadIntentParams) error

@@ -34,6 +34,22 @@ type replayEngineFake struct {
 	closure     bool
 }
 
+func TestMembershipPostconditionSetDigestIsOrderStableAndBindsAllDigests(t *testing.T) {
+	first := privacyrequests.MembershipHistoryPostcondition{Contract: privacyrequests.MembershipHistoryPostconditionVersion,
+		SHA256: bytes.Repeat([]byte{0x11}, sha256.Size)}
+	second := privacyrequests.MembershipHistoryPostcondition{Contract: privacyrequests.MembershipHistoryPostconditionVersion,
+		SHA256: bytes.Repeat([]byte{0x22}, sha256.Size)}
+	forward := membershipPostconditionSetDigest([]privacyrequests.MembershipHistoryPostcondition{first, second})
+	reversed := membershipPostconditionSetDigest([]privacyrequests.MembershipHistoryPostcondition{second, first})
+	if forward == "" || forward != reversed {
+		t.Fatalf("membership set digest is not stable: forward=%q reversed=%q", forward, reversed)
+	}
+	second.SHA256[0] ^= 0xff
+	if changed := membershipPostconditionSetDigest([]privacyrequests.MembershipHistoryPostcondition{first, second}); changed == forward {
+		t.Fatal("membership set digest did not bind a changed row digest")
+	}
+}
+
 var testReplayBindings = replayBindings{PolicyVersion: "policy-v1", ExecutorVersion: "executor-v1", PlanSchemaVersion: "plan-v1", ImageDigest: "sha256:" + strings.Repeat("a", 64)}
 
 func (f *replayEngineFake) Replay(_ context.Context, authenticated privacyrequests.AuthenticatedReplayTombstone) (privacyrequests.TombstoneReplayResult, error) {
@@ -76,6 +92,17 @@ func replayFixture(t *testing.T) (*privacyrequests.TombstoneProtector, []byte, p
 	return protector, privateKey.Bytes(), record
 }
 
+func currentClosureRecord(record privacyrequests.RestoreTombstone) privacyrequests.RestoreTombstone {
+	copy := record
+	replay := *record.Replay
+	replay.Operations = append([]string(nil), record.Replay.Operations...)
+	replay.MembershipHistoryPostcondition = &privacyrequests.MembershipHistoryPostcondition{
+		Contract: privacyrequests.MembershipHistoryPostconditionVersion, SHA256: bytes.Repeat([]byte{0x44}, 32), MembershipCount: 1, VariationCount: 2,
+	}
+	copy.Replay = &replay
+	return copy
+}
+
 func inventoryObject(sealed privacyrequests.SealedTombstone, keyByte byte) ledgerInventoryObject {
 	writtenAt := time.Date(2026, 9, 10, 10, 0, 0, 123, time.UTC)
 	retainUntil := (*time.Time)(nil)
@@ -90,7 +117,7 @@ func inventoryObject(sealed privacyrequests.SealedTombstone, keyByte byte) ledge
 	}
 }
 
-func sealLegacyClosureV2ForTest(t *testing.T, privateKey []byte, record privacyrequests.RestoreTombstone) privacyrequests.SealedTombstone {
+func sealLegacyClosureForTest(t *testing.T, privateKey []byte, record privacyrequests.RestoreTombstone, version string) privacyrequests.SealedTombstone {
 	t.Helper()
 	const (
 		algorithm    = "X25519-HKDF-SHA256-AES-256-GCM"
@@ -100,8 +127,11 @@ func sealLegacyClosureV2ForTest(t *testing.T, privateKey []byte, record privacyr
 	)
 	closedAt := record.ExecutionStart.Add(time.Hour)
 	closure := privacyrequests.TombstoneClosure{
-		Version: privacyrequests.TombstoneClosureVersionV2, Tombstone: record,
+		Version: version, Tombstone: record,
 		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+	}
+	if version == privacyrequests.TombstoneClosureVersionV3 {
+		closure.ErasureEffectiveAt = record.ExecutionStart
 	}
 	plaintext, err := json.Marshal(closure)
 	if err != nil {
@@ -173,35 +203,25 @@ func TestExecuteReplayPrefersClosureAndEmitsOnlyNonIdentifyingCounts(t *testing.
 	}
 	closedAt := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
 	closure, err := protector.SealClosure(privacyrequests.TombstoneClosure{
-		Version: privacyrequests.TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
+		Version: privacyrequests.TombstoneClosureVersion, Tombstone: currentClosureRecord(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyPayload, err := json.Marshal(privacyrequests.TombstoneEnvelope{
-		Version: privacyrequests.TombstoneEnvelopeVersionV1, Algorithm: "X25519-HKDF-SHA256-AES-256-GCM", KeyID: "legacy-key-v1",
-		Encapsulation: bytes.Repeat([]byte{0x51}, 32), Nonce: bytes.Repeat([]byte{0x52}, 12), Ciphertext: bytes.Repeat([]byte{0x53}, 16),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyDigest := sha256.Sum256(legacyPayload)
 	// Closure-first ordering proves selection does not depend on inventory order.
-	objects := []ledgerInventoryObject{inventoryObject(closure, 2), inventoryObject(intent, 1), {
-		KeySHA256: strings.Repeat("f", 64), ObjectVersion: "legacy-version", CiphertextSHA256: hex.EncodeToString(legacyDigest[:]),
-		SizeBytes: int64(len(legacyPayload)), Payload: legacyPayload, WrittenAt: closedAt, VerifiedAt: closedAt.Add(time.Second),
-	}}
+	objects := []ledgerInventoryObject{inventoryObject(closure, 2), inventoryObject(intent, 1)}
 	digest, err := inventoryMetadataDigest(objects)
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{{RunID: uuid.New(), ClosureVersion: privacyrequests.TombstoneClosureVersion}}}
+	engine := &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{{RunID: uuid.New(), ClosureVersion: privacyrequests.TombstoneClosureVersion,
+		MembershipHistoryPostcondition: *currentClosureRecord(record).Replay.MembershipHistoryPostcondition}}}
 	attestation, err := executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}, privateKey, engine, testReplayBindings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if attestation.Result != "SUCCEEDED" || attestation.ObjectCount != 3 || attestation.ImportedCount != 1 || attestation.ReplayedCount != 1 ||
-		attestation.NonReplayableV1Count != 1 || attestation.AbsenceVerifiedCount != 1 || engine.calls != 1 || !engine.closure {
+	if attestation.Result != "SUCCEEDED" || attestation.ObjectCount != 2 || attestation.ImportedCount != 1 || attestation.ReplayedCount != 1 ||
+		attestation.NonReplayableV1Count != 0 || attestation.AbsenceVerifiedCount != 1 || engine.calls != 1 || !engine.closure {
 		t.Fatalf("attestation=%+v calls=%d closure=%t", attestation, engine.calls, engine.closure)
 	}
 	encoded, _ := json.Marshal(attestation)
@@ -247,7 +267,7 @@ func TestExecuteReplayPreflightsMixedInventoryBeforeDatabaseMutation(t *testing.
 	protector, privateKey, currentRecord := replayFixture(t)
 	closedAt := currentRecord.ExecutionStart.Add(time.Hour)
 	currentClosure, err := protector.SealClosure(privacyrequests.TombstoneClosure{
-		Version: privacyrequests.TombstoneClosureVersion, Tombstone: currentRecord,
+		Version: privacyrequests.TombstoneClosureVersion, Tombstone: currentClosureRecord(currentRecord),
 		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: currentRecord.ExecutionStart,
 	})
 	if err != nil {
@@ -258,7 +278,13 @@ func TestExecuteReplayPreflightsMixedInventoryBeforeDatabaseMutation(t *testing.
 	legacyRecord.RequestID = uuid.New()
 	legacyRecord.RequestRef = uuid.New()
 	legacyRecord.SubjectUserID = uuid.New()
-	legacyClosure := sealLegacyClosureV2ForTest(t, privateKey, legacyRecord)
+	legacyClosure := sealLegacyClosureForTest(t, privateKey, legacyRecord, privacyrequests.TombstoneClosureVersionV2)
+	legacyV3Record := currentRecord
+	legacyV3Record.ExecutionID = uuid.New()
+	legacyV3Record.RequestID = uuid.New()
+	legacyV3Record.RequestRef = uuid.New()
+	legacyV3Record.SubjectUserID = uuid.New()
+	legacyV3Closure := sealLegacyClosureForTest(t, privateKey, legacyV3Record, privacyrequests.TombstoneClosureVersionV3)
 	intentRecord := currentRecord
 	intentRecord.ExecutionID = uuid.New()
 	intentRecord.RequestID = uuid.New()
@@ -268,10 +294,21 @@ func TestExecuteReplayPreflightsMixedInventoryBeforeDatabaseMutation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyV1Payload, err := json.Marshal(privacyrequests.TombstoneEnvelope{
+		Version: privacyrequests.TombstoneEnvelopeVersionV1, Algorithm: "X25519-HKDF-SHA256-AES-256-GCM", KeyID: "legacy-key-v1",
+		Encapsulation: bytes.Repeat([]byte{0x51}, 32), Nonce: bytes.Repeat([]byte{0x52}, 12), Ciphertext: bytes.Repeat([]byte{0x53}, 16),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyV1Digest := sha256.Sum256(legacyV1Payload)
 	objects := []ledgerInventoryObject{
 		inventoryObject(currentClosure, 0x11),
 		inventoryObject(legacyClosure, 0x12),
-		inventoryObject(intent, 0x13),
+		inventoryObject(legacyV3Closure, 0x13),
+		inventoryObject(intent, 0x14),
+		{KeySHA256: strings.Repeat("f", 64), ObjectVersion: "legacy-version", CiphertextSHA256: hex.EncodeToString(legacyV1Digest[:]),
+			SizeBytes: int64(len(legacyV1Payload)), Payload: legacyV1Payload, WrittenAt: closedAt, VerifiedAt: closedAt.Add(time.Second)},
 	}
 	digest, err := inventoryMetadataDigest(objects)
 	if err != nil {

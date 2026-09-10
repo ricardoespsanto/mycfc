@@ -206,7 +206,7 @@ case "$1" in
 			*pg_restore*) exit 0 ;;
 			*'CREATE ROLE'*) exit 0 ;;
 			*mycfc_restore_observer*) exit 0 ;;
-			*'SELECT version FROM mycfc_meta.schema_migrations'*) printf '%s\n' 202609100008_restore_replay 202609100009_privacy_provider_execution 202609100010_privacy_retention_completion 202609100011_privacy_completion_control 202609100012_privacy_restore_replay_hardening 202609100013_privacy_worker_release_guard 202609100014_privacy_activation_broker reset-baseline-v1 ;;
+			*'SELECT version FROM mycfc_meta.schema_migrations'*) printf '%s\n' 202609100008_restore_replay 202609100009_privacy_provider_execution 202609100010_privacy_retention_completion 202609100011_privacy_completion_control 202609100012_privacy_restore_replay_hardening 202609100013_privacy_worker_release_guard 202609100014_privacy_activation_broker 202609100015_privacy_membership_postcondition reset-baseline-v1 ;;
 			*) printf 'unexpected docker exec: %s\n' "$*" >&2; exit 1 ;;
 		esac
 		;;
@@ -215,9 +215,9 @@ case "$1" in
 			*-d\ --name*) exit 0 ;;
 			*postgres:16.9-alpine3.21@sha256:*psql*)
 				if [ "${TEST_EMPTY_LEDGER:-false}" = true ]; then
-					printf '%s\n' '1|0|1|1|5|5|1|1|1|1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+					printf '%s\n' '1|0|1|1|5|5|1|1|1|1|mycfc/membership-history-postcondition/v1|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|1|1|1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 				else
-					printf '%s\n' '1|0|0|1|5|5|1|1|1|1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+					printf '%s\n' '1|0|0|1|5|5|1|1|1|1|mycfc/membership-history-postcondition/v1|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|1|1|1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 				fi
 				;;
 			*--entrypoint\ /app/privacy-restore-replay*)
@@ -241,9 +241,9 @@ case "$1" in
 				objects=$(jq '.objects | length' "$ledger_src")
 				source=$(jq -r .source "$ledger_src")
 				if [ "$source" = SYNTHETIC_BOOTSTRAP ]; then synthetic=1; else synthetic=0; fi
-				schema_versions=$(printf '%s\n' 202609100008_restore_replay 202609100009_privacy_provider_execution 202609100010_privacy_retention_completion 202609100011_privacy_completion_control 202609100012_privacy_restore_replay_hardening 202609100013_privacy_worker_release_guard 202609100014_privacy_activation_broker reset-baseline-v1)
+				schema_versions=$(printf '%s\n' 202609100008_restore_replay 202609100009_privacy_provider_execution 202609100010_privacy_retention_completion 202609100011_privacy_completion_control 202609100012_privacy_restore_replay_hardening 202609100013_privacy_worker_release_guard 202609100014_privacy_activation_broker 202609100015_privacy_membership_postcondition reset-baseline-v1)
 				schema_digest=$(printf '%s' "$schema_versions" | sha256sum | awk '{print $1}')
-				jq -n --arg source "$source" --arg inventory "$inventory" --arg schema "$schema_digest" --argjson objects "$objects" --argjson synthetic "$synthetic" '{contract:"mycfc/privacy-restore-replay-result/v2",result:"SUCCEEDED",input_source:$source,policy_version:"privacy-policy-v1",executor_version:"privacy-erasure-executor/v2",plan_schema_version:"privacy-erasure-plan/v2",image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",schema_migration_digest:$schema,inventory_sha256:$inventory,object_count:$objects,imported_count:$objects,replayed_count:1,already_applied_count:0,non_replayable_v1_count:0,absence_verified_count:1,synthetic_replayed_count:$synthetic,closure_v3_count:1,intent_only_count:0,legacy_closure_v2_count:0,erasure_effective_at_verified_count:1,failed_count:0}' >"$output_src/replay.json"
+				jq -n --arg source "$source" --arg inventory "$inventory" --arg schema "$schema_digest" --argjson objects "$objects" --argjson synthetic "$synthetic" '{contract:"mycfc/privacy-restore-replay-result/v2",result:"SUCCEEDED",input_source:$source,policy_version:"privacy-policy-v1",executor_version:"privacy-erasure-executor/v2",plan_schema_version:"privacy-erasure-plan/v2",image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",schema_migration_digest:$schema,inventory_sha256:$inventory,object_count:$objects,imported_count:$objects,replayed_count:1,already_applied_count:0,non_replayable_v1_count:0,absence_verified_count:1,synthetic_replayed_count:$synthetic,closure_v4_count:1,intent_only_count:0,legacy_closure_v2_count:0,erasure_effective_at_verified_count:1,membership_postcondition_contract:"mycfc/membership-history-postcondition/v1",membership_postcondition_sha256:("b"*64),membership_postcondition_verified_count:1,membership_count:1,variation_count:1,failed_count:0}' >"$output_src/replay.json"
 				;;
 			*) exit 0 ;;
 		esac
@@ -281,7 +281,7 @@ printf '%s\n' "$output" | grep -q '^privacy_restore_drill_started$'
 printf '%s\n' "$output" | grep -q '^privacy_restore_backup_selected$'
 printf '%s\n' "$output" | grep -Eq '^privacy_restore_ledger_prefetched object_count=1 inventory_sha256=[0-9a-f]{64}$'
 printf '%s\n' "$output" | grep -Eq '^privacy_restore_drill_succeeded attestation_sha256=[0-9a-f]{64} backup_age_seconds=[0-9]+ ledger_object_count=1 replayed_count=1 absence_verified_count=1$'
-jq -e '.contract == "mycfc/privacy-restore-drill-attestation/v2" and .contracts.closure == "restore-tombstone-closure/v3" and .backup.manifest.ref == "s3://test-backups/daily/2026-09-02T02-15-00Z.json?versionId=manifest-version" and .backup.dump.ref == "s3://test-backups/daily/2026-09-02T02-15-00Z.dump.enc?versionId=dump-version" and .ledger.input_source == "LIVE_LEDGER" and .ledger.object_count == 1 and .candidate.closure_v3_count == 1 and .observer.verified_run_count == 1 and .evidence.ref == "s3://test-backups/" + (.evidence.ref | ltrimstr("s3://test-backups/")) and .result == "SUCCEEDED"' "$work_dir/attestations/latest.json" >/dev/null
+jq -e '.contract == "mycfc/privacy-restore-drill-attestation/v2" and .contracts.closure == "restore-tombstone-closure/v4" and .backup.manifest.ref == "s3://test-backups/daily/2026-09-02T02-15-00Z.json?versionId=manifest-version" and .backup.dump.ref == "s3://test-backups/daily/2026-09-02T02-15-00Z.dump.enc?versionId=dump-version" and .ledger.input_source == "LIVE_LEDGER" and .ledger.object_count == 1 and .candidate.closure_v4_count == 1 and .observer.verified_run_count == 1 and .evidence.ref == "s3://test-backups/" + (.evidence.ref | ltrimstr("s3://test-backups/")) and .result == "SUCCEEDED"' "$work_dir/attestations/latest.json" >/dev/null
 cmp "$work_dir/attestations/latest.json" "$work_dir/uploaded-attestation.json"
 test -s "$work_dir/uploaded-evidence.json"
 grep -q 'aws s3api put-object .*--key restore-evidence/.*--if-none-match \*' "$work_dir/operations.log"

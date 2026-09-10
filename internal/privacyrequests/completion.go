@@ -367,40 +367,45 @@ type VerifiedActivationEvidence struct {
 }
 
 type activationArtifactRecord struct {
-	PolicyVersion                string `json:"policy_version"`
-	ExecutorVersion              string `json:"executor_version"`
-	PlanSchemaVersion            string `json:"plan_schema_version"`
-	ImageDigest                  string `json:"image_digest"`
-	EvidenceRef                  string `json:"evidence_ref,omitempty"`
-	EvidenceSHA256               []byte `json:"evidence_sha256"`
-	SigningKeyID                 string `json:"signing_key_id,omitempty"`
-	SchemaMigrationDigest        []byte `json:"schema_migration_digest,omitempty"`
-	BaselineIncludesThrough      string `json:"baseline_includes_through,omitempty"`
-	ProductionStateSerial        int64  `json:"production_state_serial,omitempty"`
-	HetznerStateSerial           int64  `json:"hetzner_state_serial,omitempty"`
-	ProductionStateSHA256        []byte `json:"production_state_sha256,omitempty"`
-	HetznerStateSHA256           []byte `json:"hetzner_state_sha256,omitempty"`
-	ProductionPlanSHA256         []byte `json:"production_plan_sha256,omitempty"`
-	HetznerPlanSHA256            []byte `json:"hetzner_plan_sha256,omitempty"`
-	WorkerIdentityEnabled        *bool  `json:"worker_identity_enabled,omitempty"`
-	S3VersionDeletionEnabled     *bool  `json:"s3_version_deletion_enabled,omitempty"`
-	LedgerBrokerInvokeEnabled    *bool  `json:"ledger_broker_invoke_enabled,omitempty"`
-	WorkerMonitoringEnabled      *bool  `json:"worker_monitoring_enabled,omitempty"`
-	RestoreInfrastructureEnabled *bool  `json:"restore_infrastructure_enabled,omitempty"`
-	RestoreLedgerWriteEnabled    *bool  `json:"restore_ledger_write_enabled,omitempty"`
-	ProviderRegistryState        string `json:"provider_registry_state,omitempty"`
-	ProviderRegistrationCount    int64  `json:"provider_registration_count,omitempty"`
-	ProviderRegistrySHA256       []byte `json:"provider_registry_sha256,omitempty"`
-	RestoreInputSource           string `json:"restore_input_source,omitempty"`
-	RestoreInputContract         string `json:"restore_input_contract,omitempty"`
-	RestoreReplayContract        string `json:"restore_replay_contract,omitempty"`
-	RestoreClosureContract       string `json:"restore_closure_contract,omitempty"`
-	RestoreCandidateSHA256       []byte `json:"restore_candidate_sha256,omitempty"`
-	RestoreInventorySHA256       []byte `json:"restore_inventory_sha256,omitempty"`
-	RestoreObjectCount           int64  `json:"restore_object_count,omitempty"`
-	RestoreReplayedCount         int64  `json:"restore_replayed_count,omitempty"`
-	RestoreSyntheticCount        *int64 `json:"restore_synthetic_count,omitempty"`
-	RestoreObserverSHA256        []byte `json:"restore_observer_sha256,omitempty"`
+	PolicyVersion                               string `json:"policy_version"`
+	ExecutorVersion                             string `json:"executor_version"`
+	PlanSchemaVersion                           string `json:"plan_schema_version"`
+	ImageDigest                                 string `json:"image_digest"`
+	EvidenceRef                                 string `json:"evidence_ref,omitempty"`
+	EvidenceSHA256                              []byte `json:"evidence_sha256"`
+	SigningKeyID                                string `json:"signing_key_id,omitempty"`
+	SchemaMigrationDigest                       []byte `json:"schema_migration_digest,omitempty"`
+	BaselineIncludesThrough                     string `json:"baseline_includes_through,omitempty"`
+	ProductionStateSerial                       int64  `json:"production_state_serial,omitempty"`
+	HetznerStateSerial                          int64  `json:"hetzner_state_serial,omitempty"`
+	ProductionStateSHA256                       []byte `json:"production_state_sha256,omitempty"`
+	HetznerStateSHA256                          []byte `json:"hetzner_state_sha256,omitempty"`
+	ProductionPlanSHA256                        []byte `json:"production_plan_sha256,omitempty"`
+	HetznerPlanSHA256                           []byte `json:"hetzner_plan_sha256,omitempty"`
+	WorkerIdentityEnabled                       *bool  `json:"worker_identity_enabled,omitempty"`
+	S3VersionDeletionEnabled                    *bool  `json:"s3_version_deletion_enabled,omitempty"`
+	LedgerBrokerInvokeEnabled                   *bool  `json:"ledger_broker_invoke_enabled,omitempty"`
+	WorkerMonitoringEnabled                     *bool  `json:"worker_monitoring_enabled,omitempty"`
+	RestoreInfrastructureEnabled                *bool  `json:"restore_infrastructure_enabled,omitempty"`
+	RestoreLedgerWriteEnabled                   *bool  `json:"restore_ledger_write_enabled,omitempty"`
+	ProviderRegistryState                       string `json:"provider_registry_state,omitempty"`
+	ProviderRegistrationCount                   int64  `json:"provider_registration_count,omitempty"`
+	ProviderRegistrySHA256                      []byte `json:"provider_registry_sha256,omitempty"`
+	RestoreInputSource                          string `json:"restore_input_source,omitempty"`
+	RestoreInputContract                        string `json:"restore_input_contract,omitempty"`
+	RestoreReplayContract                       string `json:"restore_replay_contract,omitempty"`
+	RestoreClosureContract                      string `json:"restore_closure_contract,omitempty"`
+	RestoreCandidateSHA256                      []byte `json:"restore_candidate_sha256,omitempty"`
+	RestoreInventorySHA256                      []byte `json:"restore_inventory_sha256,omitempty"`
+	RestoreObjectCount                          int64  `json:"restore_object_count,omitempty"`
+	RestoreReplayedCount                        int64  `json:"restore_replayed_count,omitempty"`
+	RestoreSyntheticCount                       *int64 `json:"restore_synthetic_count,omitempty"`
+	RestoreObserverSHA256                       []byte `json:"restore_observer_sha256,omitempty"`
+	RestoreMembershipPostconditionContract      string `json:"restore_membership_postcondition_contract,omitempty"`
+	RestoreMembershipPostconditionSHA256        []byte `json:"restore_membership_postcondition_sha256,omitempty"`
+	RestoreMembershipPostconditionVerifiedCount int64  `json:"restore_membership_postcondition_verified_count,omitempty"`
+	RestoreMembershipCount                      int64  `json:"restore_membership_count,omitempty"`
+	RestoreVariationCount                       int64  `json:"restore_variation_count,omitempty"`
 }
 
 type ActivationProposal struct {
@@ -562,7 +567,7 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100014_privacy_activation_broker" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100015_privacy_membership_postcondition" {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact
@@ -667,33 +672,43 @@ type restoreActivationAttestation struct {
 		ObjectCount     int64  `json:"object_count"`
 	} `json:"ledger"`
 	Candidate struct {
-		ResultSHA256                    string `json:"result_sha256"`
-		ObjectCount                     int64  `json:"object_count"`
-		ImportedCount                   int64  `json:"imported_count"`
-		ReplayedCount                   int64  `json:"replayed_count"`
-		AlreadyAppliedCount             int64  `json:"already_applied_count"`
-		NonReplayableV1Count            int64  `json:"non_replayable_v1_count"`
-		AbsenceVerifiedCount            int64  `json:"absence_verified_count"`
-		SyntheticReplayedCount          int64  `json:"synthetic_replayed_count"`
-		ClosureV3Count                  int64  `json:"closure_v3_count"`
-		IntentOnlyCount                 int64  `json:"intent_only_count"`
-		LegacyClosureV2Count            int64  `json:"legacy_closure_v2_count"`
-		ErasureEffectiveAtVerifiedCount int64  `json:"erasure_effective_at_verified_count"`
-		FailedCount                     int64  `json:"failed_count"`
+		ResultSHA256                         string `json:"result_sha256"`
+		ObjectCount                          int64  `json:"object_count"`
+		ImportedCount                        int64  `json:"imported_count"`
+		ReplayedCount                        int64  `json:"replayed_count"`
+		AlreadyAppliedCount                  int64  `json:"already_applied_count"`
+		NonReplayableV1Count                 int64  `json:"non_replayable_v1_count"`
+		AbsenceVerifiedCount                 int64  `json:"absence_verified_count"`
+		SyntheticReplayedCount               int64  `json:"synthetic_replayed_count"`
+		ClosureV4Count                       int64  `json:"closure_v4_count"`
+		IntentOnlyCount                      int64  `json:"intent_only_count"`
+		LegacyClosureV2Count                 int64  `json:"legacy_closure_v2_count"`
+		ErasureEffectiveAtVerifiedCount      int64  `json:"erasure_effective_at_verified_count"`
+		FailedCount                          int64  `json:"failed_count"`
+		MembershipPostconditionContract      string `json:"membership_postcondition_contract"`
+		MembershipPostconditionSHA256        string `json:"membership_postcondition_sha256"`
+		MembershipPostconditionVerifiedCount int64  `json:"membership_postcondition_verified_count"`
+		MembershipCount                      int64  `json:"membership_count"`
+		VariationCount                       int64  `json:"variation_count"`
 	} `json:"candidate"`
 	Observer struct {
-		ImageDigest                     string `json:"image_digest"`
-		ReplayCount                     int64  `json:"replay_count"`
-		SourceAlreadyAppliedCount       int64  `json:"source_already_applied_count"`
-		SyntheticCount                  int64  `json:"synthetic_count"`
-		VerifiedRunCount                int64  `json:"verified_run_count"`
-		ExpectedCheckpointCount         int64  `json:"expected_checkpoint_count"`
-		SucceededCheckpointCount        int64  `json:"succeeded_checkpoint_count"`
-		ProviderAbsentCount             int64  `json:"provider_absent_count"`
-		ConsentClockVerifiedCount       int64  `json:"consent_clock_verified_count"`
-		ClosureV3Count                  int64  `json:"closure_v3_count"`
-		ErasureEffectiveAtVerifiedCount int64  `json:"erasure_effective_at_verified_count"`
-		EvidenceSHA256                  string `json:"evidence_sha256"`
+		ImageDigest                          string `json:"image_digest"`
+		ReplayCount                          int64  `json:"replay_count"`
+		SourceAlreadyAppliedCount            int64  `json:"source_already_applied_count"`
+		SyntheticCount                       int64  `json:"synthetic_count"`
+		VerifiedRunCount                     int64  `json:"verified_run_count"`
+		ExpectedCheckpointCount              int64  `json:"expected_checkpoint_count"`
+		SucceededCheckpointCount             int64  `json:"succeeded_checkpoint_count"`
+		ProviderAbsentCount                  int64  `json:"provider_absent_count"`
+		ConsentClockVerifiedCount            int64  `json:"consent_clock_verified_count"`
+		ClosureV4Count                       int64  `json:"closure_v4_count"`
+		ErasureEffectiveAtVerifiedCount      int64  `json:"erasure_effective_at_verified_count"`
+		MembershipPostconditionContract      string `json:"membership_postcondition_contract"`
+		MembershipPostconditionSHA256        string `json:"membership_postcondition_sha256"`
+		MembershipPostconditionVerifiedCount int64  `json:"membership_postcondition_verified_count"`
+		MembershipCount                      int64  `json:"membership_count"`
+		VariationCount                       int64  `json:"variation_count"`
+		EvidenceSHA256                       string `json:"evidence_sha256"`
 	} `json:"observer"`
 	Evidence immutableRestoreObject `json:"evidence"`
 }
@@ -723,20 +738,26 @@ func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, relea
 		attestation.ImageDigest != release.ImageDigest || attestation.SchemaMigrationDigest != release.SchemaMigrationDigest || !validSHA256Hex(attestation.AuthHMACSHA256) ||
 		attestation.Contracts.Backup != "mycfc/postgres-backup/v3" || attestation.Contracts.LedgerInput != "mycfc/privacy-restore-ledger-input/v2" ||
 		attestation.Contracts.ReplayResult != "mycfc/privacy-restore-replay-result/v2" || attestation.Contracts.Replay != "relational-erasure-replay/v1" ||
-		attestation.Contracts.Closure != "restore-tombstone-closure/v3" || attestation.Contracts.SyntheticFixture != "mycfc/privacy-restore-synthetic-fixture/v1" ||
+		attestation.Contracts.Closure != TombstoneClosureVersion || attestation.Contracts.SyntheticFixture != "mycfc/privacy-restore-synthetic-fixture/v1" ||
 		!validImmutableRestoreObject(attestation.Backup.Manifest) || !validImmutableRestoreObject(attestation.Backup.Dump) || !validImmutableRestoreObject(attestation.Evidence) ||
 		!validSHA256Hex(attestation.Ledger.InventorySHA256) || attestation.Ledger.ObjectCount < 0 || !validSHA256Hex(attestation.Candidate.ResultSHA256) ||
 		attestation.Candidate.ObjectCount != attestation.Ledger.ObjectCount || attestation.Candidate.ImportedCount < 0 || attestation.Candidate.ReplayedCount <= 0 ||
 		attestation.Candidate.AlreadyAppliedCount < 0 || attestation.Candidate.ReplayedCount != attestation.Candidate.ImportedCount+attestation.Candidate.AlreadyAppliedCount ||
-		attestation.Candidate.AbsenceVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.ClosureV3Count != attestation.Candidate.ReplayedCount ||
+		attestation.Candidate.AbsenceVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.ClosureV4Count != attestation.Candidate.ReplayedCount ||
 		attestation.Candidate.ErasureEffectiveAtVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.NonReplayableV1Count != 0 ||
 		attestation.Candidate.IntentOnlyCount != 0 || attestation.Candidate.LegacyClosureV2Count != 0 || attestation.Candidate.FailedCount != 0 ||
+		attestation.Candidate.MembershipPostconditionContract != MembershipHistoryPostconditionVersion || !validSHA256Hex(attestation.Candidate.MembershipPostconditionSHA256) ||
+		attestation.Candidate.MembershipPostconditionVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.MembershipCount < 0 || attestation.Candidate.VariationCount < 0 ||
 		!validImageDigest(attestation.Observer.ImageDigest) || !validSHA256Hex(attestation.Observer.EvidenceSHA256) ||
 		attestation.Observer.ReplayCount != attestation.Candidate.ReplayedCount || attestation.Observer.SourceAlreadyAppliedCount != attestation.Candidate.AlreadyAppliedCount ||
 		attestation.Observer.SyntheticCount != attestation.Candidate.SyntheticReplayedCount || attestation.Observer.VerifiedRunCount != attestation.Candidate.ReplayedCount ||
 		attestation.Observer.ExpectedCheckpointCount <= 0 || attestation.Observer.SucceededCheckpointCount != attestation.Observer.ExpectedCheckpointCount ||
 		attestation.Observer.ProviderAbsentCount != attestation.Candidate.ReplayedCount || attestation.Observer.ConsentClockVerifiedCount != attestation.Candidate.ReplayedCount ||
-		attestation.Observer.ClosureV3Count != attestation.Candidate.ReplayedCount || attestation.Observer.ErasureEffectiveAtVerifiedCount != attestation.Candidate.ReplayedCount ||
+		attestation.Observer.ClosureV4Count != attestation.Candidate.ReplayedCount || attestation.Observer.ErasureEffectiveAtVerifiedCount != attestation.Candidate.ReplayedCount ||
+		attestation.Observer.MembershipPostconditionContract != attestation.Candidate.MembershipPostconditionContract ||
+		attestation.Observer.MembershipPostconditionSHA256 != attestation.Candidate.MembershipPostconditionSHA256 ||
+		attestation.Observer.MembershipPostconditionVerifiedCount != attestation.Candidate.ReplayedCount ||
+		attestation.Observer.MembershipCount != attestation.Candidate.MembershipCount || attestation.Observer.VariationCount != attestation.Candidate.VariationCount ||
 		!((attestation.Ledger.InputSource == "LIVE_LEDGER" && attestation.Candidate.SyntheticReplayedCount == 0) ||
 			(attestation.Ledger.InputSource == "SYNTHETIC_BOOTSTRAP" && attestation.Candidate.SyntheticReplayedCount == attestation.Candidate.ReplayedCount)) {
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
@@ -766,6 +787,7 @@ func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, relea
 	inventoryDigest, _ := hex.DecodeString(attestation.Ledger.InventorySHA256)
 	candidateDigest, _ := hex.DecodeString(attestation.Candidate.ResultSHA256)
 	observerDigest, _ := hex.DecodeString(attestation.Observer.EvidenceSHA256)
+	membershipDigest, _ := hex.DecodeString(attestation.Candidate.MembershipPostconditionSHA256)
 	evidenceDigest, _ := hex.DecodeString(attestation.Evidence.SHA256)
 	syntheticCount := attestation.Candidate.SyntheticReplayedCount
 	return VerifiedActivationEvidence{kind: "RESTORE", digest: digest[:], reference: attestation.Contract, observedAt: observedAt.UTC(), expiresAt: validUntil.UTC(), artifact: activationArtifactRecord{
@@ -776,6 +798,10 @@ func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, relea
 		RestoreCandidateSHA256: candidateDigest, RestoreInventorySHA256: inventoryDigest,
 		RestoreObjectCount: attestation.Ledger.ObjectCount, RestoreReplayedCount: attestation.Candidate.ReplayedCount,
 		RestoreSyntheticCount: &syntheticCount, RestoreObserverSHA256: observerDigest,
+		RestoreMembershipPostconditionContract:      attestation.Candidate.MembershipPostconditionContract,
+		RestoreMembershipPostconditionSHA256:        membershipDigest,
+		RestoreMembershipPostconditionVerifiedCount: attestation.Candidate.MembershipPostconditionVerifiedCount,
+		RestoreMembershipCount:                      attestation.Candidate.MembershipCount, RestoreVariationCount: attestation.Candidate.VariationCount,
 	}}, nil
 }
 

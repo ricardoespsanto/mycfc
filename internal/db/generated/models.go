@@ -1890,43 +1890,48 @@ type PrivacyActivationApproval struct {
 }
 
 type PrivacyActivationAuthenticatedArtifact struct {
-	EvidenceID                   uuid.UUID          `json:"evidence_id"`
-	Kind                         string             `json:"kind"`
-	PolicyVersion                string             `json:"policy_version"`
-	ExecutorVersion              string             `json:"executor_version"`
-	PlanSchemaVersion            string             `json:"plan_schema_version"`
-	ImageDigest                  string             `json:"image_digest"`
-	ImmutableEvidenceRef         *string            `json:"immutable_evidence_ref"`
-	ImmutableEvidenceSha256      []byte             `json:"immutable_evidence_sha256"`
-	SigningKeyID                 *string            `json:"signing_key_id"`
-	SchemaMigrationDigest        []byte             `json:"schema_migration_digest"`
-	BaselineIncludesThrough      *string            `json:"baseline_includes_through"`
-	ProductionStateSerial        *int64             `json:"production_state_serial"`
-	HetznerStateSerial           *int64             `json:"hetzner_state_serial"`
-	ProductionStateSha256        []byte             `json:"production_state_sha256"`
-	HetznerStateSha256           []byte             `json:"hetzner_state_sha256"`
-	ProductionPlanSha256         []byte             `json:"production_plan_sha256"`
-	HetznerPlanSha256            []byte             `json:"hetzner_plan_sha256"`
-	WorkerIdentityEnabled        *bool              `json:"worker_identity_enabled"`
-	S3VersionDeletionEnabled     *bool              `json:"s3_version_deletion_enabled"`
-	LedgerBrokerInvokeEnabled    *bool              `json:"ledger_broker_invoke_enabled"`
-	WorkerMonitoringEnabled      *bool              `json:"worker_monitoring_enabled"`
-	RestoreInfrastructureEnabled *bool              `json:"restore_infrastructure_enabled"`
-	RestoreLedgerWriteEnabled    *bool              `json:"restore_ledger_write_enabled"`
-	ProviderRegistryState        *string            `json:"provider_registry_state"`
-	ProviderRegistrationCount    *int64             `json:"provider_registration_count"`
-	ProviderRegistrySha256       []byte             `json:"provider_registry_sha256"`
-	RestoreInputSource           *string            `json:"restore_input_source"`
-	RestoreInputContract         *string            `json:"restore_input_contract"`
-	RestoreReplayContract        *string            `json:"restore_replay_contract"`
-	RestoreClosureContract       *string            `json:"restore_closure_contract"`
-	RestoreCandidateSha256       []byte             `json:"restore_candidate_sha256"`
-	RestoreInventorySha256       []byte             `json:"restore_inventory_sha256"`
-	RestoreObjectCount           *int64             `json:"restore_object_count"`
-	RestoreReplayedCount         *int64             `json:"restore_replayed_count"`
-	RestoreSyntheticCount        *int64             `json:"restore_synthetic_count"`
-	RestoreObserverSha256        []byte             `json:"restore_observer_sha256"`
-	AuthenticatedAt              pgtype.Timestamptz `json:"authenticated_at"`
+	EvidenceID                                  uuid.UUID          `json:"evidence_id"`
+	Kind                                        string             `json:"kind"`
+	PolicyVersion                               string             `json:"policy_version"`
+	ExecutorVersion                             string             `json:"executor_version"`
+	PlanSchemaVersion                           string             `json:"plan_schema_version"`
+	ImageDigest                                 string             `json:"image_digest"`
+	ImmutableEvidenceRef                        *string            `json:"immutable_evidence_ref"`
+	ImmutableEvidenceSha256                     []byte             `json:"immutable_evidence_sha256"`
+	SigningKeyID                                *string            `json:"signing_key_id"`
+	SchemaMigrationDigest                       []byte             `json:"schema_migration_digest"`
+	BaselineIncludesThrough                     *string            `json:"baseline_includes_through"`
+	ProductionStateSerial                       *int64             `json:"production_state_serial"`
+	HetznerStateSerial                          *int64             `json:"hetzner_state_serial"`
+	ProductionStateSha256                       []byte             `json:"production_state_sha256"`
+	HetznerStateSha256                          []byte             `json:"hetzner_state_sha256"`
+	ProductionPlanSha256                        []byte             `json:"production_plan_sha256"`
+	HetznerPlanSha256                           []byte             `json:"hetzner_plan_sha256"`
+	WorkerIdentityEnabled                       *bool              `json:"worker_identity_enabled"`
+	S3VersionDeletionEnabled                    *bool              `json:"s3_version_deletion_enabled"`
+	LedgerBrokerInvokeEnabled                   *bool              `json:"ledger_broker_invoke_enabled"`
+	WorkerMonitoringEnabled                     *bool              `json:"worker_monitoring_enabled"`
+	RestoreInfrastructureEnabled                *bool              `json:"restore_infrastructure_enabled"`
+	RestoreLedgerWriteEnabled                   *bool              `json:"restore_ledger_write_enabled"`
+	ProviderRegistryState                       *string            `json:"provider_registry_state"`
+	ProviderRegistrationCount                   *int64             `json:"provider_registration_count"`
+	ProviderRegistrySha256                      []byte             `json:"provider_registry_sha256"`
+	RestoreInputSource                          *string            `json:"restore_input_source"`
+	RestoreInputContract                        *string            `json:"restore_input_contract"`
+	RestoreReplayContract                       *string            `json:"restore_replay_contract"`
+	RestoreClosureContract                      *string            `json:"restore_closure_contract"`
+	RestoreCandidateSha256                      []byte             `json:"restore_candidate_sha256"`
+	RestoreInventorySha256                      []byte             `json:"restore_inventory_sha256"`
+	RestoreObjectCount                          *int64             `json:"restore_object_count"`
+	RestoreReplayedCount                        *int64             `json:"restore_replayed_count"`
+	RestoreSyntheticCount                       *int64             `json:"restore_synthetic_count"`
+	RestoreObserverSha256                       []byte             `json:"restore_observer_sha256"`
+	AuthenticatedAt                             pgtype.Timestamptz `json:"authenticated_at"`
+	RestoreMembershipPostconditionContract      *string            `json:"restore_membership_postcondition_contract"`
+	RestoreMembershipPostconditionSha256        []byte             `json:"restore_membership_postcondition_sha256"`
+	RestoreMembershipPostconditionVerifiedCount *int64             `json:"restore_membership_postcondition_verified_count"`
+	RestoreMembershipCount                      *int64             `json:"restore_membership_count"`
+	RestoreVariationCount                       *int64             `json:"restore_variation_count"`
 }
 
 type PrivacyActivationEvidence struct {
@@ -2145,6 +2150,47 @@ type PrivacyProtectedCompletionNoticeTarget struct {
 	ExecutionID    uuid.UUID          `json:"execution_id"`
 	SealedDelivery []byte             `json:"sealed_delivery"`
 	CapturedAt     pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayCapture struct {
+	RunID      uuid.UUID          `json:"run_id"`
+	CapturedAt pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayPostcondition struct {
+	RunID               uuid.UUID          `json:"run_id"`
+	Contract            string             `json:"contract"`
+	PostconditionSha256 []byte             `json:"postcondition_sha256"`
+	MembershipCount     int64              `json:"membership_count"`
+	VariationCount      int64              `json:"variation_count"`
+	CanonicalSize       int64              `json:"canonical_size"`
+	RecordedAt          pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayRow struct {
+	RunID        uuid.UUID `json:"run_id"`
+	MembershipID uuid.UUID `json:"membership_id"`
+}
+
+type PrivacyProtectedMembershipHistorySourceCapture struct {
+	ExecutionID uuid.UUID          `json:"execution_id"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistorySourcePostcondition struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	EffectiveAt         pgtype.Timestamptz `json:"effective_at"`
+	Contract            string             `json:"contract"`
+	PostconditionSha256 []byte             `json:"postcondition_sha256"`
+	MembershipCount     int64              `json:"membership_count"`
+	VariationCount      int64              `json:"variation_count"`
+	CanonicalSize       int64              `json:"canonical_size"`
+	RecordedAt          pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedMembershipHistorySourceRow struct {
+	ExecutionID  uuid.UUID `json:"execution_id"`
+	MembershipID uuid.UUID `json:"membership_id"`
 }
 
 type PrivacyProtectedObjectCaptureSet struct {
@@ -2403,35 +2449,39 @@ type PrivacyProtectedProviderTargetDigest struct {
 }
 
 type PrivacyProtectedRestoreLedgerImport struct {
-	ID                 uuid.UUID          `json:"id"`
-	Kind               string             `json:"kind"`
-	RecordVersion      string             `json:"record_version"`
-	EnvelopeVersion    string             `json:"envelope_version"`
-	EncryptionKeyID    string             `json:"encryption_key_id"`
-	LocatorKeyID       string             `json:"locator_key_id"`
-	LocatorDigest      []byte             `json:"locator_digest"`
-	CiphertextSha256   []byte             `json:"ciphertext_sha256"`
-	ObjectVersionID    string             `json:"object_version_id"`
-	WrittenAt          pgtype.Timestamptz `json:"written_at"`
-	VerifiedAt         pgtype.Timestamptz `json:"verified_at"`
-	RetainUntil        pgtype.Timestamptz `json:"retain_until"`
-	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
-	SourceRequestID    uuid.UUID          `json:"source_request_id"`
-	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
-	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
-	PlanSha256         []byte             `json:"plan_sha256"`
-	WorksetSha256      []byte             `json:"workset_sha256"`
-	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
-	ReplayVersion      string             `json:"replay_version"`
-	ActionVersion      string             `json:"action_version"`
-	Operations         []string           `json:"operations"`
-	PrescriptionSha256 []byte             `json:"prescription_sha256"`
-	RecordSha256       []byte             `json:"record_sha256"`
-	ImportedByRef      uuid.UUID          `json:"imported_by_ref"`
-	ImportedAt         pgtype.Timestamptz `json:"imported_at"`
-	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
-	ClosureVersion     *string            `json:"closure_version"`
-	SyntheticFixture   *string            `json:"synthetic_fixture"`
+	ID                              uuid.UUID          `json:"id"`
+	Kind                            string             `json:"kind"`
+	RecordVersion                   string             `json:"record_version"`
+	EnvelopeVersion                 string             `json:"envelope_version"`
+	EncryptionKeyID                 string             `json:"encryption_key_id"`
+	LocatorKeyID                    string             `json:"locator_key_id"`
+	LocatorDigest                   []byte             `json:"locator_digest"`
+	CiphertextSha256                []byte             `json:"ciphertext_sha256"`
+	ObjectVersionID                 string             `json:"object_version_id"`
+	WrittenAt                       pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt                      pgtype.Timestamptz `json:"verified_at"`
+	RetainUntil                     pgtype.Timestamptz `json:"retain_until"`
+	SourceExecutionID               uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID                 uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef                uuid.UUID          `json:"source_request_ref"`
+	SubjectUserID                   uuid.UUID          `json:"subject_user_id"`
+	PlanSha256                      []byte             `json:"plan_sha256"`
+	WorksetSha256                   []byte             `json:"workset_sha256"`
+	ExecutionStartedAt              pgtype.Timestamptz `json:"execution_started_at"`
+	ReplayVersion                   string             `json:"replay_version"`
+	ActionVersion                   string             `json:"action_version"`
+	Operations                      []string           `json:"operations"`
+	PrescriptionSha256              []byte             `json:"prescription_sha256"`
+	RecordSha256                    []byte             `json:"record_sha256"`
+	ImportedByRef                   uuid.UUID          `json:"imported_by_ref"`
+	ImportedAt                      pgtype.Timestamptz `json:"imported_at"`
+	ErasureEffectiveAt              pgtype.Timestamptz `json:"erasure_effective_at"`
+	ClosureVersion                  *string            `json:"closure_version"`
+	SyntheticFixture                *string            `json:"synthetic_fixture"`
+	MembershipPostconditionContract *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256   []byte             `json:"membership_postcondition_sha256"`
+	MembershipCount                 *int64             `json:"membership_count"`
+	VariationCount                  *int64             `json:"variation_count"`
 }
 
 type PrivacyProtectedRestoreReplayAlreadyAppliedEvidence struct {
@@ -2458,26 +2508,32 @@ type PrivacyProtectedRestoreReplayCheckpoint struct {
 }
 
 type PrivacyProtectedRestoreReplayInventoryAttestation struct {
-	ID                              uuid.UUID          `json:"id"`
-	InputSource                     string             `json:"input_source"`
-	InventorySha256                 []byte             `json:"inventory_sha256"`
-	ObjectCount                     int32              `json:"object_count"`
-	PolicyVersion                   string             `json:"policy_version"`
-	ExecutorVersion                 string             `json:"executor_version"`
-	PlanSchemaVersion               string             `json:"plan_schema_version"`
-	ImageDigest                     string             `json:"image_digest"`
-	SchemaMigrationDigest           []byte             `json:"schema_migration_digest"`
-	ImportedCount                   int32              `json:"imported_count"`
-	ReplayedCount                   int32              `json:"replayed_count"`
-	AlreadyAppliedCount             int32              `json:"already_applied_count"`
-	AbsenceVerifiedCount            int32              `json:"absence_verified_count"`
-	SyntheticReplayedCount          int32              `json:"synthetic_replayed_count"`
-	ClosureV3Count                  int32              `json:"closure_v3_count"`
-	IntentOnlyCount                 int32              `json:"intent_only_count"`
-	LegacyClosureV2Count            int32              `json:"legacy_closure_v2_count"`
-	ErasureEffectiveAtVerifiedCount int32              `json:"erasure_effective_at_verified_count"`
-	EvidenceSha256                  []byte             `json:"evidence_sha256"`
-	RecordedAt                      pgtype.Timestamptz `json:"recorded_at"`
+	ID                                   uuid.UUID          `json:"id"`
+	InputSource                          string             `json:"input_source"`
+	InventorySha256                      []byte             `json:"inventory_sha256"`
+	ObjectCount                          int32              `json:"object_count"`
+	PolicyVersion                        string             `json:"policy_version"`
+	ExecutorVersion                      string             `json:"executor_version"`
+	PlanSchemaVersion                    string             `json:"plan_schema_version"`
+	ImageDigest                          string             `json:"image_digest"`
+	SchemaMigrationDigest                []byte             `json:"schema_migration_digest"`
+	ImportedCount                        int32              `json:"imported_count"`
+	ReplayedCount                        int32              `json:"replayed_count"`
+	AlreadyAppliedCount                  int32              `json:"already_applied_count"`
+	AbsenceVerifiedCount                 int32              `json:"absence_verified_count"`
+	SyntheticReplayedCount               int32              `json:"synthetic_replayed_count"`
+	ClosureV3Count                       int32              `json:"closure_v3_count"`
+	IntentOnlyCount                      int32              `json:"intent_only_count"`
+	LegacyClosureV2Count                 int32              `json:"legacy_closure_v2_count"`
+	ErasureEffectiveAtVerifiedCount      int32              `json:"erasure_effective_at_verified_count"`
+	EvidenceSha256                       []byte             `json:"evidence_sha256"`
+	RecordedAt                           pgtype.Timestamptz `json:"recorded_at"`
+	ClosureV4Count                       *int32             `json:"closure_v4_count"`
+	MembershipPostconditionContract      *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256        []byte             `json:"membership_postcondition_sha256"`
+	MembershipPostconditionVerifiedCount *int32             `json:"membership_postcondition_verified_count"`
+	MembershipCount                      *int64             `json:"membership_count"`
+	VariationCount                       *int64             `json:"variation_count"`
 }
 
 type PrivacyProtectedRestoreReplayInventoryAttestationRun struct {
@@ -2496,17 +2552,21 @@ type PrivacyProtectedRestoreReplayRun struct {
 }
 
 type PrivacyProtectedRestoreSyntheticFixture struct {
-	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
-	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
-	SourceRequestID    uuid.UUID          `json:"source_request_id"`
-	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
-	PlanSha256         []byte             `json:"plan_sha256"`
-	WorksetSha256      []byte             `json:"workset_sha256"`
-	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
-	Operations         []string           `json:"operations"`
-	FixtureMarker      string             `json:"fixture_marker"`
-	CreatedByRef       uuid.UUID          `json:"created_by_ref"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	SubjectUserID                   uuid.UUID          `json:"subject_user_id"`
+	SourceExecutionID               uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID                 uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef                uuid.UUID          `json:"source_request_ref"`
+	PlanSha256                      []byte             `json:"plan_sha256"`
+	WorksetSha256                   []byte             `json:"workset_sha256"`
+	ErasureEffectiveAt              pgtype.Timestamptz `json:"erasure_effective_at"`
+	Operations                      []string           `json:"operations"`
+	FixtureMarker                   string             `json:"fixture_marker"`
+	CreatedByRef                    uuid.UUID          `json:"created_by_ref"`
+	CreatedAt                       pgtype.Timestamptz `json:"created_at"`
+	MembershipPostconditionContract *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256   []byte             `json:"membership_postcondition_sha256"`
+	MembershipCount                 *int64             `json:"membership_count"`
+	VariationCount                  *int64             `json:"variation_count"`
 }
 
 type PrivacyProtectedRestoreTombstoneClosureIntent struct {

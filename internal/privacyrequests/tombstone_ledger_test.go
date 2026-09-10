@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,41 @@ func tombstoneFixture() RestoreTombstone {
 		SubjectUserID: uuid.New(), PlanSHA256: bytes.Repeat([]byte{0x11}, 32), WorksetSHA256: bytes.Repeat([]byte{0x22}, 32),
 		ExecutionStart: time.Date(2026, time.September, 10, 9, 30, 0, 0, time.UTC),
 		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: []string{"AUTH_TOKEN_DELETE", "IDENTITY_CLEAR"}},
+	}
+}
+
+func currentClosureFixture(record RestoreTombstone) RestoreTombstone {
+	copy := record
+	replay := *record.Replay
+	replay.Operations = append([]string(nil), record.Replay.Operations...)
+	replay.MembershipHistoryPostcondition = &MembershipHistoryPostcondition{
+		Contract: MembershipHistoryPostconditionVersion, SHA256: bytes.Repeat([]byte{0x44}, 32), MembershipCount: 1, VariationCount: 2,
+	}
+	copy.Replay = &replay
+	return copy
+}
+
+func TestMembershipHistoryPostconditionComparisonBindsEveryField(t *testing.T) {
+	left := &MembershipHistoryPostcondition{Contract: MembershipHistoryPostconditionVersion,
+		SHA256: bytes.Repeat([]byte{0x44}, sha256.Size), MembershipCount: 2, VariationCount: 3}
+	right := &MembershipHistoryPostcondition{Contract: left.Contract, SHA256: bytes.Clone(left.SHA256),
+		MembershipCount: left.MembershipCount, VariationCount: left.VariationCount}
+	if !equalMembershipHistoryPostcondition(left, right) {
+		t.Fatal("equal membership postconditions were rejected")
+	}
+	right.SHA256[sha256.Size-1] ^= 0xff
+	if equalMembershipHistoryPostcondition(left, right) {
+		t.Fatal("different membership digest was accepted")
+	}
+	right.SHA256 = bytes.Clone(left.SHA256)
+	right.MembershipCount++
+	if equalMembershipHistoryPostcondition(left, right) {
+		t.Fatal("different membership count was accepted")
+	}
+	right.MembershipCount = left.MembershipCount
+	right.VariationCount++
+	if equalMembershipHistoryPostcondition(left, right) {
+		t.Fatal("different variation count was accepted")
 	}
 }
 
@@ -82,7 +118,7 @@ func TestClosureIsSeparateAndUsesExactCalendarEvidenceExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	closedAt := time.Date(2028, time.February, 29, 12, 0, 0, 0, time.UTC)
-	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
+	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: currentClosureFixture(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
 	sealed, err := protector.SealClosure(closure)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +189,7 @@ func TestLambdaLedgerInvokesOneExactBrokerWithOnlyBoundedEncryptedFields(t *test
 		t.Fatal(err)
 	}
 	tests[1].sealed, err = protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
+		Version: TombstoneClosureVersion, Tombstone: currentClosureFixture(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +243,7 @@ func TestLambdaLedgerStrictlyRejectsUnverifiedOrUnboundedResponses(t *testing.T)
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
 	sealed, err := protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
+		Version: TombstoneClosureVersion, Tombstone: currentClosureFixture(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +363,7 @@ func TestNonProductionS3LedgerClosureObjectIsImmutableThroughDatabaseExpiry(t *t
 	protector, _ := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
-	sealed, err := protector.SealClosure(TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart})
+	sealed, err := protector.SealClosure(TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: currentClosureFixture(record), ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart})
 	if err != nil {
 		t.Fatal(err)
 	}
