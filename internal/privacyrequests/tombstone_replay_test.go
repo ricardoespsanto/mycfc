@@ -62,7 +62,7 @@ func TestReplayAuthenticationRequiresExactClosureRetention(t *testing.T) {
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
 	sealed, err := protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +74,28 @@ func TestReplayAuthenticationRequiresExactClosureRetention(t *testing.T) {
 	listed.RetainUntil = listed.RetainUntil.Add(time.Second)
 	if _, err = AuthenticateReplayTombstone(privateKey, listed); !errors.Is(err, ErrTombstoneReplayInvalid) {
 		t.Fatalf("mismatched retention error=%v", err)
+	}
+}
+
+func TestReplayAuthenticationReadsLegacyV2ClosureWithExecutionStartFallback(t *testing.T) {
+	protector, privateKey := tombstoneProtectorFixture(t)
+	record := tombstoneFixture()
+	closedAt := record.ExecutionStart.Add(time.Hour)
+	closure := TombstoneClosure{Version: TombstoneClosureVersionV2, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0)}
+	plaintext, err := json.Marshal(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := protector.seal("closure", record.ExecutionID, plaintext, closure.EvidenceExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := AuthenticateReplayTombstone(privateKey, listedTombstoneFixture(sealed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authenticated.closureVersion != TombstoneClosureVersionV2 || !authenticated.effectiveAt.Equal(record.ExecutionStart) || authenticated.IsCurrentClosure() {
+		t.Fatalf("legacy closure version=%q effective=%s current=%t", authenticated.closureVersion, authenticated.effectiveAt, authenticated.IsCurrentClosure())
 	}
 }
 

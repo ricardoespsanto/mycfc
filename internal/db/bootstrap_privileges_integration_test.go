@@ -29,7 +29,8 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 	appRole := "privacy_web_" + suffix
 	executorRole := "privacy_worker_" + suffix
-	for _, role := range []string{appRole, executorRole} {
+	observerRole := "privacy_observer_" + suffix
+	for _, role := range []string{appRole, executorRole, observerRole} {
 		if _, err = tx.Exec(ctx, `CREATE ROLE `+quoteIdentifier(role)+` NOLOGIN`); err != nil {
 			t.Fatal(err)
 		}
@@ -47,6 +48,7 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		AppUsername: appRole, AppPassword: "unused-app-password",
 		MigrationUsername: "unused_migrator", MigrationPassword: "unused-migration-password",
 		PrivacyExecutorUsername: executorRole, PrivacyExecutorPassword: "unused-executor-password",
+		PrivacyRestoreObserverUsername: observerRole, PrivacyRestoreObserverPassword: "unused-observer-password",
 	}
 	for range 2 {
 		if err = HardenPrivacyExecutionRoles(ctx, tx, conn.Config().Database, credentials); err != nil {
@@ -190,6 +192,20 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	if retentionLogin || retentionReadsUsers || retentionReadsRuns || retentionProtectedUsage || !retentionRuns || !retentionStatus || retentionInternal || retentionCleanup {
 		t.Fatalf("retention boundary login=%v users=%v runs_table=%v protected=%v run=%v status=%v internal=%v cleanup=%v",
 			retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage, retentionRuns, retentionStatus, retentionInternal, retentionCleanup)
+	}
+	var observerReadsUsers, observerReadsAttestations, observerProtectedUsage, observerRunsReplay, observerRunsAggregate bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_table_privilege($1,'users','SELECT'),
+		has_table_privilege($1,'privacy_protected.restore_replay_inventory_attestations','SELECT'),
+		has_schema_privilege($1,'privacy_protected','USAGE'),
+		has_function_privilege($1,'privacy_restore_begin_replay_hardened(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text)','EXECUTE')`, observerRole).
+		Scan(&observerReadsUsers, &observerReadsAttestations, &observerProtectedUsage, &observerRunsReplay, &observerRunsAggregate); err != nil {
+		t.Fatal(err)
+	}
+	if observerReadsUsers || observerReadsAttestations || observerProtectedUsage || observerRunsReplay || !observerRunsAggregate {
+		t.Fatalf("observer boundary users=%v attestations=%v protected=%v replay=%v aggregate=%v",
+			observerReadsUsers, observerReadsAttestations, observerProtectedUsage, observerRunsReplay, observerRunsAggregate)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)

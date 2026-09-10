@@ -239,6 +239,8 @@ func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T)
 	t.Setenv("MIGRATION_DB_PASSWORD", "migration-password")
 	t.Setenv("PRIVACY_EXECUTOR_DB_USER", "mycfc_privacy_executor")
 	t.Setenv("PRIVACY_EXECUTOR_DB_PASSWORD", "executor-password")
+	t.Setenv("PRIVACY_RESTORE_OBSERVER_DB_USER", "mycfc_privacy_restore_observer")
+	t.Setenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD", "observer-password")
 	original := connectDatabaseCommand
 	t.Cleanup(func() { connectDatabaseCommand = original })
 	connection := &databaseCommandConnectionFake{}
@@ -248,7 +250,8 @@ func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T)
 	}
 	joined := strings.Join(connection.sql, "\n")
 	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`) ||
-		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) {
+		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) ||
+		!strings.Contains(joined, `privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) TO "mycfc_privacy_restore_observer"`) {
 		t.Fatalf("hardening statements=%#v", connection.sql)
 	}
 }

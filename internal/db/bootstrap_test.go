@@ -151,6 +151,28 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 	}
 }
 
+func TestBootstrapRolesProvisionOptionalDistinctPrivacyRestoreObserver(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyRestoreObserverUsername: "mycfc_privacy_restore_observer", PrivacyRestoreObserverPassword: "observer-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_privacy_restore_observer" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_restore_observer"`,
+		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_restore_observer"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("bootstrap statements missing %q", expected)
+		}
+	}
+}
+
 func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T) {
 	credentials := RoleCredentials{
 		AppUsername: "mycfc_app", AppPassword: "app-password",
@@ -243,6 +265,29 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	}
 }
 
+func TestHardenPrivacyExecutionRolesRestrictsRestoreObserverToBoundAggregate(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyRestoreObserverUsername: "mycfc_privacy_restore_observer", PrivacyRestoreObserverPassword: "observer-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := HardenPrivacyExecutionRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_restore_observer"`,
+		`REVOKE ALL ON SCHEMA privacy_protected FROM "mycfc_privacy_restore_observer"`,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM "mycfc_privacy_restore_observer"`,
+		`GRANT EXECUTE ON FUNCTION privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) TO "mycfc_privacy_restore_observer"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("hardening statements missing %q", expected)
+		}
+	}
+}
+
 func TestApplyBaselineCoversTransactionAndInstalledMigrationOutcomes(t *testing.T) {
 	databaseErr := errors.New("database unavailable")
 	if err := ApplyBaseline(t.Context(), bootstrapConnectionFake{err: databaseErr}); !errors.Is(err, databaseErr) || !strings.Contains(err.Error(), "begin baseline") {
@@ -307,6 +352,18 @@ func TestValidateBootstrapInput(t *testing.T) {
 		}},
 		{"executor identifier invalid", func(c *RoleCredentials) {
 			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "privacy-executor", "secret"
+		}},
+		{"observer password missing", func(c *RoleCredentials) { c.PrivacyRestoreObserverUsername = "mycfc_privacy_restore_observer" }},
+		{"observer username missing", func(c *RoleCredentials) { c.PrivacyRestoreObserverPassword = "secret" }},
+		{"observer aliases app", func(c *RoleCredentials) {
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = c.AppUsername, "secret"
+		}},
+		{"observer aliases executor", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = c.PrivacyExecutorUsername, "secret"
+		}},
+		{"observer identifier invalid", func(c *RoleCredentials) {
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = "privacy-observer", "secret"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

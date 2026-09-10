@@ -312,11 +312,25 @@ SELECT prepared.execution_id::uuid AS execution_id,
  prepared.replay_operations::text[] AS replay_operations
 FROM privacy_tombstone_prepare_closure_v2(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
 
+-- name: PreparePrivacyTombstoneClosureV3 :one
+SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS request_id,prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v3(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
 -- name: ConfirmPrivacyTombstoneClosure :one
 SELECT privacy_tombstone_confirm_closure_v2(
  sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),
  sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),
  sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ConfirmPrivacyTombstoneClosureV3 :one
+SELECT privacy_tombstone_confirm_closure_v3(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),
+ sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
 )::uuid;
 
 -- name: ImportAuthenticatedPrivacyRestoreTombstoneV2 :one
@@ -328,8 +342,28 @@ SELECT privacy_restore_import_authenticated_v2(
  sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
 )::uuid;
 
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened :one
+SELECT privacy_restore_import_authenticated_v2_hardened(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.narg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(erasure_effective_at),sqlc.narg(closure_version),sqlc.narg(synthetic_fixture),sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],
+ sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
+)::uuid;
+
 -- name: BeginPrivacyRestoreReplay :one
 SELECT privacy_restore_begin_replay(sqlc.arg(import_id),sqlc.arg(worker_ref))::uuid;
+
+-- name: BeginPrivacyRestoreReplayHardened :one
+SELECT begun.run_id::uuid, COALESCE(begun.outcome_code,'')::text AS outcome_code
+FROM privacy_restore_begin_replay_hardened(sqlc.arg(import_id),sqlc.arg(worker_ref)) AS begun;
+
+-- name: CreatePrivacyRestoreSyntheticFixture :one
+SELECT fixture.source_execution_id::uuid,fixture.source_request_id::uuid,fixture.source_request_ref::uuid,
+ fixture.subject_user_id::uuid,fixture.plan_sha256::bytea,fixture.workset_sha256::bytea,
+ fixture.erasure_effective_at::timestamptz,fixture.operations::text[]
+FROM privacy_restore_create_synthetic_fixture(sqlc.arg(worker_ref)) AS fixture;
 
 -- name: PrivacyRestoreReplayAlreadyApplied :one
 SELECT EXISTS(
@@ -343,6 +377,14 @@ SELECT EXISTS(
 SELECT privacy_restore_execute_checkpoint(
  sqlc.arg(run_id),sqlc.arg(worker_ref),sqlc.arg(operation_position),sqlc.arg(operation_code),sqlc.arg(action_version),sqlc.arg(prescription_sha256)
 )::uuid;
+
+-- name: RecordPrivacyRestoreReplayInventoryAttestation :one
+SELECT privacy_restore_record_inventory_attestation(
+ sqlc.arg(input_source),sqlc.arg(inventory_sha256),sqlc.arg(schema_migration_digest),sqlc.arg(policy_version),sqlc.arg(executor_version),
+ sqlc.arg(plan_schema_version),sqlc.arg(image_digest),sqlc.arg(run_ids)::uuid[],sqlc.arg(object_count),sqlc.arg(imported_count),
+ sqlc.arg(replayed_count),sqlc.arg(already_applied_count),sqlc.arg(absence_verified_count),sqlc.arg(synthetic_replayed_count)
+ ,sqlc.arg(closure_v3_count),sqlc.arg(intent_only_count),sqlc.arg(legacy_closure_v2_count),sqlc.arg(erasure_effective_at_verified_count)
+)::bytea;
 
 -- name: AuthorizePrivacyErasureJobLease :one
 SELECT lease.*

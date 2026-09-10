@@ -82,7 +82,7 @@ func TestClosureIsSeparateAndUsesExactCalendarEvidenceExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	closedAt := time.Date(2028, time.February, 29, 12, 0, 0, 0, time.UTC)
-	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0)}
+	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
 	sealed, err := protector.SealClosure(closure)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestLambdaLedgerInvokesOneExactBrokerWithOnlyBoundedEncryptedFields(t *test
 		t.Fatal(err)
 	}
 	tests[1].sealed, err = protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestLambdaLedgerStrictlyRejectsUnverifiedOrUnboundedResponses(t *testing.T)
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
 	sealed, err := protector.SealClosure(TombstoneClosure{
-		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestNonProductionS3LedgerClosureObjectIsImmutableThroughDatabaseExpiry(t *t
 	protector, _ := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
-	sealed, err := protector.SealClosure(TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0)})
+	sealed, err := protector.SealClosure(TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart})
 	if err != nil {
 		t.Fatal(err)
 	}
