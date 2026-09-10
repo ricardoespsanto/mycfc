@@ -269,7 +269,10 @@ func New(ctx context.Context) (*Application, error) {
 	}
 	auth.Privacy = privacyService
 	auth.PrivacyExecution = privacyService
-	privacy := handlers.PrivacyRequests{Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL}
+	privacy := handlers.PrivacyRequests{
+		Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL,
+		CompletionLinkKey: verificationKey, SecureCookies: cfg.IsProduction(),
+	}
 	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, privacy))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 

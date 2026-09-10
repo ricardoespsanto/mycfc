@@ -168,6 +168,10 @@ func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middlewa
 				if strings.HasPrefix(r.URL.Path, "/recuperar-palavra-passe/repor") {
 					w.Header().Set("Referrer-Policy", "no-referrer")
 				}
+				if strings.HasPrefix(r.URL.Path, "/privacidade/conclusao/") {
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Referrer-Policy", "no-referrer")
+				}
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
@@ -199,7 +203,7 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 			next.ServeHTTP(recorder, r)
 			path, route := r.URL.Path, r.Pattern
 			privacy := false
-			for _, prefix := range []string{"/perfil/privacidade", "/admin/privacidade"} {
+			for _, prefix := range []string{"/perfil/privacidade", "/admin/privacidade", "/privacidade/conclusao"} {
 				if path == prefix || strings.HasPrefix(path, prefix+"/") {
 					path, route, privacy = prefix+"/*", prefix+"/*", true
 					break

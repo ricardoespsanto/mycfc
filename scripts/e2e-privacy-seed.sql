@@ -66,18 +66,44 @@ SELECT 'e2e-privacy-v1', '[
   {"key":"training-prescriptions","label":"Prescrições de treino","description":"Dados sintéticos.","rule":{"profile":"TRAINING_PRESCRIPTION_CLEAR_V1","legal_ground":"APPROVED_POLICY","owner":"SPORT","complete_within_days":0,"fallback":"BLOCK"},"grounds":[]},
   {"key":"training-results","label":"Resultados de treino","description":"Dados sintéticos.","rule":{"profile":"TRAINING_RESULT_CLEAR_V1","legal_ground":"APPROVED_POLICY","owner":"SPORT","complete_within_days":0,"fallback":"BLOCK"},"grounds":[]},
   {"key":"verification-reset","label":"Verificação e reposição","description":"Dados sintéticos.","rule":{"profile":"AUTH_TOKEN_CLEAR_V1","legal_ground":"APPROVED_POLICY","owner":"IT","complete_within_days":0,"fallback":"BLOCK"},"grounds":[]}
-]'::jsonb, 'privacy-erasure-executor/v1', 'privacy-erasure-plan/v1', true, 90, 1, 2, now(), id
+]'::jsonb, 'privacy-erasure-executor/v2', 'privacy-erasure-plan/v2', true, 90, 1, 2, now(), id
 FROM users WHERE email = 'e2e-admin@example.test'
 ON CONFLICT (version) DO UPDATE SET category_catalogue=EXCLUDED.category_catalogue,
   executor_version=EXCLUDED.executor_version, plan_schema_version=EXCLUDED.plan_schema_version,
   account_closure_enabled=EXCLUDED.account_closure_enabled, working_retention_days=EXCLUDED.working_retention_days,
   response_months=EXCLUDED.response_months, extension_months=EXCLUDED.extension_months,
   adopted_at=EXCLUDED.adopted_at, adopted_by=EXCLUDED.adopted_by;
-INSERT INTO privacy_request_activation (policy_version, enabled, fulfilment_ready, updated_by)
-SELECT 'e2e-privacy-v1', true, true, id FROM users WHERE email = 'e2e-admin@example.test'
-ON CONFLICT (singleton) DO UPDATE SET policy_version = EXCLUDED.policy_version,
-  enabled = true, fulfilment_ready = true, updated_by = EXCLUDED.updated_by, updated_at = now();
-INSERT INTO privacy_request_activation_events (policy_version, actor_ref, enabled, fulfilment_ready, occurred_at)
-SELECT 'e2e-privacy-v1', id, true, true, now() FROM users
-WHERE email = 'e2e-admin@example.test';
+-- Exercise the same four-evidence and independent-approval gate as production.
+-- The fixture hashes are synthetic and authenticate no real operational claim.
+DO $$
+DECLARE
+  admin_id uuid;
+  executor_id uuid;
+  evidence_ids uuid[];
+  proposal_id uuid;
+  proposal_sha256 bytea;
+BEGIN
+  SELECT id INTO STRICT admin_id FROM users WHERE email = 'e2e-admin@example.test';
+  SELECT id INTO STRICT executor_id FROM users WHERE email = 'e2e-privacy-alternate@example.test';
+  SELECT array_agg(recorded.id ORDER BY recorded.kind) INTO evidence_ids
+  FROM (
+    SELECT fixture.kind, privacy_activation_record_evidence(
+      admin_id,
+      fixture.kind,
+      digest(convert_to('e2e-privacy-activation:' || fixture.kind, 'UTF8'), 'sha256'),
+      fixture.contract,
+      clock_timestamp() - interval '1 minute'
+    ) AS id
+    FROM (VALUES
+      ('RESTORE', 'mycfc/privacy-restore-drill-attestation/v1'),
+      ('INFRASTRUCTURE', 'mycfc/privacy-infrastructure-posture/v1'),
+      ('PROVIDER', 'mycfc/privacy-provider-registry/v1'),
+      ('SCHEMA', 'mycfc/schema-migration-inventory/v1')
+    ) AS fixture(kind, contract)
+  ) recorded;
+  SELECT proposed.proposal_id, proposed.activation_sha256
+  INTO STRICT proposal_id, proposal_sha256
+  FROM privacy_activation_propose(executor_id, 'e2e-privacy-v1', evidence_ids) proposed;
+  PERFORM privacy_activation_approve(admin_id, proposal_id, proposal_sha256);
+END $$;
 COMMIT;

@@ -50,6 +50,180 @@ templ PrivacyMinorRights(page PrivacyRequestsPage) {
 	@components.Base(page.Meta, privacyMinorRightsContent(page))
 }
 
+templ PrivacyCompletionDetail(page PrivacyCompletionDetailPage) {
+	@components.Base(page.Meta, privacyCompletionDetailContent(page))
+}
+
+templ privacyCompletionDetailContent(page PrivacyCompletionDetailPage) {
+	@components.PageHeader("Privacidade", "Conclusão do pedido", "Consulte o resultado desta operação de forma segura.", nil)
+	if page.Unavailable {
+		<section class="module" aria-labelledby="completion-unavailable-title">
+			<h2 id="completion-unavailable-title">Ligação indisponível</h2>
+			<p>Esta ligação é inválida, já foi utilizada ou expirou.</p>
+			<p>Por segurança, cada ligação pode ser consultada uma única vez durante 24 horas.</p>
+		</section>
+	} else if page.Confirm {
+		<section class="module" aria-labelledby="completion-confirm-title">
+			<h2 id="completion-confirm-title">Consultar resultado</h2>
+			<p>Esta ligação permite uma única consulta. Confirme apenas quando estiver pronto para guardar o comprovativo.</p>
+			<form method="post" action="/privacidade/conclusao/consultar">
+				@page.Meta.CSRFField
+				<input type="hidden" name="completion_state" value={ page.ConfirmationNonce }/>
+				<button class="action action--primary" type="submit">Consultar resultado agora</button>
+			</form>
+		</section>
+	} else {
+		<section class="module" aria-labelledby="completion-result-title">
+			<h2 id="completion-result-title">Pedido concluído</h2>
+			<p>O processamento foi concluído. Guarde esta informação agora: esta página só pode ser consultada uma vez.</p>
+			<dl>
+				<dt>Referência do pedido</dt><dd>{ page.Reference }</dd>
+				<dt>Concluído em</dt><dd>{ page.CompletedAt }</dd>
+				<dt>Categorias processadas</dt><dd>{ privacyCount(page.Categories) }</dd>
+				<dt>Verificações concluídas</dt><dd>{ privacyCount(page.Checkpoints) }</dd>
+				<dt>Objetos verificados</dt><dd>{ privacyCount(page.ObjectTargets) }</dd>
+				<dt>Destinatários externos verificados</dt><dd>{ privacyCount(page.ProviderTargets) }</dd>
+				<dt>Identificador do comprovativo</dt><dd class="privacy-fingerprint">{ page.ManifestSHA256 }</dd>
+			</dl>
+		</section>
+	}
+	<p><a href={ templ.SafeURL(privacyContact(page.ContactURL)) }>Contactar o clube sobre este pedido</a></p>
+}
+
+templ PrivacyControlLookup(page PrivacyControlLookupPage) {
+	@components.Base(page.Meta, privacyControlLookupContent(page))
+}
+
+templ privacyControlLookupContent(page PrivacyControlLookupPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "privacy-control-lookup", TitleID: "privacy-control-lookup-title", Eyebrow: "Privacidade", Title: "Controlo de execução", Description: "Consulte apenas o estado técnico necessário para acompanhar uma execução.", ReturnURL: "/today"}) {
+		<form method="get" action="/admin/privacidade/controlo" class="form-layout">
+			if page.Error != "" {
+				@components.ErrorSummary([]components.FieldError{{Field: "request_reference", Message: page.Error}})
+			}
+			@components.FieldLabel("request_reference", "Referência do pedido", true)
+			<input id="request_reference" name="ref" value={ page.Reference } required autocomplete="off" aria-invalid?={ page.Error != "" } aria-describedby="request_reference-error"/>
+			@components.FieldErrorMessage("request_reference", page.Error)
+			<button class="action action--primary" type="submit">Consultar estado técnico</button>
+		</form>
+	}
+}
+
+templ PrivacyCompletionControl(page PrivacyCompletionControlPage) {
+	@components.Base(page.Meta, privacyCompletionControlContent(page))
+}
+
+templ privacyCompletionControlContent(page PrivacyCompletionControlPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "privacy-completion-control", TitleID: "privacy-completion-control-title", Eyebrow: "Privacidade", Title: "Controlo de execução", Description: "Estado técnico limitado, sem identidade nem conteúdo do pedido.", ReturnURL: "/admin/privacidade/controlo"}) {
+		@components.StatusMessage(page.Success, "success")
+		if page.Error != "" {
+			@components.ErrorSummary([]components.FieldError{{Field: "privacy-control-action", Message: page.Error}})
+		}
+		<section id="privacy-control-action" tabindex="-1" class="module" aria-labelledby="privacy-control-summary-title">
+			<h2 id="privacy-control-summary-title">Resumo</h2>
+			<dl><dt>Referência</dt><dd>{ page.Reference }</dd><dt>Estado do pedido</dt><dd>{ privacyControlStatus(page.RequestStatus) }</dd><dt>Estado da execução</dt><dd>{ privacyControlStatus(page.ExecutionStatus) }</dd></dl>
+		</section>
+		<section class="module" aria-labelledby="privacy-control-jobs-title">
+			<h2 id="privacy-control-jobs-title">Operações</h2>
+			if len(page.Jobs) == 0 {
+				@components.EmptyState("Sem operações", "Não existe trabalho técnico disponível para esta referência.")
+			} else {
+				<ul class="record-list">
+					for _, job := range page.Jobs {
+						<li class="record-item record-item--stacked">
+							<div class="record-item__copy">
+								<h3><span class="privacy-code">{ job.CategoryCode }</span></h3>
+								<dl><dt>Finalidade</dt><dd class="privacy-code">{ job.PurposeCode }</dd><dt>Estado</dt><dd>{ privacyControlStatus(job.Status) }</dd><dt>Tentativas</dt><dd>{ job.AttemptCount }</dd></dl>
+								if job.FailureCode != "" {
+									<p><strong>Falha protegida:</strong> { privacyFailureStage(job.FailureStage) } · { privacyFailureCode(job.FailureCode) }</p>
+								}
+								if job.ProposedAt != "" {
+									<p>Nova tentativa proposta em { job.ProposedAt }. É necessária aprovação de uma pessoa administradora diferente.</p>
+								}
+							</div>
+							if job.CanPropose {
+								<form method="post" action={ templ.SafeURL("/admin/privacidade/controlo/" + page.Reference + "/reagendar") } class="form-layout">
+									@page.Meta.CSRFField
+									<input type="hidden" name="job_id" value={ job.ID }/>
+									<label><input type="checkbox" name="confirmed" value="yes" required/>Confirmo que revi o código de falha e proponho uma única nova tentativa.</label>
+									<button class="action action--secondary" type="submit">Propor nova tentativa</button>
+								</form>
+							}
+							if job.CanApprove && job.ProposedAt != "" {
+								<form method="post" action={ templ.SafeURL("/admin/privacidade/controlo/" + page.Reference + "/reagendar/aprovar") } class="form-layout">
+									@page.Meta.CSRFField
+									<input type="hidden" name="job_id" value={ job.ID }/>
+									<label><input type="checkbox" name="confirmed" value="yes" required/>Confirmo que sou uma pessoa diferente de quem propôs e aprovo uma única nova tentativa.</label>
+									<button class="action action--primary" type="submit">Aprovar nova tentativa</button>
+								</form>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+}
+
+templ PrivacyActivationControl(page PrivacyActivationControlPage) {
+	@components.Base(page.Meta, privacyActivationControlContent(page))
+}
+
+templ privacyActivationControlContent(page PrivacyActivationControlPage) {
+	@components.TaskRoute(components.TaskSurfaceConfig{ID: "privacy-activation-control", TitleID: "privacy-activation-control-title", Eyebrow: "Privacidade", Title: "Ativação do processamento", Description: "A ativação exige quatro comprovativos atuais e aprovação independente.", ReturnURL: "/admin/privacidade/controlo"}) {
+		@components.StatusMessage(page.Success, "success")
+		if page.Error != "" {
+			@components.ErrorSummary([]components.FieldError{{Field: "privacy-activation-action", Message: page.Error}})
+		}
+		<section id="privacy-activation-action" tabindex="-1" class="module" aria-labelledby="privacy-activation-status-title">
+			<h2 id="privacy-activation-status-title">Estado da ativação</h2>
+			<dl><dt>Política</dt><dd>{ page.PolicyVersion }</dd><dt>Processamento</dt><dd>{ privacyReadyLabel(page.Ready) }</dd></dl>
+			<p>Os comprovativos são autenticados e registados pelo processo operacional protegido. Não envie chaves ou ficheiros de prova através desta página.</p>
+		</section>
+		<section class="module" aria-labelledby="privacy-activation-evidence-title">
+			<h2 id="privacy-activation-evidence-title">Comprovativos atuais</h2>
+			if len(page.Evidence) == 0 {
+				@components.EmptyState("Sem comprovativos atuais", "Registe os quatro comprovativos através do processo operacional protegido.")
+			} else {
+				<ul>
+					for _, evidence := range page.Evidence {
+						<li><strong>{ privacyEvidenceKind(evidence.Kind) }</strong> — observado em { evidence.ObservedAt }</li>
+					}
+				</ul>
+			}
+		</section>
+		if page.ProposedAt != "" {
+			<section class="module" aria-labelledby="privacy-activation-proposal-title">
+				<h2 id="privacy-activation-proposal-title">Ativação proposta</h2>
+				<p>Proposta registada em { page.ProposedAt }. A aprovação tem de ser feita por uma pessoa administradora diferente.</p>
+				if page.CanApprove {
+					<form method="post" action="/admin/privacidade/ativacao/aprovar" class="form-layout">
+						@page.Meta.CSRFField
+						<label><input type="checkbox" name="confirmed" value="yes" required/>Confirmo que sou uma pessoa diferente de quem propôs e aprovo a ativação desta política.</label>
+						<button class="action action--primary" type="submit">Aprovar ativação</button>
+					</form>
+				}
+			</section>
+		} else if (page.CanPropose || page.CanRenew) && len(page.Evidence) == 4 {
+			<section class="module" aria-labelledby="privacy-activation-propose-title">
+				if page.CanRenew {
+					<h2 id="privacy-activation-propose-title">Renovar comprovativos</h2>
+				} else {
+					<h2 id="privacy-activation-propose-title">Propor ativação</h2>
+				}
+				<form method="post" action="/admin/privacidade/ativacao/propor" class="form-layout">
+					@page.Meta.CSRFField
+					<label><input type="checkbox" name="confirmed" value="yes" required/>Confirmo que revi os quatro comprovativos atuais e proponho a ativação ou renovação desta política.</label>
+					if page.CanRenew {
+						<button class="action action--secondary" type="submit">Renovar comprovativos</button>
+					} else {
+						<button class="action action--secondary" type="submit">Propor ativação</button>
+					}
+				</form>
+			</section>
+		}
+	}
+}
+
 templ privacyMinorRightsContent(page PrivacyRequestsPage) {
 	@components.PageHeader("Privacidade", "Os teus direitos", "", nil)
 	@privacyMinorNotice(page.ContactURL)
