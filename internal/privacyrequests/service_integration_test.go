@@ -63,7 +63,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+protectedSchema+" CASCADE"); err != nil {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+protectedSchema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -82,10 +82,22 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		t.Fatal(e)
 	}
 	isolatedBaseline := strings.ReplaceAll(string(baseline), "public.", schemaName+".")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName+", public")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path=pg_catalog,public", "SET search_path=pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
-	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName)
 	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
+	}
+	seedRestoreReceipt := func(executionID uuid.UUID) {
+		t.Helper()
+		locator := sha256.Sum256([]byte(uuid.NewString()))
+		ciphertext := sha256.Sum256([]byte(uuid.NewString()))
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO `+protectedSchema+`.restore_tombstone_receipts(
+			execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+			SELECT execution.id,execution.request_id,'restore-tombstone/v1','test-encryption-v1','test-locator-v1',$2,$3,$4,512,clock_timestamp(),clock_timestamp()
+			FROM privacy_erasure_executions execution WHERE execution.id=$1`, executionID, locator[:], uuid.NewString(), ciphertext[:]); insertErr != nil {
+			t.Fatal(insertErr)
+		}
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("privacy-test-password"), bcrypt.MinCost)
 	user := func(guardian *uuid.UUID) uuid.UUID {
@@ -373,6 +385,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		seedRestoreReceipt(execution.ID)
 		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
 		lease, err := worker.Claim(ctx)
 		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 1 || lease.Checkpoints[0].OperationCode != "AUDIT_ACTOR_ANONYMIZE" {
@@ -527,6 +540,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		seedRestoreReceipt(execution.ID)
 		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
 		lease, err := worker.Claim(ctx)
 		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 2 {
@@ -648,6 +662,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		seedRestoreReceipt(execution.ID)
 		worker := ExecutionWorker{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 2}
 		lease, err := worker.Claim(ctx)
 		if err != nil || lease.Job.ExecutionID != execution.ID || len(lease.Checkpoints) != 1 || lease.Checkpoints[0].OperationCode != "TRAINING_RESULT_DELETE" {
@@ -2695,6 +2710,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		seedRestoreReceipt(execution.ID)
 		workers := []ExecutionWorker{{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}, {Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Minute, MaxAttempts: 3}}
 		type claimResult struct {
 			lease ExecutionLease

@@ -28,16 +28,38 @@ func TestPrivacyExecutionLifecycleForwardMigrationPreservesPriorRows(t *testing.
 	}
 	defer conn.Close(ctx)
 	schemaName := "privacy_lifecycle_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	protectedSchemaName := "privacy_protected_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	schema := pgx.Identifier{schemaName}.Sanitize()
 	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") }()
+	defer func() {
+		_, _ = conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
+		_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{protectedSchemaName}.Sanitize()+" CASCADE")
+	}()
 	if _, err = conn.Exec(ctx, "SET search_path TO "+schema+",public"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.PgConn().Exec(ctx, baselineSchema).ReadAll(); err != nil {
+	isolatedBaseline := strings.ReplaceAll(baselineSchema, "public.", schemaName+".")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog, public", "pg_catalog, "+schemaName+", public")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
+	if _, err = conn.PgConn().Exec(ctx, isolatedBaseline).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
+	}
+	// Remove the later #247 additions before reconstructing the exact pre-#244
+	// shape. The original relational worker implementation was renamed by #247.
+	if _, err = conn.Exec(ctx, `
+		DROP FUNCTION privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);
+		DROP FUNCTION privacy_tombstone_prepare_closure(uuid,uuid);
+		DROP FUNCTION privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);
+		DROP FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid);
+		DROP FUNCTION privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text);
+		ALTER FUNCTION privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text) RENAME TO privacy_worker_execute_checkpoint;
+		DROP FUNCTION privacy_retention_run(uuid,integer);
+		DROP TABLE privacy_outbox_delivery_evidence,privacy_retention_runs;
+		DROP SCHEMA `+pgx.Identifier{protectedSchemaName}.Sanitize()+` CASCADE`); err != nil {
+		t.Fatalf("remove post-#244 restore and retention additions: %v", err)
 	}
 
 	rollback244 := `

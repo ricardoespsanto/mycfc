@@ -55,6 +55,8 @@ type Querier interface {
 	CompletePrivacyObjectCapture(ctx context.Context, arg CompletePrivacyObjectCaptureParams) (int32, error)
 	CompletePrivacyUploadCleanup(ctx context.Context, arg CompletePrivacyUploadCleanupParams) error
 	CompletePrivacyWorkerObjectCheckpoint(ctx context.Context, arg CompletePrivacyWorkerObjectCheckpointParams) (uuid.UUID, error)
+	ConfirmPrivacyRestoreTombstone(ctx context.Context, arg ConfirmPrivacyRestoreTombstoneParams) (uuid.UUID, error)
+	ConfirmPrivacyTombstoneClosure(ctx context.Context, arg ConfirmPrivacyTombstoneClosureParams) (uuid.UUID, error)
 	ConfirmPrivacyUploadPut(ctx context.Context, arg ConfirmPrivacyUploadPutParams) error
 	ConfirmWaitlistedResponse(ctx context.Context, arg ConfirmWaitlistedResponseParams) (int64, error)
 	ConsumeEmailVerification(ctx context.Context, arg ConsumeEmailVerificationParams) (uuid.UUID, error)
@@ -299,6 +301,8 @@ type Querier interface {
 	MoveGymExercise(ctx context.Context, arg MoveGymExerciseParams) (bool, error)
 	MoveTrainingSegmentBlock(ctx context.Context, arg MoveTrainingSegmentBlockParams) (bool, error)
 	MoveTrainingSessionSegment(ctx context.Context, arg MoveTrainingSessionSegmentParams) (bool, error)
+	PreparePrivacyRestoreTombstone(ctx context.Context, arg PreparePrivacyRestoreTombstoneParams) (PreparePrivacyRestoreTombstoneRow, error)
+	PreparePrivacyTombstoneClosure(ctx context.Context, arg PreparePrivacyTombstoneClosureParams) (PreparePrivacyTombstoneClosureRow, error)
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
 	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)
@@ -321,6 +325,7 @@ type Querier interface {
 	RevokePrivacyReviewerGrantsForExecution(ctx context.Context, arg RevokePrivacyReviewerGrantsForExecutionParams) ([]PrivacyReviewerGrant, error)
 	RevokePrivacyStaffGrantsForExecution(ctx context.Context, arg RevokePrivacyStaffGrantsForExecutionParams) ([]StaffGrant, error)
 	RevokeStaffGrant(ctx context.Context, arg RevokeStaffGrantParams) (int64, error)
+	RunPrivacyRetention(ctx context.Context, arg RunPrivacyRetentionParams) (RunPrivacyRetentionRow, error)
 	SaveEventResponse(ctx context.Context, arg SaveEventResponseParams) error
 	SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error)
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)

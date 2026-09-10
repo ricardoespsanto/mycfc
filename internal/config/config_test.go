@@ -86,6 +86,36 @@ func TestPrivacyObjectTargetKeysAreOptionalDistinctAndAtomic(t *testing.T) {
 	}
 }
 
+func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
+	if _, _, enabled, err := (Config{}).PrivacyTombstoneKeys(); err != nil || enabled {
+		t.Fatalf("empty configuration enabled=%t err=%v", enabled, err)
+	}
+	partial := Config{PrivacyTombstoneBucket: "private-ledger"}
+	if _, _, enabled, err := partial.PrivacyTombstoneKeys(); err == nil || enabled {
+		t.Fatalf("disabled partial configuration enabled=%t err=%v", enabled, err)
+	}
+	complete := Config{
+		PrivacyTombstoneEnabled: true, PrivacyTombstoneBucket: "private-ledger", PrivacyTombstonePrefix: "tombstones/",
+		PrivacyTombstonePublicKeyB64: encoded, PrivacyTombstoneEncryptionKeyID: "tombstone-key-v1",
+		PrivacyTombstoneLocatorKeyID: "locator-key-v1", PrivacyTombstoneLocatorKeyB64: Secret(encoded),
+	}
+	publicKey, locatorKey, enabled, err := complete.PrivacyTombstoneKeys()
+	if err != nil || !enabled || len(publicKey) != 32 || len(locatorKey) != 32 {
+		t.Fatalf("complete configuration enabled=%t public=%d locator=%d err=%v", enabled, len(publicKey), len(locatorKey), err)
+	}
+	invalid := complete
+	invalid.PrivacyTombstonePrefix = "../ledger/"
+	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "PREFIX") {
+		t.Fatalf("invalid prefix error=%v", err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstoneLocatorKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "LOCATOR_KEY") {
+		t.Fatalf("invalid locator key error=%v", err)
+	}
+}
+
 type recordingSecretGetter struct {
 	output *secretsmanager.GetSecretValueOutput
 	err    error

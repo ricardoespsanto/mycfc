@@ -610,7 +610,7 @@ func relationalExecutableOperation(operation string) bool {
 }
 
 func executableOperation(operation string) bool {
-	return operation == "OBJECT_VERSION_DELETE" || relationalExecutableOperation(operation)
+	return operation == "OBJECT_VERSION_DELETE" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
 }
 
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {
