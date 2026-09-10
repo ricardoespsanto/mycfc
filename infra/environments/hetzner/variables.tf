@@ -71,8 +71,8 @@ variable "privacy_restore_ledger_replay_enabled" {
   }
 }
 
-variable "postgres_backup_noncurrent_expiration_enabled" {
-  description = "Enable best-effort S3 lifecycle cleanup of non-current PostgreSQL backup versions and expired delete markers. Requires a separately reviewed destructive plan."
+variable "postgres_backup_noncurrent_cleanup_enabled" {
+  description = "Grant and configure exact-version PostgreSQL backup cleanup, with S3 lifecycle as a best-effort backstop. Requires a separately reviewed destructive plan."
   type        = bool
   default     = false
 }

@@ -50,12 +50,15 @@ run "backup_version_expiration_is_inert" {
   command = plan
 
   plan_options {
-    target = [aws_s3_bucket_lifecycle_configuration.postgres_backups]
+    target = [
+      aws_s3_bucket_lifecycle_configuration.postgres_backups,
+      aws_iam_user_policy.postgres_backups,
+    ]
   }
 
   assert {
     condition = (
-      !var.postgres_backup_noncurrent_expiration_enabled &&
+      !var.postgres_backup_noncurrent_cleanup_enabled &&
       length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 2
     )
     error_message = "A routine plan must retain only the existing current daily/monthly backup rules."
@@ -66,11 +69,14 @@ run "backup_version_expiration_requires_its_gate" {
   command = plan
 
   variables {
-    postgres_backup_noncurrent_expiration_enabled = true
+    postgres_backup_noncurrent_cleanup_enabled = true
   }
 
   plan_options {
-    target = [aws_s3_bucket_lifecycle_configuration.postgres_backups]
+    target = [
+      aws_s3_bucket_lifecycle_configuration.postgres_backups,
+      aws_iam_user_policy.postgres_backups,
+    ]
   }
 
   assert {
@@ -80,6 +86,14 @@ run "backup_version_expiration_requires_its_gate" {
       one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "remove-expired-backup-delete-markers"]).expiration[0].expired_object_delete_marker
     )
     error_message = "The destructive backup rules must appear only behind their explicit gate."
+  }
+
+  assert {
+    condition = (
+      toset(local.backup_cleanup_list_actions) == toset(["s3:ListBucketVersions"]) &&
+      toset(local.backup_cleanup_actions) == toset(["s3:DeleteObjectVersion"])
+    )
+    error_message = "Backup cleanup must list versions and delete exact versions only."
   }
 }
 
@@ -187,7 +201,9 @@ run "access_allowlists_are_exact" {
   assert {
     condition = toset(local.privacy_restore_writer_actions) == toset([
       "s3:GetObjectVersion",
+      "s3:GetObjectVersionAttributes",
       "s3:PutObject",
+      "s3:PutObjectRetention",
       ]) && toset(local.privacy_restore_reader_actions) == toset([
       "s3:GetObjectVersion",
     ])

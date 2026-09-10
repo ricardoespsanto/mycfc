@@ -69,13 +69,21 @@ done
 
 chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
 chmod 0755 "$deployment_dir/release-status.sh"
+chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.timer" /etc/systemd/system/mycfc-postgres-backup.timer
+install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.service" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.service
+install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.timer
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
+if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-postgres-backup-version-cleanup.timer
+else
+	systemctl disable --now mycfc-postgres-backup-version-cleanup.timer >/dev/null 2>&1 || true
+fi
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy
 systemctl start mycfc-pull-release.service

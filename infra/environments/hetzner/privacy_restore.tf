@@ -1,7 +1,7 @@
 locals {
   privacy_restore_ledger_bucket  = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-privacy-ledger"
   privacy_restore_prefix         = "tombstones/"
-  privacy_restore_closure_prefix = "tombstones/closures/"
+  privacy_restore_closure_prefix = "tombstones/closure/"
   privacy_restore_writer_name    = "${local.name}-privacy-restore-writer"
   privacy_restore_reader_name    = "${local.name}-privacy-restore-reader"
   privacy_restore_writer_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_writer_name}"
@@ -9,7 +9,9 @@ locals {
 
   privacy_restore_writer_actions = [
     "s3:GetObjectVersion",
+    "s3:GetObjectVersionAttributes",
     "s3:PutObject",
+    "s3:PutObjectRetention",
   ]
   privacy_restore_reader_actions = [
     "s3:GetObjectVersion",
@@ -212,6 +214,38 @@ data "aws_iam_policy_document" "privacy_restore_ledger_bucket" {
       test     = "Bool"
       variable = "aws:SecureTransport"
       values   = ["false"]
+    }
+  }
+
+  statement {
+    sid       = "DenyClosureWithoutComplianceMode"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:object-lock-mode"
+      values   = ["COMPLIANCE"]
+    }
+  }
+
+  statement {
+    sid       = "DenyClosureWithoutRetainUntilDate"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "s3:object-lock-retain-until-date"
+      values   = ["true"]
     }
   }
 
@@ -419,4 +453,9 @@ resource "aws_iam_user_policy" "privacy_restore_reader" {
 output "privacy_restore_ledger_bucket" {
   description = "Restore-independent tombstone ledger bucket, provisioned without credentials or active access."
   value       = try(aws_s3_bucket.privacy_restore_ledger[0].bucket, null)
+}
+
+output "privacy_restore_ledger_kms_key_arn" {
+  description = "Exact KMS key ARN that ledger writers must supply with every encrypted upload."
+  value       = try(aws_kms_key.privacy_restore_ledger[0].arn, null)
 }

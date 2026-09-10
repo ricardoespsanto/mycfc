@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MyCFC exact-version PostgreSQL backup cleanup every 15 minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=15m
+AccuracySec=1m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
