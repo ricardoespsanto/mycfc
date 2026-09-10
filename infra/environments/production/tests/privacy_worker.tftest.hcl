@@ -207,6 +207,9 @@ run "backup_cleanup_failure_alerts_immediately" {
 
   assert {
     condition = (
+      !strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "(") &&
+      !strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, ")") &&
+      strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_failed") &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.evaluation_periods == 1 &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.datapoints_to_alarm == 1 &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.period == 60

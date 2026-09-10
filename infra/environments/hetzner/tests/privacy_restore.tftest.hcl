@@ -28,6 +28,8 @@ run "defaults_are_inert" {
       aws_s3_bucket.privacy_restore_ledger,
       aws_iam_user.privacy_restore_writer,
       aws_iam_user.privacy_restore_reader,
+      aws_iam_role.privacy_restore_broker,
+      aws_lambda_function.privacy_restore_broker,
       aws_iam_user_policy.privacy_restore_writer,
       aws_iam_user_policy.privacy_restore_reader,
     ]
@@ -39,6 +41,8 @@ run "defaults_are_inert" {
       length(aws_s3_bucket.privacy_restore_ledger) == 0 &&
       length(aws_iam_user.privacy_restore_writer) == 0 &&
       length(aws_iam_user.privacy_restore_reader) == 0 &&
+      length(aws_iam_role.privacy_restore_broker) == 0 &&
+      length(aws_lambda_function.privacy_restore_broker) == 0 &&
       length(aws_iam_user_policy.privacy_restore_writer) == 0 &&
       length(aws_iam_user_policy.privacy_restore_reader) == 0
     )
@@ -173,14 +177,14 @@ run "infrastructure_is_protected_but_has_no_access" {
 
 
   assert {
-    condition = toset(local.privacy_restore_writer_kms_actions) == toset([
+    condition = toset(local.privacy_restore_broker_kms_actions) == toset([
       "kms:Decrypt",
       "kms:Encrypt",
       "kms:GenerateDataKey",
       ]) && toset(local.privacy_restore_reader_kms_actions) == toset([
       "kms:Decrypt",
     ])
-    error_message = "The writer must be able to verify ciphertext and the replay identity must be decrypt-only."
+    error_message = "Only the broker may use ledger cryptography and the replay identity must be decrypt-only."
   }
 }
 
@@ -202,16 +206,27 @@ run "access_allowlists_are_exact" {
 
   assert {
     condition = toset(local.privacy_restore_writer_actions) == toset([
+      "lambda:InvokeFunction",
+      ]) && toset(local.privacy_restore_broker_object_actions) == toset([
       "s3:GetObject",
       "s3:GetObjectVersion",
       "s3:PutObject",
-      ]) && toset(local.privacy_restore_writer_retention_actions) == toset([
+      ]) && toset(local.privacy_restore_broker_retention_actions) == toset([
       "s3:GetObjectRetention",
       "s3:PutObjectRetention",
       ]) && toset(local.privacy_restore_reader_actions) == toset([
       "s3:GetObjectVersion",
     ])
-    error_message = "Ledger access must be limited to append verification and offline version reads."
+    error_message = "The worker must only invoke the one-shot broker; direct ledger access belongs only to the broker and offline reader."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.privacy_restore_broker[0].reserved_concurrent_executions == 1 &&
+      aws_lambda_function.privacy_restore_broker[0].timeout == 15 &&
+      aws_lambda_function.privacy_restore_broker[0].memory_size == 128
+    )
+    error_message = "The ledger broker must retain its bounded execution and concurrency limits."
   }
 
   assert {
@@ -224,10 +239,11 @@ run "access_allowlists_are_exact" {
         "kms:ScheduleKeyDeletion",
         ] : !contains(concat(
           local.privacy_restore_writer_actions,
-          local.privacy_restore_writer_retention_actions,
+          local.privacy_restore_broker_object_actions,
+          local.privacy_restore_broker_retention_actions,
           local.privacy_restore_reader_actions,
           ["s3:ListBucketVersions"],
-          local.privacy_restore_writer_kms_actions,
+          local.privacy_restore_broker_kms_actions,
           local.privacy_restore_reader_kms_actions,
       ), denied)
     ])

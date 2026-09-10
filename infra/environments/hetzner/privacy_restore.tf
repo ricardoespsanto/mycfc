@@ -1,25 +1,20 @@
 locals {
-  privacy_restore_ledger_bucket  = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-privacy-ledger"
-  privacy_restore_prefix         = "tombstones/"
-  privacy_restore_closure_prefix = "tombstones/closure/"
-  privacy_restore_writer_name    = "${local.name}-privacy-restore-writer"
-  privacy_restore_reader_name    = "${local.name}-privacy-restore-reader"
-  privacy_restore_writer_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_writer_name}"
-  privacy_restore_reader_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_reader_name}"
+  privacy_restore_ledger_bucket   = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-privacy-ledger"
+  privacy_restore_prefix          = "tombstones/"
+  privacy_restore_closure_prefix  = "tombstones/closure/"
+  privacy_restore_writer_name     = "${local.name}-privacy-restore-writer"
+  privacy_restore_reader_name     = "${local.name}-privacy-restore-reader"
+  privacy_restore_broker_name     = "${local.name}-privacy-ledger-broker"
+  privacy_restore_reader_arn      = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_reader_name}"
+  privacy_restore_broker_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.privacy_restore_broker_name}"
 
   privacy_restore_writer_actions = [
-    "s3:GetObject",
-    "s3:GetObjectVersion",
-    "s3:PutObject",
-  ]
-  privacy_restore_writer_retention_actions = [
-    "s3:GetObjectRetention",
-    "s3:PutObjectRetention",
+    "lambda:InvokeFunction",
   ]
   privacy_restore_reader_actions = [
     "s3:GetObjectVersion",
   ]
-  privacy_restore_writer_kms_actions = [
+  privacy_restore_broker_kms_actions = [
     "kms:Decrypt",
     "kms:Encrypt",
     "kms:GenerateDataKey",
@@ -62,15 +57,15 @@ locals {
         Resource = "*"
       },
       {
-        Sid    = "LedgerWriterCryptographyOnly"
+        Sid    = "LedgerBrokerCryptographyOnly"
         Effect = "Allow"
         Principal = {
           AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
         }
-        Action   = local.privacy_restore_writer_kms_actions
+        Action   = local.privacy_restore_broker_kms_actions
         Resource = "*"
         Condition = {
-          ArnEquals = { "aws:PrincipalArn" = local.privacy_restore_writer_arn }
+          ArnEquals = { "aws:PrincipalArn" = local.privacy_restore_broker_role_arn }
           StringEquals = {
             "kms:EncryptionContext:aws:s3:arn" = "arn:aws:s3:::${local.privacy_restore_ledger_bucket}"
           }
@@ -203,6 +198,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "privacy_restore_ledger" {
 
 data "aws_iam_policy_document" "privacy_restore_ledger_bucket" {
   count = var.privacy_restore_infrastructure_enabled ? 1 : 0
+
+  statement {
+    sid       = "DenyAppendOutsideBroker"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:PutObjectRetention"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.privacy_restore_broker_role_arn]
+    }
+  }
 
   statement {
     sid       = "DenyInsecureTransport"
@@ -358,20 +369,7 @@ data "aws_iam_policy_document" "privacy_restore_writer_boundary" {
   statement {
     effect    = "Allow"
     actions   = local.privacy_restore_writer_actions
-    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
-  }
-
-
-  statement {
-    effect    = "Allow"
-    actions   = local.privacy_restore_writer_retention_actions
-    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = local.privacy_restore_writer_kms_actions
-    resources = [aws_kms_key.privacy_restore_ledger[0].arn]
+    resources = [aws_lambda_function.privacy_restore_broker[0].arn]
   }
 }
 
@@ -429,25 +427,7 @@ data "aws_iam_policy_document" "privacy_restore_writer" {
       sid       = "AppendAndVerifyEncryptedTombstones"
       effect    = "Allow"
       actions   = local.privacy_restore_writer_actions
-      resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
-    }
-  }
-  dynamic "statement" {
-    for_each = var.privacy_restore_ledger_write_enabled ? [1] : []
-    content {
-      sid       = "VerifyClosureRetention"
-      effect    = "Allow"
-      actions   = local.privacy_restore_writer_retention_actions
-      resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
-    }
-  }
-  dynamic "statement" {
-    for_each = var.privacy_restore_ledger_write_enabled ? [1] : []
-    content {
-      sid       = "EncryptLedgerObjects"
-      effect    = "Allow"
-      actions   = local.privacy_restore_writer_kms_actions
-      resources = [aws_kms_key.privacy_restore_ledger[0].arn]
+      resources = [aws_lambda_function.privacy_restore_broker[0].arn]
     }
   }
 }
@@ -507,6 +487,11 @@ output "privacy_restore_ledger_bucket" {
 }
 
 output "privacy_restore_ledger_kms_key_arn" {
-  description = "Exact KMS key ARN that ledger writers must supply with every encrypted upload."
+  description = "Exact KMS key ARN used by the isolated append broker and offline replay reader."
   value       = try(aws_kms_key.privacy_restore_ledger[0].arn, null)
+}
+
+output "privacy_restore_ledger_broker_function_name" {
+  description = "One-shot append broker invoked by the isolated worker; the worker has no direct ledger or retention permissions."
+  value       = try(aws_lambda_function.privacy_restore_broker[0].function_name, null)
 }

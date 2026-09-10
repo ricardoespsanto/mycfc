@@ -81,6 +81,9 @@ while [ "$#" -gt 0 ]; do
 done
 case "$operation" in
   list-object-versions)
+    if [ "${FAKE_LIST_FAILURE:-false}" = true ]; then
+      exit 7
+    fi
     count_file="$FAKE_STATE_DIR/$(printf '%s' "$prefix" | tr / _).count"
     count=0
     [ ! -f "$count_file" ] || count=$(cat "$count_file")
@@ -113,6 +116,7 @@ run_cleanup() {
     FAKE_STATE_DIR="$test_dir" \
     FAKE_PERSIST_OVERDUE="${FAKE_PERSIST_OVERDUE:-false}" \
     FAKE_INITIAL_OVERDUE="${FAKE_INITIAL_OVERDUE:-false}" \
+    FAKE_LIST_FAILURE="${FAKE_LIST_FAILURE:-false}" \
     MYCFC_ENV_FILE="$test_dir/env" \
     MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/credentials" \
     sh "$root_dir/deployment/postgres-backup-version-cleanup.sh"
@@ -149,6 +153,13 @@ if FAKE_PERSIST_OVERDUE=true run_cleanup >"$test_dir/failure-output" 2>&1; then
 fi
 grep -q 'backup_noncurrent_cleanup_verification_failed' "$test_dir/failure-output"
 grep -q 'backup_noncurrent_cleanup_sla_breach_detected' "$test_dir/failure-output"
+grep -q 'backup_noncurrent_cleanup_failed' "$test_dir/failure-output"
+
+if FAKE_LIST_FAILURE=true run_cleanup >"$test_dir/unexpected-failure-output" 2>&1; then
+  printf '%s\n' 'cleanup concealed an unexpected list failure' >&2
+  exit 1
+fi
+grep -q 'backup_noncurrent_cleanup_failed' "$test_dir/unexpected-failure-output"
 
 if FAKE_INITIAL_OVERDUE=true run_cleanup >"$test_dir/cleaned-breach-output" 2>&1; then
   printf '%s\n' 'cleanup concealed an initial SLA breach after successful deletion' >&2

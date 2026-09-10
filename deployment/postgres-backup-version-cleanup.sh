@@ -3,8 +3,21 @@ set -eu
 
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 credentials_file=${MYCFC_BACKUP_CREDENTIALS_FILE:-/etc/mycfc/backup-aws/credentials}
+work_dir=
+
+on_exit() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    printf '%s\n' 'backup_noncurrent_cleanup_failed'
+    logger -t mycfc-backup-cleanup -- 'backup_noncurrent_cleanup_failed' 2>/dev/null || true
+  fi
+  [ -z "$work_dir" ] || rm -rf "$work_dir"
+  exit "$status"
+}
+trap on_exit EXIT
+trap 'exit 1' HUP INT TERM
+
 work_dir=$(mktemp -d /var/tmp/mycfc-backup-version-cleanup.XXXXXX)
-trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 
 read_setting() {
   setting_name=$1
