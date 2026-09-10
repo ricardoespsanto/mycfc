@@ -1,0 +1,17 @@
+[Unit]
+Description=MyCFC bounded privacy retention maintenance
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/privacy-retention.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/privacy-retention.env
+ReadWritePaths=/run
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -112,6 +112,37 @@ resource "aws_cloudwatch_metric_alarm" "privacy_restore_drill_failure" {
   depends_on = [aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "privacy_retention_failure" {
+  name           = "${local.name}-privacy-retention-failure"
+  pattern        = "%privacy_retention_sla_breach|privacy_retention_backlog_breach|privacy_retention_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyRetentionFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_retention_failure" {
+  alarm_name          = "${local.name}-privacy-retention-failure"
+  alarm_description   = "Bounded privacy retention maintenance failed, exceeded its backlog limit, or missed exact repair-object absence by day 30."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyRetentionFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_retention_failure]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }

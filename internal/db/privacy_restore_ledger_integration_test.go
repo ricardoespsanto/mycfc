@@ -285,13 +285,13 @@ func TestPrivacyRetentionRunIsBoundedAndPreservesUnresolvedRows(t *testing.T) {
 	}
 
 	type result struct {
-		runID                                                                                                     uuid.UUID
-		sessions, tokens, stopped, payloads, evidence, consent, events, announcements, suggestions, working, auth int32
+		runID                                                                                                                                      uuid.UUID
+		sessions, tokens, stopped, payloads, evidence, consent, consentEvidence, audit, repairs, events, announcements, suggestions, working, auth int32
 	}
 	var got result
 	if err = tx.QueryRow(ctx, `SELECT * FROM privacy_retention_run($1,100)`, uuid.New()).Scan(
 		&got.runID, &got.sessions, &got.tokens, &got.stopped, &got.payloads, &got.evidence, &got.consent,
-		&got.events, &got.announcements, &got.suggestions, &got.working, &got.auth); err != nil {
+		&got.consentEvidence, &got.audit, &got.repairs, &got.events, &got.announcements, &got.suggestions, &got.working, &got.auth); err != nil {
 		t.Fatal(err)
 	}
 	if got.runID == uuid.Nil || got.sessions != 1 || got.tokens != 1 || got.stopped != 1 || got.payloads != 1 || got.consent != 1 ||

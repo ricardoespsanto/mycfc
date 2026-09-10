@@ -19,11 +19,13 @@ INSERT INTO consent_forms (
     sqlc.arg(user_agent)
 )
 RETURNING id, user_id, granted_by_user_id, consent_type, document_version,
-          document_sha256, is_accepted, date_signed, ip_address, user_agent;
+          document_sha256, is_accepted, date_signed, ip_address, user_agent,
+          ceased_at, cessation_reason, evidence_expires_at;
 
 -- name: ListConsentFormsForUser :many
 SELECT id, user_id, granted_by_user_id, consent_type, document_version,
-       document_sha256, is_accepted, date_signed, ip_address, user_agent
+       document_sha256, is_accepted, date_signed, ip_address, user_agent,
+       ceased_at, cessation_reason, evidence_expires_at
 FROM consent_forms
 WHERE user_id = sqlc.arg(user_id)
 ORDER BY date_signed DESC, id DESC
@@ -38,4 +40,11 @@ SELECT EXISTS (
       AND document_version = sqlc.arg(document_version)
       AND document_sha256 = sqlc.arg(document_sha256)
       AND is_accepted = true
+      AND ceased_at IS NULL
 )::boolean;
+
+-- name: CeaseConsentForms :one
+SELECT privacy_consent_cease(
+    sqlc.arg(user_id), sqlc.arg(consent_type), sqlc.narg(except_id),
+    sqlc.arg(reason), clock_timestamp()
+)::integer;

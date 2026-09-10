@@ -91,6 +91,21 @@ services:
     networks: [mycfc]
     profiles: [release]
 
+  privacy-retention:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-retention"]
+    env_file:
+      - path: /etc/mycfc/privacy-retention.env
+        required: false
+    environment:
+      PRIVACY_RETENTION_ENABLED: ${PRIVACY_RETENTION_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [maintenance]
+    restart: "no"
+
   caddy:
     image: mycfc-caddy-ratelimit:2.10.2-v0.1.0
     build:

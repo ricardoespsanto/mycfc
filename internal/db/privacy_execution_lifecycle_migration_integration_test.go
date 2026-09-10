@@ -116,6 +116,8 @@ DROP TRIGGER training_logs_active_subject_attachment ON training_logs;
 DROP TRIGGER member_profiles_active_subject_attachment ON member_profiles;
 DROP TRIGGER consent_forms_active_subject_attachment ON consent_forms;
 DROP TRIGGER users_erased_immutable ON users;
+DROP TRIGGER users_consent_cessation ON users;
+DROP FUNCTION privacy_consent_cease_on_erasure();
 DROP FUNCTION prevent_erased_user_reidentification();
 DROP TABLE privacy_erasure_restricted_records,privacy_erasure_retention_anchors;
 ALTER TABLE privacy_erasure_job_checkpoints DROP CONSTRAINT privacy_erasure_checkpoint_result_complete;
