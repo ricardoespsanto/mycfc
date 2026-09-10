@@ -60,7 +60,28 @@ if [ ! -f /etc/mycfc/backup-aws/credentials ] || [ "$(stat -c '%u:%a' /etc/mycfc
 	exit 1
 fi
 
-for command in aws base64 curl docker flock hostname jq logger od openssl shasum; do
+case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
+	true)
+		if [ ! -f /etc/mycfc/hetzner-read/token ] || [ "$(stat -c '%u:%a' /etc/mycfc/hetzner-read/token)" != '0:600' ]; then
+			printf '%s\n' '/etc/mycfc/hetzner-read/token must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
+		case "${HETZNER_SERVER_ID:-}" in
+			''|*[!0-9]*) printf '%s\n' 'HETZNER_SERVER_ID must be a positive integer.' >&2; exit 1 ;;
+		esac
+		if [ "$HETZNER_SERVER_ID" -eq 0 ] || ! printf '%s' "${HETZNER_PROJECT_REF:-}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$'; then
+			printf '%s\n' 'Hetzner posture scope is invalid.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*)
+		printf '%s\n' 'HETZNER_BACKUP_POSTURE_ENABLED must be true or false.' >&2
+		exit 1
+		;;
+esac
+
+for command in aws awk base64 cmp curl docker flock hostname jq logger od openssl sha256sum shasum; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf '%s\n' "Missing required command: $command" >&2
 		exit 1
@@ -70,12 +91,15 @@ done
 chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
 chmod 0755 "$deployment_dir/release-status.sh"
 chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
+chmod 0755 "$deployment_dir/hetzner-backup-posture.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.timer" /etc/systemd/system/mycfc-postgres-backup.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.service" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.timer
+install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.service" /etc/systemd/system/mycfc-hetzner-backup-posture.service
+install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.timer" /etc/systemd/system/mycfc-hetzner-backup-posture.timer
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
@@ -83,6 +107,11 @@ if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" = true ] && [ "${BACKUP_NONCU
 	systemctl enable --now mycfc-postgres-backup-version-cleanup.timer
 else
 	systemctl disable --now mycfc-postgres-backup-version-cleanup.timer >/dev/null 2>&1 || true
+fi
+if [ "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-hetzner-backup-posture.timer
+else
+	systemctl disable --now mycfc-hetzner-backup-posture.timer >/dev/null 2>&1 || true
 fi
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy

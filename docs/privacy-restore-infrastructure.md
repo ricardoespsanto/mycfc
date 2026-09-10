@@ -34,6 +34,12 @@ The backup exact-version cleaner has a separate pair of gates: `postgres_backup_
 
 Disabling access policies stops future ledger writes or reads but cannot undo retained ledger objects, erased records, or deleted object versions. Restore replay is the only approved route for preventing erased identities from returning from a retained backup.
 
+## Hetzner backup posture evidence
+
+Terraform explicitly requests backups for the application server, but configuration alone is not runtime evidence of provider rotation or manual-snapshot expiry. The disabled-by-default `mycfc-hetzner-backup-posture.timer` therefore performs a daily read-only check with a separately protected, project-bound token. It resolves the exact server, confirms the backup window, paginates the complete backup/snapshot image inventory twice, and refuses evidence if the two canonical inventories differ.
+
+The check requires no more than seven automatic backups bound to the server. Every manual snapshot created from that server requires an opaque accountable owner reference, a non-identifying reason code, a provider-matching creation timestamp, and an expiry no later than 30 days after creation. Missing, inconsistent, overlong, or overdue metadata fails the run; the mechanism never deletes or modifies provider resources. Output is limited to counts, oldest ages, and a digest of the canonical scoped inventory. Enabling the timer or deleting an overdue snapshot remains a separate operational approval.
+
 ## Verification
 
 `make terraform-test` runs mocked policy and gating tests for both the production worker and Hetzner restore infrastructure. The tests cover inert defaults, gate dependencies, versioning, compliance retention and exact allowlists. They do not replace a reviewed live plan or post-apply evidence.

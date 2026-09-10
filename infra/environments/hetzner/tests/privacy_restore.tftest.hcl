@@ -19,6 +19,19 @@ variables {
   deploy_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestDeployKey"
 }
 
+run "server_backup_intent_is_explicit" {
+  command = plan
+
+  plan_options {
+    target = [hcloud_server.app]
+  }
+
+  assert {
+    condition     = hcloud_server.app.backups
+    error_message = "The application server must explicitly request Hetzner backups."
+  }
+}
+
 run "defaults_are_inert" {
   command = plan
 

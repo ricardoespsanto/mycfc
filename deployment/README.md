@@ -221,6 +221,18 @@ Privacy-safe recovery additionally requires the independent tombstone ledger and
 
 Non-current PostgreSQL backup versions use a separately gated exact-version cleaner. Its Terraform permission/lifecycle gate and host scheduling gate both default to false; rollout and privacy-safe event output are documented in `docs/privacy-restore-infrastructure.md`.
 
+The Hetzner backup-posture check is separately disabled by default. It uses a dedicated project-bound read token at `/etc/mycfc/hetzner-read/token` (owned by `root`, mode `0600`) to verify the exact configured server and its paginated image inventory without changing or deleting anything. To schedule the daily check, set all three protected host values and rerun the installer:
+
+```dotenv
+HETZNER_BACKUP_POSTURE_ENABLED=true
+HETZNER_SERVER_ID=123456789
+HETZNER_PROJECT_REF=mycfc
+```
+
+The server must have its Terraform `project` label and a provider-reported backup window. At most seven automatic images may be bound to it. Every snapshot created from it must carry `mycfc-owner-ref`, `mycfc-reason-code`, `mycfc-created-at`, and `mycfc-expires-at` labels. The owner is an opaque accountable operator reference, never a name or email; the reason is a non-identifying uppercase code. Both timestamp labels are ten-digit Unix seconds, the declared creation must equal the provider creation time, and expiry must be after creation, no later than 30 days after creation, and still in the future. A failing check only reports an allowlisted reason and never deletes a snapshot.
+
+The successful CloudWatch/journal event contains only automatic and manual counts, oldest ages, and a canonical inventory SHA-256 digest. It never contains provider image/server IDs, names, labels, or the project reference. The dedicated token establishes the project boundary; the exact server lookup, Terraform project label, `bound_to`, and `created_from` fields establish the server boundary. Run an unscheduled read-only check with `sudo systemctl start mycfc-hetzner-backup-posture.service` and inspect it with `sudo journalctl -u mycfc-hetzner-backup-posture.service -n 100 --no-pager`.
+
 Run a non-destructive restore drill with:
 
 ```sh
