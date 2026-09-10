@@ -209,7 +209,7 @@ type providerFixture struct {
 func seedProviderExecutionFixture(t *testing.T, ctx context.Context, tx pgx.Tx, service string, role ProviderRole, contract, localState string) providerFixture {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	subjectID, actorID, requestID, executionID, jobID, checkpointID, leaseID, attemptID, connectionID, workerRef := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	subjectID, actorID, executorID, requestID, executionID, jobID, checkpointID, leaseID, attemptID, connectionID, workerRef := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	policyVersion := "provider-test-" + uuid.NewString()
 	entryDigest := bytes.Repeat([]byte{2}, 32)
 	planDigest := bytes.Repeat([]byte{3}, 32)
@@ -217,8 +217,10 @@ func seedProviderExecutionFixture(t *testing.T, ctx context.Context, tx pgx.Tx, 
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Provider test',$2,'hash','1990-01-01'),($3,'Provider actor',$4,'hash','1990-01-01')`, []any{subjectID, subjectID.String() + "@example.test", actorID, actorID.String() + "@example.test"}},
-		{`INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version) VALUES($1,'[]','privacy-erasure-executor/v2','privacy-erasure-plan/v2')`, []any{policyVersion}},
+		{`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Provider test',$2,'hash','1990-01-01'),($3,'Provider actor',$4,'hash','1990-01-01'),($5,'Provider executor',$6,'hash','1990-01-01')`, []any{subjectID, subjectID.String() + "@example.test", actorID, actorID.String() + "@example.test", executorID, executorID.String() + "@example.test"}},
+		{`INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, []any{actorID}},
+		{`INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3)`, []any{executorID, actorID, now.Add(-time.Hour)}},
+		{`INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,working_retention_days,adopted_at,adopted_by) VALUES($1,'[]','privacy-erasure-executor/v2','privacy-erasure-plan/v2',90,$2,$3)`, []any{policyVersion, now.Add(-time.Hour), actorID}},
 		{`INSERT INTO data_erasure_requests(id,public_ref,idempotency_key,subject_user_id,requester_user_id,subject_kind,scope_kind,categories,status,version,received_at,due_at,decision_code,decided_by,decided_at,policy_version,policy_snapshot,updated_at)
 		 VALUES($1,$2,$3,$4,$4,'SELF','CATEGORIES',ARRAY['external-provider'],'AWAITING_EXECUTION',2,$5::timestamptz,$5::timestamptz+interval '30 days','APPROVED',$6,$5::timestamptz,$7,'{}',$5::timestamptz)`, []any{requestID, uuid.New(), uuid.New(), subjectID, now, actorID, policyVersion}},
 		{`INSERT INTO privacy_request_execution_plans(request_id,policy_version,executor_version,schema_version,plan,plan_sha256,created_at)
@@ -236,6 +238,7 @@ func seedProviderExecutionFixture(t *testing.T, ctx context.Context, tx pgx.Tx, 
 			t.Fatalf("fixture statement failed: %v: %s", err, statement.sql)
 		}
 	}
+	activatePrivacyIntegrationFixture(t, ctx, tx, actorID, executorID, policyVersion)
 	registryDigest := bytes.Repeat([]byte{7}, 32)
 	credentialKey, credential := any(nil), any(nil)
 	syncEnabled := false

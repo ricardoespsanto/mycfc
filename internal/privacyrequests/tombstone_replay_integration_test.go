@@ -78,7 +78,10 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 	record.SubjectUserID = subject
 	record.ExecutionStart = time.Now().UTC()
 	record.Replay.Operations = []string{"AUTH_ACCESS_REVOKE", "AUTH_TOKEN_DELETE", "PROFILE_IDENTITY_DELETE", "PROVIDER_LOCAL_FENCE", "IDENTITY_CLEAR"}
-	sealed, err := protector.Seal(record)
+	closedAt := record.ExecutionStart.Add(time.Hour)
+	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt,
+		EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
+	sealed, err := protector.SealClosure(closure)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +144,7 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 			subjectActiveGrants, unrelatedActiveGrants, replayGrantEvents)
 	}
 
-	conflicting, err := protector.Seal(record)
+	conflicting, err := protector.SealClosure(closure)
 	if err != nil {
 		t.Fatal(err)
 	}

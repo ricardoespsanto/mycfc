@@ -32,6 +32,29 @@ func (s *cleanupVersionedStoreFake) DeleteAllVersions(_ context.Context, key str
 	return storage.VersionDeletionEvidence{DeletedVersions: 2, DeletedMarkers: 1, ListCalls: 4, StableChecks: 2}, nil
 }
 
+func activateUploadCleanupIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	adminID, executorID := uuid.New(), uuid.New()
+	now := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	policy := "upload-cleanup-" + uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES
+		($1,'Upload cleanup admin',$2,'hash','1990-01-01'),($3,'Upload cleanup executor',$4,'hash','1990-01-01')`,
+		adminID, adminID.String()+"@example.test", executorID, executorID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, adminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3)`, executorID, adminID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,working_retention_days,adopted_at,adopted_by)
+		VALUES($1,'[]','privacy-erasure-executor/v2','privacy-erasure-plan/v2',90,$2,$3)`, policy, now, adminID); err != nil {
+		t.Fatal(err)
+	}
+	activatePrivacyIntegrationFixture(t, ctx, pool, adminID, executorID, policy)
+}
+
 func TestUploadCleanupLifecycleIsFencedAndRecordsStableAbsence(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -48,6 +71,7 @@ func TestUploadCleanupLifecycleIsFencedAndRecordsStableAbsence(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Upload cleanup integration',$2,'hash','1990-01-01')`, userID, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	activateUploadCleanupIntegrationFixture(t, ctx, pool)
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +149,7 @@ func TestUploadCleanupPermanentlyDeletesEveryMinIOVersionAndMarker(t *testing.T)
 	if _, err = pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'MinIO cleanup integration',$2,'hash','1990-01-01')`, userID, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	activateUploadCleanupIntegrationFixture(t, ctx, pool)
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +215,7 @@ func TestUploadCleanupClaimAllowsOneWorkerAndFencesExpiredLease(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Cleanup claim integration',$2,'hash','1990-01-01')`, userID, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	activateUploadCleanupIntegrationFixture(t, ctx, pool)
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +302,7 @@ func TestUploadCleanupMarksOnlyExpiredUnheldIntentsStale(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Stale upload integration',$2,'hash','1990-01-01')`, userID, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	activateUploadCleanupIntegrationFixture(t, ctx, pool)
 	staleIntent := insertAgedUploadIntent(t, ctx, pool, userID, false)
 	activeIntent := insertAgedUploadIntent(t, ctx, pool, userID, true)
 	var staleStatus, activeStatus string

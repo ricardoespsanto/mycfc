@@ -82,20 +82,46 @@ DECLARE
   evidence_ids uuid[];
   proposal_id uuid;
   proposal_sha256 bytea;
+  observed_at timestamptz := clock_timestamp() - interval '1 minute';
+  fixture_digest bytea := digest(convert_to('e2e-privacy-release-binding', 'UTF8'), 'sha256');
 BEGIN
   SELECT id INTO STRICT admin_id FROM users WHERE email = 'e2e-admin@example.test';
   SELECT id INTO STRICT executor_id FROM users WHERE email = 'e2e-privacy-alternate@example.test';
   SELECT array_agg(recorded.id ORDER BY recorded.kind) INTO evidence_ids
   FROM (
-    SELECT fixture.kind, privacy_activation_record_evidence(
+    SELECT fixture.kind, privacy_activation_record_authenticated_evidence(
       admin_id,
       fixture.kind,
       digest(convert_to('e2e-privacy-activation:' || fixture.kind, 'UTF8'), 'sha256'),
       fixture.contract,
-      clock_timestamp() - interval '1 minute'
+      observed_at,
+      observed_at + interval '2160 hours',
+      jsonb_build_object(
+        'policy_version','e2e-privacy-v1','executor_version','privacy-erasure-executor/v2','plan_schema_version','privacy-erasure-plan/v2',
+        'image_digest','sha256:' || repeat('7',64),'evidence_sha256',encode(fixture_digest,'base64')
+      ) || CASE fixture.kind
+        WHEN 'RESTORE' THEN jsonb_build_object(
+          'evidence_ref','s3://fixture/restore?versionId=e2e','schema_migration_digest',encode(fixture_digest,'base64'),
+          'restore_input_source','LIVE_LEDGER','restore_input_contract','mycfc/privacy-restore-ledger-input/v2',
+          'restore_replay_contract','relational-erasure-replay/v1','restore_closure_contract','restore-tombstone-closure/v3',
+          'restore_candidate_sha256',encode(fixture_digest,'base64'),'restore_inventory_sha256',encode(fixture_digest,'base64'),
+          'restore_object_count',1,'restore_replayed_count',1,'restore_synthetic_count',0,'restore_observer_sha256',encode(fixture_digest,'base64'))
+        WHEN 'INFRASTRUCTURE' THEN jsonb_build_object(
+          'evidence_ref','s3://fixture/infrastructure?versionId=e2e','signing_key_id','fixture-key','production_state_serial',1,'hetzner_state_serial',1,
+          'production_state_sha256',encode(fixture_digest,'base64'),'hetzner_state_sha256',encode(fixture_digest,'base64'),
+          'production_plan_sha256',encode(fixture_digest,'base64'),'hetzner_plan_sha256',encode(fixture_digest,'base64'),
+          'worker_identity_enabled',true,'s3_version_deletion_enabled',true,'ledger_broker_invoke_enabled',true,
+          'worker_monitoring_enabled',true,'restore_infrastructure_enabled',true,'restore_ledger_write_enabled',true)
+        WHEN 'PROVIDER' THEN jsonb_build_object(
+          'evidence_ref','s3://fixture/provider?versionId=e2e','signing_key_id','fixture-key','provider_registry_state','READY',
+          'provider_registration_count',1,'provider_registry_sha256',encode(fixture_digest,'base64'))
+        WHEN 'SCHEMA' THEN jsonb_build_object(
+          'evidence_ref','s3://fixture/schema?versionId=e2e','signing_key_id','fixture-key','schema_migration_digest',encode(fixture_digest,'base64'),
+          'baseline_includes_through','202609100013_privacy_worker_release_guard')
+      END
     ) AS id
     FROM (VALUES
-      ('RESTORE', 'mycfc/privacy-restore-drill-attestation/v1'),
+      ('RESTORE', 'mycfc/privacy-restore-drill-attestation/v2'),
       ('INFRASTRUCTURE', 'mycfc/privacy-infrastructure-posture/v1'),
       ('PROVIDER', 'mycfc/privacy-provider-registry/v1'),
       ('SCHEMA', 'mycfc/schema-migration-inventory/v1')

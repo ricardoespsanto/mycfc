@@ -1889,6 +1889,46 @@ type PrivacyActivationApproval struct {
 	ApprovedAt       pgtype.Timestamptz `json:"approved_at"`
 }
 
+type PrivacyActivationAuthenticatedArtifact struct {
+	EvidenceID                   uuid.UUID          `json:"evidence_id"`
+	Kind                         string             `json:"kind"`
+	PolicyVersion                string             `json:"policy_version"`
+	ExecutorVersion              string             `json:"executor_version"`
+	PlanSchemaVersion            string             `json:"plan_schema_version"`
+	ImageDigest                  string             `json:"image_digest"`
+	ImmutableEvidenceRef         *string            `json:"immutable_evidence_ref"`
+	ImmutableEvidenceSha256      []byte             `json:"immutable_evidence_sha256"`
+	SigningKeyID                 *string            `json:"signing_key_id"`
+	SchemaMigrationDigest        []byte             `json:"schema_migration_digest"`
+	BaselineIncludesThrough      *string            `json:"baseline_includes_through"`
+	ProductionStateSerial        *int64             `json:"production_state_serial"`
+	HetznerStateSerial           *int64             `json:"hetzner_state_serial"`
+	ProductionStateSha256        []byte             `json:"production_state_sha256"`
+	HetznerStateSha256           []byte             `json:"hetzner_state_sha256"`
+	ProductionPlanSha256         []byte             `json:"production_plan_sha256"`
+	HetznerPlanSha256            []byte             `json:"hetzner_plan_sha256"`
+	WorkerIdentityEnabled        *bool              `json:"worker_identity_enabled"`
+	S3VersionDeletionEnabled     *bool              `json:"s3_version_deletion_enabled"`
+	LedgerBrokerInvokeEnabled    *bool              `json:"ledger_broker_invoke_enabled"`
+	WorkerMonitoringEnabled      *bool              `json:"worker_monitoring_enabled"`
+	RestoreInfrastructureEnabled *bool              `json:"restore_infrastructure_enabled"`
+	RestoreLedgerWriteEnabled    *bool              `json:"restore_ledger_write_enabled"`
+	ProviderRegistryState        *string            `json:"provider_registry_state"`
+	ProviderRegistrationCount    *int64             `json:"provider_registration_count"`
+	ProviderRegistrySha256       []byte             `json:"provider_registry_sha256"`
+	RestoreInputSource           *string            `json:"restore_input_source"`
+	RestoreInputContract         *string            `json:"restore_input_contract"`
+	RestoreReplayContract        *string            `json:"restore_replay_contract"`
+	RestoreClosureContract       *string            `json:"restore_closure_contract"`
+	RestoreCandidateSha256       []byte             `json:"restore_candidate_sha256"`
+	RestoreInventorySha256       []byte             `json:"restore_inventory_sha256"`
+	RestoreObjectCount           *int64             `json:"restore_object_count"`
+	RestoreReplayedCount         *int64             `json:"restore_replayed_count"`
+	RestoreSyntheticCount        *int64             `json:"restore_synthetic_count"`
+	RestoreObserverSha256        []byte             `json:"restore_observer_sha256"`
+	AuthenticatedAt              pgtype.Timestamptz `json:"authenticated_at"`
+}
+
 type PrivacyActivationEvidence struct {
 	ID             uuid.UUID          `json:"id"`
 	Kind           string             `json:"kind"`
@@ -2627,6 +2667,22 @@ type PrivacyTerminalRequeueProposal struct {
 	ProposalSha256           []byte             `json:"proposal_sha256"`
 	ProposedByRef            uuid.UUID          `json:"proposed_by_ref"`
 	ProposedAt               pgtype.Timestamptz `json:"proposed_at"`
+}
+
+type PrivacyWorkerKillSwitch struct {
+	Singleton            bool               `json:"singleton"`
+	Engaged              bool               `json:"engaged"`
+	Version              int64              `json:"version"`
+	ActivationApprovalID *uuid.UUID         `json:"activation_approval_id"`
+	ChangedAt            pgtype.Timestamptz `json:"changed_at"`
+}
+
+type PrivacyWorkerKillSwitchEvent struct {
+	ID                   uuid.UUID          `json:"id"`
+	Version              int64              `json:"version"`
+	Engaged              bool               `json:"engaged"`
+	ActivationApprovalID *uuid.UUID         `json:"activation_approval_id"`
+	OccurredAt           pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type Programme struct {

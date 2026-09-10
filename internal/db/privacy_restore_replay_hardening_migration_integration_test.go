@@ -23,8 +23,9 @@ func TestPrivacyRestoreReplayHardeningForwardMigrationIsAdditive(t *testing.T) {
 		t.Fatal(err)
 	}
 	markerIndex := strings.LastIndex(baselineSchema, marker)
-	if markerIndex < 0 || baselineSchema[markerIndex:] != string(migration) {
-		t.Fatal("replay-hardening migration is not the final exact baseline segment")
+	nextMarkerIndex := strings.LastIndex(baselineSchema, "-- #248 release guard:")
+	if markerIndex < 0 || nextMarkerIndex <= markerIndex || baselineSchema[markerIndex:nextMarkerIndex] != string(migration)+"\n" {
+		t.Fatal("replay-hardening migration is not the exact baseline segment before the release guard")
 	}
 
 	ctx := context.Background()

@@ -34,11 +34,76 @@ type executionVersionedStoreRecorder struct {
 	evidence storage.VersionDeletionEvidence
 }
 
-func activatePrivacyIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, adminID, executorID uuid.UUID, policyVersion string) {
+type activationFixtureQueryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query activationFixtureQueryRower, actorID uuid.UUID, policyVersion, kind string, digest []byte, observedAt time.Time) uuid.UUID {
 	t.Helper()
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	value := bytes.Repeat([]byte{7}, sha256.Size)
+	common := map[string]any{
+		"policy_version": policyVersion, "executor_version": SupportedExecutorVersion, "plan_schema_version": SupportedPlanSchemaVersion,
+		"image_digest": "sha256:" + strings.Repeat("7", sha256.Size*2), "evidence_sha256": value,
+	}
+	contract := ""
+	switch kind {
+	case "RESTORE":
+		contract = "mycfc/privacy-restore-drill-attestation/v2"
+		common["evidence_ref"] = "s3://fixture/restore?versionId=v1"
+		common["schema_migration_digest"] = value
+		common["restore_input_source"] = "LIVE_LEDGER"
+		common["restore_input_contract"] = "mycfc/privacy-restore-ledger-input/v2"
+		common["restore_replay_contract"] = "relational-erasure-replay/v1"
+		common["restore_closure_contract"] = "restore-tombstone-closure/v3"
+		common["restore_candidate_sha256"] = value
+		common["restore_inventory_sha256"] = value
+		common["restore_object_count"] = 1
+		common["restore_replayed_count"] = 1
+		common["restore_synthetic_count"] = 0
+		common["restore_observer_sha256"] = value
+	case "INFRASTRUCTURE":
+		contract = "mycfc/privacy-infrastructure-posture/v1"
+		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/infrastructure?versionId=v1", "fixture-key"
+		common["production_state_serial"], common["hetzner_state_serial"] = 1, 1
+		for _, field := range []string{"production_state_sha256", "hetzner_state_sha256", "production_plan_sha256", "hetzner_plan_sha256"} {
+			common[field] = value
+		}
+		for _, field := range []string{"worker_identity_enabled", "s3_version_deletion_enabled", "ledger_broker_invoke_enabled", "worker_monitoring_enabled", "restore_infrastructure_enabled", "restore_ledger_write_enabled"} {
+			common[field] = true
+		}
+	case "PROVIDER":
+		contract = "mycfc/privacy-provider-registry/v1"
+		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/provider?versionId=v1", "fixture-key"
+		common["provider_registry_state"], common["provider_registration_count"], common["provider_registry_sha256"] = "READY", 1, value
+	case "SCHEMA":
+		contract = "mycfc/schema-migration-inventory/v1"
+		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609100013_privacy_worker_release_guard"
+	default:
+		t.Fatalf("unsupported activation fixture kind %q", kind)
+	}
+	artifact, err := json.Marshal(common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidenceID uuid.UUID
+	if err = query.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`, actorID, kind, digest, contract, observedAt, observedAt.Add(90*24*time.Hour), artifact).Scan(&evidenceID); err != nil {
+		t.Fatalf("record %s activation fixture: %v", kind, err)
+	}
+	return evidenceID
+}
+
+func activatePrivacyIntegrationFixture(t *testing.T, ctx context.Context, pool activationFixtureQueryRower, adminID, executorID uuid.UUID, policyVersion string) {
+	t.Helper()
+	if err := pool.QueryRow(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by)
+		VALUES(true,$1,false,false,$2) ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,
+		enabled=false,fulfilment_ready=false,updated_by=EXCLUDED.updated_by,updated_at=clock_timestamp()
+		RETURNING singleton`, policyVersion, adminID).Scan(new(bool)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	contracts := map[string]string{
-		"RESTORE":        "mycfc/privacy-restore-drill-attestation/v1",
+		"RESTORE":        "mycfc/privacy-restore-drill-attestation/v2",
 		"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
 		"PROVIDER":       "mycfc/privacy-provider-registry/v1",
 		"SCHEMA":         "mycfc/schema-migration-inventory/v1",
@@ -46,11 +111,7 @@ func activatePrivacyIntegrationFixture(t *testing.T, ctx context.Context, pool *
 	evidenceIDs := make([]uuid.UUID, 0, len(contracts))
 	for kind, contract := range contracts {
 		digest := sha256.Sum256([]byte(kind + contract + uuid.NewString()))
-		var evidenceID uuid.UUID
-		if err := pool.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminID, kind, digest[:], contract, now).Scan(&evidenceID); err != nil {
-			t.Fatal(err)
-		}
-		evidenceIDs = append(evidenceIDs, evidenceID)
+		evidenceIDs = append(evidenceIDs, recordActivationFixtureEvidence(t, ctx, pool, adminID, policyVersion, kind, digest[:], now))
 	}
 	var proposalID uuid.UUID
 	var activationDigest []byte
@@ -919,9 +980,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 		// Restore the deliberately isolated fixture without pretending that a
 		// production activation can bypass the unavailable #111 executor.
-		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
-			t.Fatal(err)
-		}
+		activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 	})
 	t.Run("executor-grants-require-adults-and-record-revocation", func(t *testing.T) {
 		guardian := user(nil)
@@ -2339,12 +2398,10 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatalf("committed replay after mutable readiness changed=%+v err=%v", replayed, err)
 		}
 		s.ExecutionCapabilities = capabilities
-		if _, err = pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
-			t.Fatal(err)
-		}
 		if _, err = pool.Exec(ctx, `UPDATE privacy_executor_grants SET revoked_by=NULL,revoked_at=NULL WHERE user_id=$1`, reviewerB); err != nil {
 			t.Fatal(err)
 		}
+		activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 		var executions, notices int
 		if err = pool.QueryRow(ctx, "SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1", request.ID).Scan(&executions); err != nil {
 			t.Fatal(err)
@@ -2403,9 +2460,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
 			t.Fatalf("disabled activation error=%v", err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton`); err != nil {
-			t.Fatal(err)
-		}
+		activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 		request = approved()
 		var grantedAt time.Time
 		if err := pool.QueryRow(ctx, `SELECT granted_at FROM privacy_reviewer_grants WHERE user_id=$1 AND revoked_at IS NULL`, reviewerA).Scan(&grantedAt); err != nil {

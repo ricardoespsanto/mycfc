@@ -38,6 +38,7 @@ func TestPrivacyRestoreLedgerFencesDestructionAndRecordsClosure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	activatePrivacyDatabaseIntegrationFixture(t, ctx, tx, actor, subject)
 	policy := "ledger-" + uuid.NewString()
 	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,working_retention_days,adopted_at,adopted_by)
 		VALUES($1,'[]','executor-v1','schema-v1',90,$2,$3)`, policy, now, actor); err != nil {

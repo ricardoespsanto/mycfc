@@ -12,7 +12,8 @@ delivery target into `privacy_protected`. Cleartext contact data is not copied
 into an execution row, manifest, event, log, or completion-link record.
 
 After every category job and checkpoint succeeds, the tombstone broker writes
-and verifies the v2 closure record. The completion worker then invokes one
+and verifies the current authenticated closure record. Older closure versions
+remain readable for recovery but are not activation evidence. The completion worker then invokes one
 database finalizer. Under row locks, that finalizer compares the immutable plan
 with every category and operation position, requires result digests for every
 checkpoint, recounts object and provider targets against their capture sets,
@@ -38,7 +39,7 @@ so the raw token is not copied into form markup. No account session is needed.
 
 The executor-only pending-completion query deliberately finds succeeded work
 before closure evidence exists. Runtime ordering is: list a bounded batch,
-write and verify the closure-v2 tombstone, then invoke the atomic finalizer.
+write and verify the current tombstone closure, then invoke the atomic finalizer.
 The finalizer remains unavailable until the closure receipt exists.
 An executor-only status routine publishes only pending, leased, retry-wait,
 terminal and over-15-minute nonterminal aggregate counts for heartbeat/alarm
@@ -59,17 +60,32 @@ they exclude principals, diagnostics, targets and provider details.
 
 ## Activation evidence
 
-Activation is two-person and digest-bound. An active executor proposes an
+Activation is two-person, release-bound and digest-bound. An active executor proposes an
 adopted policy against exactly one current item of each kind:
 
-- `RESTORE` uses `mycfc/privacy-restore-drill-attestation/v1`, the authenticated
+- `RESTORE` uses the current v2 independently authenticated restore attestation,
   restore/promotion attestation contract.
 - `INFRASTRUCTURE` uses `mycfc/privacy-infrastructure-posture/v1`.
 - `PROVIDER` uses `mycfc/privacy-provider-registry/v1`.
 - `SCHEMA` uses `mycfc/schema-migration-inventory/v1`.
 
-Each record carries the SHA-256 digest of the reviewed artifact, an opaque
-reference code, its observation time and a fixed 90-day expiry. A distinct
+The non-restore documents are exact-schema Ed25519 envelopes. They bind the
+policy, compiled executor and plan versions, deployed image digest, immutable
+versioned S3 reference and object checksum to an allowlisted signing key. The
+infrastructure record additionally binds both Terraform state serials plus
+state and plan digests and every required worker capability. Provider evidence
+must describe a closed, non-empty `READY` registry; an `EMPTY` or `NOT_READY`
+registry can never activate the worker. Schema evidence binds the binary's
+ordered embedded migration-inventory digest and exact baseline cutoff.
+
+The restore record is an HMAC-authenticated independent observer result. It
+binds the same release and schema inventory, the exact candidate replay result,
+the current closure contract and authenticated erasure-effective clock, and
+cross-checks replay, absence and observer totals. Candidate-produced JSON is
+never activation-authoritative.
+
+Each record carries the SHA-256 digest of the authenticated artifact, its
+observation time and at most a 90-day expiry. A distinct
 active administrator approves the exact proposal digest while all four records
 are still current. Only the owner-controlled approval function can set both
 activation flags and bind the singleton to its approval. Direct enablement is
@@ -77,11 +93,10 @@ rejected. Deactivation remains a one-way safe operator action.
 The forward migration disables and audits any legacy unapproved activation;
 it never carries the old caller-provided readiness shortcut into 011.
 
-The restore artifact is the exact HMAC-authenticated drill document and its
-container image field must be `sha256:` followed by 64 lowercase hexadecimal
-characters. The other three artifact documents must contain their exact
-contract, `SUCCEEDED` result and an RFC3339 `observed_at` matching the recorded
-time; the server hashes the whole artifact. Evidence ingestion is a trusted
+Every release image field must be `sha256:` followed by 64 lowercase hexadecimal
+characters, and every artifact must match release values derived from the
+running image and embedded migration inventory rather than authoritative
+environment assertions. Evidence ingestion is a trusted
 CLI/runtime operation, never an in-browser secret upload. Both web availability
 and the worker's no-argument readiness probe recompute expiry against the
 database clock, so an enabled row cannot remain effectively live after any
@@ -92,6 +107,19 @@ the same evidence set fails on its immutable activation digest.
 Recording one already-verified artifact is idempotent on its kind and whole
 payload digest, so a trusted CLI can safely resume after a partial network
 failure without creating or relabelling evidence.
+
+## Database kill switch
+
+Migration 013 engages a database-resident switch and disables every older
+activation. Only approval of a complete current v2 evidence set clears it.
+Operator deactivation engages it again; there is no standalone enable path.
+The claim boundary and every executor checkpoint, object/provider operation,
+tombstone/closure operation and completion operation lock and recheck the
+switch plus evidence expiry before entering its reviewed implementation. This
+also blocks a direct call made with a stale executor credential. A lease held
+when the switch is engaged is not heartbeated, completed or marked successful;
+its original expiry makes it safely recoverable after a separately approved
+reactivation.
 
 The infrastructure and provider evidence producers, worker service wiring,
 HTTP completion-detail route and operator UI are deliberately outside this

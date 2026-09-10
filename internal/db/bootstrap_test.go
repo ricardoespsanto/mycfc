@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"strings"
@@ -10,6 +12,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
+	inventory := EmbeddedMigrationInventory()
+	if len(inventory) < 2 || inventory[len(inventory)-1] != baselineVersion {
+		t.Fatalf("unexpected migration inventory: %v", inventory)
+	}
+	want := sha256.Sum256([]byte(strings.Join(inventory, "\n")))
+	if got := EmbeddedMigrationDigest(); got != hex.EncodeToString(want[:]) {
+		t.Fatalf("migration digest=%q want=%x", got, want)
+	}
+}
 
 type bootstrapTransactionFake struct {
 	pgx.Tx

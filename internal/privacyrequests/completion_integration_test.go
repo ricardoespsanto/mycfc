@@ -68,6 +68,7 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 		VALUES($1,'[]','privacy-erasure-executor/v2','privacy-erasure-plan/v2',90,$2,$3)`, policy, now, adminA); err != nil {
 		t.Fatal(err)
 	}
+	activatePrivacyIntegrationFixture(t, ctx, tx, adminB, executor, policy)
 
 	t.Run("finalization-is-atomic-and-link-is-one-use", func(t *testing.T) {
 		requestID, requestRef, executionID, jobID, attemptID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -249,8 +250,11 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 	})
 
 	t.Run("activation-requires-four-current-contracts-and-distinct-approval", func(t *testing.T) {
+		if _, err = tx.Exec(ctx, `UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,updated_by=$1,updated_at=$2 WHERE singleton`, adminA, now); err != nil {
+			t.Fatal(err)
+		}
 		contracts := map[string]string{
-			"RESTORE":        "mycfc/privacy-restore-drill-attestation/v1",
+			"RESTORE":        "mycfc/privacy-restore-drill-attestation/v2",
 			"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
 			"PROVIDER":       "mycfc/privacy-provider-registry/v1",
 			"SCHEMA":         "mycfc/schema-migration-inventory/v1",
@@ -259,13 +263,10 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 		initialObservedAt := now.Add(-time.Hour)
 		for kind, contract := range contracts {
 			digest := sha256.Sum256([]byte(kind + contract))
-			var id uuid.UUID
-			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminA, kind, digest[:], contract, initialObservedAt).Scan(&id); err != nil {
-				t.Fatal(err)
-			}
-			var repeatedID uuid.UUID
-			if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, adminB, kind, digest[:], contract, initialObservedAt).Scan(&repeatedID); err != nil || repeatedID != id {
-				t.Fatalf("idempotent evidence %s repeated=%s original=%s err=%v", kind, repeatedID, id, err)
+			id := recordActivationFixtureEvidence(t, ctx, tx, adminA, policy, kind, digest[:], initialObservedAt)
+			repeatedID := recordActivationFixtureEvidence(t, ctx, tx, adminB, policy, kind, digest[:], initialObservedAt)
+			if repeatedID != id {
+				t.Fatalf("idempotent evidence %s repeated=%s original=%s", kind, repeatedID, id)
 			}
 			ids = append(ids, id)
 		}
@@ -316,10 +317,7 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 		}
 		expectDatabaseError(`SELECT proposal_id FROM privacy_activation_propose($1,$2,$3)`, executor, policy, ids)
 		newSchemaDigest := sha256.Sum256([]byte("renewed-schema-evidence"))
-		var renewedSchemaID uuid.UUID
-		if err = tx.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,'SCHEMA',$2,'mycfc/schema-migration-inventory/v1',$3)`, adminA, newSchemaDigest[:], now).Scan(&renewedSchemaID); err != nil {
-			t.Fatal(err)
-		}
+		_ = recordActivationFixtureEvidence(t, ctx, tx, adminA, policy, "SCHEMA", newSchemaDigest[:], now)
 		if err = tx.QueryRow(ctx, `SELECT can_renew FROM privacy_activation_control_snapshot($1) LIMIT 1`, executor).Scan(&canRenew); err != nil || !canRenew {
 			t.Fatalf("activation newer evidence renew=%t err=%v", canRenew, err)
 		}
