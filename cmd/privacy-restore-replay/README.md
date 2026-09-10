@@ -10,12 +10,33 @@ DATABASE_URL=postgres://... privacy-restore-replay \
   --isolated-restore \
   --ledger-input /input/ledger.json \
   --private-key-file /run/secrets/tombstone-replay-key \
-  --attestation-output /output/replay.json
+  --attestation-output /output/replay.json \
+  --policy-version privacy-policy-v1 \
+  --executor-version privacy-erasure-executor/v2 \
+  --plan-schema-version privacy-erasure-plan/v2 \
+  --image-digest sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
 The private-key file must be an owner-only regular file containing one
 base64-encoded 32-byte X25519 private key. The output path must not already
 exist. The explicit isolation flag is mandatory.
+
+When an isolated first-activation database has no live ledger objects, create
+one protected, non-identifying synthetic fixture and its input inventory:
+
+```sh
+DATABASE_URL=postgres://... privacy-restore-replay \
+  --isolated-restore \
+  --bootstrap-synthetic-fixture \
+  --private-key-file /run/secrets/tombstone-replay-key \
+  --synthetic-ledger-output /output/synthetic-ledger.json
+```
+
+The resulting inventory must then be processed by the ordinary invocation
+above. Bootstrap does not itself replay data or create an attestation. A
+synthetic inventory is valid only inside an isolated restore and every selected
+record must carry the authenticated
+`mycfc/privacy-restore-synthetic-fixture/v1` marker.
 
 ## Input contract
 
@@ -25,7 +46,8 @@ and verification timestamps earlier than object write time fail closed.
 
 ```json
 {
-  "contract": "mycfc/privacy-restore-ledger-input/v1",
+  "contract": "mycfc/privacy-restore-ledger-input/v2",
+  "source": "LIVE_LEDGER",
   "inventory_sha256": "lowercase SHA-256 hex",
   "objects": [
     {
@@ -55,12 +77,21 @@ array, excluding `payload`. Objects are sorted by `key_sha256` then
 Timestamps are normalized to UTC RFC3339Nano with `Z`, and intent
 `retain_until` is JSON null.
 
-V2 envelope discovery fields are not duplicated in inventory metadata. The
+`source` is exactly `LIVE_LEDGER` or `SYNTHETIC_BOOTSTRAP`; mixing authenticated
+synthetic and live records fails closed. V2 envelope discovery fields are not
+duplicated in inventory metadata. The
 command derives kind, locator key ID, and 32-byte locator digest from the
 encrypted envelope's bounded discovery header, then binds and cross-checks all
 three through AEAD additional authenticated data before import. Strictly shaped
 v1 envelopes can only increment `non_replayable_v1_count`; they are never
 imported or replayed.
+
+The command authenticates and selects the entire inventory before crossing a
+database boundary. Every selected entry must be a current
+`restore-tombstone-closure/v3` containing the exact
+`relational-erasure-replay/v1` prescription. An intent-only record or readable
+legacy closure-v2 makes the complete inventory ineligible and causes zero replay
+calls or attestation writes.
 
 ## Output contract
 
@@ -68,8 +99,13 @@ On complete success the command exclusively creates a mode `0600` JSON file:
 
 ```json
 {
-  "contract": "mycfc/privacy-restore-replay-result/v1",
+  "contract": "mycfc/privacy-restore-replay-result/v2",
   "result": "SUCCEEDED",
+  "input_source": "LIVE_LEDGER",
+  "policy_version": "privacy-policy-v1",
+  "executor_version": "privacy-erasure-executor/v2",
+  "plan_schema_version": "privacy-erasure-plan/v2",
+  "image_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "schema_migration_digest": "lowercase SHA-256 hex",
   "inventory_sha256": "lowercase SHA-256 hex",
   "object_count": 1,
@@ -78,15 +114,23 @@ On complete success the command exclusively creates a mode `0600` JSON file:
   "already_applied_count": 0,
   "non_replayable_v1_count": 0,
   "absence_verified_count": 1,
+  "synthetic_replayed_count": 0,
+  "closure_v3_count": 1,
+  "intent_only_count": 0,
+  "legacy_closure_v2_count": 0,
+  "erasure_effective_at_verified_count": 1,
   "failed_count": 0
 }
 ```
 
 The result contains counts and digests only. It never contains source
 execution, request, subject, locator, object-key, or plaintext values. Any
-selected v2 erasure (the closure supersedes its matching intent) that cannot be
-authenticated, imported, replayed, and verified prevents creation of a success
-attestation.
+selected current erasure that cannot be authenticated, imported, replayed, and
+verified prevents creation of a success attestation. Current activation
+evidence additionally requires `intent_only_count`, `legacy_closure_v2_count`,
+`non_replayable_v1_count`, and `failed_count` to be zero;
+`closure_v3_count`, `erasure_effective_at_verified_count`, and
+`absence_verified_count` must each equal `replayed_count`.
 
 `schema_migration_digest` is SHA-256 of the UTF-8 migration versions returned
 by `SELECT version FROM mycfc_meta.schema_migrations ORDER BY version`, joined

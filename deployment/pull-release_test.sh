@@ -103,6 +103,15 @@ cat >"$fake_bin/verify-restore-attestation" <<'EOF'
 #!/bin/sh
 printf 'verify-restore-attestation %s\n' "$*" >>"$TEST_DOCKER_LOG"
 EOF
+cat >"$fake_bin/privacy-worker" <<'EOF'
+#!/bin/sh
+printf 'privacy-worker %s\n' "$*" >>"$TEST_DOCKER_LOG"
+EOF
+cat >"$fake_bin/systemctl" <<'EOF'
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >>"$TEST_DOCKER_LOG"
+exit 0
+EOF
 chmod +x "$fake_bin"/*
 
 setup_case() {
@@ -222,6 +231,39 @@ for phase in privacy_restore_drill privacy_restore_attestation; do
 	grep -q "event=deployment_phase_started phase=$phase" "$privacy_gate_case/events.log"
 	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_gate_case/events.log"
 done
+
+privacy_worker_case="$work_dir/privacy-worker"
+setup_case "$privacy_worker_case"
+cat >>"$privacy_worker_case/mycfc.env" <<'EOF'
+PRIVACY_WORKER_ENABLED=true
+PRIVACY_REQUESTS_ENABLED=true
+EOF
+run_release "$privacy_worker_case" MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker
+for phase in privacy_worker_stop privacy_worker_readiness privacy_worker_restart privacy_worker_verify; do
+	grep -q "event=deployment_phase_started phase=$phase" "$privacy_worker_case/events.log"
+	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_worker_case/events.log"
+done
+awk '
+	/systemctl stop mycfc-privacy-worker.service/ { stopped = NR }
+	/run --rm migrate$/ { migrated = NR }
+	/privacy-worker readiness/ { ready = NR }
+	/systemctl restart mycfc-privacy-worker.service/ { restarted = NR }
+	END { exit !(stopped < migrated && migrated < ready && ready < restarted) }
+' "$privacy_worker_case/docker.log"
+
+privacy_worker_failure_case="$work_dir/privacy-worker-failure"
+setup_case "$privacy_worker_failure_case"
+cat >>"$privacy_worker_failure_case/mycfc.env" <<'EOF'
+PRIVACY_WORKER_ENABLED=true
+PRIVACY_REQUESTS_ENABLED=true
+EOF
+if run_release "$privacy_worker_failure_case" MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker TEST_BAD_ASSET=true; then
+	printf '%s\n' 'A worker-enabled release passed after candidate validation failed.' >&2
+	exit 1
+fi
+test "$(grep -c 'systemctl stop mycfc-privacy-worker.service' "$privacy_worker_failure_case/docker.log")" -eq 1
+test "$(grep -c 'systemctl restart mycfc-privacy-worker.service' "$privacy_worker_failure_case/docker.log")" -eq 1
+grep -q '^MYCFC_IMAGE=.*aaaaaaaa' "$privacy_worker_failure_case/mycfc.env"
 
 privacy_gate_failure_case="$work_dir/privacy-gate-failure"
 setup_case "$privacy_gate_failure_case"

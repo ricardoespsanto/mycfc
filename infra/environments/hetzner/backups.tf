@@ -5,7 +5,7 @@ data "aws_region" "current" {}
 locals {
   backup_bucket               = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-postgres-backups"
   backup_recovery_prefixes    = ["daily/*", "monthly/*"]
-  backup_attestation_prefixes = ["restore-attestations/*"]
+  backup_attestation_prefixes = ["restore-attestations/*", "restore-evidence/*"]
   backup_prefixes             = concat(local.backup_recovery_prefixes, local.backup_attestation_prefixes)
   backup_base_list_actions    = ["s3:ListBucket"]
   backup_cleanup_list_actions = ["s3:ListBucketVersions"]
@@ -47,6 +47,7 @@ resource "aws_s3_bucket_ownership_controls" "postgres_backups" {
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
+
 }
 
 resource "aws_s3_bucket_versioning" "postgres_backups" {
@@ -94,6 +95,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "postgres_backups" {
     status = "Enabled"
 
     filter { prefix = "restore-attestations/" }
+
+    expiration { days = 400 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+  }
+
+  rule {
+    id     = "retain-privacy-restore-evidence"
+    status = "Enabled"
+
+    filter { prefix = "restore-evidence/" }
 
     expiration { days = 400 }
     noncurrent_version_expiration { noncurrent_days = 1 }

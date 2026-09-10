@@ -279,6 +279,56 @@ variable "privacy_worker_metadata_rewrite_enabled" {
   }
 }
 
+variable "privacy_worker_ledger_broker_invoke_enabled" {
+  type        = bool
+  default     = false
+  description = "Grant the provisioned privacy-worker identity invoke-only access to the exact restore-ledger broker Lambda."
+
+  validation {
+    condition = !var.privacy_worker_ledger_broker_invoke_enabled || (
+      var.privacy_worker_infrastructure_enabled &&
+      var.privacy_worker_ledger_broker_function_arn != null
+    )
+    error_message = "privacy_worker_ledger_broker_invoke_enabled requires privacy_worker_infrastructure_enabled and an exact broker function ARN."
+  }
+}
+
+variable "privacy_worker_ledger_broker_function_arn" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Exact ARN exported by the separately managed Hetzner privacy-ledger broker stack."
+
+  validation {
+    condition = var.privacy_worker_ledger_broker_function_arn == null || can(regex(
+      "^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}$",
+      var.privacy_worker_ledger_broker_function_arn,
+    ))
+    error_message = "privacy_worker_ledger_broker_function_arn must be null or an exact unqualified Lambda function ARN."
+  }
+}
+
+check "privacy_worker_ledger_broker_scope" {
+  assert {
+    condition = var.privacy_worker_ledger_broker_function_arn == null || startswith(
+      var.privacy_worker_ledger_broker_function_arn,
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:",
+    )
+    error_message = "privacy_worker_ledger_broker_function_arn must belong to the configured production AWS account and region."
+  }
+}
+
+variable "privacy_worker_monitoring_enabled" {
+  type        = bool
+  default     = false
+  description = "Create terminal-failure, aged-work and missing-heartbeat alarms for an explicitly activated privacy worker."
+
+  validation {
+    condition     = !var.privacy_worker_monitoring_enabled || var.privacy_worker_infrastructure_enabled
+    error_message = "privacy_worker_monitoring_enabled requires privacy_worker_infrastructure_enabled."
+  }
+}
+
 check "production_input_validation" {
   assert {
     condition     = var.environment == "production" && can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$", var.aws_region)) && can(regex("^[a-z][a-z0-9-]{1,30}$", var.project_name)) && can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.domain_name))

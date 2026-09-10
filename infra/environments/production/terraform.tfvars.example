@@ -3,13 +3,16 @@ route53_zone_id   = "ZAAAAAAAAAAAAA"
 github_org        = "ricardoespsanto"
 github_repo       = "mycfc"
 alarm_email       = "operations@example.com"
-release_agent_cutover_complete = false
 
-# Privacy-worker source is inert by default. These are separate operational gates;
-# enabling any of them does not install or start a worker.
-privacy_worker_infrastructure_enabled = false
-privacy_worker_s3_deletion_enabled    = false
-privacy_worker_metadata_rewrite_enabled = false
+# Privacy execution remains inert until the separately evidenced activation
+# procedure is approved. The broker ARN comes from the Hetzner Terraform output.
+privacy_worker_infrastructure_enabled         = false
+privacy_worker_s3_deletion_enabled            = false
+privacy_worker_metadata_rewrite_enabled       = false
+privacy_worker_ledger_broker_invoke_enabled   = false
+privacy_worker_ledger_broker_function_arn     = null
+privacy_worker_monitoring_enabled             = false
+release_agent_cutover_complete                = false
 
 calendar_competition_id = "competition@example.com"
 calendar_training_id    = "training@example.com"

@@ -184,6 +184,29 @@ func TestVersionedStoreBatchesDeletesAndReportsConfirmedProgressBeforeFailure(t 
 	}
 }
 
+func TestVersionedStoreRechecksGuardBeforeEveryDestructiveBatch(t *testing.T) {
+	key := "profiles/many-versions.png"
+	versions := make([]types.ObjectVersion, 1001)
+	for index := range versions {
+		versions[index] = types.ObjectVersion{Key: aws.String(key), VersionId: aws.String(fmt.Sprintf("v-%04d", index))}
+	}
+	api := &versionedAPIFake{list: func(*s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error) {
+		return &s3.ListObjectVersionsOutput{Versions: versions}, nil
+	}}
+	guardCalls := 0
+	store := &S3VersionedStore{client: api, bucket: "private", beforeDelete: func(context.Context) error {
+		guardCalls++
+		if guardCalls == 2 {
+			return errors.New("activation revoked")
+		}
+		return nil
+	}}
+	evidence, err := store.DeleteAllVersions(context.Background(), key)
+	if !errors.Is(err, ErrVersionDeletion) || guardCalls != 2 || len(api.deleted) != 1 || evidence.DeletedVersions != 1000 {
+		t.Fatalf("evidence=%+v guards=%d deletes=%d err=%v", evidence, guardCalls, len(api.deleted), err)
+	}
+}
+
 func TestVersionedStoreFailsClosedWhenAbsenceCannotStabilise(t *testing.T) {
 	key := "repairs/photo.png"
 	api := &versionedAPIFake{list: func(*s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error) {

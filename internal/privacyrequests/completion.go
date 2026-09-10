@@ -434,7 +434,7 @@ func (s Service) RecordActivationEvidence(ctx context.Context, actorID uuid.UUID
 	if err != nil {
 		return result, ErrInvalid
 	}
-	err = s.Pool.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`,
+	err = s.Pool.QueryRow(ctx, `SELECT privacy_activation_broker_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`,
 		actorID, evidence.kind, evidence.digest, evidence.reference, evidence.observedAt, evidence.expiresAt, artifact).Scan(&result.ID)
 	if err != nil {
 		return ActivationEvidence{}, completionControlError(err, ErrActivationUnavailable)
@@ -562,7 +562,7 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100013_privacy_worker_release_guard" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100014_privacy_activation_broker" {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact

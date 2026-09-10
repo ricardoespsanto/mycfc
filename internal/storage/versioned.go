@@ -35,6 +35,7 @@ type S3VersionedStore struct {
 	bucket       string
 	maxPasses    int
 	stableChecks int
+	beforeDelete func(context.Context) error
 }
 
 type VersionDeletionEvidence struct {
@@ -46,6 +47,14 @@ type VersionDeletionEvidence struct {
 
 func NewS3VersionedStore(client *s3.Client, bucket string) *S3VersionedStore {
 	return &S3VersionedStore{client: client, bucket: bucket, maxPasses: 10, stableChecks: 2}
+}
+
+// NewGuardedS3VersionedStore re-evaluates an external authorization boundary
+// immediately before every destructive S3 request. The privacy worker uses it
+// to ensure a database-clock activation revocation cannot be missed during a
+// multi-pass, multi-batch exact-version cleanup.
+func NewGuardedS3VersionedStore(client *s3.Client, bucket string, beforeDelete func(context.Context) error) *S3VersionedStore {
+	return &S3VersionedStore{client: client, bucket: bucket, maxPasses: 10, stableChecks: 2, beforeDelete: beforeDelete}
 }
 
 type objectVersion struct {
@@ -150,6 +159,11 @@ func (s *S3VersionedStore) listExact(ctx context.Context, key string) ([]objectV
 func (s *S3VersionedStore) deleteExact(ctx context.Context, key string, versions []objectVersion) (int, int, error) {
 	deletedVersions, deletedMarkers := 0, 0
 	for offset := 0; offset < len(versions); offset += 1000 {
+		if s.beforeDelete != nil {
+			if err := s.beforeDelete(ctx); err != nil {
+				return deletedVersions, deletedMarkers, ErrVersionDeletion
+			}
+		}
 		end := min(offset+1000, len(versions))
 		objects := make([]types.ObjectIdentifier, end-offset)
 		for index, version := range versions[offset:end] {

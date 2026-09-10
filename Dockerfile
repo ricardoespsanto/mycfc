@@ -20,13 +20,17 @@ COPY ui ./ui
 COPY --from=assets /src/ui/static/dist ./ui/static/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mycfc ./cmd/server \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-restore-replay ./cmd/privacy-restore-replay \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-retention ./cmd/privacy-retention
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-retention ./cmd/privacy-retention \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-worker ./cmd/privacy-worker \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-activation ./cmd/privacy-activation
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/mycfc /app/mycfc
 COPY --from=build /out/privacy-restore-replay /app/privacy-restore-replay
 COPY --from=build /out/privacy-retention /app/privacy-retention
+COPY --from=build /out/privacy-worker /app/privacy-worker
+COPY --from=build /out/privacy-activation /app/privacy-activation
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/app/mycfc"]

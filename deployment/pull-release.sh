@@ -20,6 +20,7 @@ upstream_file="$state_dir/caddy-upstream.caddy"
 lock_file="$runtime_dir/mycfc-pull-release.lock"
 restore_drill_command=${MYCFC_RESTORE_DRILL_COMMAND:-$deployment_dir/postgres-restore-drill.sh}
 restore_attestation_verify_command=${MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND:-$deployment_dir/verify-privacy-restore-attestation.sh}
+privacy_worker_command=${MYCFC_PRIVACY_WORKER_COMMAND:-$deployment_dir/privacy-worker.sh}
 agent_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 backup_file=
 route_backup=
@@ -29,6 +30,7 @@ candidate_service=
 candidate_started=false
 route_switched=false
 release_updated=false
+privacy_worker_stopped=false
 current_phase=initialization
 
 log() {
@@ -140,6 +142,15 @@ check_caddy_path() {
 	return 1
 }
 
+verify_privacy_worker_active() {
+	for _ in $(seq 1 10); do
+		if ! systemctl is-active --quiet mycfc-privacy-worker.service; then
+			return 1
+		fi
+		sleep 1
+	done
+}
+
 rollback() {
 	status=$?
 	trap - EXIT HUP INT TERM
@@ -164,6 +175,9 @@ rollback() {
 			docker logs --tail 100 "mycfc-production-app-$candidate_slot-1" >&2 2>/dev/null || true
 		fi
 		cp "$backup_file" "$env_file"
+		if [ "$privacy_worker_stopped" = true ]; then
+			systemctl restart mycfc-privacy-worker.service || log 'privacy worker rollback restart failed'
+		fi
 		if [ -n "$release_digest" ]; then
 			write_state_value "$failed_digest_file" "$release_digest"
 			log "quarantined failed release digest $release_digest"
@@ -217,6 +231,10 @@ case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
 		;;
 	false) ;;
 	*) log 'invalid privacy restore promotion gate setting'; exit 1 ;;
+esac
+case "${PRIVACY_WORKER_ENABLED:-false}" in
+	true|false) ;;
+	*) log 'invalid privacy worker setting'; exit 1 ;;
 esac
 
 # AWS environment credentials belong to the application runtime. All AWS CLI
@@ -287,7 +305,12 @@ case "$active_slot" in
 	legacy) active_container='mycfc-production-app-1' ;;
 esac
 running_image=$(docker inspect --format '{{.Config.Image}}' "$active_container" 2>/dev/null || true)
-if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
+privacy_worker_image_current=true
+if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
+	running_worker_image=$(docker inspect --format '{{.Config.Image}}' mycfc-production-privacy-worker-1 2>/dev/null || true)
+	[ "$running_worker_image" = "$image" ] || privacy_worker_image_current=false
+fi
+if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ] && [ "$privacy_worker_image_current" = true ]; then
 	record_attempt succeeded
 	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
@@ -340,6 +363,10 @@ if [ "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" = true ]; then
 	# retained backup before any production migration or traffic change.
 	run_phase privacy_restore_drill "$restore_drill_command" "$image"
 	run_phase privacy_restore_attestation "$restore_attestation_verify_command" "$image"
+fi
+if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
+	run_phase privacy_worker_stop systemctl stop mycfc-privacy-worker.service
+	privacy_worker_stopped=true
 fi
 run_phase postgres_ready docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 run_phase database_bootstrap docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
@@ -417,6 +444,12 @@ for path in /health/live /health/ready /login "$asset_path"; do
 done
 post_switch_duration_seconds=$(($(date +%s) - post_switch_started_epoch))
 log "event=deployment_phase_completed phase=$current_phase duration_seconds=$post_switch_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
+
+if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
+	run_phase privacy_worker_readiness "$privacy_worker_command" readiness
+	run_phase privacy_worker_restart systemctl restart mycfc-privacy-worker.service
+	run_phase privacy_worker_verify verify_privacy_worker_active
+fi
 
 write_state_value "$active_slot_file" "$candidate_slot"
 rm -f "$failed_digest_file" "$route_backup"

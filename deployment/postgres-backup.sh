@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 compose_file=${MYCFC_COMPOSE_FILE:-/opt/mycfc/deployment/compose.yaml}
@@ -56,12 +57,15 @@ created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 dump="$work_dir/$stamp.dump"
 encrypted="$dump.enc"
 key_json="$work_dir/key.json"
+key_hex_file="$work_dir/key.hex"
 
 docker compose --env-file "$env_file" -f "$compose_file" exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc >"$dump"
 aws kms generate-data-key --key-id "$BACKUP_KMS_KEY_ID" --key-spec AES_256 --output json >"$key_json"
-key_hex=$(jq -r '.Plaintext' "$key_json" | base64 -d | od -An -v -tx1 | tr -d ' \n')
-iv=$(openssl rand -hex 16)
-openssl enc -aes-256-cbc -K "$key_hex" -iv "$iv" -nosalt -in "$dump" -out "$encrypted"
+jq -r '.Plaintext' "$key_json" | base64 -d | od -An -v -tx1 | tr -d ' \n' >"$key_hex_file"
+chmod 0600 "$key_hex_file"
+# File-based passphrase input keeps the KMS plaintext data key out of argv and
+# shell traces. The manifest authenticates the ciphertext digest separately.
+openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -salt -pass "file:$key_hex_file" -in "$dump" -out "$encrypted"
 sha256=$(sha256sum "$encrypted" | awk '{print $1}')
 checksum_base64=$(openssl dgst -sha256 -binary "$encrypted" | base64 | tr -d '\n')
 
@@ -84,23 +88,26 @@ upload_recovery_point() {
 
 	if [ "$BACKUP_MANIFEST_AUTH_ENABLED" = true ]; then
 		jq -n \
-			--arg contract 'mycfc/postgres-backup/v2' \
+			--arg contract 'mycfc/postgres-backup/v3' \
 			--arg ciphertext "$(jq -r '.CiphertextBlob' "$key_json")" \
-			--arg iv "$iv" \
+			--arg cipher 'AES-256-CBC' \
+			--arg kdf 'PBKDF2-HMAC-SHA256' \
+			--argjson kdf_iterations 600000 \
 			--arg sha256 "$sha256" \
 			--arg database "$POSTGRES_DB" \
 			--arg created_at "$created_at" \
 			--arg dump_key "$dump_key" \
 			--arg dump_version "$dump_version" \
-			'{contract:$contract,ciphertext:$ciphertext,iv:$iv,sha256:$sha256,database:$database,created_at:$created_at,dump_key:$dump_key,dump_version:$dump_version}' \
+			'{contract:$contract,cipher:$cipher,kdf:$kdf,kdf_iterations:$kdf_iterations,ciphertext:$ciphertext,sha256:$sha256,database:$database,created_at:$created_at,dump_key:$dump_key,dump_version:$dump_version}' \
 			>"$manifest"
 		canonical=$(jq -Sc . "$manifest")
 		auth_hmac_sha256=$(hmac_sha256 "$canonical")
 		jq --arg auth_hmac_sha256 "$auth_hmac_sha256" '. + {auth_hmac_sha256:$auth_hmac_sha256}' "$manifest" >"$manifest.signed"
 		mv "$manifest.signed" "$manifest"
 	else
-		jq -n --arg ciphertext "$(jq -r '.CiphertextBlob' "$key_json")" --arg iv "$iv" --arg sha256 "$sha256" --arg database "$POSTGRES_DB" --arg created_at "$created_at" \
-			'{ciphertext:$ciphertext,iv:$iv,sha256:$sha256,database:$database,created_at:$created_at}' >"$manifest"
+		jq -n --arg ciphertext "$(jq -r '.CiphertextBlob' "$key_json")" --arg cipher 'AES-256-CBC' --arg kdf 'PBKDF2-HMAC-SHA256' --argjson kdf_iterations 600000 \
+			--arg sha256 "$sha256" --arg database "$POSTGRES_DB" --arg created_at "$created_at" \
+			'{cipher:$cipher,kdf:$kdf,kdf_iterations:$kdf_iterations,ciphertext:$ciphertext,sha256:$sha256,database:$database,created_at:$created_at}' >"$manifest"
 	fi
 
 	manifest_checksum_base64=$(openssl dgst -sha256 -binary "$manifest" | base64 | tr -d '\n')

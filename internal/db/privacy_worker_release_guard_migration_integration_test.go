@@ -27,8 +27,12 @@ func TestPrivacyWorkerReleaseGuardForwardMigrationPreservesMembershipHistoryAndR
 		t.Fatal(err)
 	}
 	markerIndex := strings.LastIndex(baselineSchema, marker)
-	if markerIndex < 0 || baselineSchema[markerIndex:] != string(migration) {
-		t.Fatal("release-guard migration is not the final exact baseline segment")
+	if markerIndex < 0 {
+		t.Fatal("release-guard migration marker missing from baseline")
+	}
+	nextMarker := strings.Index(baselineSchema[markerIndex:], "-- #248 trusted activation boundary")
+	if nextMarker < 0 || baselineSchema[markerIndex:markerIndex+nextMarker] != string(migration) {
+		t.Fatal("release-guard migration is not the exact baseline segment before activation broker hardening")
 	}
 
 	ctx := context.Background()

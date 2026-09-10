@@ -102,6 +102,50 @@ run "rewrite_requires_version_deletion" {
   expect_failures = [var.privacy_worker_metadata_rewrite_enabled]
 }
 
+run "broker_invoke_requires_exact_infrastructure_input" {
+  command = plan
+
+  variables {
+    privacy_worker_ledger_broker_invoke_enabled = true
+  }
+
+  plan_options {
+    target = [aws_iam_user_policy.privacy_worker]
+  }
+
+  expect_failures = [var.privacy_worker_ledger_broker_invoke_enabled]
+}
+
+run "monitoring_requires_worker_infrastructure" {
+  command = plan
+
+  variables {
+    privacy_worker_monitoring_enabled = true
+  }
+
+  plan_options {
+    target = [aws_cloudwatch_metric_alarm.privacy_worker_failure]
+  }
+
+  expect_failures = [var.privacy_worker_monitoring_enabled]
+}
+
+run "broker_arn_must_match_production_account_and_region" {
+  command = plan
+
+  variables {
+    privacy_worker_infrastructure_enabled       = true
+    privacy_worker_ledger_broker_invoke_enabled = true
+    privacy_worker_ledger_broker_function_arn   = "arn:aws:lambda:us-east-1:999999999999:function:wrong-scope"
+  }
+
+  plan_options {
+    target = [aws_iam_user_policy.privacy_worker]
+  }
+
+  expect_failures = [aws_iam_user_policy.privacy_worker]
+}
+
 run "infrastructure_has_no_s3_grant" {
   command = plan
 
@@ -182,7 +226,6 @@ run "s3_allowlist_is_exact" {
         "logs:GetLogEvents",
         "logs:FilterLogEvents",
         ] : !contains(concat(
-          local.privacy_worker_secret_actions,
           local.privacy_worker_log_write_actions,
           local.privacy_worker_version_list_actions,
           local.privacy_worker_version_delete_actions,
@@ -193,6 +236,60 @@ run "s3_allowlist_is_exact" {
     error_message = "The privacy-worker policy contains a forbidden wildcard, ordinary object operation, log-read, or unrelated-service permission."
   }
 
+}
+
+run "broker_permission_and_worker_alarms_are_exact" {
+  command = plan
+
+  variables {
+    privacy_worker_infrastructure_enabled       = true
+    privacy_worker_ledger_broker_invoke_enabled = true
+    privacy_worker_ledger_broker_function_arn   = "arn:aws:lambda:eu-west-1:123456789012:function:mycfc-production-privacy-ledger-broker"
+    privacy_worker_monitoring_enabled           = true
+  }
+
+  plan_options {
+    target = [
+      aws_iam_user_policy.privacy_worker,
+      aws_cloudwatch_log_metric_filter.privacy_worker_failure,
+      aws_cloudwatch_metric_alarm.privacy_worker_failure,
+      aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat,
+      aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing,
+    ]
+  }
+
+  assert {
+    condition = (
+      toset(local.privacy_worker_ledger_broker_actions) == toset(["lambda:InvokeFunction"]) &&
+      var.privacy_worker_ledger_broker_function_arn == "arn:aws:lambda:eu-west-1:123456789012:function:mycfc-production-privacy-ledger-broker" &&
+      !contains(local.privacy_worker_ledger_broker_actions, "lambda:*")
+    )
+    error_message = "The worker must invoke only the exact configured restore-ledger broker."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "(") &&
+      !strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, ")") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "privacy_worker_terminal_failure") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "privacy_worker_aged_nonterminal_breach") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "privacy_worker_completion_unavailable") &&
+      aws_cloudwatch_metric_alarm.privacy_worker_failure[0].period == 60 &&
+      aws_cloudwatch_metric_alarm.privacy_worker_failure[0].evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_worker_failure[0].datapoints_to_alarm == 1
+    )
+    error_message = "Terminal, aged, and unsealed completed work must alarm after one matching one-minute period."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat[0].pattern == "\"event=privacy_worker_heartbeat\"" &&
+      aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing[0].period == 300 &&
+      aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing[0].evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing[0].treat_missing_data == "breaching"
+    )
+    error_message = "An activated worker must alarm after two missing five-minute heartbeats."
+  }
 }
 
 run "backup_cleanup_failure_alerts_immediately" {

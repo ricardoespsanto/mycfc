@@ -2116,6 +2116,31 @@ type PrivacyOutboxDeliveryEvidence struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
 
+type PrivacyProtectedActivationBrokerReceipt struct {
+	ProposalID              uuid.UUID          `json:"proposal_id"`
+	ApprovalID              uuid.UUID          `json:"approval_id"`
+	ExecutorEnvelopeID      uuid.UUID          `json:"executor_envelope_id"`
+	AdministratorEnvelopeID uuid.UUID          `json:"administrator_envelope_id"`
+	EvidenceSetSha256       []byte             `json:"evidence_set_sha256"`
+	ActivationSha256        []byte             `json:"activation_sha256"`
+	RecordedAt              pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedActivationSignedApproval struct {
+	ID             uuid.UUID          `json:"id"`
+	ProposalID     uuid.UUID          `json:"proposal_id"`
+	SignerRole     string             `json:"signer_role"`
+	ActorRef       uuid.UUID          `json:"actor_ref"`
+	SigningKeyID   string             `json:"signing_key_id"`
+	NonceSha256    []byte             `json:"nonce_sha256"`
+	EnvelopeSha256 []byte             `json:"envelope_sha256"`
+	RawEnvelope    []byte             `json:"raw_envelope"`
+	ParsedEnvelope []byte             `json:"parsed_envelope"`
+	IssuedAt       pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type PrivacyProtectedCompletionNoticeTarget struct {
 	ExecutionID    uuid.UUID          `json:"execution_id"`
 	SealedDelivery []byte             `json:"sealed_delivery"`
