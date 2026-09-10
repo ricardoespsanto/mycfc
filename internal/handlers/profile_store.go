@@ -11,6 +11,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,9 +48,7 @@ type ProfileUpdate struct {
 type ProfilePhotoUpdate struct {
 	ActorID, SubjectID uuid.UUID
 	IsAdmin            bool
-	ObjectKey          string
-	ContentType        string
-	Size               int64
+	Upload             privacyrequests.PreparedUpload
 	ConsentVersion     string
 	ConsentSHA256      string
 	AcceptConsent      bool
@@ -232,8 +231,18 @@ func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoU
 		}
 		consentID := consent.ID
 		oldKey = current.PhotoObjectKey
-		key, contentType, size := input.ObjectKey, input.ContentType, input.Size
-		if _, err := q.UpdateMemberProfilePhoto(ctx, dbgen.UpdateMemberProfilePhotoParams{PhotoObjectKey: &key, PhotoContentType: &contentType, PhotoSizeBytes: &size, PhotoConsentFormID: &consentID, UserID: input.SubjectID}); err != nil {
+		if input.Upload.IntentID == uuid.Nil || len(input.Upload.HoldToken) != 32 || input.Upload.ObjectKey == "" {
+			return privacyrequests.ErrUploadProvenanceUnavailable
+		}
+		if err := q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{
+			IntentID: input.Upload.IntentID, HoldToken: input.Upload.HoldToken, PriorIntentID: current.PhotoUploadIntentID,
+			SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: input.SubjectID, ObjectKey: input.Upload.ObjectKey,
+			ContentType: input.Upload.ContentType, SizeBytes: input.Upload.SizeBytes,
+		}); err != nil {
+			return err
+		}
+		key, contentType, size, intentID := input.Upload.ObjectKey, input.Upload.ContentType, input.Upload.SizeBytes, input.Upload.IntentID
+		if _, err := q.UpdateMemberProfilePhoto(ctx, dbgen.UpdateMemberProfilePhotoParams{PhotoObjectKey: &key, PhotoContentType: &contentType, PhotoSizeBytes: &size, PhotoConsentFormID: &consentID, PhotoUploadIntentID: &intentID, UserID: input.SubjectID}); err != nil {
 			return err
 		}
 		action := "PHOTO_UPLOADED"
@@ -260,6 +269,12 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 			return pgx.ErrNoRows
 		}
 		oldKey = current.PhotoObjectKey
+		if current.PhotoUploadIntentID == nil {
+			return privacyrequests.ErrUploadProvenanceUnavailable
+		}
+		if err := q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: *current.PhotoUploadIntentID, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}); err != nil {
+			return err
+		}
 		if _, err := q.ClearMemberProfilePhoto(ctx, subjectID); err != nil {
 			return err
 		}

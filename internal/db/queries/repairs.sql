@@ -1,21 +1,28 @@
 -- name: CreateRepairRequest :one
 INSERT INTO repair_requests (
+    id,
     idempotency_key,
     equipment_id,
     reported_by_id,
     issue_description,
     image_object_key,
     image_content_type,
-    image_size_bytes
-) VALUES (
+    image_size_bytes,
+    image_upload_intent_id
+) SELECT
+    sqlc.arg(id),
     sqlc.arg(idempotency_key),
     sqlc.arg(equipment_id),
     sqlc.narg(reported_by_id),
     sqlc.arg(issue_description),
-    sqlc.narg(image_object_key),
-    sqlc.narg(image_content_type),
-    sqlc.narg(image_size_bytes)
-)
+    sqlc.narg(image_object_key)::varchar(512),
+    sqlc.narg(image_content_type)::varchar(100),
+    sqlc.narg(image_size_bytes)::bigint,
+    CASE WHEN privacy_upload_attach(sqlc.narg(image_upload_intent_id), sqlc.narg(upload_hold_token), NULL, 'REPAIR_ATTACHMENT', sqlc.arg(id),
+      sqlc.narg(image_object_key)::text, sqlc.narg(image_content_type)::text, sqlc.narg(image_size_bytes)::bigint) IS NULL
+         THEN sqlc.narg(image_upload_intent_id)::uuid ELSE sqlc.narg(image_upload_intent_id)::uuid END
+WHERE sqlc.narg(image_object_key)::varchar(512) IS NULL
+   OR (sqlc.narg(image_upload_intent_id)::uuid IS NOT NULL AND sqlc.narg(upload_hold_token)::bytea IS NOT NULL)
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
           image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at;

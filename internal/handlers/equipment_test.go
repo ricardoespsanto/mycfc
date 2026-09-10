@@ -14,6 +14,8 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -148,6 +150,30 @@ func TestCreateEquipmentUploadsValidatedPhoto(t *testing.T) {
 	if w.Code != http.StatusSeeOther || objects.puts != 1 || store.createParams.ImageObjectKey == nil || store.createParams.ImageContentType == nil || *store.createParams.ImageContentType != "image/png" || store.createParams.ImageSizeBytes == nil {
 		t.Fatalf("response=%d puts=%d params=%#v", w.Code, objects.puts, store.createParams)
 	}
+}
+
+func TestEquipmentUploadHelperFailsClosedAndSchedulesAttachmentCleanup(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/admin/fleet/equipment", nil)
+	user := CurrentUser{ID: uuid.New(), IsAdmin: true}
+	photo := &storage.ValidatedPhoto{Bytes: pngPhoto(t), ContentType: "image/png", Extension: "png", Size: int64(len(pngPhoto(t)))}
+	if upload, ok := (Dashboard{}).uploadEquipmentPhoto(request, user, uuid.New(), photo); ok || upload != nil {
+		t.Fatalf("missing uploader upload=%#v ok=%t", upload, ok)
+	}
+	failing := &repairObjectStoreFake{putErr: errors.New("upload unavailable")}
+	if upload, ok := (Dashboard{Uploads: failing}).uploadEquipmentPhoto(request, user, uuid.New(), photo); ok || upload != nil {
+		t.Fatalf("failed uploader upload=%#v ok=%t", upload, ok)
+	}
+	successful := &repairObjectStoreFake{}
+	handler := Dashboard{Uploads: successful}
+	upload, ok := handler.uploadEquipmentPhoto(request, user, uuid.New(), photo)
+	if !ok || upload == nil {
+		t.Fatalf("successful upload=%#v ok=%t", upload, ok)
+	}
+	handler.failEquipmentAttachment(request, upload)
+	if successful.deletes != 1 {
+		t.Fatalf("attachment cleanup calls=%d", successful.deletes)
+	}
+	handler.failEquipmentAttachment(request, (*privacyrequests.PreparedUpload)(nil))
 }
 
 func TestEquipmentPhotoValidationRendersRecoverableCreateAndEditErrors(t *testing.T) {

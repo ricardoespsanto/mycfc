@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -45,6 +45,7 @@ const (
 type Profile struct {
 	Store                  ProfileStore
 	Objects                storage.ObjectStore
+	Uploads                UploadService
 	System                 System
 	PageMeta               components.PageMeta
 	Sessions               *scs.SessionManager
@@ -60,6 +61,11 @@ type Profile struct {
 	HealthURL              string
 	HealthConsentStatement string
 	HTTPClient             *http.Client
+}
+
+type UploadService interface {
+	Upload(context.Context, privacyrequests.UploadInput, storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error)
+	AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error
 }
 
 func (h Profile) Get(w http.ResponseWriter, r *http.Request) {
@@ -171,12 +177,16 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 		h.photoError(w, r, actor, subjectID, base, err.Error()+" Selecione a imagem novamente.")
 		return
 	}
-	if h.Objects == nil {
+	uploader := h.Uploads
+	if uploader == nil {
+		uploader, _ = h.Objects.(UploadService)
+	}
+	if uploader == nil {
 		h.System.InternalError(w, r)
 		return
 	}
-	key := fmt.Sprintf("profiles/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), photo.Extension)
-	if err := h.Objects.PutObject(r.Context(), key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
+	upload, err := uploader.Upload(r.Context(), privacyrequests.UploadInput{SubjectUserID: &subjectID, ActorUserID: actor.ID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}, photo)
+	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
@@ -188,9 +198,9 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 	if len(userAgent) > 512 {
 		userAgent = userAgent[:512]
 	}
-	oldKey, err := h.Store.SavePhoto(r.Context(), ProfilePhotoUpdate{ActorID: actor.ID, SubjectID: subjectID, IsAdmin: actor.IsAdmin, ObjectKey: key, ContentType: photo.ContentType, Size: photo.Size, ConsentVersion: h.ImageVersion, ConsentSHA256: h.ImageSHA256, AcceptConsent: r.MultipartForm.Value["accept_image_use"] != nil && r.MultipartForm.Value["accept_image_use"][0] == "yes", IP: ip, UserAgent: userAgent})
+	_, err = h.Store.SavePhoto(r.Context(), ProfilePhotoUpdate{ActorID: actor.ID, SubjectID: subjectID, IsAdmin: actor.IsAdmin, Upload: upload, ConsentVersion: h.ImageVersion, ConsentSHA256: h.ImageSHA256, AcceptConsent: r.MultipartForm.Value["accept_image_use"] != nil && r.MultipartForm.Value["accept_image_use"][0] == "yes", IP: ip, UserAgent: userAgent})
 	if err != nil {
-		h.deleteObject(r, &key)
+		_ = uploader.AttachmentFailed(context.WithoutCancel(r.Context()), upload)
 		if errors.Is(err, ErrConsentRequired) {
 			h.photoError(w, r, actor, subjectID, base, "É necessário aceitar o consentimento de uso de imagem atual antes de guardar a fotografia.")
 			return
@@ -202,7 +212,6 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.deleteObject(r, oldKey)
 	h.flash(r, "Fotografia atualizada.")
 	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
 }
@@ -217,7 +226,7 @@ func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
 		h.System.RequestRejected(w, r)
 		return
 	}
-	oldKey, err := h.Store.RemovePhoto(r.Context(), actor.ID, subjectID, actor.IsAdmin)
+	_, err := h.Store.RemovePhoto(r.Context(), actor.ID, subjectID, actor.IsAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.NotFound(w, r)
 		return
@@ -230,7 +239,6 @@ func (h Profile) RemovePhoto(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	h.deleteObject(r, oldKey)
 	h.flash(r, "Fotografia removida.")
 	httpx.Redirect(w, r, profileActionPath(base, profileCollectionReturn(r, actor)), http.StatusSeeOther)
 }

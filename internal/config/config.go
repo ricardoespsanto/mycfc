@@ -155,6 +155,11 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
+	PrivacyUploadPublicKeyB64    string `env:"PRIVACY_UPLOAD_PUBLIC_KEY_B64"`
+	PrivacyUploadEncryptionKeyID string `env:"PRIVACY_UPLOAD_ENCRYPTION_KEY_ID"`
+	PrivacyUploadDigestKeyID     string `env:"PRIVACY_UPLOAD_DIGEST_KEY_ID"`
+	PrivacyUploadDigestKeyB64    Secret `env:"PRIVACY_UPLOAD_DIGEST_KEY_B64"`
+
 	GalleryURL string `env:"GALLERY_URL"`
 
 	ConsentTermsVersion string `env:"CONSENT_TERMS_VERSION"`
@@ -592,6 +597,26 @@ func (c Config) EmailVerificationHMACKey() ([]byte, error) {
 	return decoded, nil
 }
 
+func (c Config) PrivacyUploadKeys() (publicKey, digestKey []byte, configured bool, err error) {
+	values := []string{c.PrivacyUploadPublicKeyB64, c.PrivacyUploadEncryptionKeyID, c.PrivacyUploadDigestKeyID, c.PrivacyUploadDigestKeyB64.Value()}
+	configured = slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
+	if !configured {
+		return nil, nil, false, nil
+	}
+	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
+		return nil, nil, true, errors.New("privacy upload key configuration must be complete")
+	}
+	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyUploadPublicKeyB64)
+	if err != nil || len(publicKey) != 32 {
+		return nil, nil, true, errors.New("PRIVACY_UPLOAD_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
+	}
+	digestKey, err = base64.StdEncoding.DecodeString(c.PrivacyUploadDigestKeyB64.Value())
+	if err != nil || len(digestKey) < 32 {
+		return nil, nil, true, errors.New("PRIVACY_UPLOAD_DIGEST_KEY_B64 must decode to at least 32 bytes")
+	}
+	return publicKey, digestKey, true, nil
+}
+
 func (c Config) TrustedProxyCIDRs() ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(c.TrustedProxyCIDRValues))
 	for _, raw := range c.TrustedProxyCIDRValues {
@@ -616,6 +641,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.PrivacyExecutionTestCapabilities) != "" && c.AppEnv != "test" {
 		problems.Add("PRIVACY_EXECUTION_TEST_CAPABILITIES", "is allowed only when APP_ENV=test")
+	}
+	if _, _, _, err := c.PrivacyUploadKeys(); err != nil {
+		problems.Add("PRIVACY_UPLOAD_KEYS", err.Error())
 	}
 	if strings.TrimSpace(c.AppVersion) == "" {
 		problems.Add("APP_VERSION", "must not be empty")

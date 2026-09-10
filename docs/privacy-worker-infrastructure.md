@@ -12,6 +12,14 @@ All three production variables default to `false`:
 
 These Terraform gates grant capability only. Creating and installing a worker credential, populating its secret, installing or starting a service/timer, registering an execution capability, enabling the privacy workflow, running an inventory/purge, and performing an erasure each require their own reviewed operational change and human approval.
 
+## Upload provenance configuration
+
+The web source accepts an optional all-or-nothing upload-provenance key set: `PRIVACY_UPLOAD_PUBLIC_KEY_B64`, `PRIVACY_UPLOAD_ENCRYPTION_KEY_ID`, `PRIVACY_UPLOAD_DIGEST_KEY_ID`, and `PRIVACY_UPLOAD_DIGEST_KEY_B64`. When all four are absent, existing photos remain readable but every new photo write fails closed. Partial or malformed configuration prevents startup. The web process receives only the X25519 public key and the upload-digest key; it must never receive the matching private key, a cleanup-evidence key, or an execution-target private key.
+
+The matching upload private key and the separately keyed cleanup transcript secret belong only in a future dedicated worker secret. This repository does not create those secret values, install a worker, or schedule cleanup. Before provisioning them, adopt rotation/runbook ownership and verify that the worker database role can call only the fenced cleanup routines while the web role cannot claim or complete cleanup.
+
+Each configured upload also records a protected SHA-256 commitment to its high-entropy object key. Attachment must match that commitment plus the recorded content type and size, and deferred database invariants require the exact source pointer to exist at commit and remain bound on every later pointer-table change. Removal and supersession cannot become cleanup-eligible while the source still references the intent, and cleanup claims repeat that check. Legacy pointers have no such commitment, so they remain readable but cannot be replaced or removed until the separate purge or verified-backfill gate is approved.
+
 The identity has no ordinary `s3:DeleteObject`, unversioned `s3:GetObject`, wildcard S3, backup-bucket, application-secret, ECR, Route 53, SSM, log-read, or Object Lock bypass permission. Existing `host_runtime` permissions are not changed.
 
 ## Apply and verification boundary

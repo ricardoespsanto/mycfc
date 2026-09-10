@@ -28,8 +28,14 @@ WHERE id = sqlc.arg(id);
 
 -- name: CreateEquipmentWithAudit :one
 WITH created AS (
-    INSERT INTO equipment (asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes)
-    VALUES (sqlc.arg(asset_tag), sqlc.arg(name), sqlc.arg(type), sqlc.arg(status), sqlc.arg(notes), sqlc.narg(image_object_key), sqlc.narg(image_content_type), sqlc.narg(image_size_bytes))
+    INSERT INTO equipment (id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, image_upload_intent_id)
+    SELECT sqlc.arg(id), sqlc.arg(asset_tag), sqlc.arg(name), sqlc.arg(type), sqlc.arg(status), sqlc.arg(notes),
+           sqlc.narg(image_object_key)::varchar(512), sqlc.narg(image_content_type), sqlc.narg(image_size_bytes), attached.intent_id
+    FROM (SELECT sqlc.narg(image_upload_intent_id)::uuid AS intent_id,
+                 privacy_upload_attach(sqlc.narg(image_upload_intent_id), sqlc.narg(upload_hold_token), NULL, 'EQUIPMENT_PHOTO', sqlc.arg(id),
+                   sqlc.narg(image_object_key)::text, sqlc.narg(image_content_type)::text, sqlc.narg(image_size_bytes)::bigint)) attached
+    WHERE sqlc.narg(image_object_key)::varchar(512) IS NULL
+       OR (sqlc.narg(image_upload_intent_id)::uuid IS NOT NULL AND sqlc.narg(upload_hold_token)::bytea IS NOT NULL)
     RETURNING id, asset_tag, name, type, status, notes, image_object_key, image_content_type, image_size_bytes, image_upload_intent_id, created_at, updated_at
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, after_state)
@@ -49,10 +55,20 @@ WITH previous AS MATERIALIZED (
 ), updated AS (
     UPDATE equipment e
     SET asset_tag = sqlc.arg(asset_tag), name = sqlc.arg(name), type = sqlc.arg(type),
-        status = sqlc.arg(status), notes = sqlc.arg(notes), image_object_key = sqlc.narg(image_object_key),
-        image_content_type = sqlc.narg(image_content_type), image_size_bytes = sqlc.narg(image_size_bytes), updated_at = now()
+        status = sqlc.arg(status), notes = sqlc.arg(notes), image_object_key = sqlc.narg(image_object_key)::varchar(512),
+        image_content_type = sqlc.narg(image_content_type), image_size_bytes = sqlc.narg(image_size_bytes),
+        image_upload_intent_id = COALESCE(attached.intent_id, p.image_upload_intent_id), updated_at = now()
     FROM previous p
+    LEFT JOIN LATERAL (
+        SELECT sqlc.narg(image_upload_intent_id)::uuid AS intent_id,
+               privacy_upload_attach(sqlc.narg(image_upload_intent_id), sqlc.narg(upload_hold_token), p.image_upload_intent_id, 'EQUIPMENT_PHOTO', sqlc.arg(equipment_id),
+                 sqlc.narg(image_object_key)::text, sqlc.narg(image_content_type)::text, sqlc.narg(image_size_bytes)::bigint)
+        WHERE sqlc.narg(upload_hold_token)::bytea IS NOT NULL
+    ) attached ON true
     WHERE e.id = p.id
+      AND (p.image_object_key IS NOT DISTINCT FROM sqlc.narg(image_object_key)::varchar(512)
+        OR ((p.image_object_key IS NULL OR p.image_upload_intent_id IS NOT NULL)
+          AND sqlc.narg(image_upload_intent_id)::uuid IS NOT NULL AND sqlc.narg(upload_hold_token)::bytea IS NOT NULL))
     RETURNING e.id, e.asset_tag, e.name, e.type, e.status, e.notes, e.image_object_key, e.image_content_type, e.image_size_bytes, e.image_upload_intent_id, e.created_at, e.updated_at
 ), audited AS (
     INSERT INTO equipment_audit_events (equipment_id, actor_user_id, action, before_state, after_state)

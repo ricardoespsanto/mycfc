@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -47,6 +49,15 @@ func TestRepairPostNoPhotoCreatesAndRedirects(t *testing.T) {
 	}
 	if store.created.ImageObjectKey != nil || store.created.IssueDescription != "Uma descrição válida" || store.creates != 1 {
 		t.Fatalf("created = %#v, creates = %d", store.created, store.creates)
+	}
+}
+
+func TestRepairPhotoFailsClosedWithoutUploadProvenanceService(t *testing.T) {
+	userID, equipmentID := uuid.New(), uuid.New()
+	store := &repairStoreFake{equipment: dbgen.Equipment{ID: equipmentID, Status: "Operational"}}
+	response := repairResponse(t, Repair{Store: store}, userID, equipmentID, pngPhoto(t), false)
+	if response.Code != http.StatusInternalServerError || store.creates != 0 {
+		t.Fatalf("response=%d creates=%d", response.Code, store.creates)
 	}
 }
 
@@ -292,6 +303,20 @@ func (s *repairObjectStoreFake) DeleteObject(context.Context, string) error {
 func (s *repairObjectStoreFake) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return "", nil
 }
+func (s *repairObjectStoreFake) Upload(_ context.Context, input privacyrequests.UploadInput, photo storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error) {
+	s.puts++
+	if s.putErr != nil {
+		return privacyrequests.PreparedUpload{}, s.putErr
+	}
+	prefix := map[string]string{"REPAIR_ATTACHMENT": "repairs", "EQUIPMENT_PHOTO": "equipment"}[input.SourceKind]
+	return privacyrequests.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{9}, 32), ObjectKey: prefix + "/photo." + photo.Extension, ContentType: photo.ContentType, SizeBytes: photo.Size}, nil
+}
+func (s *repairObjectStoreFake) AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error {
+	s.deletes++
+	return s.deleteErr
+}
+
+var _ UploadService = (*repairObjectStoreFake)(nil)
 
 func TestRepairObjectCleanupLogOmitsRawObjectKey(t *testing.T) {
 	logs := captureDefaultLogs(t)

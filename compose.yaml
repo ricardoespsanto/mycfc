@@ -98,6 +98,10 @@ services:
       PRIVACY_REQUESTS_ENABLED: "true"
       APP_ENV: test
       PRIVACY_EXECUTION_TEST_CAPABILITIES: IDENTITY_CLEAR
+      PRIVACY_UPLOAD_PUBLIC_KEY_B64: 9pxWXBZPndHfffCQFASnLkPyrb49Ibke8co44RBZln8=
+      PRIVACY_UPLOAD_ENCRYPTION_KEY_ID: e2e-upload-key-v1
+      PRIVACY_UPLOAD_DIGEST_KEY_ID: e2e-upload-digest-v1
+      PRIVACY_UPLOAD_DIGEST_KEY_B64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
     command: go run ./cmd/server
     depends_on:
       postgres:

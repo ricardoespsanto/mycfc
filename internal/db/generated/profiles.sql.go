@@ -14,8 +14,10 @@ import (
 
 const clearMemberProfilePhoto = `-- name: ClearMemberProfilePhoto :one
 UPDATE member_profiles AS profile SET photo_object_key = NULL, photo_content_type = NULL,
-    photo_size_bytes = NULL, photo_consent_form_id = NULL, updated_at = clock_timestamp()
+    photo_size_bytes = NULL, photo_consent_form_id = NULL, photo_upload_intent_id = NULL,
+    updated_at = clock_timestamp()
 WHERE profile.user_id = $1 AND profile.photo_object_key IS NOT NULL
+  AND profile.photo_upload_intent_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM users WHERE id = $1 AND erased_at IS NULL)
 RETURNING updated_at
 `
@@ -122,7 +124,7 @@ SELECT u.id, u.name, u.email, u.email_verified_at, u.minor_login_id, u.guardian_
        p.allergies, p.medical_conditions, p.medication,
        p.activity_restrictions, p.medical_notes, p.photo_object_key,
        p.photo_content_type, p.photo_size_bytes, p.photo_consent_form_id,
-       p.created_at, p.updated_at
+       p.photo_upload_intent_id, p.created_at, p.updated_at
 FROM users u
 JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = $1 AND u.erased_at IS NULL
@@ -162,6 +164,7 @@ type GetMemberProfileRow struct {
 	PhotoContentType               *string            `json:"photo_content_type"`
 	PhotoSizeBytes                 *int64             `json:"photo_size_bytes"`
 	PhotoConsentFormID             *uuid.UUID         `json:"photo_consent_form_id"`
+	PhotoUploadIntentID            *uuid.UUID         `json:"photo_upload_intent_id"`
 	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                      pgtype.Timestamptz `json:"updated_at"`
 }
@@ -203,6 +206,7 @@ func (q *Queries) GetMemberProfile(ctx context.Context, userID uuid.UUID) (GetMe
 		&i.PhotoContentType,
 		&i.PhotoSizeBytes,
 		&i.PhotoConsentFormID,
+		&i.PhotoUploadIntentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -385,18 +389,20 @@ func (q *Queries) UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfi
 const updateMemberProfilePhoto = `-- name: UpdateMemberProfilePhoto :one
 UPDATE member_profiles AS profile SET photo_object_key = $1,
     photo_content_type = $2, photo_size_bytes = $3,
-    photo_consent_form_id = $4, updated_at = clock_timestamp()
-WHERE profile.user_id = $5
-  AND EXISTS (SELECT 1 FROM users WHERE id = $5 AND erased_at IS NULL)
+    photo_consent_form_id = $4,
+    photo_upload_intent_id = $5, updated_at = clock_timestamp()
+WHERE profile.user_id = $6
+  AND EXISTS (SELECT 1 FROM users WHERE id = $6 AND erased_at IS NULL)
 RETURNING updated_at
 `
 
 type UpdateMemberProfilePhotoParams struct {
-	PhotoObjectKey     *string    `json:"photo_object_key"`
-	PhotoContentType   *string    `json:"photo_content_type"`
-	PhotoSizeBytes     *int64     `json:"photo_size_bytes"`
-	PhotoConsentFormID *uuid.UUID `json:"photo_consent_form_id"`
-	UserID             uuid.UUID  `json:"user_id"`
+	PhotoObjectKey      *string    `json:"photo_object_key"`
+	PhotoContentType    *string    `json:"photo_content_type"`
+	PhotoSizeBytes      *int64     `json:"photo_size_bytes"`
+	PhotoConsentFormID  *uuid.UUID `json:"photo_consent_form_id"`
+	PhotoUploadIntentID *uuid.UUID `json:"photo_upload_intent_id"`
+	UserID              uuid.UUID  `json:"user_id"`
 }
 
 func (q *Queries) UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMemberProfilePhotoParams) (pgtype.Timestamptz, error) {
@@ -405,6 +411,7 @@ func (q *Queries) UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMember
 		arg.PhotoContentType,
 		arg.PhotoSizeBytes,
 		arg.PhotoConsentFormID,
+		arg.PhotoUploadIntentID,
 		arg.UserID,
 	)
 	var updated_at pgtype.Timestamptz

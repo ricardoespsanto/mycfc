@@ -116,6 +116,22 @@ func New(ctx context.Context) (*Application, error) {
 		}
 	})
 	objectStore := storage.NewS3Store(s3Client, cfg.S3BucketName)
+	var uploadCoordinator *privacyrequests.UploadCoordinator
+	uploadPublicKey, uploadDigestKey, uploadConfigured, err := cfg.PrivacyUploadKeys()
+	if err != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, err
+	}
+	if uploadConfigured {
+		protector, protectorErr := privacyrequests.NewX25519UploadIntentProtector(cfg.PrivacyUploadEncryptionKeyID, uploadPublicKey, cfg.PrivacyUploadDigestKeyID, uploadDigestKey)
+		if protectorErr != nil {
+			sessionStore.StopCleanup()
+			pool.Close()
+			return nil, fmt.Errorf("configure privacy upload protection: %w", protectorErr)
+		}
+		uploadCoordinator = &privacyrequests.UploadCoordinator{Store: privacyrequests.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
+	}
 
 	csrfKey, err := cfg.CSRFAuthKey()
 	if err != nil {
@@ -203,6 +219,7 @@ func New(ctx context.Context) (*Application, error) {
 		Releases:              releaseChecker,
 		Features:              dbgen.New(pool),
 		Objects:               objectStore,
+		Uploads:               uploadCoordinator,
 		MaxRequestBytes:       cfg.MaxRequestBytes,
 		MaxPhotoBytes:         cfg.MaxPhotoBytes,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
@@ -214,13 +231,13 @@ func New(ctx context.Context) (*Application, error) {
 		ResponsibilityURL: versionedLegalURL(minorDocument),
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), Sessions: sessions, System: system}
-	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
+	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Uploads: uploadCoordinator, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
+	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}

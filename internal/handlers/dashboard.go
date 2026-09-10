@@ -87,6 +87,7 @@ type Dashboard struct {
 	ResponsibilityURL     string
 	Sessions              *scs.SessionManager
 	Objects               storage.ObjectStore
+	Uploads               UploadService
 	MaxRequestBytes       int64
 	MaxPhotoBytes         int64
 }

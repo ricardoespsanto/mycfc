@@ -34,6 +34,12 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err = tx.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid) TO `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea) TO `+quoteIdentifier(executorRole)); err != nil {
+		t.Fatal(err)
+	}
 	credentials := RoleCredentials{
 		AppUsername: appRole, AppPassword: "unused-app-password",
 		MigrationUsername: "unused_migrator", MigrationPassword: "unused-migration-password",
@@ -120,15 +126,24 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			}
 		})
 	}
-	var canExecute, canMutate, canBypass bool
+	var canExecute, canMutate, canBypass, canCleanup, canUpload bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
-		has_function_privilege($1,'privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass); err != nil {
+		has_function_privilege($1,'privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute || !canMutate || canBypass {
-		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v", canExecute, canMutate, canBypass)
+	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v", canExecute, canMutate, canBypass, canCleanup, canUpload)
+	}
+	var appCanUpload, appCanCleanup bool
+	if err := tx.QueryRow(ctx, `SELECT has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup); err != nil {
+		t.Fatal(err)
+	}
+	if !appCanUpload || appCanCleanup {
+		t.Fatalf("web upload boundary lifecycle=%v cleanup=%v", appCanUpload, appCanCleanup)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)

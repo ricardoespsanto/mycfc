@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -91,8 +94,19 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 	t.Cleanup(func() {
 		loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS = originalLoad, originalOpen, originalPing, originalAWS
 	})
+	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
-		return config.Config{AppEnv: "test", AppVersion: "test", GITSHA: strings.Repeat("0", 40), ReleaseRepository: "cfcoimbra/mycfc", Port: 8080, BaseURL: "http://localhost:8080", DatabaseURL: config.Secret("postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable"), DBMaxConns: 8, DBMinConns: 1, DBMaxConnLifetime: time.Minute, DBMaxConnIdleTime: time.Minute, DBHealthCheckPeriod: time.Minute, SessionLifetime: time.Hour, SessionIdleTimeout: time.Minute, AWSRegion: "eu-west-1", S3BucketName: "mycfc-local", S3Endpoint: "http://localhost:9000", S3ForcePathStyle: true, CSRFAuthKeyB64: config.Secret("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="), EmailVerificationHMACKeyB64: config.Secret("YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk="), SMTPHost: "localhost", SMTPPort: 1025, SMTPFromAddress: "mycfc@example.test", SMTPFromName: "MyCFCoimbra", SMTPTLSMode: "none", SMTPTimeout: time.Second, MaxRequestBytes: 1024, MaxPhotoBytes: 512, ConsentTermsVersion: "dev", ConsentTermsSHA256: strings.Repeat("0", 64), ConsentTermsURL: "http://localhost:8080/terms", ConsentImageVersion: "dev", ConsentImageSHA256: strings.Repeat("0", 64), ConsentImageURL: "http://localhost:8080/image", ConsentMinorVersion: "dev", ConsentMinorSHA256: strings.Repeat("0", 64), ConsentMinorURL: "http://localhost:8080/minor", PrivacyExecutionTestCapabilities: "IDENTITY_CLEAR, AUTH_TOKEN_DELETE, ,IDENTITY_CLEAR", ReleaseCheckTimeout: time.Second, ReleaseCheckCacheTTL: time.Minute}, nil
+		cfg := applicationStartupTestConfig()
+		cfg.AppEnv = "test"
+		cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR, AUTH_TOKEN_DELETE, ,IDENTITY_CLEAR"
+		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
+		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+		return cfg, nil
 	}
 	openApplicationPool = func(ctx context.Context, poolConfig *pgxpool.Config) (*pgxpool.Pool, error) {
 		return pgxpool.NewWithConfig(ctx, poolConfig)
@@ -156,6 +170,31 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	loadApplicationAWS = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
 		return aws.Config{Region: "eu-west-1"}, nil
 	}
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+		return cfg, nil
+	}
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy upload key configuration") {
+		t.Fatalf("privacy upload key error=%v", err)
+	}
+
+	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.PrivacyUploadEncryptionKeyID = "invalid key id"
+		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
+		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+		return cfg, nil
+	}
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy upload protection") {
+		t.Fatalf("privacy upload protector error=%v", err)
+	}
+
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
 		cfg.CSRFAuthKeyB64 = config.Secret("not-base64")

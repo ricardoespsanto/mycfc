@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"github.com/a-h/templ"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -66,22 +66,28 @@ func (h Dashboard) CreateEquipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := CurrentUserFromContext(r.Context())
-	objectKey, contentType, size, ok := h.uploadEquipmentPhoto(r, user, validated)
+	equipmentID := uuid.New()
+	upload, ok := h.uploadEquipmentPhoto(r, user, equipmentID, validated)
 	if !ok {
 		h.System.InternalError(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	_, err = h.Equipment.CreateEquipmentWithAudit(ctx, dbgen.CreateEquipmentWithAuditParams{AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: objectKey, ImageContentType: contentType, ImageSizeBytes: size, ActorUserID: &user.ID})
+	params := dbgen.CreateEquipmentWithAuditParams{ID: equipmentID, AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ActorUserID: &user.ID}
+	if upload != nil {
+		params.ImageObjectKey, params.ImageContentType, params.ImageSizeBytes = &upload.ObjectKey, &upload.ContentType, &upload.SizeBytes
+		params.ImageUploadIntentID, params.UploadHoldToken = &upload.IntentID, upload.HoldToken
+	}
+	_, err = h.Equipment.CreateEquipmentWithAudit(ctx, params)
 	if isUniqueViolation(err) {
-		h.deleteEquipmentObject(r, objectKey)
+		h.failEquipmentAttachment(r, upload)
 		form.Errors.Add("asset_tag", "Já existe um equipamento com este identificador.")
 		h.renderFleetEquipment(w, r, http.StatusUnprocessableEntity, form)
 		return
 	}
 	if err != nil {
-		h.deleteEquipmentObject(r, objectKey)
+		h.failEquipmentAttachment(r, upload)
 		h.System.InternalError(w, r)
 		return
 	}
@@ -155,25 +161,29 @@ func (h Dashboard) UpdateEquipment(w http.ResponseWriter, r *http.Request) {
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	imageKey, imageType, imageSize := current.ImageObjectKey, current.ImageContentType, current.ImageSizeBytes
-	newKey, newType, newSize, ok := h.uploadEquipmentPhoto(r, user, validated)
+	upload, ok := h.uploadEquipmentPhoto(r, user, id, validated)
 	if !ok {
 		h.System.InternalError(w, r)
 		return
 	}
-	if newKey != nil {
-		imageKey, imageType, imageSize = newKey, newType, newSize
+	if upload != nil {
+		imageKey, imageType, imageSize = &upload.ObjectKey, &upload.ContentType, &upload.SizeBytes
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	_, err = h.Equipment.UpdateEquipmentWithAudit(ctx, dbgen.UpdateEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}, AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: imageKey, ImageContentType: imageType, ImageSizeBytes: imageSize, ActorUserID: &user.ID})
+	params := dbgen.UpdateEquipmentWithAuditParams{EquipmentID: id, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}, AssetTag: form.AssetTag, Name: form.Name, Type: form.Type, Status: form.Status, Notes: form.Notes, ImageObjectKey: imageKey, ImageContentType: imageType, ImageSizeBytes: imageSize, ActorUserID: &user.ID}
+	if upload != nil {
+		params.ImageUploadIntentID, params.UploadHoldToken = &upload.IntentID, upload.HoldToken
+	}
+	_, err = h.Equipment.UpdateEquipmentWithAudit(ctx, params)
 	if isUniqueViolation(err) {
-		h.deleteEquipmentObject(r, newKey)
+		h.failEquipmentAttachment(r, upload)
 		form.Errors.Add("asset_tag", "Já existe um equipamento com este identificador.")
 		h.renderEquipmentEdit(w, r, http.StatusUnprocessableEntity, form, "")
 		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		h.deleteEquipmentObject(r, newKey)
+		h.failEquipmentAttachment(r, upload)
 		latest, getErr := h.getEquipment(r.Context(), id)
 		if getErr != nil {
 			h.System.InternalError(w, r)
@@ -183,12 +193,9 @@ func (h Dashboard) UpdateEquipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.deleteEquipmentObject(r, newKey)
+		h.failEquipmentAttachment(r, upload)
 		h.System.InternalError(w, r)
 		return
-	}
-	if newKey != nil && current.ImageObjectKey != nil {
-		h.deleteEquipmentObject(r, current.ImageObjectKey)
 	}
 	h.fleetFlash(r, "Equipamento atualizado.")
 	httpx.Redirect(w, r, fleetCollectionReturn(r, "equipment-"+id.String()), http.StatusSeeOther)
@@ -374,18 +381,33 @@ func (h Dashboard) renderEquipmentPhotoError(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (h Dashboard) uploadEquipmentPhoto(r *http.Request, _ CurrentUser, photo *storage.ValidatedPhoto) (*string, *string, *int64, bool) {
+func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, sourceRef uuid.UUID, photo *storage.ValidatedPhoto) (*privacyrequests.PreparedUpload, bool) {
 	if photo == nil {
-		return nil, nil, nil, true
+		return nil, true
 	}
-	if h.Objects == nil {
-		return nil, nil, nil, false
+	uploader := h.Uploads
+	if uploader == nil {
+		uploader, _ = h.Objects.(UploadService)
 	}
-	key := fmt.Sprintf("equipment/%s/%s.%s", h.now().In(h.location()).Format("2006/01"), uuid.New(), photo.Extension)
-	if err := h.Objects.PutObject(r.Context(), key, photo.ContentType, photo.Size, bytes.NewReader(photo.Bytes)); err != nil {
-		return nil, nil, nil, false
+	if uploader == nil {
+		return nil, false
 	}
-	return &key, &photo.ContentType, &photo.Size, true
+	upload, err := uploader.Upload(r.Context(), privacyrequests.UploadInput{ActorUserID: user.ID, SourceKind: "EQUIPMENT_PHOTO", SourceRef: sourceRef}, *photo)
+	if err != nil {
+		return nil, false
+	}
+	return &upload, true
+}
+
+func (h Dashboard) failEquipmentAttachment(r *http.Request, upload *privacyrequests.PreparedUpload) {
+	uploader := h.Uploads
+	if uploader == nil {
+		uploader, _ = h.Objects.(UploadService)
+	}
+	if upload == nil || uploader == nil {
+		return
+	}
+	_ = uploader.AttachmentFailed(context.WithoutCancel(r.Context()), *upload)
 }
 
 func (h Dashboard) deleteEquipmentObject(r *http.Request, key *string) {
