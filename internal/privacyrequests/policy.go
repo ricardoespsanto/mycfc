@@ -42,13 +42,20 @@ func ReadPolicy(row dbgen.PrivacyRequestPolicy) (AdoptedPolicy, error) {
 	p.ExecutorVersion = *row.ExecutorVersion
 	p.PlanSchemaVersion = *row.PlanSchemaVersion
 	p.WorkingRetentionDays = *row.WorkingRetentionDays
-	if json.Unmarshal(row.CategoryCatalogue, &p.Categories) != nil || p.Validate() != nil {
+	if json.Unmarshal(row.CategoryCatalogue, &p.Categories) != nil || p.validateCompatible() != nil {
 		return p, ErrPolicyUnresolved
 	}
 	return p, nil
 }
 func (p AdoptedPolicy) Validate() error {
-	if !policyKey.MatchString(p.Version) || len(p.Version) > 80 || p.ExecutorVersion != SupportedExecutorVersion || p.PlanSchemaVersion != SupportedPlanSchemaVersion || p.ResponseMonths != 1 || p.ExtensionMonths != 2 || p.WorkingRetentionDays < 1 || p.WorkingRetentionDays > 36500 || len(p.Categories) == 0 || len(p.Categories) > 50 {
+	if !currentPlanVersion(p.ExecutorVersion, p.PlanSchemaVersion) {
+		return ErrPolicyUnresolved
+	}
+	return p.validateCompatible()
+}
+
+func (p AdoptedPolicy) validateCompatible() error {
+	if !policyKey.MatchString(p.Version) || len(p.Version) > 80 || !compatiblePlanVersion(p.ExecutorVersion, p.PlanSchemaVersion) || p.ResponseMonths != 1 || p.ExtensionMonths != 2 || p.WorkingRetentionDays < 1 || p.WorkingRetentionDays > 36500 || len(p.Categories) == 0 || len(p.Categories) > 50 {
 		return ErrPolicyUnresolved
 	}
 	seen := map[string]bool{}
@@ -71,7 +78,7 @@ func (p AdoptedPolicy) Validate() error {
 	return nil
 }
 func (p AdoptedPolicy) Snapshot(scope Scope) (Policy, error) {
-	if p.Validate() != nil || !scope.valid() || (scope.Kind == AccountClosure && !p.AccountClosureEnabled) {
+	if p.validateCompatible() != nil || !scope.valid() || (scope.Kind == AccountClosure && !p.AccountClosureEnabled) {
 		return Policy{}, ErrPolicyUnresolved
 	}
 	out := Policy{Version: p.Version, Adopted: true, Scope: scope.clone()}

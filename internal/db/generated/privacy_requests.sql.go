@@ -223,6 +223,49 @@ func (q *Queries) CallPrivacyWorkerSync(ctx context.Context, arg CallPrivacyWork
 	return column_1, err
 }
 
+const completePrivacyObjectCapture = `-- name: CompletePrivacyObjectCapture :one
+SELECT privacy_execution_complete_object_capture($1,$2) AS target_count
+`
+
+type CompletePrivacyObjectCaptureParams struct {
+	ExecutionID uuid.UUID `json:"execution_id"`
+	CategoryKey string    `json:"category_key"`
+}
+
+func (q *Queries) CompletePrivacyObjectCapture(ctx context.Context, arg CompletePrivacyObjectCaptureParams) (int32, error) {
+	row := q.db.QueryRow(ctx, completePrivacyObjectCapture, arg.ExecutionID, arg.CategoryKey)
+	var target_count int32
+	err := row.Scan(&target_count)
+	return target_count, err
+}
+
+const completePrivacyWorkerObjectCheckpoint = `-- name: CompletePrivacyWorkerObjectCheckpoint :one
+SELECT id FROM (SELECT privacy_worker_complete_object_checkpoint(
+ $1,$2,$3,$4,$5
+) AS id) completed WHERE id IS NOT NULL
+`
+
+type CompletePrivacyWorkerObjectCheckpointParams struct {
+	JobID      uuid.UUID `json:"job_id"`
+	LeaseID    uuid.UUID `json:"lease_id"`
+	AttemptID  uuid.UUID `json:"attempt_id"`
+	LeaseEpoch int64     `json:"lease_epoch"`
+	WorkerRef  uuid.UUID `json:"worker_ref"`
+}
+
+func (q *Queries) CompletePrivacyWorkerObjectCheckpoint(ctx context.Context, arg CompletePrivacyWorkerObjectCheckpointParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, completePrivacyWorkerObjectCheckpoint,
+		arg.JobID,
+		arg.LeaseID,
+		arg.AttemptID,
+		arg.LeaseEpoch,
+		arg.WorkerRef,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const countActiveUnindexedPrivacySessions = `-- name: CountActiveUnindexedPrivacySessions :one
 SELECT count(*) FROM sessions WHERE NOT subject_indexed AND expiry>clock_timestamp()
 `
@@ -1675,6 +1718,105 @@ func (q *Queries) MarkPrivacySessionIndexed(ctx context.Context, arg MarkPrivacy
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const materializePrivacyObjectTarget = `-- name: MaterializePrivacyObjectTarget :one
+SELECT privacy_execution_materialize_object_target(
+ $1,$2,$3,$4,$5,$6,
+ $7,$8,$9,$10,
+ $11,$12,$13,$14,$15,$16,
+ $17,$18
+) AS target_id
+`
+
+type MaterializePrivacyObjectTargetParams struct {
+	TargetID        uuid.UUID `json:"target_id"`
+	ExecutionID     uuid.UUID `json:"execution_id"`
+	JobID           uuid.UUID `json:"job_id"`
+	CheckpointID    uuid.UUID `json:"checkpoint_id"`
+	PlanEntrySha256 []byte    `json:"plan_entry_sha256"`
+	CategoryKey     string    `json:"category_key"`
+	SourceKind      string    `json:"source_kind"`
+	SourceRef       uuid.UUID `json:"source_ref"`
+	UploadIntentID  uuid.UUID `json:"upload_intent_id"`
+	ObjectKey       string    `json:"object_key"`
+	EnvelopeVersion string    `json:"envelope_version"`
+	Algorithm       string    `json:"algorithm"`
+	EncryptionKeyID string    `json:"encryption_key_id"`
+	Encapsulation   []byte    `json:"encapsulation"`
+	Nonce           []byte    `json:"nonce"`
+	Ciphertext      []byte    `json:"ciphertext"`
+	DigestKeyID     string    `json:"digest_key_id"`
+	LocatorDigest   []byte    `json:"locator_digest"`
+}
+
+func (q *Queries) MaterializePrivacyObjectTarget(ctx context.Context, arg MaterializePrivacyObjectTargetParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, materializePrivacyObjectTarget,
+		arg.TargetID,
+		arg.ExecutionID,
+		arg.JobID,
+		arg.CheckpointID,
+		arg.PlanEntrySha256,
+		arg.CategoryKey,
+		arg.SourceKind,
+		arg.SourceRef,
+		arg.UploadIntentID,
+		arg.ObjectKey,
+		arg.EnvelopeVersion,
+		arg.Algorithm,
+		arg.EncryptionKeyID,
+		arg.Encapsulation,
+		arg.Nonce,
+		arg.Ciphertext,
+		arg.DigestKeyID,
+		arg.LocatorDigest,
+	)
+	var target_id uuid.UUID
+	err := row.Scan(&target_id)
+	return target_id, err
+}
+
+const recordPrivacyWorkerObjectEvidence = `-- name: RecordPrivacyWorkerObjectEvidence :one
+SELECT id FROM (SELECT privacy_worker_record_object_evidence(
+ $1,$2,$3,$4,$5,$6,
+ $7,$8,$9,$10,
+ $11,$12
+) AS id) recorded WHERE id IS NOT NULL
+`
+
+type RecordPrivacyWorkerObjectEvidenceParams struct {
+	TargetID         uuid.UUID `json:"target_id"`
+	JobID            uuid.UUID `json:"job_id"`
+	LeaseID          uuid.UUID `json:"lease_id"`
+	AttemptID        uuid.UUID `json:"attempt_id"`
+	LeaseEpoch       int64     `json:"lease_epoch"`
+	WorkerRef        uuid.UUID `json:"worker_ref"`
+	DeletedVersions  int32     `json:"deleted_versions"`
+	DeletedMarkers   int32     `json:"deleted_markers"`
+	ListCalls        int32     `json:"list_calls"`
+	StableChecks     int32     `json:"stable_checks"`
+	TranscriptKeyID  string    `json:"transcript_key_id"`
+	TranscriptDigest []byte    `json:"transcript_digest"`
+}
+
+func (q *Queries) RecordPrivacyWorkerObjectEvidence(ctx context.Context, arg RecordPrivacyWorkerObjectEvidenceParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, recordPrivacyWorkerObjectEvidence,
+		arg.TargetID,
+		arg.JobID,
+		arg.LeaseID,
+		arg.AttemptID,
+		arg.LeaseEpoch,
+		arg.WorkerRef,
+		arg.DeletedVersions,
+		arg.DeletedMarkers,
+		arg.ListCalls,
+		arg.StableChecks,
+		arg.TranscriptKeyID,
+		arg.TranscriptDigest,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const revokePrivacyExecutor = `-- name: RevokePrivacyExecutor :one

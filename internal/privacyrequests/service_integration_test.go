@@ -3,8 +3,11 @@
 package privacyrequests
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,12 +21,23 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
+
+type executionVersionedStoreRecorder struct {
+	key      string
+	evidence storage.VersionDeletionEvidence
+}
+
+func (s *executionVersionedStoreRecorder) DeleteAllVersions(_ context.Context, key string) (storage.VersionDeletionEvidence, error) {
+	s.key = key
+	return s.evidence, nil
+}
 
 func TestPrivacyServiceTransactions(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -40,11 +54,16 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	defer admin.Close(ctx)
 	schemaName := "privacy_service_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	schema := pgx.Identifier{schemaName}.Sanitize()
+	protectedSchemaName := schemaName + "_protected"
+	protectedSchema := pgx.Identifier{protectedSchemaName}.Sanitize()
 	if _, e = admin.Exec(ctx, "CREATE SCHEMA "+schema); e != nil {
 		t.Fatal(e)
 	}
 	defer func() {
 		if _, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+protectedSchema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -63,6 +82,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		t.Fatal(e)
 	}
 	isolatedBaseline := strings.ReplaceAll(string(baseline), "public.", schemaName+".")
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName)
 	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
@@ -103,7 +123,15 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	}
 	relationalExecutableOperations = testRelationalCapabilities
 	defer func() { relationalExecutableOperations = productionRelationalCapabilities }()
-	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos", ExecutionCapabilities: capabilities}
+	targetPrivateKey, e := ecdh.X25519().GenerateKey(rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	targetProtector, e := NewX25519ObjectTargetProtector("execution-target-test-v1", targetPrivateKey.PublicKey().Bytes(), "execution-digest-test-v1", bytes.Repeat([]byte{3}, 32))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := Service{Pool: pool, Enabled: true, Key: []byte(strings.Repeat("k", 32)), ContactURL: "https://example.test/legal/direitos", ExecutionCapabilities: capabilities, ObjectTargets: targetProtector}
 	p := testPolicy()
 	p.Version = "test-" + uuid.NewString()
 	p.WorkingRetentionDays = ApprovedWorkingRetentionDays
@@ -2836,6 +2864,127 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		stored, err := dbgen.New(pool).GetPrivacyErasureExecution(ctx, execution.ID)
 		if err != nil || stored.Status != "TERMINAL_FAILED" {
 			t.Fatalf("tampered graph execution=%+v err=%v", stored, err)
+		}
+	})
+	t.Run("object-target-capture-and-worker-evidence-are-atomic-and-fenced", func(t *testing.T) {
+		subject := user(nil)
+		steps := []string{}
+		uploadProtector, protectErr := NewX25519UploadIntentProtector("upload-execution-test-v1", targetPrivateKey.PublicKey().Bytes(), "upload-execution-digest-v1", bytes.Repeat([]byte{7}, 32))
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		coordinator := UploadCoordinator{Store: PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: &uploadObjectStoreFake{steps: &steps}, Protector: uploadProtector}
+		prepared, uploadErr := coordinator.Upload(ctx, UploadInput{SubjectUserID: &subject, ActorUserID: subject, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subject}, storage.ValidatedPhoto{Bytes: []byte("photo"), ContentType: "image/png", Extension: "png", Size: 5})
+		if uploadErr != nil {
+			t.Fatal(uploadErr)
+		}
+		tx, txErr := pool.Begin(ctx)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		var consentID uuid.UUID
+		if txErr = tx.QueryRow(ctx, `INSERT INTO consent_forms(user_id,granted_by_user_id,consent_type,document_version,document_sha256,is_accepted)
+VALUES($1,$1,'Foto_Perfil','v1',repeat('a',64),true) RETURNING id`, subject).Scan(&consentID); txErr == nil {
+			_, txErr = tx.Exec(ctx, `SELECT privacy_upload_attach($1,$2,NULL,'MEMBER_PROFILE_PHOTO',$3,$4,'image/png',5)`, prepared.IntentID, prepared.HoldToken, subject, prepared.ObjectKey)
+		}
+		if txErr == nil {
+			_, txErr = tx.Exec(ctx, `INSERT INTO member_profiles(user_id,photo_object_key,photo_content_type,photo_size_bytes,photo_consent_form_id,photo_upload_intent_id)
+VALUES($1,$2,'image/png',5,$3,$4)`, subject, prepared.ObjectKey, consentID, prepared.IntentID)
+		}
+		if txErr == nil {
+			txErr = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+
+		request, requestErr := s.Submit(ctx, SubmitInput{ActorID: subject, SubjectID: subject, RequestKey: uuid.New(), CredentialVersion: 1,
+			Password: "privacy-test-password", IP: subject.String(), PolicyVersion: p.Version,
+			Scope: Scope{Kind: Categories, Categories: []Category{"profile-photo"}}})
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		request = claimVerify(request, false)
+		request, requestErr = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version,
+			Action: "approve", PolicyVersion: p.Version, Explanation: "Apagar fotografia.",
+			Decisions: map[string]CategoryDecision{"profile-photo": {Outcome: "APPROVE"}}})
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		realTargetProtector := s.ObjectTargets
+		s.ObjectTargets = objectTargetProtectorStub{sealErr: errors.New("target sealing unavailable")}
+		if _, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(startErr, ErrExecutorUnavailable) {
+			t.Fatalf("failed materialization error=%v", startErr)
+		}
+		s.ObjectTargets = realTargetProtector
+		var rolledBackExecutions, rolledBackCaptures int
+		if err := pool.QueryRow(ctx, `SELECT
+(SELECT count(*) FROM privacy_erasure_executions WHERE request_id=$1),
+(SELECT count(*) FROM `+protectedSchema+`.object_capture_sets capture JOIN privacy_erasure_executions execution ON execution.id=capture.execution_id WHERE execution.request_id=$1)`, request.ID).Scan(&rolledBackExecutions, &rolledBackCaptures); err != nil {
+			t.Fatal(err)
+		}
+		if rolledBackExecutions != 0 || rolledBackCaptures != 0 {
+			t.Fatalf("failed capture was not atomic: executions=%d captures=%d", rolledBackExecutions, rolledBackCaptures)
+		}
+		execution, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+
+		var binding ObjectTargetBinding
+		var envelope ObjectTargetEnvelope
+		query := `SELECT t.id,t.execution_id,t.job_id,t.checkpoint_id,t.plan_entry_sha256,t.category_key,t.service_code,t.target_kind,
+t.source_kind,t.source_ref,t.operation_code,t.action_version,t.provider_contract_version,t.envelope_version,t.algorithm,t.encryption_key_id,t.encapsulation,t.nonce,t.ciphertext
+FROM ` + protectedSchema + `.object_targets t WHERE t.execution_id=$1`
+		if err := pool.QueryRow(ctx, query, execution.ID).Scan(&binding.TargetID, &binding.ExecutionID, &binding.JobID, &binding.CheckpointID,
+			&binding.PlanEntrySHA256, &binding.Category, &binding.Service, &binding.TargetKind, &binding.SourceKind, &binding.SourceRef,
+			&binding.OperationCode, &binding.ActionVersion, &binding.ProviderContractVersion, &envelope.Version, &envelope.Algorithm,
+			&envelope.KeyID, &envelope.Encapsulation, &envelope.Nonce, &envelope.Ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		opened, openErr := OpenObjectTargetEnvelope(targetPrivateKey.Bytes(), binding, envelope)
+		if openErr != nil || opened != prepared.ObjectKey {
+			t.Fatalf("opened=%q err=%v", opened, openErr)
+		}
+		blockedIntent := uuid.New()
+		if _, err := pool.Exec(ctx, `SELECT privacy_upload_begin($1,$2,$2,'MEMBER_PROFILE_PHOTO',$2,'private-media','image/png',5,$3)`, blockedIntent, subject, bytes.Repeat([]byte{9}, 32)); err == nil {
+			t.Fatal("post-capture profile upload was not blocked")
+		}
+
+		workerRef, leaseID, attemptID := uuid.New(), uuid.New(), uuid.New()
+		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET status='LEASED',lease_epoch=1,attempt_count=1,updated_at=clock_timestamp() WHERE id=$1`, binding.JobID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO privacy_erasure_job_leases(id,job_id,epoch,worker_ref,acquired_at,heartbeat_at,expires_at)
+VALUES($1,$2,1,$3,clock_timestamp(),clock_timestamp(),clock_timestamp()+interval '5 minutes')`, leaseID, binding.JobID, workerRef); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO privacy_erasure_job_attempts(id,job_id,lease_id,lease_epoch,attempt_number,started_at)
+VALUES($1,$2,$3,1,1,clock_timestamp())`, attemptID, binding.JobID, leaseID); err != nil {
+			t.Fatal(err)
+		}
+		jobRow, err := dbgen.New(pool).GetPrivacyErasureCategoryJob(ctx, binding.JobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease := ExecutionLease{Job: ExecutionJob{PrivacyErasureCategoryJob: jobRow, ActiveLeaseID: leaseID, ActiveAttemptID: attemptID, WorkerRef: workerRef}}
+		objects := &executionVersionedStoreRecorder{evidence: storage.VersionDeletionEvidence{DeletedVersions: 2, DeletedMarkers: 1, ListCalls: 4, StableChecks: 2}}
+		checkpoint, err := (ObjectExecutionWorker{Pool: pool, Objects: objects, WorkerRef: workerRef, PrivateKey: targetPrivateKey.Bytes(),
+			TranscriptKeyID: "object-evidence-test-v1", TranscriptKey: bytes.Repeat([]byte{8}, 32)}).CompleteCheckpoint(ctx, lease)
+		if err != nil || checkpoint.Status != "SUCCEEDED" || objects.key != prepared.ObjectKey {
+			t.Fatalf("checkpoint=%+v deleted=%q err=%v", checkpoint, objects.key, err)
+		}
+		var evidenceCount int
+		if err = pool.QueryRow(ctx, `SELECT count(*) FROM `+protectedSchema+`.object_evidence WHERE target_id=$1`, binding.TargetID).Scan(&evidenceCount); err != nil || evidenceCount != 1 {
+			t.Fatalf("evidence=%d err=%v", evidenceCount, err)
+		}
+		stale := lease
+		stale.Job.LeaseEpoch = 0
+		if _, err = (ObjectExecutionWorker{Pool: pool, Objects: objects, WorkerRef: workerRef, PrivateKey: targetPrivateKey.Bytes(),
+			TranscriptKeyID: "object-evidence-test-v1", TranscriptKey: bytes.Repeat([]byte{8}, 32)}).CompleteCheckpoint(ctx, stale); !errors.Is(err, ErrObjectExecutionUnavailable) {
+			t.Fatalf("stale lease error=%v", err)
 		}
 	})
 	t.Run("account-closure-revalidates-admin-and-legacy-session-before-cutoff", func(t *testing.T) {

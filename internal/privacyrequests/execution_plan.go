@@ -12,13 +12,24 @@ import (
 )
 
 const (
-	SupportedExecutorVersion   = "privacy-erasure-executor/v1"
-	SupportedPlanSchemaVersion = "privacy-erasure-plan/v1"
+	LegacyExecutorVersion      = "privacy-erasure-executor/v1"
+	LegacyPlanSchemaVersion    = "privacy-erasure-plan/v1"
+	SupportedExecutorVersion   = "privacy-erasure-executor/v2"
+	SupportedPlanSchemaVersion = "privacy-erasure-plan/v2"
 	SupportedActionVersion     = "v1"
 	decisionRecordedAnchor     = "DECISION_RECORDED"
 	caseClosureAnchor          = "CASE_CLOSURE"
 	calendarDayUnit            = "CALENDAR_DAY"
 )
+
+func compatiblePlanVersion(executorVersion, schemaVersion string) bool {
+	return (executorVersion == LegacyExecutorVersion && schemaVersion == LegacyPlanSchemaVersion) ||
+		(executorVersion == SupportedExecutorVersion && schemaVersion == SupportedPlanSchemaVersion)
+}
+
+func currentPlanVersion(executorVersion, schemaVersion string) bool {
+	return executorVersion == SupportedExecutorVersion && schemaVersion == SupportedPlanSchemaVersion
+}
 
 // ExecutionRule is controller-approved input to the plan compiler. The web
 // form never supplies it. Stable operation and field codes are closed here so
@@ -345,7 +356,7 @@ func executionCategoryPriority(category string) int {
 // expansion without consulting mutable policy prose or schema relationships.
 func ReadExecutionPlan(row dbgen.PrivacyRequestExecutionPlan) (ExecutionPlan, error) {
 	var plan ExecutionPlan
-	if row.RequestID == uuid.Nil || row.PolicyVersion == "" || row.ExecutorVersion != SupportedExecutorVersion || row.SchemaVersion != SupportedPlanSchemaVersion || len(row.PlanSha256) != 32 || json.Unmarshal(row.Plan, &plan) != nil {
+	if row.RequestID == uuid.Nil || row.PolicyVersion == "" || !compatiblePlanVersion(row.ExecutorVersion, row.SchemaVersion) || len(row.PlanSha256) != 32 || json.Unmarshal(row.Plan, &plan) != nil {
 		return ExecutionPlan{}, ErrPolicyUnresolved
 	}
 	created, err := time.Parse(time.RFC3339Nano, plan.CreatedAt)

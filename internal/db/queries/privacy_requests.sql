@@ -190,6 +190,29 @@ SELECT
  (SELECT count(*) FROM privacy_erasure_category_jobs counted_job WHERE counted_job.execution_id=sqlc.arg(execution_ref))::bigint AS job_count,
  (SELECT count(*) FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id WHERE job.execution_id=sqlc.arg(execution_ref))::bigint AS checkpoint_count;
 
+-- name: MaterializePrivacyObjectTarget :one
+SELECT privacy_execution_materialize_object_target(
+ sqlc.arg(target_id),sqlc.arg(execution_id),sqlc.arg(job_id),sqlc.arg(checkpoint_id),sqlc.arg(plan_entry_sha256),sqlc.arg(category_key),
+ sqlc.arg(source_kind),sqlc.arg(source_ref),sqlc.arg(upload_intent_id),sqlc.arg(object_key),
+ sqlc.arg(envelope_version),sqlc.arg(algorithm),sqlc.arg(encryption_key_id),sqlc.arg(encapsulation),sqlc.arg(nonce),sqlc.arg(ciphertext),
+ sqlc.arg(digest_key_id),sqlc.arg(locator_digest)
+) AS target_id;
+
+-- name: CompletePrivacyObjectCapture :one
+SELECT privacy_execution_complete_object_capture(sqlc.arg(execution_id),sqlc.arg(category_key)) AS target_count;
+
+-- name: RecordPrivacyWorkerObjectEvidence :one
+SELECT id FROM (SELECT privacy_worker_record_object_evidence(
+ sqlc.arg(target_id),sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(deleted_versions),sqlc.arg(deleted_markers),sqlc.arg(list_calls),sqlc.arg(stable_checks),
+ sqlc.arg(transcript_key_id),sqlc.arg(transcript_digest)
+) AS id) recorded WHERE id IS NOT NULL;
+
+-- name: CompletePrivacyWorkerObjectCheckpoint :one
+SELECT id FROM (SELECT privacy_worker_complete_object_checkpoint(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS id) completed WHERE id IS NOT NULL;
+
 -- name: GetPrivacyErasureCategoryJob :one
 SELECT * FROM privacy_erasure_category_jobs WHERE id=sqlc.arg(id);
 

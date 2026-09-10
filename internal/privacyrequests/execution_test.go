@@ -15,6 +15,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type objectTargetProtectorStub struct {
+	sealErr   error
+	digestErr error
+}
+
+func (s objectTargetProtectorStub) SealObjectKey(ObjectTargetBinding, string) (ObjectTargetEnvelope, error) {
+	return ObjectTargetEnvelope{}, s.sealErr
+}
+
+func (s objectTargetProtectorStub) DigestObjectKey(uuid.UUID, string, string) (ObjectTargetDigest, error) {
+	return ObjectTargetDigest{}, s.digestErr
+}
+
 func executionPlanFixture(t *testing.T) ExecutionPlan {
 	t.Helper()
 	policy := testPolicy()
@@ -190,6 +203,7 @@ func TestExecutionActivationDoesNotStrandAnOlderImmutablePlan(t *testing.T) {
 
 func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	plan := executionPlanFixture(t)
+	protector := objectTargetProtectorStub{}
 	if (Service{}).ExecutionCapabilitiesReady(plan) {
 		t.Fatal("nil capability registry enabled execution")
 	}
@@ -210,6 +224,20 @@ func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	}
 	if !(Service{ExecutionCapabilities: all}).ExecutionCapabilitiesReady(plan) {
 		t.Fatal("complete explicit capability registry did not enable execution")
+	}
+	objectPlan := plan
+	objectPlan.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
+	objectPlan.Entries[0].Operations = []string{"OBJECT_VERSION_DELETE"}
+	objectCapabilities := make(map[string]bool, len(all)+1)
+	for operation, enabled := range all {
+		objectCapabilities[operation] = enabled
+	}
+	objectCapabilities["OBJECT_VERSION_DELETE"] = true
+	if (Service{ExecutionCapabilities: objectCapabilities}).ExecutionCapabilitiesReady(objectPlan) {
+		t.Fatal("object operation enabled without a target protector")
+	}
+	if !(Service{ExecutionCapabilities: objectCapabilities, ObjectTargets: protector}).ExecutionCapabilitiesReady(objectPlan) {
+		t.Fatal("object operation remained disabled with its seal-only protector")
 	}
 	knownButUnsafe := plan
 	knownButUnsafe.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
