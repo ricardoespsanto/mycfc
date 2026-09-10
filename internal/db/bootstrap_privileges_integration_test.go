@@ -65,6 +65,14 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		{"worker cannot update memberships", executorRole, "user_memberships", "UPDATE", false},
 		{"worker cannot update equipment audit", executorRole, "equipment_audit_events", "UPDATE", false},
 		{"worker cannot update pseudonymous principals", executorRole, "privacy_pseudonymous_principals", "UPDATE", false},
+		{"web cannot read protected targets", appRole, "privacy_protected.object_targets", "SELECT", false},
+		{"web cannot insert protected targets", appRole, "privacy_protected.object_targets", "INSERT", false},
+		{"worker cannot read protected targets directly", executorRole, "privacy_protected.object_targets", "SELECT", false},
+		{"worker cannot read protected evidence directly", executorRole, "privacy_protected.object_evidence", "SELECT", false},
+		{"web cannot read protected upload intents", appRole, "privacy_protected.object_upload_intents", "SELECT", false},
+		{"web cannot append protected upload events", appRole, "privacy_protected.object_upload_intent_events", "INSERT", false},
+		{"worker cannot read protected upload intents directly", executorRole, "privacy_protected.object_upload_intents", "SELECT", false},
+		{"worker cannot append protected upload events directly", executorRole, "privacy_protected.object_upload_intent_events", "INSERT", false},
 	} {
 		t.Run(check.name, func(t *testing.T) {
 			var got bool
@@ -75,6 +83,15 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 				t.Fatalf("has_table_privilege(%q, %q, %q)=%t want %t", check.role, check.table, check.privilege, got, check.want)
 			}
 		})
+	}
+	for _, role := range []string{appRole, executorRole} {
+		var usage bool
+		if err := tx.QueryRow(ctx, `SELECT has_schema_privilege($1,'privacy_protected','USAGE')`, role).Scan(&usage); err != nil {
+			t.Fatal(err)
+		}
+		if usage {
+			t.Fatalf("role %q unexpectedly has privacy_protected schema usage", role)
+		}
 	}
 
 	for _, check := range []struct {

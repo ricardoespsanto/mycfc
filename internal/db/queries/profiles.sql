@@ -43,7 +43,7 @@ RETURNING user_id, phone, address_line1, address_line2, postcode, locality,
           emergency_contact_alternate_phone, medical_declaration, allergies,
           medical_conditions, medication, activity_restrictions, medical_notes,
           photo_object_key, photo_content_type, photo_size_bytes, photo_consent_form_id,
-          created_at, updated_at;
+          photo_upload_intent_id, created_at, updated_at;
 
 -- name: UpdateMemberIdentity :one
 UPDATE users SET name = sqlc.arg(name), email = sqlc.narg(email),

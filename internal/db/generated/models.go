@@ -1619,17 +1619,18 @@ type EmailVerificationToken struct {
 }
 
 type Equipment struct {
-	ID               uuid.UUID          `json:"id"`
-	AssetTag         string             `json:"asset_tag"`
-	Name             string             `json:"name"`
-	Type             string             `json:"type"`
-	Status           string             `json:"status"`
-	Notes            string             `json:"notes"`
-	ImageObjectKey   *string            `json:"image_object_key"`
-	ImageContentType *string            `json:"image_content_type"`
-	ImageSizeBytes   *int64             `json:"image_size_bytes"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	ID                  uuid.UUID          `json:"id"`
+	AssetTag            string             `json:"asset_tag"`
+	Name                string             `json:"name"`
+	Type                string             `json:"type"`
+	Status              string             `json:"status"`
+	Notes               string             `json:"notes"`
+	ImageObjectKey      *string            `json:"image_object_key"`
+	ImageContentType    *string            `json:"image_content_type"`
+	ImageSizeBytes      *int64             `json:"image_size_bytes"`
+	ImageUploadIntentID *uuid.UUID         `json:"image_upload_intent_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type EquipmentAuditEvent struct {
@@ -1766,6 +1767,7 @@ type MemberProfile struct {
 	PhotoContentType               *string            `json:"photo_content_type"`
 	PhotoSizeBytes                 *int64             `json:"photo_size_bytes"`
 	PhotoConsentFormID             *uuid.UUID         `json:"photo_consent_form_id"`
+	PhotoUploadIntentID            *uuid.UUID         `json:"photo_upload_intent_id"`
 	CreatedAt                      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                      pgtype.Timestamptz `json:"updated_at"`
 }
@@ -2005,6 +2007,86 @@ type PrivacyExecutorGrantEvent struct {
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type PrivacyProtectedObjectEvidence struct {
+	ID                    uuid.UUID          `json:"id"`
+	TargetID              uuid.UUID          `json:"target_id"`
+	JobID                 uuid.UUID          `json:"job_id"`
+	AttemptID             uuid.UUID          `json:"attempt_id"`
+	EvidenceVersion       string             `json:"evidence_version"`
+	OutcomeCode           string             `json:"outcome_code"`
+	DeletedVersionCount   int32              `json:"deleted_version_count"`
+	DeletedMarkerCount    int32              `json:"deleted_marker_count"`
+	ListCallCount         int32              `json:"list_call_count"`
+	StableEmptyCheckCount int32              `json:"stable_empty_check_count"`
+	TranscriptKeyID       string             `json:"transcript_key_id"`
+	TranscriptDigest      []byte             `json:"transcript_digest"`
+	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyProtectedObjectTarget struct {
+	ID                      uuid.UUID          `json:"id"`
+	ExecutionID             uuid.UUID          `json:"execution_id"`
+	JobID                   uuid.UUID          `json:"job_id"`
+	CheckpointID            uuid.UUID          `json:"checkpoint_id"`
+	PlanEntrySha256         []byte             `json:"plan_entry_sha256"`
+	CategoryKey             string             `json:"category_key"`
+	ServiceCode             string             `json:"service_code"`
+	TargetKind              string             `json:"target_kind"`
+	SourceKind              string             `json:"source_kind"`
+	SourceRef               uuid.UUID          `json:"source_ref"`
+	OperationCode           string             `json:"operation_code"`
+	ActionVersion           string             `json:"action_version"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	EnvelopeVersion         string             `json:"envelope_version"`
+	Algorithm               string             `json:"algorithm"`
+	EncryptionKeyID         string             `json:"encryption_key_id"`
+	Encapsulation           []byte             `json:"encapsulation"`
+	Nonce                   []byte             `json:"nonce"`
+	Ciphertext              []byte             `json:"ciphertext"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedObjectTargetDigest struct {
+	TargetID      uuid.UUID          `json:"target_id"`
+	ExecutionID   uuid.UUID          `json:"execution_id"`
+	ServiceCode   string             `json:"service_code"`
+	TargetKind    string             `json:"target_kind"`
+	DigestKeyID   string             `json:"digest_key_id"`
+	LocatorDigest []byte             `json:"locator_digest"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedObjectUploadIntent struct {
+	ID                      uuid.UUID          `json:"id"`
+	SubjectUserID           *uuid.UUID         `json:"subject_user_id"`
+	ProvenanceActorUserID   *uuid.UUID         `json:"provenance_actor_user_id"`
+	SourceKind              string             `json:"source_kind"`
+	SourceRef               uuid.UUID          `json:"source_ref"`
+	ServiceCode             string             `json:"service_code"`
+	TargetKind              string             `json:"target_kind"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	EnvelopeVersion         string             `json:"envelope_version"`
+	Algorithm               string             `json:"algorithm"`
+	EncryptionKeyID         string             `json:"encryption_key_id"`
+	Encapsulation           []byte             `json:"encapsulation"`
+	Nonce                   []byte             `json:"nonce"`
+	Ciphertext              []byte             `json:"ciphertext"`
+	DigestKeyID             string             `json:"digest_key_id"`
+	LocatorDigest           []byte             `json:"locator_digest"`
+	ContentType             string             `json:"content_type"`
+	SizeBytes               int64              `json:"size_bytes"`
+	CleanupAfter            pgtype.Timestamptz `json:"cleanup_after"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedObjectUploadIntentEvent struct {
+	IntentID   uuid.UUID          `json:"intent_id"`
+	Sequence   int32              `json:"sequence"`
+	Status     string             `json:"status"`
+	ReasonCode string             `json:"reason_code"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
 type PrivacyPseudonymousPrincipal struct {
 	ID        uuid.UUID          `json:"id"`
 	Purpose   string             `json:"purpose"`
@@ -2119,18 +2201,19 @@ type Programme struct {
 }
 
 type RepairRequest struct {
-	ID               uuid.UUID          `json:"id"`
-	IdempotencyKey   uuid.UUID          `json:"idempotency_key"`
-	EquipmentID      uuid.UUID          `json:"equipment_id"`
-	ReportedByID     *uuid.UUID         `json:"reported_by_id"`
-	IssueDescription string             `json:"issue_description"`
-	Status           string             `json:"status"`
-	ImageObjectKey   *string            `json:"image_object_key"`
-	ImageContentType *string            `json:"image_content_type"`
-	ImageSizeBytes   *int64             `json:"image_size_bytes"`
-	DateReported     pgtype.Timestamptz `json:"date_reported"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
+	ID                  uuid.UUID          `json:"id"`
+	IdempotencyKey      uuid.UUID          `json:"idempotency_key"`
+	EquipmentID         uuid.UUID          `json:"equipment_id"`
+	ReportedByID        *uuid.UUID         `json:"reported_by_id"`
+	IssueDescription    string             `json:"issue_description"`
+	Status              string             `json:"status"`
+	ImageObjectKey      *string            `json:"image_object_key"`
+	ImageContentType    *string            `json:"image_content_type"`
+	ImageSizeBytes      *int64             `json:"image_size_bytes"`
+	ImageUploadIntentID *uuid.UUID         `json:"image_upload_intent_id"`
+	DateReported        pgtype.Timestamptz `json:"date_reported"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ResolvedAt          pgtype.Timestamptz `json:"resolved_at"`
 }
 
 type Season struct {

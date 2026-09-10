@@ -32,7 +32,7 @@ INSERT INTO repair_requests (
 )
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
-          image_size_bytes, date_reported, updated_at, resolved_at
+          image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 `
 
 type CreateRepairRequestParams struct {
@@ -66,6 +66,7 @@ func (q *Queries) CreateRepairRequest(ctx context.Context, arg CreateRepairReque
 		&i.ImageObjectKey,
 		&i.ImageContentType,
 		&i.ImageSizeBytes,
+		&i.ImageUploadIntentID,
 		&i.DateReported,
 		&i.UpdatedAt,
 		&i.ResolvedAt,
@@ -76,7 +77,7 @@ func (q *Queries) CreateRepairRequest(ctx context.Context, arg CreateRepairReque
 const getRepairByIdempotencyKey = `-- name: GetRepairByIdempotencyKey :one
 SELECT id, idempotency_key, equipment_id, reported_by_id,
        issue_description, status, image_object_key, image_content_type,
-       image_size_bytes, date_reported, updated_at, resolved_at
+       image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 FROM repair_requests
 WHERE idempotency_key = $1
 `
@@ -94,6 +95,7 @@ func (q *Queries) GetRepairByIdempotencyKey(ctx context.Context, idempotencyKey 
 		&i.ImageObjectKey,
 		&i.ImageContentType,
 		&i.ImageSizeBytes,
+		&i.ImageUploadIntentID,
 		&i.DateReported,
 		&i.UpdatedAt,
 		&i.ResolvedAt,
@@ -104,7 +106,7 @@ func (q *Queries) GetRepairByIdempotencyKey(ctx context.Context, idempotencyKey 
 const getRepairRequestByID = `-- name: GetRepairRequestByID :one
 SELECT id, idempotency_key, equipment_id, reported_by_id,
        issue_description, status, image_object_key, image_content_type,
-       image_size_bytes, date_reported, updated_at, resolved_at
+       image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 FROM repair_requests
 WHERE id = $1
 `
@@ -122,6 +124,7 @@ func (q *Queries) GetRepairRequestByID(ctx context.Context, id uuid.UUID) (Repai
 		&i.ImageObjectKey,
 		&i.ImageContentType,
 		&i.ImageSizeBytes,
+		&i.ImageUploadIntentID,
 		&i.DateReported,
 		&i.UpdatedAt,
 		&i.ResolvedAt,
@@ -302,7 +305,7 @@ WHERE id = $2
   AND status = $3
 RETURNING id, idempotency_key, equipment_id, reported_by_id,
           issue_description, status, image_object_key, image_content_type,
-          image_size_bytes, date_reported, updated_at, resolved_at
+          image_size_bytes, image_upload_intent_id, date_reported, updated_at, resolved_at
 `
 
 type UpdateRepairStatusParams struct {
@@ -324,6 +327,7 @@ func (q *Queries) UpdateRepairStatus(ctx context.Context, arg UpdateRepairStatus
 		&i.ImageObjectKey,
 		&i.ImageContentType,
 		&i.ImageSizeBytes,
+		&i.ImageUploadIntentID,
 		&i.DateReported,
 		&i.UpdatedAt,
 		&i.ResolvedAt,

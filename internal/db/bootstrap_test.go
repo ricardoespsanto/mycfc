@@ -171,6 +171,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_request_execution_plans TO "mycfc_privacy_executor"`,
 		`GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_executor"`,
+		`REVOKE ALL ON SCHEMA privacy_protected FROM "mycfc_app"`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM "mycfc_privacy_executor"`,
 	} {
 		if !strings.Contains(joined, expected) {
