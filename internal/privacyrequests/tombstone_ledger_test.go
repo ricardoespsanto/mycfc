@@ -7,12 +7,15 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
@@ -97,6 +100,172 @@ func TestClosureIsSeparateAndUsesExactCalendarEvidenceExpiry(t *testing.T) {
 	}
 }
 
+type tombstoneLambdaFake struct {
+	invoke func(*awslambda.InvokeInput) (*awslambda.InvokeOutput, error)
+	calls  int
+}
+
+func (f *tombstoneLambdaFake) Invoke(_ context.Context, input *awslambda.InvokeInput, _ ...func(*awslambda.Options)) (*awslambda.InvokeOutput, error) {
+	f.calls++
+	return f.invoke(input)
+}
+
+func brokerResponsePayload(t *testing.T, sealed SealedTombstone, mutate func(*tombstoneBrokerResponse)) []byte {
+	t.Helper()
+	writtenAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
+	response := tombstoneBrokerResponse{
+		Kind: sealed.Kind, LocatorKeyID: sealed.LocatorKeyID, LocatorDigest: bytes.Clone(sealed.Locator),
+		ObjectVersion: "immutable-version", CiphertextSHA256: bytes.Clone(sealed.SHA256), SizeBytes: int64(len(sealed.Encoded)),
+		WrittenAt: writtenAt, VerifiedAt: writtenAt.Add(time.Second),
+	}
+	if sealed.Kind == "closure" {
+		retainUntil := sealed.RetainUntil.UTC()
+		response.RetainUntil = &retainUntil
+	}
+	if mutate != nil {
+		mutate(&response)
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func TestLambdaLedgerInvokesOneExactBrokerWithOnlyBoundedEncryptedFields(t *testing.T) {
+	protector, _ := tombstoneProtectorFixture(t)
+	record := tombstoneFixture()
+	closedAt := time.Date(2026, time.September, 10, 9, 59, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		sealed SealedTombstone
+		keys   int
+	}{
+		{name: "intent", keys: 5},
+		{name: "closure", keys: 6},
+	}
+	var err error
+	tests[0].sealed, err = protector.Seal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests[1].sealed, err = protector.SealClosure(TombstoneClosure{
+		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &tombstoneLambdaFake{}
+			fake.invoke = func(input *awslambda.InvokeInput) (*awslambda.InvokeOutput, error) {
+				if aws.ToString(input.FunctionName) != "mycfc-tombstone-broker" || input.InvocationType != lambdatypes.InvocationTypeRequestResponse || input.LogType != lambdatypes.LogTypeNone {
+					t.Fatalf("unsafe broker invocation: %+v", input)
+				}
+				if len(input.Payload) == 0 || len(input.Payload) > maxBrokerRequestBytes || strings.Contains(string(input.Payload), record.ExecutionID.String()) {
+					t.Fatal("broker request was unbounded or exposed a record identifier")
+				}
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(input.Payload, &fields); err != nil || len(fields) != test.keys {
+					t.Fatalf("request field count=%d err=%v", len(fields), err)
+				}
+				for _, key := range []string{"kind", "locator_key_id", "locator_digest", "payload", "checksum"} {
+					if _, ok := fields[key]; !ok {
+						t.Fatalf("request omitted %q", key)
+					}
+				}
+				_, hasRetention := fields["retain_until"]
+				if hasRetention != (test.sealed.Kind == "closure") {
+					t.Fatalf("retain_until presence=%t kind=%s", hasRetention, test.sealed.Kind)
+				}
+				var request tombstoneBrokerRequest
+				if err := json.Unmarshal(input.Payload, &request); err != nil || request.Kind != test.sealed.Kind ||
+					request.LocatorKeyID != test.sealed.LocatorKeyID || !bytes.Equal(request.LocatorDigest, test.sealed.Locator) ||
+					!bytes.Equal(request.Payload, test.sealed.Encoded) || !bytes.Equal(request.Checksum, test.sealed.SHA256) {
+					t.Fatalf("broker request did not match sealed record: %+v err=%v", request, err)
+				}
+				return &awslambda.InvokeOutput{StatusCode: 200, Payload: brokerResponsePayload(t, test.sealed, nil)}, nil
+			}
+			ledger, err := NewLambdaTombstoneLedger(fake, "mycfc-tombstone-broker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := ledger.Write(t.Context(), test.sealed)
+			if err != nil || fake.calls != 1 || receipt.ObjectVersion != "immutable-version" ||
+				!bytes.Equal(receipt.LocatorDigest, test.sealed.Locator) || !bytes.Equal(receipt.CiphertextSHA, test.sealed.SHA256) {
+				t.Fatalf("receipt=%+v calls=%d err=%v", receipt, fake.calls, err)
+			}
+		})
+	}
+}
+
+func TestLambdaLedgerStrictlyRejectsUnverifiedOrUnboundedResponses(t *testing.T) {
+	protector, _ := tombstoneProtectorFixture(t)
+	record := tombstoneFixture()
+	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
+	sealed, err := protector.SealClosure(TombstoneClosure{
+		Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := brokerResponsePayload(t, sealed, nil)
+	tests := []struct {
+		name   string
+		output *awslambda.InvokeOutput
+		err    error
+	}{
+		{name: "invoke error", err: errors.New("opaque upstream error")},
+		{name: "function error", output: &awslambda.InvokeOutput{StatusCode: 200, FunctionError: aws.String("Unhandled"), Payload: valid}},
+		{name: "non success status", output: &awslambda.InvokeOutput{StatusCode: 202, Payload: valid}},
+		{name: "oversized", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: bytes.Repeat([]byte{'x'}, maxBrokerResponseBytes+1)}},
+		{name: "unknown field", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: append(valid[:len(valid)-1], []byte(`,"execution_id":"forbidden"}`)...)}},
+		{name: "trailing document", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: append(bytes.Clone(valid), []byte(` {}`)...)}},
+		{name: "checksum mismatch", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: brokerResponsePayload(t, sealed, func(response *tombstoneBrokerResponse) { response.CiphertextSHA256[0] ^= 0xff })}},
+		{name: "locator mismatch", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: brokerResponsePayload(t, sealed, func(response *tombstoneBrokerResponse) { response.LocatorDigest[0] ^= 0xff })}},
+		{name: "retention mismatch", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: brokerResponsePayload(t, sealed, func(response *tombstoneBrokerResponse) {
+			changed := response.RetainUntil.Add(time.Second)
+			response.RetainUntil = &changed
+		})}},
+		{name: "version missing", output: &awslambda.InvokeOutput{StatusCode: 200, Payload: brokerResponsePayload(t, sealed, func(response *tombstoneBrokerResponse) { response.ObjectVersion = "" })}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &tombstoneLambdaFake{invoke: func(*awslambda.InvokeInput) (*awslambda.InvokeOutput, error) { return test.output, test.err }}
+			ledger, err := NewLambdaTombstoneLedger(fake, "mycfc-tombstone-broker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = ledger.Write(t.Context(), sealed); !errors.Is(err, ErrTombstoneUnavailable) || fake.calls != 1 {
+				t.Fatalf("error=%v calls=%d", err, fake.calls)
+			}
+		})
+	}
+}
+
+func TestLambdaLedgerFailsClosedBeforeInvocationForInvalidConfigurationOrPayload(t *testing.T) {
+	fake := &tombstoneLambdaFake{invoke: func(*awslambda.InvokeInput) (*awslambda.InvokeOutput, error) {
+		t.Fatal("invalid payload reached broker")
+		return nil, nil
+	}}
+	if _, err := NewLambdaTombstoneLedger(fake, "*"); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("invalid function name error=%v", err)
+	}
+	ledger, err := NewLambdaTombstoneLedger(fake, "arn:aws:lambda:eu-west-1:123456789012:function:mycfc-tombstone-broker:live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector, _ := tombstoneProtectorFixture(t)
+	sealed, err := protector.Seal(tombstoneFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed.Encoded = bytes.Repeat([]byte{0x01}, maxTombstonePayloadBytes+1)
+	if _, err = ledger.Write(t.Context(), sealed); !errors.Is(err, ErrTombstoneInvalid) || fake.calls != 0 {
+		t.Fatalf("oversized payload error=%v calls=%d", err, fake.calls)
+	}
+}
+
 type tombstoneS3Fake struct {
 	put       func(*s3.PutObjectInput) (*s3.PutObjectOutput, error)
 	head      func(*s3.HeadObjectInput) (*s3.HeadObjectOutput, error)
@@ -114,7 +283,7 @@ func (f *tombstoneS3Fake) HeadObject(_ context.Context, input *s3.HeadObjectInpu
 	return f.head(input)
 }
 
-func TestS3LedgerConditionallyCreatesAndVerifiesExactObjectVersion(t *testing.T) {
+func TestNonProductionS3LedgerConditionallyCreatesAndVerifiesExactObjectVersion(t *testing.T) {
 	protector, _ := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
 	sealed, err := protector.Seal(record)
@@ -151,7 +320,7 @@ func TestS3LedgerConditionallyCreatesAndVerifiesExactObjectVersion(t *testing.T)
 	}
 }
 
-func TestS3LedgerClosureObjectIsImmutableThroughDatabaseExpiry(t *testing.T) {
+func TestNonProductionS3LedgerClosureObjectIsImmutableThroughDatabaseExpiry(t *testing.T) {
 	protector, _ := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
 	closedAt := time.Date(2026, time.September, 10, 10, 0, 0, 0, time.UTC)
@@ -187,7 +356,7 @@ func TestS3LedgerClosureObjectIsImmutableThroughDatabaseExpiry(t *testing.T) {
 	}
 }
 
-func TestS3LedgerIdempotentRetryRequiresMatchingImmutableVersion(t *testing.T) {
+func TestNonProductionS3LedgerIdempotentRetryRequiresMatchingImmutableVersion(t *testing.T) {
 	protector, _ := tombstoneProtectorFixture(t)
 	sealed, err := protector.Seal(tombstoneFixture())
 	if err != nil {

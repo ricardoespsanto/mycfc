@@ -91,12 +91,12 @@ func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
 	if _, _, enabled, err := (Config{}).PrivacyTombstoneKeys(); err != nil || enabled {
 		t.Fatalf("empty configuration enabled=%t err=%v", enabled, err)
 	}
-	partial := Config{PrivacyTombstoneBucket: "private-ledger"}
+	partial := Config{PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker"}
 	if _, _, enabled, err := partial.PrivacyTombstoneKeys(); err == nil || enabled {
 		t.Fatalf("disabled partial configuration enabled=%t err=%v", enabled, err)
 	}
 	complete := Config{
-		PrivacyTombstoneEnabled: true, PrivacyTombstoneBucket: "private-ledger", PrivacyTombstonePrefix: "tombstones/",
+		PrivacyTombstoneEnabled: true, PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker",
 		PrivacyTombstonePublicKeyB64: encoded, PrivacyTombstoneEncryptionKeyID: "tombstone-key-v1",
 		PrivacyTombstoneLocatorKeyID: "locator-key-v1", PrivacyTombstoneLocatorKeyB64: Secret(encoded),
 	}
@@ -105,9 +105,9 @@ func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
 		t.Fatalf("complete configuration enabled=%t public=%d locator=%d err=%v", enabled, len(publicKey), len(locatorKey), err)
 	}
 	invalid := complete
-	invalid.PrivacyTombstonePrefix = "../ledger/"
-	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "PREFIX") {
-		t.Fatalf("invalid prefix error=%v", err)
+	invalid.PrivacyTombstoneBrokerFunctionName = "*"
+	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "BROKER_FUNCTION_NAME") {
+		t.Fatalf("invalid broker function error=%v", err)
 	}
 	invalid = complete
 	invalid.PrivacyTombstoneLocatorKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))

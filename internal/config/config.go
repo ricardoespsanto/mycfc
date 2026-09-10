@@ -25,11 +25,11 @@ import (
 )
 
 var (
-	lowerHex40      = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowerHex64      = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	bucketName      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
-	awsRegion       = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	tombstonePrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9/_-]{0,119}/$`)
+	lowerHex40     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowerHex64     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	bucketName     = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
+	awsRegion      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	lambdaFunction = regexp.MustCompile(`^(?:[A-Za-z0-9_-]{1,64}|arn:(?:aws|aws-us-gov|aws-cn):lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]+)?)$`)
 )
 
 const productionParameterPrefix = "/mycfc/production"
@@ -169,13 +169,12 @@ type Config struct {
 
 	// The restore tombstone ledger is a worker-only, independently stored
 	// capability. Merely shipping these fields never enables it.
-	PrivacyTombstoneEnabled         bool   `env:"PRIVACY_TOMBSTONE_ENABLED" envDefault:"false"`
-	PrivacyTombstoneBucket          string `env:"PRIVACY_TOMBSTONE_BUCKET"`
-	PrivacyTombstonePrefix          string `env:"PRIVACY_TOMBSTONE_PREFIX" envDefault:"tombstones/"`
-	PrivacyTombstonePublicKeyB64    string `env:"PRIVACY_TOMBSTONE_PUBLIC_KEY_B64"`
-	PrivacyTombstoneEncryptionKeyID string `env:"PRIVACY_TOMBSTONE_ENCRYPTION_KEY_ID"`
-	PrivacyTombstoneLocatorKeyID    string `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_ID"`
-	PrivacyTombstoneLocatorKeyB64   Secret `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_B64"`
+	PrivacyTombstoneEnabled            bool   `env:"PRIVACY_TOMBSTONE_ENABLED" envDefault:"false"`
+	PrivacyTombstoneBrokerFunctionName string `env:"PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME"`
+	PrivacyTombstonePublicKeyB64       string `env:"PRIVACY_TOMBSTONE_PUBLIC_KEY_B64"`
+	PrivacyTombstoneEncryptionKeyID    string `env:"PRIVACY_TOMBSTONE_ENCRYPTION_KEY_ID"`
+	PrivacyTombstoneLocatorKeyID       string `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_ID"`
+	PrivacyTombstoneLocatorKeyB64      Secret `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_B64"`
 
 	GalleryURL string `env:"GALLERY_URL"`
 
@@ -661,7 +660,7 @@ func (c Config) PrivacyObjectTargetKeys() (publicKey, digestKey []byte, configur
 
 func (c Config) PrivacyTombstoneKeys() (publicKey, locatorKey []byte, enabled bool, err error) {
 	values := []string{
-		c.PrivacyTombstoneBucket, c.PrivacyTombstonePublicKeyB64, c.PrivacyTombstoneEncryptionKeyID,
+		c.PrivacyTombstoneBrokerFunctionName, c.PrivacyTombstonePublicKeyB64, c.PrivacyTombstoneEncryptionKeyID,
 		c.PrivacyTombstoneLocatorKeyID, c.PrivacyTombstoneLocatorKeyB64.Value(),
 	}
 	configured := slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
@@ -674,11 +673,8 @@ func (c Config) PrivacyTombstoneKeys() (publicKey, locatorKey []byte, enabled bo
 	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
 		return nil, nil, true, errors.New("privacy tombstone key configuration must be complete")
 	}
-	if err = validateBucketName(c.PrivacyTombstoneBucket); err != nil {
-		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_BUCKET is invalid")
-	}
-	if !tombstonePrefix.MatchString(strings.TrimSpace(c.PrivacyTombstonePrefix)) {
-		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_PREFIX is invalid")
+	if !lambdaFunction.MatchString(strings.TrimSpace(c.PrivacyTombstoneBrokerFunctionName)) {
+		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME is invalid")
 	}
 	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyTombstonePublicKeyB64)
 	if err != nil || len(publicKey) != 32 {
