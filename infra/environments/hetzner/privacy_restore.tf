@@ -264,7 +264,23 @@ data "aws_iam_policy_document" "privacy_restore_ledger_bucket" {
     condition {
       test     = "NumericGreaterThan"
       variable = "s3:object-lock-remaining-retention-days"
-      values   = ["732"]
+      values   = ["731"]
+    }
+  }
+
+  statement {
+    sid       = "DenyClosureRetentionBelowEvidenceWindow"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:PutObjectRetention"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "NumericLessThan"
+      variable = "s3:object-lock-remaining-retention-days"
+      values   = ["729"]
     }
   }
 

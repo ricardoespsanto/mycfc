@@ -15,13 +15,17 @@ EOF
 
 candidate_time=$(date -u -d 'now - 23 hours - 30 minutes' +%Y-%m-%dT%H:%M:%SZ)
 overdue_time=$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+recent_successor_time=$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
 
 cat >"$test_dir/before.json" <<EOF
 {
   "Versions": [
     {"Key":"daily/current.dump.enc","VersionId":"current","IsLatest":true,"LastModified":"$overdue_time"},
-    {"Key":"daily/secret-person-key","VersionId":"old-version","IsLatest":false,"LastModified":"$candidate_time"},
-    {"Key":"daily/new-version.dump.enc","VersionId":"new-version","IsLatest":false,"LastModified":"2999-01-01T00:00:00Z"}
+    {"Key":"daily/secret-person-key","VersionId":"current-version","IsLatest":true,"LastModified":"$candidate_time"},
+    {"Key":"daily/secret-person-key","VersionId":"old-version","IsLatest":false,"LastModified":"2000-01-01T00:00:00Z"},
+    {"Key":"daily/recently-noncurrent.dump.enc","VersionId":"fresh-successor","IsLatest":true,"LastModified":"$recent_successor_time"},
+    {"Key":"daily/recently-noncurrent.dump.enc","VersionId":"old-payload","IsLatest":false,"LastModified":"2000-01-01T00:00:00Z"},
+    {"Key":"daily/old-marker.dump.enc","VersionId":"marker-successor","IsLatest":true,"LastModified":"2999-01-01T00:00:00Z"}
   ],
   "DeleteMarkers": [
     {"Key":"daily/old-marker.dump.enc","VersionId":"old-marker","IsLatest":false,"LastModified":"$candidate_time"}
@@ -32,7 +36,8 @@ EOF
 cat >"$test_dir/overdue.json" <<EOF
 {
   "Versions": [
-    {"Key":"daily/overdue-secret-key","VersionId":"overdue-version","IsLatest":false,"LastModified":"$overdue_time"}
+    {"Key":"daily/overdue-secret-key","VersionId":"current-version","IsLatest":true,"LastModified":"$overdue_time"},
+    {"Key":"daily/overdue-secret-key","VersionId":"overdue-version","IsLatest":false,"LastModified":"2000-01-01T00:00:00Z"}
   ],
   "DeleteMarkers": []
 }
@@ -119,6 +124,10 @@ test "$(wc -l <"$test_dir/deleted" | tr -d ' ')" -eq 3
 grep -q 'secret-person-key|old-version' "$test_dir/deleted"
 grep -q 'old-marker.dump.enc|old-marker' "$test_dir/deleted"
 grep -q 'orphan-marker.dump.enc|orphan-marker' "$test_dir/deleted"
+if grep -q 'recently-noncurrent.dump.enc' "$test_dir/deleted"; then
+  printf '%s\n' 'cleanup aged a noncurrent version from its upload instead of its successor' >&2
+  exit 1
+fi
 if printf '%s' "$output" | grep -q 'secret-person-key'; then
   printf '%s\n' 'cleanup output leaked an object key' >&2
   exit 1

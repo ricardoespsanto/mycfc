@@ -73,7 +73,25 @@ delete_version() {
   fi
 }
 
-timestamp_filter='def epoch: sub("\\.[0-9]+(Z|\\+00:00)$"; "Z") | sub("\\+00:00$"; "Z") | fromdateiso8601;'
+inventory_filter='def epoch: sub("\\.[0-9]+(Z|\\+00:00)$"; "Z") | sub("\\+00:00$"; "Z") | fromdateiso8601;
+def history:
+  [((.Versions // [])[] | . + {EntryKind:"VERSION"}), ((.DeleteMarkers // [])[] | . + {EntryKind:"DELETE_MARKER"})]
+  | group_by(.Key)[]
+  | sort_by(.LastModified | epoch) as $entries
+  | range(0; $entries | length) as $index
+  | $entries[$index] + {SuccessorModified:(if $index + 1 < ($entries | length) then $entries[$index + 1].LastModified else null end)};
+def deletion_candidates($cutoff):
+  history
+  | select(
+      (.EntryKind == "VERSION" and .IsLatest == false and .SuccessorModified != null and (.SuccessorModified | epoch) <= $cutoff)
+      or (.EntryKind == "DELETE_MARKER" and .IsLatest == false and (.LastModified | epoch) <= $cutoff)
+    );
+def retention_breaches($cutoff):
+  history
+  | select(
+      (.EntryKind == "VERSION" and .IsLatest == false and .SuccessorModified != null and (.SuccessorModified | epoch) <= $cutoff)
+      or (.EntryKind == "DELETE_MARKER" and (.LastModified | epoch) <= $cutoff)
+    );'
 now_epoch=$(date -u +%s)
 delete_cutoff=$((now_epoch - delete_age_seconds))
 maximum_cutoff=$((now_epoch - maximum_age_seconds))
@@ -87,20 +105,10 @@ for prefix in daily/ monthly/; do
   before="$work_dir/$(printf '%s' "$prefix" | tr / _)-before.json"
   candidates="$work_dir/$(printf '%s' "$prefix" | tr / _)-candidates.jsonl"
   list_versions "$prefix" >"$before"
-  jq -c --argjson cutoff "$delete_cutoff" "$timestamp_filter
-    [(.Versions // [])[], (.DeleteMarkers // [])[]]
-    | .[]
-    | select(.IsLatest == false)
-    | select((.LastModified | epoch) <= \$cutoff)
-    | {Key, VersionId}" "$before" >"$candidates"
+  jq -c --argjson cutoff "$delete_cutoff" "$inventory_filter deletion_candidates(\$cutoff) | {Key, VersionId}" "$before" >"$candidates"
   prefix_eligible=$(wc -l <"$candidates" | tr -d ' ')
   eligible=$((eligible + prefix_eligible))
-  prefix_overdue=$(jq --argjson cutoff "$maximum_cutoff" "$timestamp_filter
-    [
-      ((.Versions // [])[] | select(.IsLatest == false)),
-      (.DeleteMarkers // [])[]
-      | select((.LastModified | epoch) <= \$cutoff)
-    ] | length" "$before")
+  prefix_overdue=$(jq --argjson cutoff "$maximum_cutoff" "$inventory_filter [retention_breaches(\$cutoff)] | length" "$before")
   initial_overdue=$((initial_overdue + prefix_overdue))
   if [ "$prefix_overdue" -ne 0 ]; then
     log_event "backup_noncurrent_cleanup_sla_breach_detected overdue_count=$prefix_overdue"
@@ -121,7 +129,7 @@ for prefix in daily/ monthly/; do
   after_versions="$work_dir/$(printf '%s' "$prefix" | tr / _)-after-versions.json"
   orphan_markers="$work_dir/$(printf '%s' "$prefix" | tr / _)-orphan-markers.jsonl"
   list_versions "$prefix" >"$after_versions"
-  jq -c --argjson cutoff "$delete_cutoff" "$timestamp_filter
+  jq -c --argjson cutoff "$delete_cutoff" "$inventory_filter
     . as \$root
     | (\$root.DeleteMarkers // [])[]
     | select(.IsLatest == true)
@@ -140,17 +148,7 @@ for prefix in daily/ monthly/; do
 
   verified="$work_dir/$(printf '%s' "$prefix" | tr / _)-verified.json"
   list_versions "$prefix" >"$verified"
-  overdue=$(jq --argjson cutoff "$maximum_cutoff" "$timestamp_filter
-    . as \$root
-    |
-    [
-      (\$root.Versions // [])[]
-      | select(.IsLatest == false)
-      | select((.LastModified | epoch) <= \$cutoff)
-    ] + [
-      (\$root.DeleteMarkers // [])[]
-      | select((.LastModified | epoch) <= \$cutoff)
-    ] | length" "$verified")
+  overdue=$(jq --argjson cutoff "$maximum_cutoff" "$inventory_filter [retention_breaches(\$cutoff)] | length" "$verified")
   if [ "$overdue" -ne 0 ]; then
     log_event 'backup_noncurrent_cleanup_verification_failed'
     exit 1

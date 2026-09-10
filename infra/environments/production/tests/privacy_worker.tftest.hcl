@@ -194,3 +194,23 @@ run "s3_allowlist_is_exact" {
   }
 
 }
+
+run "backup_cleanup_failure_alerts_immediately" {
+  command = plan
+
+  plan_options {
+    target = [
+      aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure,
+      aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure,
+    ]
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.datapoints_to_alarm == 1 &&
+      aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.period == 60
+    )
+    error_message = "A single exact-version backup cleanup failure must alert in the next one-minute period."
+  }
+}
