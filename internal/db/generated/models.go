@@ -2171,6 +2171,108 @@ type PrivacyProtectedObjectUploadIntentReservation struct {
 	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 }
 
+type PrivacyProtectedProviderCaptureSet struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	JobID               uuid.UUID          `json:"job_id"`
+	CheckpointID        uuid.UUID          `json:"checkpoint_id"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	CategoryKey         string             `json:"category_key"`
+	ExpectedTargetCount int32              `json:"expected_target_count"`
+	OperationCode       string             `json:"operation_code"`
+	ActionVersion       string             `json:"action_version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedProviderConnection struct {
+	ID                      uuid.UUID          `json:"id"`
+	SubjectUserID           uuid.UUID          `json:"subject_user_id"`
+	ServiceCode             string             `json:"service_code"`
+	ProviderRole            string             `json:"provider_role"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	RegistryEvidenceKeyID   string             `json:"registry_evidence_key_id"`
+	RegistryEvidenceDigest  []byte             `json:"registry_evidence_digest"`
+	TargetKeyID             string             `json:"target_key_id"`
+	TargetOpaque            []byte             `json:"target_opaque"`
+	CredentialKeyID         *string            `json:"credential_key_id"`
+	CredentialOpaque        []byte             `json:"credential_opaque"`
+	State                   string             `json:"state"`
+	StateVersion            int64              `json:"state_version"`
+	SyncEnabled             bool               `json:"sync_enabled"`
+	WebhookEnabled          bool               `json:"webhook_enabled"`
+	ReconnectEnabled        bool               `json:"reconnect_enabled"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PrivacyProtectedProviderCredentialQuarantine struct {
+	TargetID              uuid.UUID          `json:"target_id"`
+	SourceCommitmentKeyID string             `json:"source_commitment_key_id"`
+	SourceCommitment      []byte             `json:"source_commitment"`
+	EnvelopeVersion       string             `json:"envelope_version"`
+	Algorithm             string             `json:"algorithm"`
+	EncryptionKeyID       string             `json:"encryption_key_id"`
+	Encapsulation         []byte             `json:"encapsulation"`
+	Nonce                 []byte             `json:"nonce"`
+	Ciphertext            []byte             `json:"ciphertext"`
+	QuarantinedAt         pgtype.Timestamptz `json:"quarantined_at"`
+}
+
+type PrivacyProtectedProviderEvidence struct {
+	ID               uuid.UUID          `json:"id"`
+	TargetID         uuid.UUID          `json:"target_id"`
+	JobID            uuid.UUID          `json:"job_id"`
+	AttemptID        uuid.UUID          `json:"attempt_id"`
+	EvidenceVersion  string             `json:"evidence_version"`
+	OutcomeCode      string             `json:"outcome_code"`
+	AdapterAttempts  int32              `json:"adapter_attempts"`
+	EvidenceCode     string             `json:"evidence_code"`
+	RecipientRole    *string            `json:"recipient_role"`
+	ChannelCode      *string            `json:"channel_code"`
+	NotificationCode *string            `json:"notification_code"`
+	ReasonCode       *string            `json:"reason_code"`
+	GuidanceCode     *string            `json:"guidance_code"`
+	TranscriptKeyID  string             `json:"transcript_key_id"`
+	TranscriptDigest []byte             `json:"transcript_digest"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyProtectedProviderTarget struct {
+	ID                      uuid.UUID          `json:"id"`
+	ConnectionID            uuid.UUID          `json:"connection_id"`
+	ExecutionID             uuid.UUID          `json:"execution_id"`
+	JobID                   uuid.UUID          `json:"job_id"`
+	CheckpointID            uuid.UUID          `json:"checkpoint_id"`
+	PlanEntrySha256         []byte             `json:"plan_entry_sha256"`
+	CategoryKey             string             `json:"category_key"`
+	ServiceCode             string             `json:"service_code"`
+	TargetKind              string             `json:"target_kind"`
+	ProviderRole            string             `json:"provider_role"`
+	TargetVersion           int64              `json:"target_version"`
+	OperationCode           string             `json:"operation_code"`
+	ActionVersion           string             `json:"action_version"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	RegistryEvidenceKeyID   string             `json:"registry_evidence_key_id"`
+	RegistryEvidenceDigest  []byte             `json:"registry_evidence_digest"`
+	LocalState              string             `json:"local_state"`
+	TargetEnvelopeVersion   string             `json:"target_envelope_version"`
+	TargetAlgorithm         string             `json:"target_algorithm"`
+	TargetEncryptionKeyID   string             `json:"target_encryption_key_id"`
+	TargetEncapsulation     []byte             `json:"target_encapsulation"`
+	TargetNonce             []byte             `json:"target_nonce"`
+	TargetCiphertext        []byte             `json:"target_ciphertext"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedProviderTargetDigest struct {
+	TargetID     uuid.UUID          `json:"target_id"`
+	ExecutionID  uuid.UUID          `json:"execution_id"`
+	ServiceCode  string             `json:"service_code"`
+	TargetKind   string             `json:"target_kind"`
+	DigestKeyID  string             `json:"digest_key_id"`
+	TargetDigest []byte             `json:"target_digest"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type PrivacyProtectedRestoreLedgerImport struct {
 	ID                 uuid.UUID          `json:"id"`
 	Kind               string             `json:"kind"`

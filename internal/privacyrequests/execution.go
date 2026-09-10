@@ -181,6 +181,9 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if err = s.materializeObjectTargets(ctx, tx, q, execution, plan, subject.ID); err != nil {
 		return zero, err
 	}
+	if err = s.materializeProviderTargets(ctx, tx, q, execution, plan, subject.ID); err != nil {
+		return zero, err
+	}
 
 	updated, err := q.TransitionPrivacyRequestExecutionStatus(ctx, dbgen.TransitionPrivacyRequestExecutionStatusParams{
 		ToStatus: string(transition.Case.Status), UpdatedAt: stamp(now), ID: r.ID,
@@ -236,7 +239,8 @@ func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
 		}
 		for _, operation := range entry.Operations {
 			if !supportedOperation(operation) || !executableOperation(operation) || !s.ExecutionCapabilities[operation] ||
-				(operation == "OBJECT_VERSION_DELETE" && s.ObjectTargets == nil) {
+				(operation == "OBJECT_VERSION_DELETE" && s.ObjectTargets == nil) ||
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderTargets == nil || s.ProviderRegistry == nil || !s.ProviderRegistry.Ready())) {
 				return false
 			}
 		}
@@ -571,7 +575,8 @@ func executionWorkGraph(plan ExecutionPlan) ([]executionWorkJob, error) {
 		spec := executionWorkJob{Position: int16(entryIndex + 1), EntryDigest: slices.Clone(digest[:]), Category: entry.Category, Purpose: entry.Purpose}
 		seenOperations := make(map[string]bool, len(entry.Operations))
 		for operationIndex, operation := range entry.Operations {
-			if !supportedOperation(operation) || seenOperations[operation] {
+			if !supportedOperation(operation) || seenOperations[operation] ||
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && !currentPlanVersion(plan.ExecutorVersion, plan.SchemaVersion)) {
 				return nil, ErrExecutorUnavailable
 			}
 			seenOperations[operation] = true
@@ -610,7 +615,7 @@ func relationalExecutableOperation(operation string) bool {
 }
 
 func executableOperation(operation string) bool {
-	return operation == "OBJECT_VERSION_DELETE" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
+	return operation == "OBJECT_VERSION_DELETE" || operation == "PROVIDER_RECIPIENT_NOTIFY" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
 }
 
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {

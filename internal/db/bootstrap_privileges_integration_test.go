@@ -127,6 +127,7 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		})
 	}
 	var canExecute, canMutate, canBypass, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects bool
+	var canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
@@ -136,24 +137,37 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
-		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects); err != nil {
+		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects, &canListProviders, &canRecordProviderEvidence, &canCompleteProviderCheckpoint, &canCaptureProviders); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects {
-		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v", canExecute, canMutate, canBypass, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects)
+	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects || !canListProviders || !canRecordProviderEvidence || !canCompleteProviderCheckpoint || canCaptureProviders {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v provider_list=%v provider_evidence=%v provider_complete=%v provider_capture=%v",
+			canExecute, canMutate, canBypass, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects,
+			canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders)
 	}
 	var appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects bool
+	var appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),
 		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea)','EXECUTE'),
 		has_function_privilege($1,'privacy_execution_complete_object_capture(uuid,text)','EXECUTE'),
-		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup, &appCanCapture, &appCanMaterialize, &appCanCompleteCapture, &appCanListObjects); err != nil {
+		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_complete_provider_capture(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup, &appCanCapture, &appCanMaterialize, &appCanCompleteCapture, &appCanListObjects, &appCanCaptureProviders, &appCanMaterializeProvider, &appCanCompleteProviderCapture, &appCanListProviders); err != nil {
 		t.Fatal(err)
 	}
-	if !appCanUpload || appCanCleanup || !appCanCapture || !appCanMaterialize || !appCanCompleteCapture || appCanListObjects {
-		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v", appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects)
+	if !appCanUpload || appCanCleanup || !appCanCapture || !appCanMaterialize || !appCanCompleteCapture || appCanListObjects || !appCanCaptureProviders || !appCanMaterializeProvider || !appCanCompleteProviderCapture || appCanListProviders {
+		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v provider_capture=%v provider_materialize=%v provider_complete=%v provider_list=%v",
+			appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects,
+			appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)
