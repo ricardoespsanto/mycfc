@@ -6,10 +6,35 @@ credentials_file=${MYCFC_BACKUP_CREDENTIALS_FILE:-/etc/mycfc/backup-aws/credenti
 work_dir=$(mktemp -d /var/tmp/mycfc-backup-version-cleanup.XXXXXX)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 
-set -a
-. "$env_file"
-set +a
+read_setting() {
+  setting_name=$1
+  (
+    set -a
+    . "$env_file"
+    set +a
+    eval "printf '%s' \"\${$setting_name-}\""
+  )
+}
+
+BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-$(read_setting BACKUP_S3_BUCKET)}
+AWS_REGION=${AWS_REGION:-$(read_setting AWS_REGION)}
+BACKUP_NONCURRENT_CLEANER_ENABLED=${BACKUP_NONCURRENT_CLEANER_ENABLED:-$(read_setting BACKUP_NONCURRENT_CLEANER_ENABLED)}
+BACKUP_NONCURRENT_CLEANER_DRY_RUN=${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-$(read_setting BACKUP_NONCURRENT_CLEANER_DRY_RUN)}
+BACKUP_NONCURRENT_CLEANER_ENABLED=${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}
+BACKUP_NONCURRENT_CLEANER_DRY_RUN=${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}
 : "${BACKUP_S3_BUCKET:?set BACKUP_S3_BUCKET in the protected environment file}"
+
+if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" != true ]; then
+  printf '%s\n' 'backup_noncurrent_cleanup_disabled' >&2
+  exit 1
+fi
+case "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" in
+  true|false) ;;
+  *)
+    printf '%s\n' 'BACKUP_NONCURRENT_CLEANER_DRY_RUN must be true or false.' >&2
+    exit 1
+    ;;
+esac
 
 export AWS_SHARED_CREDENTIALS_FILE="$credentials_file"
 export AWS_PROFILE="${AWS_PROFILE:-mycfc-backup}"
@@ -18,15 +43,15 @@ export AWS_PAGER=""
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
 delete_age_seconds=${BACKUP_NONCURRENT_DELETE_AGE_SECONDS:-82800}
-maximum_age_seconds=${BACKUP_NONCURRENT_MAXIMUM_AGE_SECONDS:-86400}
-case "$delete_age_seconds:$maximum_age_seconds" in
-  *[!0-9:]*|:|*:)
+maximum_age_seconds=86400
+case "$delete_age_seconds" in
+  ''|*[!0-9]*)
     printf '%s\n' 'Backup version cleanup ages must be positive integer seconds.' >&2
     exit 1
     ;;
 esac
-if [ "$delete_age_seconds" -ge "$maximum_age_seconds" ]; then
-  printf '%s\n' 'Backup version deletion must begin before the maximum-age verification boundary.' >&2
+if [ "$delete_age_seconds" -eq 0 ] || [ "$delete_age_seconds" -gt 82800 ]; then
+  printf '%s\n' 'Backup version deletion must begin after zero and no later than the approved 23-hour boundary.' >&2
   exit 1
 fi
 
@@ -55,6 +80,8 @@ maximum_cutoff=$((now_epoch - maximum_age_seconds))
 
 log_event 'backup_noncurrent_cleanup_started'
 deleted=0
+eligible=0
+initial_overdue=0
 
 for prefix in daily/ monthly/; do
   before="$work_dir/$(printf '%s' "$prefix" | tr / _)-before.json"
@@ -66,6 +93,22 @@ for prefix in daily/ monthly/; do
     | select(.IsLatest == false)
     | select((.LastModified | epoch) <= \$cutoff)
     | {Key, VersionId}" "$before" >"$candidates"
+  prefix_eligible=$(wc -l <"$candidates" | tr -d ' ')
+  eligible=$((eligible + prefix_eligible))
+  prefix_overdue=$(jq --argjson cutoff "$maximum_cutoff" "$timestamp_filter
+    [
+      ((.Versions // [])[] | select(.IsLatest == false)),
+      (.DeleteMarkers // [])[]
+      | select((.LastModified | epoch) <= \$cutoff)
+    ] | length" "$before")
+  initial_overdue=$((initial_overdue + prefix_overdue))
+  if [ "$prefix_overdue" -ne 0 ]; then
+    log_event "backup_noncurrent_cleanup_sla_breach_detected overdue_count=$prefix_overdue"
+  fi
+
+  if [ "$BACKUP_NONCURRENT_CLEANER_DRY_RUN" = true ]; then
+    continue
+  fi
 
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
@@ -114,4 +157,17 @@ for prefix in daily/ monthly/; do
   fi
 done
 
+if [ "$BACKUP_NONCURRENT_CLEANER_DRY_RUN" = true ]; then
+  log_event "backup_noncurrent_cleanup_inventory eligible_count=$eligible overdue_count=$initial_overdue"
+  if [ "$initial_overdue" -ne 0 ]; then
+    log_event "backup_noncurrent_cleanup_sla_breached overdue_count=$initial_overdue"
+    exit 1
+  fi
+  exit 0
+fi
+
+if [ "$initial_overdue" -ne 0 ]; then
+  log_event "backup_noncurrent_cleanup_sla_breached overdue_count=$initial_overdue"
+  exit 1
+fi
 log_event "backup_noncurrent_cleanup_succeeded deleted_count=$deleted"

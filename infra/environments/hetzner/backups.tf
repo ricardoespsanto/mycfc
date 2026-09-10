@@ -88,26 +88,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "postgres_backups" {
   }
 
   dynamic "rule" {
-    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? [1] : []
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? toset(["daily/", "monthly/"]) : toset([])
 
     content {
-      id     = "expire-noncurrent-backup-versions"
+      id     = "expire-noncurrent-${trimsuffix(rule.value, "/")}-backup-versions"
       status = "Enabled"
 
-      filter { prefix = "" }
+      filter { prefix = rule.value }
 
       noncurrent_version_expiration { noncurrent_days = 1 }
     }
   }
 
   dynamic "rule" {
-    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? [1] : []
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? toset(["daily/", "monthly/"]) : toset([])
 
     content {
-      id     = "remove-expired-backup-delete-markers"
+      id     = "remove-expired-${trimsuffix(rule.value, "/")}-backup-delete-markers"
       status = "Enabled"
 
-      filter { prefix = "" }
+      filter { prefix = rule.value }
 
       expiration { expired_object_delete_marker = true }
     }

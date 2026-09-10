@@ -81,9 +81,11 @@ run "backup_version_expiration_requires_its_gate" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 4 &&
-      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "expire-noncurrent-backup-versions"]).noncurrent_version_expiration[0].noncurrent_days == 1 &&
-      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "remove-expired-backup-delete-markers"]).expiration[0].expired_object_delete_marker
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 6 &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.noncurrent_version_expiration[0].noncurrent_days == 1 if startswith(rule.id, "expire-noncurrent-")]) &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.expiration[0].expired_object_delete_marker if startswith(rule.id, "remove-expired-")]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.filter[0].prefix if startswith(rule.id, "expire-noncurrent-")]) == toset(["daily/", "monthly/"]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.filter[0].prefix if startswith(rule.id, "remove-expired-")]) == toset(["daily/", "monthly/"])
     )
     error_message = "The destructive backup rules must appear only behind their explicit gate."
   }
@@ -200,9 +202,11 @@ run "access_allowlists_are_exact" {
 
   assert {
     condition = toset(local.privacy_restore_writer_actions) == toset([
+      "s3:GetObject",
       "s3:GetObjectVersion",
-      "s3:GetObjectVersionAttributes",
       "s3:PutObject",
+      ]) && toset(local.privacy_restore_writer_retention_actions) == toset([
+      "s3:GetObjectRetention",
       "s3:PutObjectRetention",
       ]) && toset(local.privacy_restore_reader_actions) == toset([
       "s3:GetObjectVersion",
@@ -216,17 +220,17 @@ run "access_allowlists_are_exact" {
         "s3:*",
         "s3:DeleteObject",
         "s3:DeleteObjectVersion",
-        "s3:GetObject",
         "kms:*",
         "kms:ScheduleKeyDeletion",
         ] : !contains(concat(
           local.privacy_restore_writer_actions,
+          local.privacy_restore_writer_retention_actions,
           local.privacy_restore_reader_actions,
           ["s3:ListBucketVersions"],
           local.privacy_restore_writer_kms_actions,
           local.privacy_restore_reader_kms_actions,
       ), denied)
     ])
-    error_message = "The privacy restore roles contain a destructive, wildcard, or ordinary object permission."
+    error_message = "The privacy restore roles contain a destructive, wildcard, key-administration, or unrelated permission."
   }
 }

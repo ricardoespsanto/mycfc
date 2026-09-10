@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/mycfc/deployment/postgres-backup-version-cleanup.sh
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/postgres-backup-version-cleanup.sh
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=/var/tmp
+ReadWritePaths=/var/tmp /run

@@ -8,9 +8,12 @@ locals {
   privacy_restore_reader_arn     = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${local.privacy_restore_reader_name}"
 
   privacy_restore_writer_actions = [
+    "s3:GetObject",
     "s3:GetObjectVersion",
-    "s3:GetObjectVersionAttributes",
     "s3:PutObject",
+  ]
+  privacy_restore_writer_retention_actions = [
+    "s3:GetObjectRetention",
     "s3:PutObjectRetention",
   ]
   privacy_restore_reader_actions = [
@@ -250,6 +253,22 @@ data "aws_iam_policy_document" "privacy_restore_ledger_bucket" {
   }
 
   statement {
+    sid       = "DenyClosureRetentionBeyondEvidenceWindow"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:PutObjectRetention"]
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "s3:object-lock-remaining-retention-days"
+      values   = ["732"]
+    }
+  }
+
+  statement {
     sid       = "DenyMissingKMSHeader"
     effect    = "Deny"
     actions   = ["s3:PutObject"]
@@ -326,6 +345,13 @@ data "aws_iam_policy_document" "privacy_restore_writer_boundary" {
     resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
   }
 
+
+  statement {
+    effect    = "Allow"
+    actions   = local.privacy_restore_writer_retention_actions
+    resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
+  }
+
   statement {
     effect    = "Allow"
     actions   = local.privacy_restore_writer_kms_actions
@@ -388,6 +414,15 @@ data "aws_iam_policy_document" "privacy_restore_writer" {
       effect    = "Allow"
       actions   = local.privacy_restore_writer_actions
       resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_prefix}*"]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.privacy_restore_ledger_write_enabled ? [1] : []
+    content {
+      sid       = "VerifyClosureRetention"
+      effect    = "Allow"
+      actions   = local.privacy_restore_writer_retention_actions
+      resources = ["${aws_s3_bucket.privacy_restore_ledger[0].arn}/${local.privacy_restore_closure_prefix}*"]
     }
   }
   dynamic "statement" {

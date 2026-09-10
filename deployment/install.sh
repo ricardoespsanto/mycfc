@@ -79,7 +79,7 @@ install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /e
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
-if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" = true ]; then
+if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" = true ] && [ "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" = false ]; then
 	systemctl enable --now mycfc-postgres-backup-version-cleanup.timer
 else
 	systemctl disable --now mycfc-postgres-backup-version-cleanup.timer >/dev/null 2>&1 || true

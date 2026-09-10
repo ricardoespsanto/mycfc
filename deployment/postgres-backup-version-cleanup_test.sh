@@ -8,27 +8,41 @@ mkdir -p "$test_dir/bin"
 
 cat >"$test_dir/env" <<'EOF'
 BACKUP_S3_BUCKET=test-backups
+BACKUP_NONCURRENT_CLEANER_ENABLED=true
+BACKUP_NONCURRENT_CLEANER_DRY_RUN=false
 EOF
 : >"$test_dir/credentials"
 
-cat >"$test_dir/before.json" <<'EOF'
+candidate_time=$(date -u -d 'now - 23 hours - 30 minutes' +%Y-%m-%dT%H:%M:%SZ)
+overdue_time=$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+
+cat >"$test_dir/before.json" <<EOF
 {
   "Versions": [
-    {"Key":"daily/current.dump.enc","VersionId":"current","IsLatest":true,"LastModified":"2000-01-01T00:00:00Z"},
-    {"Key":"daily/secret-person-key","VersionId":"old-version","IsLatest":false,"LastModified":"2000-01-01T00:00:00Z"},
+    {"Key":"daily/current.dump.enc","VersionId":"current","IsLatest":true,"LastModified":"$overdue_time"},
+    {"Key":"daily/secret-person-key","VersionId":"old-version","IsLatest":false,"LastModified":"$candidate_time"},
     {"Key":"daily/new-version.dump.enc","VersionId":"new-version","IsLatest":false,"LastModified":"2999-01-01T00:00:00Z"}
   ],
   "DeleteMarkers": [
-    {"Key":"daily/old-marker.dump.enc","VersionId":"old-marker","IsLatest":false,"LastModified":"2000-01-01T00:00:00Z"}
+    {"Key":"daily/old-marker.dump.enc","VersionId":"old-marker","IsLatest":false,"LastModified":"$candidate_time"}
   ]
 }
 EOF
 
-cat >"$test_dir/orphan.json" <<'EOF'
+cat >"$test_dir/overdue.json" <<EOF
+{
+  "Versions": [
+    {"Key":"daily/overdue-secret-key","VersionId":"overdue-version","IsLatest":false,"LastModified":"$overdue_time"}
+  ],
+  "DeleteMarkers": []
+}
+EOF
+
+cat >"$test_dir/orphan.json" <<EOF
 {
   "Versions": [],
   "DeleteMarkers": [
-    {"Key":"daily/orphan-marker.dump.enc","VersionId":"orphan-marker","IsLatest":true,"LastModified":"2000-01-01T00:00:00Z"}
+    {"Key":"daily/orphan-marker.dump.enc","VersionId":"orphan-marker","IsLatest":true,"LastModified":"$candidate_time"}
   ]
 }
 EOF
@@ -68,7 +82,9 @@ case "$operation" in
     count=$((count + 1))
     printf '%s' "$count" >"$count_file"
     if [ "${FAKE_PERSIST_OVERDUE:-false}" = true ] && [ "$prefix" = daily/ ]; then
-      cat "$FAKE_STATE_DIR/before.json"
+      cat "$FAKE_STATE_DIR/overdue.json"
+    elif [ "${FAKE_INITIAL_OVERDUE:-false}" = true ] && [ "$prefix" = daily/ ] && [ "$count" -eq 1 ]; then
+      cat "$FAKE_STATE_DIR/overdue.json"
     elif [ "$prefix" = daily/ ] && [ "$count" -eq 1 ]; then
       cat "$FAKE_STATE_DIR/before.json"
     elif [ "$prefix" = daily/ ] && [ "$count" -eq 2 ]; then
@@ -91,6 +107,7 @@ run_cleanup() {
   PATH="$test_dir/bin:$PATH" \
     FAKE_STATE_DIR="$test_dir" \
     FAKE_PERSIST_OVERDUE="${FAKE_PERSIST_OVERDUE:-false}" \
+    FAKE_INITIAL_OVERDUE="${FAKE_INITIAL_OVERDUE:-false}" \
     MYCFC_ENV_FILE="$test_dir/env" \
     MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/credentials" \
     sh "$root_dir/deployment/postgres-backup-version-cleanup.sh"
@@ -107,17 +124,35 @@ if printf '%s' "$output" | grep -q 'secret-person-key'; then
   exit 1
 fi
 
+rm -f "$test_dir/deleted"
+dry_output=$(BACKUP_NONCURRENT_CLEANER_DRY_RUN=true run_cleanup)
+printf '%s' "$dry_output" | grep -q 'backup_noncurrent_cleanup_inventory eligible_count=2 overdue_count=0'
+test ! -f "$test_dir/deleted"
+
+if BACKUP_NONCURRENT_CLEANER_ENABLED=false run_cleanup >/dev/null 2>&1; then
+  printf '%s\n' 'cleanup ran while its executable gate was disabled' >&2
+  exit 1
+fi
+
 if FAKE_PERSIST_OVERDUE=true run_cleanup >"$test_dir/failure-output" 2>&1; then
   printf '%s\n' 'cleanup unexpectedly accepted an overdue version after deletion' >&2
   exit 1
 fi
 grep -q 'backup_noncurrent_cleanup_verification_failed' "$test_dir/failure-output"
+grep -q 'backup_noncurrent_cleanup_sla_breach_detected' "$test_dir/failure-output"
+
+if FAKE_INITIAL_OVERDUE=true run_cleanup >"$test_dir/cleaned-breach-output" 2>&1; then
+  printf '%s\n' 'cleanup concealed an initial SLA breach after successful deletion' >&2
+  exit 1
+fi
+grep -q 'backup_noncurrent_cleanup_sla_breached' "$test_dir/cleaned-breach-output"
 
 if PATH="$test_dir/bin:$PATH" \
   MYCFC_ENV_FILE="$test_dir/env" \
   MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/credentials" \
+  BACKUP_NONCURRENT_CLEANER_ENABLED=true \
+  BACKUP_NONCURRENT_CLEANER_DRY_RUN=false \
   BACKUP_NONCURRENT_DELETE_AGE_SECONDS=86400 \
-  BACKUP_NONCURRENT_MAXIMUM_AGE_SECONDS=86400 \
   sh "$root_dir/deployment/postgres-backup-version-cleanup.sh" >/dev/null 2>&1; then
   printf '%s\n' 'cleanup accepted a deletion age without a verification buffer' >&2
   exit 1
