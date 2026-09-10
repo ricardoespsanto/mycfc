@@ -94,6 +94,15 @@ case "$url" in
 	*) ;;
 esac
 EOF
+cat >"$fake_bin/restore-drill" <<'EOF'
+#!/bin/sh
+printf 'restore-drill %s\n' "$*" >>"$TEST_DOCKER_LOG"
+[ "${TEST_RESTORE_DRILL_FAILURE:-false}" != true ]
+EOF
+cat >"$fake_bin/verify-restore-attestation" <<'EOF'
+#!/bin/sh
+printf 'verify-restore-attestation %s\n' "$*" >>"$TEST_DOCKER_LOG"
+EOF
 chmod +x "$fake_bin"/*
 
 setup_case() {
@@ -184,6 +193,55 @@ grep -q 'exec -T caddy caddy reload' "$success_case/docker.log"
 grep -q "^mycfc-release|$success_case/release-aws/credentials$" "$success_case/aws.log"
 if grep -q 'cloudflared' "$success_case/docker.log"; then
 	printf '%s\n' 'ordinary releases must not operate on cloudflared' >&2
+	exit 1
+fi
+if grep -Eq '^restore-drill |^verify-restore-attestation ' "$success_case/docker.log"; then
+	printf '%s\n' 'The default-inert release unexpectedly ran a restore gate.' >&2
+	exit 1
+fi
+
+privacy_gate_case="$work_dir/privacy-gate"
+setup_case "$privacy_gate_case"
+cat >>"$privacy_gate_case/mycfc.env" <<'EOF'
+BACKUP_MANIFEST_AUTH_ENABLED=true
+PRIVACY_RESTORE_DRILL_ENABLED=true
+PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true
+EOF
+run_release "$privacy_gate_case" \
+	MYCFC_RESTORE_DRILL_COMMAND=restore-drill \
+	MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND=verify-restore-attestation
+grep -q '^restore-drill registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$' "$privacy_gate_case/docker.log"
+grep -q '^verify-restore-attestation registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$' "$privacy_gate_case/docker.log"
+awk '
+	/^restore-drill / { drill = NR }
+	/^verify-restore-attestation / { attestation = NR }
+	/compose .* up -d --wait postgres$/ { postgres = NR }
+	END { exit !(drill < attestation && attestation < postgres) }
+' "$privacy_gate_case/docker.log"
+for phase in privacy_restore_drill privacy_restore_attestation; do
+	grep -q "event=deployment_phase_started phase=$phase" "$privacy_gate_case/events.log"
+	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_gate_case/events.log"
+done
+
+privacy_gate_failure_case="$work_dir/privacy-gate-failure"
+setup_case "$privacy_gate_failure_case"
+cat >>"$privacy_gate_failure_case/mycfc.env" <<'EOF'
+BACKUP_MANIFEST_AUTH_ENABLED=true
+PRIVACY_RESTORE_DRILL_ENABLED=true
+PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true
+EOF
+if run_release "$privacy_gate_failure_case" \
+	MYCFC_RESTORE_DRILL_COMMAND=restore-drill \
+	MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND=verify-restore-attestation \
+	TEST_RESTORE_DRILL_FAILURE=true; then
+	printf '%s\n' 'A release passed after the privacy restore drill failed.' >&2
+	exit 1
+fi
+test "$(cat "$privacy_gate_failure_case/state/active-slot")" = legacy
+test "$(cat "$privacy_gate_failure_case/state/last-attempt-result")" = failed
+grep -q 'event=deployment_failed phase=privacy_restore_drill' "$privacy_gate_failure_case/events.log"
+if grep -Eq '^verify-restore-attestation |compose .*up -d --wait postgres' "$privacy_gate_failure_case/docker.log"; then
+	printf '%s\n' 'A failed privacy restore drill reached attestation validation or the production database.' >&2
 	exit 1
 fi
 

@@ -60,6 +60,56 @@ if [ ! -f /etc/mycfc/backup-aws/credentials ] || [ "$(stat -c '%u:%a' /etc/mycfc
 	exit 1
 fi
 
+case "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" in
+	true)
+		if [ ! -f /etc/mycfc/backup-auth/manifest.key ] || [ "$(stat -c '%u:%a' /etc/mycfc/backup-auth/manifest.key)" != '0:600' ]; then
+			printf '%s\n' '/etc/mycfc/backup-auth/manifest.key must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
+		if ! tr -d '\n' </etc/mycfc/backup-auth/manifest.key | grep -Eq '^[0-9A-Fa-f]{64}$'; then
+			printf '%s\n' 'The backup manifest authentication key must contain exactly 32 bytes encoded as hexadecimal.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'BACKUP_MANIFEST_AUTH_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
+case "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" in
+	true)
+		if [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
+			printf '%s\n' 'PRIVACY_RESTORE_DRILL_ENABLED requires BACKUP_MANIFEST_AUTH_ENABLED=true.' >&2
+			exit 1
+		fi
+		: "${PRIVACY_RESTORE_LEDGER_BUCKET:?set PRIVACY_RESTORE_LEDGER_BUCKET in /etc/mycfc/mycfc.env}"
+		: "${PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN:?set PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN in /etc/mycfc/mycfc.env}"
+		for protected_file in /etc/mycfc/privacy-restore/credentials /etc/mycfc/privacy-restore/attestation.key /etc/mycfc/privacy-restore/tombstone-replay.key; do
+			if [ ! -f "$protected_file" ] || [ "$(stat -c '%u:%a' "$protected_file")" != '0:600' ]; then
+				printf '%s\n' 'A privacy restore input is missing or not root-owned mode 0600.' >&2
+				exit 1
+			fi
+		done
+		if ! tr -d '\n' </etc/mycfc/privacy-restore/attestation.key | grep -Eq '^[0-9A-Fa-f]{64}$'; then
+			printf '%s\n' 'The restore attestation authentication key must contain exactly 32 bytes encoded as hexadecimal.' >&2
+			exit 1
+		fi
+		install -d -m 0700 /etc/mycfc/privacy-restore/attestations
+		;;
+	false) ;;
+	*) printf '%s\n' 'PRIVACY_RESTORE_DRILL_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
+case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
+	true)
+		if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" != true ]; then
+			printf '%s\n' 'PRIVACY_RESTORE_PROMOTION_GATE_ENABLED requires PRIVACY_RESTORE_DRILL_ENABLED=true.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'PRIVACY_RESTORE_PROMOTION_GATE_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
 case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
 	true)
 		if [ ! -f /etc/mycfc/hetzner-read/token ] || [ "$(stat -c '%u:%a' /etc/mycfc/hetzner-read/token)" != '0:600' ]; then
@@ -81,7 +131,7 @@ case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
 		;;
 esac
 
-for command in aws awk base64 cmp curl docker flock hostname jq logger od openssl sha256sum shasum; do
+for command in aws awk base64 cmp curl date docker flock hostname jq logger od openssl python3 sed sha256sum; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf '%s\n' "Missing required command: $command" >&2
 		exit 1
@@ -92,6 +142,8 @@ chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
 chmod 0755 "$deployment_dir/release-status.sh"
 chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
 chmod 0755 "$deployment_dir/hetzner-backup-posture.sh"
+chmod 0755 "$deployment_dir/postgres-restore-drill.sh"
+chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
@@ -100,6 +152,8 @@ install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.service" 
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.timer
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.service" /etc/systemd/system/mycfc-hetzner-backup-posture.service
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.timer" /etc/systemd/system/mycfc-hetzner-backup-posture.timer
+install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.service" /etc/systemd/system/mycfc-postgres-restore-drill.service
+install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.timer" /etc/systemd/system/mycfc-postgres-restore-drill.timer
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
@@ -112,6 +166,11 @@ if [ "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" = true ]; then
 	systemctl enable --now mycfc-hetzner-backup-posture.timer
 else
 	systemctl disable --now mycfc-hetzner-backup-posture.timer >/dev/null 2>&1 || true
+fi
+if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-postgres-restore-drill.timer
+else
+	systemctl disable --now mycfc-postgres-restore-drill.timer >/dev/null 2>&1 || true
 fi
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy

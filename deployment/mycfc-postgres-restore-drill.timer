@@ -1,0 +1,11 @@
+[Unit]
+Description=Annual MyCFC isolated privacy-safe PostgreSQL restore drill
+
+[Timer]
+OnCalendar=*-01-15 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=1d
+Unit=mycfc-postgres-restore-drill.service
+
+[Install]
+WantedBy=timers.target

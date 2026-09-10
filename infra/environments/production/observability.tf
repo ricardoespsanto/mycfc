@@ -81,6 +81,37 @@ resource "aws_cloudwatch_metric_alarm" "backup_noncurrent_cleanup_failure" {
   depends_on = [aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "privacy_restore_drill_failure" {
+  name           = "${local.name}-privacy-restore-drill-failure"
+  pattern        = "%privacy_restore_drill_failed|privacy_restore_promotion_gate_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyRestoreDrillFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_restore_drill_failure" {
+  alarm_name          = "${local.name}-privacy-restore-drill-failure"
+  alarm_description   = "The isolated privacy restore drill or its authenticated promotion evidence failed."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyRestoreDrillFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }
