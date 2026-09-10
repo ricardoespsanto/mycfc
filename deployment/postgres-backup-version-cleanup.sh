@@ -101,16 +101,12 @@ for prefix in daily/ monthly/; do
     . as \$root
     |
     [
-      [((\$root.Versions // [])[]), ((\$root.DeleteMarkers // [])[])]
-      | .[]
+      (\$root.Versions // [])[]
       | select(.IsLatest == false)
       | select((.LastModified | epoch) <= \$cutoff)
     ] + [
       (\$root.DeleteMarkers // [])[]
-      | select(.IsLatest == true)
       | select((.LastModified | epoch) <= \$cutoff)
-      | . as \$marker
-      | select(([((\$root.Versions // [])[]), ((\$root.DeleteMarkers // [])[])] | map(select(.Key == \$marker.Key))) | length == 1)
     ] | length" "$verified")
   if [ "$overdue" -ne 0 ]; then
     log_event 'backup_noncurrent_cleanup_verification_failed'
