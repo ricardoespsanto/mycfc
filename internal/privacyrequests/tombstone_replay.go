@@ -1,0 +1,209 @@
+package privacyrequests
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+var (
+	ErrTombstoneReplayInvalid     = errors.New("privacy restore replay invalid")
+	ErrTombstoneReplayUnavailable = errors.New("privacy restore replay unavailable")
+)
+
+// ListedTombstoneObject is the non-identifying material available to an
+// offline recovery process after listing and reading the independent ledger.
+// V2 AEAD binds the opaque locator, so no execution UUID is needed to open it.
+type ListedTombstoneObject struct {
+	Kind          string
+	LocatorKeyID  string
+	LocatorDigest []byte
+	Payload       []byte
+	Checksum      []byte
+	ObjectVersion string
+	WrittenAt     time.Time
+	VerifiedAt    time.Time
+	RetainUntil   time.Time
+}
+
+// AuthenticatedReplayTombstone has no public fields so callers cannot bypass
+// AEAD verification and construct an importable prescription directly.
+type AuthenticatedReplayTombstone struct {
+	kind               string
+	locatorKeyID       string
+	locatorDigest      []byte
+	ciphertextSHA256   []byte
+	objectVersion      string
+	writtenAt          time.Time
+	verifiedAt         time.Time
+	retainUntil        time.Time
+	envelopeVersion    string
+	encryptionKeyID    string
+	record             RestoreTombstone
+	prescriptionSHA256 []byte
+	recordSHA256       []byte
+}
+
+func (a AuthenticatedReplayTombstone) OpaqueReplayID() string {
+	digest := sha256.Sum256(append([]byte("mycfc/privacy-restore-replay-id/v1\x00"), a.record.ExecutionID[:]...))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func (a AuthenticatedReplayTombstone) IsClosure() bool { return a.kind == "closure" }
+
+// SameReplay reports whether two independently authenticated ledger objects
+// prescribe the same source erasure. It deliberately exposes no identity.
+func (a AuthenticatedReplayTombstone) SameReplay(other AuthenticatedReplayTombstone) bool {
+	return a.record.ExecutionID == other.record.ExecutionID && a.record.RequestID == other.record.RequestID &&
+		a.record.RequestRef == other.record.RequestRef && a.record.SubjectUserID == other.record.SubjectUserID &&
+		a.record.ExecutionStart.Equal(other.record.ExecutionStart) && hmac.Equal(a.record.PlanSHA256, other.record.PlanSHA256) &&
+		hmac.Equal(a.record.WorksetSHA256, other.record.WorksetSHA256) && hmac.Equal(a.prescriptionSHA256, other.prescriptionSHA256)
+}
+
+func AuthenticateReplayTombstone(privateKey []byte, listed ListedTombstoneObject) (AuthenticatedReplayTombstone, error) {
+	var zero AuthenticatedReplayTombstone
+	digest := sha256.Sum256(listed.Payload)
+	if len(listed.Payload) == 0 || len(listed.Payload) > maxTombstonePayloadBytes ||
+		len(listed.Checksum) != sha256.Size || !hmac.Equal(digest[:], listed.Checksum) || listed.ObjectVersion == "" ||
+		listed.ObjectVersion != strings.TrimSpace(listed.ObjectVersion) || len(listed.ObjectVersion) > 1024 ||
+		listed.WrittenAt.IsZero() || listed.VerifiedAt.IsZero() || listed.VerifiedAt.Before(listed.WrittenAt) ||
+		(listed.Kind != "" && listed.Kind != "intent" && listed.Kind != "closure") {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	var envelope TombstoneEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(listed.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil || ensureJSONEOF(decoder) != nil || envelope.Version != TombstoneEnvelopeVersion {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	kind, locatorKeyID, locatorDigest := envelope.Kind, envelope.LocatorKeyID, envelope.LocatorDigest
+	if (listed.Kind != "" && listed.Kind != kind) || (listed.LocatorKeyID != "" && listed.LocatorKeyID != locatorKeyID) ||
+		(len(listed.LocatorDigest) != 0 && !hmac.Equal(listed.LocatorDigest, locatorDigest)) ||
+		(kind == "intent" && !listed.RetainUntil.IsZero()) ||
+		(kind == "closure" && (listed.RetainUntil.IsZero() || listed.VerifiedAt.After(listed.RetainUntil))) {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	plaintext, err := openTombstoneEnvelopeV2(privateKey, kind, locatorKeyID, locatorDigest, envelope)
+	if err != nil {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	var record RestoreTombstone
+	if kind == "intent" {
+		if err = decodeStrictJSON(plaintext, &record); err != nil || !validReplayableRestoreTombstone(record) {
+			return zero, ErrTombstoneReplayInvalid
+		}
+	} else {
+		var closure TombstoneClosure
+		if err = decodeStrictJSON(plaintext, &closure); err != nil || closure.Version != TombstoneClosureVersion ||
+			!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
+			!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) || !listed.RetainUntil.Equal(closure.EvidenceExpiresAt) {
+			return zero, ErrTombstoneReplayInvalid
+		}
+		record = closure.Tombstone
+	}
+	prescription, err := json.Marshal(record.Replay)
+	if err != nil {
+		return zero, ErrTombstoneReplayInvalid
+	}
+	prescriptionDigest := sha256.Sum256(prescription)
+	recordDigest := sha256.Sum256(plaintext)
+	return AuthenticatedReplayTombstone{
+		kind: kind, locatorKeyID: locatorKeyID, locatorDigest: bytes.Clone(locatorDigest),
+		ciphertextSHA256: bytes.Clone(listed.Checksum), objectVersion: listed.ObjectVersion,
+		writtenAt: listed.WrittenAt.UTC(), verifiedAt: listed.VerifiedAt.UTC(), retainUntil: listed.RetainUntil.UTC(),
+		envelopeVersion: envelope.Version, encryptionKeyID: envelope.KeyID, record: record,
+		prescriptionSHA256: prescriptionDigest[:], recordSHA256: recordDigest[:],
+	}, nil
+}
+
+func decodeStrictJSON(encoded []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
+
+// TombstoneReplayWorker is intentionally database-only. It never receives an
+// S3 or provider client; ledger discovery and AEAD authentication must finish
+// before this offline operator path is constructed.
+type TombstoneReplayWorker struct {
+	Store     dbgen.DBTX
+	WorkerRef uuid.UUID
+}
+
+type TombstoneReplayResult struct {
+	RunID          uuid.UUID
+	AlreadyApplied bool
+}
+
+func (w TombstoneReplayWorker) Replay(ctx context.Context, authenticated AuthenticatedReplayTombstone) (TombstoneReplayResult, error) {
+	if w.Store == nil || w.WorkerRef == uuid.Nil || !validAuthenticatedReplayTombstone(authenticated) {
+		return TombstoneReplayResult{}, ErrTombstoneReplayInvalid
+	}
+	q := dbgen.New(w.Store)
+	alreadyApplied, err := q.PrivacyRestoreReplayAlreadyApplied(ctx, dbgen.PrivacyRestoreReplayAlreadyAppliedParams{
+		LocatorKeyID: authenticated.locatorKeyID, LocatorDigest: bytes.Clone(authenticated.locatorDigest),
+	})
+	if err != nil {
+		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
+	}
+	retainUntil := pgtype.Timestamptz{}
+	if authenticated.kind == "closure" {
+		retainUntil = stamp(authenticated.retainUntil)
+	}
+	importID, err := q.ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx, dbgen.ImportAuthenticatedPrivacyRestoreTombstoneV2Params{
+		WorkerRef: w.WorkerRef, Kind: authenticated.kind, RecordVersion: authenticated.record.Version,
+		EnvelopeVersion: authenticated.envelopeVersion, EncryptionKeyID: authenticated.encryptionKeyID,
+		LocatorKeyID: authenticated.locatorKeyID, LocatorDigest: bytes.Clone(authenticated.locatorDigest),
+		CiphertextSha256: bytes.Clone(authenticated.ciphertextSHA256), ObjectVersionID: authenticated.objectVersion,
+		WrittenAt: stamp(authenticated.writtenAt), VerifiedAt: stamp(authenticated.verifiedAt), RetainUntil: retainUntil,
+		SourceExecutionID: authenticated.record.ExecutionID, SourceRequestID: authenticated.record.RequestID,
+		SourceRequestRef: authenticated.record.RequestRef, SubjectUserID: authenticated.record.SubjectUserID,
+		PlanSha256: bytes.Clone(authenticated.record.PlanSHA256), WorksetSha256: bytes.Clone(authenticated.record.WorksetSHA256),
+		ExecutionStartedAt: stamp(authenticated.record.ExecutionStart), ReplayVersion: authenticated.record.Replay.Version,
+		ActionVersion: authenticated.record.Replay.ActionVersion, Operations: append([]string(nil), authenticated.record.Replay.Operations...),
+		PrescriptionSha256: bytes.Clone(authenticated.prescriptionSHA256), RecordSha256: bytes.Clone(authenticated.recordSHA256),
+	})
+	if err != nil {
+		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
+	}
+	runID, err := q.BeginPrivacyRestoreReplay(ctx, dbgen.BeginPrivacyRestoreReplayParams{ImportID: importID, WorkerRef: w.WorkerRef})
+	if err != nil {
+		return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
+	}
+	if alreadyApplied {
+		return TombstoneReplayResult{RunID: runID, AlreadyApplied: true}, nil
+	}
+	for index, operation := range authenticated.record.Replay.Operations {
+		if _, err = q.ExecutePrivacyRestoreReplayCheckpoint(ctx, dbgen.ExecutePrivacyRestoreReplayCheckpointParams{
+			RunID: runID, WorkerRef: w.WorkerRef, OperationPosition: int16(index + 1), OperationCode: operation,
+			ActionVersion: authenticated.record.Replay.ActionVersion, PrescriptionSha256: bytes.Clone(authenticated.prescriptionSHA256),
+		}); err != nil {
+			return TombstoneReplayResult{}, ErrTombstoneReplayUnavailable
+		}
+	}
+	return TombstoneReplayResult{RunID: runID, AlreadyApplied: alreadyApplied}, nil
+}
+
+func validAuthenticatedReplayTombstone(authenticated AuthenticatedReplayTombstone) bool {
+	return (authenticated.kind == "intent" || authenticated.kind == "closure") &&
+		authenticated.envelopeVersion == TombstoneEnvelopeVersion && policyKey.MatchString(authenticated.encryptionKeyID) &&
+		policyKey.MatchString(authenticated.locatorKeyID) && len(authenticated.locatorDigest) == sha256.Size &&
+		len(authenticated.ciphertextSHA256) == sha256.Size && len(authenticated.prescriptionSHA256) == sha256.Size &&
+		len(authenticated.recordSHA256) == sha256.Size && validReplayableRestoreTombstone(authenticated.record) &&
+		authenticated.objectVersion != "" && !authenticated.writtenAt.IsZero() && !authenticated.verifiedAt.Before(authenticated.writtenAt) &&
+		((authenticated.kind == "intent" && authenticated.retainUntil.IsZero()) ||
+			(authenticated.kind == "closure" && !authenticated.retainUntil.IsZero() && !authenticated.verifiedAt.After(authenticated.retainUntil)))
+}

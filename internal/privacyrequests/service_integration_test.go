@@ -94,7 +94,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		ciphertext := sha256.Sum256([]byte(uuid.NewString()))
 		if _, insertErr := pool.Exec(ctx, `INSERT INTO `+protectedSchema+`.restore_tombstone_receipts(
 			execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
-			SELECT execution.id,execution.request_id,'restore-tombstone/v1','test-encryption-v1','test-locator-v1',$2,$3,$4,512,clock_timestamp(),clock_timestamp()
+			SELECT execution.id,execution.request_id,'restore-tombstone/v2','test-encryption-v2','test-locator-v2',$2,$3,$4,512,clock_timestamp(),clock_timestamp()
 			FROM privacy_erasure_executions execution WHERE execution.id=$1`, executionID, locator[:], uuid.NewString(), ciphertext[:]); insertErr != nil {
 			t.Fatal(insertErr)
 		}

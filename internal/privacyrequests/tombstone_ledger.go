@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,13 +30,17 @@ import (
 )
 
 const (
-	TombstoneRecordVersion   = "restore-tombstone/v1"
-	TombstoneClosureVersion  = "restore-tombstone-closure/v1"
-	TombstoneEnvelopeVersion = "x25519-aes256gcm-hkdfsha256/v1"
-	tombstoneAlgorithm       = "X25519-HKDF-SHA256-AES-256-GCM"
-	maxTombstonePayloadBytes = 1 << 20
-	maxBrokerRequestBytes    = 2 << 20
-	maxBrokerResponseBytes   = 8 << 10
+	TombstoneRecordVersionV1   = "restore-tombstone/v1"
+	TombstoneClosureVersionV1  = "restore-tombstone-closure/v1"
+	TombstoneEnvelopeVersionV1 = "x25519-aes256gcm-hkdfsha256/v1"
+	TombstoneRecordVersion     = "restore-tombstone/v2"
+	TombstoneClosureVersion    = "restore-tombstone-closure/v2"
+	TombstoneEnvelopeVersion   = "x25519-aes256gcm-hkdfsha256/v2"
+	TombstoneReplayVersion     = "relational-erasure-replay/v1"
+	tombstoneAlgorithm         = "X25519-HKDF-SHA256-AES-256-GCM"
+	maxTombstonePayloadBytes   = 1 << 20
+	maxBrokerRequestBytes      = 2 << 20
+	maxBrokerResponseBytes     = 8 << 10
 )
 
 var (
@@ -48,20 +53,32 @@ var (
 // RestoreTombstone is the minimum replay identity. It deliberately excludes
 // names, addresses, credentials, object locators, and provider payloads.
 type RestoreTombstone struct {
-	Version        string    `json:"version"`
-	ExecutionID    uuid.UUID `json:"execution_id"`
-	RequestID      uuid.UUID `json:"request_id"`
-	RequestRef     uuid.UUID `json:"request_ref"`
-	SubjectUserID  uuid.UUID `json:"subject_user_id"`
-	PlanSHA256     []byte    `json:"plan_sha256"`
-	WorksetSHA256  []byte    `json:"workset_sha256"`
-	ExecutionStart time.Time `json:"execution_started_at"`
+	Version        string                        `json:"version"`
+	ExecutionID    uuid.UUID                     `json:"execution_id"`
+	RequestID      uuid.UUID                     `json:"request_id"`
+	RequestRef     uuid.UUID                     `json:"request_ref"`
+	SubjectUserID  uuid.UUID                     `json:"subject_user_id"`
+	PlanSHA256     []byte                        `json:"plan_sha256"`
+	WorksetSHA256  []byte                        `json:"workset_sha256"`
+	ExecutionStart time.Time                     `json:"execution_started_at"`
+	Replay         *RelationalReplayPrescription `json:"replay,omitempty"`
+}
+
+// RelationalReplayPrescription is deliberately limited to versioned local
+// database operations. It contains no object-store or provider instructions.
+type RelationalReplayPrescription struct {
+	Version       string   `json:"version"`
+	ActionVersion string   `json:"action_version"`
+	Operations    []string `json:"operations"`
 }
 
 type TombstoneEnvelope struct {
 	Version       string `json:"version"`
 	Algorithm     string `json:"algorithm"`
 	KeyID         string `json:"key_id"`
+	Kind          string `json:"kind,omitempty"`
+	LocatorKeyID  string `json:"locator_key_id,omitempty"`
+	LocatorDigest []byte `json:"locator_digest,omitempty"`
 	Encapsulation []byte `json:"encapsulation"`
 	Nonce         []byte `json:"nonce"`
 	Ciphertext    []byte `json:"ciphertext"`
@@ -109,7 +126,7 @@ func NewTombstoneProtector(keyID string, publicKey []byte, locatorKeyID string, 
 }
 
 func (p *TombstoneProtector) Seal(record RestoreTombstone) (SealedTombstone, error) {
-	if p == nil || p.publicKey == nil || p.random == nil || !validRestoreTombstone(record) {
+	if p == nil || p.publicKey == nil || p.random == nil || !validReplayableRestoreTombstone(record) {
 		return SealedTombstone{}, ErrTombstoneInvalid
 	}
 	plaintext, err := json.Marshal(record)
@@ -121,7 +138,7 @@ func (p *TombstoneProtector) Seal(record RestoreTombstone) (SealedTombstone, err
 
 func (p *TombstoneProtector) SealClosure(closure TombstoneClosure) (SealedTombstone, error) {
 	if p == nil || p.publicKey == nil || p.random == nil || closure.Version != TombstoneClosureVersion ||
-		!validRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
+		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
 		return SealedTombstone{}, ErrTombstoneInvalid
 	}
@@ -134,6 +151,9 @@ func (p *TombstoneProtector) SealClosure(closure TombstoneClosure) (SealedTombst
 
 func (p *TombstoneProtector) seal(kind string, executionID uuid.UUID, plaintext []byte, retainUntil time.Time) (SealedTombstone, error) {
 	var zero SealedTombstone
+	locatorMAC := hmac.New(sha256.New, p.locatorKey)
+	_, _ = locatorMAC.Write(encodeFields("mycfc/restore-tombstone-locator/v1", kind, executionID.String()))
+	locator := locatorMAC.Sum(nil)
 	ephemeral, err := ecdh.X25519().GenerateKey(p.random)
 	if err != nil {
 		return zero, ErrTombstoneInvalid
@@ -143,7 +163,7 @@ func (p *TombstoneProtector) seal(kind string, executionID uuid.UUID, plaintext 
 		return zero, ErrTombstoneInvalid
 	}
 	key := make([]byte, 32)
-	if _, err = io.ReadFull(hkdf.New(sha256.New, shared, nil, tombstoneAAD(kind, executionID, p.keyID)), key); err != nil {
+	if _, err = io.ReadFull(hkdf.New(sha256.New, shared, nil, tombstoneAADV2(kind, p.locatorKeyID, locator, p.keyID)), key); err != nil {
 		return zero, ErrTombstoneInvalid
 	}
 	block, err := aes.NewCipher(key)
@@ -160,29 +180,51 @@ func (p *TombstoneProtector) seal(kind string, executionID uuid.UUID, plaintext 
 	}
 	envelope := TombstoneEnvelope{
 		Version: TombstoneEnvelopeVersion, Algorithm: tombstoneAlgorithm, KeyID: p.keyID,
+		Kind: kind, LocatorKeyID: p.locatorKeyID, LocatorDigest: bytes.Clone(locator),
 		Encapsulation: ephemeral.PublicKey().Bytes(), Nonce: nonce,
-		Ciphertext: aead.Seal(nil, nonce, plaintext, tombstoneAAD(kind, executionID, p.keyID)),
+		Ciphertext: aead.Seal(nil, nonce, plaintext, tombstoneAADV2(kind, p.locatorKeyID, locator, p.keyID)),
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
 		return zero, ErrTombstoneInvalid
 	}
-	locatorMAC := hmac.New(sha256.New, p.locatorKey)
-	_, _ = locatorMAC.Write(encodeFields("mycfc/restore-tombstone-locator/v1", kind, executionID.String()))
 	digest := sha256.Sum256(encoded)
-	return SealedTombstone{Kind: kind, LocatorKeyID: p.locatorKeyID, Locator: locatorMAC.Sum(nil), Envelope: envelope, Encoded: encoded, SHA256: digest[:], RetainUntil: retainUntil}, nil
+	return SealedTombstone{Kind: kind, LocatorKeyID: p.locatorKeyID, Locator: locator, Envelope: envelope, Encoded: encoded, SHA256: digest[:], RetainUntil: retainUntil}, nil
 }
 
+// OpenRestoreTombstone preserves the v1 read path. V1 records are useful as
+// historical evidence but intentionally cannot produce a replay prescription.
 func OpenRestoreTombstone(privateKey []byte, executionID uuid.UUID, envelope TombstoneEnvelope) (RestoreTombstone, error) {
 	var zero RestoreTombstone
-	plaintext, err := openTombstoneEnvelope(privateKey, "intent", executionID, envelope)
+	if envelope.Version != TombstoneEnvelopeVersionV1 {
+		return zero, ErrTombstoneInvalid
+	}
+	plaintext, err := openTombstoneEnvelopeV1(privateKey, "intent", executionID, envelope)
 	if err != nil {
 		return zero, err
 	}
 	var record RestoreTombstone
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&record); err != nil || !validRestoreTombstone(record) || record.ExecutionID != executionID {
+	if err = decoder.Decode(&record); err != nil || ensureJSONEOF(decoder) != nil || !validLegacyRestoreTombstone(record) || record.ExecutionID != executionID {
+		return zero, ErrTombstoneInvalid
+	}
+	return record, nil
+}
+
+// OpenRestoreTombstoneV2 authenticates locator-bound data discovered by
+// listing opaque ledger objects; the execution UUID is learned only after AEAD
+// verification succeeds.
+func OpenRestoreTombstoneV2(privateKey []byte, locatorKeyID string, locator []byte, envelope TombstoneEnvelope) (RestoreTombstone, error) {
+	var zero RestoreTombstone
+	plaintext, err := openTombstoneEnvelopeV2(privateKey, "intent", locatorKeyID, locator, envelope)
+	if err != nil {
+		return zero, err
+	}
+	var record RestoreTombstone
+	decoder := json.NewDecoder(bytes.NewReader(plaintext))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&record); err != nil || ensureJSONEOF(decoder) != nil || !validReplayableRestoreTombstone(record) {
 		return zero, ErrTombstoneInvalid
 	}
 	return record, nil
@@ -190,25 +232,74 @@ func OpenRestoreTombstone(privateKey []byte, executionID uuid.UUID, envelope Tom
 
 func OpenRestoreTombstoneClosure(privateKey []byte, executionID uuid.UUID, envelope TombstoneEnvelope) (TombstoneClosure, error) {
 	var zero TombstoneClosure
-	plaintext, err := openTombstoneEnvelope(privateKey, "closure", executionID, envelope)
+	if envelope.Version != TombstoneEnvelopeVersionV1 {
+		return zero, ErrTombstoneInvalid
+	}
+	plaintext, err := openTombstoneEnvelopeV1(privateKey, "closure", executionID, envelope)
 	if err != nil {
 		return zero, err
 	}
 	var closure TombstoneClosure
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&closure); err != nil || closure.Version != TombstoneClosureVersion ||
-		!validRestoreTombstone(closure.Tombstone) || closure.Tombstone.ExecutionID != executionID || closure.ClosedAt.IsZero() ||
+	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil || closure.Version != TombstoneClosureVersionV1 ||
+		!validLegacyRestoreTombstone(closure.Tombstone) || closure.Tombstone.ExecutionID != executionID || closure.ClosedAt.IsZero() ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
 		return zero, ErrTombstoneInvalid
 	}
 	return closure, nil
 }
 
-func openTombstoneEnvelope(privateKey []byte, kind string, executionID uuid.UUID, envelope TombstoneEnvelope) ([]byte, error) {
-	if executionID == uuid.Nil || envelope.Version != TombstoneEnvelopeVersion || envelope.Algorithm != tombstoneAlgorithm || !policyKey.MatchString(envelope.KeyID) {
+func OpenRestoreTombstoneClosureV2(privateKey []byte, locatorKeyID string, locator []byte, envelope TombstoneEnvelope) (TombstoneClosure, error) {
+	var zero TombstoneClosure
+	plaintext, err := openTombstoneEnvelopeV2(privateKey, "closure", locatorKeyID, locator, envelope)
+	if err != nil {
+		return zero, err
+	}
+	var closure TombstoneClosure
+	decoder := json.NewDecoder(bytes.NewReader(plaintext))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil || closure.Version != TombstoneClosureVersion ||
+		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
+		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
+		return zero, ErrTombstoneInvalid
+	}
+	return closure, nil
+}
+
+// IsLegacyTombstoneEnvelope recognizes only the bounded, strict outer shape
+// emitted by v1. Its contents cannot be authenticated without the execution
+// UUID, so callers may report it as non-replayable but must never import it.
+func IsLegacyTombstoneEnvelope(encoded []byte) bool {
+	if len(encoded) == 0 || len(encoded) > maxTombstonePayloadBytes {
+		return false
+	}
+	var envelope TombstoneEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&envelope) == nil && ensureJSONEOF(decoder) == nil &&
+		envelope.Version == TombstoneEnvelopeVersionV1 && envelope.Algorithm == tombstoneAlgorithm && policyKey.MatchString(envelope.KeyID) &&
+		envelope.Kind == "" && envelope.LocatorKeyID == "" && len(envelope.LocatorDigest) == 0 &&
+		len(envelope.Encapsulation) == 32 && len(envelope.Nonce) == 12 && len(envelope.Ciphertext) >= 16
+}
+
+func openTombstoneEnvelopeV1(privateKey []byte, kind string, executionID uuid.UUID, envelope TombstoneEnvelope) ([]byte, error) {
+	if executionID == uuid.Nil || envelope.Version != TombstoneEnvelopeVersionV1 || envelope.Algorithm != tombstoneAlgorithm || !policyKey.MatchString(envelope.KeyID) {
 		return nil, ErrTombstoneInvalid
 	}
+	return openTombstoneEnvelope(privateKey, envelope, tombstoneAADV1(kind, executionID, envelope.KeyID))
+}
+
+func openTombstoneEnvelopeV2(privateKey []byte, kind, locatorKeyID string, locator []byte, envelope TombstoneEnvelope) ([]byte, error) {
+	if (kind != "intent" && kind != "closure") || !policyKey.MatchString(locatorKeyID) || len(locator) != sha256.Size ||
+		envelope.Version != TombstoneEnvelopeVersion || envelope.Algorithm != tombstoneAlgorithm || !policyKey.MatchString(envelope.KeyID) ||
+		envelope.Kind != kind || envelope.LocatorKeyID != locatorKeyID || !hmac.Equal(envelope.LocatorDigest, locator) {
+		return nil, ErrTombstoneInvalid
+	}
+	return openTombstoneEnvelope(privateKey, envelope, tombstoneAADV2(kind, locatorKeyID, locator, envelope.KeyID))
+}
+
+func openTombstoneEnvelope(privateKey []byte, envelope TombstoneEnvelope, aad []byte) ([]byte, error) {
 	private, err := ecdh.X25519().NewPrivateKey(privateKey)
 	if err != nil {
 		return nil, ErrTombstoneInvalid
@@ -222,7 +313,7 @@ func openTombstoneEnvelope(privateKey []byte, kind string, executionID uuid.UUID
 		return nil, ErrTombstoneInvalid
 	}
 	key := make([]byte, 32)
-	if _, err = io.ReadFull(hkdf.New(sha256.New, shared, nil, tombstoneAAD(kind, executionID, envelope.KeyID)), key); err != nil {
+	if _, err = io.ReadFull(hkdf.New(sha256.New, shared, nil, aad), key); err != nil {
 		return nil, ErrTombstoneInvalid
 	}
 	block, err := aes.NewCipher(key)
@@ -233,21 +324,48 @@ func openTombstoneEnvelope(privateKey []byte, kind string, executionID uuid.UUID
 	if err != nil || len(envelope.Nonce) != aead.NonceSize() {
 		return nil, ErrTombstoneInvalid
 	}
-	plaintext, err := aead.Open(nil, envelope.Nonce, envelope.Ciphertext, tombstoneAAD(kind, executionID, envelope.KeyID))
+	plaintext, err := aead.Open(nil, envelope.Nonce, envelope.Ciphertext, aad)
 	if err != nil {
 		return nil, ErrTombstoneInvalid
 	}
 	return plaintext, nil
 }
 
-func validRestoreTombstone(record RestoreTombstone) bool {
-	return record.Version == TombstoneRecordVersion && record.ExecutionID != uuid.Nil && record.RequestID != uuid.Nil &&
+func validRestoreTombstoneIdentity(record RestoreTombstone) bool {
+	return record.ExecutionID != uuid.Nil && record.RequestID != uuid.Nil &&
 		record.RequestRef != uuid.Nil && record.SubjectUserID != uuid.Nil && len(record.PlanSHA256) == sha256.Size &&
 		len(record.WorksetSHA256) == sha256.Size && !record.ExecutionStart.IsZero()
 }
 
-func tombstoneAAD(kind string, executionID uuid.UUID, keyID string) []byte {
-	return encodeFields("mycfc/restore-tombstone-aad/v1", kind, TombstoneEnvelopeVersion, tombstoneAlgorithm, keyID, executionID.String())
+func validLegacyRestoreTombstone(record RestoreTombstone) bool {
+	return record.Version == TombstoneRecordVersionV1 && record.Replay == nil && validRestoreTombstoneIdentity(record)
+}
+
+func validReplayableRestoreTombstone(record RestoreTombstone) bool {
+	return record.Version == TombstoneRecordVersion && validRestoreTombstoneIdentity(record) && validReplayPrescription(record.Replay)
+}
+
+func validReplayPrescription(prescription *RelationalReplayPrescription) bool {
+	if prescription == nil || prescription.Version != TombstoneReplayVersion || prescription.ActionVersion != SupportedActionVersion ||
+		len(prescription.Operations) == 0 || len(prescription.Operations) > len(relationalExecutableOperations) {
+		return false
+	}
+	seen := make(map[string]bool, len(prescription.Operations))
+	for _, operation := range prescription.Operations {
+		if !relationalExecutableOperation(operation) || seen[operation] {
+			return false
+		}
+		seen[operation] = true
+	}
+	return true
+}
+
+func tombstoneAADV1(kind string, executionID uuid.UUID, keyID string) []byte {
+	return encodeFields("mycfc/restore-tombstone-aad/v1", kind, TombstoneEnvelopeVersionV1, tombstoneAlgorithm, keyID, executionID.String())
+}
+
+func tombstoneAADV2(kind, locatorKeyID string, locator []byte, keyID string) []byte {
+	return encodeFields("mycfc/restore-tombstone-aad/v2", kind, TombstoneEnvelopeVersion, tombstoneAlgorithm, keyID, locatorKeyID, hex.EncodeToString(locator))
 }
 
 type TombstoneLedgerReceipt struct {
@@ -488,6 +606,7 @@ func (w TombstoneExportWorker) Export(ctx context.Context, lease ExecutionLease)
 		RequestRef: contextRow.RequestRef, SubjectUserID: contextRow.SubjectUserID,
 		PlanSHA256: bytes.Clone(contextRow.PlanSha256), WorksetSHA256: bytes.Clone(contextRow.WorksetSha256),
 		ExecutionStart: contextRow.ExecutionStartedAt.Time,
+		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: slices.Clone(contextRow.ReplayOperations)},
 	}
 	sealed, err := w.Protector.Seal(record)
 	if err != nil {
@@ -526,6 +645,7 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		Version: TombstoneRecordVersion, ExecutionID: row.ExecutionID, RequestID: row.RequestID, RequestRef: row.RequestRef,
 		SubjectUserID: row.SubjectUserID, PlanSHA256: bytes.Clone(row.PlanSha256), WorksetSHA256: bytes.Clone(row.WorksetSha256),
 		ExecutionStart: row.ExecutionStartedAt.Time,
+		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: slices.Clone(row.ReplayOperations)},
 	}
 	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: row.ClosedAt.Time, EvidenceExpiresAt: row.EvidenceExpiresAt.Time}
 	sealed, err := w.Protector.SealClosure(closure)

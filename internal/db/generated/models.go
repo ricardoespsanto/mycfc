@@ -1991,12 +1991,13 @@ type PrivacyErasureRetentionAnchor struct {
 }
 
 type PrivacyExecutorGrant struct {
-	ID        uuid.UUID          `json:"id"`
-	UserID    uuid.UUID          `json:"user_id"`
-	GrantedBy uuid.UUID          `json:"granted_by"`
-	GrantedAt pgtype.Timestamptz `json:"granted_at"`
-	RevokedBy *uuid.UUID         `json:"revoked_by"`
-	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	GrantedBy            uuid.UUID          `json:"granted_by"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy            *uuid.UUID         `json:"revoked_by"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type PrivacyExecutorGrantEvent struct {
@@ -2170,6 +2171,56 @@ type PrivacyProtectedObjectUploadIntentReservation struct {
 	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 }
 
+type PrivacyProtectedRestoreLedgerImport struct {
+	ID                 uuid.UUID          `json:"id"`
+	Kind               string             `json:"kind"`
+	RecordVersion      string             `json:"record_version"`
+	EnvelopeVersion    string             `json:"envelope_version"`
+	EncryptionKeyID    string             `json:"encryption_key_id"`
+	LocatorKeyID       string             `json:"locator_key_id"`
+	LocatorDigest      []byte             `json:"locator_digest"`
+	CiphertextSha256   []byte             `json:"ciphertext_sha256"`
+	ObjectVersionID    string             `json:"object_version_id"`
+	WrittenAt          pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt         pgtype.Timestamptz `json:"verified_at"`
+	RetainUntil        pgtype.Timestamptz `json:"retain_until"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID    uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	PlanSha256         []byte             `json:"plan_sha256"`
+	WorksetSha256      []byte             `json:"workset_sha256"`
+	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
+	ReplayVersion      string             `json:"replay_version"`
+	ActionVersion      string             `json:"action_version"`
+	Operations         []string           `json:"operations"`
+	PrescriptionSha256 []byte             `json:"prescription_sha256"`
+	RecordSha256       []byte             `json:"record_sha256"`
+	ImportedByRef      uuid.UUID          `json:"imported_by_ref"`
+	ImportedAt         pgtype.Timestamptz `json:"imported_at"`
+}
+
+type PrivacyProtectedRestoreReplayCheckpoint struct {
+	ID                uuid.UUID          `json:"id"`
+	RunID             uuid.UUID          `json:"run_id"`
+	OperationPosition int16              `json:"operation_position"`
+	OperationCode     string             `json:"operation_code"`
+	ActionVersion     string             `json:"action_version"`
+	Status            string             `json:"status"`
+	AffectedRows      *int64             `json:"affected_rows"`
+	ResultSha256      []byte             `json:"result_sha256"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+}
+
+type PrivacyProtectedRestoreReplayRun struct {
+	ID          uuid.UUID          `json:"id"`
+	ImportID    uuid.UUID          `json:"import_id"`
+	WorkerRef   uuid.UUID          `json:"worker_ref"`
+	Status      string             `json:"status"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+}
+
 type PrivacyProtectedRestoreTombstoneClosureIntent struct {
 	ExecutionID       uuid.UUID          `json:"execution_id"`
 	ClosedAt          pgtype.Timestamptz `json:"closed_at"`
@@ -2315,12 +2366,13 @@ type PrivacyRetentionRun struct {
 }
 
 type PrivacyReviewerGrant struct {
-	ID        uuid.UUID          `json:"id"`
-	UserID    uuid.UUID          `json:"user_id"`
-	GrantedBy uuid.UUID          `json:"granted_by"`
-	GrantedAt pgtype.Timestamptz `json:"granted_at"`
-	RevokedBy *uuid.UUID         `json:"revoked_by"`
-	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	GrantedBy            uuid.UUID          `json:"granted_by"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy            *uuid.UUID         `json:"revoked_by"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type PrivacyReviewerGrantEvent struct {
@@ -2373,16 +2425,17 @@ type Session struct {
 }
 
 type StaffGrant struct {
-	ID           uuid.UUID          `json:"id"`
-	UserID       uuid.UUID          `json:"user_id"`
-	Capability   StaffCapability    `json:"capability"`
-	ProgrammeID  *uuid.UUID         `json:"programme_id"`
-	TeamID       *uuid.UUID         `json:"team_id"`
-	GrantedByID  uuid.UUID          `json:"granted_by_id"`
-	GrantedAt    pgtype.Timestamptz `json:"granted_at"`
-	RevokedByID  *uuid.UUID         `json:"revoked_by_id"`
-	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
-	RevokeReason *string            `json:"revoke_reason"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	Capability           StaffCapability    `json:"capability"`
+	ProgrammeID          *uuid.UUID         `json:"programme_id"`
+	TeamID               *uuid.UUID         `json:"team_id"`
+	GrantedByID          uuid.UUID          `json:"granted_by_id"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedByID          *uuid.UUID         `json:"revoked_by_id"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokeReason         *string            `json:"revoke_reason"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type StaffGrantAuditEvent struct {
@@ -2393,6 +2446,7 @@ type StaffGrantAuditEvent struct {
 	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
 	Reason           *string            `json:"reason"`
 	ActorPrincipalID *uuid.UUID         `json:"actor_principal_id"`
+	ActorReplayRunID *uuid.UUID         `json:"actor_replay_run_id"`
 }
 
 type Suggestion struct {
@@ -2697,6 +2751,7 @@ type User struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	ErasedAt           pgtype.Timestamptz `json:"erased_at"`
 	ErasureExecutionID *uuid.UUID         `json:"erasure_execution_id"`
+	ErasureReplayRunID *uuid.UUID         `json:"erasure_replay_run_id"`
 }
 
 type UserMembership struct {

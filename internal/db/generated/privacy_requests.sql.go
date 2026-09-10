@@ -167,6 +167,22 @@ func (q *Queries) AuthorizePrivacyErasureJobLease(ctx context.Context, arg Autho
 	return i, err
 }
 
+const beginPrivacyRestoreReplay = `-- name: BeginPrivacyRestoreReplay :one
+SELECT privacy_restore_begin_replay($1,$2)::uuid
+`
+
+type BeginPrivacyRestoreReplayParams struct {
+	ImportID  uuid.UUID `json:"import_id"`
+	WorkerRef uuid.UUID `json:"worker_ref"`
+}
+
+func (q *Queries) BeginPrivacyRestoreReplay(ctx context.Context, arg BeginPrivacyRestoreReplayParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, beginPrivacyRestoreReplay, arg.ImportID, arg.WorkerRef)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const callPrivacyWorkerExecuteCheckpoint = `-- name: CallPrivacyWorkerExecuteCheckpoint :one
 SELECT id FROM (
  SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)::uuid AS id
@@ -267,7 +283,7 @@ func (q *Queries) CompletePrivacyWorkerObjectCheckpoint(ctx context.Context, arg
 }
 
 const confirmPrivacyRestoreTombstone = `-- name: ConfirmPrivacyRestoreTombstone :one
-SELECT privacy_tombstone_confirm(
+SELECT privacy_tombstone_confirm_v2(
  $1,$2,$3,$4,$5,
  $6,$7,$8,$9,
  $10,$11,$12,$13,$14
@@ -314,7 +330,7 @@ func (q *Queries) ConfirmPrivacyRestoreTombstone(ctx context.Context, arg Confir
 }
 
 const confirmPrivacyTombstoneClosure = `-- name: ConfirmPrivacyTombstoneClosure :one
-SELECT privacy_tombstone_confirm_closure(
+SELECT privacy_tombstone_confirm_closure_v2(
  $1,$2,$3,$4,
  $5,$6,$7,$8,
  $9,$10,$11
@@ -721,7 +737,7 @@ func (q *Queries) DeletePrivacySessionsByUser(ctx context.Context, userID *uuid.
 
 const disablePrivacyAccountForExecution = `-- name: DisablePrivacyAccountForExecution :one
 UPDATE users SET is_active=false,credential_version=credential_version+1,updated_at=$1
-WHERE id=$2 AND is_active RETURNING id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id
+WHERE id=$2 AND is_active RETURNING id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id
 `
 
 type DisablePrivacyAccountForExecutionParams struct {
@@ -749,6 +765,7 @@ func (q *Queries) DisablePrivacyAccountForExecution(ctx context.Context, arg Dis
 		&i.UpdatedAt,
 		&i.ErasedAt,
 		&i.ErasureExecutionID,
+		&i.ErasureReplayRunID,
 	)
 	return i, err
 }
@@ -781,6 +798,35 @@ func (q *Queries) EnqueuePrivacyRequestEmail(ctx context.Context, arg EnqueuePri
 	return id, err
 }
 
+const executePrivacyRestoreReplayCheckpoint = `-- name: ExecutePrivacyRestoreReplayCheckpoint :one
+SELECT privacy_restore_execute_checkpoint(
+ $1,$2,$3,$4,$5,$6
+)::uuid
+`
+
+type ExecutePrivacyRestoreReplayCheckpointParams struct {
+	RunID              uuid.UUID `json:"run_id"`
+	WorkerRef          uuid.UUID `json:"worker_ref"`
+	OperationPosition  int16     `json:"operation_position"`
+	OperationCode      string    `json:"operation_code"`
+	ActionVersion      string    `json:"action_version"`
+	PrescriptionSha256 []byte    `json:"prescription_sha256"`
+}
+
+func (q *Queries) ExecutePrivacyRestoreReplayCheckpoint(ctx context.Context, arg ExecutePrivacyRestoreReplayCheckpointParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, executePrivacyRestoreReplayCheckpoint,
+		arg.RunID,
+		arg.WorkerRef,
+		arg.OperationPosition,
+		arg.OperationCode,
+		arg.ActionVersion,
+		arg.PrescriptionSha256,
+	)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const expireLegacyPrivacySessionsBy = `-- name: ExpireLegacyPrivacySessionsBy :execrows
 WITH authority_clock AS MATERIALIZED (SELECT clock_timestamp() AS occurred_at)
 UPDATE sessions SET expiry=authority_clock.occurred_at
@@ -796,7 +842,7 @@ func (q *Queries) ExpireLegacyPrivacySessionsBy(ctx context.Context) (int64, err
 }
 
 const getPrivacyAccountForUpdate = `-- name: GetPrivacyAccountForUpdate :one
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id FROM users WHERE id = $1 FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM users WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
@@ -819,6 +865,7 @@ func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) 
 		&i.UpdatedAt,
 		&i.ErasedAt,
 		&i.ErasureExecutionID,
+		&i.ErasureReplayRunID,
 	)
 	return i, err
 }
@@ -1041,7 +1088,7 @@ func (q *Queries) GetPrivacyExecutionPlan(ctx context.Context, requestID uuid.UU
 }
 
 const getPrivacyExecutorGrantForShare = `-- name: GetPrivacyExecutorGrantForShare :one
-SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at FROM privacy_executor_grants WHERE user_id=$1 AND revoked_at IS NULL FOR SHARE
+SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id FROM privacy_executor_grants WHERE user_id=$1 AND revoked_at IS NULL FOR SHARE
 `
 
 func (q *Queries) GetPrivacyExecutorGrantForShare(ctx context.Context, userID uuid.UUID) (PrivacyExecutorGrant, error) {
@@ -1054,6 +1101,7 @@ func (q *Queries) GetPrivacyExecutorGrantForShare(ctx context.Context, userID uu
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
 }
@@ -1304,7 +1352,7 @@ func (q *Queries) GetPrivacyRequestForUpdate(ctx context.Context, publicRef uuid
 }
 
 const getPrivacyReviewerGrantForShare = `-- name: GetPrivacyReviewerGrantForShare :one
-SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at FROM privacy_reviewer_grants WHERE user_id = $1 AND revoked_at IS NULL FOR SHARE
+SELECT id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id FROM privacy_reviewer_grants WHERE user_id = $1 AND revoked_at IS NULL FOR SHARE
 `
 
 func (q *Queries) GetPrivacyReviewerGrantForShare(ctx context.Context, userID uuid.UUID) (PrivacyReviewerGrant, error) {
@@ -1317,13 +1365,14 @@ func (q *Queries) GetPrivacyReviewerGrantForShare(ctx context.Context, userID uu
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
 }
 
 const grantPrivacyExecutor = `-- name: GrantPrivacyExecutor :one
 INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at)
-VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type GrantPrivacyExecutorParams struct {
@@ -1342,12 +1391,13 @@ func (q *Queries) GrantPrivacyExecutor(ctx context.Context, arg GrantPrivacyExec
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
 }
 
 const grantPrivacyReviewer = `-- name: GrantPrivacyReviewer :one
-INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3) RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type GrantPrivacyReviewerParams struct {
@@ -1366,8 +1416,78 @@ func (q *Queries) GrantPrivacyReviewer(ctx context.Context, arg GrantPrivacyRevi
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
+}
+
+const importAuthenticatedPrivacyRestoreTombstoneV2 = `-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2 :one
+SELECT privacy_restore_import_authenticated_v2(
+ $1,$2,$3,$4,$5,
+ $6,$7,$8,$9,
+ $10,$11,$12,$13,$14,
+ $15,$16,$17,$18,$19,
+ $20,$21,$22::text[],$23,$24
+)::uuid
+`
+
+type ImportAuthenticatedPrivacyRestoreTombstoneV2Params struct {
+	WorkerRef          uuid.UUID          `json:"worker_ref"`
+	Kind               string             `json:"kind"`
+	RecordVersion      string             `json:"record_version"`
+	EnvelopeVersion    string             `json:"envelope_version"`
+	EncryptionKeyID    string             `json:"encryption_key_id"`
+	LocatorKeyID       string             `json:"locator_key_id"`
+	LocatorDigest      []byte             `json:"locator_digest"`
+	CiphertextSha256   []byte             `json:"ciphertext_sha256"`
+	ObjectVersionID    string             `json:"object_version_id"`
+	WrittenAt          pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt         pgtype.Timestamptz `json:"verified_at"`
+	RetainUntil        pgtype.Timestamptz `json:"retain_until"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID    uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	PlanSha256         []byte             `json:"plan_sha256"`
+	WorksetSha256      []byte             `json:"workset_sha256"`
+	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
+	ReplayVersion      string             `json:"replay_version"`
+	ActionVersion      string             `json:"action_version"`
+	Operations         []string           `json:"operations"`
+	PrescriptionSha256 []byte             `json:"prescription_sha256"`
+	RecordSha256       []byte             `json:"record_sha256"`
+}
+
+func (q *Queries) ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2Params) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, importAuthenticatedPrivacyRestoreTombstoneV2,
+		arg.WorkerRef,
+		arg.Kind,
+		arg.RecordVersion,
+		arg.EnvelopeVersion,
+		arg.EncryptionKeyID,
+		arg.LocatorKeyID,
+		arg.LocatorDigest,
+		arg.CiphertextSha256,
+		arg.ObjectVersionID,
+		arg.WrittenAt,
+		arg.VerifiedAt,
+		arg.RetainUntil,
+		arg.SourceExecutionID,
+		arg.SourceRequestID,
+		arg.SourceRequestRef,
+		arg.SubjectUserID,
+		arg.PlanSha256,
+		arg.WorksetSha256,
+		arg.ExecutionStartedAt,
+		arg.ReplayVersion,
+		arg.ActionVersion,
+		arg.Operations,
+		arg.PrescriptionSha256,
+		arg.RecordSha256,
+	)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const invalidatePrivacyAccountTokens = `-- name: InvalidatePrivacyAccountTokens :one
@@ -1450,7 +1570,7 @@ func (q *Queries) ListPrivacyDependantResolutions(ctx context.Context, requestID
 }
 
 const listPrivacyDependantsForUpdate = `-- name: ListPrivacyDependantsForUpdate :many
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id FROM users WHERE guardian_id = $1 ORDER BY id FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM users WHERE guardian_id = $1 ORDER BY id FOR UPDATE
 `
 
 func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID *uuid.UUID) ([]User, error) {
@@ -1479,6 +1599,7 @@ func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID
 			&i.UpdatedAt,
 			&i.ErasedAt,
 			&i.ErasureExecutionID,
+			&i.ErasureReplayRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -1871,8 +1992,9 @@ SELECT prepared.execution_id::uuid AS execution_id,
  prepared.subject_user_id::uuid AS subject_user_id,
  prepared.plan_sha256::bytea AS plan_sha256,
  prepared.workset_sha256::bytea AS workset_sha256,
- prepared.execution_started_at::timestamptz AS execution_started_at
-FROM privacy_tombstone_prepare(
+ prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_v2(
  $1,$2,$3,$4,$5
 ) AS prepared
 `
@@ -1893,6 +2015,7 @@ type PreparePrivacyRestoreTombstoneRow struct {
 	PlanSha256         []byte             `json:"plan_sha256"`
 	WorksetSha256      []byte             `json:"workset_sha256"`
 	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
+	ReplayOperations   []string           `json:"replay_operations"`
 }
 
 func (q *Queries) PreparePrivacyRestoreTombstone(ctx context.Context, arg PreparePrivacyRestoreTombstoneParams) (PreparePrivacyRestoreTombstoneRow, error) {
@@ -1912,6 +2035,7 @@ func (q *Queries) PreparePrivacyRestoreTombstone(ctx context.Context, arg Prepar
 		&i.PlanSha256,
 		&i.WorksetSha256,
 		&i.ExecutionStartedAt,
+		&i.ReplayOperations,
 	)
 	return i, err
 }
@@ -1925,8 +2049,9 @@ SELECT prepared.execution_id::uuid AS execution_id,
  prepared.workset_sha256::bytea AS workset_sha256,
  prepared.execution_started_at::timestamptz AS execution_started_at,
  prepared.closed_at::timestamptz AS closed_at,
- prepared.evidence_expires_at::timestamptz AS evidence_expires_at
-FROM privacy_tombstone_prepare_closure($1,$2) AS prepared
+ prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v2($1,$2) AS prepared
 `
 
 type PreparePrivacyTombstoneClosureParams struct {
@@ -1944,6 +2069,7 @@ type PreparePrivacyTombstoneClosureRow struct {
 	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
 	ClosedAt           pgtype.Timestamptz `json:"closed_at"`
 	EvidenceExpiresAt  pgtype.Timestamptz `json:"evidence_expires_at"`
+	ReplayOperations   []string           `json:"replay_operations"`
 }
 
 func (q *Queries) PreparePrivacyTombstoneClosure(ctx context.Context, arg PreparePrivacyTombstoneClosureParams) (PreparePrivacyTombstoneClosureRow, error) {
@@ -1959,8 +2085,30 @@ func (q *Queries) PreparePrivacyTombstoneClosure(ctx context.Context, arg Prepar
 		&i.ExecutionStartedAt,
 		&i.ClosedAt,
 		&i.EvidenceExpiresAt,
+		&i.ReplayOperations,
 	)
 	return i, err
+}
+
+const privacyRestoreReplayAlreadyApplied = `-- name: PrivacyRestoreReplayAlreadyApplied :one
+SELECT EXISTS(
+ SELECT 1 FROM privacy_protected.restore_ledger_imports imported
+ JOIN privacy_protected.restore_replay_runs run ON run.import_id=imported.id
+ WHERE imported.locator_key_id=$1 AND imported.locator_digest=$2
+  AND run.status='SUCCEEDED'
+)::boolean
+`
+
+type PrivacyRestoreReplayAlreadyAppliedParams struct {
+	LocatorKeyID  string `json:"locator_key_id"`
+	LocatorDigest []byte `json:"locator_digest"`
+}
+
+func (q *Queries) PrivacyRestoreReplayAlreadyApplied(ctx context.Context, arg PrivacyRestoreReplayAlreadyAppliedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, privacyRestoreReplayAlreadyApplied, arg.LocatorKeyID, arg.LocatorDigest)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const recordPrivacyWorkerObjectEvidence = `-- name: RecordPrivacyWorkerObjectEvidence :one
@@ -2008,7 +2156,7 @@ func (q *Queries) RecordPrivacyWorkerObjectEvidence(ctx context.Context, arg Rec
 
 const revokePrivacyExecutor = `-- name: RevokePrivacyExecutor :one
 UPDATE privacy_executor_grants SET revoked_by=$1,revoked_at=$2
-WHERE id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+WHERE id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type RevokePrivacyExecutorParams struct {
@@ -2027,13 +2175,14 @@ func (q *Queries) RevokePrivacyExecutor(ctx context.Context, arg RevokePrivacyEx
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
 }
 
 const revokePrivacyExecutorGrantsForExecution = `-- name: RevokePrivacyExecutorGrantsForExecution :many
 UPDATE privacy_executor_grants SET revoked_by=$1,revoked_at=$2
-WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type RevokePrivacyExecutorGrantsForExecutionParams struct {
@@ -2058,6 +2207,7 @@ func (q *Queries) RevokePrivacyExecutorGrantsForExecution(ctx context.Context, a
 			&i.GrantedAt,
 			&i.RevokedBy,
 			&i.RevokedAt,
+			&i.RevokedByReplayRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -2097,7 +2247,7 @@ func (q *Queries) RevokePrivacyPlatformRolesForExecution(ctx context.Context, us
 }
 
 const revokePrivacyReviewer = `-- name: RevokePrivacyReviewer :one
-UPDATE privacy_reviewer_grants SET revoked_by = $1, revoked_at = $2 WHERE id = $3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+UPDATE privacy_reviewer_grants SET revoked_by = $1, revoked_at = $2 WHERE id = $3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type RevokePrivacyReviewerParams struct {
@@ -2116,13 +2266,14 @@ func (q *Queries) RevokePrivacyReviewer(ctx context.Context, arg RevokePrivacyRe
 		&i.GrantedAt,
 		&i.RevokedBy,
 		&i.RevokedAt,
+		&i.RevokedByReplayRunID,
 	)
 	return i, err
 }
 
 const revokePrivacyReviewerGrantsForExecution = `-- name: RevokePrivacyReviewerGrantsForExecution :many
 UPDATE privacy_reviewer_grants SET revoked_by=$1,revoked_at=$2
-WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, granted_by, granted_at, revoked_by, revoked_at, revoked_by_replay_run_id
 `
 
 type RevokePrivacyReviewerGrantsForExecutionParams struct {
@@ -2147,6 +2298,7 @@ func (q *Queries) RevokePrivacyReviewerGrantsForExecution(ctx context.Context, a
 			&i.GrantedAt,
 			&i.RevokedBy,
 			&i.RevokedAt,
+			&i.RevokedByReplayRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -2160,7 +2312,7 @@ func (q *Queries) RevokePrivacyReviewerGrantsForExecution(ctx context.Context, a
 
 const revokePrivacyStaffGrantsForExecution = `-- name: RevokePrivacyStaffGrantsForExecution :many
 UPDATE staff_grants SET revoked_by_id=$1,revoked_at=$2,revoke_reason='PRIVACY_ACCOUNT_CLOSURE'
-WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, capability, programme_id, team_id, granted_by_id, granted_at, revoked_by_id, revoked_at, revoke_reason
+WHERE user_id=$3 AND revoked_at IS NULL RETURNING id, user_id, capability, programme_id, team_id, granted_by_id, granted_at, revoked_by_id, revoked_at, revoke_reason, revoked_by_replay_run_id
 `
 
 type RevokePrivacyStaffGrantsForExecutionParams struct {
@@ -2189,6 +2341,7 @@ func (q *Queries) RevokePrivacyStaffGrantsForExecution(ctx context.Context, arg 
 			&i.RevokedByID,
 			&i.RevokedAt,
 			&i.RevokeReason,
+			&i.RevokedByReplayRunID,
 		); err != nil {
 			return nil, err
 		}

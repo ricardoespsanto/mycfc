@@ -94,22 +94,39 @@ func TestPrivacyRestoreLedgerFencesDestructionAndRecordsClosure(t *testing.T) {
 	if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT missing_tombstone`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = tx.Exec(ctx, `SAVEPOINT legacy_tombstone`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.restore_tombstone_receipts(
+		execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+		VALUES($1,$2,'restore-tombstone/v1','legacy-encrypt','legacy-locator',$3,'legacy-version',$4,512,$5,$5)`,
+		executionID, requestID, bytes.Repeat([]byte{0x31}, 32), bytes.Repeat([]byte{0x32}, 32), now); err != nil {
+		t.Fatal(err)
+	}
+	err = tx.QueryRow(ctx, `SELECT privacy_worker_execute_checkpoint($1,$2,$3,1,$4,'AUTH_TOKEN_DELETE','v1')`, destructive.job, destructive.lease, destructive.attempt, worker).Scan(&ignored)
+	if err == nil || !strings.Contains(err.Error(), "privacy_restore_tombstone_required") {
+		t.Fatalf("legacy non-replayable receipt authorized destruction error=%v", err)
+	}
+	if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT legacy_tombstone`); err != nil {
+		t.Fatal(err)
+	}
 
 	var preparedExecution, preparedRequest, requestRef, preparedSubject uuid.UUID
 	var preparedPlan, workset []byte
 	var executionStarted time.Time
-	if err = tx.QueryRow(ctx, `SELECT * FROM privacy_tombstone_prepare($1,$2,$3,1,$4)`, tombstone.job, tombstone.lease, tombstone.attempt, worker).
-		Scan(&preparedExecution, &preparedRequest, &requestRef, &preparedSubject, &preparedPlan, &workset, &executionStarted); err != nil {
+	var replayOperations []string
+	if err = tx.QueryRow(ctx, `SELECT * FROM privacy_tombstone_prepare_v2($1,$2,$3,1,$4)`, tombstone.job, tombstone.lease, tombstone.attempt, worker).
+		Scan(&preparedExecution, &preparedRequest, &requestRef, &preparedSubject, &preparedPlan, &workset, &executionStarted, &replayOperations); err != nil {
 		t.Fatal(err)
 	}
-	if preparedExecution != executionID || preparedRequest != requestID || preparedSubject != subject || requestRef == uuid.Nil || !bytes.Equal(preparedPlan, planDigest) || len(workset) != 32 {
+	if preparedExecution != executionID || preparedRequest != requestID || preparedSubject != subject || requestRef == uuid.Nil || !bytes.Equal(preparedPlan, planDigest) || len(workset) != 32 || len(replayOperations) != 1 || replayOperations[0] != "AUTH_TOKEN_DELETE" {
 		t.Fatalf("unexpected tombstone context execution=%s request=%s subject=%s workset=%x", preparedExecution, preparedRequest, preparedSubject, workset)
 	}
 	if _, err = tx.Exec(ctx, `SAVEPOINT stale_lease`); err != nil {
 		t.Fatal(err)
 	}
-	err = tx.QueryRow(ctx, `SELECT * FROM privacy_tombstone_prepare($1,$2,$3,2,$4)`, tombstone.job, tombstone.lease, tombstone.attempt, worker).
-		Scan(&preparedExecution, &preparedRequest, &requestRef, &preparedSubject, &preparedPlan, &workset, &executionStarted)
+	err = tx.QueryRow(ctx, `SELECT * FROM privacy_tombstone_prepare_v2($1,$2,$3,2,$4)`, tombstone.job, tombstone.lease, tombstone.attempt, worker).
+		Scan(&preparedExecution, &preparedRequest, &requestRef, &preparedSubject, &preparedPlan, &workset, &executionStarted, &replayOperations)
 	if err != pgx.ErrNoRows {
 		t.Fatalf("stale lease error=%v", err)
 	}
@@ -119,7 +136,7 @@ func TestPrivacyRestoreLedgerFencesDestructionAndRecordsClosure(t *testing.T) {
 
 	writtenAt, verifiedAt := now.Add(5*time.Minute), now.Add(6*time.Minute)
 	locator, ciphertext := bytes.Repeat([]byte{0x55}, 32), bytes.Repeat([]byte{0x66}, 32)
-	if err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm($1,$2,$3,1,$4,'restore-tombstone/v1','encrypt-v1','locator-v1',$5,'object-version-1',$6,512,$7,$8)`,
+	if err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm_v2($1,$2,$3,1,$4,'restore-tombstone/v2','encrypt-v2','locator-v2',$5,'object-version-1',$6,512,$7,$8)`,
 		tombstone.job, tombstone.lease, tombstone.attempt, worker, locator, ciphertext, writtenAt, verifiedAt).Scan(&ignored); err != nil {
 		t.Fatal(err)
 	}
@@ -146,21 +163,21 @@ func TestPrivacyRestoreLedgerFencesDestructionAndRecordsClosure(t *testing.T) {
 	}
 
 	var closedAt, expiresAt time.Time
-	if err = tx.QueryRow(ctx, `SELECT closed_at,evidence_expires_at FROM privacy_tombstone_prepare_closure($1,$2)`, executionID, worker).Scan(&closedAt, &expiresAt); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT closed_at,evidence_expires_at FROM privacy_tombstone_prepare_closure_v2($1,$2)`, executionID, worker).Scan(&closedAt, &expiresAt); err != nil {
 		t.Fatal(err)
 	}
 	if !expiresAt.Equal(closedAt.AddDate(0, 24, 0)) {
 		t.Fatalf("closure expiry=%s want=%s", expiresAt, closedAt.AddDate(0, 24, 0))
 	}
 	closureLocator := bytes.Repeat([]byte{0x77}, 32)
-	if err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm_closure($1,$2,'restore-tombstone-closure/v1','encrypt-v1','locator-v1',$3,'closure-version-1',$4,768,$5,$6)`,
+	if err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm_closure_v2($1,$2,'restore-tombstone-closure/v2','encrypt-v2','locator-v2',$3,'closure-version-1',$4,768,$5,$6)`,
 		executionID, worker, closureLocator, ciphertext, closedAt, closedAt.Add(time.Second)).Scan(&ignored); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `SAVEPOINT closure_conflict`); err != nil {
 		t.Fatal(err)
 	}
-	err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm_closure($1,$2,'restore-tombstone-closure/v1','encrypt-v1','locator-v1',$3,'different-version',$4,768,$5,$6)`,
+	err = tx.QueryRow(ctx, `SELECT privacy_tombstone_confirm_closure_v2($1,$2,'restore-tombstone-closure/v2','encrypt-v2','locator-v2',$3,'different-version',$4,768,$5,$6)`,
 		executionID, worker, closureLocator, ciphertext, closedAt, closedAt.Add(time.Second)).Scan(&ignored)
 	if err == nil || !strings.Contains(err.Error(), "privacy_tombstone_closure_receipt_conflict") {
 		t.Fatalf("closure overwrite error=%v", err)
@@ -347,6 +364,60 @@ func TestPrivacyRestoreAndRetentionForwardMigrationsAreAdditive(t *testing.T) {
 		t.Fatalf("create isolated baseline: %v", err)
 	}
 	if _, err = conn.Exec(ctx, `
+		DROP FUNCTION privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea);
+		DROP FUNCTION privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text);
+		DROP FUNCTION privacy_restore_begin_replay(uuid,uuid);
+		DROP FUNCTION privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea);
+		DROP FUNCTION privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);
+		DROP FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid);
+		DROP FUNCTION privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz);
+		DROP FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid);
+		DROP FUNCTION privacy_relational_replay_operation_supported(text);
+		CREATE OR REPLACE FUNCTION audit_staff_grant_change() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+		 IF TG_OP='INSERT' THEN INSERT INTO staff_grant_audit_events(staff_grant_id,action,actor_user_id) VALUES(NEW.id,'GRANTED',NEW.granted_by_id); RETURN NEW; END IF;
+		 IF OLD.user_id<>NEW.user_id OR OLD.capability<>NEW.capability OR OLD.programme_id IS DISTINCT FROM NEW.programme_id
+		  OR OLD.team_id IS DISTINCT FROM NEW.team_id OR OLD.granted_by_id<>NEW.granted_by_id OR OLD.granted_at<>NEW.granted_at
+		  OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL THEN RAISE EXCEPTION 'staff grants are immutable except for one revocation'; END IF;
+		 INSERT INTO staff_grant_audit_events(staff_grant_id,action,actor_user_id,occurred_at,reason)
+		 VALUES(NEW.id,'REVOKED',NEW.revoked_by_id,NEW.revoked_at,NEW.revoke_reason); RETURN NEW;
+		END; $$;
+		ALTER TABLE staff_grant_audit_events DROP CONSTRAINT staff_grant_audit_actor_principal_exactly_one,
+		 DROP COLUMN actor_replay_run_id,
+		 ADD CONSTRAINT staff_grant_audit_actor_principal_exactly_one CHECK(num_nonnulls(actor_user_id,actor_principal_id)=1);
+		ALTER TABLE staff_grants DROP CONSTRAINT staff_grants_revocation_valid,
+		 DROP COLUMN revoked_by_replay_run_id,
+		 ADD CONSTRAINT staff_grants_revocation_valid CHECK(
+		  (revoked_at IS NULL AND revoked_by_id IS NULL AND revoke_reason IS NULL)
+		  OR (revoked_at IS NOT NULL AND revoked_by_id IS NOT NULL AND revoke_reason=btrim(revoke_reason) AND char_length(revoke_reason) BETWEEN 1 AND 500));
+		ALTER TABLE privacy_reviewer_grants DROP CONSTRAINT privacy_reviewer_grants_revocation_actor_exactly_one,
+		 DROP COLUMN revoked_by_replay_run_id,
+		 ADD CONSTRAINT privacy_reviewer_grants_check CHECK((revoked_at IS NULL)=(revoked_by IS NULL));
+		ALTER TABLE privacy_executor_grants DROP CONSTRAINT privacy_executor_grants_revocation_actor_exactly_one,
+		 DROP COLUMN revoked_by_replay_run_id,
+		 ADD CONSTRAINT privacy_executor_grants_check CHECK((revoked_at IS NULL)=(revoked_by IS NULL));
+		ALTER TABLE users DROP CONSTRAINT users_identity_shape;
+		ALTER TABLE users DROP COLUMN erasure_replay_run_id;
+		ALTER TABLE users ADD CONSTRAINT users_identity_shape CHECK (
+		 (erased_at IS NULL AND erasure_execution_id IS NULL AND (
+		   (is_dependent AND guardian_id IS NOT NULL AND email IS NULL AND
+		    ((minor_login_id IS NULL AND password_hash IS NULL) OR (minor_login_id IS NOT NULL AND password_hash IS NOT NULL)))
+		   OR
+		   (NOT is_dependent AND guardian_id IS NULL AND email IS NOT NULL AND password_hash IS NOT NULL AND minor_login_id IS NULL)
+		 ))
+		 OR
+		 (erased_at IS NOT NULL AND erasure_execution_id IS NOT NULL AND NOT is_active
+		  AND NOT leaderboard_visible AND NOT is_dependent AND guardian_id IS NULL
+		  AND email IS NULL AND email_verified_at IS NULL AND minor_login_id IS NULL
+		  AND password_hash IS NULL AND name='Conta eliminada' AND date_of_birth=DATE '1900-01-01')
+		);
+		DROP TABLE `+protected+`.restore_replay_checkpoints,`+protected+`.restore_replay_runs,`+protected+`.restore_ledger_imports;
+		ALTER TABLE `+protected+`.restore_tombstone_receipts
+		 DROP CONSTRAINT restore_tombstone_receipts_ledger_version_check,
+		 ADD CONSTRAINT restore_tombstone_receipts_ledger_version_check CHECK(ledger_version='restore-tombstone/v1');
+		ALTER TABLE `+protected+`.restore_tombstone_closure_receipts
+		 DROP CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check,
+		 ADD CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check CHECK(ledger_version='restore-tombstone-closure/v1');
 		DROP FUNCTION privacy_retention_run(uuid,integer);
 		DROP TABLE privacy_outbox_delivery_evidence,privacy_retention_runs;
 		DROP INDEX email_verification_tokens_retention_idx,password_reset_tokens_retention_idx,event_responses_retention_idx,announcement_deliveries_retention_idx,suggestions_retention_idx;
@@ -366,7 +437,7 @@ func TestPrivacyRestoreAndRetentionForwardMigrationsAreAdditive(t *testing.T) {
 	if _, err = conn.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES('pre-247-session','x',clock_timestamp()+interval '1 day',$1,true)`, userID); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"migrations/202609100006_privacy_restore_ledger.sql", "migrations/202609100007_retention_maintenance.sql"} {
+	for _, name := range []string{"migrations/202609100006_privacy_restore_ledger.sql", "migrations/202609100007_retention_maintenance.sql", "migrations/202609100008_privacy_tombstone_replay.sql"} {
 		migration, readErr := migrationFiles.ReadFile(name)
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -375,16 +446,20 @@ func TestPrivacyRestoreAndRetentionForwardMigrationsAreAdditive(t *testing.T) {
 			t.Fatalf("apply %s: %v", name, err)
 		}
 	}
-	var userPreserved, sessionPreserved, receiptTable, retentionTable, guardedWorker, originalWorker bool
+	var userPreserved, sessionPreserved, receiptTable, retentionTable, importTable, replayColumn, replayAPI, guardedWorker, originalWorker bool
 	if err = conn.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM users WHERE id=$1),EXISTS(SELECT 1 FROM sessions WHERE token='pre-247-session'),
-		to_regclass($2) IS NOT NULL,to_regclass('privacy_retention_runs') IS NOT NULL,
+		to_regclass($2) IS NOT NULL,to_regclass('privacy_retention_runs') IS NOT NULL,to_regclass($3) IS NOT NULL,
+		EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='users' AND column_name='erasure_replay_run_id'),
+		to_regprocedure('privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea)') IS NOT NULL,
 		to_regprocedure('privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)') IS NOT NULL,
 		to_regprocedure('privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text)') IS NOT NULL`,
-		userID, protectedName+".restore_tombstone_receipts").Scan(&userPreserved, &sessionPreserved, &receiptTable, &retentionTable, &guardedWorker, &originalWorker); err != nil {
+		userID, protectedName+".restore_tombstone_receipts", protectedName+".restore_ledger_imports").
+		Scan(&userPreserved, &sessionPreserved, &receiptTable, &retentionTable, &importTable, &replayColumn, &replayAPI, &guardedWorker, &originalWorker); err != nil {
 		t.Fatal(err)
 	}
-	if !userPreserved || !sessionPreserved || !receiptTable || !retentionTable || !guardedWorker || !originalWorker {
-		t.Fatalf("migration additive user=%t session=%t receipt=%t retention=%t guard=%t original=%t", userPreserved, sessionPreserved, receiptTable, retentionTable, guardedWorker, originalWorker)
+	if !userPreserved || !sessionPreserved || !receiptTable || !retentionTable || !importTable || !replayColumn || !replayAPI || !guardedWorker || !originalWorker {
+		t.Fatalf("migration additive user=%t session=%t receipt=%t retention=%t imports=%t replay_column=%t replay_api=%t guard=%t original=%t",
+			userPreserved, sessionPreserved, receiptTable, retentionTable, importTable, replayColumn, replayAPI, guardedWorker, originalWorker)
 	}
 }

@@ -26,6 +26,7 @@ func tombstoneFixture() RestoreTombstone {
 		Version: TombstoneRecordVersion, ExecutionID: uuid.New(), RequestID: uuid.New(), RequestRef: uuid.New(),
 		SubjectUserID: uuid.New(), PlanSHA256: bytes.Repeat([]byte{0x11}, 32), WorksetSHA256: bytes.Repeat([]byte{0x22}, 32),
 		ExecutionStart: time.Date(2026, time.September, 10, 9, 30, 0, 0, time.UTC),
+		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: []string{"AUTH_TOKEN_DELETE", "IDENTITY_CLEAR"}},
 	}
 }
 
@@ -56,17 +57,19 @@ func TestTombstoneEnvelopeIsRandomizedBoundAndRoundTrips(t *testing.T) {
 	if bytes.Equal(first.Encoded, second.Encoded) || !bytes.Equal(first.Locator, second.Locator) {
 		t.Fatal("encryption was deterministic or stable locator changed")
 	}
-	opened, err := OpenRestoreTombstone(private, record.ExecutionID, first.Envelope)
+	opened, err := OpenRestoreTombstoneV2(private, first.LocatorKeyID, first.Locator, first.Envelope)
 	if err != nil || opened.ExecutionID != record.ExecutionID || !bytes.Equal(opened.WorksetSHA256, record.WorksetSHA256) {
 		t.Fatalf("opened=%+v err=%v", opened, err)
 	}
-	if _, err = OpenRestoreTombstone(private, uuid.New(), first.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
-		t.Fatalf("wrong execution error=%v", err)
+	wrongLocator := bytes.Clone(first.Locator)
+	wrongLocator[0] ^= 0xff
+	if _, err = OpenRestoreTombstoneV2(private, first.LocatorKeyID, wrongLocator, first.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("wrong locator error=%v", err)
 	}
 	tampered := first.Envelope
 	tampered.Ciphertext = bytes.Clone(first.Envelope.Ciphertext)
 	tampered.Ciphertext[0] ^= 0xff
-	if _, err = OpenRestoreTombstone(private, record.ExecutionID, tampered); !errors.Is(err, ErrTombstoneInvalid) {
+	if _, err = OpenRestoreTombstoneV2(private, first.LocatorKeyID, first.Locator, tampered); !errors.Is(err, ErrTombstoneInvalid) {
 		t.Fatalf("tampered envelope error=%v", err)
 	}
 }
@@ -87,11 +90,11 @@ func TestClosureIsSeparateAndUsesExactCalendarEvidenceExpiry(t *testing.T) {
 	if sealed.Kind != "closure" || !sealed.RetainUntil.Equal(closure.EvidenceExpiresAt) || bytes.Equal(intent.Locator, sealed.Locator) {
 		t.Fatalf("closure not domain-separated: %+v", sealed)
 	}
-	opened, err := OpenRestoreTombstoneClosure(private, record.ExecutionID, sealed.Envelope)
+	opened, err := OpenRestoreTombstoneClosureV2(private, sealed.LocatorKeyID, sealed.Locator, sealed.Envelope)
 	if err != nil || !opened.ClosedAt.Equal(closedAt) || !opened.EvidenceExpiresAt.Equal(closedAt.AddDate(0, 24, 0)) {
 		t.Fatalf("opened=%+v err=%v", opened, err)
 	}
-	if _, err = OpenRestoreTombstone(private, record.ExecutionID, sealed.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
+	if _, err = OpenRestoreTombstoneV2(private, sealed.LocatorKeyID, sealed.Locator, sealed.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
 		t.Fatalf("closure opened as intent: %v", err)
 	}
 	closure.EvidenceExpiresAt = closure.EvidenceExpiresAt.Add(-time.Second)
