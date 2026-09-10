@@ -30,6 +30,7 @@ type Querier interface {
 	AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error)
 	AttachPrivacyUploadIntent(ctx context.Context, arg AttachPrivacyUploadIntentParams) error
 	AuthorizePrivacyErasureJobLease(ctx context.Context, arg AuthorizePrivacyErasureJobLeaseParams) (PrivacyErasureJobLease, error)
+	BeginPrivacyRestoreReplay(ctx context.Context, arg BeginPrivacyRestoreReplayParams) (uuid.UUID, error)
 	BeginPrivacyUploadIntent(ctx context.Context, arg BeginPrivacyUploadIntentParams) ([]byte, error)
 	CallPrivacyWorkerExecuteCheckpoint(ctx context.Context, arg CallPrivacyWorkerExecuteCheckpointParams) (uuid.UUID, error)
 	CallPrivacyWorkerSync(ctx context.Context, arg CallPrivacyWorkerSyncParams) (uuid.UUID, error)
@@ -124,6 +125,7 @@ type Querier interface {
 	EndCurrentSeasonMembership(ctx context.Context, arg EndCurrentSeasonMembershipParams) (int64, error)
 	EnqueuePrivacyRequestEmail(ctx context.Context, arg EnqueuePrivacyRequestEmailParams) (uuid.UUID, error)
 	EnsureMemberProfile(ctx context.Context, userID uuid.UUID) error
+	ExecutePrivacyRestoreReplayCheckpoint(ctx context.Context, arg ExecutePrivacyRestoreReplayCheckpointParams) (uuid.UUID, error)
 	ExpireAnnouncement(ctx context.Context, arg ExpireAnnouncementParams) (int64, error)
 	ExpireLegacyPrivacySessionsBy(ctx context.Context) (int64, error)
 	ExpireNews(ctx context.Context, id uuid.UUID) (int64, error)
@@ -204,6 +206,7 @@ type Querier interface {
 	GrantPrivacyReviewer(ctx context.Context, arg GrantPrivacyReviewerParams) (PrivacyReviewerGrant, error)
 	GrantStaffCapability(ctx context.Context, arg GrantStaffCapabilityParams) (GrantStaffCapabilityRow, error)
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
+	ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2Params) (uuid.UUID, error)
 	InvalidatePrivacyAccountTokens(ctx context.Context, arg InvalidatePrivacyAccountTokensParams) (InvalidatePrivacyAccountTokensRow, error)
 	IsPrivacyAdministrator(ctx context.Context, userID uuid.UUID) (bool, error)
 	IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error)
@@ -303,6 +306,7 @@ type Querier interface {
 	MoveTrainingSessionSegment(ctx context.Context, arg MoveTrainingSessionSegmentParams) (bool, error)
 	PreparePrivacyRestoreTombstone(ctx context.Context, arg PreparePrivacyRestoreTombstoneParams) (PreparePrivacyRestoreTombstoneRow, error)
 	PreparePrivacyTombstoneClosure(ctx context.Context, arg PreparePrivacyTombstoneClosureParams) (PreparePrivacyTombstoneClosureRow, error)
+	PrivacyRestoreReplayAlreadyApplied(ctx context.Context, arg PrivacyRestoreReplayAlreadyAppliedParams) (bool, error)
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
 	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)

@@ -229,13 +229,14 @@ SELECT prepared.execution_id::uuid AS execution_id,
  prepared.subject_user_id::uuid AS subject_user_id,
  prepared.plan_sha256::bytea AS plan_sha256,
  prepared.workset_sha256::bytea AS workset_sha256,
- prepared.execution_started_at::timestamptz AS execution_started_at
-FROM privacy_tombstone_prepare(
+ prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_v2(
  sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
 ) AS prepared;
 
 -- name: ConfirmPrivacyRestoreTombstone :one
-SELECT privacy_tombstone_confirm(
+SELECT privacy_tombstone_confirm_v2(
  sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
  sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),sqlc.arg(locator_digest),
  sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
@@ -265,14 +266,40 @@ SELECT prepared.execution_id::uuid AS execution_id,
  prepared.workset_sha256::bytea AS workset_sha256,
  prepared.execution_started_at::timestamptz AS execution_started_at,
  prepared.closed_at::timestamptz AS closed_at,
- prepared.evidence_expires_at::timestamptz AS evidence_expires_at
-FROM privacy_tombstone_prepare_closure(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+ prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v2(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
 
 -- name: ConfirmPrivacyTombstoneClosure :one
-SELECT privacy_tombstone_confirm_closure(
+SELECT privacy_tombstone_confirm_closure_v2(
  sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),
  sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),
  sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2 :one
+SELECT privacy_restore_import_authenticated_v2(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.narg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
+)::uuid;
+
+-- name: BeginPrivacyRestoreReplay :one
+SELECT privacy_restore_begin_replay(sqlc.arg(import_id),sqlc.arg(worker_ref))::uuid;
+
+-- name: PrivacyRestoreReplayAlreadyApplied :one
+SELECT EXISTS(
+ SELECT 1 FROM privacy_protected.restore_ledger_imports imported
+ JOIN privacy_protected.restore_replay_runs run ON run.import_id=imported.id
+ WHERE imported.locator_key_id=sqlc.arg(locator_key_id) AND imported.locator_digest=sqlc.arg(locator_digest)
+  AND run.status='SUCCEEDED'
+)::boolean;
+
+-- name: ExecutePrivacyRestoreReplayCheckpoint :one
+SELECT privacy_restore_execute_checkpoint(
+ sqlc.arg(run_id),sqlc.arg(worker_ref),sqlc.arg(operation_position),sqlc.arg(operation_code),sqlc.arg(action_version),sqlc.arg(prescription_sha256)
 )::uuid;
 
 -- name: AuthorizePrivacyErasureJobLease :one
