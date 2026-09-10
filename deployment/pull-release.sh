@@ -18,6 +18,8 @@ timeline_digest_file="$state_dir/release-timeline-digest"
 timeline_tag_file="$state_dir/release-timeline-tag"
 upstream_file="$state_dir/caddy-upstream.caddy"
 lock_file="$runtime_dir/mycfc-pull-release.lock"
+restore_drill_command=${MYCFC_RESTORE_DRILL_COMMAND:-$deployment_dir/postgres-restore-drill.sh}
+restore_attestation_verify_command=${MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND:-$deployment_dir/verify-privacy-restore-attestation.sh}
 agent_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 backup_file=
 route_backup=
@@ -206,6 +208,17 @@ set +a
 : "${ECR_REPOSITORY_URL:?}"
 : "${MYCFC_DOMAIN:?}"
 
+case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
+	true)
+		if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" != true ] || [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
+			log 'privacy restore promotion gate requires the authenticated restore drill'
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) log 'invalid privacy restore promotion gate setting'; exit 1 ;;
+esac
+
 # AWS environment credentials belong to the application runtime. All AWS CLI
 # calls made by the deployment agent must use its narrower, root-owned profile.
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -322,6 +335,12 @@ export GIT_SHA="$sha"
 release_updated=true
 
 log "event=release_preparing sha=$sha digest=$release_digest candidate_slot=$candidate_slot active_slot=$active_slot"
+if [ "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" = true ]; then
+	# The candidate image proves it can migrate and replay the oldest valid
+	# retained backup before any production migration or traffic change.
+	run_phase privacy_restore_drill "$restore_drill_command" "$image"
+	run_phase privacy_restore_attestation "$restore_attestation_verify_command" "$image"
+fi
 run_phase postgres_ready docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 run_phase database_bootstrap docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 run_phase database_migrate docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate

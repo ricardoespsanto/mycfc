@@ -1,0 +1,17 @@
+[Unit]
+Description=MyCFC isolated privacy-safe PostgreSQL restore drill
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/postgres-restore-drill.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/backup-aws/credentials /etc/mycfc/backup-auth/manifest.key /etc/mycfc/privacy-restore/credentials /etc/mycfc/privacy-restore/attestation.key /etc/mycfc/privacy-restore/tombstone-replay.key
+ReadWritePaths=/etc/mycfc/privacy-restore/attestations /var/tmp /run
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

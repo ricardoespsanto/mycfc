@@ -217,3 +217,27 @@ run "backup_cleanup_failure_alerts_immediately" {
     error_message = "A single exact-version backup cleanup failure must alert in the next one-minute period."
   }
 }
+
+run "privacy_restore_drill_failures_alert_immediately" {
+  command = plan
+
+  plan_options {
+    target = [
+      aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure,
+      aws_cloudwatch_metric_alarm.privacy_restore_drill_failure,
+    ]
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure.pattern, "(") &&
+      !strcontains(aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure.pattern, ")") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure.pattern, "privacy_restore_drill_failed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure.pattern, "privacy_restore_promotion_gate_failed") &&
+      aws_cloudwatch_metric_alarm.privacy_restore_drill_failure.evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_restore_drill_failure.datapoints_to_alarm == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_restore_drill_failure.treat_missing_data == "notBreaching"
+    )
+    error_message = "Restore-drill or promotion-attestation failure must alarm on one event without invalid pattern grouping."
+  }
+}

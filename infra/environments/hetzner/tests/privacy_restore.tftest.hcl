@@ -76,7 +76,9 @@ run "backup_version_expiration_is_inert" {
   assert {
     condition = (
       !var.postgres_backup_noncurrent_cleanup_enabled &&
-      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 2
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 3 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "retain-privacy-restore-attestations"]).expiration[0].days == 400 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "retain-privacy-restore-attestations"]).noncurrent_version_expiration[0].noncurrent_days == 1
     )
     error_message = "A routine plan must retain only the existing current daily/monthly backup rules."
   }
@@ -98,7 +100,7 @@ run "backup_version_expiration_requires_its_gate" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 6 &&
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 7 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.noncurrent_version_expiration[0].noncurrent_days == 1 if startswith(rule.id, "expire-noncurrent-")]) &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.expiration[0].expired_object_delete_marker if startswith(rule.id, "remove-expired-")]) &&
       toset([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule.filter[0].prefix if startswith(rule.id, "expire-noncurrent-")]) == toset(["daily/", "monthly/"]) &&
@@ -110,9 +112,11 @@ run "backup_version_expiration_requires_its_gate" {
   assert {
     condition = (
       toset(local.backup_cleanup_list_actions) == toset(["s3:ListBucketVersions"]) &&
-      toset(local.backup_cleanup_actions) == toset(["s3:DeleteObjectVersion"])
+      toset(local.backup_cleanup_actions) == toset(["s3:DeleteObjectVersion"]) &&
+      toset(local.backup_recovery_prefixes) == toset(["daily/*", "monthly/*"]) &&
+      toset(local.backup_attestation_prefixes) == toset(["restore-attestations/*"])
     )
-    error_message = "Backup cleanup must list versions and delete exact versions only."
+    error_message = "Backup cleanup must list and delete exact recovery-point versions without reaching durable restore attestations."
   }
 }
 
