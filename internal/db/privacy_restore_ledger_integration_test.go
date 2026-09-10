@@ -360,7 +360,11 @@ func TestPrivacyRestoreAndRetentionForwardMigrationsAreAdditive(t *testing.T) {
 		sql = strings.ReplaceAll(sql, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
 		return strings.ReplaceAll(sql, "privacy_protected", protectedName)
 	}
-	if _, err = conn.PgConn().Exec(ctx, rewrite(baselineSchema)).ReadAll(); err != nil {
+	hardeningMarker := strings.LastIndex(baselineSchema, "-- #247 replay hardening:")
+	if hardeningMarker < 0 {
+		t.Fatal("replay hardening marker missing from baseline")
+	}
+	if _, err = conn.PgConn().Exec(ctx, rewrite(baselineSchema[:hardeningMarker])).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
 	}
 	if _, err = conn.Exec(ctx, `

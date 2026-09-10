@@ -27,6 +27,8 @@ type replayEngineFake struct {
 	closure bool
 }
 
+var testReplayBindings = replayBindings{PolicyVersion: "policy-v1", ExecutorVersion: "executor-v1", PlanSchemaVersion: "plan-v1", ImageDigest: "sha256:" + strings.Repeat("a", 64)}
+
 func (f *replayEngineFake) Replay(_ context.Context, authenticated privacyrequests.AuthenticatedReplayTombstone) (privacyrequests.TombstoneReplayResult, error) {
 	f.calls++
 	f.closure = authenticated.IsClosure()
@@ -41,6 +43,10 @@ func (f *replayEngineFake) SchemaMigrationDigest(context.Context) (string, error
 		return "", f.err
 	}
 	return strings.Repeat("a", 64), nil
+}
+
+func (f *replayEngineFake) RecordAttestation(context.Context, replayAttestation, []uuid.UUID) error {
+	return f.err
 }
 
 func replayFixture(t *testing.T) (*privacyrequests.TombstoneProtector, []byte, privacyrequests.RestoreTombstone) {
@@ -83,7 +89,7 @@ func TestExecuteReplayPrefersClosureAndEmitsOnlyNonIdentifyingCounts(t *testing.
 	}
 	closedAt := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
 	closure, err := protector.SealClosure(privacyrequests.TombstoneClosure{
-		Version: privacyrequests.TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0),
+		Version: privacyrequests.TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,8 +111,8 @@ func TestExecuteReplayPrefersClosureAndEmitsOnlyNonIdentifyingCounts(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{{RunID: uuid.New()}}}
-	attestation, err := executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, InventorySHA256: digest, Objects: objects}, privateKey, engine)
+	engine := &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{{RunID: uuid.New(), ClosureVersion: privacyrequests.TombstoneClosureVersion}}}
+	attestation, err := executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}, privateKey, engine, testReplayBindings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +154,7 @@ func TestExecuteReplayDoesNotDowngradeTamperedV2ToLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := &replayEngineFake{}
-	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, InventorySHA256: inventoryDigest, Objects: objects}, privateKey, engine); err == nil || engine.calls != 0 {
+	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: inventoryDigest, Objects: objects}, privateKey, engine, testReplayBindings); err == nil || engine.calls != 0 {
 		t.Fatalf("downgraded envelope accepted: err=%v calls=%d", err, engine.calls)
 	}
 }
@@ -164,7 +170,7 @@ func TestLedgerInventoryDigestIsMetadataOnlyCanonicalAndStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inventory := ledgerInventory{Contract: ledgerInputContract, InventorySHA256: digest, Objects: objects}
+	inventory := ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}
 	path := filepath.Join(t.TempDir(), "ledger.json")
 	encoded, _ := json.Marshal(inventory)
 	if err = os.WriteFile(path, encoded, 0o600); err != nil {
@@ -187,7 +193,8 @@ func TestCommandRequiresExplicitIsolationAndOwnerOnlyKey(t *testing.T) {
 	if _, err := parseCommand([]string{"--ledger-input", "in", "--private-key-file", "key", "--attestation-output", "out"}); err == nil {
 		t.Fatal("missing isolated restore mode accepted")
 	}
-	request, err := parseCommand([]string{"--isolated-restore", "--ledger-input", "in", "--private-key-file", "key", "--attestation-output", "out"})
+	request, err := parseCommand([]string{"--isolated-restore", "--ledger-input", "in", "--private-key-file", "key", "--attestation-output", "out",
+		"--policy-version", "policy-v1", "--executor-version", "executor-v1", "--plan-schema-version", "plan-v1", "--image-digest", "sha256:" + strings.Repeat("a", 64)})
 	if err != nil || request.ledgerInput != "in" {
 		t.Fatalf("request=%+v err=%v", request, err)
 	}
@@ -227,7 +234,7 @@ func TestExecuteReplayFailsClosedOnDatabaseFailure(t *testing.T) {
 	objects := []ledgerInventoryObject{inventoryObject(sealed, 3)}
 	digest, _ := inventoryMetadataDigest(objects)
 	engine := &replayEngineFake{err: errors.New("database details must remain opaque")}
-	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, InventorySHA256: digest, Objects: objects}, privateKey, engine); err == nil || strings.Contains(err.Error(), "database details") {
+	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}, privateKey, engine, testReplayBindings); err == nil || strings.Contains(err.Error(), "database details") {
 		t.Fatalf("error=%v", err)
 	}
 }

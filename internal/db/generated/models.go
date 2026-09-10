@@ -2364,6 +2364,20 @@ type PrivacyProtectedRestoreLedgerImport struct {
 	RecordSha256       []byte             `json:"record_sha256"`
 	ImportedByRef      uuid.UUID          `json:"imported_by_ref"`
 	ImportedAt         pgtype.Timestamptz `json:"imported_at"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	ClosureVersion     *string            `json:"closure_version"`
+	SyntheticFixture   *string            `json:"synthetic_fixture"`
+}
+
+type PrivacyProtectedRestoreReplayAlreadyAppliedEvidence struct {
+	RunID              uuid.UUID          `json:"run_id"`
+	ImportID           uuid.UUID          `json:"import_id"`
+	EvidenceCode       string             `json:"evidence_code"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	VerifiedOperations []string           `json:"verified_operations"`
+	VerificationSha256 []byte             `json:"verification_sha256"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
 }
 
 type PrivacyProtectedRestoreReplayCheckpoint struct {
@@ -2378,6 +2392,34 @@ type PrivacyProtectedRestoreReplayCheckpoint struct {
 	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
 }
 
+type PrivacyProtectedRestoreReplayInventoryAttestation struct {
+	ID                              uuid.UUID          `json:"id"`
+	InputSource                     string             `json:"input_source"`
+	InventorySha256                 []byte             `json:"inventory_sha256"`
+	ObjectCount                     int32              `json:"object_count"`
+	PolicyVersion                   string             `json:"policy_version"`
+	ExecutorVersion                 string             `json:"executor_version"`
+	PlanSchemaVersion               string             `json:"plan_schema_version"`
+	ImageDigest                     string             `json:"image_digest"`
+	SchemaMigrationDigest           []byte             `json:"schema_migration_digest"`
+	ImportedCount                   int32              `json:"imported_count"`
+	ReplayedCount                   int32              `json:"replayed_count"`
+	AlreadyAppliedCount             int32              `json:"already_applied_count"`
+	AbsenceVerifiedCount            int32              `json:"absence_verified_count"`
+	SyntheticReplayedCount          int32              `json:"synthetic_replayed_count"`
+	ClosureV3Count                  int32              `json:"closure_v3_count"`
+	IntentOnlyCount                 int32              `json:"intent_only_count"`
+	LegacyClosureV2Count            int32              `json:"legacy_closure_v2_count"`
+	ErasureEffectiveAtVerifiedCount int32              `json:"erasure_effective_at_verified_count"`
+	EvidenceSha256                  []byte             `json:"evidence_sha256"`
+	RecordedAt                      pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedRestoreReplayInventoryAttestationRun struct {
+	AttestationID uuid.UUID `json:"attestation_id"`
+	RunID         uuid.UUID `json:"run_id"`
+}
+
 type PrivacyProtectedRestoreReplayRun struct {
 	ID          uuid.UUID          `json:"id"`
 	ImportID    uuid.UUID          `json:"import_id"`
@@ -2385,6 +2427,21 @@ type PrivacyProtectedRestoreReplayRun struct {
 	Status      string             `json:"status"`
 	StartedAt   pgtype.Timestamptz `json:"started_at"`
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	OutcomeCode *string            `json:"outcome_code"`
+}
+
+type PrivacyProtectedRestoreSyntheticFixture struct {
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID    uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
+	PlanSha256         []byte             `json:"plan_sha256"`
+	WorksetSha256      []byte             `json:"workset_sha256"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	Operations         []string           `json:"operations"`
+	FixtureMarker      string             `json:"fixture_marker"`
+	CreatedByRef       uuid.UUID          `json:"created_by_ref"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
 type PrivacyProtectedRestoreTombstoneClosureIntent struct {

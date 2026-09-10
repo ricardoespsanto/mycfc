@@ -178,17 +178,20 @@ func logDatabaseCommandConfiguration(command, source, host, databaseName, connec
 		"app_role", credentials.AppUsername,
 		"migration_role", credentials.MigrationUsername,
 		"privacy_executor_configured", credentials.PrivacyExecutorUsername != "",
+		"privacy_restore_observer_configured", credentials.PrivacyRestoreObserverUsername != "",
 	)
 }
 
 func databaseRoleCredentialsFromEnvironment() db.RoleCredentials {
 	return db.RoleCredentials{
-		AppUsername:             os.Getenv("APP_DB_USER"),
-		AppPassword:             os.Getenv("APP_DB_PASSWORD"),
-		MigrationUsername:       os.Getenv("MIGRATION_DB_USER"),
-		MigrationPassword:       os.Getenv("MIGRATION_DB_PASSWORD"),
-		PrivacyExecutorUsername: os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
-		PrivacyExecutorPassword: os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+		AppUsername:                    os.Getenv("APP_DB_USER"),
+		AppPassword:                    os.Getenv("APP_DB_PASSWORD"),
+		MigrationUsername:              os.Getenv("MIGRATION_DB_USER"),
+		MigrationPassword:              os.Getenv("MIGRATION_DB_PASSWORD"),
+		PrivacyExecutorUsername:        os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
+		PrivacyExecutorPassword:        os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+		PrivacyRestoreObserverUsername: os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_USER"),
+		PrivacyRestoreObserverPassword: os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD"),
 	}
 }
 

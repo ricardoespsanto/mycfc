@@ -183,6 +183,28 @@ func (q *Queries) BeginPrivacyRestoreReplay(ctx context.Context, arg BeginPrivac
 	return column_1, err
 }
 
+const beginPrivacyRestoreReplayHardened = `-- name: BeginPrivacyRestoreReplayHardened :one
+SELECT begun.run_id::uuid, COALESCE(begun.outcome_code,'')::text AS outcome_code
+FROM privacy_restore_begin_replay_hardened($1,$2) AS begun
+`
+
+type BeginPrivacyRestoreReplayHardenedParams struct {
+	ImportID  uuid.UUID `json:"import_id"`
+	WorkerRef uuid.UUID `json:"worker_ref"`
+}
+
+type BeginPrivacyRestoreReplayHardenedRow struct {
+	BegunRunID  uuid.UUID `json:"begun_run_id"`
+	OutcomeCode string    `json:"outcome_code"`
+}
+
+func (q *Queries) BeginPrivacyRestoreReplayHardened(ctx context.Context, arg BeginPrivacyRestoreReplayHardenedParams) (BeginPrivacyRestoreReplayHardenedRow, error) {
+	row := q.db.QueryRow(ctx, beginPrivacyRestoreReplayHardened, arg.ImportID, arg.WorkerRef)
+	var i BeginPrivacyRestoreReplayHardenedRow
+	err := row.Scan(&i.BegunRunID, &i.OutcomeCode)
+	return i, err
+}
+
 const callPrivacyWorkerExecuteCheckpoint = `-- name: CallPrivacyWorkerExecuteCheckpoint :one
 SELECT id FROM (
  SELECT privacy_worker_execute_checkpoint($1,$2,$3,$4,$5,$6,$7)::uuid AS id
@@ -396,6 +418,46 @@ type ConfirmPrivacyTombstoneClosureParams struct {
 
 func (q *Queries) ConfirmPrivacyTombstoneClosure(ctx context.Context, arg ConfirmPrivacyTombstoneClosureParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, confirmPrivacyTombstoneClosure,
+		arg.ExecutionID,
+		arg.WorkerRef,
+		arg.LedgerVersion,
+		arg.EncryptionKeyID,
+		arg.LocatorKeyID,
+		arg.LocatorDigest,
+		arg.ObjectVersionID,
+		arg.CiphertextSha256,
+		arg.SizeBytes,
+		arg.WrittenAt,
+		arg.VerifiedAt,
+	)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const confirmPrivacyTombstoneClosureV3 = `-- name: ConfirmPrivacyTombstoneClosureV3 :one
+SELECT privacy_tombstone_confirm_closure_v3(
+ $1,$2,$3,$4,$5,
+ $6,$7,$8,$9,$10,$11
+)::uuid
+`
+
+type ConfirmPrivacyTombstoneClosureV3Params struct {
+	ExecutionID      uuid.UUID          `json:"execution_id"`
+	WorkerRef        uuid.UUID          `json:"worker_ref"`
+	LedgerVersion    string             `json:"ledger_version"`
+	EncryptionKeyID  string             `json:"encryption_key_id"`
+	LocatorKeyID     string             `json:"locator_key_id"`
+	LocatorDigest    []byte             `json:"locator_digest"`
+	ObjectVersionID  string             `json:"object_version_id"`
+	CiphertextSha256 []byte             `json:"ciphertext_sha256"`
+	SizeBytes        int64              `json:"size_bytes"`
+	WrittenAt        pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+}
+
+func (q *Queries) ConfirmPrivacyTombstoneClosureV3(ctx context.Context, arg ConfirmPrivacyTombstoneClosureV3Params) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, confirmPrivacyTombstoneClosureV3,
 		arg.ExecutionID,
 		arg.WorkerRef,
 		arg.LedgerVersion,
@@ -763,6 +825,40 @@ func (q *Queries) CreatePrivacyRequest(ctx context.Context, arg CreatePrivacyReq
 		&i.WorkingErasedAt,
 		&i.UpdatedAt,
 		&i.RepresentationRelationshipUpdatedAt,
+	)
+	return i, err
+}
+
+const createPrivacyRestoreSyntheticFixture = `-- name: CreatePrivacyRestoreSyntheticFixture :one
+SELECT fixture.source_execution_id::uuid,fixture.source_request_id::uuid,fixture.source_request_ref::uuid,
+ fixture.subject_user_id::uuid,fixture.plan_sha256::bytea,fixture.workset_sha256::bytea,
+ fixture.erasure_effective_at::timestamptz,fixture.operations::text[]
+FROM privacy_restore_create_synthetic_fixture($1) AS fixture
+`
+
+type CreatePrivacyRestoreSyntheticFixtureRow struct {
+	FixtureSourceExecutionID  uuid.UUID          `json:"fixture_source_execution_id"`
+	FixtureSourceRequestID    uuid.UUID          `json:"fixture_source_request_id"`
+	FixtureSourceRequestRef   uuid.UUID          `json:"fixture_source_request_ref"`
+	FixtureSubjectUserID      uuid.UUID          `json:"fixture_subject_user_id"`
+	FixturePlanSha256         []byte             `json:"fixture_plan_sha256"`
+	FixtureWorksetSha256      []byte             `json:"fixture_workset_sha256"`
+	FixtureErasureEffectiveAt pgtype.Timestamptz `json:"fixture_erasure_effective_at"`
+	FixtureOperations         []string           `json:"fixture_operations"`
+}
+
+func (q *Queries) CreatePrivacyRestoreSyntheticFixture(ctx context.Context, workerRef uuid.UUID) (CreatePrivacyRestoreSyntheticFixtureRow, error) {
+	row := q.db.QueryRow(ctx, createPrivacyRestoreSyntheticFixture, workerRef)
+	var i CreatePrivacyRestoreSyntheticFixtureRow
+	err := row.Scan(
+		&i.FixtureSourceExecutionID,
+		&i.FixtureSourceRequestID,
+		&i.FixtureSourceRequestRef,
+		&i.FixtureSubjectUserID,
+		&i.FixturePlanSha256,
+		&i.FixtureWorksetSha256,
+		&i.FixtureErasureEffectiveAt,
+		&i.FixtureOperations,
 	)
 	return i, err
 }
@@ -1573,6 +1669,82 @@ func (q *Queries) ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx context.Conte
 	return column_1, err
 }
 
+const importAuthenticatedPrivacyRestoreTombstoneV2Hardened = `-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened :one
+SELECT privacy_restore_import_authenticated_v2_hardened(
+ $1,$2,$3,$4,$5,
+ $6,$7,$8,$9,
+ $10,$11,$12,$13,$14,
+ $15,$16,$17,$18,$19,
+ $20,$21,$22,$23,$24,$25::text[],
+ $26,$27
+)::uuid
+`
+
+type ImportAuthenticatedPrivacyRestoreTombstoneV2HardenedParams struct {
+	WorkerRef          uuid.UUID          `json:"worker_ref"`
+	Kind               string             `json:"kind"`
+	RecordVersion      string             `json:"record_version"`
+	EnvelopeVersion    string             `json:"envelope_version"`
+	EncryptionKeyID    string             `json:"encryption_key_id"`
+	LocatorKeyID       string             `json:"locator_key_id"`
+	LocatorDigest      []byte             `json:"locator_digest"`
+	CiphertextSha256   []byte             `json:"ciphertext_sha256"`
+	ObjectVersionID    string             `json:"object_version_id"`
+	WrittenAt          pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt         pgtype.Timestamptz `json:"verified_at"`
+	RetainUntil        pgtype.Timestamptz `json:"retain_until"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID    uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef   uuid.UUID          `json:"source_request_ref"`
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	PlanSha256         []byte             `json:"plan_sha256"`
+	WorksetSha256      []byte             `json:"workset_sha256"`
+	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	ClosureVersion     *string            `json:"closure_version"`
+	SyntheticFixture   *string            `json:"synthetic_fixture"`
+	ReplayVersion      string             `json:"replay_version"`
+	ActionVersion      string             `json:"action_version"`
+	Operations         []string           `json:"operations"`
+	PrescriptionSha256 []byte             `json:"prescription_sha256"`
+	RecordSha256       []byte             `json:"record_sha256"`
+}
+
+func (q *Queries) ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2HardenedParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, importAuthenticatedPrivacyRestoreTombstoneV2Hardened,
+		arg.WorkerRef,
+		arg.Kind,
+		arg.RecordVersion,
+		arg.EnvelopeVersion,
+		arg.EncryptionKeyID,
+		arg.LocatorKeyID,
+		arg.LocatorDigest,
+		arg.CiphertextSha256,
+		arg.ObjectVersionID,
+		arg.WrittenAt,
+		arg.VerifiedAt,
+		arg.RetainUntil,
+		arg.SourceExecutionID,
+		arg.SourceRequestID,
+		arg.SourceRequestRef,
+		arg.SubjectUserID,
+		arg.PlanSha256,
+		arg.WorksetSha256,
+		arg.ExecutionStartedAt,
+		arg.ErasureEffectiveAt,
+		arg.ClosureVersion,
+		arg.SyntheticFixture,
+		arg.ReplayVersion,
+		arg.ActionVersion,
+		arg.Operations,
+		arg.PrescriptionSha256,
+		arg.RecordSha256,
+	)
+	var column_1 uuid.UUID
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const invalidatePrivacyAccountTokens = `-- name: InvalidatePrivacyAccountTokens :one
 WITH verification AS (
  UPDATE email_verification_tokens token SET consumed_at=GREATEST($1,token.created_at)
@@ -2257,6 +2429,53 @@ func (q *Queries) PreparePrivacyTombstoneClosure(ctx context.Context, arg Prepar
 	return i, err
 }
 
+const preparePrivacyTombstoneClosureV3 = `-- name: PreparePrivacyTombstoneClosureV3 :one
+SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS request_id,prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v3($1,$2) AS prepared
+`
+
+type PreparePrivacyTombstoneClosureV3Params struct {
+	ExecutionID uuid.UUID `json:"execution_id"`
+	WorkerRef   uuid.UUID `json:"worker_ref"`
+}
+
+type PreparePrivacyTombstoneClosureV3Row struct {
+	ExecutionID        uuid.UUID          `json:"execution_id"`
+	RequestID          uuid.UUID          `json:"request_id"`
+	RequestRef         uuid.UUID          `json:"request_ref"`
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	PlanSha256         []byte             `json:"plan_sha256"`
+	WorksetSha256      []byte             `json:"workset_sha256"`
+	ExecutionStartedAt pgtype.Timestamptz `json:"execution_started_at"`
+	ClosedAt           pgtype.Timestamptz `json:"closed_at"`
+	EvidenceExpiresAt  pgtype.Timestamptz `json:"evidence_expires_at"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	ReplayOperations   []string           `json:"replay_operations"`
+}
+
+func (q *Queries) PreparePrivacyTombstoneClosureV3(ctx context.Context, arg PreparePrivacyTombstoneClosureV3Params) (PreparePrivacyTombstoneClosureV3Row, error) {
+	row := q.db.QueryRow(ctx, preparePrivacyTombstoneClosureV3, arg.ExecutionID, arg.WorkerRef)
+	var i PreparePrivacyTombstoneClosureV3Row
+	err := row.Scan(
+		&i.ExecutionID,
+		&i.RequestID,
+		&i.RequestRef,
+		&i.SubjectUserID,
+		&i.PlanSha256,
+		&i.WorksetSha256,
+		&i.ExecutionStartedAt,
+		&i.ClosedAt,
+		&i.EvidenceExpiresAt,
+		&i.ErasureEffectiveAt,
+		&i.ReplayOperations,
+	)
+	return i, err
+}
+
 const privacyActivationReady = `-- name: PrivacyActivationReady :one
 SELECT privacy_activation_ready($1)
 `
@@ -2285,6 +2504,62 @@ type PrivacyRestoreReplayAlreadyAppliedParams struct {
 func (q *Queries) PrivacyRestoreReplayAlreadyApplied(ctx context.Context, arg PrivacyRestoreReplayAlreadyAppliedParams) (bool, error) {
 	row := q.db.QueryRow(ctx, privacyRestoreReplayAlreadyApplied, arg.LocatorKeyID, arg.LocatorDigest)
 	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const recordPrivacyRestoreReplayInventoryAttestation = `-- name: RecordPrivacyRestoreReplayInventoryAttestation :one
+SELECT privacy_restore_record_inventory_attestation(
+ $1,$2,$3,$4,$5,
+ $6,$7,$8::uuid[],$9,$10,
+ $11,$12,$13,$14
+ ,$15,$16,$17,$18
+)::bytea
+`
+
+type RecordPrivacyRestoreReplayInventoryAttestationParams struct {
+	InputSource                     string      `json:"input_source"`
+	InventorySha256                 []byte      `json:"inventory_sha256"`
+	SchemaMigrationDigest           []byte      `json:"schema_migration_digest"`
+	PolicyVersion                   string      `json:"policy_version"`
+	ExecutorVersion                 string      `json:"executor_version"`
+	PlanSchemaVersion               string      `json:"plan_schema_version"`
+	ImageDigest                     string      `json:"image_digest"`
+	RunIds                          []uuid.UUID `json:"run_ids"`
+	ObjectCount                     int32       `json:"object_count"`
+	ImportedCount                   int32       `json:"imported_count"`
+	ReplayedCount                   int32       `json:"replayed_count"`
+	AlreadyAppliedCount             int32       `json:"already_applied_count"`
+	AbsenceVerifiedCount            int32       `json:"absence_verified_count"`
+	SyntheticReplayedCount          int32       `json:"synthetic_replayed_count"`
+	ClosureV3Count                  int32       `json:"closure_v3_count"`
+	IntentOnlyCount                 int32       `json:"intent_only_count"`
+	LegacyClosureV2Count            int32       `json:"legacy_closure_v2_count"`
+	ErasureEffectiveAtVerifiedCount int32       `json:"erasure_effective_at_verified_count"`
+}
+
+func (q *Queries) RecordPrivacyRestoreReplayInventoryAttestation(ctx context.Context, arg RecordPrivacyRestoreReplayInventoryAttestationParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, recordPrivacyRestoreReplayInventoryAttestation,
+		arg.InputSource,
+		arg.InventorySha256,
+		arg.SchemaMigrationDigest,
+		arg.PolicyVersion,
+		arg.ExecutorVersion,
+		arg.PlanSchemaVersion,
+		arg.ImageDigest,
+		arg.RunIds,
+		arg.ObjectCount,
+		arg.ImportedCount,
+		arg.ReplayedCount,
+		arg.AlreadyAppliedCount,
+		arg.AbsenceVerifiedCount,
+		arg.SyntheticReplayedCount,
+		arg.ClosureV3Count,
+		arg.IntentOnlyCount,
+		arg.LegacyClosureV2Count,
+		arg.ErasureEffectiveAtVerifiedCount,
+	)
+	var column_1 []byte
 	err := row.Scan(&column_1)
 	return column_1, err
 }

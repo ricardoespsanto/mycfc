@@ -34,9 +34,11 @@ const (
 	TombstoneClosureVersionV1  = "restore-tombstone-closure/v1"
 	TombstoneEnvelopeVersionV1 = "x25519-aes256gcm-hkdfsha256/v1"
 	TombstoneRecordVersion     = "restore-tombstone/v2"
-	TombstoneClosureVersion    = "restore-tombstone-closure/v2"
+	TombstoneClosureVersionV2  = "restore-tombstone-closure/v2"
+	TombstoneClosureVersion    = "restore-tombstone-closure/v3"
 	TombstoneEnvelopeVersion   = "x25519-aes256gcm-hkdfsha256/v2"
 	TombstoneReplayVersion     = "relational-erasure-replay/v1"
+	SyntheticRestoreFixtureV1  = "mycfc/privacy-restore-synthetic-fixture/v1"
 	tombstoneAlgorithm         = "X25519-HKDF-SHA256-AES-256-GCM"
 	maxTombstonePayloadBytes   = 1 << 20
 	maxBrokerRequestBytes      = 2 << 20
@@ -53,15 +55,16 @@ var (
 // RestoreTombstone is the minimum replay identity. It deliberately excludes
 // names, addresses, credentials, object locators, and provider payloads.
 type RestoreTombstone struct {
-	Version        string                        `json:"version"`
-	ExecutionID    uuid.UUID                     `json:"execution_id"`
-	RequestID      uuid.UUID                     `json:"request_id"`
-	RequestRef     uuid.UUID                     `json:"request_ref"`
-	SubjectUserID  uuid.UUID                     `json:"subject_user_id"`
-	PlanSHA256     []byte                        `json:"plan_sha256"`
-	WorksetSHA256  []byte                        `json:"workset_sha256"`
-	ExecutionStart time.Time                     `json:"execution_started_at"`
-	Replay         *RelationalReplayPrescription `json:"replay,omitempty"`
+	Version          string                        `json:"version"`
+	ExecutionID      uuid.UUID                     `json:"execution_id"`
+	RequestID        uuid.UUID                     `json:"request_id"`
+	RequestRef       uuid.UUID                     `json:"request_ref"`
+	SubjectUserID    uuid.UUID                     `json:"subject_user_id"`
+	PlanSHA256       []byte                        `json:"plan_sha256"`
+	WorksetSHA256    []byte                        `json:"workset_sha256"`
+	ExecutionStart   time.Time                     `json:"execution_started_at"`
+	SyntheticFixture string                        `json:"synthetic_fixture,omitempty"`
+	Replay           *RelationalReplayPrescription `json:"replay,omitempty"`
 }
 
 // RelationalReplayPrescription is deliberately limited to versioned local
@@ -88,10 +91,11 @@ type TombstoneEnvelope struct {
 // repeats the replay identity so the closure object remains sufficient even
 // after the pre-destructive intent is eventually removed.
 type TombstoneClosure struct {
-	Version           string           `json:"version"`
-	Tombstone         RestoreTombstone `json:"tombstone"`
-	ClosedAt          time.Time        `json:"closed_at"`
-	EvidenceExpiresAt time.Time        `json:"evidence_expires_at"`
+	Version            string           `json:"version"`
+	Tombstone          RestoreTombstone `json:"tombstone"`
+	ClosedAt           time.Time        `json:"closed_at"`
+	EvidenceExpiresAt  time.Time        `json:"evidence_expires_at"`
+	ErasureEffectiveAt time.Time        `json:"erasure_effective_at,omitempty"`
 }
 
 type SealedTombstone struct {
@@ -139,6 +143,7 @@ func (p *TombstoneProtector) Seal(record RestoreTombstone) (SealedTombstone, err
 func (p *TombstoneProtector) SealClosure(closure TombstoneClosure) (SealedTombstone, error) {
 	if p == nil || p.publicKey == nil || p.random == nil || closure.Version != TombstoneClosureVersion ||
 		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
+		closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt) ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
 		return SealedTombstone{}, ErrTombstoneInvalid
 	}
@@ -242,7 +247,7 @@ func OpenRestoreTombstoneClosure(privateKey []byte, executionID uuid.UUID, envel
 	var closure TombstoneClosure
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil || closure.Version != TombstoneClosureVersionV1 ||
+	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil || closure.Version != TombstoneClosureVersionV1 || !closure.ErasureEffectiveAt.IsZero() ||
 		!validLegacyRestoreTombstone(closure.Tombstone) || closure.Tombstone.ExecutionID != executionID || closure.ClosedAt.IsZero() ||
 		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
 		return zero, ErrTombstoneInvalid
@@ -259,9 +264,12 @@ func OpenRestoreTombstoneClosureV2(privateKey []byte, locatorKeyID string, locat
 	var closure TombstoneClosure
 	decoder := json.NewDecoder(bytes.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil || closure.Version != TombstoneClosureVersion ||
+	if err = decoder.Decode(&closure); err != nil || ensureJSONEOF(decoder) != nil ||
+		(closure.Version != TombstoneClosureVersionV2 && closure.Version != TombstoneClosureVersion) ||
 		!validReplayableRestoreTombstone(closure.Tombstone) || closure.ClosedAt.IsZero() ||
-		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) {
+		!closure.EvidenceExpiresAt.Equal(closure.ClosedAt.AddDate(0, 24, 0)) ||
+		(closure.Version == TombstoneClosureVersionV2 && !closure.ErasureEffectiveAt.IsZero()) ||
+		(closure.Version == TombstoneClosureVersion && (closure.ErasureEffectiveAt.IsZero() || closure.ErasureEffectiveAt.Before(closure.Tombstone.ExecutionStart) || closure.ErasureEffectiveAt.After(closure.ClosedAt))) {
 		return zero, ErrTombstoneInvalid
 	}
 	return closure, nil
@@ -342,17 +350,18 @@ func validLegacyRestoreTombstone(record RestoreTombstone) bool {
 }
 
 func validReplayableRestoreTombstone(record RestoreTombstone) bool {
-	return record.Version == TombstoneRecordVersion && validRestoreTombstoneIdentity(record) && validReplayPrescription(record.Replay)
+	return record.Version == TombstoneRecordVersion && validRestoreTombstoneIdentity(record) &&
+		(record.SyntheticFixture == "" || record.SyntheticFixture == SyntheticRestoreFixtureV1) && validReplayPrescription(record.Replay)
 }
 
 func validReplayPrescription(prescription *RelationalReplayPrescription) bool {
 	if prescription == nil || prescription.Version != TombstoneReplayVersion || prescription.ActionVersion != SupportedActionVersion ||
-		len(prescription.Operations) == 0 || len(prescription.Operations) > len(relationalExecutableOperations) {
+		len(prescription.Operations) == 0 || len(prescription.Operations) > len(relationalExecutableOperations)+1 {
 		return false
 	}
 	seen := make(map[string]bool, len(prescription.Operations))
 	for _, operation := range prescription.Operations {
-		if !relationalExecutableOperation(operation) || seen[operation] {
+		if !(relationalExecutableOperation(operation) || operation == "PROVIDER_LOCAL_FENCE") || seen[operation] {
 			return false
 		}
 		seen[operation] = true
@@ -606,7 +615,7 @@ func (w TombstoneExportWorker) Export(ctx context.Context, lease ExecutionLease)
 		RequestRef: contextRow.RequestRef, SubjectUserID: contextRow.SubjectUserID,
 		PlanSHA256: bytes.Clone(contextRow.PlanSha256), WorksetSHA256: bytes.Clone(contextRow.WorksetSha256),
 		ExecutionStart: contextRow.ExecutionStartedAt.Time,
-		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: slices.Clone(contextRow.ReplayOperations)},
+		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: replayOperationsWithProviderFence(contextRow.ReplayOperations)},
 	}
 	sealed, err := w.Protector.Seal(record)
 	if err != nil {
@@ -637,7 +646,7 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		return ErrTombstoneInvalid
 	}
 	q := dbgen.New(w.Store)
-	row, err := q.PreparePrivacyTombstoneClosure(ctx, dbgen.PreparePrivacyTombstoneClosureParams{ExecutionID: executionID, WorkerRef: w.WorkerRef})
+	row, err := q.PreparePrivacyTombstoneClosureV3(ctx, dbgen.PreparePrivacyTombstoneClosureV3Params{ExecutionID: executionID, WorkerRef: w.WorkerRef})
 	if err != nil {
 		return ErrTombstoneUnavailable
 	}
@@ -645,9 +654,9 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		Version: TombstoneRecordVersion, ExecutionID: row.ExecutionID, RequestID: row.RequestID, RequestRef: row.RequestRef,
 		SubjectUserID: row.SubjectUserID, PlanSHA256: bytes.Clone(row.PlanSha256), WorksetSHA256: bytes.Clone(row.WorksetSha256),
 		ExecutionStart: row.ExecutionStartedAt.Time,
-		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: slices.Clone(row.ReplayOperations)},
+		Replay:         &RelationalReplayPrescription{Version: TombstoneReplayVersion, ActionVersion: SupportedActionVersion, Operations: replayOperationsWithProviderFence(row.ReplayOperations)},
 	}
-	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: row.ClosedAt.Time, EvidenceExpiresAt: row.EvidenceExpiresAt.Time}
+	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: row.ClosedAt.Time, EvidenceExpiresAt: row.EvidenceExpiresAt.Time, ErasureEffectiveAt: row.ErasureEffectiveAt.Time}
 	sealed, err := w.Protector.SealClosure(closure)
 	if err != nil {
 		return err
@@ -656,7 +665,7 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 	if err != nil {
 		return err
 	}
-	_, err = q.ConfirmPrivacyTombstoneClosure(ctx, dbgen.ConfirmPrivacyTombstoneClosureParams{
+	_, err = q.ConfirmPrivacyTombstoneClosureV3(ctx, dbgen.ConfirmPrivacyTombstoneClosureV3Params{
 		ExecutionID: executionID, WorkerRef: w.WorkerRef, LedgerVersion: closure.Version, EncryptionKeyID: sealed.Envelope.KeyID,
 		LocatorKeyID: receipt.LocatorKeyID, LocatorDigest: receipt.LocatorDigest, ObjectVersionID: receipt.ObjectVersion,
 		CiphertextSha256: receipt.CiphertextSHA, SizeBytes: receipt.SizeBytes, WrittenAt: stamp(receipt.WrittenAt), VerifiedAt: stamp(receipt.VerifiedAt),
@@ -665,4 +674,16 @@ func (w TombstoneExportWorker) ExportClosure(ctx context.Context, executionID uu
 		return ErrTombstoneUnavailable
 	}
 	return nil
+}
+
+// Every newly emitted v2 prescription fences restored provider state locally,
+// even when the source execution found no registered remote recipient. This
+// closes the backup race without putting a provider or network instruction in
+// the replay contract.
+func replayOperationsWithProviderFence(operations []string) []string {
+	result := slices.Clone(operations)
+	if !slices.Contains(result, "PROVIDER_LOCAL_FENCE") {
+		result = append(result, "PROVIDER_LOCAL_FENCE")
+	}
+	return result
 }

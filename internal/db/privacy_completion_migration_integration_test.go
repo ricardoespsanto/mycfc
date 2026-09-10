@@ -23,8 +23,9 @@ func TestPrivacyCompletionForwardMigrationPreservesDisabledActivation(t *testing
 		t.Fatal(err)
 	}
 	markerIndex := strings.LastIndex(baselineSchema, marker)
-	if markerIndex < 0 || baselineSchema[markerIndex:] != string(migration) {
-		t.Fatal("completion migration is not the final exact baseline segment")
+	nextMarkerIndex := strings.LastIndex(baselineSchema, "-- #247 replay hardening:")
+	if markerIndex < 0 || nextMarkerIndex <= markerIndex || baselineSchema[markerIndex:nextMarkerIndex] != string(migration) {
+		t.Fatal("completion migration is not the exact baseline segment before replay hardening")
 	}
 	priorBaseline := baselineSchema[:markerIndex]
 	ctx := context.Background()
