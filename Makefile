@@ -153,9 +153,9 @@ terraform-validate: ## Validate Terraform stacks through the pinned container wi
 	@mkdir -p "$(TERRAFORM_PLUGIN_CACHE_DIR)"
 	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap init -backend=false && TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap validate && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner init -backend=false && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner validate && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production validate'
 
-terraform-test: ## Run mocked production Terraform policy and gating tests
+terraform-test: ## Run mocked Terraform policy and gating tests
 	@mkdir -p "$(TERRAFORM_PLUGIN_CACHE_DIR)"
-	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production test'
+	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production test && TF_DATA_DIR=/tmp/mycfc-hetzner-test terraform -chdir=infra/environments/hetzner init -backend=false && TF_DATA_DIR=/tmp/mycfc-hetzner-test terraform -chdir=infra/environments/hetzner test'
 
 terraform-lint: ## Run built-in TFLint rules for every Terraform root module
 	docker run --rm -v "$(CURDIR):/workspace" -w /workspace $(TFLINT_IMAGE) --chdir=infra/bootstrap --format=compact
