@@ -100,7 +100,7 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 		} else {
 			err = w.Sender.SendPasswordReset(ctx, item.Email, link, item.ExpiresAt.Time)
 		}
-	case "PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED":
+	case "PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED", "PRIVACY_COMPLETED":
 		payload, openErr := privacyrequests.OpenDelivery(w.PrivacyKey, item.SealedPayload)
 		sender, supported := w.Sender.(PrivacySender)
 		if openErr != nil || !supported {

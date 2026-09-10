@@ -479,7 +479,7 @@ func (q *Queries) CreatePrivacyErasureAccessRevocation(ctx context.Context, arg 
 const createPrivacyErasureCategoryJob = `-- name: CreatePrivacyErasureCategoryJob :one
 INSERT INTO privacy_erasure_category_jobs(execution_id,plan_entry_position,entry_sha256,category_key,purpose_code,next_attempt_at,created_at,updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$7)
-RETURNING id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at
+RETURNING id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at, manual_attempt_allowance
 `
 
 type CreatePrivacyErasureCategoryJobParams struct {
@@ -517,6 +517,7 @@ func (q *Queries) CreatePrivacyErasureCategoryJob(ctx context.Context, arg Creat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.ManualAttemptAllowance,
 	)
 	return i, err
 }
@@ -914,7 +915,7 @@ func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) 
 }
 
 const getPrivacyActivation = `-- name: GetPrivacyActivation :one
-SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at FROM privacy_request_activation WHERE singleton = true
+SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at, approval_id FROM privacy_request_activation WHERE singleton = true
 `
 
 func (q *Queries) GetPrivacyActivation(ctx context.Context) (PrivacyRequestActivation, error) {
@@ -927,12 +928,13 @@ func (q *Queries) GetPrivacyActivation(ctx context.Context) (PrivacyRequestActiv
 		&i.FulfilmentReady,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+		&i.ApprovalID,
 	)
 	return i, err
 }
 
 const getPrivacyActivationForUpdate = `-- name: GetPrivacyActivationForUpdate :one
-SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at FROM privacy_request_activation WHERE singleton = true FOR UPDATE
+SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at, approval_id FROM privacy_request_activation WHERE singleton = true FOR UPDATE
 `
 
 func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (PrivacyRequestActivation, error) {
@@ -945,12 +947,13 @@ func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (PrivacyReq
 		&i.FulfilmentReady,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+		&i.ApprovalID,
 	)
 	return i, err
 }
 
 const getPrivacyErasureCategoryJob = `-- name: GetPrivacyErasureCategoryJob :one
-SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at FROM privacy_erasure_category_jobs WHERE id=$1
+SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at, manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE id=$1
 `
 
 func (q *Queries) GetPrivacyErasureCategoryJob(ctx context.Context, id uuid.UUID) (PrivacyErasureCategoryJob, error) {
@@ -970,6 +973,7 @@ func (q *Queries) GetPrivacyErasureCategoryJob(ctx context.Context, id uuid.UUID
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.ManualAttemptAllowance,
 	)
 	return i, err
 }
@@ -1723,7 +1727,7 @@ func (q *Queries) ListPrivacyErasureAccessRevocations(ctx context.Context, execu
 }
 
 const listPrivacyErasureCategoryJobs = `-- name: ListPrivacyErasureCategoryJobs :many
-SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at FROM privacy_erasure_category_jobs WHERE execution_id=$1 ORDER BY plan_entry_position
+SELECT id, execution_id, plan_entry_position, entry_sha256, category_key, purpose_code, status, next_attempt_at, lease_epoch, attempt_count, created_at, updated_at, completed_at, manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE execution_id=$1 ORDER BY plan_entry_position
 `
 
 func (q *Queries) ListPrivacyErasureCategoryJobs(ctx context.Context, executionID uuid.UUID) ([]PrivacyErasureCategoryJob, error) {
@@ -1749,6 +1753,7 @@ func (q *Queries) ListPrivacyErasureCategoryJobs(ctx context.Context, executionI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CompletedAt,
+			&i.ManualAttemptAllowance,
 		); err != nil {
 			return nil, err
 		}
@@ -2252,6 +2257,17 @@ func (q *Queries) PreparePrivacyTombstoneClosure(ctx context.Context, arg Prepar
 	return i, err
 }
 
+const privacyActivationReady = `-- name: PrivacyActivationReady :one
+SELECT privacy_activation_ready($1)
+`
+
+func (q *Queries) PrivacyActivationReady(ctx context.Context, policyVersion string) (bool, error) {
+	row := q.db.QueryRow(ctx, privacyActivationReady, policyVersion)
+	var privacy_activation_ready bool
+	err := row.Scan(&privacy_activation_ready)
+	return privacy_activation_ready, err
+}
+
 const privacyRestoreReplayAlreadyApplied = `-- name: PrivacyRestoreReplayAlreadyApplied :one
 SELECT EXISTS(
  SELECT 1 FROM privacy_protected.restore_ledger_imports imported
@@ -2634,7 +2650,7 @@ func (q *Queries) RunPrivacyRetention(ctx context.Context, arg RunPrivacyRetenti
 const setPrivacyActivation = `-- name: SetPrivacyActivation :one
 INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at)
 VALUES(true,$1,$2,$3,$4,$5)
-ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=EXCLUDED.enabled,fulfilment_ready=EXCLUDED.fulfilment_ready,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at RETURNING singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at
+ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=EXCLUDED.enabled,fulfilment_ready=EXCLUDED.fulfilment_ready,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at RETURNING singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at, approval_id
 `
 
 type SetPrivacyActivationParams struct {
@@ -2661,6 +2677,7 @@ func (q *Queries) SetPrivacyActivation(ctx context.Context, arg SetPrivacyActiva
 		&i.FulfilmentReady,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+		&i.ApprovalID,
 	)
 	return i, err
 }

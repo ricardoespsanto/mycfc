@@ -163,8 +163,9 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	}
 	joined := strings.Join(conn.statements, "\n")
 	for _, expected := range []string{
-		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records FROM PUBLIC`,
+		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records, privacy_erasure_completion_manifests FROM PUBLIC`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`,
+		`REVOKE ALL PRIVILEGES ON TABLE privacy_completion_access_links, privacy_terminal_requeue_proposals`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)`,
 		`REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid)`,
@@ -188,6 +189,10 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_execution_complete_provider_capture(uuid,text) TO "mycfc_app"`,
 		`GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)`,
 		`privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid)`,
+		`privacy_activation_control_snapshot(uuid) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO "mycfc_privacy_executor"`,
+		`REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea)`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("hardening statements missing %q", expected)
