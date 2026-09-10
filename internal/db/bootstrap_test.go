@@ -180,6 +180,10 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`REVOKE ALL ON SCHEMA privacy_protected FROM "mycfc_app"`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_media_sources(uuid,uuid,text)`,
+		`privacy_execution_complete_object_capture(uuid,text) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)`,
+		`privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("hardening statements missing %q", expected)

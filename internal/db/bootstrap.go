@@ -23,7 +23,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609100004_privacy_upload_provenance"
+	baselineIncludesThrough = "202609100005_privacy_object_execution"
 )
 
 type RoleCredentials struct {
@@ -134,6 +134,8 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"grant web checkpoint insert", "GRANT INSERT (job_id, operation_position, operation_code, action_version, created_at) ON TABLE privacy_erasure_job_checkpoints TO " + app},
 		{"revoke web upload capabilities", "REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid), privacy_upload_pointer_references(uuid,text,uuid), privacy_upload_pointer_matches(uuid,text,uuid,bytea,text,bigint), privacy_upload_enforce_pointer_state(), privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid), privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM " + app},
 		{"grant web upload lifecycle", "GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid) TO " + app},
+		{"revoke web object execution internals", "REVOKE EXECUTE ON FUNCTION privacy_media_subject_lock(uuid), privacy_execution_capture_media_sources(uuid,uuid,text), privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea), privacy_execution_complete_object_capture(uuid,text), privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
+		{"grant web object capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_media_sources(uuid,uuid,text), privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea), privacy_execution_complete_object_capture(uuid,text) TO " + app},
 	}
 	if privacyExecutorConfigured(credentials) {
 		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
@@ -151,6 +153,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"grant privacy executor request lifecycle reads", "GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests TO " + executor},
 			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 			namedStatement{"grant privacy executor upload cleanup routines", "GRANT EXECUTE ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) TO " + executor},
+			namedStatement{"grant privacy executor object routines", "GRANT EXECUTE ON FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 		)
 	}
 	for _, statement := range statements {

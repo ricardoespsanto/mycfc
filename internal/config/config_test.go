@@ -55,6 +55,37 @@ func TestPrivacyUploadKeysAreOptionalButAtomic(t *testing.T) {
 	}
 }
 
+func TestPrivacyObjectTargetKeysAreOptionalDistinctAndAtomic(t *testing.T) {
+	if _, _, configured, err := (Config{}).PrivacyObjectTargetKeys(); err != nil || configured {
+		t.Fatalf("empty configuration configured=%t err=%v", configured, err)
+	}
+	partial := Config{PrivacyObjectTargetEncryptionKeyID: "target-key-v1"}
+	if _, _, configured, err := partial.PrivacyObjectTargetKeys(); err == nil || !configured {
+		t.Fatalf("partial configuration configured=%t err=%v", configured, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
+	complete := Config{
+		PrivacyObjectTargetPublicKeyB64: encoded, PrivacyObjectTargetEncryptionKeyID: "target-key-v1",
+		PrivacyObjectTargetDigestKeyID: "target-digest-v1", PrivacyObjectTargetDigestKeyB64: Secret(encoded),
+	}
+	publicKey, digestKey, configured, err := complete.PrivacyObjectTargetKeys()
+	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
+		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
+	}
+	complete.PrivacyUploadPublicKeyB64 = complete.PrivacyObjectTargetPublicKeyB64
+	complete.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+	complete.PrivacyUploadDigestKeyID = "upload-digest-v1"
+	complete.PrivacyUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("u", 32))))
+	if _, _, configured, err = complete.PrivacyObjectTargetKeys(); err == nil || !configured || !strings.Contains(err.Error(), "distinct") {
+		t.Fatalf("shared upload public key configured=%t err=%v", configured, err)
+	}
+	cfg := validConfig()
+	cfg.PrivacyObjectTargetDigestKeyID = "partial"
+	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_OBJECT_TARGET_KEYS") {
+		t.Fatalf("validation error=%v", err)
+	}
+}
+
 type recordingSecretGetter struct {
 	output *secretsmanager.GetSecretValueOutput
 	err    error

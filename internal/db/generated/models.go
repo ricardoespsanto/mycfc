@@ -2007,6 +2007,19 @@ type PrivacyExecutorGrantEvent struct {
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type PrivacyProtectedObjectCaptureSet struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	JobID               uuid.UUID          `json:"job_id"`
+	CheckpointID        uuid.UUID          `json:"checkpoint_id"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	CategoryKey         string             `json:"category_key"`
+	SourceKinds         []string           `json:"source_kinds"`
+	ExpectedTargetCount int32              `json:"expected_target_count"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	OperationCode       string             `json:"operation_code"`
+	ActionVersion       string             `json:"action_version"`
+}
+
 type PrivacyProtectedObjectEvidence struct {
 	ID                    uuid.UUID          `json:"id"`
 	TargetID              uuid.UUID          `json:"target_id"`
@@ -2044,6 +2057,7 @@ type PrivacyProtectedObjectTarget struct {
 	Nonce                   []byte             `json:"nonce"`
 	Ciphertext              []byte             `json:"ciphertext"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UploadIntentID          *uuid.UUID         `json:"upload_intent_id"`
 }
 
 type PrivacyProtectedObjectTargetDigest struct {

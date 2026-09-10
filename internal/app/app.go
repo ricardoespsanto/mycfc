@@ -132,6 +132,22 @@ func New(ctx context.Context) (*Application, error) {
 		}
 		uploadCoordinator = &privacyrequests.UploadCoordinator{Store: privacyrequests.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
 	}
+	var objectTargetProtector privacyrequests.ObjectTargetProtector
+	objectTargetPublicKey, objectTargetDigestKey, objectTargetConfigured, err := cfg.PrivacyObjectTargetKeys()
+	if err != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, err
+	}
+	if objectTargetConfigured {
+		protector, protectorErr := privacyrequests.NewX25519ObjectTargetProtector(cfg.PrivacyObjectTargetEncryptionKeyID, objectTargetPublicKey, cfg.PrivacyObjectTargetDigestKeyID, objectTargetDigestKey)
+		if protectorErr != nil {
+			sessionStore.StopCleanup()
+			pool.Close()
+			return nil, fmt.Errorf("configure privacy object target protection: %w", protectorErr)
+		}
+		objectTargetProtector = protector
+	}
 
 	csrfKey, err := cfg.CSRFAuthKey()
 	if err != nil {
@@ -242,7 +258,7 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos"}
+	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos", ObjectTargets: objectTargetProtector}
 	if cfg.AppEnv == "test" {
 		privacyService.ExecutionCapabilities = map[string]bool{}
 		for _, capability := range strings.Split(cfg.PrivacyExecutionTestCapabilities, ",") {

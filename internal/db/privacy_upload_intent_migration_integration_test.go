@@ -26,6 +26,16 @@ func TestPrivacyUploadIntentFoundationMigrationIsAdditiveProtectedAndImmutable(t
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 
 	if _, err = tx.Exec(ctx, `
+		DROP FUNCTION privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid);
+		DROP FUNCTION privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea);
+		DROP FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid);
+		DROP FUNCTION privacy_execution_complete_object_capture(uuid,text);
+		DROP FUNCTION privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea);
+		DROP FUNCTION privacy_execution_capture_media_sources(uuid,uuid,text);
+		DROP FUNCTION privacy_media_subject_lock(uuid);
+		DROP TABLE privacy_protected.object_capture_sets;
+		ALTER TABLE privacy_protected.object_targets DROP CONSTRAINT privacy_object_targets_capture_source_unique;
+		ALTER TABLE privacy_protected.object_targets DROP COLUMN upload_intent_id;
 		DROP TRIGGER privacy_upload_profile_pointer_deferred ON member_profiles;
 		DROP TRIGGER privacy_upload_repair_pointer_deferred ON repair_requests;
 		DROP TRIGGER privacy_upload_equipment_pointer_deferred ON equipment`); err != nil {

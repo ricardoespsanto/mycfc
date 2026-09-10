@@ -126,24 +126,34 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			}
 		})
 	}
-	var canExecute, canMutate, canBypass, canCleanup, canUpload bool
+	var canExecute, canMutate, canBypass, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
-		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload); err != nil {
+		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload {
-		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v", canExecute, canMutate, canBypass, canCleanup, canUpload)
+	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v", canExecute, canMutate, canBypass, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects)
 	}
-	var appCanUpload, appCanCleanup bool
-	if err := tx.QueryRow(ctx, `SELECT has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup); err != nil {
+	var appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects bool
+	if err := tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_complete_object_capture(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup, &appCanCapture, &appCanMaterialize, &appCanCompleteCapture, &appCanListObjects); err != nil {
 		t.Fatal(err)
 	}
-	if !appCanUpload || appCanCleanup {
-		t.Fatalf("web upload boundary lifecycle=%v cleanup=%v", appCanUpload, appCanCleanup)
+	if !appCanUpload || appCanCleanup || !appCanCapture || !appCanMaterialize || !appCanCompleteCapture || appCanListObjects {
+		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v", appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)

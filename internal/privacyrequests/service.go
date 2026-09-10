@@ -30,6 +30,7 @@ type Service struct {
 	ContactURL            string
 	Now                   func() time.Time
 	ExecutionCapabilities map[string]bool
+	ObjectTargets         ObjectTargetProtector
 }
 
 func (s Service) now() time.Time {
@@ -366,7 +367,7 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 	}
 	v.Subject = subject
 	v.Requester = requester
-	if json.Unmarshal(r.PolicySnapshot, &v.Policy) != nil || v.Policy.Validate() != nil {
+	if json.Unmarshal(r.PolicySnapshot, &v.Policy) != nil || v.Policy.validateCompatible() != nil {
 		return View{}, ErrPolicyUnresolved
 	}
 	v.Events, e = q.ListPrivacyRequestEvents(ctx, r.ID)
@@ -612,7 +613,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 		return zero, ErrInvalidTransition
 	}
 	var p AdoptedPolicy
-	if json.Unmarshal(r.PolicySnapshot, &p) != nil || p.Validate() != nil {
+	if json.Unmarshal(r.PolicySnapshot, &p) != nil || p.validateCompatible() != nil {
 		return zero, ErrPolicyUnresolved
 	}
 	scope := scopeOf(r)
