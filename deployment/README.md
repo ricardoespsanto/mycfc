@@ -217,6 +217,10 @@ For a host incident, use the separate operator SSH key from an approved SSH CIDR
 
 The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
 
+Privacy-safe recovery additionally requires the independent tombstone ledger and isolated replay controls described in `docs/privacy-restore-infrastructure.md`. A normal database restore is never eligible for production traffic until current migrations, tombstone replay and absence verification have succeeded. The infrastructure remains disabled by default until its separate rollout gates are approved and evidenced.
+
+Non-current PostgreSQL backup versions use a separately gated exact-version cleaner. Its Terraform permission/lifecycle gate and host scheduling gate both default to false; rollout and privacy-safe event output are documented in `docs/privacy-restore-infrastructure.md`.
+
 Run a non-destructive restore drill with:
 
 ```sh

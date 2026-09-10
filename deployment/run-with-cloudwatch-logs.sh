@@ -28,9 +28,16 @@ if [ ! -f "$env_file" ]; then
 	exit "$status"
 fi
 
-set -a
-. "$env_file"
-set +a
+read_setting() {
+	setting_name=$1
+	(
+		set -a
+		. "$env_file"
+		set +a
+		eval "printf '%s' \"\${$setting_name-}\""
+	)
+}
+AWS_REGION=${AWS_REGION:-$(read_setting AWS_REGION)}
 
 if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_credentials_file")" != '0:600' ]; then
 	printf '%s\n' 'CloudWatch upload skipped: missing or insecure release-agent AWS credentials file' >&2

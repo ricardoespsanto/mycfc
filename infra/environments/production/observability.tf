@@ -50,6 +50,37 @@ resource "aws_cloudwatch_metric_alarm" "repeated_release_agent_failures" {
   depends_on = [aws_cloudwatch_log_metric_filter.release_agent_failure]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "backup_noncurrent_cleanup_failure" {
+  name           = "${local.name}-backup-noncurrent-cleanup-failure"
+  pattern        = "%backup_noncurrent_cleanup_delete_failed|backup_noncurrent_cleanup_verification_failed|backup_noncurrent_cleanup_sla_breached|backup_noncurrent_cleanup_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "BackupNoncurrentCleanupFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "backup_noncurrent_cleanup_failure" {
+  alarm_name          = "${local.name}-backup-noncurrent-cleanup-failure"
+  alarm_description   = "Exact-version PostgreSQL backup cleanup failed verification or exceeded the approved 24-hour maximum."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "BackupNoncurrentCleanupFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }

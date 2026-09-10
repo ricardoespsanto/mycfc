@@ -15,7 +15,7 @@ HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b
 TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f
 TERRAFORM_PLUGIN_CACHE_DIR ?= $(CURDIR)/.cache/terraform/plugin-cache
 
-.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-privacy-ledger-broker dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -77,6 +77,9 @@ test-e2e-worker-harness: ## Test worker-trial validation and evidence parsing
 	./scripts/e2e-worker-trial_test.sh
 	node --test scripts/summarize-playwright-json.test.mjs
 
+test-privacy-ledger-broker: ## Test the one-shot encrypted ledger append broker
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest infra/environments/hetzner/privacy_ledger_broker/test_handler.py
+
 dev-infra: ## Start local PostgreSQL, MinIO, and Mailpit
 	docker compose up -d --wait postgres minio mailpit
 	docker compose run --rm minio-init
@@ -131,6 +134,8 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/pull-release_test.sh
 	sh deployment/release-status_test.sh
 	sh deployment/publish-release-image_test.sh
+	sh deployment/postgres-backup-version-cleanup_test.sh
+	$(MAKE) test-privacy-ledger-broker
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
 	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/...
@@ -153,9 +158,9 @@ terraform-validate: ## Validate Terraform stacks through the pinned container wi
 	@mkdir -p "$(TERRAFORM_PLUGIN_CACHE_DIR)"
 	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap init -backend=false && TF_DATA_DIR=/tmp/mycfc-bootstrap terraform -chdir=infra/bootstrap validate && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner init -backend=false && TF_DATA_DIR=/tmp/mycfc-hetzner terraform -chdir=infra/environments/hetzner validate && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production terraform -chdir=infra/environments/production validate'
 
-terraform-test: ## Run mocked production Terraform policy and gating tests
+terraform-test: ## Run mocked Terraform policy and gating tests
 	@mkdir -p "$(TERRAFORM_PLUGIN_CACHE_DIR)"
-	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production test'
+	docker run --rm --user "$$(id -u):$$(id -g)" --entrypoint /bin/sh -v "$(CURDIR):/workspace" -v "$(TERRAFORM_PLUGIN_CACHE_DIR):/terraform-plugin-cache" -w /workspace -e TF_PLUGIN_CACHE_DIR=/terraform-plugin-cache $(TERRAFORM_IMAGE) -ec 'TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production init -backend=false && TF_DATA_DIR=/tmp/mycfc-production-test terraform -chdir=infra/environments/production test && TF_DATA_DIR=/tmp/mycfc-hetzner-test terraform -chdir=infra/environments/hetzner init -backend=false && TF_DATA_DIR=/tmp/mycfc-hetzner-test terraform -chdir=infra/environments/hetzner test'
 
 terraform-lint: ## Run built-in TFLint rules for every Terraform root module
 	docker run --rm -v "$(CURDIR):/workspace" -w /workspace $(TFLINT_IMAGE) --chdir=infra/bootstrap --format=compact
