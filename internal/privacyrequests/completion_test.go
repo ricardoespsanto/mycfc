@@ -3,6 +3,7 @@ package privacyrequests
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -39,30 +40,43 @@ func TestRestoreActivationAttestationRequiresAuthenticatedCurrentExactContract(t
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	key := bytes.Repeat([]byte{4}, sha256.Size)
 	hexDigest := strings.Repeat("a", sha256.Size*2)
+	release := ActivationReleaseBinding{PolicyVersion: "privacy-v1", ExecutorVersion: "privacy-erasure-executor/v2", PlanSchemaVersion: "privacy-erasure-plan/v2", ImageDigest: "sha256:" + hexDigest, SchemaMigrationDigest: hexDigest}
+	immutableObject := func(name string) map[string]any {
+		return map[string]any{"ref": "s3://evidence/" + name + "?versionId=version-1", "sha256": hexDigest, "checksum_sha256": hexDigest,
+			"kms_key_arn": "arn:aws:kms:eu-west-1:123456789012:key/key-1", "size_bytes": 128}
+	}
 	document := map[string]any{
-		"contract": "mycfc/privacy-restore-drill-attestation/v1", "result": "SUCCEEDED",
-		"completed_at": now.Add(-time.Hour).Format(time.RFC3339), "valid_until": now.Add(89 * 24 * time.Hour).Format(time.RFC3339),
+		"contract": "mycfc/privacy-restore-drill-attestation/v2", "result": "SUCCEEDED",
+		"observed_at": now.Add(-time.Hour).Format(time.RFC3339), "valid_until": now.Add(-time.Hour).Add(90 * 24 * time.Hour).Format(time.RFC3339),
+		"policy_version": "privacy-v1", "executor_version": "privacy-erasure-executor/v2", "plan_schema_version": "privacy-erasure-plan/v2",
 		"image_digest": "sha256:" + hexDigest, "schema_migration_digest": hexDigest,
-		"backup": map[string]any{"created_at": now.Add(-24 * time.Hour).Format(time.RFC3339), "manifest_key_sha256": hexDigest,
-			"manifest_version": "version-1", "manifest_sha256": hexDigest, "dump_key_sha256": hexDigest, "dump_version": "version-2", "dump_sha256": hexDigest},
-		"ledger": map[string]any{"inventory_sha256": hexDigest, "object_count": 2},
-		"replay": map[string]any{"imported_count": 1, "replayed_count": 2, "already_applied_count": 1, "absence_verified_count": 2},
+		"contracts": map[string]any{"backup": "mycfc/postgres-backup/v3", "ledger_input": "mycfc/privacy-restore-ledger-input/v2",
+			"replay_result": "mycfc/privacy-restore-replay-result/v2", "replay": "relational-erasure-replay/v1", "closure": "restore-tombstone-closure/v3", "synthetic_fixture": "mycfc/privacy-restore-synthetic-fixture/v1"},
+		"backup": map[string]any{"created_at": now.Add(-24 * time.Hour).Format(time.RFC3339), "manifest": immutableObject("manifest.json"), "dump": immutableObject("database.dump")},
+		"ledger": map[string]any{"input_source": "LIVE_LEDGER", "inventory_sha256": hexDigest, "object_count": 2},
+		"candidate": map[string]any{"result_sha256": hexDigest, "object_count": 2, "imported_count": 1, "replayed_count": 2, "already_applied_count": 1,
+			"non_replayable_v1_count": 0, "absence_verified_count": 2, "synthetic_replayed_count": 0, "closure_v3_count": 2, "intent_only_count": 0,
+			"legacy_closure_v2_count": 0, "erasure_effective_at_verified_count": 2, "failed_count": 0},
+		"observer": map[string]any{"image_digest": "sha256:" + hexDigest, "replay_count": 2, "source_already_applied_count": 1, "synthetic_count": 0,
+			"verified_run_count": 2, "expected_checkpoint_count": 4, "succeeded_checkpoint_count": 4, "provider_absent_count": 2,
+			"consent_clock_verified_count": 2, "closure_v3_count": 2, "erasure_effective_at_verified_count": 2, "evidence_sha256": hexDigest},
+		"evidence": immutableObject("restore-evidence.json"),
 	}
 	canonical, _ := json.Marshal(document)
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(canonical)
 	document["auth_hmac_sha256"] = hex.EncodeToString(mac.Sum(nil))
 	payload, _ := json.Marshal(document)
-	evidence, err := VerifyRestoreActivationAttestation(payload, key, now)
-	if err != nil || evidence.kind != "RESTORE" || evidence.reference != "mycfc/privacy-restore-drill-attestation/v1" || len(evidence.digest) != sha256.Size || !evidence.observedAt.Equal(now.Add(-time.Hour)) {
+	evidence, err := VerifyRestoreActivationAttestation(payload, key, release, now)
+	if err != nil || evidence.kind != "RESTORE" || evidence.reference != "mycfc/privacy-restore-drill-attestation/v2" || len(evidence.digest) != sha256.Size || !evidence.observedAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("evidence=%+v err=%v", evidence, err)
 	}
 	tampered := append([]byte(nil), payload...)
 	tampered[len(tampered)-2] ^= 1
-	if _, err = VerifyRestoreActivationAttestation(tampered, key, now); !errors.Is(err, ErrActivationUnavailable) {
+	if _, err = VerifyRestoreActivationAttestation(tampered, key, release, now); !errors.Is(err, ErrActivationUnavailable) {
 		t.Fatalf("tampered attestation error=%v", err)
 	}
-	if _, err = VerifyRestoreActivationAttestation(payload, bytes.Repeat([]byte{5}, sha256.Size), now); !errors.Is(err, ErrActivationUnavailable) {
+	if _, err = VerifyRestoreActivationAttestation(payload, bytes.Repeat([]byte{5}, sha256.Size), release, now); !errors.Is(err, ErrActivationUnavailable) {
 		t.Fatalf("wrong authentication key error=%v", err)
 	}
 	document["image_digest"] = hexDigest
@@ -71,7 +85,7 @@ func TestRestoreActivationAttestationRequiresAuthenticatedCurrentExactContract(t
 	_, _ = mac.Write(canonical)
 	document["auth_hmac_sha256"] = hex.EncodeToString(mac.Sum(nil))
 	payload, _ = json.Marshal(document)
-	if _, err = VerifyRestoreActivationAttestation(payload, key, now); !errors.Is(err, ErrActivationUnavailable) {
+	if _, err = VerifyRestoreActivationAttestation(payload, key, release, now); !errors.Is(err, ErrActivationUnavailable) {
 		t.Fatalf("unprefixed image digest error=%v", err)
 	}
 }
@@ -88,18 +102,51 @@ func mapWithoutAuthentication(document map[string]any) map[string]any {
 
 func TestActivationArtifactsAreComputedNotCallerAsserted(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	payload := []byte(`{"contract":"mycfc/privacy-provider-registry/v1","result":"SUCCEEDED","observed_at":"` + now.Add(-time.Hour).Format(time.RFC3339) + `","providers":[]}`)
-	evidence, err := VerifyActivationArtifact("PROVIDER", "mycfc/privacy-provider-registry/v1", payload, now.Add(-time.Hour), now)
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hexDigest := strings.Repeat("a", sha256.Size*2)
+	release := ActivationReleaseBinding{PolicyVersion: "privacy-v1", ExecutorVersion: "privacy-erasure-executor/v2", PlanSchemaVersion: "privacy-erasure-plan/v2", ImageDigest: "sha256:" + hexDigest, SchemaMigrationDigest: hexDigest}
+	document := map[string]any{
+		"contract": "mycfc/privacy-provider-registry/v1", "result": "SUCCEEDED", "observed_at": now.Add(-time.Hour).Format(time.RFC3339),
+		"policy_version": "privacy-v1", "executor_version": "privacy-erasure-executor/v2", "plan_schema_version": "privacy-erasure-plan/v2",
+		"image_digest": "sha256:" + hexDigest, "evidence_ref": "s3://evidence/provider.json?versionId=version-1", "evidence_sha256": hexDigest,
+		"signing_key_id": "activation-key-1", "registry_state": "READY", "registration_count": 1, "provider_registry_sha256": hexDigest,
+	}
+	canonical, _ := json.Marshal(document)
+	document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
+	payload, _ := json.Marshal(document)
+	evidence, err := VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
 	want := sha256.Sum256(payload)
 	if err != nil || evidence.kind != "PROVIDER" || !bytes.Equal(evidence.digest, want[:]) {
 		t.Fatalf("evidence=%+v err=%v", evidence, err)
 	}
-	if _, err = VerifyActivationArtifact("RESTORE", "mycfc/privacy-restore-drill-attestation/v1", payload, now, now); !errors.Is(err, ErrActivationUnavailable) {
-		t.Fatalf("unsigned restore artifact error=%v", err)
+	wrongRelease := release
+	wrongRelease.ImageDigest = "sha256:" + strings.Repeat("b", sha256.Size*2)
+	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, wrongRelease, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("artifact from a different release error=%v", err)
 	}
-	if _, err = VerifyActivationArtifact("PROVIDER", "mycfc/privacy-provider-registry/v1", payload, now.Add(-2*time.Hour), now); !errors.Is(err, ErrActivationUnavailable) {
-		t.Fatalf("caller observation mismatch error=%v", err)
+	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": bytes.Repeat([]byte{9}, ed25519.PublicKeySize)}, release, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("artifact with untrusted signature error=%v", err)
 	}
+	document["registry_state"] = "EMPTY"
+	canonical, _ = json.Marshal(mapWithoutSignature(document))
+	document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
+	payload, _ = json.Marshal(document)
+	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("empty provider registry error=%v", err)
+	}
+}
+
+func mapWithoutSignature(document map[string]any) map[string]any {
+	copy := make(map[string]any, len(document)-1)
+	for key, value := range document {
+		if key != "signature_ed25519" {
+			copy[key] = value
+		}
+	}
+	return copy
 }
 
 func TestCompletionWorkerFailsClosedBeforeDatabaseAccess(t *testing.T) {

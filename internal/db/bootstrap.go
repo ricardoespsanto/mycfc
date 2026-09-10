@@ -2,11 +2,14 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609100012_privacy_restore_replay_hardening"
+	baselineIncludesThrough = "202609100013_privacy_worker_release_guard"
 	privacyRetentionRole    = "mycfc_privacy_retention"
 )
 
@@ -39,6 +42,29 @@ type RoleCredentials struct {
 }
 
 type namedStatement struct{ name, sql string }
+
+// EmbeddedMigrationInventory returns the exact ordered inventory represented
+// by a database created or upgraded by this binary. It deliberately includes
+// the baseline marker because the restore observer hashes schema_migrations,
+// not only the forward migration files.
+func EmbeddedMigrationInventory() []string {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		return nil
+	}
+	versions := make([]string, 0, len(entries)+1)
+	versions = append(versions, baselineVersion)
+	for _, name := range entries {
+		versions = append(versions, migrationVersion(name))
+	}
+	sort.Strings(versions)
+	return versions
+}
+
+func EmbeddedMigrationDigest() string {
+	digest := sha256.Sum256([]byte(strings.Join(EmbeddedMigrationInventory(), "\n")))
+	return hex.EncodeToString(digest[:])
+}
 
 type bootstrapConnection interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -140,8 +166,11 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		"privacy_terminal_requeue_proposals",
 		"privacy_terminal_requeue_approvals",
 		"privacy_activation_evidence",
+		"privacy_activation_authenticated_artifacts",
 		"privacy_activation_proposals",
 		"privacy_activation_approvals",
+		"privacy_worker_kill_switch",
+		"privacy_worker_kill_switch_events",
 	}, ", ")
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
@@ -169,9 +198,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke web provider worker routines", "REVOKE EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
 		{"grant web provider capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) TO " + app},
 		{"revoke web completion worker routines", "REVOKE EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() FROM " + app},
-		{"grant web completion control routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_control_snapshot(uuid) TO " + app},
+		{"grant web completion control routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_control_snapshot(uuid) TO " + app},
 		{"revoke web restore and retention routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea), privacy_retention_run(uuid,integer) FROM " + app},
-		{"revoke web hardened restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + app},
+		{"revoke web hardened restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_verify_operation_inner_013(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_begin_replay_hardened_inner_013(uuid,uuid), privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + app},
 		{"revoke web retention internals", "REVOKE EXECUTE ON FUNCTION privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_status() FROM " + app},
 		{"grant web consent cessation", "GRANT EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz) TO " + app},
 		{"revoke privacy retention table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + retention},
@@ -194,6 +223,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"revoke privacy executor completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + executor},
 			namedStatement{"revoke privacy executor sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + executor},
 			namedStatement{"revoke legacy checkpoint bypass", "REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM " + executor},
+			namedStatement{"revoke privacy executor release guard internals", "REVOKE EXECUTE ON FUNCTION privacy_activation_authenticated_set_digest(text,uuid[]), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_worker_require_activation(), privacy_upload_cleanup_claim_inner_013(bigint,uuid), privacy_upload_cleanup_complete_inner_013(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail_inner_013(uuid,uuid,bigint,uuid,boolean,bigint), privacy_worker_claim_inner_013(bigint,uuid), privacy_worker_heartbeat_inner_013(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_complete_job_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job_inner_013(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_execute_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_list_object_targets_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_prepare_v2_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2_inner_013(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2_inner_013(uuid,uuid), privacy_tombstone_confirm_closure_v2_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v3_inner_013(uuid,uuid), privacy_tombstone_confirm_closure_v3_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_worker_list_provider_targets_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_completion_prepare_inner_013(uuid,uuid), privacy_completion_list_pending_inner_013(uuid,integer), privacy_completion_finalize_inner_013(uuid,uuid,bytea,bytea) FROM " + executor},
 			namedStatement{"grant privacy executor execution reads", "GRANT SELECT ON TABLE " + executionTables + ", privacy_request_execution_plans TO " + executor},
 			namedStatement{"grant privacy executor request lifecycle reads", "GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests TO " + executor},
 			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
@@ -202,9 +232,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"revoke privacy executor provider capture routines", "REVOKE EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) FROM " + executor},
 			namedStatement{"grant privacy executor provider routines", "GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 			namedStatement{"revoke privacy executor legacy and offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) FROM " + executor},
-			namedStatement{"revoke privacy executor hardened offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + executor},
+			namedStatement{"revoke privacy executor hardened offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_verify_operation_inner_013(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_begin_replay_hardened_inner_013(uuid,uuid), privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + executor},
 			namedStatement{"grant privacy executor tombstone routines", "GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) TO " + executor},
-			namedStatement{"revoke privacy executor operator completion routines", "REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_control_snapshot(uuid) FROM " + executor},
+			namedStatement{"revoke privacy executor operator completion routines", "REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_control_snapshot(uuid) FROM " + executor},
 			namedStatement{"grant privacy executor completion routines", "GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO " + executor},
 			namedStatement{"revoke privacy executor retention routine", "REVOKE EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz), privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_run(uuid,integer), privacy_retention_status() FROM " + executor},
 		)

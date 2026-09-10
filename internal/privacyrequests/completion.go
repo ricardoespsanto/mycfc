@@ -3,6 +3,7 @@ package privacyrequests
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -343,11 +344,63 @@ type ActivationEvidence struct {
 	Digest []byte
 }
 
+type ActivationReleaseBinding struct {
+	PolicyVersion         string
+	ExecutorVersion       string
+	PlanSchemaVersion     string
+	ImageDigest           string
+	SchemaMigrationDigest string
+}
+
+func (binding ActivationReleaseBinding) valid() bool {
+	return policyKey.MatchString(binding.PolicyVersion) && binding.ExecutorVersion == SupportedExecutorVersion &&
+		binding.PlanSchemaVersion == SupportedPlanSchemaVersion && validImageDigest(binding.ImageDigest) && validSHA256Hex(binding.SchemaMigrationDigest)
+}
+
 type VerifiedActivationEvidence struct {
 	kind       string
 	digest     []byte
 	reference  string
 	observedAt time.Time
+	expiresAt  time.Time
+	artifact   activationArtifactRecord
+}
+
+type activationArtifactRecord struct {
+	PolicyVersion                string `json:"policy_version"`
+	ExecutorVersion              string `json:"executor_version"`
+	PlanSchemaVersion            string `json:"plan_schema_version"`
+	ImageDigest                  string `json:"image_digest"`
+	EvidenceRef                  string `json:"evidence_ref,omitempty"`
+	EvidenceSHA256               []byte `json:"evidence_sha256"`
+	SigningKeyID                 string `json:"signing_key_id,omitempty"`
+	SchemaMigrationDigest        []byte `json:"schema_migration_digest,omitempty"`
+	BaselineIncludesThrough      string `json:"baseline_includes_through,omitempty"`
+	ProductionStateSerial        int64  `json:"production_state_serial,omitempty"`
+	HetznerStateSerial           int64  `json:"hetzner_state_serial,omitempty"`
+	ProductionStateSHA256        []byte `json:"production_state_sha256,omitempty"`
+	HetznerStateSHA256           []byte `json:"hetzner_state_sha256,omitempty"`
+	ProductionPlanSHA256         []byte `json:"production_plan_sha256,omitempty"`
+	HetznerPlanSHA256            []byte `json:"hetzner_plan_sha256,omitempty"`
+	WorkerIdentityEnabled        *bool  `json:"worker_identity_enabled,omitempty"`
+	S3VersionDeletionEnabled     *bool  `json:"s3_version_deletion_enabled,omitempty"`
+	LedgerBrokerInvokeEnabled    *bool  `json:"ledger_broker_invoke_enabled,omitempty"`
+	WorkerMonitoringEnabled      *bool  `json:"worker_monitoring_enabled,omitempty"`
+	RestoreInfrastructureEnabled *bool  `json:"restore_infrastructure_enabled,omitempty"`
+	RestoreLedgerWriteEnabled    *bool  `json:"restore_ledger_write_enabled,omitempty"`
+	ProviderRegistryState        string `json:"provider_registry_state,omitempty"`
+	ProviderRegistrationCount    int64  `json:"provider_registration_count,omitempty"`
+	ProviderRegistrySHA256       []byte `json:"provider_registry_sha256,omitempty"`
+	RestoreInputSource           string `json:"restore_input_source,omitempty"`
+	RestoreInputContract         string `json:"restore_input_contract,omitempty"`
+	RestoreReplayContract        string `json:"restore_replay_contract,omitempty"`
+	RestoreClosureContract       string `json:"restore_closure_contract,omitempty"`
+	RestoreCandidateSHA256       []byte `json:"restore_candidate_sha256,omitempty"`
+	RestoreInventorySHA256       []byte `json:"restore_inventory_sha256,omitempty"`
+	RestoreObjectCount           int64  `json:"restore_object_count,omitempty"`
+	RestoreReplayedCount         int64  `json:"restore_replayed_count,omitempty"`
+	RestoreSyntheticCount        *int64 `json:"restore_synthetic_count,omitempty"`
+	RestoreObserverSHA256        []byte `json:"restore_observer_sha256,omitempty"`
 }
 
 type ActivationProposal struct {
@@ -373,10 +426,16 @@ type ActivationControlSnapshot struct {
 
 func (s Service) RecordActivationEvidence(ctx context.Context, actorID uuid.UUID, evidence VerifiedActivationEvidence) (ActivationEvidence, error) {
 	var result ActivationEvidence
-	if s.Pool == nil || actorID == uuid.Nil || len(evidence.digest) != sha256.Size || evidence.observedAt.IsZero() {
+	if s.Pool == nil || actorID == uuid.Nil || len(evidence.digest) != sha256.Size || evidence.observedAt.IsZero() ||
+		evidence.expiresAt.IsZero() || len(evidence.artifact.EvidenceSHA256) != sha256.Size {
 		return result, ErrInvalid
 	}
-	err := s.Pool.QueryRow(ctx, `SELECT privacy_activation_record_evidence($1,$2,$3,$4,$5)`, actorID, evidence.kind, evidence.digest, evidence.reference, evidence.observedAt).Scan(&result.ID)
+	artifact, err := json.Marshal(evidence.artifact)
+	if err != nil {
+		return result, ErrInvalid
+	}
+	err = s.Pool.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`,
+		actorID, evidence.kind, evidence.digest, evidence.reference, evidence.observedAt, evidence.expiresAt, artifact).Scan(&result.ID)
 	if err != nil {
 		return ActivationEvidence{}, completionControlError(err, ErrActivationUnavailable)
 	}
@@ -384,16 +443,16 @@ func (s Service) RecordActivationEvidence(ctx context.Context, actorID uuid.UUID
 	return result, nil
 }
 
-func (s Service) VerifyAndRecordActivationArtifact(ctx context.Context, actorID uuid.UUID, kind, contract string, payload []byte, observedAt, now time.Time) (ActivationEvidence, error) {
-	evidence, err := VerifyActivationArtifact(kind, contract, payload, observedAt, now)
+func (s Service) VerifyAndRecordActivationArtifact(ctx context.Context, actorID uuid.UUID, payload []byte, trustedKeys map[string]ed25519.PublicKey, release ActivationReleaseBinding, now time.Time) (ActivationEvidence, error) {
+	evidence, err := VerifyActivationArtifact(payload, trustedKeys, release, now)
 	if err != nil {
 		return ActivationEvidence{}, err
 	}
 	return s.RecordActivationEvidence(ctx, actorID, evidence)
 }
 
-func (s Service) VerifyAndRecordRestoreActivationEvidence(ctx context.Context, actorID uuid.UUID, payload, authenticationKey []byte, now time.Time) (ActivationEvidence, error) {
-	evidence, err := VerifyRestoreActivationAttestation(payload, authenticationKey, now)
+func (s Service) VerifyAndRecordRestoreActivationEvidence(ctx context.Context, actorID uuid.UUID, payload, authenticationKey []byte, release ActivationReleaseBinding, now time.Time) (ActivationEvidence, error) {
+	evidence, err := VerifyRestoreActivationAttestation(payload, authenticationKey, release, now)
 	if err != nil {
 		return ActivationEvidence{}, err
 	}
@@ -406,62 +465,241 @@ var activationArtifactContracts = map[string]string{
 	"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 }
 
-func VerifyActivationArtifact(kind, contract string, payload []byte, observedAt, now time.Time) (VerifiedActivationEvidence, error) {
-	want, ok := activationArtifactContracts[kind]
-	if !ok || contract != want || len(payload) == 0 || len(payload) > 1<<20 || observedAt.IsZero() || observedAt.After(now) || !observedAt.After(now.AddDate(0, 0, -90)) {
+type signedActivationArtifact struct {
+	Contract          string `json:"contract"`
+	Result            string `json:"result"`
+	ObservedAt        string `json:"observed_at"`
+	PolicyVersion     string `json:"policy_version"`
+	ExecutorVersion   string `json:"executor_version"`
+	PlanSchemaVersion string `json:"plan_schema_version"`
+	ImageDigest       string `json:"image_digest"`
+	EvidenceRef       string `json:"evidence_ref"`
+	EvidenceSHA256    string `json:"evidence_sha256"`
+	SigningKeyID      string `json:"signing_key_id"`
+	SignatureEd25519  string `json:"signature_ed25519"`
+}
+
+type infrastructureActivationArtifact struct {
+	signedActivationArtifact
+	ProductionStateSerial        int64  `json:"production_state_serial"`
+	HetznerStateSerial           int64  `json:"hetzner_state_serial"`
+	ProductionStateSHA256        string `json:"production_state_sha256"`
+	HetznerStateSHA256           string `json:"hetzner_state_sha256"`
+	ProductionPlanSHA256         string `json:"production_plan_sha256"`
+	HetznerPlanSHA256            string `json:"hetzner_plan_sha256"`
+	WorkerIdentityEnabled        bool   `json:"worker_identity_enabled"`
+	S3VersionDeletionEnabled     bool   `json:"s3_version_deletion_enabled"`
+	LedgerBrokerInvokeEnabled    bool   `json:"ledger_broker_invoke_enabled"`
+	WorkerMonitoringEnabled      bool   `json:"worker_monitoring_enabled"`
+	RestoreInfrastructureEnabled bool   `json:"restore_infrastructure_enabled"`
+	RestoreLedgerWriteEnabled    bool   `json:"restore_ledger_write_enabled"`
+}
+
+type providerActivationArtifact struct {
+	signedActivationArtifact
+	RegistryState          string `json:"registry_state"`
+	RegistrationCount      int64  `json:"registration_count"`
+	ProviderRegistrySHA256 string `json:"provider_registry_sha256"`
+}
+
+type schemaActivationArtifact struct {
+	signedActivationArtifact
+	SchemaMigrationDigest   string `json:"schema_migration_digest"`
+	BaselineIncludesThrough string `json:"baseline_includes_through"`
+}
+
+func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.PublicKey, release ActivationReleaseBinding, now time.Time) (VerifiedActivationEvidence, error) {
+	if len(payload) == 0 || len(payload) > 1<<20 || now.IsZero() || len(trustedKeys) == 0 || !release.valid() {
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
 	}
-	var artifact struct {
-		Contract   string `json:"contract"`
-		Result     string `json:"result"`
-		ObservedAt string `json:"observed_at"`
+	var header signedActivationArtifact
+	if !decodeExactJSON(payload, &header) {
+		// The common header intentionally rejects kind-specific fields, so use a
+		// small untyped pass only to select the exact closed schema below.
+		var selector struct {
+			Contract string `json:"contract"`
+		}
+		if json.Unmarshal(payload, &selector) != nil {
+			return VerifiedActivationEvidence{}, ErrActivationUnavailable
+		}
+		header.Contract = selector.Contract
 	}
+	kind := ""
+	for candidate, contract := range activationArtifactContracts {
+		if header.Contract == contract {
+			kind = candidate
+			break
+		}
+	}
+	var record activationArtifactRecord
+	switch kind {
+	case "INFRASTRUCTURE":
+		var artifact infrastructureActivationArtifact
+		if !decodeExactJSON(payload, &artifact) || artifact.ProductionStateSerial <= 0 || artifact.HetznerStateSerial <= 0 ||
+			!validSHA256Hex(artifact.ProductionStateSHA256) || !validSHA256Hex(artifact.HetznerStateSHA256) ||
+			!validSHA256Hex(artifact.ProductionPlanSHA256) || !validSHA256Hex(artifact.HetznerPlanSHA256) ||
+			!artifact.WorkerIdentityEnabled || !artifact.S3VersionDeletionEnabled || !artifact.LedgerBrokerInvokeEnabled ||
+			!artifact.WorkerMonitoringEnabled || !artifact.RestoreInfrastructureEnabled || !artifact.RestoreLedgerWriteEnabled {
+			return VerifiedActivationEvidence{}, ErrActivationUnavailable
+		}
+		header = artifact.signedActivationArtifact
+		record.ProductionStateSerial, record.HetznerStateSerial = artifact.ProductionStateSerial, artifact.HetznerStateSerial
+		record.ProductionStateSHA256, _ = hex.DecodeString(artifact.ProductionStateSHA256)
+		record.HetznerStateSHA256, _ = hex.DecodeString(artifact.HetznerStateSHA256)
+		record.ProductionPlanSHA256, _ = hex.DecodeString(artifact.ProductionPlanSHA256)
+		record.HetznerPlanSHA256, _ = hex.DecodeString(artifact.HetznerPlanSHA256)
+		enabled := true
+		record.WorkerIdentityEnabled, record.S3VersionDeletionEnabled, record.LedgerBrokerInvokeEnabled = &enabled, &enabled, &enabled
+		record.WorkerMonitoringEnabled, record.RestoreInfrastructureEnabled, record.RestoreLedgerWriteEnabled = &enabled, &enabled, &enabled
+	case "PROVIDER":
+		var artifact providerActivationArtifact
+		if !decodeExactJSON(payload, &artifact) || artifact.RegistryState != "READY" || artifact.RegistrationCount <= 0 || !validSHA256Hex(artifact.ProviderRegistrySHA256) {
+			return VerifiedActivationEvidence{}, ErrActivationUnavailable
+		}
+		header = artifact.signedActivationArtifact
+		record.ProviderRegistryState, record.ProviderRegistrationCount = artifact.RegistryState, artifact.RegistrationCount
+		record.ProviderRegistrySHA256, _ = hex.DecodeString(artifact.ProviderRegistrySHA256)
+	case "SCHEMA":
+		var artifact schemaActivationArtifact
+		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100013_privacy_worker_release_guard" {
+			return VerifiedActivationEvidence{}, ErrActivationUnavailable
+		}
+		header = artifact.signedActivationArtifact
+		record.SchemaMigrationDigest, _ = hex.DecodeString(artifact.SchemaMigrationDigest)
+		record.BaselineIncludesThrough = artifact.BaselineIncludesThrough
+	default:
+		return VerifiedActivationEvidence{}, ErrActivationUnavailable
+	}
+	observedAt, err := time.Parse(time.RFC3339, header.ObservedAt)
+	if err != nil || observedAt.Format(time.RFC3339) != header.ObservedAt || observedAt.After(now) || !observedAt.After(now.Add(-90*24*time.Hour)) ||
+		header.Result != "SUCCEEDED" || !policyKey.MatchString(header.PolicyVersion) || header.PolicyVersion != release.PolicyVersion || header.ExecutorVersion != release.ExecutorVersion ||
+		header.PlanSchemaVersion != release.PlanSchemaVersion || header.ImageDigest != release.ImageDigest ||
+		!validImageDigest(header.ImageDigest) || !validSHA256Hex(header.EvidenceSHA256) || !validActivationEvidenceRef(header.EvidenceRef) ||
+		!keyIdentifier.MatchString(header.SigningKeyID) {
+		return VerifiedActivationEvidence{}, ErrActivationUnavailable
+	}
+	key, ok := trustedKeys[header.SigningKeyID]
+	signature, signatureErr := base64.StdEncoding.DecodeString(header.SignatureEd25519)
+	canonical, canonicalErr := canonicalJSONWithoutField(payload, "signature_ed25519")
+	if !ok || len(key) != ed25519.PublicKeySize || signatureErr != nil || len(signature) != ed25519.SignatureSize || canonicalErr != nil ||
+		!ed25519.Verify(key, canonical, signature) {
+		return VerifiedActivationEvidence{}, ErrActivationUnavailable
+	}
+	record.PolicyVersion, record.ExecutorVersion, record.PlanSchemaVersion = header.PolicyVersion, header.ExecutorVersion, header.PlanSchemaVersion
+	record.ImageDigest, record.EvidenceRef, record.SigningKeyID = header.ImageDigest, header.EvidenceRef, header.SigningKeyID
+	record.EvidenceSHA256, _ = hex.DecodeString(header.EvidenceSHA256)
+	digest := sha256.Sum256(payload)
+	return VerifiedActivationEvidence{kind: kind, digest: digest[:], reference: header.Contract, observedAt: observedAt.UTC(), expiresAt: observedAt.Add(90 * 24 * time.Hour).UTC(), artifact: record}, nil
+}
+
+func decodeExactJSON(payload []byte, target any) bool {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
-	if decoder.Decode(&artifact) != nil {
-		return VerifiedActivationEvidence{}, ErrActivationUnavailable
+	if decoder.Decode(target) != nil {
+		return false
 	}
 	var trailing any
-	parsedObservedAt, observedErr := time.Parse(time.RFC3339, artifact.ObservedAt)
-	if decoder.Decode(&trailing) != io.EOF || observedErr != nil || artifact.Contract != contract || artifact.Result != "SUCCEEDED" ||
-		parsedObservedAt.Format(time.RFC3339) != artifact.ObservedAt || !parsedObservedAt.Equal(observedAt) {
-		return VerifiedActivationEvidence{}, ErrActivationUnavailable
+	return decoder.Decode(&trailing) == io.EOF
+}
+
+func canonicalJSONWithoutField(payload []byte, field string) ([]byte, error) {
+	var document map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if decoder.Decode(&document) != nil {
+		return nil, ErrActivationUnavailable
 	}
-	digest := sha256.Sum256(payload)
-	return VerifiedActivationEvidence{kind: kind, digest: digest[:], reference: contract, observedAt: observedAt.UTC()}, nil
+	delete(document, field)
+	return json.Marshal(document)
+}
+
+func validActivationEvidenceRef(value string) bool {
+	if len(value) > 2048 {
+		return false
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "s3" || u.Host == "" || u.User != nil || u.Fragment != "" || u.Path == "" || u.Path == "/" {
+		return false
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	versionID := query.Get("versionId")
+	return err == nil && len(query) == 1 && len(query["versionId"]) == 1 && len(versionID) <= 1024 && versionID != "" &&
+		u.RawQuery == "versionId="+url.QueryEscape(versionID)
+}
+
+type immutableRestoreObject struct {
+	Ref            string `json:"ref"`
+	SHA256         string `json:"sha256"`
+	ChecksumSHA256 string `json:"checksum_sha256"`
+	KMSKeyARN      string `json:"kms_key_arn"`
+	SizeBytes      int64  `json:"size_bytes"`
 }
 
 type restoreActivationAttestation struct {
 	Contract              string `json:"contract"`
 	Result                string `json:"result"`
-	CompletedAt           string `json:"completed_at"`
+	ObservedAt            string `json:"observed_at"`
 	ValidUntil            string `json:"valid_until"`
+	PolicyVersion         string `json:"policy_version"`
+	ExecutorVersion       string `json:"executor_version"`
+	PlanSchemaVersion     string `json:"plan_schema_version"`
 	ImageDigest           string `json:"image_digest"`
 	SchemaMigrationDigest string `json:"schema_migration_digest"`
 	AuthHMACSHA256        string `json:"auth_hmac_sha256"`
-	Backup                struct {
-		CreatedAt         string `json:"created_at"`
-		ManifestKeySHA256 string `json:"manifest_key_sha256"`
-		ManifestVersion   string `json:"manifest_version"`
-		ManifestSHA256    string `json:"manifest_sha256"`
-		DumpKeySHA256     string `json:"dump_key_sha256"`
-		DumpVersion       string `json:"dump_version"`
-		DumpSHA256        string `json:"dump_sha256"`
+	Contracts             struct {
+		Backup           string `json:"backup"`
+		LedgerInput      string `json:"ledger_input"`
+		ReplayResult     string `json:"replay_result"`
+		Replay           string `json:"replay"`
+		Closure          string `json:"closure"`
+		SyntheticFixture string `json:"synthetic_fixture"`
+	} `json:"contracts"`
+	Backup struct {
+		CreatedAt string                 `json:"created_at"`
+		Manifest  immutableRestoreObject `json:"manifest"`
+		Dump      immutableRestoreObject `json:"dump"`
 	} `json:"backup"`
 	Ledger struct {
+		InputSource     string `json:"input_source"`
 		InventorySHA256 string `json:"inventory_sha256"`
 		ObjectCount     int64  `json:"object_count"`
 	} `json:"ledger"`
-	Replay struct {
-		ImportedCount        int64 `json:"imported_count"`
-		ReplayedCount        int64 `json:"replayed_count"`
-		AlreadyAppliedCount  int64 `json:"already_applied_count"`
-		AbsenceVerifiedCount int64 `json:"absence_verified_count"`
-	} `json:"replay"`
+	Candidate struct {
+		ResultSHA256                    string `json:"result_sha256"`
+		ObjectCount                     int64  `json:"object_count"`
+		ImportedCount                   int64  `json:"imported_count"`
+		ReplayedCount                   int64  `json:"replayed_count"`
+		AlreadyAppliedCount             int64  `json:"already_applied_count"`
+		NonReplayableV1Count            int64  `json:"non_replayable_v1_count"`
+		AbsenceVerifiedCount            int64  `json:"absence_verified_count"`
+		SyntheticReplayedCount          int64  `json:"synthetic_replayed_count"`
+		ClosureV3Count                  int64  `json:"closure_v3_count"`
+		IntentOnlyCount                 int64  `json:"intent_only_count"`
+		LegacyClosureV2Count            int64  `json:"legacy_closure_v2_count"`
+		ErasureEffectiveAtVerifiedCount int64  `json:"erasure_effective_at_verified_count"`
+		FailedCount                     int64  `json:"failed_count"`
+	} `json:"candidate"`
+	Observer struct {
+		ImageDigest                     string `json:"image_digest"`
+		ReplayCount                     int64  `json:"replay_count"`
+		SourceAlreadyAppliedCount       int64  `json:"source_already_applied_count"`
+		SyntheticCount                  int64  `json:"synthetic_count"`
+		VerifiedRunCount                int64  `json:"verified_run_count"`
+		ExpectedCheckpointCount         int64  `json:"expected_checkpoint_count"`
+		SucceededCheckpointCount        int64  `json:"succeeded_checkpoint_count"`
+		ProviderAbsentCount             int64  `json:"provider_absent_count"`
+		ConsentClockVerifiedCount       int64  `json:"consent_clock_verified_count"`
+		ClosureV3Count                  int64  `json:"closure_v3_count"`
+		ErasureEffectiveAtVerifiedCount int64  `json:"erasure_effective_at_verified_count"`
+		EvidenceSHA256                  string `json:"evidence_sha256"`
+	} `json:"observer"`
+	Evidence immutableRestoreObject `json:"evidence"`
 }
 
-func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, now time.Time) (VerifiedActivationEvidence, error) {
-	if len(payload) == 0 || len(payload) > 1<<20 || len(authenticationKey) != sha256.Size {
+func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, release ActivationReleaseBinding, now time.Time) (VerifiedActivationEvidence, error) {
+	if len(payload) == 0 || len(payload) > 1<<20 || len(authenticationKey) != sha256.Size || !release.valid() {
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -475,18 +713,32 @@ func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, now t
 	if decoder.Decode(&trailing) != io.EOF {
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
 	}
-	completedAt, completedErr := time.Parse(time.RFC3339, attestation.CompletedAt)
+	observedAt, observedErr := time.Parse(time.RFC3339, attestation.ObservedAt)
 	validUntil, validErr := time.Parse(time.RFC3339, attestation.ValidUntil)
-	if completedErr != nil || validErr != nil || attestation.Contract != "mycfc/privacy-restore-drill-attestation/v1" || attestation.Result != "SUCCEEDED" ||
-		completedAt.Format(time.RFC3339) != attestation.CompletedAt || validUntil.Format(time.RFC3339) != attestation.ValidUntil ||
-		completedAt.After(now) || !validUntil.After(now) || validUntil.Sub(completedAt) > 90*24*time.Hour || !completedAt.After(now.AddDate(0, 0, -90)) ||
-		!validImageDigest(attestation.ImageDigest) || !validSHA256Hex(attestation.SchemaMigrationDigest) || !validSHA256Hex(attestation.AuthHMACSHA256) ||
-		!validSHA256Hex(attestation.Backup.ManifestKeySHA256) || !validSHA256Hex(attestation.Backup.ManifestSHA256) ||
-		!validSHA256Hex(attestation.Backup.DumpKeySHA256) || !validSHA256Hex(attestation.Backup.DumpSHA256) ||
-		attestation.Backup.CreatedAt == "" || attestation.Backup.ManifestVersion == "" || attestation.Backup.DumpVersion == "" ||
-		!validSHA256Hex(attestation.Ledger.InventorySHA256) || attestation.Ledger.ObjectCount < 0 || attestation.Replay.ImportedCount < 0 ||
-		attestation.Replay.ReplayedCount <= 0 || attestation.Replay.AlreadyAppliedCount < 0 || attestation.Replay.AbsenceVerifiedCount != attestation.Replay.ReplayedCount ||
-		attestation.Ledger.ObjectCount < attestation.Replay.ReplayedCount || attestation.Replay.ReplayedCount != attestation.Replay.ImportedCount+attestation.Replay.AlreadyAppliedCount {
+	backupCreatedAt, backupErr := time.Parse(time.RFC3339, attestation.Backup.CreatedAt)
+	if observedErr != nil || validErr != nil || backupErr != nil || attestation.Contract != "mycfc/privacy-restore-drill-attestation/v2" || attestation.Result != "SUCCEEDED" ||
+		observedAt.Format(time.RFC3339) != attestation.ObservedAt || validUntil.Format(time.RFC3339) != attestation.ValidUntil || backupCreatedAt.Format(time.RFC3339) != attestation.Backup.CreatedAt ||
+		observedAt.After(now) || backupCreatedAt.After(observedAt) || !validUntil.After(now) || !validUntil.Equal(observedAt.Add(90*24*time.Hour)) || !observedAt.After(now.Add(-90*24*time.Hour)) ||
+		attestation.PolicyVersion != release.PolicyVersion || attestation.ExecutorVersion != release.ExecutorVersion || attestation.PlanSchemaVersion != release.PlanSchemaVersion ||
+		attestation.ImageDigest != release.ImageDigest || attestation.SchemaMigrationDigest != release.SchemaMigrationDigest || !validSHA256Hex(attestation.AuthHMACSHA256) ||
+		attestation.Contracts.Backup != "mycfc/postgres-backup/v3" || attestation.Contracts.LedgerInput != "mycfc/privacy-restore-ledger-input/v2" ||
+		attestation.Contracts.ReplayResult != "mycfc/privacy-restore-replay-result/v2" || attestation.Contracts.Replay != "relational-erasure-replay/v1" ||
+		attestation.Contracts.Closure != "restore-tombstone-closure/v3" || attestation.Contracts.SyntheticFixture != "mycfc/privacy-restore-synthetic-fixture/v1" ||
+		!validImmutableRestoreObject(attestation.Backup.Manifest) || !validImmutableRestoreObject(attestation.Backup.Dump) || !validImmutableRestoreObject(attestation.Evidence) ||
+		!validSHA256Hex(attestation.Ledger.InventorySHA256) || attestation.Ledger.ObjectCount < 0 || !validSHA256Hex(attestation.Candidate.ResultSHA256) ||
+		attestation.Candidate.ObjectCount != attestation.Ledger.ObjectCount || attestation.Candidate.ImportedCount < 0 || attestation.Candidate.ReplayedCount <= 0 ||
+		attestation.Candidate.AlreadyAppliedCount < 0 || attestation.Candidate.ReplayedCount != attestation.Candidate.ImportedCount+attestation.Candidate.AlreadyAppliedCount ||
+		attestation.Candidate.AbsenceVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.ClosureV3Count != attestation.Candidate.ReplayedCount ||
+		attestation.Candidate.ErasureEffectiveAtVerifiedCount != attestation.Candidate.ReplayedCount || attestation.Candidate.NonReplayableV1Count != 0 ||
+		attestation.Candidate.IntentOnlyCount != 0 || attestation.Candidate.LegacyClosureV2Count != 0 || attestation.Candidate.FailedCount != 0 ||
+		!validImageDigest(attestation.Observer.ImageDigest) || !validSHA256Hex(attestation.Observer.EvidenceSHA256) ||
+		attestation.Observer.ReplayCount != attestation.Candidate.ReplayedCount || attestation.Observer.SourceAlreadyAppliedCount != attestation.Candidate.AlreadyAppliedCount ||
+		attestation.Observer.SyntheticCount != attestation.Candidate.SyntheticReplayedCount || attestation.Observer.VerifiedRunCount != attestation.Candidate.ReplayedCount ||
+		attestation.Observer.ExpectedCheckpointCount <= 0 || attestation.Observer.SucceededCheckpointCount != attestation.Observer.ExpectedCheckpointCount ||
+		attestation.Observer.ProviderAbsentCount != attestation.Candidate.ReplayedCount || attestation.Observer.ConsentClockVerifiedCount != attestation.Candidate.ReplayedCount ||
+		attestation.Observer.ClosureV3Count != attestation.Candidate.ReplayedCount || attestation.Observer.ErasureEffectiveAtVerifiedCount != attestation.Candidate.ReplayedCount ||
+		!((attestation.Ledger.InputSource == "LIVE_LEDGER" && attestation.Candidate.SyntheticReplayedCount == 0) ||
+			(attestation.Ledger.InputSource == "SYNTHETIC_BOOTSTRAP" && attestation.Candidate.SyntheticReplayedCount == attestation.Candidate.ReplayedCount)) {
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
 	}
 	var canonical map[string]any
@@ -510,7 +762,26 @@ func VerifyRestoreActivationAttestation(payload, authenticationKey []byte, now t
 		return VerifiedActivationEvidence{}, ErrActivationUnavailable
 	}
 	digest := sha256.Sum256(payload)
-	return VerifiedActivationEvidence{kind: "RESTORE", digest: digest[:], reference: attestation.Contract, observedAt: completedAt.UTC()}, nil
+	schemaDigest, _ := hex.DecodeString(attestation.SchemaMigrationDigest)
+	inventoryDigest, _ := hex.DecodeString(attestation.Ledger.InventorySHA256)
+	candidateDigest, _ := hex.DecodeString(attestation.Candidate.ResultSHA256)
+	observerDigest, _ := hex.DecodeString(attestation.Observer.EvidenceSHA256)
+	evidenceDigest, _ := hex.DecodeString(attestation.Evidence.SHA256)
+	syntheticCount := attestation.Candidate.SyntheticReplayedCount
+	return VerifiedActivationEvidence{kind: "RESTORE", digest: digest[:], reference: attestation.Contract, observedAt: observedAt.UTC(), expiresAt: validUntil.UTC(), artifact: activationArtifactRecord{
+		PolicyVersion: attestation.PolicyVersion, ExecutorVersion: attestation.ExecutorVersion, PlanSchemaVersion: attestation.PlanSchemaVersion,
+		ImageDigest: attestation.ImageDigest, EvidenceRef: attestation.Evidence.Ref, EvidenceSHA256: evidenceDigest, SchemaMigrationDigest: schemaDigest,
+		RestoreInputSource: attestation.Ledger.InputSource, RestoreInputContract: attestation.Contracts.LedgerInput,
+		RestoreReplayContract: attestation.Contracts.Replay, RestoreClosureContract: attestation.Contracts.Closure,
+		RestoreCandidateSHA256: candidateDigest, RestoreInventorySHA256: inventoryDigest,
+		RestoreObjectCount: attestation.Ledger.ObjectCount, RestoreReplayedCount: attestation.Candidate.ReplayedCount,
+		RestoreSyntheticCount: &syntheticCount, RestoreObserverSHA256: observerDigest,
+	}}, nil
+}
+
+func validImmutableRestoreObject(object immutableRestoreObject) bool {
+	return validActivationEvidenceRef(object.Ref) && validSHA256Hex(object.SHA256) && object.ChecksumSHA256 == object.SHA256 &&
+		strings.HasPrefix(object.KMSKeyARN, "arn:aws:kms:") && len(object.KMSKeyARN) <= 2048 && object.SizeBytes > 0
 }
 
 func validImageDigest(value string) bool {
