@@ -71,26 +71,6 @@ ALTER TABLE guardian_authority_events
  ADD CONSTRAINT guardian_authority_events_actor_v2_check
  CHECK((actor_role='SYSTEM' AND actor_ref IS NULL) OR (actor_role<>'SYSTEM' AND actor_ref IS NOT NULL)) NOT VALID;
 
--- The predecessor converted legacy guardian pointers into version-one pending
--- declarations. Its exact created-at equality distinguishes those imported
--- rows from declarations made by guardian_authority_create_dependent().
-CREATE TEMP TABLE guardian_authority_legacy_imports ON COMMIT DROP AS
- SELECT relationship.id,relationship.subject_user_id
- FROM guardian_authority_relationships relationship
- JOIN users subject ON subject.id=relationship.subject_user_id
- JOIN guardian_authority_events event ON event.relationship_id=relationship.id
-  AND event.relationship_version=1
- WHERE relationship.version=1 AND relationship.state='PENDING'
-  AND relationship.created_at=subject.created_at
-  AND event.actor_role='GUARDIAN' AND event.actor_ref=relationship.guardian_user_id
-  AND event.action='DECLARED' AND event.from_state IS NULL AND event.to_state='PENDING';
-
-ALTER TABLE guardian_authority_events DISABLE TRIGGER guardian_authority_events_immutable;
-UPDATE guardian_authority_events event SET actor_ref=NULL,actor_role='SYSTEM',occurred_at=clock_timestamp()
- FROM guardian_authority_legacy_imports legacy WHERE legacy.id=event.relationship_id AND event.relationship_version=1;
-ALTER TABLE guardian_authority_events ENABLE TRIGGER guardian_authority_events_immutable;
-ALTER TABLE guardian_authority_events VALIDATE CONSTRAINT guardian_authority_events_actor_v2_check;
-
 DELETE FROM sessions session_row USING guardian_authority_relationships relationship
  WHERE session_row.subject_indexed AND session_row.user_id=relationship.subject_user_id
   AND relationship.state='PENDING';
@@ -99,6 +79,22 @@ UPDATE users subject SET minor_login_id=NULL,password_hash=NULL,
  FROM guardian_authority_relationships relationship
  WHERE relationship.subject_user_id=subject.id AND relationship.state='PENDING'
   AND (subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL);
+
+-- The predecessor converted legacy guardian pointers into version-one pending
+-- declarations. Its exact created-at equality distinguishes those imported
+-- rows from declarations made by guardian_authority_create_dependent(). Keep
+-- this set-based so the restricted production migration role needs no TEMP
+-- privilege.
+ALTER TABLE guardian_authority_events DISABLE TRIGGER guardian_authority_events_immutable;
+UPDATE guardian_authority_events event SET actor_ref=NULL,actor_role='SYSTEM',occurred_at=clock_timestamp()
+ FROM guardian_authority_relationships relationship,users subject
+ WHERE event.relationship_id=relationship.id AND event.relationship_version=1
+  AND subject.id=relationship.subject_user_id AND relationship.version=1 AND relationship.state='PENDING'
+  AND relationship.created_at=subject.created_at
+  AND event.actor_role='GUARDIAN' AND event.actor_ref=relationship.guardian_user_id
+  AND event.action='DECLARED' AND event.from_state IS NULL AND event.to_state='PENDING';
+ALTER TABLE guardian_authority_events ENABLE TRIGGER guardian_authority_events_immutable;
+ALTER TABLE guardian_authority_events VALIDATE CONSTRAINT guardian_authority_events_actor_v2_check;
 
 -- This schema revision invalidates every prior privacy activation artifact.
 UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;

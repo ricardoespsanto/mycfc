@@ -922,6 +922,9 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(strings.ToUpper(string(cutoffMigration)), "CREATE TEMP") {
+		t.Fatal("cutoff migration requires TEMP privilege unavailable to the production migration role")
+	}
 	for _, expected := range []string{
 		"DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id",
 		"credential_version=credential_version+1",
