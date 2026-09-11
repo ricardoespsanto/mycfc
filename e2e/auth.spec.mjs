@@ -478,7 +478,10 @@ test.describe('authentication', () => {
     await expectNoHorizontalOverflow(interactivePage);
 
     await interactivePage.setViewportSize({ width: 1280, height: 800 });
-    await interactivePage.getByRole('button', { name: 'Terminar sessão' }).click();
+    // Reset the actor explicitly. Waiting on the responsive logout control here
+    // can leave this long journey on the guardian page until the test timeout.
+    await context.clearCookies();
+    await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill('e2e-privacy-reviewer@example.test');
     await interactivePage.getByLabel('Palavra-passe').fill(password);
     await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
