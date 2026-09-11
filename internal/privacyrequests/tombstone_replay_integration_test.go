@@ -34,11 +34,16 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	effectiveAt := time.Date(2026, time.September, 10, 23, 30, 0, 0, time.UTC)
+	if _, err = tx.Exec(ctx, "SET LOCAL TIME ZONE 'Europe/Lisbon'"); err != nil {
+		t.Fatal(err)
+	}
 
-	subject, unrelated := uuid.New(), uuid.New()
+	subject, unrelated, admin := uuid.New(), uuid.New(), uuid.New()
 	for id, email := range map[uuid.UUID]string{
 		subject:   "restore-subject-" + uuid.NewString() + "@example.test",
 		unrelated: "restore-unrelated-" + uuid.NewString() + "@example.test",
+		admin:     "restore-admin-" + uuid.NewString() + "@example.test",
 	} {
 		if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Restore fixture',$2,'hash','1990-01-01')`, id, email); err != nil {
 			t.Fatal(err)
@@ -53,16 +58,25 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 		}
 	}
 	for _, id := range []uuid.UUID{subject, unrelated} {
-		if _, err = tx.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,granted_by_id) VALUES($1,'MODERATOR',$2)`, id, unrelated); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,granted_by_id,granted_at) VALUES($1,'MODERATOR',$2,$3)`, id, unrelated, effectiveAt.Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, id, unrelated); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3)`, id, unrelated, effectiveAt.Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, id, unrelated); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,$3)`, id, unrelated, effectiveAt.Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	activationPolicy := "replay-activation-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_policies(version,category_catalogue,executor_version,plan_schema_version,working_retention_days,adopted_at,adopted_by)
+		VALUES($1,'[]','privacy-erasure-executor/v2','privacy-erasure-plan/v2',90,clock_timestamp(),$2)`, activationPolicy, admin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, admin); err != nil {
+		t.Fatal(err)
+	}
+	activatePrivacyIntegrationFixture(t, ctx, tx, admin, unrelated, activationPolicy)
 	for _, id := range []uuid.UUID{subject, unrelated} {
 		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.provider_connections(
 		 id,subject_user_id,service_code,provider_role,provider_contract_version,registry_evidence_key_id,registry_evidence_digest,
@@ -72,13 +86,44 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 			t.Fatal(err)
 		}
 	}
+	programmeID := uuid.New()
+	seasonSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	historySeason, activeSeason, futureSeason := uuid.New(), uuid.New(), uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO programmes(id,code,name_pt) VALUES($1,$2,'Programa replay')`, programmeID, "Replay"+seasonSuffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES
+		 ($1,$4||'H','Histórico',($5::timestamptz AT TIME ZONE 'UTC')::date-400,($5::timestamptz AT TIME ZONE 'UTC')::date-300),
+		 ($2,$4||'A','Atual',($5::timestamptz AT TIME ZONE 'UTC')::date-30,($5::timestamptz AT TIME ZONE 'UTC')::date+30),
+		 ($3,$4||'F','Futuro',($5::timestamptz AT TIME ZONE 'UTC')::date+1,($5::timestamptz AT TIME ZONE 'UTC')::date+365)`, historySeason, activeSeason, futureSeason, seasonSuffix, effectiveAt); err != nil {
+		t.Fatal(err)
+	}
+	historyMembership, activeMembership, futureMembership := uuid.New(), uuid.New(), uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES
+		 ($1,$4,$5,$8,($9::timestamptz AT TIME ZONE 'UTC')::date-400,($9::timestamptz AT TIME ZONE 'UTC')::date-300),
+		 ($2,$4,$6,$8,($9::timestamptz AT TIME ZONE 'UTC')::date-30,NULL),
+		 ($3,$4,$7,$8,($9::timestamptz AT TIME ZONE 'UTC')::date+1,NULL)`, historyMembership, activeMembership, futureMembership, subject, historySeason, activeSeason, futureSeason, programmeID, effectiveAt); err != nil {
+		t.Fatal(err)
+	}
 
 	protector, privateKey := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
 	record.SubjectUserID = subject
-	record.ExecutionStart = time.Now().UTC()
-	record.Replay.Operations = []string{"AUTH_ACCESS_REVOKE", "AUTH_TOKEN_DELETE", "PROFILE_IDENTITY_DELETE", "PROVIDER_LOCAL_FENCE", "IDENTITY_CLEAR"}
-	record.Replay.MembershipHistoryPostcondition = databaseMembershipPostcondition(t, ctx, tx, nil, record.ExecutionStart)
+	record.ExecutionStart = effectiveAt
+	record.Replay.Operations = []string{"AUTH_ACCESS_REVOKE", "AUTH_TOKEN_DELETE", "PROFILE_IDENTITY_DELETE", "PROVIDER_LOCAL_FENCE", "IDENTITY_CLEAR", "MEMBERSHIP_ACTIVE_REVOKE", "MEMBERSHIP_HISTORY_ANONYMIZE"}
+	if _, err = tx.Exec(ctx, "SAVEPOINT expected_membership_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE user_memberships SET ends_on=($2::timestamptz AT TIME ZONE 'UTC')::date-1 WHERE id=$1`, activeMembership, record.ExecutionStart); err != nil {
+		t.Fatal(err)
+	}
+	record.Replay.MembershipHistoryPostcondition = databaseMembershipPostcondition(t, ctx, tx, []uuid.UUID{historyMembership, activeMembership}, record.ExecutionStart)
+	if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT expected_membership_postcondition"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "RELEASE SAVEPOINT expected_membership_postcondition"); err != nil {
+		t.Fatal(err)
+	}
 	closedAt := record.ExecutionStart.Add(time.Hour)
 	closure := TombstoneClosure{Version: TombstoneClosureVersion, Tombstone: record, ClosedAt: closedAt,
 		EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart}
@@ -90,6 +135,7 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertV4ImportRejectsNullMembershipDigest(t, ctx, tx, uuid.New(), authenticated)
 	worker := TombstoneReplayWorker{Store: tx, WorkerRef: uuid.New()}
 	if _, err = tx.Exec(ctx, "SAVEPOINT corrupt_ordinary_postcondition"); err != nil {
 		t.Fatal(err)
@@ -125,7 +171,7 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 	var subjectEmail *string
 	var subjectName, runStatus string
 	var checkpointCount, succeededCount, subjectActiveGrants, unrelatedActiveGrants, replayGrantEvents int
-	var subjectProviders, unrelatedProviders int
+	var subjectProviders, unrelatedProviders, retainedMemberships, futureMemberships, subjectMemberships int
 	if err = tx.QueryRow(ctx, `SELECT erased_at IS NOT NULL,email::text,name FROM users WHERE id=$1`, subject).Scan(&erased, &subjectEmail, &subjectName); err != nil {
 		t.Fatal(err)
 	}
@@ -157,9 +203,16 @@ func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testin
 	 FROM privacy_protected.provider_connections`, subject, unrelated).Scan(&subjectProviders, &unrelatedProviders); err != nil {
 		t.Fatal(err)
 	}
+	if err = tx.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE id IN($2,$3) AND user_id IS NULL AND principal_id IS NOT NULL AND ends_on<$5::date),
+		count(*) FILTER(WHERE id=$4),count(*) FILTER(WHERE user_id=$1)
+		FROM user_memberships`, subject, historyMembership, activeMembership, futureMembership, record.ExecutionStart).
+		Scan(&retainedMemberships, &futureMemberships, &subjectMemberships); err != nil {
+		t.Fatal(err)
+	}
 	if !erased || subjectEmail != nil || subjectName != "Conta eliminada" || subjectProfile || subjectToken || !unrelatedProfile || !unrelatedToken ||
-		runStatus != "SUCCEEDED" || checkpointCount != 5 || succeededCount != 5 || subjectActiveGrants != 0 || unrelatedActiveGrants != 3 || replayGrantEvents != 3 ||
-		subjectProviders != 0 || unrelatedProviders != 1 {
+		runStatus != "SUCCEEDED" || checkpointCount != 7 || succeededCount != 7 || subjectActiveGrants != 0 || unrelatedActiveGrants != 3 || replayGrantEvents != 3 ||
+		subjectProviders != 0 || unrelatedProviders != 1 || retainedMemberships != 2 || futureMemberships != 0 || subjectMemberships != 0 {
 		t.Fatalf("scope/result erased=%t email=%v name=%q profiles=%t/%t tokens=%t/%t run=%s checkpoints=%d/%d grants=%d/%d events=%d",
 			erased, subjectEmail, subjectName, subjectProfile, unrelatedProfile, subjectToken, unrelatedToken, runStatus, checkpointCount, succeededCount,
 			subjectActiveGrants, unrelatedActiveGrants, replayGrantEvents)
@@ -195,13 +248,13 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	subject, actor := uuid.New(), uuid.New()
+	subject, actor, executor := uuid.New(), uuid.New(), uuid.New()
 	requestID, requestRef, executionID := uuid.New(), uuid.New(), uuid.New()
 	effective := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	for _, item := range []struct {
 		id    uuid.UUID
 		email string
-	}{{subject, "post-erasure-" + uuid.NewString() + "@example.test"}, {actor, "post-erasure-actor-" + uuid.NewString() + "@example.test"}} {
+	}{{subject, "post-erasure-" + uuid.NewString() + "@example.test"}, {actor, "post-erasure-actor-" + uuid.NewString() + "@example.test"}, {executor, "post-erasure-executor-" + uuid.NewString() + "@example.test"}} {
 		if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth)VALUES($1,'Post erasure fixture',$2,'hash','1990-01-01')`, item.id, item.email); err != nil {
 			t.Fatal(err)
 		}
@@ -231,6 +284,13 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 			t.Fatal(err)
 		}
 	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES($1,$2,clock_timestamp())`, executor, actor); err != nil {
+		t.Fatal(err)
+	}
+	activatePrivacyIntegrationFixture(t, ctx, tx, actor, executor, "replay-source-policy")
 	if _, err = tx.Exec(ctx, `UPDATE users SET name='Conta eliminada',email=NULL,email_verified_at=NULL,password_hash=NULL,
 	 date_of_birth='1900-01-01',is_active=false,leaderboard_visible=false,credential_version=credential_version+1,
 	 erased_at=$2,erasure_execution_id=$3,updated_at=$2 WHERE id=$1`, subject, effective, executionID); err != nil {
@@ -254,6 +314,7 @@ func TestReplayRecognizesPostErasureBackupVerifiesAndRecordsImmutableEvidence(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertV4ImportRejectsNullMembershipDigest(t, ctx, tx, uuid.New(), authenticated)
 	worker := TombstoneReplayWorker{Store: tx, WorkerRef: uuid.New()}
 	if _, err = tx.Exec(ctx, "SAVEPOINT corrupt_already_applied_postcondition"); err != nil {
 		t.Fatal(err)
@@ -447,5 +508,37 @@ func replayImportParams(workerRef uuid.UUID, authenticated AuthenticatedReplayTo
 		ExecutionStartedAt: stamp(authenticated.record.ExecutionStart), ReplayVersion: authenticated.record.Replay.Version,
 		ActionVersion: authenticated.record.Replay.ActionVersion, Operations: append([]string(nil), authenticated.record.Replay.Operations...),
 		PrescriptionSha256: bytes.Clone(authenticated.prescriptionSHA256), RecordSha256: bytes.Clone(authenticated.recordSHA256),
+	}
+}
+
+func assertV4ImportRejectsNullMembershipDigest(t *testing.T, ctx context.Context, tx pgx.Tx, workerRef uuid.UUID, authenticated AuthenticatedReplayTombstone) {
+	t.Helper()
+	postcondition := authenticated.record.Replay.MembershipHistoryPostcondition
+	params := dbgen.ImportAuthenticatedPrivacyRestoreTombstoneV4HardenedParams{
+		WorkerRef: workerRef, Kind: authenticated.kind, RecordVersion: authenticated.record.Version,
+		EnvelopeVersion: authenticated.envelopeVersion, EncryptionKeyID: authenticated.encryptionKeyID,
+		LocatorKeyID: authenticated.locatorKeyID, LocatorDigest: bytes.Clone(authenticated.locatorDigest),
+		CiphertextSha256: bytes.Clone(authenticated.ciphertextSHA256), ObjectVersionID: authenticated.objectVersion,
+		WrittenAt: stamp(authenticated.writtenAt), VerifiedAt: stamp(authenticated.verifiedAt), RetainUntil: stamp(authenticated.retainUntil),
+		SourceExecutionID: authenticated.record.ExecutionID, SourceRequestID: authenticated.record.RequestID,
+		SourceRequestRef: authenticated.record.RequestRef, SubjectUserID: authenticated.record.SubjectUserID,
+		PlanSha256: bytes.Clone(authenticated.record.PlanSHA256), WorksetSha256: bytes.Clone(authenticated.record.WorksetSHA256),
+		ExecutionStartedAt: stamp(authenticated.record.ExecutionStart), ErasureEffectiveAt: stamp(authenticated.effectiveAt),
+		ClosureVersion: authenticated.closureVersion, SyntheticFixture: nullableString(authenticated.record.SyntheticFixture),
+		ReplayVersion: authenticated.record.Replay.Version, ActionVersion: authenticated.record.Replay.ActionVersion,
+		Operations: append([]string(nil), authenticated.record.Replay.Operations...), PrescriptionSha256: bytes.Clone(authenticated.prescriptionSHA256),
+		RecordSha256: bytes.Clone(authenticated.recordSHA256), MembershipPostconditionContract: postcondition.Contract,
+		MembershipPostconditionSha256: nil, MembershipCount: int64(postcondition.MembershipCount), VariationCount: int64(postcondition.VariationCount),
+	}
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dbgen.New(savepoint).ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened(ctx, params); err == nil {
+		_ = savepoint.Rollback(ctx)
+		t.Fatal("NULL membership postcondition digest accepted by authenticated v4 import")
+	}
+	if err = savepoint.Rollback(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

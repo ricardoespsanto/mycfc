@@ -103,9 +103,12 @@ BEGIN
         WHEN 'RESTORE' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/restore?versionId=e2e','schema_migration_digest',encode(fixture_digest,'base64'),
           'restore_input_source','LIVE_LEDGER','restore_input_contract','mycfc/privacy-restore-ledger-input/v2',
-          'restore_replay_contract','relational-erasure-replay/v1','restore_closure_contract','restore-tombstone-closure/v3',
+          'restore_replay_contract','relational-erasure-replay/v1','restore_closure_contract','restore-tombstone-closure/v4',
           'restore_candidate_sha256',encode(fixture_digest,'base64'),'restore_inventory_sha256',encode(fixture_digest,'base64'),
-          'restore_object_count',1,'restore_replayed_count',1,'restore_synthetic_count',0,'restore_observer_sha256',encode(fixture_digest,'base64'))
+          'restore_object_count',1,'restore_replayed_count',1,'restore_synthetic_count',0,'restore_observer_sha256',encode(fixture_digest,'base64'),
+          'restore_membership_postcondition_contract','mycfc/membership-history-postcondition/v1',
+          'restore_membership_postcondition_sha256',encode(fixture_digest,'base64'),
+          'restore_membership_postcondition_verified_count',1,'restore_membership_count',1,'restore_variation_count',1)
         WHEN 'INFRASTRUCTURE' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/infrastructure?versionId=e2e','signing_key_id','fixture-key','production_state_serial',1,'hetzner_state_serial',1,
           'production_state_sha256',encode(fixture_digest,'base64'),'hetzner_state_sha256',encode(fixture_digest,'base64'),

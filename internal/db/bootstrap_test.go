@@ -61,6 +61,7 @@ func TestMembershipPostconditionMigrationIsRepresentedByFreshBaseline(t *testing
 	for _, required := range []string{
 		"restore-tombstone-closure/v4", "mycfc/membership-history-postcondition/v1",
 		"membership_history_source_rows", "membership_history_replay_postconditions",
+		"privacy_membership_history_lock_source", "pg_advisory_xact_lock",
 		"privacy_worker_execute_checkpoint_inner_015", "proc.proname IN('privacy_worker_execute_checkpoint'",
 		"privacy_inner_capability_revoke_failed",
 	} {
@@ -274,6 +275,10 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_execution_complete_provider_capture(uuid,text) TO "mycfc_app"`,
 		`GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)`,
 		`privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
+		`REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2`,
+		`privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2`,
+		`privacy_tombstone_prepare_closure_v4(uuid,uuid), privacy_tombstone_confirm_closure_v4`,
 		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid)`,
 		`privacy_activation_control_snapshot(uuid) TO "mycfc_app"`,
 		`GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO "mycfc_privacy_executor"`,

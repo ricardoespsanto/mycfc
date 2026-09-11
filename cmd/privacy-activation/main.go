@@ -267,12 +267,8 @@ func readHexKey(path string) ([]byte, error) {
 
 func readSecret(path string) ([]byte, error) {
 	path = strings.TrimSpace(path)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return nil, errors.New("privacy activation secret rejected")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Geteuid() {
+	pathInfo, err := os.Lstat(path)
+	if err != nil || !pathInfo.Mode().IsRegular() {
 		return nil, errors.New("privacy activation secret rejected")
 	}
 	file, err := os.Open(path)
@@ -280,6 +276,14 @@ func readSecret(path string) ([]byte, error) {
 		return nil, errors.New("privacy activation secret unavailable")
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(pathInfo, info) || (info.Mode().Perm() != 0o600 && info.Mode().Perm() != 0o400) {
+		return nil, errors.New("privacy activation secret rejected")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return nil, errors.New("privacy activation secret rejected")
+	}
 	payload, err := io.ReadAll(io.LimitReader(file, maximumArtifactBytes+1))
 	if err != nil || len(payload) == 0 || len(payload) > maximumArtifactBytes {
 		return nil, errors.New("privacy activation secret rejected")

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,11 +115,43 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.restore_tombstone_closure_intents(execution_id,closed_at,evidence_expires_at) VALUES($1,$2,$2::timestamptz+interval '24 months')`, executionID, closedAt); err != nil {
 			t.Fatal(err)
 		}
-		closureLocator, closureCiphertext := sha256.Sum256([]byte("closure-locator"+executionID.String())), sha256.Sum256([]byte("closure-cipher"+executionID.String()))
-		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
-			VALUES($1,'restore-tombstone-closure/v2','enc-v2','loc-v2',$2,'version-closure',$3,512,$4,$4)`, executionID, closureLocator[:], closureCiphertext[:], closedAt); err != nil {
+		programmeID, seasonID, membershipID := uuid.New(), uuid.New(), uuid.New()
+		codeSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		if _, err = tx.Exec(ctx, `INSERT INTO programmes(id,code,name_pt) VALUES($1,$2,'Programa conclusão')`, programmeID, "Completion"+codeSuffix); err != nil {
 			t.Fatal(err)
 		}
+		if _, err = tx.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Época conclusão',$3::date-2,$3::date-1)`, seasonID, "C"+codeSuffix, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on)
+			VALUES($1,$2,$3,$4,$5::date-2,$5::date-1)`, membershipID, subject, seasonID, programmeID, now); err != nil {
+			t.Fatal(err)
+		}
+		principalID := uuid.New()
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_pseudonymous_principals(id,purpose) VALUES($1,'MEMBERSHIP')`, principalID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `UPDATE user_memberships SET user_id=NULL,principal_id=$2 WHERE id=$1`, membershipID, principalID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.membership_history_source_captures(execution_id) VALUES($1)`, executionID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.membership_history_source_rows(execution_id,membership_id) VALUES($1,$2)`, executionID, membershipID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO privacy_protected.membership_history_source_postconditions(
+			 execution_id,effective_at,contract,postcondition_sha256,membership_count,variation_count,canonical_size)
+			SELECT $1,$2,computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count,computed.canonical_size
+			FROM privacy_membership_history_compute_source($1,$2) computed`, executionID, now); err != nil {
+			t.Fatal(err)
+		}
+		expectDatabaseError(`UPDATE user_memberships SET ends_on=ends_on-1 WHERE id=$1`, membershipID)
+		closureLocator, closureCiphertext := sha256.Sum256([]byte("closure-locator"+executionID.String())), sha256.Sum256([]byte("closure-cipher"+executionID.String()))
+		if _, err = tx.Exec(ctx, `SELECT privacy_tombstone_confirm_closure_v4($1,$2,'restore-tombstone-closure/v4','enc-v4','loc-v4',$3,'version-closure',$4,512,$5,$5)`, executionID, executor, closureLocator[:], closureCiphertext[:], closedAt); err != nil {
+			t.Fatal(err)
+		}
+		expectDatabaseError(`UPDATE user_memberships SET updated_at=clock_timestamp() WHERE id=$1`, membershipID)
 		key := bytes.Repeat([]byte{8}, 32)
 		sealed, sealErr := SealDelivery(key, Delivery{Recipient: subject.String() + "@example.test", ContactURL: "https://mycfc.example/legal/direitos"})
 		if sealErr != nil {

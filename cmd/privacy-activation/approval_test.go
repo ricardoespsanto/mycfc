@@ -3,12 +3,35 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+func TestReadPrivateKeyRequiresPrivateSecretFile(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "approval-key")
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(privateKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPrivateKey(path); err != nil {
+		t.Fatalf("private approval key rejected: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPrivateKey(path); err == nil {
+		t.Fatal("world-readable private approval key accepted")
+	}
+}
 
 func TestApprovalEnvelopeIsCanonicalSignedAndReleaseBound(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)

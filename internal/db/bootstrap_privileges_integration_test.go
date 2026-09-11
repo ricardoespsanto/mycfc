@@ -135,6 +135,7 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	}
 	var canExecute, canMutate, canBypass, canCallInner, canCallPostconditionInner, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects bool
 	var canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders bool
+	var canPrepareClosureV2, canConfirmClosureV2, canPrepareClosureV3, canConfirmClosureV3, canPrepareClosureV4, canConfirmClosureV4, canCallMembershipLock, canCheckCompletionPostcondition bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
@@ -150,13 +151,21 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		has_function_privilege($1,'privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
-		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCallInner, &canCallPostconditionInner, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects, &canListProviders, &canRecordProviderEvidence, &canCompleteProviderCheckpoint, &canCaptureProviders); err != nil {
+		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v2(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v3(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v4(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_membership_history_lock_source(uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_completion_membership_postcondition_ready(uuid)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCallInner, &canCallPostconditionInner, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects, &canListProviders, &canRecordProviderEvidence, &canCompleteProviderCheckpoint, &canCaptureProviders, &canPrepareClosureV2, &canConfirmClosureV2, &canPrepareClosureV3, &canConfirmClosureV3, &canPrepareClosureV4, &canConfirmClosureV4, &canCallMembershipLock, &canCheckCompletionPostcondition); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute || !canMutate || canBypass || canCallInner || canCallPostconditionInner || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects || !canListProviders || !canRecordProviderEvidence || !canCompleteProviderCheckpoint || canCaptureProviders {
-		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v release_guard_inner=%v postcondition_inner=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v provider_list=%v provider_evidence=%v provider_complete=%v provider_capture=%v",
+	if !canExecute || !canMutate || canBypass || canCallInner || canCallPostconditionInner || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects || !canListProviders || !canRecordProviderEvidence || !canCompleteProviderCheckpoint || canCaptureProviders || canPrepareClosureV2 || canConfirmClosureV2 || canPrepareClosureV3 || canConfirmClosureV3 || !canPrepareClosureV4 || !canConfirmClosureV4 || canCallMembershipLock || canCheckCompletionPostcondition {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v release_guard_inner=%v postcondition_inner=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v provider_list=%v provider_evidence=%v provider_complete=%v provider_capture=%v closure_v2_prepare=%v closure_v2_confirm=%v closure_v3_prepare=%v closure_v3_confirm=%v closure_v4_prepare=%v closure_v4_confirm=%v membership_lock=%v completion_postcondition=%v",
 			canExecute, canMutate, canBypass, canCallInner, canCallPostconditionInner, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects,
-			canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders)
+			canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders, canPrepareClosureV2, canConfirmClosureV2, canPrepareClosureV3, canConfirmClosureV3, canPrepareClosureV4, canConfirmClosureV4, canCallMembershipLock, canCheckCompletionPostcondition)
 	}
 	var appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects bool
 	var appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders bool

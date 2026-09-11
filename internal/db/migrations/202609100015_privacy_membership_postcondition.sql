@@ -22,15 +22,15 @@ ALTER TABLE privacy_protected.restore_ledger_imports
   (kind='intent' AND closure_version IS NULL)
   OR (kind='closure' AND closure_version IN ('restore-tombstone-closure/v2','restore-tombstone-closure/v3','restore-tombstone-closure/v4'))
  ) NOT VALID,
- ADD CONSTRAINT restore_ledger_imports_membership_postcondition_check CHECK(
+ ADD CONSTRAINT restore_ledger_imports_membership_postcondition_check CHECK((
   (closure_version='restore-tombstone-closure/v4'
    AND membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
    AND octet_length(membership_postcondition_sha256)=32
    AND membership_count BETWEEN 0 AND 10000 AND variation_count BETWEEN 0 AND 100000)
-  OR (closure_version IS DISTINCT FROM 'restore-tombstone-closure/v4'
+ OR (closure_version IS DISTINCT FROM 'restore-tombstone-closure/v4'
    AND membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL
    AND membership_count IS NULL AND variation_count IS NULL)
- ) NOT VALID;
+ ) IS TRUE) NOT VALID;
 ALTER TABLE privacy_protected.restore_ledger_imports
  VALIDATE CONSTRAINT restore_ledger_imports_closure_version_check;
 ALTER TABLE privacy_protected.restore_ledger_imports
@@ -107,7 +107,7 @@ CREATE FUNCTION public.privacy_membership_history_digest_equal(p_left bytea,p_ri
 RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE difference integer:=0;position integer;
 BEGIN
- IF octet_length(p_left)<>32 OR octet_length(p_right)<>32 THEN RETURN false; END IF;
+ IF p_left IS NULL OR p_right IS NULL OR octet_length(p_left)<>32 OR octet_length(p_right)<>32 THEN RETURN false; END IF;
  FOR position IN 0..31 LOOP
   difference:=difference | (get_byte(p_left,position) # get_byte(p_right,position));
  END LOOP;
@@ -128,7 +128,7 @@ BEGIN
  SELECT count(*),count(DISTINCT membership.principal_id),min(membership.principal_id::text)::uuid
  INTO actual_count,principal_count,principal_ref FROM user_memberships membership WHERE membership.id=ANY(ids);
  IF actual_count<>membership_total OR EXISTS(SELECT 1 FROM user_memberships membership WHERE membership.id=ANY(ids)
-   AND (membership.ends_on IS NULL OR membership.ends_on>=p_effective_at::date))
+   AND (membership.ends_on IS NULL OR membership.ends_on>=(p_effective_at AT TIME ZONE 'UTC')::date))
   OR (p_require_anonymized AND membership_total>0 AND (principal_count<>1 OR EXISTS(
     SELECT 1 FROM user_memberships membership WHERE membership.id=ANY(ids) AND (membership.user_id IS NOT NULL OR membership.principal_id IS NULL))))
   OR (p_require_anonymized AND membership_total>0 AND EXISTS(
@@ -195,6 +195,94 @@ LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
   p_effective_at,true) computed WHERE capture.run_id=p_run_id;
 $$;
 
+-- Membership date boundaries are tied to the persisted erasure instant (or
+-- execution start before identity clearing), never to a retry's wall clock.
+CREATE FUNCTION public.privacy_membership_history_effective_date(p_execution_id uuid,p_subject_user_id uuid)
+RETURNS date LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT (CASE WHEN subject.erasure_execution_id=execution.id AND subject.erased_at IS NOT NULL
+              THEN subject.erased_at ELSE execution.started_at END AT TIME ZONE 'UTC')::date
+ FROM privacy_erasure_executions execution JOIN users subject ON subject.id=p_subject_user_id
+ WHERE execution.id=p_execution_id;
+$$;
+
+-- Upgrade the pre-v4 executor in place. Assert the exact number of legacy or
+-- upgraded cutoff references so an unexpected predecessor cannot migrate.
+DO $$DECLARE definition text;legacy_count integer;current_count integer;
+ current_call text:='public.privacy_membership_history_effective_date(execution_ref,subject_ref)';
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text)'::regprocedure) INTO definition;
+ legacy_count:=(length(definition)-length(replace(definition,'CURRENT_DATE','')))/length('CURRENT_DATE');
+ current_count:=(length(definition)-length(replace(definition,current_call,'')))/length(current_call);
+ IF legacy_count=12 AND current_count=0 THEN EXECUTE replace(definition,'CURRENT_DATE',current_call);
+ ELSIF legacy_count<>0 OR current_count<>12 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_effective_date_predecessor_mismatch';
+ END IF;
+END$$;
+
+-- Serialize sealing and every digest-covered mutation by membership ID.
+CREATE FUNCTION public.privacy_membership_history_lock_source(p_execution_id uuid)
+RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE membership_ref uuid;
+BEGIN
+ FOR membership_ref IN
+  SELECT DISTINCT source_row.membership_id FROM privacy_protected.membership_history_source_rows source_row
+  WHERE source_row.execution_id=p_execution_id ORDER BY source_row.membership_id
+ LOOP
+  PERFORM pg_advisory_xact_lock(hashtextextended('mycfc:privacy-membership-history:'||membership_ref::text,0));
+ END LOOP;
+END;$$;
+
+CREATE FUNCTION public.privacy_membership_history_source_postcondition_ready(p_execution_id uuid)
+RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM public.privacy_membership_history_lock_source(p_execution_id);
+ RETURN EXISTS(
+  SELECT 1
+  FROM privacy_protected.membership_history_source_postconditions postcondition
+  CROSS JOIN LATERAL public.privacy_membership_history_compute_source(postcondition.execution_id,postcondition.effective_at) computed
+  WHERE postcondition.execution_id=p_execution_id
+   AND postcondition.contract='mycfc/membership-history-postcondition/v1'
+   AND computed.contract=postcondition.contract
+   AND public.privacy_membership_history_digest_equal(computed.postcondition_sha256,postcondition.postcondition_sha256)
+   AND computed.membership_count=postcondition.membership_count
+   AND computed.variation_count=postcondition.variation_count
+ );
+END;
+$$;
+
+-- Once closure preparation seals a source postcondition, every digest-covered
+-- membership row and relationship becomes immutable. Erasure itself runs
+-- before that postcondition exists, so its required anonymisation is not
+-- impeded.
+CREATE FUNCTION public.prevent_sealed_membership_history_mutation()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE old_membership uuid;new_membership uuid;column_name text;
+BEGIN
+ column_name:=CASE TG_TABLE_NAME WHEN 'user_memberships' THEN 'id' WHEN 'training_variations' THEN 'target_membership_id' ELSE 'membership_id' END;
+ IF TG_OP<>'INSERT' THEN old_membership:=NULLIF(to_jsonb(OLD)->>column_name,'')::uuid; END IF;
+ IF TG_OP<>'DELETE' THEN new_membership:=NULLIF(to_jsonb(NEW)->>column_name,'')::uuid; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc:privacy-membership-history:'||locked.membership_ref::text,0))
+ FROM (SELECT DISTINCT membership_ref FROM unnest(ARRAY[old_membership,new_membership]) membership_ref
+       WHERE membership_ref IS NOT NULL ORDER BY membership_ref) locked;
+ IF EXISTS(
+  SELECT 1 FROM privacy_protected.membership_history_source_rows source_row
+  JOIN privacy_protected.membership_history_source_postconditions postcondition ON postcondition.execution_id=source_row.execution_id
+  WHERE source_row.membership_id=old_membership OR source_row.membership_id=new_membership
+ ) THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='sealed_membership_history_immutable'; END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER user_memberships_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON user_memberships
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER membership_modalities_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON membership_modalities
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_group_members_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_group_members
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_variation_group_members_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_variation_group_members
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_variations_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_variations
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+
 -- Capture the final retained membership row set immediately before the
 -- history operation. Identity clearing runs earlier, so its wrapper scrubs
 -- variation canaries while the original name/email/login still exist.
@@ -204,7 +292,12 @@ CREATE FUNCTION public.privacy_worker_execute_checkpoint(
  p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE execution_ref uuid;subject_ref uuid;checkpoint_status text;subject_name text;subject_email text;subject_login text;capture_inserted bigint;
+ previous_timezone text;checkpoint_ref uuid;
 BEGIN
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  previous_timezone:=current_setting('TimeZone');
+  PERFORM set_config('TimeZone','UTC',true);
+ END IF;
  PERFORM public.privacy_worker_require_activation();
  SELECT execution.id,request.subject_user_id,checkpoint.status INTO execution_ref,subject_ref,checkpoint_status
  FROM privacy_erasure_category_jobs job
@@ -219,7 +312,9 @@ BEGIN
   AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs prior WHERE prior.execution_id=execution.id AND prior.plan_entry_position<job.plan_entry_position AND prior.status<>'SUCCEEDED')
  FOR UPDATE OF job,lease,attempt,checkpoint;
  IF execution_ref IS NULL OR subject_ref IS NULL THEN
-  RETURN public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+  checkpoint_ref:=public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+  IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
+  RETURN checkpoint_ref;
  END IF;
  IF checkpoint_status='PENDING' AND p_operation_code='IDENTITY_CLEAR' AND EXISTS(
   SELECT 1 FROM privacy_erasure_category_jobs membership_job JOIN privacy_erasure_job_checkpoints membership_checkpoint ON membership_checkpoint.job_id=membership_job.id
@@ -238,7 +333,9 @@ BEGIN
   INSERT INTO privacy_protected.membership_history_source_rows(execution_id,membership_id)
    SELECT execution_ref,membership.id FROM user_memberships membership WHERE membership.user_id=subject_ref ORDER BY membership.id;
  END IF;
- RETURN public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+ checkpoint_ref:=public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+ IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
+ RETURN checkpoint_ref;
 END;$$;
 
 CREATE FUNCTION public.privacy_tombstone_prepare_closure_v4(p_execution_id uuid,p_worker_ref uuid)
@@ -258,6 +355,7 @@ BEGIN
    RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_unavailable'; END IF;
  ELSE INSERT INTO privacy_protected.membership_history_source_captures(execution_id) VALUES(p_execution_id) ON CONFLICT DO NOTHING;
  END IF;
+ PERFORM public.privacy_membership_history_lock_source(p_execution_id);
  SELECT * INTO computed FROM public.privacy_membership_history_compute_source(p_execution_id,prepared.erasure_effective_at);
  IF computed.contract IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_unavailable'; END IF;
  SELECT * INTO existing FROM privacy_protected.membership_history_source_postconditions WHERE membership_history_source_postconditions.execution_id=p_execution_id;
@@ -287,8 +385,7 @@ BEGIN
   OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
   OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
   OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at
-  OR NOT EXISTS(SELECT 1 FROM privacy_protected.membership_history_source_postconditions postcondition
-   WHERE postcondition.execution_id=p_execution_id AND postcondition.contract='mycfc/membership-history-postcondition/v1')
+  OR NOT public.privacy_membership_history_source_postcondition_ready(p_execution_id)
  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
  SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
  IF existing.execution_id IS NULL THEN
@@ -305,10 +402,11 @@ ALTER TABLE privacy_protected.restore_synthetic_fixtures
  ADD COLUMN membership_postcondition_sha256 bytea NULL,
  ADD COLUMN membership_count bigint NULL,
  ADD COLUMN variation_count bigint NULL,
- ADD CONSTRAINT restore_synthetic_fixtures_membership_postcondition_check CHECK(
-  membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
-  AND octet_length(membership_postcondition_sha256)=32
-  AND membership_count BETWEEN 0 AND 10000 AND variation_count BETWEEN 0 AND 100000) NOT VALID;
+ ADD CONSTRAINT restore_synthetic_fixtures_membership_postcondition_check CHECK((
+  (membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL AND membership_count IS NULL AND variation_count IS NULL)
+  OR (membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+   AND octet_length(membership_postcondition_sha256)=32
+   AND membership_count BETWEEN 0 AND 10000 AND variation_count BETWEEN 0 AND 100000)) IS TRUE) NOT VALID;
 ALTER TABLE privacy_protected.restore_synthetic_fixtures VALIDATE CONSTRAINT restore_synthetic_fixtures_membership_postcondition_check;
 
 DROP FUNCTION public.privacy_restore_create_synthetic_fixture(uuid);
@@ -393,7 +491,7 @@ BEGIN
   OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
   OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR octet_length(p_plan_sha256)<>32
   OR octet_length(p_workset_sha256)<>32 OR octet_length(p_prescription_sha256)<>32 OR octet_length(p_record_sha256)<>32
-  OR p_membership_postcondition_contract<>'mycfc/membership-history-postcondition/v1' OR octet_length(p_membership_postcondition_sha256)<>32
+  OR p_membership_postcondition_contract<>'mycfc/membership-history-postcondition/v1' OR octet_length(p_membership_postcondition_sha256) IS DISTINCT FROM 32
   OR p_membership_count NOT BETWEEN 0 AND 10000 OR p_variation_count NOT BETWEEN 0 AND 100000
   OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
   OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_retain_until IS NULL OR p_verified_at>p_retain_until
@@ -467,7 +565,7 @@ BEGIN
  SELECT email::text,minor_login_id INTO subject_email,subject_login FROM users WHERE id=imported.subject_user_id;
  IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
   IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id
-   AND (starts_on>=imported.erasure_effective_at::date OR ends_on IS NULL OR ends_on>=imported.erasure_effective_at::date)) THEN
+   AND (starts_on>=(imported.erasure_effective_at AT TIME ZONE 'UTC')::date OR ends_on IS NULL OR ends_on>=(imported.erasure_effective_at AT TIME ZONE 'UTC')::date)) THEN
    RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
  ELSE
   IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id)
@@ -497,7 +595,9 @@ BEGIN
    ON CONFLICT DO NOTHING;
  ELSE
   INSERT INTO privacy_protected.membership_history_replay_rows(run_id,membership_id)
-   SELECT run_ref,membership.id FROM user_memberships membership WHERE membership.user_id=imported.subject_user_id ON CONFLICT DO NOTHING;
+   SELECT run_ref,membership.id FROM user_memberships membership
+   WHERE membership.user_id=imported.subject_user_id AND membership.starts_on<(imported.erasure_effective_at AT TIME ZONE 'UTC')::date
+   ON CONFLICT DO NOTHING;
  END IF;
  SELECT begun.run_id,begun.outcome_code INTO run_ref,outcome FROM public.privacy_restore_begin_replay_hardened_inner_013(p_import_id,p_worker_ref) begun;
  IF outcome='ALREADY_APPLIED_SOURCE' AND NOT EXISTS(SELECT 1 FROM privacy_protected.membership_history_replay_postconditions postcondition WHERE postcondition.run_id=run_ref) THEN
@@ -511,6 +611,7 @@ ALTER FUNCTION public.privacy_restore_execute_checkpoint(uuid,uuid,smallint,text
 CREATE FUNCTION public.privacy_restore_execute_checkpoint(p_run_id uuid,p_worker_ref uuid,p_operation_position smallint,p_operation_code text,p_action_version text,p_prescription_sha256 bytea)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;subject_name text;subject_email text;subject_login text;checkpoint_ref uuid;
+ previous_timezone text;
 BEGIN
  SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run
  JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id;
@@ -523,7 +624,12 @@ BEGIN
    patch=privacy_scrub_audit_json(patch,imported.subject_user_id,subject_name,subject_email,subject_login),updated_at=clock_timestamp()
   WHERE target_membership_id IN(SELECT row.membership_id FROM privacy_protected.membership_history_replay_rows row WHERE row.run_id=p_run_id);
  END IF;
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  previous_timezone:=current_setting('TimeZone');
+  PERFORM set_config('TimeZone','UTC',true);
+ END IF;
  checkpoint_ref:=public.privacy_restore_execute_checkpoint_inner_013(p_run_id,p_worker_ref,p_operation_position,p_operation_code,p_action_version,p_prescription_sha256);
+ IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
  IF NOT('MEMBERSHIP_HISTORY_ANONYMIZE'=ANY(imported.operations)) AND NOT EXISTS(
   SELECT 1 FROM privacy_protected.restore_replay_checkpoints checkpoint WHERE checkpoint.run_id=p_run_id AND checkpoint.status<>'SUCCEEDED') THEN
   PERFORM public.privacy_restore_finalize_membership_postcondition(p_run_id);
@@ -556,7 +662,7 @@ BEGIN
  EXECUTE format('ALTER TABLE privacy_protected.restore_replay_inventory_attestations DROP CONSTRAINT %I',constraint_name);
 END$$;
 ALTER TABLE privacy_protected.restore_replay_inventory_attestations
- ADD CONSTRAINT restore_replay_inventory_attestations_closure_compatibility CHECK(
+ ADD CONSTRAINT restore_replay_inventory_attestations_closure_compatibility CHECK((
   (closure_v4_count IS NULL AND membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL
    AND membership_postcondition_verified_count IS NULL AND membership_count IS NULL AND variation_count IS NULL
    AND closure_v3_count=replayed_count AND intent_only_count=0 AND legacy_closure_v2_count=0 AND erasure_effective_at_verified_count=replayed_count)
@@ -564,7 +670,7 @@ ALTER TABLE privacy_protected.restore_replay_inventory_attestations
    AND erasure_effective_at_verified_count=replayed_count
    AND membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
    AND octet_length(membership_postcondition_sha256)=32 AND membership_postcondition_verified_count=replayed_count
-   AND membership_count>=0 AND variation_count>=0)) NOT VALID;
+   AND membership_count>=0 AND variation_count>=0)) IS TRUE) NOT VALID;
 ALTER TABLE privacy_protected.restore_replay_inventory_attestations
  VALIDATE CONSTRAINT restore_replay_inventory_attestations_closure_compatibility;
 
@@ -587,7 +693,7 @@ BEGIN
   OR (p_input_source='LIVE_LEDGER' AND p_synthetic_replayed_count<>0) OR (p_input_source='SYNTHETIC_BOOTSTRAP' AND p_synthetic_replayed_count<>p_replayed_count)
   OR p_closure_v4_count<>p_replayed_count OR p_intent_only_count<>0 OR p_legacy_closure_v2_count<>0
   OR p_erasure_effective_at_verified_count<>p_replayed_count OR p_membership_postcondition_contract<>'mycfc/membership-history-postcondition/v1'
-  OR octet_length(p_membership_postcondition_sha256)<>32 OR p_membership_postcondition_verified_count<>p_replayed_count
+  OR octet_length(p_membership_postcondition_sha256) IS DISTINCT FROM 32 OR p_membership_postcondition_verified_count<>p_replayed_count
   OR p_membership_count<0 OR p_variation_count<0
   OR EXISTS(SELECT 1 FROM unnest(p_run_ids) listed(run_id)
    LEFT JOIN privacy_protected.restore_replay_runs run ON run.id=listed.run_id
@@ -779,12 +885,41 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR chec
  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected';
 END;$$;
 
+-- Completion may proceed only from the current authenticated closure and an
+-- immutable membership-history postcondition that still recomputes exactly.
+CREATE FUNCTION public.privacy_completion_membership_postcondition_ready(p_execution_id uuid)
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT public.privacy_membership_history_source_postcondition_ready(p_execution_id);
+$$;
+
+-- The completion implementation predates closure v4 and was wrapped by the
+-- release guard in 013. Replace only the two exact, asserted version clauses;
+-- any unexpected predecessor definition aborts the migration.
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_completion_prepare_inner_013(uuid,uuid)'::regprocedure) INTO definition;
+ old_clause:='receipt.ledger_version=''restore-tombstone-closure/v2''';
+ new_clause:='receipt.ledger_version=''restore-tombstone-closure/v4'' AND public.privacy_completion_membership_postcondition_ready(execution.id)';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_prepare_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_completion_finalize_inner_013(uuid,uuid,bytea,bytea)'::regprocedure) INTO definition;
+ old_clause:='receipt.ledger_version<>''restore-tombstone-closure/v2''';
+ new_clause:='receipt.ledger_version<>''restore-tombstone-closure/v4'' OR NOT public.privacy_completion_membership_postcondition_ready(execution.id)';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_finalize_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
 REVOKE ALL ON TABLE privacy_protected.membership_history_source_captures,privacy_protected.membership_history_source_rows,
  privacy_protected.membership_history_source_postconditions,privacy_protected.membership_history_replay_captures,
  privacy_protected.membership_history_replay_rows,privacy_protected.membership_history_replay_postconditions FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.privacy_membership_history_frame(text),public.privacy_membership_history_frame(bytea),
  public.privacy_membership_history_digest_equal(bytea,bytea),public.privacy_membership_history_compute(uuid[],timestamptz,boolean),
  public.privacy_membership_history_compute_source(uuid,timestamptz),public.privacy_membership_history_compute_replay(uuid,timestamptz),
+ public.privacy_membership_history_lock_source(uuid),public.privacy_membership_history_source_postcondition_ready(uuid),public.prevent_sealed_membership_history_mutation(),
+ public.privacy_completion_membership_postcondition_ready(uuid),
  public.privacy_worker_execute_checkpoint_inner_015(uuid,uuid,uuid,bigint,uuid,text,text),
  public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text),
  public.privacy_tombstone_prepare_closure_v4(uuid,uuid),public.privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),
@@ -806,7 +941,7 @@ BEGIN
   SELECT proc.oid,proc.proowner,acl.grantee FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
   CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
   WHERE namespace.nspname='public' AND (proc.proname LIKE '%\_inner\_015' ESCAPE '\' OR proc.proname LIKE 'privacy\_membership\_history\_%' ESCAPE '\'
-   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4'))
+   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4','privacy_membership_history_source_postcondition_ready','prevent_sealed_membership_history_mutation','privacy_completion_membership_postcondition_ready','privacy_tombstone_prepare_closure_v2','privacy_tombstone_confirm_closure_v2','privacy_tombstone_prepare_closure_v3','privacy_tombstone_confirm_closure_v3'))
    AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner
  LOOP
   grantee_name:=CASE WHEN capability.grantee=0 THEN 'PUBLIC' ELSE quote_ident((SELECT rolname FROM pg_roles WHERE oid=capability.grantee)) END;
@@ -815,7 +950,7 @@ BEGIN
  IF EXISTS(SELECT 1 FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
   CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
   WHERE namespace.nspname='public' AND (proc.proname LIKE '%\_inner\_015' ESCAPE '\' OR proc.proname LIKE 'privacy\_membership\_history\_%' ESCAPE '\'
-   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4'))
+   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4','privacy_membership_history_source_postcondition_ready','prevent_sealed_membership_history_mutation','privacy_completion_membership_postcondition_ready','privacy_tombstone_prepare_closure_v2','privacy_tombstone_confirm_closure_v2','privacy_tombstone_prepare_closure_v3','privacy_tombstone_confirm_closure_v3'))
    AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner) THEN
   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_inner_capability_revoke_failed'; END IF;
 END$$;

@@ -228,7 +228,7 @@ func equalUUIDs(left, right []uuid.UUID) bool {
 }
 
 func readPrivateKey(path string) (ed25519.PrivateKey, error) {
-	payload, err := readArtifact(path)
+	payload, err := readSecret(path)
 	if err != nil {
 		return nil, err
 	}

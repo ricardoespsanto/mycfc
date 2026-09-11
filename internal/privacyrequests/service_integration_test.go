@@ -590,16 +590,16 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		seasonSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 		if _, err := pool.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES
 			($1,$5||'H','Histórico','2020-01-01','2020-12-31'),
-			($2,$5||'A','Atual',CURRENT_DATE-30,CURRENT_DATE+30),
-			($3,$5||'F','Futuro',CURRENT_DATE+1,CURRENT_DATE+365),
+			($2,$5||'A','Atual',(clock_timestamp() AT TIME ZONE 'UTC')::date-30,(clock_timestamp() AT TIME ZONE 'UTC')::date+30),
+			($3,$5||'F','Futuro',(clock_timestamp() AT TIME ZONE 'UTC')::date+1,(clock_timestamp() AT TIME ZONE 'UTC')::date+365),
 			($4,$5||'U','Não relacionado','2019-01-01','2019-12-31')`, historySeason, activeSeason, futureSeason, unrelatedSeason, seasonSuffix); err != nil {
 			t.Fatal(err)
 		}
 		historyMembership, activeMembership, futureMembership, unrelatedMembership := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES
 			($1,$5,$6,$10,'2020-01-01','2020-12-31'),
-			($2,$5,$7,$10,CURRENT_DATE-1,NULL),
-			($3,$5,$8,$10,CURRENT_DATE+1,NULL),
+			($2,$5,$7,$10,(clock_timestamp() AT TIME ZONE 'UTC')::date-1,NULL),
+			($3,$5,$8,$10,(clock_timestamp() AT TIME ZONE 'UTC')::date+1,NULL),
 			($4,$9,$11,$10,'2019-01-01','2019-12-31')`, historyMembership, activeMembership, futureMembership, unrelatedMembership, subject, historySeason, activeSeason, futureSeason, unrelated, programmeID, unrelatedSeason); err != nil {
 			t.Fatal(err)
 		}
@@ -691,7 +691,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		var preservedCount, futureCount, futureLinks, unrelatedCount int
 		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships
 			WHERE id IN($1,$2) AND user_id IS NULL AND principal_id=$3
-			  AND (id<>$2 OR ends_on=CURRENT_DATE-1)`, historyMembership, activeMembership, principalID).Scan(&preservedCount); err != nil {
+			  AND (id<>$2 OR ends_on=(clock_timestamp() AT TIME ZONE 'UTC')::date-1)`, historyMembership, activeMembership, principalID).Scan(&preservedCount); err != nil {
 			t.Fatal(err)
 		}
 		if err = pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE id=$1`, futureMembership).Scan(&futureCount); err != nil {

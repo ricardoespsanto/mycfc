@@ -90,7 +90,7 @@ func TestReadArtifactRejectsDirectoriesAndOversizedFiles(t *testing.T) {
 	}
 }
 
-func TestReadSecretRequiresOwnerRegularMode0600AndRejectsSymlink(t *testing.T) {
+func TestReadSecretRequiresOwnerRegularPrivateModeAndRejectsSymlink(t *testing.T) {
 	directory := t.TempDir()
 	secret := writeActivationFile(t, directory, "secret", []byte("secret"))
 	if _, err := readSecret(secret); err != nil {
@@ -101,6 +101,12 @@ func TestReadSecretRequiresOwnerRegularMode0600AndRejectsSymlink(t *testing.T) {
 	}
 	if _, err := readSecret(secret); err == nil {
 		t.Fatal("group-readable activation secret accepted")
+	}
+	if err := os.Chmod(secret, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSecret(secret); err != nil {
+		t.Fatalf("owner-read-only activation secret rejected: %v", err)
 	}
 	if err := os.Chmod(secret, 0o600); err != nil {
 		t.Fatal(err)
