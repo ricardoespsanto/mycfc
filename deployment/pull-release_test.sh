@@ -213,6 +213,16 @@ for phase in postgres_ready database_bootstrap database_migrate database_harden 
 done
 grep -q 'event=release_selected .*active_slot=legacy' "$success_case/events.log"
 grep -q 'event=deployment_succeeded .*slot=blue' "$success_case/events.log"
+
+purge_tag_case="$work_dir/purge-tag-filter"
+setup_case "$purge_tag_case"
+mixed_tags=$(printf 'purge-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\trelease-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4')
+run_release "$purge_tag_case" TEST_RELEASE_TAG="$mixed_tags"
+grep -q 'pull registry.example/mycfc:release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4' "$purge_tag_case/docker.log"
+if grep -q 'pull .*:purge-' "$purge_tag_case/docker.log"; then
+	printf '%s\n' 'production release agent selected a purge-only image' >&2
+	exit 1
+fi
 grep -q 'reverse_proxy app-blue:8080' "$success_case/state/caddy-upstream.caddy"
 grep -q '^MYCFC_IMAGE=.*bbbbbbbb' "$success_case/mycfc.env"
 grep -q -- '--profile blue up -d --no-deps --force-recreate app-blue' "$success_case/docker.log"

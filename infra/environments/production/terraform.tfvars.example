@@ -12,6 +12,10 @@ privacy_worker_metadata_rewrite_enabled       = false
 privacy_worker_ledger_broker_invoke_enabled   = false
 privacy_worker_ledger_broker_function_arn     = null
 privacy_worker_monitoring_enabled             = false
+legacy_media_purge_identity_enabled            = false
+legacy_media_purge_deletion_enabled            = false
+legacy_media_purge_write_fence_enabled         = false
+legacy_media_purge_permission_expires_at       = null
 release_agent_cutover_complete                = false
 
 calendar_competition_id = "competition@example.com"

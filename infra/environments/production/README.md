@@ -4,6 +4,8 @@ The ECS/RDS/ALB runtime was retired. This module manages the private repair-phot
 
 Use the existing remote backend and run `terraform plan` before applying a retained-resource change. Do not restore retired runtime resources from this module.
 
+The legacy-media purge identity is a temporary, independently gated exception documented in `docs/legacy-media-purge-operations.md`. Its inventory and deletion permissions are separate, expire at an exact future UTC deadline no more than 24 hours after plan time, and are capped by an identical permissions boundary. Deletion is ordered after a separately gated, equally expiring bucket deny that fences new object versions and delete markers under the three purge prefixes; teardown removes deletion first. Terraform creates no access key. Leave all purge inputs at their inert defaults outside the approved one-time maintenance window.
+
 The optional privacy-worker source is disabled by default and creates no credentials, secret value, service, timer, alarm, or activation. Its three separate infrastructure, version-deletion, and metadata-rewrite gates and rollback procedure are documented in [`../../../docs/privacy-worker-infrastructure.md`](../../../docs/privacy-worker-infrastructure.md). Source delivery does not authorize a Terraform apply or live erasure.
 
 ## Amazon SES provisioning

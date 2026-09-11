@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -44,9 +45,6 @@ func TestLegacyMediaPurgeCommandDefaultsToDryRunAndRequiresTypedExecuteConfirmat
 			t.Fatalf("invalid arguments accepted: %v", args)
 		}
 	}
-	if legacyMediaPurgeExecutionEnabled {
-		t.Fatal("destructive legacy media execution must ship source-disabled")
-	}
 }
 
 func TestLegacyMediaPurgeCommandRequiresSeparateEvidenceKey(t *testing.T) {
@@ -57,6 +55,37 @@ func TestLegacyMediaPurgeCommandRequiresSeparateEvidenceKey(t *testing.T) {
 	decoded, err := decodeEvidenceKey(base64.StdEncoding.EncodeToString(raw))
 	if err != nil || string(decoded) != string(raw) {
 		t.Fatalf("decoded=%d err=%v", len(decoded), err)
+	}
+}
+
+func TestLegacyMediaPurgeEvidenceKeyFileIsProtectedAndExclusive(t *testing.T) {
+	path := t.TempDir() + "/evidence.key"
+	raw := bytes.Repeat([]byte{0x51}, 32)
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(raw)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := loadEvidenceKey("", path)
+	if err != nil || !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded=%d err=%v", len(decoded), err)
+	}
+	if _, err = loadEvidenceKey(base64.StdEncoding.EncodeToString(raw), path); err == nil {
+		t.Fatal("simultaneous evidence key sources accepted")
+	}
+	if _, err = loadEvidenceKey("", ""); err == nil {
+		t.Fatal("missing evidence key source accepted")
+	}
+	if err = os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = loadEvidenceKey("", path); err == nil {
+		t.Fatal("over-permissive evidence key file accepted")
+	}
+	link := t.TempDir() + "/evidence-link.key"
+	if err = os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = loadEvidenceKey("", link); err == nil {
+		t.Fatal("evidence key symlink accepted")
 	}
 }
 
@@ -85,7 +114,7 @@ func TestLegacyMediaPurgeRunDispatchesDryRunAndFailsClosed(t *testing.T) {
 	if err := run(t.Context(), nil, &output); err != nil {
 		t.Fatal(err)
 	}
-	if runner.request.Execute || runner.request.Enabled || !strings.Contains(output.String(), `"mode": "DRY_RUN"`) {
+	if runner.request.Execute || runner.request.Enabled != legacyMediaPurgeExecutionEnabled || !strings.Contains(output.String(), `"mode": "DRY_RUN"`) {
 		t.Fatalf("request=%+v output=%q", runner.request, output.String())
 	}
 

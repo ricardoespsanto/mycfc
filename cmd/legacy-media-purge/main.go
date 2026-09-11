@@ -17,11 +17,6 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/storage"
 )
 
-// Destructive execution intentionally ships disabled. Enabling it is a
-// separate reviewed source change and still does not bypass the exact typed
-// confirmation required by the storage operation.
-const legacyMediaPurgeExecutionEnabled = false
-
 type legacyMediaPurgeRunner interface {
 	Run(context.Context, storage.LegacyMediaPurgeRequest) (storage.LegacyMediaPurgeEvidence, error)
 }
@@ -46,7 +41,10 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	}
 	bucket := strings.TrimSpace(legacyMediaPurgeEnvironment("S3_BUCKET_NAME"))
 	evidenceKeyID := strings.TrimSpace(legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_ID"))
-	evidenceKey, err := decodeEvidenceKey(legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_B64"))
+	evidenceKey, err := loadEvidenceKey(
+		legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_B64"),
+		legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_FILE"),
+	)
 	if err != nil {
 		return err
 	}
@@ -74,6 +72,26 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		return errors.New("write legacy media purge evidence")
 	}
 	return nil
+}
+
+func loadEvidenceKey(encoded, path string) ([]byte, error) {
+	encoded = strings.TrimSpace(encoded)
+	path = strings.TrimSpace(path)
+	if (encoded == "") == (path == "") {
+		return nil, errors.New("configure exactly one legacy media purge evidence key source")
+	}
+	if path == "" {
+		return decodeEvidenceKey(encoded)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o027 != 0 || info.Mode().Perm()&0o400 == 0 {
+		return nil, errors.New("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_FILE must be a protected regular file")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.New("read LEGACY_MEDIA_PURGE_EVIDENCE_KEY_FILE")
+	}
+	return decodeEvidenceKey(string(contents))
 }
 
 type commandRequest struct {

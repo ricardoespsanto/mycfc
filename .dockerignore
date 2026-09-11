@@ -1,6 +1,7 @@
 # Build only the files required to compile the production binary and assets.
 **
 !Dockerfile
+!Dockerfile.legacy-media-purge
 !go.mod
 !go.sum
 !package.json

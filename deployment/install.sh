@@ -212,6 +212,7 @@ chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
 chmod 0755 "$deployment_dir/privacy-retention.sh"
 chmod 0755 "$deployment_dir/privacy-worker.sh"
 chmod 0755 "$deployment_dir/privacy-activation.sh"
+chmod 0755 "$deployment_dir/legacy-media-purge.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
