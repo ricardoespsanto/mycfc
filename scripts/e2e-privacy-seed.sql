@@ -117,16 +117,17 @@ BEGIN
           'worker_monitoring_enabled',true,'restore_infrastructure_enabled',true,'restore_ledger_write_enabled',true)
         WHEN 'PROVIDER' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/provider?versionId=e2e','signing_key_id','fixture-key','provider_registry_state','READY',
-          'provider_registration_count',1,'provider_registry_sha256',encode(fixture_digest,'base64'))
+          'provider_registration_count',0,'provider_registry_sha256',encode(fixture_digest,'base64'),
+          'provider_inventory_contract','mycfc/privacy-provider-registry-source/v2')
         WHEN 'SCHEMA' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/schema?versionId=e2e','signing_key_id','fixture-key','schema_migration_digest',encode(fixture_digest,'base64'),
-          'baseline_includes_through','202609110001_privacy_upload_finalize_execution_fence')
+          'baseline_includes_through','202609110002_privacy_empty_provider_registry_activation')
       END
     ) AS id
     FROM (VALUES
       ('RESTORE', 'mycfc/privacy-restore-drill-attestation/v2'),
       ('INFRASTRUCTURE', 'mycfc/privacy-infrastructure-posture/v1'),
-      ('PROVIDER', 'mycfc/privacy-provider-registry/v1'),
+      ('PROVIDER', 'mycfc/privacy-provider-registry/v2'),
       ('SCHEMA', 'mycfc/schema-migration-inventory/v1')
     ) AS fixture(kind, contract)
   ) recorded;

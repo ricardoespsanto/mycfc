@@ -30,8 +30,23 @@ func TestPrivacyUploadFinalizeFenceForwardMigrationClosesBothCaptureRaces(t *tes
 	}
 	const migrationMarker = "-- #246 closes the reservation-to-finalisation race with execution capture."
 	baselineIndex := strings.LastIndex(baselineSchema, migrationMarker)
-	if baselineIndex < 0 || strings.TrimSpace(baselineSchema[baselineIndex:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("new privacy fence migration is not the exact final baseline segment")
+	nextIndex := strings.LastIndex(baselineSchema, "-- Baseline through 202609110002_privacy_empty_provider_registry_activation.")
+	if baselineIndex < 0 || nextIndex <= baselineIndex || strings.TrimSpace(baselineSchema[baselineIndex:nextIndex]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy fence migration is not the exact baseline segment")
+	}
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+		DELETE FROM privacy_activation_authenticated_artifacts;
+		ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v5_check`); err != nil {
+		t.Fatal(err)
+	}
+	constraintPredecessor := migrationFunctionSegment(t, string(migration),
+		"ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v4_check",
+		"DO $$DECLARE definition text;old_clause text;new_clause text;")
+	if _, err = tx.Exec(ctx, constraintPredecessor); err != nil {
+		t.Fatal(err)
 	}
 
 	// Recreate the actual predecessor media routines so the migration is tested
@@ -62,9 +77,9 @@ func TestPrivacyUploadFinalizeFenceForwardMigrationClosesBothCaptureRaces(t *tes
 	if _, err = tx.Exec(ctx, `DO $$DECLARE definition text;
 BEGIN
  SELECT pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110001_privacy_upload_finalize_execution_fence','202609100015_privacy_membership_postcondition');
+ EXECUTE replace(definition,'202609110002_privacy_empty_provider_registry_activation','202609100015_privacy_membership_postcondition');
  SELECT pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110001_privacy_upload_finalize_execution_fence','202609100015_privacy_membership_postcondition');
+ EXECUTE replace(definition,'202609110002_privacy_empty_provider_registry_activation','202609100015_privacy_membership_postcondition');
 END$$`); err != nil {
 		t.Fatal(err)
 	}

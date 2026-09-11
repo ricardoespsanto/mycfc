@@ -37,3 +37,19 @@ func TestProfilePhotoRemovalRendersAnExplicitDestructiveConfirmation(t *testing.
 		}
 	}
 }
+
+func TestFPCHistoryLinksSuppressReferrerDisclosure(t *testing.T) {
+	page := ProfilePage{
+		FPCNationalHistoryURL:      "https://example.test/national/123/",
+		FPCInternationalHistoryURL: "https://example.test/international/123/",
+	}
+
+	var output bytes.Buffer
+	if err := fpcHistoryLinks(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	if strings.Count(html, `rel="noreferrer"`) != 2 {
+		t.Fatalf("FPC history links must suppress referrer disclosure: %s", html)
+	}
+}

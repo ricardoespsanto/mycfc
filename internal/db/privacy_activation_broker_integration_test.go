@@ -124,7 +124,7 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 		artifact := brokerArtifactFixture(kind, policy, image, digest)
 		payload, _ := json.Marshal(artifact)
 		var evidenceID uuid.UUID
-		contract := map[string]string{"RESTORE": "mycfc/privacy-restore-drill-attestation/v2", "INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1", "PROVIDER": "mycfc/privacy-provider-registry/v1", "SCHEMA": "mycfc/schema-migration-inventory/v1"}[kind]
+		contract := map[string]string{"RESTORE": "mycfc/privacy-restore-drill-attestation/v2", "INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1", "PROVIDER": "mycfc/privacy-provider-registry/v2", "SCHEMA": "mycfc/schema-migration-inventory/v1"}[kind]
 		kindDigest := sha256.Sum256([]byte(kind + uuid.NewString()))
 		if err = adminConn.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`, adminID, kind, kindDigest[:], contract, now, now.Add(90*24*time.Hour), payload).Scan(&evidenceID); err != nil {
 			t.Fatal(err)
@@ -206,10 +206,11 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 		}
 	case "PROVIDER":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/provider?versionId=v1", "fixture-key"
-		artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 1, digest
+		artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 0, digest
+		artifact["provider_inventory_contract"] = "mycfc/privacy-provider-registry-source/v2"
 	case "SCHEMA":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110001_privacy_upload_finalize_execution_fence"
+		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110002_privacy_empty_provider_registry_activation"
 	}
 	return artifact
 }

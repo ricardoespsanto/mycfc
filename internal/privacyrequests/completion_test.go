@@ -113,10 +113,11 @@ func TestActivationArtifactsAreComputedNotCallerAsserted(t *testing.T) {
 	hexDigest := strings.Repeat("a", sha256.Size*2)
 	release := ActivationReleaseBinding{PolicyVersion: "privacy-v1", ExecutorVersion: "privacy-erasure-executor/v2", PlanSchemaVersion: "privacy-erasure-plan/v2", ImageDigest: "sha256:" + hexDigest, SchemaMigrationDigest: hexDigest}
 	document := map[string]any{
-		"contract": "mycfc/privacy-provider-registry/v1", "result": "SUCCEEDED", "observed_at": now.Add(-time.Hour).Format(time.RFC3339),
+		"contract": "mycfc/privacy-provider-registry/v2", "result": "SUCCEEDED", "observed_at": now.Add(-time.Hour).Format(time.RFC3339),
 		"policy_version": "privacy-v1", "executor_version": "privacy-erasure-executor/v2", "plan_schema_version": "privacy-erasure-plan/v2",
 		"image_digest": "sha256:" + hexDigest, "evidence_ref": "s3://evidence/provider.json?versionId=version-1", "evidence_sha256": hexDigest,
-		"signing_key_id": "activation-key-1", "registry_state": "READY", "registration_count": 1, "provider_registry_sha256": hexDigest,
+		"signing_key_id": "activation-key-1", "registry_state": "READY", "registration_count": 0, "provider_registry_sha256": hexDigest,
+		"inventory_contract": "mycfc/privacy-provider-registry-source/v2",
 	}
 	canonical, _ := json.Marshal(document)
 	document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
@@ -134,12 +135,20 @@ func TestActivationArtifactsAreComputedNotCallerAsserted(t *testing.T) {
 	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": bytes.Repeat([]byte{9}, ed25519.PublicKeySize)}, release, now); !errors.Is(err, ErrActivationUnavailable) {
 		t.Fatalf("artifact with untrusted signature error=%v", err)
 	}
-	document["registry_state"] = "EMPTY"
+	document["registration_count"] = 1
 	canonical, _ = json.Marshal(mapWithoutSignature(document))
 	document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
 	payload, _ = json.Marshal(document)
 	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
-		t.Fatalf("empty provider registry error=%v", err)
+		t.Fatalf("unsupported nonempty provider registry error=%v", err)
+	}
+	document["registration_count"] = 0
+	document["inventory_contract"] = "mycfc/privacy-provider-registry-source/v1"
+	canonical, _ = json.Marshal(mapWithoutSignature(document))
+	document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
+	payload, _ = json.Marshal(document)
+	if _, err = VerifyActivationArtifact(payload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("legacy incomplete provider registry error=%v", err)
 	}
 }
 
@@ -301,7 +310,7 @@ func TestActivationArtifactSupportsInfrastructureAndSchemaContracts(t *testing.T
 
 	schema := signedPayload(map[string]any{
 		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
-		"baseline_includes_through": "202609110001_privacy_upload_finalize_execution_fence",
+		"baseline_includes_through": "202609110002_privacy_empty_provider_registry_activation",
 	})
 	evidence, err = VerifyActivationArtifact(schema, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
 	if err != nil || evidence.kind != "SCHEMA" || evidence.artifact.BaselineIncludesThrough == "" {

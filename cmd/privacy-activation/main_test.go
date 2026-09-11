@@ -58,7 +58,7 @@ func TestLoadActivationInputsUsesTrustedCurrentReleaseBinding(t *testing.T) {
 		"PRIVACY_ACTIVATION_ARTIFACT_PUBLIC_KEY_FILE": writeActivationFile(t, directory, "artifact.pub", []byte(base64.StdEncoding.EncodeToString(public))),
 		"PRIVACY_ACTIVATION_RESTORE_ATTESTATION_FILE": writeActivationFile(t, directory, "restore.json", []byte(`{"contract":"restore"}`)),
 		"PRIVACY_ACTIVATION_INFRASTRUCTURE_FILE":      writeActivationFile(t, directory, "infrastructure.json", []byte(`{"contract":"mycfc/privacy-infrastructure-posture/v1"}`)),
-		"PRIVACY_ACTIVATION_PROVIDER_FILE":            writeActivationFile(t, directory, "provider.json", []byte(`{"contract":"mycfc/privacy-provider-registry/v1"}`)),
+		"PRIVACY_ACTIVATION_PROVIDER_FILE":            writeActivationFile(t, directory, "provider.json", []byte(`{"contract":"mycfc/privacy-provider-registry/v2"}`)),
 		"PRIVACY_ACTIVATION_SCHEMA_FILE":              writeActivationFile(t, directory, "schema.json", []byte(`{"contract":"mycfc/schema-migration-inventory/v1"}`)),
 	}
 	actor := uuid.New()
@@ -507,7 +507,7 @@ func activationCommandEnvironment(t *testing.T) map[string]string {
 		"PRIVACY_ACTIVATION_ARTIFACT_PUBLIC_KEY_FILE": writeActivationFile(t, directory, "artifact.pub", []byte(base64.StdEncoding.EncodeToString(public))),
 		"PRIVACY_ACTIVATION_RESTORE_ATTESTATION_FILE": writeActivationFile(t, directory, "restore.json", []byte(`{"contract":"restore"}`)),
 		"PRIVACY_ACTIVATION_INFRASTRUCTURE_FILE":      writeActivationFile(t, directory, "infrastructure.json", []byte(`{"contract":"mycfc/privacy-infrastructure-posture/v1"}`)),
-		"PRIVACY_ACTIVATION_PROVIDER_FILE":            writeActivationFile(t, directory, "provider.json", []byte(`{"contract":"mycfc/privacy-provider-registry/v1"}`)),
+		"PRIVACY_ACTIVATION_PROVIDER_FILE":            writeActivationFile(t, directory, "provider.json", []byte(`{"contract":"mycfc/privacy-provider-registry/v2"}`)),
 		"PRIVACY_ACTIVATION_SCHEMA_FILE":              writeActivationFile(t, directory, "schema.json", []byte(`{"contract":"mycfc/schema-migration-inventory/v1"}`)),
 	}
 }

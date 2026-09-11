@@ -167,8 +167,8 @@ templ fpcHistoryLinks(page ProfilePage) {
 		if page.FPCNationalHistoryURL != "" && page.FPCInternationalHistoryURL != "" {
 			<p>Consulte os resultados publicados pela Federação Portuguesa de Canoagem. Estes links abrem um serviço externo da FPC.</p>
 			<div class="record-item__actions">
-				<a class="action action--secondary" href={ templ.SafeURL(page.FPCNationalHistoryURL) }>Ver histórico nacional na FPC</a>
-				<a class="action action--secondary" href={ templ.SafeURL(page.FPCInternationalHistoryURL) }>Ver histórico internacional na FPC</a>
+				<a class="action action--secondary" href={ templ.SafeURL(page.FPCNationalHistoryURL) } rel="noreferrer">Ver histórico nacional na FPC</a>
+				<a class="action action--secondary" href={ templ.SafeURL(page.FPCInternationalHistoryURL) } rel="noreferrer">Ver histórico internacional na FPC</a>
 			</div>
 		} else {
 			<p>Ainda não existe um número de atleta FPC válido associado a este perfil.</p>

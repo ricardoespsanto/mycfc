@@ -66,7 +66,7 @@ adopted policy against exactly one current item of each kind:
 - `RESTORE` uses the current v2 independently authenticated restore attestation,
   restore/promotion attestation contract.
 - `INFRASTRUCTURE` uses `mycfc/privacy-infrastructure-posture/v1`.
-- `PROVIDER` uses `mycfc/privacy-provider-registry/v1`.
+- `PROVIDER` uses `mycfc/privacy-provider-registry/v2`.
 - `SCHEMA` uses `mycfc/schema-migration-inventory/v1`.
 
 The non-restore documents are exact-schema Ed25519 envelopes. They bind the
@@ -74,8 +74,11 @@ policy, compiled executor and plan versions, deployed image digest, immutable
 versioned S3 reference and object checksum to an allowlisted signing key. The
 infrastructure record additionally binds both Terraform state serials plus
 state and plan digests and every required worker capability. Provider evidence
-must describe a closed, non-empty `READY` registry; an `EMPTY` or `NOT_READY`
-registry can never activate the worker. Schema evidence binds the binary's
+must describe a signed, complete `READY` inventory of subject-specific external
+integrations. That inventory may contain zero registrations; missing, partial,
+assumed, malformed or unsupported non-empty inventories remain fail closed.
+Historical v1 provider evidence remains audit material but cannot authorize a
+new activation. Schema evidence binds the binary's
 ordered embedded migration-inventory digest and exact baseline cutoff.
 
 The restore record is an HMAC-authenticated independent observer result. It

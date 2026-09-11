@@ -1932,6 +1932,7 @@ type PrivacyActivationAuthenticatedArtifact struct {
 	RestoreMembershipPostconditionVerifiedCount *int64             `json:"restore_membership_postcondition_verified_count"`
 	RestoreMembershipCount                      *int64             `json:"restore_membership_count"`
 	RestoreVariationCount                       *int64             `json:"restore_variation_count"`
+	ProviderInventoryContract                   *string            `json:"provider_inventory_contract"`
 }
 
 type PrivacyActivationEvidence struct {

@@ -65,13 +65,14 @@ func activatePrivacyDatabaseIntegrationFixture(t *testing.T, ctx context.Context
 				artifact[field] = true
 			}
 		case "PROVIDER":
-			contract = "mycfc/privacy-provider-registry/v1"
+			contract = "mycfc/privacy-provider-registry/v2"
 			artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/provider?versionId=v1", "fixture-key"
-			artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 1, value
+			artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 0, value
+			artifact["provider_inventory_contract"] = "mycfc/privacy-provider-registry-source/v2"
 		case "SCHEMA":
 			contract = "mycfc/schema-migration-inventory/v1"
 			artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-			artifact["schema_migration_digest"], artifact["baseline_includes_through"] = value, "202609110001_privacy_upload_finalize_execution_fence"
+			artifact["schema_migration_digest"], artifact["baseline_includes_through"] = value, "202609110002_privacy_empty_provider_registry_activation"
 		}
 		encoded, err := json.Marshal(artifact)
 		if err != nil {

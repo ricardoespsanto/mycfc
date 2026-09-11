@@ -172,7 +172,7 @@ func loadActivationInputs(getenv func(string) string) (activationInputs, error) 
 	}
 	for _, artifact := range []struct{ env, contract string }{
 		{"PRIVACY_ACTIVATION_INFRASTRUCTURE_FILE", "mycfc/privacy-infrastructure-posture/v1"},
-		{"PRIVACY_ACTIVATION_PROVIDER_FILE", "mycfc/privacy-provider-registry/v1"},
+		{"PRIVACY_ACTIVATION_PROVIDER_FILE", "mycfc/privacy-provider-registry/v2"},
 		{"PRIVACY_ACTIVATION_SCHEMA_FILE", "mycfc/schema-migration-inventory/v1"},
 	} {
 		payload, readErr := readArtifact(getenv(artifact.env))
