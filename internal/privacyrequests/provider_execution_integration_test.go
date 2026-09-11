@@ -198,6 +198,53 @@ func TestUnknownProviderRollsBackCaptureAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestProviderMaterializationFailsClosedAtEveryProtectionBoundary(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	fixture := seedProviderExecutionFixture(t, ctx, tx, "fake-provider", ProviderRoleProcessor, "fake-delete/v1", "ACTIVE")
+	registry, err := NewProviderExecutionRegistry(providerRegistration(&fakeProviderAdapter{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := providerExecutionPlanFixture(fixture.category, fixture.entryDigest)
+	if err = (Service{}).materializeProviderTargets(ctx, tx, dbgen.New(tx), fixture.execution, plan, fixture.subjectID); !errors.Is(err, ErrExecutorUnavailable) {
+		t.Fatalf("missing registry error=%v", err)
+	}
+	for name, protector := range map[string]providerTargetProtectorFailure{
+		"target-seal":       {sealTargetErr: errors.New("target seal failed")},
+		"target-digest":     {digestTargetErr: errors.New("target digest failed")},
+		"credential-seal":   {sealCredentialErr: errors.New("credential seal failed")},
+		"credential-digest": {digestCredentialErr: errors.New("credential digest failed")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, savepointErr := tx.Exec(ctx, "SAVEPOINT provider_protection_boundary"); savepointErr != nil {
+				t.Fatal(savepointErr)
+			}
+			service := Service{ProviderRegistry: registry, ProviderTargets: protector}
+			materializeErr := service.materializeProviderTargets(ctx, tx, dbgen.New(tx), fixture.execution, plan, fixture.subjectID)
+			if !errors.Is(materializeErr, ErrProviderCaptureFailed) {
+				t.Fatalf("materialization error=%v", materializeErr)
+			}
+			if _, rollbackErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT provider_protection_boundary"); rollbackErr != nil {
+				t.Fatal(rollbackErr)
+			}
+		})
+	}
+}
+
 type providerFixture struct {
 	subjectID, connectionID, jobID, workerRef uuid.UUID
 	execution                                 dbgen.PrivacyErasureExecution

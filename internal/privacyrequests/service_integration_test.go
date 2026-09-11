@@ -2462,6 +2462,13 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
 			t.Fatalf("disabled activation error=%v", err)
 		}
+		if _, err := pool.Exec(ctx, `UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true WHERE singleton`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartExecution(ctx, valid(request, reviewerB)); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("engaged worker kill switch error=%v", err)
+		}
 		activatePrivacyIntegrationFixture(t, ctx, pool, owner, reviewerB, p.Version)
 		request = approved()
 		var grantedAt time.Time
@@ -2504,7 +2511,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer pool.Exec(ctx, `DROP FUNCTION IF EXISTS privacy_test_fail_write() CASCADE`)
-		for _, table := range []string{"privacy_erasure_executions", "privacy_erasure_category_jobs", "privacy_erasure_job_checkpoints", "data_erasure_requests", "data_erasure_request_events", "email_outbox"} {
+		for _, table := range []string{"privacy_erasure_executions", "privacy_erasure_category_jobs", "privacy_erasure_job_checkpoints", "data_erasure_requests", "data_erasure_request_events", "email_outbox", protectedSchema + ".completion_notice_targets"} {
 			t.Run(table, func(t *testing.T) {
 				subject := user(nil)
 				request, err := submit(subject, subject, Categories)
@@ -3151,6 +3158,35 @@ VALUES($1,$2,$3,1,1,clock_timestamp())`, attemptID, binding.JobID, leaseID); err
 		}
 		if active || indexedSessions != 0 || ownerRoles != 0 || activeTokens != 0 || execution.ID == uuid.Nil {
 			t.Fatalf("account cutoff incomplete: active=%v sessions=%d roles=%d active_tokens=%d execution=%s", active, indexedSessions, ownerRoles, activeTokens, execution.ID)
+		}
+	})
+	t.Run("execution-start-rejects-mismatched-completion-capture", func(t *testing.T) {
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = claimVerify(request, false)
+		request, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: request.PublicRef, Version: request.Version,
+			Action: "approve", PolicyVersion: p.Version, Explanation: "Execução aprovada para validar a vinculação do aviso.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var originalCaptureFunction string
+		if err = pool.QueryRow(ctx, `SELECT pg_get_functiondef('privacy_execution_capture_completion_notice(uuid,uuid)'::regprocedure)`).Scan(&originalCaptureFunction); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, cleanupErr := pool.Exec(context.Background(), originalCaptureFunction); cleanupErr != nil {
+				t.Errorf("restore privacy execution completion capture function: %v", cleanupErr)
+			}
+		})
+		if _, err = pool.Exec(ctx, `CREATE OR REPLACE FUNCTION privacy_execution_capture_completion_notice(p_execution_id uuid,p_processing_event_id uuid)
+RETURNS uuid LANGUAGE sql AS $$ SELECT gen_random_uuid() $$`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
+			t.Fatalf("mismatched completion capture error=%v", err)
 		}
 	})
 }

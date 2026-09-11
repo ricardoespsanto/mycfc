@@ -395,7 +395,8 @@ func TestPrivacyControlLookupAndActivationUseCurrentServerSnapshot(t *testing.T)
 		{ID: uuid.New(), Kind: "RESTORE", ObservedAt: time.Now()}, {ID: uuid.New(), Kind: "INFRASTRUCTURE", ObservedAt: time.Now()},
 		{ID: uuid.New(), Kind: "PROVIDER", ObservedAt: time.Now()}, {ID: uuid.New(), Kind: "SCHEMA", ObservedAt: time.Now()},
 	}
-	s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2", Evidence: evidence, CanPropose: true}
+	s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2", Evidence: evidence, CanPropose: true,
+		PendingProposal: &pr.ControlProposal{ID: uuid.New(), Digest: bytes.Repeat([]byte{3}, 32), ProposedAt: time.Now()}}
 	r = privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/ativacao", nil, CurrentUser{ID: actor, CanExecutePrivacy: true})
 	w = httptest.NewRecorder()
 	h.ActivationControl(w, r)
@@ -410,6 +411,118 @@ func TestPrivacyControlLookupAndActivationUseCurrentServerSnapshot(t *testing.T)
 	if strings.Contains(w.Body.String(), "Propor ativação") || strings.Contains(w.Body.String(), "Aprovar e ativar") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/propor") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/aprovar") {
 		t.Fatal("read-only activation page exposed a mutation control")
 	}
+}
+
+func TestPrivacyOperationalControlFailureAndStaleStateBoundaries(t *testing.T) {
+	actor, reference, jobID := uuid.New(), uuid.New(), uuid.New()
+	request := func(method, path string, form url.Values) *http.Request {
+		r := privacyHandlerRequestFor(method, path, form, CurrentUser{ID: actor, IsAdmin: true, CanExecutePrivacy: true})
+		r.SetPathValue("ref", reference.String())
+		return r
+	}
+	t.Run("lookup empty and invalid", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		h := PrivacyRequests{Service: s}
+		for path, want := range map[string]int{"/admin/privacidade/controlo": http.StatusOK, "/admin/privacidade/controlo?ref=not-a-uuid": http.StatusUnprocessableEntity} {
+			w := httptest.NewRecorder()
+			h.ControlLookup(w, request(http.MethodGet, path, nil))
+			if w.Code != want {
+				t.Fatalf("lookup %s status=%d want=%d", path, w.Code, want)
+			}
+		}
+	})
+	t.Run("completion snapshot errors and result states", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, result string
+			err          error
+			want         int
+		}{
+			{"forbidden", "", pr.ErrForbidden, http.StatusNotFound},
+			{"unavailable", "", pr.ErrCompletionUnavailable, http.StatusNotFound},
+			{"internal", "", errors.New("database unavailable"), http.StatusInternalServerError},
+			{"invalid result", "unexpected", nil, http.StatusForbidden},
+			{"proposal result", "proposta", nil, http.StatusOK},
+			{"approval result", "aprovada", nil, http.StatusOK},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := privacyHandlerFixture(t)
+				s.controlErr = tc.err
+				s.controlSnapshot = pr.CompletionControlSnapshot{RequestReference: reference, Jobs: []pr.CompletionControlJob{{JobID: jobID}}}
+				w := httptest.NewRecorder()
+				r := request(http.MethodGet, "/admin/privacidade/controlo/"+reference.String()+"?resultado="+tc.result, nil)
+				PrivacyRequests{Service: s}.CompletionControl(w, r)
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d body=%s", w.Code, tc.want, w.Body.String())
+				}
+			})
+		}
+		w := httptest.NewRecorder()
+		r := request(http.MethodGet, "/admin/privacidade/controlo/not-a-uuid", nil)
+		r.SetPathValue("ref", "not-a-uuid")
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.CompletionControl(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("invalid reference status=%d", w.Code)
+		}
+	})
+	t.Run("terminal mutation stale and service failures", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			approve bool
+			setup   func(*privacyHandlerStore)
+			form    url.Values
+			want    int
+		}{
+			{"invalid job", false, nil, url.Values{"job_id": {"bad"}, "confirmed": {"yes"}}, http.StatusForbidden},
+			{"stale selection", false, nil, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+			{"snapshot unavailable", false, func(s *privacyHandlerStore) { s.controlErr = pr.ErrCompletionUnavailable }, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusNotFound},
+			{"proposal unavailable", false, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanProposeRequeue: true}}
+				s.requeueProposeErr = pr.ErrRequeueUnavailable
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+			{"proposal internal", false, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanProposeRequeue: true}}
+				s.requeueProposeErr = errors.New("database unavailable")
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusInternalServerError},
+			{"approval missing proposal", true, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanApproveRequeue: true}}
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := privacyHandlerFixture(t)
+				if tc.setup != nil {
+					tc.setup(s)
+				}
+				w := httptest.NewRecorder()
+				r := request(http.MethodPost, "/admin/privacidade/controlo/"+reference.String(), tc.form)
+				h := PrivacyRequests{Service: s}
+				if tc.approve {
+					h.ApproveTerminalRequeue(w, r)
+				} else {
+					h.ProposeTerminalRequeue(w, r)
+				}
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d body=%s", w.Code, tc.want, w.Body.String())
+				}
+			})
+		}
+	})
+	t.Run("activation failure and result states", func(t *testing.T) {
+		for _, tc := range []struct {
+			result string
+			err    error
+			want   int
+		}{{"", pr.ErrActivationUnavailable, http.StatusNotFound}, {"", errors.New("database unavailable"), http.StatusInternalServerError}, {"unexpected", nil, http.StatusForbidden}, {"proposta", nil, http.StatusOK}, {"aprovada", nil, http.StatusOK}} {
+			s := privacyHandlerFixture(t)
+			s.activationErr = tc.err
+			s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2"}
+			w := httptest.NewRecorder()
+			r := request(http.MethodGet, "/admin/privacidade/ativacao?resultado="+tc.result, nil)
+			PrivacyRequests{Service: s}.ActivationControl(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("activation result=%q status=%d want=%d", tc.result, w.Code, tc.want)
+			}
+		}
+	})
 }
 
 func TestPrivacyNewLoadsApprovedSubjectsAndFailsClosed(t *testing.T) {

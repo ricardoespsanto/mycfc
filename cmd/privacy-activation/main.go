@@ -33,6 +33,43 @@ type activationInputs struct {
 	artifacts   [][]byte
 }
 
+type activationEvidenceStore interface {
+	activationEvidenceWriter
+	Close()
+}
+
+type activationEvidenceWriter interface {
+	VerifyAndRecordRestoreActivationEvidence(context.Context, uuid.UUID, []byte, []byte, privacyrequests.ActivationReleaseBinding, time.Time) (privacyrequests.ActivationEvidence, error)
+	VerifyAndRecordActivationArtifact(context.Context, uuid.UUID, []byte, map[string]ed25519.PublicKey, privacyrequests.ActivationReleaseBinding, time.Time) (privacyrequests.ActivationEvidence, error)
+}
+
+type postgresActivationEvidenceStore struct {
+	close  func()
+	writer activationEvidenceWriter
+}
+
+func (s postgresActivationEvidenceStore) VerifyAndRecordRestoreActivationEvidence(ctx context.Context, actor uuid.UUID, payload, key []byte,
+	release privacyrequests.ActivationReleaseBinding, now time.Time) (privacyrequests.ActivationEvidence, error) {
+	return s.writer.VerifyAndRecordRestoreActivationEvidence(ctx, actor, payload, key, release, now)
+}
+
+func (s postgresActivationEvidenceStore) VerifyAndRecordActivationArtifact(ctx context.Context, actor uuid.UUID, payload []byte,
+	trustedKeys map[string]ed25519.PublicKey, release privacyrequests.ActivationReleaseBinding, now time.Time) (privacyrequests.ActivationEvidence, error) {
+	return s.writer.VerifyAndRecordActivationArtifact(ctx, actor, payload, trustedKeys, release, now)
+}
+
+func (s postgresActivationEvidenceStore) Close() { s.close() }
+
+var verifyRestoreActivationAttestation = privacyrequests.VerifyRestoreActivationAttestation
+var verifyActivationArtifact = privacyrequests.VerifyActivationArtifact
+var openActivationEvidenceStore = func(ctx context.Context, databaseURL string) (activationEvidenceStore, error) {
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	return postgresActivationEvidenceStore{close: pool.Close, writer: privacyrequests.Service{Pool: pool}}, nil
+}
+
 func main() {
 	mode := "record-evidence"
 	if len(os.Args) == 2 {
@@ -69,27 +106,26 @@ func run(ctx context.Context, getenv func(string) string, output io.Writer) erro
 	// Use the package verifier as the sole authority and validate the complete
 	// four-artifact set before the first evidence row can be recorded. The
 	// service wrappers repeat the same verification at the write boundary.
-	if _, err = privacyrequests.VerifyRestoreActivationAttestation(inputs.restore, inputs.restoreKey, inputs.release, now); err != nil {
+	if _, err = verifyRestoreActivationAttestation(inputs.restore, inputs.restoreKey, inputs.release, now); err != nil {
 		return errors.New("restore activation evidence rejected")
 	}
 	for _, payload := range inputs.artifacts {
-		if _, err = privacyrequests.VerifyActivationArtifact(payload, inputs.trustedKeys, inputs.release, now); err != nil {
+		if _, err = verifyActivationArtifact(payload, inputs.trustedKeys, inputs.release, now); err != nil {
 			return errors.New("signed activation evidence rejected")
 		}
 	}
 
-	pool, err := pgxpool.New(ctx, inputs.databaseURL)
+	store, err := openActivationEvidenceStore(ctx, inputs.databaseURL)
 	if err != nil {
 		return errors.New("open privacy activation database")
 	}
-	defer pool.Close()
-	service := privacyrequests.Service{Pool: pool}
-	if _, err = service.VerifyAndRecordRestoreActivationEvidence(ctx, inputs.actor, inputs.restore, inputs.restoreKey, inputs.release, now); err != nil {
+	defer store.Close()
+	if _, err = store.VerifyAndRecordRestoreActivationEvidence(ctx, inputs.actor, inputs.restore, inputs.restoreKey, inputs.release, now); err != nil {
 		return errors.New("record restore activation evidence")
 	}
 	seen := make(map[string]bool, len(inputs.artifacts))
 	for _, payload := range inputs.artifacts {
-		evidence, recordErr := service.VerifyAndRecordActivationArtifact(ctx, inputs.actor, payload, inputs.trustedKeys, inputs.release, now)
+		evidence, recordErr := store.VerifyAndRecordActivationArtifact(ctx, inputs.actor, payload, inputs.trustedKeys, inputs.release, now)
 		if recordErr != nil {
 			return errors.New("record signed activation evidence")
 		}

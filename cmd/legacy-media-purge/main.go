@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/cfcoimbra/mycfc/internal/storage"
@@ -20,6 +21,16 @@ import (
 // separate reviewed source change and still does not bypass the exact typed
 // confirmation required by the storage operation.
 const legacyMediaPurgeExecutionEnabled = false
+
+type legacyMediaPurgeRunner interface {
+	Run(context.Context, storage.LegacyMediaPurgeRequest) (storage.LegacyMediaPurgeEvidence, error)
+}
+
+var legacyMediaPurgeEnvironment = os.Getenv
+var loadLegacyMediaPurgeAWSConfig = awsconfig.LoadDefaultConfig
+var newLegacyMediaPurgeRunner = func(config aws.Config, bucket, evidenceKeyID string, evidenceKey []byte) (legacyMediaPurgeRunner, error) {
+	return storage.NewLegacyMediaPurge(s3.NewFromConfig(config), bucket, evidenceKeyID, evidenceKey)
+}
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -33,21 +44,21 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	bucket := strings.TrimSpace(os.Getenv("S3_BUCKET_NAME"))
-	evidenceKeyID := strings.TrimSpace(os.Getenv("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_ID"))
-	evidenceKey, err := decodeEvidenceKey(os.Getenv("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_B64"))
+	bucket := strings.TrimSpace(legacyMediaPurgeEnvironment("S3_BUCKET_NAME"))
+	evidenceKeyID := strings.TrimSpace(legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_ID"))
+	evidenceKey, err := decodeEvidenceKey(legacyMediaPurgeEnvironment("LEGACY_MEDIA_PURGE_EVIDENCE_KEY_B64"))
 	if err != nil {
 		return err
 	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
-	if region := strings.TrimSpace(os.Getenv("AWS_REGION")); region != "" {
+	if region := strings.TrimSpace(legacyMediaPurgeEnvironment("AWS_REGION")); region != "" {
 		loadOptions = append(loadOptions, awsconfig.WithRegion(region))
 	}
-	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	awsConfig, err := loadLegacyMediaPurgeAWSConfig(ctx, loadOptions...)
 	if err != nil {
 		return errors.New("load legacy media purge storage configuration")
 	}
-	runner, err := storage.NewLegacyMediaPurge(s3.NewFromConfig(awsConfig), bucket, evidenceKeyID, evidenceKey)
+	runner, err := newLegacyMediaPurgeRunner(awsConfig, bucket, evidenceKeyID, evidenceKey)
 	if err != nil {
 		return err
 	}

@@ -79,6 +79,30 @@ func TestPrivacyObjectTargetKeysAreOptionalDistinctAndAtomic(t *testing.T) {
 	if _, _, configured, err = complete.PrivacyObjectTargetKeys(); err == nil || !configured || !strings.Contains(err.Error(), "distinct") {
 		t.Fatalf("shared upload public key configured=%t err=%v", configured, err)
 	}
+	for name, mutate := range map[string]func(*Config){
+		"invalid public": func(c *Config) { c.PrivacyObjectTargetPublicKeyB64 = "not-base64" },
+		"short digest": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+		},
+		"shared encryption id": func(c *Config) {
+			c.PrivacyObjectTargetEncryptionKeyID = c.PrivacyUploadEncryptionKeyID
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+		"shared digest id": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyID = c.PrivacyUploadDigestKeyID
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+		"shared digest bytes": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyB64 = c.PrivacyUploadDigestKeyB64
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+	} {
+		candidate := complete
+		mutate(&candidate)
+		if _, _, configured, err = candidate.PrivacyObjectTargetKeys(); err == nil || !configured {
+			t.Errorf("%s configuration was accepted", name)
+		}
+	}
 	cfg := validConfig()
 	cfg.PrivacyObjectTargetDigestKeyID = "partial"
 	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_OBJECT_TARGET_KEYS") {
@@ -113,6 +137,16 @@ func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
 	invalid.PrivacyTombstoneLocatorKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
 	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "LOCATOR_KEY") {
 		t.Fatalf("invalid locator key error=%v", err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstonePublicKeyB64 = "not-base64"
+	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "PUBLIC_KEY") {
+		t.Fatalf("invalid public key enabled=%t err=%v", enabled, err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstoneLocatorKeyB64 = ""
+	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("partial enabled configuration enabled=%t err=%v", enabled, err)
 	}
 }
 

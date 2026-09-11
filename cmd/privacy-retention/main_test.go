@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -53,5 +54,21 @@ func TestWriteEvidenceFailsOnOldBacklog(t *testing.T) {
 	err := writeEvidence(&output, dbgen.RunPrivacyRetentionRow{}, dbgen.GetPrivacyRetentionStatusRow{DueCount: 1, OldestDueAgeSeconds: maximumBacklogAge + 1})
 	if err == nil || !strings.Contains(output.String(), "privacy_retention_backlog_breach") {
 		t.Fatalf("output=%q error=%v", output.String(), err)
+	}
+}
+
+func TestWriteEvidenceAcceptsHealthyAggregateStatus(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeEvidence(&output, dbgen.RunPrivacyRetentionRow{SessionsDeleted: 1}, dbgen.GetPrivacyRetentionStatusRow{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "privacy_retention_succeeded sessions_deleted=1") || strings.Contains(output.String(), "breach") {
+		t.Fatalf("unexpected healthy evidence %q", output.String())
+	}
+}
+
+func TestRunRejectsDisabledConfigurationBeforeDatabaseAccess(t *testing.T) {
+	if err := run(t.Context(), func(string) string { return "" }, io.Discard); err == nil {
+		t.Fatal("disabled retention run accepted")
 	}
 }

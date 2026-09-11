@@ -20,6 +20,25 @@ type fakeProviderAdapter struct {
 	calls   int
 }
 
+type providerTargetProtectorFailure struct {
+	sealTargetErr, digestTargetErr, sealCredentialErr, digestCredentialErr error
+}
+
+func (s providerTargetProtectorFailure) SealProviderTarget(ProviderTargetBinding, string, []byte) (ProviderTargetEnvelope, error) {
+	return ProviderTargetEnvelope{Version: ProviderTargetEnvelopeVersion, Algorithm: providerTargetAlgorithm, KeyID: "provider-test-encryption",
+		Encapsulation: bytes.Repeat([]byte{1}, 32), Nonce: bytes.Repeat([]byte{2}, 12), Ciphertext: bytes.Repeat([]byte{3}, 32)}, s.sealTargetErr
+}
+func (s providerTargetProtectorFailure) DigestProviderTarget(ProviderTargetBinding, string, []byte) (ProviderTargetDigest, error) {
+	return ProviderTargetDigest{KeyID: "provider-test-digest", Digest: bytes.Repeat([]byte{4}, 32)}, s.digestTargetErr
+}
+func (s providerTargetProtectorFailure) SealProviderCredential(ProviderTargetBinding, string, []byte) (ProviderTargetEnvelope, error) {
+	return ProviderTargetEnvelope{Version: ProviderTargetEnvelopeVersion, Algorithm: providerTargetAlgorithm, KeyID: "provider-test-encryption",
+		Encapsulation: bytes.Repeat([]byte{5}, 32), Nonce: bytes.Repeat([]byte{6}, 12), Ciphertext: bytes.Repeat([]byte{7}, 32)}, s.sealCredentialErr
+}
+func (s providerTargetProtectorFailure) DigestProviderCredential(ProviderTargetBinding, string, []byte) (ProviderTargetDigest, error) {
+	return ProviderTargetDigest{KeyID: "provider-test-credential-digest", Digest: bytes.Repeat([]byte{8}, 32)}, s.digestCredentialErr
+}
+
 func (f *fakeProviderAdapter) EraseOrNotify(_ context.Context, _ ProviderErasureRequest) (ProviderErasureResult, error) {
 	index := f.calls
 	f.calls++
@@ -54,6 +73,53 @@ func TestProviderRegistryIsClosedAndFailsWithoutFactualEvidence(t *testing.T) {
 	}
 	if _, err = NewProviderExecutionRegistry(valid, valid); !errors.Is(err, ErrProviderRegistryUnavailable) {
 		t.Fatalf("duplicate registration error=%v", err)
+	}
+}
+
+func TestProviderBoundaryHelpersFailClosedAndDoNotLeak(t *testing.T) {
+	if RetryableProviderError(nil) != nil {
+		t.Fatal("nil provider error became retryable")
+	}
+	retryable := RetryableProviderError(errors.New("provider secret"))
+	if retryable == nil || retryable.Error() != "provider dependency unavailable" || !isRetryableProviderError(retryable) {
+		t.Fatalf("retryable provider error=%v", retryable)
+	}
+	registry, err := NewProviderExecutionRegistry(providerRegistration(&fakeProviderAdapter{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := providerRegistration(&fakeProviderAdapter{})
+	if got, ok := registry.registration(registration.ServiceCode, registration.Role, registration.ContractVersion,
+		registration.RegistryEvidenceKeyID, registration.RegistryEvidenceDigest); !ok || got.ServiceCode != registration.ServiceCode {
+		t.Fatalf("registration lookup=%+v ok=%t", got, ok)
+	}
+	wrongDigest := bytes.Clone(registration.RegistryEvidenceDigest)
+	wrongDigest[0] ^= 0xff
+	if _, ok := registry.registration(registration.ServiceCode, registration.Role, registration.ContractVersion, registration.RegistryEvidenceKeyID, wrongDigest); ok {
+		t.Fatal("registration accepted the wrong evidence digest")
+	}
+	if _, ok := (*ProviderExecutionRegistry)(nil).registration("service", ProviderRoleProcessor, "contract", "key", bytes.Repeat([]byte{1}, 32)); ok {
+		t.Fatal("nil registry returned a registration")
+	}
+	if _, err = (*X25519ProviderTargetProtector)(nil).DigestProviderTarget(providerTargetTestBinding(), "source", []byte("value")); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("nil target protector error=%v", err)
+	}
+	if _, err = (*X25519ProviderTargetProtector)(nil).DigestProviderCredential(providerTargetTestBinding(), "source", []byte("value")); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("nil credential protector error=%v", err)
+	}
+	if _, err = digestProviderSecret(ProviderTargetBinding{}, "source", []byte("value"), "digest", bytes.Repeat([]byte{1}, 32), "domain", true); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("invalid digest binding error=%v", err)
+	}
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewX25519ProviderTargetProtector("same-key", private.PublicKey().Bytes(), "same-key",
+		bytes.Repeat([]byte{1}, 32), "credential-key", bytes.Repeat([]byte{2}, 32)); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("shared key identifier error=%v", err)
+	}
+	if _, err = OpenProviderTargetEnvelope(nil, providerTargetTestBinding(), providerTargetLocatorVersion, ProviderTargetEnvelope{}); !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("invalid envelope error=%v", err)
 	}
 }
 
@@ -228,4 +294,102 @@ func providerTargetTestBinding() ProviderTargetBinding {
 	return ProviderTargetBinding{ExecutionID: uuid.New(), JobID: uuid.New(), CheckpointID: uuid.New(), TargetID: uuid.New(), PlanEntrySHA256: bytes.Repeat([]byte{1}, 32),
 		Category: "external-provider", Service: "fake-provider", TargetKind: "REMOTE_ACCOUNT", Role: ProviderRoleProcessor, TargetVersion: 3,
 		OperationCode: "PROVIDER_RECIPIENT_NOTIFY", ActionVersion: SupportedActionVersion, ProviderContractVersion: "fake-delete/v1"}
+}
+
+type providerEntropyFailure struct{}
+
+func (providerEntropyFailure) Read([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
+
+type providerNonceEntropyFailure struct{}
+
+func (*providerNonceEntropyFailure) Read(target []byte) (int, error) {
+	if len(target) == 12 {
+		return 0, errors.New("nonce entropy unavailable")
+	}
+	for index := range target {
+		target[index] = 4
+	}
+	return len(target), nil
+}
+
+func TestProviderTargetProtectionFailsClosedAtCryptographicBoundaries(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewX25519ProviderTargetProtector("provider-public-2026", []byte("invalid"),
+		"provider-target-digest-2026", bytes.Repeat([]byte{8}, 32), "provider-credential-digest-2026", bytes.Repeat([]byte{9}, 32)); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("invalid public key error=%v", err)
+	}
+	protector, err := NewX25519ProviderTargetProtector("provider-public-2026", private.PublicKey().Bytes(),
+		"provider-target-digest-2026", bytes.Repeat([]byte{8}, 32), "provider-credential-digest-2026", bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := providerTargetTestBinding()
+	if _, err = (*X25519ProviderTargetProtector)(nil).SealProviderTarget(binding, "source-target-v1", []byte("target")); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("nil protector error=%v", err)
+	}
+	protector.random = providerEntropyFailure{}
+	if _, err = protector.SealProviderTarget(binding, "source-target-v1", []byte("target")); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("ephemeral entropy error=%v", err)
+	}
+	protector.random = &providerNonceEntropyFailure{}
+	if _, err = protector.SealProviderTarget(binding, "source-target-v1", []byte("target")); !errors.Is(err, ErrProviderCaptureFailed) {
+		t.Fatalf("nonce entropy error=%v", err)
+	}
+	protector.random = rand.Reader
+	envelope, err := protector.SealProviderTarget(binding, "source-target-v1", []byte("target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenProviderTargetEnvelope([]byte("invalid"), binding, providerTargetLocatorVersion, envelope); !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("invalid private key error=%v", err)
+	}
+	invalidEncapsulation := envelope
+	invalidEncapsulation.Encapsulation = bytes.Repeat([]byte{1}, 31)
+	if _, err = OpenProviderTargetEnvelope(private.Bytes(), binding, providerTargetLocatorVersion, invalidEncapsulation); !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("invalid encapsulation error=%v", err)
+	}
+	lowOrderEncapsulation := envelope
+	lowOrderEncapsulation.Encapsulation = make([]byte, 32)
+	if _, err = OpenProviderTargetEnvelope(private.Bytes(), binding, providerTargetLocatorVersion, lowOrderEncapsulation); !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("low-order encapsulation error=%v", err)
+	}
+}
+
+func TestProviderWorkerConfigurationAndQueryFailuresAreBounded(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewProviderExecutionRegistry(providerRegistration(&fakeProviderAdapter{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcriptKey := bytes.Repeat([]byte{3}, 32)
+	worker := ProviderExecutionWorker{
+		Pool: activationReadinessStore{}, Registry: registry, WorkerRef: uuid.New(), PrivateKey: private.Bytes(),
+		TranscriptKeyID: "provider-transcript-2026", TranscriptKey: transcriptKey,
+		CredentialDigestKeys: map[string][]byte{"credential-digest-2026": bytes.Repeat([]byte{4}, 32)},
+		AdapterAttempts:      2, AdapterTimeout: 2 * time.Second,
+	}
+	if worker.attempts() != 2 || worker.timeout() != 2*time.Second || !worker.valid() {
+		t.Fatal("valid explicit provider worker configuration rejected")
+	}
+	if validProviderDigestKeyring(nil, worker.TranscriptKeyID, worker.TranscriptKey) {
+		t.Fatal("empty provider digest keyring accepted")
+	}
+	if validProviderDigestKeyring(map[string][]byte{worker.TranscriptKeyID: bytes.Clone(transcriptKey)}, worker.TranscriptKeyID, transcriptKey) {
+		t.Fatal("shared transcript credential key accepted")
+	}
+	if optionalBytes(nil) != nil {
+		t.Fatal("empty optional bytes were not nil")
+	}
+	lease := ExecutionLease{Job: ExecutionJob{PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
+		ID: uuid.New(), ExecutionID: uuid.New(), LeaseEpoch: 1, AttemptCount: 1,
+	}, ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New()}}
+	if _, err = worker.CompleteCheckpoint(context.Background(), lease); !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("query failure error=%v", err)
+	}
 }

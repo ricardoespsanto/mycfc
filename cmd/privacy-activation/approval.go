@@ -18,6 +18,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,6 +26,15 @@ const (
 	approvalMaterialContract = "mycfc/privacy-activation-approval-material/v1"
 	approvalEnvelopeContract = "mycfc/privacy-activation-approval/v1"
 )
+
+type activationBrokerDatabase interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Close()
+}
+
+var openActivationBrokerDatabase = func(ctx context.Context, databaseURL string) (activationBrokerDatabase, error) {
+	return pgxpool.New(ctx, databaseURL)
+}
 
 type approvalMaterial struct {
 	Contract              string      `json:"contract"`
@@ -150,7 +160,7 @@ func verifyApproval(raw []byte, material approvalMaterial, expectedRole, expecte
 }
 
 func prepareApprovalMaterial(ctx context.Context, databaseURL string, release privacyrequests.ActivationReleaseBinding) (approvalMaterial, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	pool, err := openActivationBrokerDatabase(ctx, databaseURL)
 	if err != nil {
 		return approvalMaterial{}, errors.New("open privacy activation broker database")
 	}
@@ -182,7 +192,7 @@ func activateApprovedMaterial(ctx context.Context, databaseURL string, material 
 	activationDigest, _ := hex.DecodeString(material.ActivationSHA256)
 	executorNonceDigest := sha256.Sum256(executorNonce)
 	administratorNonceDigest := sha256.Sum256(administratorNonce)
-	pool, err := pgxpool.New(ctx, databaseURL)
+	pool, err := openActivationBrokerDatabase(ctx, databaseURL)
 	if err != nil {
 		return errors.New("open privacy activation broker database")
 	}

@@ -37,6 +37,39 @@ func legacyPurgeExecutionRequest(runner *LegacyMediaPurge, inventory map[string]
 	return LegacyMediaPurgeRequest{Execute: true, Enabled: true, Confirmation: LegacyMediaPurgeConfirmation, ExpectedInventoryDigest: runner.aggregateDigest(prefixes)}
 }
 
+func TestLegacyMediaPurgeConstructorDefaultsAndOpaqueFormatting(t *testing.T) {
+	client := &s3.Client{}
+	key := bytes.Repeat([]byte{0x71}, 32)
+	runner, err := NewLegacyMediaPurge(client, "private-media", "legacy-purge-key/v1", key)
+	if err != nil || runner.client == nil || runner.bucket != "private-media" || !bytes.Equal(runner.evidenceKey, key) {
+		t.Fatalf("constructor=%+v err=%v", runner, err)
+	}
+	key[0] ^= 0xff
+	if bytes.Equal(runner.evidenceKey, key) {
+		t.Fatal("constructor retained caller-owned key storage")
+	}
+	if pages, entries, passes := runner.limits(); pages != legacyMediaDefaultMaxPages || entries != legacyMediaDefaultMaxEntries || passes != legacyMediaDefaultMaxPasses {
+		t.Fatalf("default limits=%d/%d/%d", pages, entries, passes)
+	}
+	for _, invalid := range []struct {
+		bucket, keyID string
+		key           []byte
+	}{{"", "key", bytes.Repeat([]byte{1}, 32)}, {"private", "-bad", bytes.Repeat([]byte{1}, 32)}, {"private", "key", bytes.Repeat([]byte{1}, 31)}} {
+		if _, err = NewLegacyMediaPurge(client, invalid.bucket, invalid.keyID, invalid.key); !errors.Is(err, ErrLegacyMediaPurgeConfiguration) {
+			t.Fatalf("invalid constructor bucket=%q key=%q err=%v", invalid.bucket, invalid.keyID, err)
+		}
+	}
+	cause := errors.New("provider secret")
+	opaque := legacyMediaOpaqueError{kind: ErrLegacyMediaPurgeInventory, cause: cause}
+	if !errors.Is(opaque, ErrLegacyMediaPurgeInventory) || !errors.Is(opaque, cause) || fmt.Sprintf("%+v", opaque) != ErrLegacyMediaPurgeInventory.Error() {
+		t.Fatalf("opaque error semantics=%v", opaque)
+	}
+	withoutCause := legacyMediaOpaqueError{kind: ErrLegacyMediaPurgeChanged}
+	if !errors.Is(withoutCause, ErrLegacyMediaPurgeChanged) || len(withoutCause.Unwrap()) != 1 {
+		t.Fatalf("cause-free opaque error=%v", withoutCause)
+	}
+}
+
 func TestLegacyMediaPurgeDryRunInventoriesEveryFixedPrefixAcrossPagesWithoutRawKeys(t *testing.T) {
 	secretKey := "profiles/member-identifying-name.png"
 	api := &versionedAPIFake{list: func(input *s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error) {

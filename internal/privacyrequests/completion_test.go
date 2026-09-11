@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -154,6 +155,12 @@ func mapWithoutSignature(document map[string]any) map[string]any {
 
 func TestCompletionWorkerFailsClosedBeforeDatabaseAccess(t *testing.T) {
 	worker := CompletionWorker{WorkerRef: uuid.New(), Key: bytes.Repeat([]byte{1}, sha256.Size), DetailBaseURL: "https://mycfc.example/privacy/completion"}
+	if _, err := worker.ListPending(context.Background(), 10); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil pool list pending error=%v", err)
+	}
+	if _, err := worker.ActivationReady(context.Background()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil pool activation readiness error=%v", err)
+	}
 	if _, err := worker.Complete(context.Background(), uuid.New()); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil pool completion error=%v", err)
 	}
@@ -164,6 +171,23 @@ func TestCompletionWorkerFailsClosedBeforeDatabaseAccess(t *testing.T) {
 		if err := (Service{}).ValidateCompletionLink(context.Background(), token); !errors.Is(err, ErrCompletionLinkUnavailable) {
 			t.Fatalf("invalid validation token %q error=%v", token, err)
 		}
+	}
+}
+
+func TestActivationEvidenceWrappersRejectInvalidInputBeforeDatabaseAccess(t *testing.T) {
+	evidence := VerifiedActivationEvidence{
+		kind: "SCHEMA", digest: bytes.Repeat([]byte{1}, sha256.Size), reference: "mycfc/schema-migration-inventory/v1",
+		observedAt: time.Now().UTC(), expiresAt: time.Now().UTC().Add(time.Hour),
+		artifact: activationArtifactRecord{EvidenceSHA256: bytes.Repeat([]byte{2}, sha256.Size)},
+	}
+	if _, err := (Service{}).RecordActivationEvidence(context.Background(), uuid.New(), evidence); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil pool evidence error=%v", err)
+	}
+	if _, err := (Service{}).VerifyAndRecordActivationArtifact(context.Background(), uuid.New(), []byte("invalid"), nil, ActivationReleaseBinding{}, time.Now()); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("invalid signed artifact error=%v", err)
+	}
+	if _, err := (Service{}).VerifyAndRecordRestoreActivationEvidence(context.Background(), uuid.New(), []byte("invalid"), nil, ActivationReleaseBinding{}, time.Now()); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("invalid restore artifact error=%v", err)
 	}
 }
 
@@ -195,5 +219,145 @@ func TestCompletionWorkerRequiresHTTPSAndStrongKey(t *testing.T) {
 	}
 	if validCompletionBaseURL("http://mycfc.example/privacy/completion") || validCompletionBaseURL("https://mycfc.example/privacy/completion?x=1") {
 		t.Fatal("unsafe completion base URL accepted")
+	}
+}
+
+func TestCompletionDeliveryRejectsCryptographicAndRandomnessFailures(t *testing.T) {
+	key := bytes.Repeat([]byte{3}, sha256.Size)
+	sealed, err := SealDelivery(key, Delivery{Recipient: "captured@example.test", ContactURL: "https://mycfc.example/legal/direitos"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = prepareCompletionDelivery(key[:16], sealed, "https://mycfc.example/privacy/completion", rand.Read); !errors.Is(err, ErrCompletionUnavailable) {
+		t.Fatalf("weak key error=%v", err)
+	}
+	randomFailure := errors.New("entropy unavailable")
+	if _, _, _, err = prepareCompletionDelivery(key, sealed, "https://mycfc.example/privacy/completion", func([]byte) (int, error) {
+		return 0, randomFailure
+	}); !errors.Is(err, randomFailure) {
+		t.Fatalf("random failure error=%v", err)
+	}
+	if _, _, _, err = prepareCompletionDelivery(key, sealed, "https://mycfc.example/privacy/completion", func(target []byte) (int, error) {
+		return copy(target, bytes.Repeat([]byte{1}, len(target)-1)), nil
+	}); !errors.Is(err, ErrCompletionUnavailable) {
+		t.Fatalf("short random read error=%v", err)
+	}
+	if _, _, _, err = prepareCompletionDelivery(key, sealed, "http://mycfc.example/privacy/completion", func(target []byte) (int, error) {
+		return copy(target, bytes.Repeat([]byte{1}, len(target))), nil
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unsafe base URL error=%v", err)
+	}
+}
+
+func TestActivationArtifactSupportsInfrastructureAndSchemaContracts(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	hexDigest := strings.Repeat("a", sha256.Size*2)
+	release := ActivationReleaseBinding{
+		PolicyVersion: "privacy-v1", ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion,
+		ImageDigest: "sha256:" + hexDigest, SchemaMigrationDigest: hexDigest,
+	}
+	base := map[string]any{
+		"result": "SUCCEEDED", "observed_at": now.Add(-time.Hour).Format(time.RFC3339),
+		"policy_version": release.PolicyVersion, "executor_version": release.ExecutorVersion, "plan_schema_version": release.PlanSchemaVersion,
+		"image_digest": release.ImageDigest, "evidence_ref": "s3://evidence/artifact.json?versionId=version-1",
+		"evidence_sha256": hexDigest, "signing_key_id": "activation-key-1",
+	}
+	signedPayload := func(fields map[string]any) []byte {
+		t.Helper()
+		document := make(map[string]any, len(base)+len(fields)+1)
+		for key, value := range base {
+			document[key] = value
+		}
+		for key, value := range fields {
+			document[key] = value
+		}
+		canonical, marshalErr := json.Marshal(document)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		document["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
+		payload, marshalErr := json.Marshal(document)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return payload
+	}
+
+	infrastructure := signedPayload(map[string]any{
+		"contract": "mycfc/privacy-infrastructure-posture/v1", "production_state_serial": 1, "hetzner_state_serial": 2,
+		"production_state_sha256": hexDigest, "hetzner_state_sha256": hexDigest,
+		"production_plan_sha256": hexDigest, "hetzner_plan_sha256": hexDigest,
+		"worker_identity_enabled": true, "s3_version_deletion_enabled": true, "ledger_broker_invoke_enabled": true,
+		"worker_monitoring_enabled": true, "restore_infrastructure_enabled": true, "restore_ledger_write_enabled": true,
+	})
+	evidence, err := VerifyActivationArtifact(infrastructure, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
+	if err != nil || evidence.kind != "INFRASTRUCTURE" || evidence.artifact.WorkerIdentityEnabled == nil || !*evidence.artifact.WorkerIdentityEnabled {
+		t.Fatalf("infrastructure evidence=%+v err=%v", evidence, err)
+	}
+
+	schema := signedPayload(map[string]any{
+		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
+		"baseline_includes_through": "202609100015_privacy_membership_postcondition",
+	})
+	evidence, err = VerifyActivationArtifact(schema, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
+	if err != nil || evidence.kind != "SCHEMA" || evidence.artifact.BaselineIncludesThrough == "" {
+		t.Fatalf("schema evidence=%+v err=%v", evidence, err)
+	}
+	if _, err = VerifyActivationArtifact(signedPayload(map[string]any{
+		"contract": "mycfc/privacy-infrastructure-posture/v1", "production_state_serial": 1, "hetzner_state_serial": 2,
+		"production_state_sha256": hexDigest, "hetzner_state_sha256": hexDigest, "production_plan_sha256": hexDigest, "hetzner_plan_sha256": hexDigest,
+		"worker_identity_enabled": false, "s3_version_deletion_enabled": true, "ledger_broker_invoke_enabled": true,
+		"worker_monitoring_enabled": true, "restore_infrastructure_enabled": true, "restore_ledger_write_enabled": true,
+	}), map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("inactive infrastructure artifact error=%v", err)
+	}
+	if _, err = VerifyActivationArtifact(signedPayload(map[string]any{
+		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
+		"baseline_includes_through": "202609100014_privacy_activation_broker",
+	}), map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("stale schema artifact error=%v", err)
+	}
+
+	for name, payload := range map[string][]byte{
+		"invalid-release":  infrastructure,
+		"malformed-json":   []byte("{"),
+		"unknown-contract": signedPayload(map[string]any{"contract": "mycfc/privacy-unknown/v1"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidateRelease := release
+			candidatePayload := payload
+			if name == "invalid-release" {
+				candidateRelease.ImageDigest = "invalid"
+			}
+			if _, verifyErr := VerifyActivationArtifact(candidatePayload, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, candidateRelease, now); !errors.Is(verifyErr, ErrActivationUnavailable) {
+				t.Fatalf("VerifyActivationArtifact() error=%v", verifyErr)
+			}
+		})
+	}
+}
+
+func TestActivationEvidenceReferenceAndCanonicalJSONBoundaries(t *testing.T) {
+	if validActivationEvidenceRef("s3://bucket/" + strings.Repeat("a", 2048) + "?versionId=v1") {
+		t.Fatal("oversized evidence reference accepted")
+	}
+	for _, value := range []string{"https://bucket/evidence?versionId=v1", "s3:///evidence?versionId=v1", "s3://bucket/evidence#fragment?versionId=v1"} {
+		if validActivationEvidenceRef(value) {
+			t.Fatalf("invalid evidence reference %q accepted", value)
+		}
+	}
+	if _, err := canonicalJSONWithoutField([]byte("{"), "signature"); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("canonical malformed JSON error=%v", err)
+	}
+	release := ActivationReleaseBinding{PolicyVersion: "privacy-v1", ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion,
+		ImageDigest: "sha256:" + strings.Repeat("a", sha256.Size*2), SchemaMigrationDigest: strings.Repeat("a", sha256.Size*2)}
+	if _, err := VerifyRestoreActivationAttestation(nil, bytes.Repeat([]byte{1}, sha256.Size), release, time.Now()); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("empty restore attestation error=%v", err)
+	}
+	if _, err := VerifyRestoreActivationAttestation([]byte("{} {}"), bytes.Repeat([]byte{1}, sha256.Size), release, time.Now()); !errors.Is(err, ErrActivationUnavailable) {
+		t.Fatalf("trailing restore attestation error=%v", err)
 	}
 }

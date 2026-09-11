@@ -135,6 +135,38 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 	}
 }
 
+func TestPostgresProfileStoreConsentCessationFailuresRollback(t *testing.T) {
+	subjectID, consentID, intentID := uuid.New(), uuid.New(), uuid.New()
+	cessationErr := errors.New("consent cessation unavailable")
+	t.Run("health withdrawal", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, medicalDeclaration: "PROVIDED", allergies: "Pólen", queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), ProfileUpdate{
+			ActorID: subjectID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "UNKNOWN"},
+		})
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("health withdrawal err=%v committed=%t", err, tx.committed)
+		}
+	})
+	t.Run("photo supersession", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{
+			ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42),
+			ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true,
+		})
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("photo supersession err=%v committed=%t", err, tx.committed)
+		}
+	})
+	t.Run("photo withdrawal", func(t *testing.T) {
+		oldKey := "profiles/old.png"
+		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID, queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("photo withdrawal err=%v committed=%t", err, tx.committed)
+		}
+	})
+}
+
 func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *testing.T) {
 	subjectID, consentID := uuid.New(), uuid.New()
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, currentConsent: true}

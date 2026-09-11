@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
@@ -75,14 +76,49 @@ type eventSink struct {
 	mu     sync.Mutex
 }
 
+type statusQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type executionRuntime interface {
+	Claim(context.Context) (privacyrequests.ExecutionLease, error)
+	Heartbeat(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobLease, error)
+	CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease, string, string) (dbgen.PrivacyErasureJobCheckpoint, error)
+	CompleteJob(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureExecution, error)
+	FailJob(context.Context, privacyrequests.ExecutionLease, privacyrequests.ExecutionFailure) (dbgen.PrivacyErasureExecution, error)
+}
+
+type uploadCleanupRuntime interface {
+	RunOnce(context.Context) (bool, error)
+}
+
+type objectExecutionRuntime interface {
+	CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error)
+}
+
+type tombstoneRuntime interface {
+	Export(context.Context, privacyrequests.ExecutionLease) error
+	ExportClosure(context.Context, uuid.UUID) error
+}
+
+type completionRuntime interface {
+	ActivationReady(context.Context) (bool, error)
+	ListPending(context.Context, int32) ([]uuid.UUID, error)
+	Complete(context.Context, uuid.UUID) (privacyrequests.CompletionResult, error)
+}
+
+type eventRuntime interface {
+	emit(context.Context, string, map[string]int64) error
+}
+
 type runtime struct {
-	pool           *pgxpool.Pool
-	execution      privacyrequests.ExecutionWorker
-	uploadCleanup  privacyrequests.UploadCleanupWorker
-	objects        privacyrequests.ObjectExecutionWorker
-	tombstones     privacyrequests.TombstoneExportWorker
-	completion     privacyrequests.CompletionWorker
-	events         *eventSink
+	pool           statusQueryer
+	execution      executionRuntime
+	uploadCleanup  uploadCleanupRuntime
+	objects        objectExecutionRuntime
+	tombstones     tombstoneRuntime
+	completion     completionRuntime
+	events         eventRuntime
 	pollInterval   time.Duration
 	statusInterval time.Duration
 }

@@ -57,6 +57,28 @@ func TestReplayAuthenticationDiscoversV2IdentityFromOpaqueLocator(t *testing.T) 
 	}
 }
 
+func TestAuthenticatedReplayOpaqueIdentityAndEqualityAreStable(t *testing.T) {
+	record := tombstoneFixture()
+	record.SyntheticFixture = SyntheticRestoreFixtureV1
+	base := AuthenticatedReplayTombstone{
+		kind: "closure", closureVersion: TombstoneClosureVersion, record: record,
+		basePrescriptionSHA256: bytes.Repeat([]byte{0x61}, sha256.Size),
+	}
+	copy := base
+	if base.OpaqueReplayID() == "" || base.OpaqueReplayID() != copy.OpaqueReplayID() || !base.IsClosure() || !base.IsCurrentClosure() || !base.IsSynthetic() || !base.SameReplay(copy) {
+		t.Fatalf("authenticated replay helpers rejected equivalent values: %+v", base)
+	}
+	copy.record.RequestRef = uuid.New()
+	if base.SameReplay(copy) {
+		t.Fatal("different source request was treated as the same replay")
+	}
+	intent := base
+	intent.kind = "intent"
+	if intent.IsClosure() || intent.IsCurrentClosure() {
+		t.Fatal("intent was classified as a closure")
+	}
+}
+
 func TestReplayAuthenticationRequiresExactClosureRetention(t *testing.T) {
 	protector, privateKey := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()

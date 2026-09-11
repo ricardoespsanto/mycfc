@@ -26,12 +26,16 @@ import (
 )
 
 type replayEngineFake struct {
-	results     []privacyrequests.TombstoneReplayResult
-	err         error
-	calls       int
-	schemaCalls int
-	recordCalls int
-	closure     bool
+	results      []privacyrequests.TombstoneReplayResult
+	err          error
+	replayErr    error
+	schemaErr    error
+	recordErr    error
+	schemaDigest string
+	calls        int
+	schemaCalls  int
+	recordCalls  int
+	closure      bool
 }
 
 func TestMembershipPostconditionSetDigestIsOrderStableAndBindsAllDigests(t *testing.T) {
@@ -55,6 +59,9 @@ var testReplayBindings = replayBindings{PolicyVersion: "policy-v1", ExecutorVers
 func (f *replayEngineFake) Replay(_ context.Context, authenticated privacyrequests.AuthenticatedReplayTombstone) (privacyrequests.TombstoneReplayResult, error) {
 	f.calls++
 	f.closure = authenticated.IsClosure()
+	if f.replayErr != nil {
+		return privacyrequests.TombstoneReplayResult{}, f.replayErr
+	}
 	if f.err != nil {
 		return privacyrequests.TombstoneReplayResult{}, f.err
 	}
@@ -63,14 +70,23 @@ func (f *replayEngineFake) Replay(_ context.Context, authenticated privacyreques
 
 func (f *replayEngineFake) SchemaMigrationDigest(context.Context) (string, error) {
 	f.schemaCalls++
+	if f.schemaErr != nil {
+		return "", f.schemaErr
+	}
 	if f.err != nil {
 		return "", f.err
+	}
+	if f.schemaDigest != "" {
+		return f.schemaDigest, nil
 	}
 	return strings.Repeat("a", 64), nil
 }
 
 func (f *replayEngineFake) RecordAttestation(context.Context, replayAttestation, []uuid.UUID) error {
 	f.recordCalls++
+	if f.recordErr != nil {
+		return f.recordErr
+	}
 	return f.err
 }
 
@@ -354,11 +370,25 @@ func TestLedgerInventoryDigestIsMetadataOnlyCanonicalAndStrict(t *testing.T) {
 	if _, err = readLedgerInventory(path); err == nil {
 		t.Fatal("payload tampering passed ciphertext checksum verification")
 	}
+	second := objects[0]
+	second.ObjectVersion = "another-version"
+	if _, err = inventoryMetadataDigest([]ledgerInventoryObject{objects[0], second}); err != nil {
+		t.Fatalf("same key with distinct immutable versions rejected: %v", err)
+	}
+	if _, err = inventoryMetadataDigest([]ledgerInventoryObject{objects[0], objects[0]}); err == nil {
+		t.Fatal("duplicate ledger object accepted")
+	}
 }
 
 func TestCommandRequiresExplicitIsolationAndOwnerOnlyKey(t *testing.T) {
 	if _, err := parseCommand([]string{"--ledger-input", "in", "--private-key-file", "key", "--attestation-output", "out"}); err == nil {
 		t.Fatal("missing isolated restore mode accepted")
+	}
+	if _, err := parseCommand([]string{"--isolated-restore", "--private-key-file", "key", "--bootstrap-synthetic-fixture"}); err == nil {
+		t.Fatal("synthetic bootstrap without output accepted")
+	}
+	if _, err := parseCommand([]string{"--isolated-restore", "--private-key-file", "key"}); err == nil {
+		t.Fatal("normal replay without input and attestation accepted")
 	}
 	request, err := parseCommand([]string{"--isolated-restore", "--ledger-input", "in", "--private-key-file", "key", "--attestation-output", "out",
 		"--policy-version", "policy-v1", "--executor-version", "executor-v1", "--plan-schema-version", "plan-v1", "--image-digest", "sha256:" + strings.Repeat("a", 64)})
@@ -404,4 +434,185 @@ func TestExecuteReplayFailsClosedOnDatabaseFailure(t *testing.T) {
 	if _, err = executeReplay(t.Context(), ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}, privateKey, engine, testReplayBindings); err == nil || strings.Contains(err.Error(), "database details") {
 		t.Fatalf("error=%v", err)
 	}
+}
+
+func TestExecuteReplayFailureBoundariesAfterCurrentClosurePreflight(t *testing.T) {
+	inventory, privateKey, validResult := currentReplayInventory(t)
+	if _, err := executeReplay(t.Context(), inventory, privateKey, &replayEngineFake{}, replayBindings{}); err == nil {
+		t.Fatal("invalid release bindings accepted")
+	}
+	syntheticMismatch := inventory
+	syntheticMismatch.Source = "SYNTHETIC_BOOTSTRAP"
+	if _, err := executeReplay(t.Context(), syntheticMismatch, privateKey, &replayEngineFake{}, testReplayBindings); err == nil {
+		t.Fatal("synthetic source accepted a live closure")
+	}
+	tests := []struct {
+		name   string
+		engine *replayEngineFake
+	}{
+		{"replay", &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{validResult}, replayErr: errors.New("unavailable")}},
+		{"postcondition", &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{{RunID: uuid.New(), ClosureVersion: privacyrequests.TombstoneClosureVersion}}}},
+		{"schema error", &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{validResult}, schemaErr: errors.New("unavailable")}},
+		{"schema digest", &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{validResult}, schemaDigest: "invalid"}},
+		{"record", &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{validResult}, recordErr: errors.New("unavailable")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := executeReplay(t.Context(), inventory, privateKey, test.engine, testReplayBindings); err == nil {
+				t.Fatal("failure boundary accepted")
+			}
+		})
+	}
+}
+
+func TestExecuteReplayRejectsLegacyOnlyAndInvalidResultVersions(t *testing.T) {
+	_, privateKey, _ := currentReplayInventory(t)
+	legacyPayload, err := json.Marshal(privacyrequests.TombstoneEnvelope{
+		Version: privacyrequests.TombstoneEnvelopeVersionV1, Algorithm: "X25519-HKDF-SHA256-AES-256-GCM", KeyID: "legacy-key-v1",
+		Encapsulation: bytes.Repeat([]byte{0x51}, 32), Nonce: bytes.Repeat([]byte{0x52}, 12), Ciphertext: bytes.Repeat([]byte{0x53}, 16),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDigest := sha256.Sum256(legacyPayload)
+	legacyObject := ledgerInventoryObject{KeySHA256: strings.Repeat("f", 64), ObjectVersion: "legacy-version", CiphertextSHA256: hex.EncodeToString(legacyDigest[:]),
+		SizeBytes: int64(len(legacyPayload)), Payload: legacyPayload, WrittenAt: time.Now().UTC(), VerifiedAt: time.Now().UTC()}
+	legacyInventory := ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", Objects: []ledgerInventoryObject{legacyObject}}
+	if _, err = executeReplay(t.Context(), legacyInventory, privateKey, &replayEngineFake{}, testReplayBindings); err == nil {
+		t.Fatal("legacy-only inventory accepted")
+	}
+
+	inventory, privateKey, result := currentReplayInventory(t)
+	for name, closureVersion := range map[string]string{"legacy closure": privacyrequests.TombstoneClosureVersionV2, "intent result": "intent"} {
+		t.Run(name, func(t *testing.T) {
+			changed := result
+			changed.ClosureVersion = closureVersion
+			if _, replayErr := executeReplay(t.Context(), inventory, privateKey, &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{changed}}, testReplayBindings); replayErr == nil {
+				t.Fatal("non-current replay result accepted")
+			}
+		})
+	}
+	result.AlreadyApplied = true
+	attestation, err := executeReplay(t.Context(), inventory, privateKey, &replayEngineFake{results: []privacyrequests.TombstoneReplayResult{result}}, testReplayBindings)
+	if err != nil || attestation.AlreadyAppliedCount != 1 || attestation.ImportedCount != 0 {
+		t.Fatalf("already-applied attestation=%+v error=%v", attestation, err)
+	}
+}
+
+func TestReplayInputOutputAndCommandFailureBoundaries(t *testing.T) {
+	inventory, privateKey, _ := currentReplayInventory(t)
+	directory := t.TempDir()
+	ledgerPath := filepath.Join(directory, "ledger.json")
+	if err := writeLedgerInventory(ledgerPath, inventory); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := readLedgerInventory(ledgerPath)
+	if err != nil || loaded.InventorySHA256 != inventory.InventorySHA256 {
+		t.Fatalf("loaded inventory=%+v error=%v", loaded, err)
+	}
+	if err = writeLedgerInventory(ledgerPath, inventory); err == nil {
+		t.Fatal("ledger output was overwritten")
+	}
+	attestationPath := filepath.Join(directory, "attestation.json")
+	attestation := replayAttestation{Contract: replayResultContract, Result: "SUCCEEDED", InventorySHA256: inventory.InventorySHA256}
+	if err = writeAttestation(attestationPath, attestation); err != nil {
+		t.Fatal(err)
+	}
+	if err = writeAttestation(attestationPath, attestation); err == nil {
+		t.Fatal("attestation output was overwritten")
+	}
+
+	for name, payload := range map[string][]byte{
+		"empty":    nil,
+		"trailing": append(mustJSON(t, inventory), []byte(` {}`)...),
+		"digest": func() []byte {
+			changed := inventory
+			changed.InventorySHA256 = strings.Repeat("0", 64)
+			return mustJSON(t, changed)
+		}(),
+		"metadata": func() []byte {
+			changed := inventory
+			changed.Objects = append([]ledgerInventoryObject(nil), inventory.Objects...)
+			changed.Objects[0].ObjectVersion = ""
+			changed.InventorySHA256, _ = inventoryMetadataDigest(changed.Objects)
+			return mustJSON(t, changed)
+		}(),
+	} {
+		path := filepath.Join(directory, name+".json")
+		if err = os.WriteFile(path, payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = readLedgerInventory(path); err == nil {
+			t.Fatalf("invalid ledger input accepted: %s", name)
+		}
+	}
+	if _, err = readLedgerInventory(filepath.Join(directory, "missing.json")); err == nil {
+		t.Fatal("missing ledger input accepted")
+	}
+	badKey := filepath.Join(directory, "bad.key")
+	if err = os.WriteFile(badKey, []byte("not-base64"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readPrivateKey(badKey); err == nil {
+		t.Fatal("invalid private key accepted")
+	}
+	if policyValue("") || policyValue("bad value") || !policyValue("policy-v1") {
+		t.Fatal("policy value validation mismatch")
+	}
+
+	if err = run(t.Context(), nil); err == nil {
+		t.Fatal("invalid command accepted")
+	}
+	missingKeyArgs := []string{"--isolated-restore", "--ledger-input", ledgerPath, "--private-key-file", filepath.Join(directory, "missing-private.key"),
+		"--attestation-output", filepath.Join(directory, "missing-key-attestation.json"), "--policy-version", "policy-v1", "--executor-version", "executor-v1",
+		"--plan-schema-version", "plan-v1", "--image-digest", "sha256:" + strings.Repeat("a", 64)}
+	if err = run(t.Context(), missingKeyArgs); err == nil {
+		t.Fatal("missing private replay key accepted")
+	}
+	if err = (databaseReplayEngine{}).RecordAttestation(t.Context(), replayAttestation{InventorySHA256: "invalid"}, nil); err == nil {
+		t.Fatal("invalid attestation inventory digest accepted")
+	}
+	keyPath := filepath.Join(directory, "private.key")
+	if err = os.WriteFile(keyPath, []byte(base64.StdEncoding.EncodeToString(privateKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--isolated-restore", "--ledger-input", ledgerPath, "--private-key-file", keyPath, "--attestation-output", filepath.Join(directory, "run-attestation.json"),
+		"--policy-version", "policy-v1", "--executor-version", "executor-v1", "--plan-schema-version", "plan-v1", "--image-digest", "sha256:" + strings.Repeat("a", 64)}
+	t.Setenv("DATABASE_URL", "")
+	if err = run(t.Context(), args); err == nil {
+		t.Fatal("missing database URL accepted")
+	}
+	t.Setenv("DATABASE_URL", "://invalid")
+	if err = run(t.Context(), args); err == nil {
+		t.Fatal("invalid database URL accepted")
+	}
+}
+
+func currentReplayInventory(t *testing.T) (ledgerInventory, []byte, privacyrequests.TombstoneReplayResult) {
+	t.Helper()
+	protector, privateKey, record := replayFixture(t)
+	record = currentClosureRecord(record)
+	closedAt := record.ExecutionStart.Add(time.Hour)
+	closure, err := protector.SealClosure(privacyrequests.TombstoneClosure{Version: privacyrequests.TombstoneClosureVersion, Tombstone: record,
+		ClosedAt: closedAt, EvidenceExpiresAt: closedAt.AddDate(0, 24, 0), ErasureEffectiveAt: record.ExecutionStart})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := []ledgerInventoryObject{inventoryObject(closure, 0x31)}
+	digest, err := inventoryMetadataDigest(objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := privacyrequests.TombstoneReplayResult{RunID: uuid.New(), ClosureVersion: privacyrequests.TombstoneClosureVersion,
+		MembershipHistoryPostcondition: *record.Replay.MembershipHistoryPostcondition}
+	return ledgerInventory{Contract: ledgerInputContract, Source: "LIVE_LEDGER", InventorySHA256: digest, Objects: objects}, privateKey, result
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }

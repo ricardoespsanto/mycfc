@@ -79,6 +79,58 @@ func tombstoneProtectorFixture(t *testing.T) (*TombstoneProtector, []byte) {
 	return protector, private.Bytes()
 }
 
+func TestTombstoneConstructorAndLegacyEnvelopeBoundaries(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locatorKey := bytes.Repeat([]byte{0x35}, sha256.Size)
+	protector, err := NewTombstoneProtector("restore-key", private.PublicKey().Bytes(), "locator-key", locatorKey)
+	if err != nil || protector.publicKey == nil || !bytes.Equal(protector.locatorKey, locatorKey) {
+		t.Fatalf("protector=%+v err=%v", protector, err)
+	}
+	locatorKey[0] ^= 0xff
+	if bytes.Equal(protector.locatorKey, locatorKey) {
+		t.Fatal("protector retained caller-owned locator key storage")
+	}
+	for _, test := range []struct {
+		keyID, locatorID string
+		public, locator  []byte
+	}{{"", "locator", private.PublicKey().Bytes(), bytes.Repeat([]byte{1}, 32)}, {"key", "", private.PublicKey().Bytes(), bytes.Repeat([]byte{1}, 32)}, {"key", "locator", []byte("bad"), bytes.Repeat([]byte{1}, 32)}, {"key", "locator", private.PublicKey().Bytes(), bytes.Repeat([]byte{1}, 31)}} {
+		if _, err = NewTombstoneProtector(test.keyID, test.public, test.locatorID, test.locator); !errors.Is(err, ErrTombstoneInvalid) {
+			t.Fatalf("invalid constructor %+v err=%v", test, err)
+		}
+	}
+	record := tombstoneFixture()
+	record.Version = TombstoneRecordVersionV1
+	record.Replay = nil
+	legacy := sealLegacyTombstoneForTest(t, private.PublicKey(), record)
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsLegacyTombstoneEnvelope(encoded) {
+		t.Fatal("valid bounded v1 envelope was not recognized")
+	}
+	for _, invalid := range [][]byte{nil, []byte("{}"), append(encoded, []byte(" trailing")...)} {
+		if IsLegacyTombstoneEnvelope(invalid) {
+			t.Fatalf("invalid legacy envelope was recognized: %q", invalid)
+		}
+	}
+	if _, err = OpenRestoreTombstone(private.Bytes(), record.ExecutionID, TombstoneEnvelope{}); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("wrong legacy envelope version error=%v", err)
+	}
+	if _, err = OpenRestoreTombstoneClosure(private.Bytes(), record.ExecutionID, TombstoneEnvelope{}); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("wrong legacy closure version error=%v", err)
+	}
+	if _, err = (*TombstoneProtector)(nil).Seal(tombstoneFixture()); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("nil intent protector error=%v", err)
+	}
+	if _, err = (*TombstoneProtector)(nil).SealClosure(TombstoneClosure{}); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("nil closure protector error=%v", err)
+	}
+}
+
 func TestTombstoneEnvelopeIsRandomizedBoundAndRoundTrips(t *testing.T) {
 	protector, private := tombstoneProtectorFixture(t)
 	record := tombstoneFixture()
@@ -108,6 +160,71 @@ func TestTombstoneEnvelopeIsRandomizedBoundAndRoundTrips(t *testing.T) {
 	if _, err = OpenRestoreTombstoneV2(private, first.LocatorKeyID, first.Locator, tampered); !errors.Is(err, ErrTombstoneInvalid) {
 		t.Fatalf("tampered envelope error=%v", err)
 	}
+}
+
+func TestTombstoneCryptographicAndDecodedPayloadBoundariesFailClosed(t *testing.T) {
+	protector, private := tombstoneProtectorFixture(t)
+	record := tombstoneFixture()
+	protector.random = providerEntropyFailure{}
+	if _, err := protector.Seal(record); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("ephemeral entropy error=%v", err)
+	}
+	protector.random = &providerNonceEntropyFailure{}
+	if _, err := protector.Seal(record); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("nonce entropy error=%v", err)
+	}
+	protector.random = rand.Reader
+	sealed, err := protector.Seal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenRestoreTombstoneV2([]byte("invalid"), sealed.LocatorKeyID, sealed.Locator, sealed.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("invalid private key error=%v", err)
+	}
+	invalidEncapsulation := sealed.Envelope
+	invalidEncapsulation.Encapsulation = bytes.Repeat([]byte{1}, 31)
+	if _, err = OpenRestoreTombstoneV2(private, sealed.LocatorKeyID, sealed.Locator, invalidEncapsulation); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("invalid encapsulation error=%v", err)
+	}
+	lowOrderEncapsulation := sealed.Envelope
+	lowOrderEncapsulation.Encapsulation = make([]byte, 32)
+	if _, err = OpenRestoreTombstoneV2(private, sealed.LocatorKeyID, sealed.Locator, lowOrderEncapsulation); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("low-order encapsulation error=%v", err)
+	}
+	invalidNonce := sealed.Envelope
+	invalidNonce.Nonce = invalidNonce.Nonce[:len(invalidNonce.Nonce)-1]
+	if _, err = OpenRestoreTombstoneV2(private, sealed.LocatorKeyID, sealed.Locator, invalidNonce); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("invalid nonce error=%v", err)
+	}
+
+	malformedIntent, err := protector.seal("intent", record.ExecutionID, []byte("{"), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenRestoreTombstoneV2(private, malformedIntent.LocatorKeyID, malformedIntent.Locator, malformedIntent.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("malformed intent error=%v", err)
+	}
+	malformedClosure, err := protector.seal("closure", record.ExecutionID, []byte("{"), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenRestoreTombstoneClosureV2(private, malformedClosure.LocatorKeyID, malformedClosure.Locator, malformedClosure.Envelope); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("malformed closure error=%v", err)
+	}
+
+	legacy := sealLegacyPayloadForTest(t, mustX25519PublicKey(t, private), "intent", record.ExecutionID, "{")
+	if _, err = OpenRestoreTombstone(private, record.ExecutionID, legacy); !errors.Is(err, ErrTombstoneInvalid) {
+		t.Fatalf("malformed legacy intent error=%v", err)
+	}
+}
+
+func mustX25519PublicKey(t *testing.T, private []byte) *ecdh.PublicKey {
+	t.Helper()
+	key, err := ecdh.X25519().NewPrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key.PublicKey()
 }
 
 func TestClosureIsSeparateAndUsesExactCalendarEvidenceExpiry(t *testing.T) {

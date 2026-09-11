@@ -291,4 +291,41 @@ func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
 			t.Errorf("detail error target missing %q: %+v", want, targets)
 		}
 	}
+	for status, want := range map[string]string{
+		"PENDING": "Pendente", "LEASED": "Em processamento", "RUNNING": "Em processamento", "PROCESSING": "Em processamento",
+		"RETRYABLE_FAILED": "Nova tentativa pendente", "TERMINAL_FAILED": "Intervenção necessária",
+		"SUCCEEDED": "Concluído", "COMPLETED": "Concluído", "UNKNOWN": "Estado indisponível",
+	} {
+		if got := privacyControlStatus(status); got != want {
+			t.Errorf("control status %s=%q want=%q", status, got, want)
+		}
+	}
+	for stage, want := range map[string]string{"SYNC": "Sincronização", "EXECUTE": "Execução", "VERIFY": "Verificação", "UNKNOWN": "Etapa protegida"} {
+		if got := privacyFailureStage(stage); got != want {
+			t.Errorf("failure stage %s=%q want=%q", stage, got, want)
+		}
+	}
+	for code, want := range map[string]string{
+		"ACTION_FAILED":          "ACTION_FAILED — a operação não terminou",
+		"DEPENDENCY_UNAVAILABLE": "DEPENDENCY_UNAVAILABLE — dependência indisponível",
+		"UNSUPPORTED_OPERATION":  "UNSUPPORTED_OPERATION — operação não suportada",
+		"VERIFICATION_FAILED":    "VERIFICATION_FAILED — verificação sem sucesso",
+		"RETRY_LIMIT_REACHED":    "RETRY_LIMIT_REACHED — limite de tentativas atingido",
+		"UNKNOWN":                "OPERATIONAL_FAILURE — falha operacional protegida",
+	} {
+		if got := privacyFailureCode(code); got != want {
+			t.Errorf("failure code %s=%q want=%q", code, got, want)
+		}
+	}
+	for kind, want := range map[string]string{
+		"RESTORE": "Restauro isolado", "INFRASTRUCTURE": "Infraestrutura", "PROVIDER": "Destinatários externos",
+		"SCHEMA": "Esquema de dados", "UNKNOWN": "Evidência não reconhecida",
+	} {
+		if got := privacyEvidenceKind(kind); got != want {
+			t.Errorf("evidence kind %s=%q want=%q", kind, got, want)
+		}
+	}
+	if privacyReadyLabel(true) != "Ativo" || privacyReadyLabel(false) != "Inativo" || privacyCount(42) != "42" {
+		t.Fatal("privacy operational label helpers changed")
+	}
 }

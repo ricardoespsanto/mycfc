@@ -28,7 +28,7 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer adminConn.Close(ctx)
+	t.Cleanup(func() { _ = adminConn.Close(context.Background()) })
 	t.Cleanup(func() {
 		cleanup, cleanupErr := pgx.Connect(context.Background(), dsn)
 		if cleanupErr == nil {
@@ -37,13 +37,64 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 			_ = cleanup.Close(context.Background())
 		}
 	})
-	const brokerPassword = "integration-only-activation-broker"
-	if _, err = adminConn.Exec(ctx, `DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_activation_broker') THEN CREATE ROLE mycfc_privacy_activation_broker LOGIN NOINHERIT NOBYPASSRLS; END IF; END $$;
-		ALTER ROLE mycfc_privacy_activation_broker WITH LOGIN NOINHERIT NOBYPASSRLS PASSWORD '`+brokerPassword+`';
-		GRANT CONNECT ON DATABASE `+quoteIdentifier(adminConn.Config().Database)+` TO mycfc_privacy_activation_broker;
-		GRANT USAGE ON SCHEMA public TO mycfc_privacy_activation_broker;
-		GRANT EXECUTE ON FUNCTION privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb),privacy_activation_broker_material(text),privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) TO mycfc_privacy_activation_broker`); err != nil {
+	brokerIdentifier := quoteIdentifier(privacyActivationBrokerRole)
+	var brokerRoleExists bool
+	if err = adminConn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)`, privacyActivationBrokerRole).Scan(&brokerRoleExists); err != nil {
 		t.Fatal(err)
+	}
+	if !brokerRoleExists {
+		if _, err = adminConn.Exec(ctx, `CREATE ROLE `+brokerIdentifier+` NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			cleanup, cleanupErr := pgx.Connect(context.Background(), dsn)
+			if cleanupErr != nil {
+				t.Errorf("connect to remove activation broker role: %v", cleanupErr)
+				return
+			}
+			defer cleanup.Close(context.Background())
+			if _, cleanupErr = cleanup.Exec(context.Background(), `DROP OWNED BY `+brokerIdentifier); cleanupErr != nil {
+				t.Errorf("drop activation broker privileges: %v", cleanupErr)
+				return
+			}
+			if _, cleanupErr = cleanup.Exec(context.Background(), `DROP ROLE `+brokerIdentifier); cleanupErr != nil {
+				t.Errorf("drop activation broker role: %v", cleanupErr)
+			}
+		})
+	}
+	ensurePrivilege := func(checkQuery string, checkArgs []any, grant, revoke string) {
+		t.Helper()
+		var granted bool
+		if checkErr := adminConn.QueryRow(ctx, checkQuery, checkArgs...).Scan(&granted); checkErr != nil {
+			t.Fatal(checkErr)
+		}
+		if granted {
+			return
+		}
+		if _, grantErr := adminConn.Exec(ctx, grant); grantErr != nil {
+			t.Fatal(grantErr)
+		}
+		if brokerRoleExists {
+			t.Cleanup(func() {
+				if _, cleanupErr := adminConn.Exec(context.Background(), revoke); cleanupErr != nil {
+					t.Errorf("restore activation broker privilege: %v", cleanupErr)
+				}
+			})
+		}
+	}
+	ensurePrivilege(`SELECT has_database_privilege($1,$2,'CONNECT')`, []any{privacyActivationBrokerRole, adminConn.Config().Database},
+		`GRANT CONNECT ON DATABASE `+quoteIdentifier(adminConn.Config().Database)+` TO `+brokerIdentifier,
+		`REVOKE CONNECT ON DATABASE `+quoteIdentifier(adminConn.Config().Database)+` FROM `+brokerIdentifier)
+	ensurePrivilege(`SELECT has_schema_privilege($1,'public','USAGE')`, []any{privacyActivationBrokerRole},
+		`GRANT USAGE ON SCHEMA public TO `+brokerIdentifier, `REVOKE USAGE ON SCHEMA public FROM `+brokerIdentifier)
+	for _, routine := range []string{
+		"privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)",
+		"privacy_activation_broker_material(text)",
+		"privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)",
+	} {
+		ensurePrivilege(`SELECT has_function_privilege($1,$2,'EXECUTE')`, []any{privacyActivationBrokerRole, routine},
+			`GRANT EXECUTE ON FUNCTION `+routine+` TO `+brokerIdentifier,
+			`REVOKE EXECUTE ON FUNCTION `+routine+` FROM `+brokerIdentifier)
 	}
 
 	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
@@ -80,16 +131,14 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 		}
 	}
 
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.User, config.Password = privacyActivationBrokerRole, brokerPassword
-	brokerConn, err := pgx.ConnectConfig(ctx, config)
+	brokerConn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer brokerConn.Close(ctx)
+	if _, err = brokerConn.Exec(ctx, `SET SESSION AUTHORIZATION `+brokerIdentifier); err != nil {
+		t.Fatal(err)
+	}
 	var evidenceIDs []uuid.UUID
 	var evidenceDigest, activationDigest, schemaDigest []byte
 	var executorVersion, planVersion, materialImage string
