@@ -3,6 +3,8 @@ package guardianauthority
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 )
 
@@ -33,5 +35,12 @@ func TestWorkerTreatsReconciliationFailureAsRetryable(t *testing.T) {
 	(Worker{Store: store}).Run(ctx)
 	if store.calls != 1 {
 		t.Fatalf("calls = %d, want 1", store.calls)
+	}
+}
+
+func TestWorkerUsesInjectedLogger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if got := (Worker{Logger: logger}).logger(); got != logger {
+		t.Fatal("injected logger was not returned")
 	}
 }

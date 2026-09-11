@@ -467,6 +467,19 @@ func TestMemberMembershipMapsSeasonProgrammeAndWriteFailures(t *testing.T) {
 	}
 }
 
+func TestMemberMembershipEndingMissingRowIsNotFound(t *testing.T) {
+	memberID, programmeID := uuid.New(), uuid.New()
+	store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New()}, programmes: []dbgen.Programme{{ID: programmeID}}, endAffected: 0}
+	request := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/inscricao", strings.NewReader("programme_id="+programmeID.String()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetPathValue("id", memberID.String())
+	response := httptest.NewRecorder()
+	(Members{Store: store, Location: time.UTC}).Membership(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
 type memberStoreFake struct{}
 
 type memberWorkflowStore struct {
@@ -487,6 +500,8 @@ type memberWorkflowStore struct {
 	createdSeason      dbgen.CreateSeasonParams
 	programmesErr      error
 	membershipErr      error
+	endAffected        int64
+	endErr             error
 }
 
 func (s *memberWorkflowStore) GetCurrentSeason(context.Context) (dbgen.Season, error) {
@@ -509,6 +524,9 @@ func (s *memberWorkflowStore) ListMembershipProgrammes(context.Context) ([]dbgen
 func (s *memberWorkflowStore) UpsertCurrentSeasonMembership(_ context.Context, params dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UserMembership, error) {
 	s.membership = params
 	return dbgen.UserMembership{}, s.membershipErr
+}
+func (s *memberWorkflowStore) EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error) {
+	return s.endAffected, s.endErr
 }
 func (s *memberWorkflowStore) DeactivateMemberForAdmin(_ context.Context, id uuid.UUID) (int64, error) {
 	s.deactivated = id

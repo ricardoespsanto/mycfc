@@ -671,6 +671,74 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	}
 }
 
+func TestPostgresGuardianAuthorityStoreCoversVerifierLifecycle(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	createAdult := func(name string) dbgen.CreateAdultUserRow {
+		email := strings.ToLower(strings.ReplaceAll(name, " ", "-")) + "-" + uuid.NewString() + "@example.test"
+		account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: name, Email: &email, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return account
+	}
+	administrator := createAdult("Authority admin")
+	verifier := createAdult("Authority verifier")
+	guardian := createAdult("Authority guardian")
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: administrator.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, administrator.ID)
+	if _, err := pool.Exec(ctx, `SELECT guardian_authority_grant_verifier($1,$2)`, administrator.ID, verifier.ID); err != nil {
+		t.Fatal(err)
+	}
+	dependentStore := PostgresGuardianDependentStore{Pool: pool}
+	if err := dependentStore.CreateDependent(ctx, GuardianDependentInput{GuardianID: guardian.ID, Name: "Authority subject", DateOfBirth: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("d", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	store := PostgresGuardianAuthorityStore{DB: pool}
+	available, err := store.PolicyAvailable(ctx)
+	if err != nil || !available {
+		t.Fatalf("policy available=%t err=%v", available, err)
+	}
+	evidenceTypes, err := store.EvidenceTypes(ctx)
+	if err != nil || len(evidenceTypes) != 1 || evidenceTypes[0].Code != "TEST_EVIDENCE" {
+		t.Fatalf("evidence types=%#v err=%v", evidenceTypes, err)
+	}
+	reasons, err := store.ReasonCodes(ctx)
+	if err != nil || len(reasons) == 0 {
+		t.Fatalf("reason codes=%#v err=%v", reasons, err)
+	}
+	pending, err := store.ListPending(ctx, verifier.ID, 100, 0)
+	if err != nil {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+	var relationship GuardianAuthorityRelationship
+	for _, candidate := range pending {
+		if candidate.GuardianID == guardian.ID {
+			relationship = candidate
+			break
+		}
+	}
+	if relationship.Reference == uuid.Nil {
+		t.Fatalf("created relationship missing from pending queue: %#v", pending)
+	}
+	detail, err := store.GetForVerifier(ctx, relationship.Reference, verifier.ID)
+	if err != nil || detail.StoredState != "PENDING" || detail.GuardianName == "" {
+		t.Fatalf("detail=%#v err=%v", detail, err)
+	}
+	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: detail.Version, Action: "VERIFY", EvidenceType: "TEST_EVIDENCE", EvidenceReference: "integration/" + detail.Reference.String(), EvidenceDigest: make([]byte, 32), ReasonCode: "EVIDENCE_CONFIRMED"}); err != nil {
+		t.Fatal(err)
+	}
+	relationships, err := store.ListForGuardian(ctx, guardian.ID, 10)
+	if err != nil || len(relationships) != 1 || relationships[0].State != "VERIFIED" || relationships[0].VerifiedUntil == nil || relationships[0].ReviewDueAt == nil {
+		t.Fatalf("relationships=%#v err=%v policy=%s", relationships, err, policy)
+	}
+	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: 2, Action: "SUSPEND", ReasonCode: "CONFLICT"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)

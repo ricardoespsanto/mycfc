@@ -34,6 +34,19 @@ type executionVersionedStoreRecorder struct {
 	evidence storage.VersionDeletionEvidence
 }
 
+type cancelIdentityQueryTracer struct{}
+
+func (cancelIdentityQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SELECT updated_at FROM users") {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		return cancelled
+	}
+	return ctx
+}
+
+func (cancelIdentityQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
 type blockingObjectTargetProtector struct {
 	delegate ObjectTargetProtector
 	entered  chan struct{}
@@ -449,6 +462,52 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	for _, category := range p.Categories {
 		closureDecisions[category.Key] = CategoryDecision{Outcome: "APPROVE"}
 	}
+	t.Run("identity-timestamp-query-errors-fail-closed", func(t *testing.T) {
+		tracedConfig := cfg.Copy()
+		tracedConfig.ConnConfig.Tracer = cancelIdentityQueryTracer{}
+		tracedPool, err := pgxpool.NewWithConfig(ctx, tracedConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tracedPool.Close()
+		failClosed := s
+		failClosed.Pool = tracedPool
+
+		subject := user(nil)
+		request, err := submit(subject, subject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = failClosed.View(ctx, subject, request.PublicRef, false); err == nil {
+			t.Fatal("view ignored identity timestamp query failure")
+		}
+		if _, err = failClosed.Change(ctx, ReviewInput{ActorID: subject, Reference: request.PublicRef, Version: request.Version, Action: "cancel"}); err == nil {
+			t.Fatal("change ignored identity timestamp query failure")
+		}
+
+		guardian := user(nil)
+		dependent := user(&guardian)
+		if _, err = submit(guardian, dependent, Categories); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = failClosed.List(ctx, guardian, false, "", "", ""); err == nil {
+			t.Fatal("list ignored identity timestamp query failure")
+		}
+
+		executionSubject := user(nil)
+		approved, err := submit(executionSubject, executionSubject, Categories)
+		if err != nil {
+			t.Fatal(err)
+		}
+		approved = claimVerify(approved, false)
+		approved, err = s.Change(ctx, ReviewInput{ActorID: reviewerA, Reference: approved.PublicRef, Version: approved.Version, Action: "approve", PolicyVersion: p.Version, Explanation: "Execução aprovada para validar falha fechada.", Decisions: decisions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = failClosed.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: approved.PublicRef, Version: approved.Version, Confirmed: true}); err == nil {
+			t.Fatal("execution ignored identity timestamp query failure")
+		}
+	})
 	t.Run("unsupported-account-closure-cannot-start-or-cut-off-access", func(t *testing.T) {
 		saved := relationalExecutableOperations
 		relationalExecutableOperations = productionRelationalCapabilities
