@@ -149,7 +149,11 @@ func TestPrivacyMembershipPostconditionForwardMigrationFrom014(t *testing.T) {
 		t.Fatal("membership-postcondition migration marker missing from baseline")
 	}
 	const currentCutoff = "public.privacy_membership_history_effective_date(execution_ref,subject_ref)"
-	baselineSegment := baselineSchema[markerIndex:]
+	nextMarker := strings.LastIndex(baselineSchema, "-- Baseline through 202609110001_privacy_upload_finalize_execution_fence.")
+	if nextMarker <= markerIndex {
+		t.Fatal("privacy upload finalisation fence marker missing after membership-postcondition baseline segment")
+	}
+	baselineSegment := baselineSchema[markerIndex:nextMarker]
 	// The baseline uses OR REPLACE for the four wrappers renamed in this
 	// migration because sqlc parses the monolithic schema without modelling
 	// ALTER FUNCTION ... RENAME. PostgreSQL receives the exact forward file.
@@ -159,8 +163,8 @@ func TestPrivacyMembershipPostconditionForwardMigrationFrom014(t *testing.T) {
 	} {
 		baselineSegment = strings.Replace(baselineSegment, "CREATE OR REPLACE FUNCTION public."+function, "CREATE FUNCTION public."+function, 1)
 	}
-	if baselineSegment != string(migration) {
-		t.Fatal("membership-postcondition migration is not the exact final baseline segment")
+	if strings.TrimSpace(baselineSegment) != strings.TrimSpace(string(migration)) {
+		t.Fatal("membership-postcondition migration is not the exact baseline segment before the upload finalisation fence")
 	}
 
 	ctx := context.Background()

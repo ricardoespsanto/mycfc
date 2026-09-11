@@ -542,7 +542,7 @@ func TestCompletionControlPublicAPIs(t *testing.T) {
 			PolicyVersion: policy, ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion,
 			ImageDigest: "sha256:" + strings.Repeat("7", sha256.Size*2), EvidenceRef: "s3://fixture/public-schema?versionId=v1",
 			EvidenceSHA256: evidenceSHA[:], SigningKeyID: "fixture-key", SchemaMigrationDigest: bytes.Repeat([]byte{7}, sha256.Size),
-			BaselineIncludesThrough: "202609100015_privacy_membership_postcondition",
+			BaselineIncludesThrough: "202609110001_privacy_upload_finalize_execution_fence",
 		},
 	})
 	if err != nil || recorded.ID == uuid.Nil || recorded.Kind != "SCHEMA" || !bytes.Equal(recorded.Digest, evidenceDigest[:]) {

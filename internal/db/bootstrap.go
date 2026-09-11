@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609100015_privacy_membership_postcondition"
+	baselineIncludesThrough      = "202609110001_privacy_upload_finalize_execution_fence"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
