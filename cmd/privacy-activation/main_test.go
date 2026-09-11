@@ -440,9 +440,22 @@ func TestActivationInputAndKeyFailureBoundaries(t *testing.T) {
 	env := activationCommandEnvironment(t)
 	getenv := func(name string) string { return env[name] }
 	for name, mutate := range map[string]func(){
-		"operator":   func() { env["PRIVACY_ACTIVATION_ACTOR_REF"] = "invalid" },
-		"trust root": func() { env["PRIVACY_ACTIVATION_ARTIFACT_SIGNING_KEY_ID"] = "" },
-		"restore":    func() { env["PRIVACY_ACTIVATION_RESTORE_ATTESTATION_FILE"] = filepath.Join(t.TempDir(), "missing") },
+		"operator": func() { env["PRIVACY_ACTIVATION_ACTOR_REF"] = "invalid" },
+		"trust root": func() {
+			env["PRIVACY_ACTIVATION_ARTIFACT_SIGNING_KEY_ID"] = ""
+		},
+		"restore key": func() {
+			env["PRIVACY_ACTIVATION_RESTORE_AUTH_KEY_FILE"] = filepath.Join(t.TempDir(), "missing")
+		},
+		"artifact trust key": func() {
+			env["PRIVACY_ACTIVATION_ARTIFACT_PUBLIC_KEY_FILE"] = filepath.Join(t.TempDir(), "missing")
+		},
+		"restore": func() {
+			env["PRIVACY_ACTIVATION_RESTORE_ATTESTATION_FILE"] = filepath.Join(t.TempDir(), "missing")
+		},
+		"required signed artifact": func() {
+			env["PRIVACY_ACTIVATION_PROVIDER_FILE"] = filepath.Join(t.TempDir(), "missing")
+		},
 		"contract": func() {
 			env["PRIVACY_ACTIVATION_PROVIDER_FILE"] = writeActivationFile(t, t.TempDir(), "provider.json", []byte(`{"contract":"wrong"}`))
 		},
