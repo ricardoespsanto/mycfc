@@ -77,8 +77,26 @@ esac
 
 case "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" in
 	true)
-		if [ ! -f /etc/mycfc/backup-cleanup-aws/credentials ] || [ "$(stat -c '%u:%a' /etc/mycfc/backup-cleanup-aws/credentials)" != '0:600' ]; then
+		if ! printf '%s' "${BACKUP_CLEANUP_ROLE_ARN:-}" | grep -Eq '^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'; then
+			printf '%s\n' 'BACKUP_CLEANUP_ROLE_ARN must identify the exact cleanup role.' >&2
+			exit 1
+		fi
+		if [ ! -f /etc/mycfc/backup-cleanup-aws/credentials ] || [ -L /etc/mycfc/backup-cleanup-aws/credentials ] || [ "$(stat -c '%u:%g:%a' /etc/mycfc/backup-cleanup-aws/credentials)" != '0:0:600' ]; then
 			printf '%s\n' '/etc/mycfc/backup-cleanup-aws/credentials must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
+		if ! awk '
+			/^[[:space:]]*(#|;|$)/ { next }
+			/^\[mycfc-backup-cleanup\][[:space:]]*$/ { section = "cleanup"; next }
+			/^\[/ { invalid = 1; next }
+			section != "cleanup" { invalid = 1; next }
+			/^[[:space:]]*aws_access_key_id[[:space:]]*=[[:space:]]*ASIA[A-Z0-9]+[[:space:]]*$/ { access = 1; next }
+			/^[[:space:]]*aws_secret_access_key[[:space:]]*=[[:space:]]*[^[:space:]]+[[:space:]]*$/ { secret = 1; next }
+			/^[[:space:]]*aws_session_token[[:space:]]*=[[:space:]]*[^[:space:]]+[[:space:]]*$/ { token = 1; next }
+			{ invalid = 1 }
+			END { exit !(access && secret && token && !invalid) }
+		' /etc/mycfc/backup-cleanup-aws/credentials; then
+			printf '%s\n' 'The cleanup profile must contain only renewable STS session credentials.' >&2
 			exit 1
 		fi
 		;;
@@ -90,6 +108,32 @@ case "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" in
 	true | false) ;;
 	*) printf '%s\n' 'BACKUP_NONCURRENT_CLEANER_DRY_RUN must be true or false.' >&2; exit 1 ;;
 esac
+
+AWS_REGION=${AWS_REGION:-eu-west-1}
+BACKUP_NONCURRENT_DELETE_AGE_SECONDS=${BACKUP_NONCURRENT_DELETE_AGE_SECONDS:-82800}
+if ! printf '%s' "$BACKUP_S3_BUCKET" | grep -Eq '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$' || ! printf '%s' "$AWS_REGION" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'; then
+	printf '%s\n' 'The backup cleanup bucket or AWS region is invalid.' >&2
+	exit 1
+fi
+case "$BACKUP_NONCURRENT_DELETE_AGE_SECONDS" in
+	'' | *[!0-9]*) printf '%s\n' 'BACKUP_NONCURRENT_DELETE_AGE_SECONDS must be a positive integer.' >&2; exit 1 ;;
+esac
+if [ "$BACKUP_NONCURRENT_DELETE_AGE_SECONDS" -eq 0 ] || [ "$BACKUP_NONCURRENT_DELETE_AGE_SECONDS" -gt 82800 ]; then
+	printf '%s\n' 'BACKUP_NONCURRENT_DELETE_AGE_SECONDS must preserve the 23-hour verification boundary.' >&2
+	exit 1
+fi
+cleanup_env_tmp=$(mktemp /etc/mycfc/.backup-cleanup.env.XXXXXX)
+chmod 0600 "$cleanup_env_tmp"
+{
+	printf "BACKUP_S3_BUCKET='%s'\n" "$BACKUP_S3_BUCKET"
+	printf "AWS_REGION='%s'\n" "$AWS_REGION"
+	printf "BACKUP_CLEANUP_ROLE_ARN='%s'\n" "${BACKUP_CLEANUP_ROLE_ARN:-}"
+	printf "BACKUP_NONCURRENT_CLEANER_ENABLED='%s'\n" "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}"
+	printf "BACKUP_NONCURRENT_CLEANER_DRY_RUN='%s'\n" "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}"
+	printf "BACKUP_NONCURRENT_DELETE_AGE_SECONDS='%s'\n" "$BACKUP_NONCURRENT_DELETE_AGE_SECONDS"
+} >"$cleanup_env_tmp"
+chown root:root "$cleanup_env_tmp"
+mv -f "$cleanup_env_tmp" /etc/mycfc/backup-cleanup.env
 
 case "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" in
 	true)
@@ -225,6 +269,7 @@ done
 chmod 0755 "$deployment_dir/run-with-cloudwatch-logs.sh"
 chmod 0755 "$deployment_dir/release-status.sh"
 chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
+chmod 0755 "$deployment_dir/postgres-backup-version-cleanup-cloudwatch.sh"
 chmod 0755 "$deployment_dir/hetzner-backup-posture.sh"
 chmod 0755 "$deployment_dir/postgres-restore-drill.sh"
 chmod 0755 "$deployment_dir/privacy-restore-observer.sh"
@@ -238,6 +283,7 @@ install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/m
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.timer" /etc/systemd/system/mycfc-postgres-backup.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.service" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.service
+install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup-log.service" /etc/systemd/system/mycfc-postgres-backup-version-cleanup-log.service
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.timer
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.service" /etc/systemd/system/mycfc-hetzner-backup-posture.service
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.timer" /etc/systemd/system/mycfc-hetzner-backup-posture.timer

@@ -43,7 +43,8 @@ BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<exact-KMS-key-ARN>
 BACKUP_MANIFEST_AUTH_ENABLED=false
 
-# Separate backup-version inventory/deletion identity; both host gates are inert.
+# Separate backup-version inventory/deletion role; both host gates are inert.
+BACKUP_CLEANUP_ROLE_ARN=arn:aws:iam::<account-id>:role/mycfc-production-postgres-backup-cleanup
 BACKUP_NONCURRENT_CLEANER_ENABLED=false
 BACKUP_NONCURRENT_CLEANER_DRY_RUN=true
 
@@ -197,18 +198,20 @@ aws_access_key_id=<backup-access-key-id>
 aws_secret_access_key=<backup-secret-access-key>
 ```
 
-The standing `mycfc-backup` profile has no version-inventory or deletion permission. When the separate cleanup identity has been explicitly provisioned, install its independently created credential in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
+The standing `mycfc-backup` profile and its permissions boundary have neither `s3:ListBucketVersions` nor `s3:DeleteObjectVersion`; they do not retain even read-only version inventory. When the separate cleanup role has been explicitly provisioned, an approved credential renewer may assume it for at most one hour. Install only that temporary session in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
 
 ```text
 [mycfc-backup-cleanup]
-aws_access_key_id=<cleanup-access-key-id>
-aws_secret_access_key=<cleanup-secret-access-key>
-# aws_session_token=<required for a preferred short-lived STS credential>
+aws_access_key_id=ASIA<temporary-cleanup-access-key-id>
+aws_secret_access_key=<temporary-cleanup-secret-access-key>
+aws_session_token=<required-temporary-session-token>
 ```
 
-Never put the cleanup credential in `/etc/mycfc/backup-aws/credentials` or the application environment. With `BACKUP_NONCURRENT_CLEANER_ENABLED=true` and `BACKUP_NONCURRENT_CLEANER_DRY_RUN=true`, the cleanup service can be invoked manually for inventory but the timer stays disabled. Exact-version deletion additionally requires the reviewed Terraform destructive gate and host dry-run false; see `docs/privacy-restore-infrastructure.md`.
+The installer and runtime reject long-lived access-key profiles, extra profiles, missing session tokens, expired or otherwise rejected sessions, and sessions whose caller ARN does not match `BACKUP_CLEANUP_ROLE_ARN`. Never put the cleanup session in `/etc/mycfc/backup-aws/credentials` or the application environment. The installer writes only the allowlisted bucket, region, role ARN, gates, and age boundary to `/etc/mycfc/backup-cleanup.env`; systemd presents that file and the temporary AWS session as service credentials to a transient unprivileged `mycfc-backup-cleanup` account. `/etc/mycfc` is otherwise inaccessible to that account, including ordinary backup, release, application, restore, and activation secrets.
 
-The installer refuses to proceed until this credential file and `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID` are present, then enables both the release-poll and nightly backup timers.
+With `BACKUP_NONCURRENT_CLEANER_ENABLED=true` and `BACKUP_NONCURRENT_CLEANER_DRY_RUN=true`, the cleanup service can be invoked manually for inventory but the timer stays disabled. Exact-version deletion additionally requires the reviewed Terraform destructive gate and host dry-run false. The cleanup process writes only fixed event codes and aggregate counts to its protected runtime result. A separate root-owned logger service validates that allowlist before using the release logger to upload it to CloudWatch; raw AWS stderr and object keys are discarded locally and never enter that upload. Renew the session before its one-hour expiry or the cleanup fails closed and its existing alarm reports the missed boundary. See `docs/privacy-restore-infrastructure.md`.
+
+The installer always requires the standing backup credential plus `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID`, then enables the release-poll and nightly backup timers. It requires the separate temporary cleanup session only when `BACKUP_NONCURRENT_CLEANER_ENABLED=true`.
 
 ## Operations
 

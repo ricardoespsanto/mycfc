@@ -307,6 +307,10 @@ run "backup_cleanup_failure_alerts_immediately" {
       !strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "(") &&
       !strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, ")") &&
       strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_failed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_log_missing") &&
+      strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_log_rejected") &&
+      strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_log_identity_failed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure.pattern, "backup_noncurrent_cleanup_log_stale") &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.evaluation_periods == 1 &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.datapoints_to_alarm == 1 &&
       aws_cloudwatch_metric_alarm.backup_noncurrent_cleanup_failure.period == 60

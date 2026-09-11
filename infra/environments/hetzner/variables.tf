@@ -72,9 +72,27 @@ variable "privacy_restore_ledger_replay_enabled" {
 }
 
 variable "postgres_backup_cleanup_identity_enabled" {
-  description = "Provision an inert cleanup-only IAM identity with version-inventory permission. Terraform creates no access key and grants no deletion."
+  description = "Provision an inert cleanup-only IAM role with version-inventory permission and one-hour sessions. Terraform creates no access key and grants no deletion."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.postgres_backup_cleanup_identity_enabled || length(var.postgres_backup_cleanup_assumer_arns) > 0
+    error_message = "postgres_backup_cleanup_identity_enabled requires at least one explicitly approved credential-renewer ARN."
+  }
+}
+
+variable "postgres_backup_cleanup_assumer_arns" {
+  description = "Exact IAM user or role ARNs allowed to renew short-lived cleanup-role sessions. Do not use the backup writer, application, or release identity."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.postgres_backup_cleanup_assumer_arns : can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+$", arn))
+    ])
+    error_message = "postgres_backup_cleanup_assumer_arns must contain exact IAM user or role ARNs."
+  }
 }
 
 variable "postgres_backup_noncurrent_cleanup_enabled" {

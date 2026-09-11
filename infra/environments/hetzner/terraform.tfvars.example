@@ -6,3 +6,4 @@ ssh_source_ips        = ["203.0.113.10/32"]
 # inventory-only identity first; deletion and lifecycle remain a later gate.
 postgres_backup_cleanup_identity_enabled      = false
 postgres_backup_noncurrent_cleanup_enabled    = false
+postgres_backup_cleanup_assumer_arns          = ["arn:aws:iam::123456789012:role/mycfc-production-backup-cleanup-renewer"]

@@ -52,7 +52,7 @@ resource "aws_cloudwatch_metric_alarm" "repeated_release_agent_failures" {
 
 resource "aws_cloudwatch_log_metric_filter" "backup_noncurrent_cleanup_failure" {
   name           = "${local.name}-backup-noncurrent-cleanup-failure"
-  pattern        = "%backup_noncurrent_cleanup_delete_failed|backup_noncurrent_cleanup_verification_failed|backup_noncurrent_cleanup_sla_breached|backup_noncurrent_cleanup_failed%"
+  pattern        = "%backup_noncurrent_cleanup_delete_failed|backup_noncurrent_cleanup_verification_failed|backup_noncurrent_cleanup_sla_breached|backup_noncurrent_cleanup_failed|backup_noncurrent_cleanup_log_missing|backup_noncurrent_cleanup_log_rejected|backup_noncurrent_cleanup_log_identity_failed|backup_noncurrent_cleanup_log_stale%"
   log_group_name = aws_cloudwatch_log_group.deployment.name
 
   metric_transformation {

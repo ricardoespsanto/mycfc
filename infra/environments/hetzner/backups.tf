@@ -8,7 +8,7 @@ locals {
   backup_attestation_prefixes = ["restore-attestations/*", "restore-evidence/*"]
   backup_prefixes             = concat(local.backup_recovery_prefixes, local.backup_attestation_prefixes)
   backup_base_list_actions    = ["s3:ListBucket"]
-  backup_cleanup_user_name    = "${local.name}-postgres-backup-cleanup"
+  backup_cleanup_role_name    = "${local.name}-postgres-backup-cleanup"
   backup_cleanup_list_actions = ["s3:ListBucketVersions"]
   backup_object_actions       = ["s3:GetObject", "s3:PutObject"]
   backup_cleanup_actions      = ["s3:DeleteObjectVersion"]
@@ -280,27 +280,37 @@ data "aws_iam_policy_document" "postgres_backup_cleanup_boundary" {
 resource "aws_iam_policy" "postgres_backup_cleanup_boundary" {
   count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
 
-  name        = "${local.backup_cleanup_user_name}-boundary"
+  name        = "${local.backup_cleanup_role_name}-boundary"
   description = "Maximum independently gated PostgreSQL backup version-cleanup permissions"
   policy      = data.aws_iam_policy_document.postgres_backup_cleanup_boundary[0].json
 
   lifecycle { prevent_destroy = true }
 }
 
-resource "aws_iam_user" "postgres_backup_cleanup" {
+resource "aws_iam_role" "postgres_backup_cleanup" {
   count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
 
-  name                 = local.backup_cleanup_user_name
+  name = local.backup_cleanup_role_name
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowApprovedCredentialRenewers"
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { AWS = sort(tolist(var.postgres_backup_cleanup_assumer_arns)) }
+    }]
+  })
+  max_session_duration = 3600
   permissions_boundary = aws_iam_policy.postgres_backup_cleanup_boundary[0].arn
 
   lifecycle { prevent_destroy = true }
 }
 
-resource "aws_iam_user_policy" "postgres_backup_cleanup" {
+resource "aws_iam_role_policy" "postgres_backup_cleanup" {
   count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
 
   name   = "postgres-backup-cleanup"
-  user   = aws_iam_user.postgres_backup_cleanup[0].name
+  role   = aws_iam_role.postgres_backup_cleanup[0].name
   policy = data.aws_iam_policy_document.postgres_backup_cleanup_boundary[0].json
 }
 
@@ -312,7 +322,7 @@ output "postgres_backup_kms_key_arn" {
   value = aws_kms_key.postgres_backups.arn
 }
 
-output "postgres_backup_cleanup_user_name" {
-  description = "Dedicated cleanup identity created without an access key when its inert infrastructure gate is enabled."
-  value       = try(aws_iam_user.postgres_backup_cleanup[0].name, null)
+output "postgres_backup_cleanup_role_arn" {
+  description = "Dedicated cleanup role issuing sessions of at most one hour when its inert infrastructure gate is enabled."
+  value       = try(aws_iam_role.postgres_backup_cleanup[0].arn, null)
 }
