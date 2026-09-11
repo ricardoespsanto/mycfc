@@ -20,25 +20,6 @@ type fakeProviderAdapter struct {
 	calls   int
 }
 
-type providerTargetProtectorFailure struct {
-	sealTargetErr, digestTargetErr, sealCredentialErr, digestCredentialErr error
-}
-
-func (s providerTargetProtectorFailure) SealProviderTarget(ProviderTargetBinding, string, []byte) (ProviderTargetEnvelope, error) {
-	return ProviderTargetEnvelope{Version: ProviderTargetEnvelopeVersion, Algorithm: providerTargetAlgorithm, KeyID: "provider-test-encryption",
-		Encapsulation: bytes.Repeat([]byte{1}, 32), Nonce: bytes.Repeat([]byte{2}, 12), Ciphertext: bytes.Repeat([]byte{3}, 32)}, s.sealTargetErr
-}
-func (s providerTargetProtectorFailure) DigestProviderTarget(ProviderTargetBinding, string, []byte) (ProviderTargetDigest, error) {
-	return ProviderTargetDigest{KeyID: "provider-test-digest", Digest: bytes.Repeat([]byte{4}, 32)}, s.digestTargetErr
-}
-func (s providerTargetProtectorFailure) SealProviderCredential(ProviderTargetBinding, string, []byte) (ProviderTargetEnvelope, error) {
-	return ProviderTargetEnvelope{Version: ProviderTargetEnvelopeVersion, Algorithm: providerTargetAlgorithm, KeyID: "provider-test-encryption",
-		Encapsulation: bytes.Repeat([]byte{5}, 32), Nonce: bytes.Repeat([]byte{6}, 12), Ciphertext: bytes.Repeat([]byte{7}, 32)}, s.sealCredentialErr
-}
-func (s providerTargetProtectorFailure) DigestProviderCredential(ProviderTargetBinding, string, []byte) (ProviderTargetDigest, error) {
-	return ProviderTargetDigest{KeyID: "provider-test-credential-digest", Digest: bytes.Repeat([]byte{8}, 32)}, s.digestCredentialErr
-}
-
 func (f *fakeProviderAdapter) EraseOrNotify(_ context.Context, _ ProviderErasureRequest) (ProviderErasureResult, error) {
 	index := f.calls
 	f.calls++

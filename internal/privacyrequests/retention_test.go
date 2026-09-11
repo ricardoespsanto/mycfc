@@ -19,7 +19,7 @@ func (s retentionErrorStore) Query(context.Context, string, ...any) (pgx.Rows, e
 	return nil, s.err
 }
 func (s retentionErrorStore) QueryRow(context.Context, string, ...any) pgx.Row {
-	return retentionErrorRow{err: s.err}
+	return retentionErrorRow(s)
 }
 
 type retentionErrorRow struct{ err error }
