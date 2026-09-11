@@ -189,7 +189,7 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 	// Prepare a second, fresh authorization set, then queue disable ahead of
 	// activation behind the shared advisory lock. Disable must commit first and
 	// the waiting activation must reject all material from the prior generation.
-	if _, err = adminConn.Exec(ctx, `UPDATE privacy_worker_kill_switch SET changed_at=clock_timestamp()-interval '1 second' WHERE singleton`); err != nil {
+	if _, err = adminConn.Exec(ctx, `UPDATE privacy_worker_kill_switch SET engaged=true,activation_approval_id=NULL,changed_at=clock_timestamp()-interval '1 second' WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}
 	raceIssued := time.Now().UTC().Truncate(time.Microsecond)
@@ -237,7 +237,7 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 			}
 		})
 	}
-	if _, err = adminConn.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO `+disableIdentifier); err != nil {
+	if _, err = adminConn.Exec(ctx, `GRANT USAGE ON SCHEMA privacy_disable TO `+disableIdentifier+`; GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO `+disableIdentifier); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,7 +267,7 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 		var version int64
 		var database string
 		var engaged, ready bool
-		disableResult <- disableConn.QueryRow(context.Background(), `SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_activation_disable($1,$2)`, adminID, adminConn.Config().Database).
+		disableResult <- disableConn.QueryRow(context.Background(), `SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_disable.privacy_activation_disable($1,$2)`, adminID, adminConn.Config().Database).
 			Scan(&version, &database, &engaged, &ready)
 	}()
 	waitForAdvisoryLock(t, adminConn, disableConn.PgConn().PID())
@@ -296,6 +296,67 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 	}
 	if !raceEngaged || raceReady {
 		t.Fatalf("disable did not win race: engaged=%t ready=%t", raceEngaged, raceReady)
+	}
+
+	// A request that begins while approvals are valid must not retain that
+	// timestamp while waiting for the shared lock. Expiry is authoritative at
+	// the instant the transaction obtains the lock.
+	if _, err = adminConn.Exec(ctx, `UPDATE privacy_worker_kill_switch SET changed_at=clock_timestamp()-interval '1 second' WHERE singleton`); err != nil {
+		t.Fatal(err)
+	}
+	expiryIssued := time.Now().UTC().Truncate(time.Microsecond)
+	for _, kind := range []string{"RESTORE", "INFRASTRUCTURE", "PROVIDER", "SCHEMA"} {
+		artifact := brokerArtifactFixture(kind, policy, image, digest)
+		payload, _ := json.Marshal(artifact)
+		contract := map[string]string{"RESTORE": "mycfc/privacy-restore-drill-attestation/v2", "INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1", "PROVIDER": "mycfc/privacy-provider-registry/v2", "SCHEMA": "mycfc/schema-migration-inventory/v1"}[kind]
+		kindDigest := sha256.Sum256([]byte("expiry-" + kind + uuid.NewString()))
+		var evidenceID uuid.UUID
+		if err = adminConn.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`, adminID, kind, kindDigest[:], contract, expiryIssued, expiryIssued.Add(90*24*time.Hour), payload).Scan(&evidenceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var expiryEvidenceIDs []uuid.UUID
+	var expiryEvidenceDigest, expiryActivationDigest, expirySchemaDigest []byte
+	var expiryExecutorVersion, expiryPlanVersion, expiryImage string
+	if err = brokerConn.QueryRow(ctx, `SELECT evidence_ids,evidence_set_sha256,activation_sha256,executor_version,plan_schema_version,image_digest,schema_migration_digest FROM privacy_activation_broker_material($1)`, policy).
+		Scan(&expiryEvidenceIDs, &expiryEvidenceDigest, &expiryActivationDigest, &expiryExecutorVersion, &expiryPlanVersion, &expiryImage, &expirySchemaDigest); err != nil {
+		t.Fatal(err)
+	}
+	expiryProposalID := uuid.New()
+	expiryExecutorNonce := sha256.Sum256([]byte(uuid.NewString()))
+	expiryAdministratorNonce := sha256.Sum256([]byte(uuid.NewString()))
+	expiryExecutorEnvelope := brokerApprovalFixture(expiryProposalID, policy, expiryEvidenceIDs, expiryEvidenceDigest, expiryActivationDigest, expiryExecutorVersion, expiryPlanVersion, expiryImage, expirySchemaDigest, executorID, "EXECUTOR", "executor-key", expiryExecutorNonce[:], expiryIssued)
+	expiryAdministratorEnvelope := brokerApprovalFixture(expiryProposalID, policy, expiryEvidenceIDs, expiryEvidenceDigest, expiryActivationDigest, expiryExecutorVersion, expiryPlanVersion, expiryImage, expirySchemaDigest, adminID, "ADMINISTRATOR", "administrator-key", expiryAdministratorNonce[:], expiryIssued)
+	expiresAt := expiryIssued.Add(750 * time.Millisecond)
+	expiryExecutorEnvelope["expires_at"] = expiresAt
+	expiryAdministratorEnvelope["expires_at"] = expiresAt
+	expiryExecutorRaw, _ := json.Marshal(expiryExecutorEnvelope)
+	expiryAdministratorRaw, _ := json.Marshal(expiryAdministratorEnvelope)
+	expiryExecutorNonceDigest := sha256.Sum256(expiryExecutorNonce[:])
+	expiryAdministratorNonceDigest := sha256.Sum256(expiryAdministratorNonce[:])
+
+	expiryLockTx, err := lockConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = expiryLockTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0))`); err != nil {
+		t.Fatal(err)
+	}
+	expiryResult := make(chan error, 1)
+	go func() {
+		var approval uuid.UUID
+		expiryResult <- brokerConn.QueryRow(context.Background(), `SELECT privacy_activation_broker_activate($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19)`,
+			expiryProposalID, policy, expiryEvidenceIDs, expiryEvidenceDigest, expiryActivationDigest, executorID, adminID, "executor-key", "administrator-key",
+			expiryExecutorNonceDigest[:], expiryAdministratorNonceDigest[:], expiryExecutorRaw, expiryAdministratorRaw, string(expiryExecutorRaw), string(expiryAdministratorRaw),
+			expiryIssued, expiresAt, expiryIssued, expiresAt).Scan(&approval)
+	}()
+	waitForAdvisoryLock(t, adminConn, brokerConn.PgConn().PID())
+	time.Sleep(time.Until(expiresAt) + 100*time.Millisecond)
+	if err = expiryLockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-expiryResult; err == nil || !strings.Contains(err.Error(), "privacy_activation_signed_approval_rejected") {
+		t.Fatalf("approval that expired while waiting for the activation lock was accepted: %v", err)
 	}
 }
 

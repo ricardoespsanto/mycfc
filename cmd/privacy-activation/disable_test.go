@@ -59,7 +59,7 @@ func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
 	if err := runDisable(t.Context(), getenv, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !database.closed || strings.TrimSpace(database.query) != "SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_activation_disable($1,$2)" || len(database.arguments) != 2 || database.arguments[0] != actor || database.arguments[1] != "mycfc" {
+	if !database.closed || strings.TrimSpace(database.query) != "SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_disable.privacy_activation_disable($1,$2)" || len(database.arguments) != 2 || database.arguments[0] != actor || database.arguments[1] != "mycfc" {
 		t.Fatalf("closed=%t query=%q arguments=%v", database.closed, database.query, database.arguments)
 	}
 	if output.String() != "privacy_activation_disabled kill_switch=engaged readiness=blocked\n" {

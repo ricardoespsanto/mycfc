@@ -195,7 +195,6 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
 		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
 		PrivacyActivationBrokerUsername: "mycfc_privacy_activation_broker", PrivacyActivationBrokerPassword: "broker-password",
-		PrivacyActivationDisableUsername: "mycfc_privacy_activation_disable", PrivacyActivationDisablePassword: "disable-password",
 	}
 	conn := &bootstrapRoleConnectionFake{}
 	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
@@ -207,11 +206,35 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_executor"`,
 		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_executor"`,
 		`CREATE ROLE "mycfc_privacy_activation_broker" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
-		`CREATE ROLE "mycfc_privacy_activation_disable" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("bootstrap statements missing %q", expected)
 		}
+	}
+}
+
+func TestProvisionPrivacyActivationDisableRoleIsExplicitAndRestricted(t *testing.T) {
+	conn := &bootstrapRoleConnectionFake{}
+	if err := ProvisionPrivacyActivationDisableRole(t.Context(), conn, "mycfc", privacyActivationDisableRole, "disable-password"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_privacy_activation_disable" LOGIN NOSUPERUSER`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_activation_disable"`,
+		`REVOKE USAGE ON SCHEMA public FROM PUBLIC`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_activation_disable"`,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM "mycfc_privacy_activation_disable"`,
+		`REVOKE ALL ON SCHEMA public FROM "mycfc_privacy_activation_disable"`,
+		`GRANT USAGE ON SCHEMA privacy_disable TO "mycfc_privacy_activation_disable"`,
+		`GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO "mycfc_privacy_activation_disable"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("provision statements missing %q", expected)
+		}
+	}
+	if err := ProvisionPrivacyActivationDisableRole(t.Context(), conn, "mycfc", "other_role", "disable-password"); err == nil {
+		t.Fatal("unexpected disable role accepted")
 	}
 }
 
@@ -433,16 +456,15 @@ func TestValidateBootstrapInput(t *testing.T) {
 		{"observer identifier invalid", func(c *RoleCredentials) {
 			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = "privacy-observer", "secret"
 		}},
-		{"broker without executor and disable", func(c *RoleCredentials) {
+		{"broker without executor", func(c *RoleCredentials) {
 			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "mycfc_privacy_activation_broker", "secret"
 		}},
-		{"executor without broker and disable", func(c *RoleCredentials) {
+		{"executor without broker", func(c *RoleCredentials) {
 			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
 		}},
 		{"wrong broker identity", func(c *RoleCredentials) {
 			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
 			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "other_broker", "secret"
-			c.PrivacyActivationDisableUsername, c.PrivacyActivationDisablePassword = "mycfc_privacy_activation_disable", "secret"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

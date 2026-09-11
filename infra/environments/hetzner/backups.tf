@@ -11,6 +11,7 @@ locals {
   backup_cleanup_role_name    = "${local.name}-postgres-backup-cleanup"
   backup_cleanup_list_actions = ["s3:ListBucketVersions"]
   backup_object_actions       = ["s3:GetObject", "s3:PutObject"]
+  backup_version_read_actions = ["s3:GetObjectVersion"]
   backup_cleanup_actions      = ["s3:DeleteObjectVersion"]
   backup_encryption_actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
 }
@@ -189,6 +190,12 @@ data "aws_iam_policy_document" "postgres_backups_boundary" {
 
   statement {
     effect    = "Allow"
+    actions   = local.backup_version_read_actions
+    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    effect    = "Allow"
     actions   = local.backup_cleanup_list_actions
     resources = [aws_s3_bucket.postgres_backups.arn]
 
@@ -233,6 +240,13 @@ data "aws_iam_policy_document" "postgres_backups" {
     effect    = "Allow"
     actions   = local.backup_object_actions
     resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    sid       = "ReadExactRecoveryPointVersions"
+    effect    = "Allow"
+    actions   = local.backup_version_read_actions
+    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
   }
 
   statement {

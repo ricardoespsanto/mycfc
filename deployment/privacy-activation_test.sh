@@ -55,6 +55,11 @@ output=$(PATH="$test_dir/bin:$PATH" MYCFC_ENV_FILE="$test_dir/main.env" MYCFC_PR
 [ "$output" = 'privacy_activation_disabled kill_switch=engaged readiness=blocked' ] || { printf '%s\n' 'activation disable output was not preserved' >&2; exit 1; }
 grep -q -- '--profile privacy-activation-disable run --rm --no-deps privacy-activation-disable' "$DOCKER_CALLS" || { printf '%s\n' 'activation disable compose command is not isolated' >&2; exit 1; }
 
+PATH="$test_dir/bin:$PATH" MYCFC_ENV_FILE="$test_dir/main.env" \
+	MYCFC_PRIVACY_ACTIVATION_DISABLE_ENV_FILE="$test_dir/privacy-activation-disable.env" MYCFC_DEPLOYMENT_DIR="$script_dir" \
+	sh "$script_dir/privacy-activation.sh" provision-disable >/dev/null
+grep -q -- '--profile privacy-activation-disable-bootstrap run --rm privacy-activation-disable-bootstrap' "$DOCKER_CALLS" || { printf '%s\n' 'disable credential provisioning is not an explicit isolated operation' >&2; exit 1; }
+
 if TEST_EFFECTIVE_UID=1000 PATH="$test_dir/bin:$PATH" MYCFC_ENV_FILE="$test_dir/main.env" \
 	MYCFC_PRIVACY_ACTIVATION_DISABLE_ENV_FILE="$test_dir/privacy-activation-disable.env" MYCFC_DEPLOYMENT_DIR="$script_dir" \
 	sh "$script_dir/privacy-activation.sh" disable >/dev/null 2>&1; then
@@ -89,6 +94,18 @@ disable_service=$(awk '/^  privacy-activation-disable:/{copy=1} copy{print} copy
 printf '%s' "$disable_service" | grep -q 'privacy-activation-disable.env' || { printf '%s\n' 'disable service is missing its dedicated environment' >&2; exit 1; }
 if printf '%s' "$disable_service" | grep -Eq 'privacy-activation\.env|privacy-activation/evidence|PRIVACY_ACTIVATION_BROKER'; then
 	printf '%s\n' 'disable service inherited broker or evidence inputs' >&2
+	exit 1
+fi
+
+routine_database_services=$(sed -n '/^  db-bootstrap:/,/^  privacy-activation-disable-bootstrap:/p' "$script_dir/compose.yaml")
+if printf '%s' "$routine_database_services" | grep -q 'PRIVACY_ACTIVATION_DISABLE'; then
+	printf '%s\n' 'routine database jobs inherited the break-glass credential' >&2
+	exit 1
+fi
+disable_bootstrap_service=$(awk '/^  privacy-activation-disable-bootstrap:/{copy=1} copy{print} copy && /^  [a-z][a-z-]*:/{if (++services > 1) exit}' "$script_dir/compose.yaml")
+printf '%s' "$disable_bootstrap_service" | grep -q 'privacy-activation-disable.env' || { printf '%s\n' 'disable bootstrap service is missing its dedicated credential file' >&2; exit 1; }
+if printf '%s' "$disable_bootstrap_service" | grep -Eq 'PRIVACY_ACTIVATION_BROKER|privacy-activation/evidence'; then
+	printf '%s\n' 'disable bootstrap service inherited activation authority' >&2
 	exit 1
 fi
 

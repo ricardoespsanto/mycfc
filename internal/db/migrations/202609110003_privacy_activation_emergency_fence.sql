@@ -57,6 +57,7 @@ BEGIN
  SELECT * INTO material FROM privacy_activation_broker_material(p_policy_version);';
  new_clause:='IF session_user<>''mycfc_privacy_activation_broker'' THEN RAISE EXCEPTION USING ERRCODE=''42501'',MESSAGE=''privacy_activation_broker_required''; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended(''mycfc/privacy-activation'',0));
+ now_at:=clock_timestamp();
  SELECT * INTO material FROM privacy_activation_broker_material(p_policy_version);';
  IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_lock_predecessor_mismatch'; END IF;
@@ -78,7 +79,11 @@ END$$;
 REVOKE ALL ON FUNCTION privacy_activation_disable(uuid) FROM PUBLIC;
 DROP FUNCTION privacy_activation_disable(uuid);
 
-CREATE FUNCTION privacy_activation_disable(p_actor uuid,p_expected_database text)
+CREATE SCHEMA IF NOT EXISTS privacy_disable;
+REVOKE ALL ON SCHEMA privacy_disable FROM PUBLIC;
+REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+
+CREATE FUNCTION privacy_disable.privacy_activation_disable(p_actor uuid,p_expected_database text)
 RETURNS TABLE(switch_version bigint,database_name text,engaged boolean,fulfilment_ready boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE now_at timestamptz;v_switch_version bigint;v_policy_version text;
@@ -90,12 +95,8 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0));
  now_at:=clock_timestamp();
  UPDATE privacy_worker_kill_switch switch SET engaged=true,version=switch.version+1,activation_approval_id=NULL,changed_at=now_at
- WHERE switch.singleton AND NOT switch.engaged RETURNING switch.version INTO v_switch_version;
- IF v_switch_version IS NOT NULL THEN
-  INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) VALUES(v_switch_version,true,now_at);
- ELSE
-  SELECT switch.version INTO v_switch_version FROM privacy_worker_kill_switch switch WHERE switch.singleton;
- END IF;
+ WHERE switch.singleton RETURNING switch.version INTO v_switch_version;
+ INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) VALUES(v_switch_version,true,now_at);
  UPDATE privacy_request_activation activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_by=p_actor,updated_at=now_at
  WHERE activation.singleton AND (activation.enabled OR activation.fulfilment_ready OR activation.approval_id IS NOT NULL)
  RETURNING activation.policy_version INTO v_policy_version;
@@ -107,10 +108,13 @@ BEGIN
   FROM privacy_worker_kill_switch switch WHERE switch.singleton;
 END;$$;
 
-REVOKE ALL ON FUNCTION privacy_activation_disable(uuid,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) FROM PUBLIC;
 DO $$BEGIN
  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_activation_disable') THEN
-  GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO mycfc_privacy_activation_disable;
+  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM mycfc_privacy_activation_disable;
+  REVOKE ALL ON SCHEMA public FROM mycfc_privacy_activation_disable;
+  GRANT USAGE ON SCHEMA privacy_disable TO mycfc_privacy_activation_disable;
+  GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO mycfc_privacy_activation_disable;
  END IF;
 END$$;
 

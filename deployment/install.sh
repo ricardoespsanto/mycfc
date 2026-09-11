@@ -215,22 +215,20 @@ case "${PRIVACY_WORKER_ENABLED:-false}" in
 				exit 1
 			fi
 		done
-		for name in PRIVACY_EXECUTOR_DB_USER PRIVACY_EXECUTOR_DB_PASSWORD PRIVACY_ACTIVATION_BROKER_DB_USER PRIVACY_ACTIVATION_BROKER_DB_PASSWORD PRIVACY_ACTIVATION_DISABLE_DB_USER PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD; do
+		for name in PRIVACY_EXECUTOR_DB_USER PRIVACY_EXECUTOR_DB_PASSWORD PRIVACY_ACTIVATION_BROKER_DB_USER PRIVACY_ACTIVATION_BROKER_DB_PASSWORD; do
 			case "$name" in
 				PRIVACY_EXECUTOR_DB_USER) value=${PRIVACY_EXECUTOR_DB_USER:-} ;;
 				PRIVACY_EXECUTOR_DB_PASSWORD) value=${PRIVACY_EXECUTOR_DB_PASSWORD:-} ;;
 				PRIVACY_ACTIVATION_BROKER_DB_USER) value=${PRIVACY_ACTIVATION_BROKER_DB_USER:-} ;;
 				PRIVACY_ACTIVATION_BROKER_DB_PASSWORD) value=${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-} ;;
-				PRIVACY_ACTIVATION_DISABLE_DB_USER) value=${PRIVACY_ACTIVATION_DISABLE_DB_USER:-} ;;
-				PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD) value=${PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD:-} ;;
 			esac
 			if [ -z "$value" ]; then
-				printf '%s\n' 'The privacy executor, activation broker, and disable database role bootstrap inputs are incomplete.' >&2
+				printf '%s\n' 'The privacy executor and activation broker database role bootstrap inputs are incomplete.' >&2
 				exit 1
 			fi
 		done
-		if [ "$PRIVACY_EXECUTOR_DB_USER" != mycfc_privacy_executor ] || [ "$PRIVACY_ACTIVATION_BROKER_DB_USER" != mycfc_privacy_activation_broker ] || [ "$PRIVACY_ACTIVATION_DISABLE_DB_USER" != mycfc_privacy_activation_disable ]; then
-			printf '%s\n' 'The privacy database role identifiers must match the reviewed fixed identities.' >&2
+		if [ "$PRIVACY_EXECUTOR_DB_USER" != mycfc_privacy_executor ] || [ "$PRIVACY_ACTIVATION_BROKER_DB_USER" != mycfc_privacy_activation_broker ]; then
+			printf '%s\n' 'The routine privacy database role identifiers must match the reviewed fixed identities.' >&2
 			exit 1
 		fi
 		;;

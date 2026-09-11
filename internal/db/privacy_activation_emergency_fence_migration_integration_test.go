@@ -53,7 +53,7 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 		t.Fatal(err)
 	}
 	activateDefinition = strings.Replace(activateDefinition,
-		" PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0));\n", "", 1)
+		" PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0));\n now_at:=clock_timestamp();\n", "", 1)
 	activateDefinition = strings.Replace(activateDefinition,
 		"  OR p_executor_issued_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton)\n  OR p_administrator_issued_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton)\n  OR EXISTS(SELECT 1 FROM privacy_activation_evidence evidence\n    WHERE evidence.id=ANY(p_evidence_ids) AND evidence.recorded_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton))\n", "", 1)
 	if _, err = tx.Exec(ctx, activateDefinition); err != nil {
@@ -69,7 +69,7 @@ BEGIN
 END$$`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `DROP FUNCTION privacy_activation_disable(uuid,text)`); err != nil {
+	if _, err = tx.Exec(ctx, `DROP FUNCTION privacy_disable.privacy_activation_disable(uuid,text); DROP SCHEMA privacy_disable`); err != nil {
 		t.Fatal(err)
 	}
 	brokerMigration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
@@ -81,6 +81,17 @@ END$$`); err != nil {
 	if _, err = tx.Exec(ctx, disablePredecessor); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = tx.Exec(ctx, `SAVEPOINT unexpected_disable_function;
+CREATE SCHEMA privacy_disable;
+CREATE FUNCTION privacy_disable.privacy_activation_disable(uuid,text) RETURNS boolean LANGUAGE sql AS 'SELECT false'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, string(migration)); err == nil {
+		t.Fatal("forward migration accepted an unexpected pre-existing disable function")
+	}
+	if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT unexpected_disable_function`); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err = tx.Exec(ctx, string(migration)); err != nil {
 		t.Fatal(err)
@@ -89,15 +100,16 @@ END$$`); err != nil {
 	if err = tx.QueryRow(ctx, `SELECT pg_get_functiondef('privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)'::regprocedure)`).Scan(&fencedDefinition); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fencedDefinition, "pg_advisory_xact_lock") || !strings.Contains(fencedDefinition, "evidence.recorded_at<=") {
+	normalizedDefinition := strings.ReplaceAll(fencedDefinition, " ", "")
+	if !strings.Contains(fencedDefinition, "pg_advisory_xact_lock") || !strings.Contains(normalizedDefinition, "now_at:=clock_timestamp()") || !strings.Contains(fencedDefinition, "evidence.recorded_at<=") {
 		t.Fatal("forward migration did not install activation serialization and generation fence")
 	}
-	var oldExists, checkedExists bool
-	if err = tx.QueryRow(ctx, `SELECT to_regprocedure('privacy_activation_disable(uuid)') IS NOT NULL,to_regprocedure('privacy_activation_disable(uuid,text)') IS NOT NULL`).Scan(&oldExists, &checkedExists); err != nil {
+	var oldExists, publicCheckedExists, isolatedCheckedExists bool
+	if err = tx.QueryRow(ctx, `SELECT to_regprocedure('privacy_activation_disable(uuid)') IS NOT NULL,to_regprocedure('privacy_activation_disable(uuid,text)') IS NOT NULL,to_regprocedure('privacy_disable.privacy_activation_disable(uuid,text)') IS NOT NULL`).Scan(&oldExists, &publicCheckedExists, &isolatedCheckedExists); err != nil {
 		t.Fatal(err)
 	}
-	if oldExists || !checkedExists {
-		t.Fatalf("disable API boundary old=%t checked=%t", oldExists, checkedExists)
+	if oldExists || publicCheckedExists || !isolatedCheckedExists {
+		t.Fatalf("disable API boundary old=%t public_checked=%t isolated_checked=%t", oldExists, publicCheckedExists, isolatedCheckedExists)
 	}
 	var publicDefaultExecute bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(

@@ -54,24 +54,27 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 	})
 	for _, statement := range []string{
 		`GRANT CONNECT ON DATABASE ` + databaseIdentifier + ` TO ` + roleIdentifier,
-		`GRANT USAGE ON SCHEMA public TO ` + roleIdentifier,
-		`GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO ` + roleIdentifier,
+		`REVOKE ALL ON SCHEMA public FROM ` + roleIdentifier,
+		`GRANT USAGE ON SCHEMA privacy_disable TO ` + roleIdentifier,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM ` + roleIdentifier,
+		`GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO ` + roleIdentifier,
 	} {
 		if _, err = admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var canDisable, canReadBroker, canActivateBroker, canReadActivationTable bool
+	var canDisable, canUsePublicSchema, canReadBroker, canActivateBroker, canReadActivationTable bool
 	if err = admin.QueryRow(ctx, `SELECT
-		has_function_privilege($1,'privacy_activation_disable(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_disable.privacy_activation_disable(uuid,text)','EXECUTE'),
+		has_schema_privilege($1,'public','USAGE'),
 		has_function_privilege($1,'privacy_activation_broker_material(text)','EXECUTE'),
 		has_function_privilege($1,'privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)','EXECUTE'),
 		has_table_privilege($1,'privacy_request_activation','SELECT')`, privacyActivationDisableRole).
-		Scan(&canDisable, &canReadBroker, &canActivateBroker, &canReadActivationTable); err != nil {
+		Scan(&canDisable, &canUsePublicSchema, &canReadBroker, &canActivateBroker, &canReadActivationTable); err != nil {
 		t.Fatal(err)
 	}
-	if !canDisable || canReadBroker || canActivateBroker || canReadActivationTable {
-		t.Fatalf("disable privilege boundary disable=%t material=%t activate=%t activation_table=%t", canDisable, canReadBroker, canActivateBroker, canReadActivationTable)
+	if !canDisable || canUsePublicSchema || canReadBroker || canActivateBroker || canReadActivationTable {
+		t.Fatalf("disable privilege boundary disable=%t public_schema=%t material=%t activate=%t activation_table=%t", canDisable, canUsePublicSchema, canReadBroker, canActivateBroker, canReadActivationTable)
 	}
 
 	var beforeVersion int64
@@ -99,6 +102,18 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 		"PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": admin.Config().Database,
 		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor.String(),
 	}
+	restricted, err := pgx.Connect(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unrelatedReady bool
+	if unrelatedErr := restricted.QueryRow(ctx, `SELECT public.privacy_activation_ready($1)`, "irrelevant-policy").Scan(&unrelatedReady); unrelatedErr == nil {
+		_ = restricted.Close(ctx)
+		t.Fatal("disable role executed an unrelated public-schema function")
+	}
+	if err = restricted.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
 	withDisableRuntime(t, 0, nil)
 	var output bytes.Buffer
 	if err = runDisable(ctx, func(name string) string { return env[name] }, &output); err != nil {
@@ -125,14 +140,14 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 	if err = admin.QueryRow(ctx, `SELECT version FROM privacy_worker_kill_switch WHERE singleton`).Scan(&repeatedVersion); err != nil {
 		t.Fatal(err)
 	}
-	if repeatedVersion != afterVersion {
-		t.Fatalf("idempotent disable changed switch version from %d to %d", afterVersion, repeatedVersion)
+	if repeatedVersion != afterVersion+1 {
+		t.Fatalf("repeated disable did not advance the incident fence from %d to %d", afterVersion, repeatedVersion)
 	}
 	var engagedEvents int
-	if err = admin.QueryRow(ctx, `SELECT count(*) FROM privacy_worker_kill_switch_events WHERE version=$1 AND engaged`, afterVersion).Scan(&engagedEvents); err != nil {
+	if err = admin.QueryRow(ctx, `SELECT count(*) FROM privacy_worker_kill_switch_events WHERE version IN($1,$2) AND engaged`, afterVersion, repeatedVersion).Scan(&engagedEvents); err != nil {
 		t.Fatal(err)
 	}
-	if engagedEvents != 1 {
-		t.Fatalf("idempotent disable recorded %d engaged events for version %d", engagedEvents, afterVersion)
+	if engagedEvents != 2 {
+		t.Fatalf("two disable incidents recorded %d engaged events", engagedEvents)
 	}
 }

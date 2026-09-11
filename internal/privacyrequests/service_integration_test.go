@@ -176,6 +176,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	schema := pgx.Identifier{schemaName}.Sanitize()
 	protectedSchemaName := schemaName + "_protected"
 	protectedSchema := pgx.Identifier{protectedSchemaName}.Sanitize()
+	disableSchemaName := schemaName + "_disable"
+	disableSchema := pgx.Identifier{disableSchemaName}.Sanitize()
 	if _, e = admin.Exec(ctx, "CREATE SCHEMA "+schema); e != nil {
 		t.Fatal(e)
 	}
@@ -184,6 +186,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Error(err)
 		}
 		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+protectedSchema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+disableSchema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -205,6 +210,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName+", public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path=pg_catalog,public", "SET search_path=pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_disable", disableSchemaName)
 	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
 	}

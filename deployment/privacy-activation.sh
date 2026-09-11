@@ -17,7 +17,7 @@ if [ "$#" -gt 1 ] || [ ! -f "$env_file" ]; then
 	fail
 fi
 
-if [ "$mode" = disable ]; then
+if [ "$mode" = disable ] || [ "$mode" = provision-disable ]; then
 	if [ "$(id -u 2>/dev/null || true)" != 0 ] || [ ! -f "$disable_env_file" ] || [ -L "$disable_env_file" ] ||
 		[ "$(stat -c '%u:%g:%a' "$disable_env_file" 2>/dev/null || true)" != '0:0:600' ] ||
 		[ "$(grep -c '^PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=' "$disable_env_file" 2>/dev/null || true)" -ne 1 ] ||
@@ -32,6 +32,9 @@ if [ "$mode" = disable ]; then
 			*) fail ;;
 		esac
 	done <"$disable_env_file"
+	if [ "$mode" = provision-disable ]; then
+		exec docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" --profile privacy-activation-disable-bootstrap run --rm privacy-activation-disable-bootstrap
+	fi
 	exec docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" --profile privacy-activation-disable run --rm --no-deps privacy-activation-disable
 fi
 

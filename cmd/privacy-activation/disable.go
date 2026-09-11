@@ -43,7 +43,7 @@ func runDisable(ctx context.Context, getenv func(string) string, output io.Write
 	var switchVersion int64
 	var databaseName string
 	var engaged, readiness bool
-	if err = database.QueryRow(ctx, `SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_activation_disable($1,$2)`, actor, expectedDatabase).
+	if err = database.QueryRow(ctx, `SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_disable.privacy_activation_disable($1,$2)`, actor, expectedDatabase).
 		Scan(&switchVersion, &databaseName, &engaged, &readiness); err != nil || switchVersion < 1 || databaseName != expectedDatabase || !engaged || readiness {
 		return errors.New("privacy activation disable rejected")
 	}

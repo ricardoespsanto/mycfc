@@ -98,11 +98,21 @@ run "backup_version_expiration_is_inert" {
     condition = (
       toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions)) == toset(["s3:ListBucket", "s3:ListBucketVersions"]) &&
       length(setintersection(
-        toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions, local.backup_object_actions, local.backup_encryption_actions)),
+        toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions, local.backup_object_actions, local.backup_version_read_actions, local.backup_encryption_actions)),
         toset(local.backup_cleanup_actions),
-      )) == 0
+      )) == 0 &&
+      toset(local.backup_version_read_actions) == toset(["s3:GetObjectVersion"]) &&
+      toset(local.backup_recovery_prefixes) == toset(["daily/*", "monthly/*"])
     )
-    error_message = "The standing backup identity may inventory versions for restore, but must never receive deletion permission."
+    error_message = "The standing backup identity may inventory and read exact recovery-point versions for restore, but must never receive deletion permission."
+  }
+
+  assert {
+    condition = toset(one([
+      for statement in data.aws_iam_policy_document.postgres_backups.statement : statement.actions
+      if statement.sid == "ReadExactRecoveryPointVersions"
+    ])) == toset(["s3:GetObjectVersion"])
+    error_message = "The standing backup policy must wire exact-version restore reads into a dedicated statement."
   }
 }
 

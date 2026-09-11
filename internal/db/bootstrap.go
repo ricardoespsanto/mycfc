@@ -33,18 +33,16 @@ const (
 )
 
 type RoleCredentials struct {
-	AppUsername                      string
-	AppPassword                      string
-	MigrationUsername                string
-	MigrationPassword                string
-	PrivacyExecutorUsername          string
-	PrivacyExecutorPassword          string
-	PrivacyActivationBrokerUsername  string
-	PrivacyActivationBrokerPassword  string
-	PrivacyActivationDisableUsername string
-	PrivacyActivationDisablePassword string
-	PrivacyRestoreObserverUsername   string
-	PrivacyRestoreObserverPassword   string
+	AppUsername                     string
+	AppPassword                     string
+	MigrationUsername               string
+	MigrationPassword               string
+	PrivacyExecutorUsername         string
+	PrivacyExecutorPassword         string
+	PrivacyActivationBrokerUsername string
+	PrivacyActivationBrokerPassword string
+	PrivacyRestoreObserverUsername  string
+	PrivacyRestoreObserverPassword  string
 }
 
 type namedStatement struct{ name, sql string }
@@ -122,14 +120,10 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 	}
 	if privacyActivationBrokerConfigured(credentials) {
 		broker := quoteIdentifier(credentials.PrivacyActivationBrokerUsername)
-		disable := quoteIdentifier(credentials.PrivacyActivationDisableUsername)
 		statements = append(statements,
 			namedStatement{"configure privacy activation broker role", roleStatement(credentials.PrivacyActivationBrokerUsername, credentials.PrivacyActivationBrokerPassword)},
 			namedStatement{"grant privacy activation broker database access", "GRANT CONNECT ON DATABASE " + database + " TO " + broker},
 			namedStatement{"grant privacy activation broker schema usage", "GRANT USAGE ON SCHEMA public TO " + broker},
-			namedStatement{"configure privacy activation disable role", roleStatement(credentials.PrivacyActivationDisableUsername, credentials.PrivacyActivationDisablePassword)},
-			namedStatement{"grant privacy activation disable database access", "GRANT CONNECT ON DATABASE " + database + " TO " + disable},
-			namedStatement{"grant privacy activation disable schema usage", "GRANT USAGE ON SCHEMA public TO " + disable},
 		)
 	}
 	if privacyRestoreObserverConfigured(credentials) {
@@ -143,6 +137,36 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 	for _, statement := range statements {
 		if _, err := conn.Exec(ctx, statement.sql); err != nil {
 			return fmt.Errorf("bootstrap database roles (%s): %w", statement.name, err)
+		}
+	}
+	return nil
+}
+
+// ProvisionPrivacyActivationDisableRole is an explicit break-glass setup step.
+// Routine bootstrap and migration commands never receive or rotate this secret.
+func ProvisionPrivacyActivationDisableRole(ctx context.Context, conn bootstrapConnection, databaseName, username, password string) error {
+	if !postgresIdentifier.MatchString(databaseName) {
+		return fmt.Errorf("database name %q must be a PostgreSQL identifier", databaseName)
+	}
+	if strings.TrimSpace(username) != privacyActivationDisableRole || strings.TrimSpace(password) == "" {
+		return errors.New("privacy activation disable credential rejected")
+	}
+	database := quoteIdentifier(databaseName)
+	disable := quoteIdentifier(privacyActivationDisableRole)
+	statements := []namedStatement{
+		{"configure privacy activation disable role", roleStatement(privacyActivationDisableRole, password)},
+		{"grant privacy activation disable database access", "GRANT CONNECT ON DATABASE " + database + " TO " + disable},
+		{"revoke public schema inheritance", "REVOKE USAGE ON SCHEMA public FROM PUBLIC"},
+		{"revoke privacy activation disable public schema access", "REVOKE ALL ON SCHEMA public FROM " + disable},
+		{"grant privacy activation disable schema usage", "GRANT USAGE ON SCHEMA privacy_disable TO " + disable},
+		{"revoke privacy disable table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + disable},
+		{"revoke privacy disable protected access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + disable},
+		{"revoke privacy disable function access", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + disable},
+		{"grant privacy disable fixed API", "GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO " + disable},
+	}
+	for _, statement := range statements {
+		if _, err := conn.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("provision privacy activation disable role (%s): %w", statement.name, err)
 		}
 	}
 	return nil
@@ -218,7 +242,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke web provider worker routines", "REVOKE EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
 		{"grant web provider capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) TO " + app},
 		{"revoke web completion worker routines", "REVOKE EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() FROM " + app},
-		{"revoke web activation mutations", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_disable(uuid,text) FROM " + app},
+		{"revoke web activation mutations", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) FROM " + app},
 		{"grant web completion control routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_control_snapshot(uuid) TO " + app},
 		{"revoke web restore and retention routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea), privacy_retention_run(uuid,integer) FROM " + app},
 		{"revoke web hardened restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_verify_operation_inner_013(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_begin_replay_hardened_inner_013(uuid,uuid), privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + app},
@@ -235,7 +259,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	if privacyExecutorConfigured(credentials) {
 		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
 		statements = append(statements,
-			namedStatement{"revoke privacy executor activation broker capabilities", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_disable(uuid,text) FROM " + executor},
+			namedStatement{"revoke privacy executor activation broker capabilities", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) FROM " + executor},
 			namedStatement{"revoke privacy executor upload lifecycle", "REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid), privacy_upload_pointer_references(uuid,text,uuid), privacy_upload_pointer_matches(uuid,text,uuid,bytea,text,bigint), privacy_upload_enforce_pointer_state(), privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid), privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM " + executor},
 			namedStatement{"revoke privacy executor schema creation", "REVOKE CREATE ON SCHEMA public FROM " + executor},
 			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
@@ -266,17 +290,25 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	}
 	if privacyActivationBrokerConfigured(credentials) {
 		broker := quoteIdentifier(credentials.PrivacyActivationBrokerUsername)
-		disable := quoteIdentifier(credentials.PrivacyActivationDisableUsername)
 		statements = append(statements,
 			namedStatement{"revoke privacy activation broker table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + broker},
 			namedStatement{"revoke privacy activation broker protected access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + broker},
 			namedStatement{"revoke privacy activation broker raw routines", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_authenticated_set_digest(text,uuid[]) FROM " + broker},
 			namedStatement{"grant privacy activation broker fixed API", "GRANT EXECUTE ON FUNCTION privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_ready(text) TO " + broker},
-			namedStatement{"revoke privacy disable table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + disable},
-			namedStatement{"revoke privacy disable protected access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + disable},
-			namedStatement{"grant privacy disable fixed API", "GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO " + disable},
 		)
 	}
+	statements = append(statements,
+		namedStatement{"harden separately provisioned privacy disable role", `DO $$BEGIN
+			IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_activation_disable') THEN
+				REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM mycfc_privacy_activation_disable;
+				REVOKE ALL ON SCHEMA privacy_protected FROM mycfc_privacy_activation_disable;
+				REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM mycfc_privacy_activation_disable;
+				REVOKE ALL ON SCHEMA public FROM mycfc_privacy_activation_disable;
+				GRANT USAGE ON SCHEMA privacy_disable TO mycfc_privacy_activation_disable;
+				GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text) TO mycfc_privacy_activation_disable;
+			END IF;
+		END$$`},
+	)
 	if privacyRestoreObserverConfigured(credentials) {
 		observer := quoteIdentifier(credentials.PrivacyRestoreObserverUsername)
 		statements = append(statements,
@@ -476,14 +508,13 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 	}
 	for _, role := range []struct{ label, username, password string }{
 		{"privacy activation broker", credentials.PrivacyActivationBrokerUsername, credentials.PrivacyActivationBrokerPassword},
-		{"privacy activation disable", credentials.PrivacyActivationDisableUsername, credentials.PrivacyActivationDisablePassword},
 	} {
 		if (strings.TrimSpace(role.username) == "") != (strings.TrimSpace(role.password) == "") {
 			return fmt.Errorf("%s database user and password must either both be set or both be empty", role.label)
 		}
 	}
 	if privacyActivationRolesPartiallyConfigured(credentials) && !privacyActivationRolesComplete(credentials) {
-		return errors.New("privacy executor, activation broker, and activation disable database identities must be configured together")
+		return errors.New("privacy executor and activation broker database identities must be configured together")
 	}
 	return nil
 }
@@ -520,8 +551,7 @@ func validateDatabaseRoleIdentifiers(databaseName string, credentials RoleCreden
 		}
 	}
 	for label, user := range map[string]string{
-		"privacy activation broker":  strings.TrimSpace(credentials.PrivacyActivationBrokerUsername),
-		"privacy activation disable": strings.TrimSpace(credentials.PrivacyActivationDisableUsername),
+		"privacy activation broker": strings.TrimSpace(credentials.PrivacyActivationBrokerUsername),
 	} {
 		if user == "" {
 			continue
@@ -535,14 +565,8 @@ func validateDatabaseRoleIdentifiers(databaseName string, credentials RoleCreden
 			}
 		}
 	}
-	if credentials.PrivacyActivationBrokerUsername != "" && credentials.PrivacyActivationBrokerUsername == credentials.PrivacyActivationDisableUsername {
-		return errors.New("privacy activation broker and disable database users must differ")
-	}
 	if credentials.PrivacyActivationBrokerUsername != "" && credentials.PrivacyActivationBrokerUsername != privacyActivationBrokerRole {
 		return fmt.Errorf("privacy activation broker database user must be %q", privacyActivationBrokerRole)
-	}
-	if credentials.PrivacyActivationDisableUsername != "" && credentials.PrivacyActivationDisableUsername != privacyActivationDisableRole {
-		return fmt.Errorf("privacy activation disable database user must be %q", privacyActivationDisableRole)
 	}
 	return nil
 }
@@ -556,14 +580,12 @@ func privacyRestoreObserverConfigured(credentials RoleCredentials) bool {
 }
 
 func privacyActivationBrokerConfigured(credentials RoleCredentials) bool {
-	return strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" && strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != "" &&
-		strings.TrimSpace(credentials.PrivacyActivationDisableUsername) != "" && strings.TrimSpace(credentials.PrivacyActivationDisablePassword) != ""
+	return strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" && strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != ""
 }
 
 func privacyActivationRolesPartiallyConfigured(credentials RoleCredentials) bool {
 	return strings.TrimSpace(credentials.PrivacyExecutorUsername) != "" || strings.TrimSpace(credentials.PrivacyExecutorPassword) != "" ||
-		strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" || strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != "" ||
-		strings.TrimSpace(credentials.PrivacyActivationDisableUsername) != "" || strings.TrimSpace(credentials.PrivacyActivationDisablePassword) != ""
+		strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" || strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != ""
 }
 
 func privacyActivationRolesComplete(credentials RoleCredentials) bool {
