@@ -51,4 +51,4 @@ jobs:
           name: e2e-worker-trial-${{ github.sha }}
           path: artifacts/e2e-worker-trials/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14

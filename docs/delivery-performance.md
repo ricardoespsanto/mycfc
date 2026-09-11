@@ -25,7 +25,7 @@ Apply the maintainer-controlled `e2e-worker-trial` label to a pull request, or
 run the manual `E2E worker trial` workflow with its default 20 samples after the
 workflow is on the default branch. It runs all three worker counts sequentially
 on one representative GitHub-hosted runner and retains the TSV, JSON, logs, and
-failure traces as a 30-day artifact. The same harness can be exercised locally
+failure traces as a 14-day artifact. The same harness can be exercised locally
 with:
 
 ```sh
