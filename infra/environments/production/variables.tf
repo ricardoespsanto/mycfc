@@ -257,6 +257,54 @@ variable "privacy_worker_infrastructure_enabled" {
   description = "Provision the inert privacy-worker IAM user, permissions boundary, empty secret container, and dedicated log group. This does not create credentials or start a worker."
 }
 
+variable "legacy_media_purge_identity_enabled" {
+  type        = bool
+  default     = false
+  description = "Provision the temporary bounded identity for the separately approved one-time legacy media purge. Terraform creates no access key."
+
+  validation {
+    condition = !var.legacy_media_purge_identity_enabled || (
+      var.legacy_media_purge_permission_expires_at != null &&
+      can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.legacy_media_purge_permission_expires_at)) &&
+      can(timecmp(var.legacy_media_purge_permission_expires_at, plantimestamp())) &&
+      timecmp(var.legacy_media_purge_permission_expires_at, plantimestamp()) > 0 &&
+      timecmp(var.legacy_media_purge_permission_expires_at, timeadd(plantimestamp(), "24h")) <= 0
+    )
+    error_message = "legacy_media_purge_identity_enabled requires a valid future UTC expiry no more than 24 hours after plan time."
+  }
+}
+
+variable "legacy_media_purge_deletion_enabled" {
+  type        = bool
+  default     = false
+  description = "Add exact version-deletion permission to the temporary purge identity after matching inventories are approved."
+
+  validation {
+    condition = !var.legacy_media_purge_deletion_enabled || (
+      var.legacy_media_purge_identity_enabled && var.legacy_media_purge_write_fence_enabled
+    )
+    error_message = "legacy_media_purge_deletion_enabled requires both the temporary identity and the bucket write fence."
+  }
+}
+
+variable "legacy_media_purge_write_fence_enabled" {
+  type        = bool
+  default     = false
+  description = "Temporarily deny every principal from writing under the three purge prefixes during the approved deletion window."
+
+  validation {
+    condition     = !var.legacy_media_purge_write_fence_enabled || var.legacy_media_purge_identity_enabled
+    error_message = "legacy_media_purge_write_fence_enabled requires legacy_media_purge_identity_enabled."
+  }
+}
+
+variable "legacy_media_purge_permission_expires_at" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "UTC RFC3339 deadline enforced by IAM for every temporary legacy-media purge permission."
+}
+
 variable "privacy_worker_s3_deletion_enabled" {
   type        = bool
   default     = false
