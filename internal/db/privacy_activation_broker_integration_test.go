@@ -209,7 +209,7 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 		artifact["provider_registry_state"], artifact["provider_registration_count"], artifact["provider_registry_sha256"] = "READY", 1, digest
 	case "SCHEMA":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609100015_privacy_membership_postcondition"
+		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110001_privacy_upload_finalize_execution_fence"
 	}
 	return artifact
 }

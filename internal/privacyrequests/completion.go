@@ -567,7 +567,7 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609100015_privacy_membership_postcondition" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609110001_privacy_upload_finalize_execution_fence" {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact

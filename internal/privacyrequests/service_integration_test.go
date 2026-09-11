@@ -34,6 +34,33 @@ type executionVersionedStoreRecorder struct {
 	evidence storage.VersionDeletionEvidence
 }
 
+type blockingObjectTargetProtector struct {
+	delegate ObjectTargetProtector
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (p *blockingObjectTargetProtector) SealObjectKey(binding ObjectTargetBinding, objectKey string) (ObjectTargetEnvelope, error) {
+	var waitErr error
+	p.once.Do(func() {
+		close(p.entered)
+		select {
+		case <-p.release:
+		case <-time.After(2 * time.Second):
+			waitErr = errors.New("timed out waiting to release object target materialization")
+		}
+	})
+	if waitErr != nil {
+		return ObjectTargetEnvelope{}, waitErr
+	}
+	return p.delegate.SealObjectKey(binding, objectKey)
+}
+
+func (p *blockingObjectTargetProtector) DigestObjectKey(executionID uuid.UUID, service, objectKey string) (ObjectTargetDigest, error) {
+	return p.delegate.DigestObjectKey(executionID, service, objectKey)
+}
+
 type activationFixtureQueryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
@@ -80,7 +107,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609100015_privacy_membership_postcondition"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110001_privacy_upload_finalize_execution_fence"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -3032,9 +3059,161 @@ VALUES($1,$2,'image/png',5,$3,$4)`, subject, prepared.ObjectKey, consentID, prep
 		if rolledBackExecutions != 0 || rolledBackCaptures != 0 {
 			t.Fatalf("failed capture was not atomic: executions=%d captures=%d", rolledBackExecutions, rolledBackCaptures)
 		}
-		execution, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
-		if startErr != nil {
-			t.Fatal(startErr)
+		racedIntent := uuid.New()
+		racedToken := bytes.Repeat([]byte{9}, 32)
+		if _, err := pool.Exec(ctx, `SELECT privacy_upload_begin($1,$2,$2,'MEMBER_PROFILE_PHOTO',$2,'private-media','image/png',5,$3)`, racedIntent, subject, racedToken); err != nil {
+			t.Fatal(err)
+		}
+		materializeEntered := make(chan struct{})
+		materializeRelease := make(chan struct{})
+		defer func() {
+			select {
+			case <-materializeRelease:
+			default:
+				close(materializeRelease)
+			}
+		}()
+		s.ObjectTargets = &blockingObjectTargetProtector{delegate: realTargetProtector, entered: materializeEntered, release: materializeRelease}
+		type executionStartResult struct {
+			execution dbgen.PrivacyErasureExecution
+			err       error
+		}
+		startResult := make(chan executionStartResult, 1)
+		go func() {
+			execution, startErr := s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
+			startResult <- executionStartResult{execution: execution, err: startErr}
+		}()
+		select {
+		case <-materializeEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("execution start did not reach object materialization")
+		}
+
+		uploadConn, acquireErr := pool.Acquire(ctx)
+		if acquireErr != nil {
+			t.Fatal(acquireErr)
+		}
+		defer uploadConn.Release()
+		uploadResult := make(chan error, 1)
+		go func() {
+			_, uploadErr := uploadConn.Exec(ctx, `SELECT privacy_upload_finalize(
+$1,$2,'x25519-aes256gcm-hkdfsha256/v1','X25519-HKDF-SHA256-AES-256-GCM','upload-race-key',
+decode(repeat('01',32),'hex'),decode(repeat('02',12),'hex'),decode(repeat('03',48),'hex'),
+'upload-race-digest',decode(repeat('04',32),'hex'),decode(repeat('05',32),'hex'))`, racedIntent, racedToken)
+			uploadResult <- uploadErr
+		}()
+		pid := uploadConn.Conn().PgConn().PID()
+		lockDeadline := time.Now().Add(2 * time.Second)
+		for {
+			select {
+			case uploadErr := <-uploadResult:
+				t.Fatalf("upload finalization escaped the execution-start subject lock: %v", uploadErr)
+			default:
+			}
+			var waitEventType *string
+			if err := pool.QueryRow(ctx, `SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1`, pid).Scan(&waitEventType); err != nil {
+				t.Fatal(err)
+			}
+			if waitEventType != nil && *waitEventType == "Lock" {
+				break
+			}
+			if time.Now().After(lockDeadline) {
+				t.Fatal("concurrent upload did not wait on the execution-start lock")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		close(materializeRelease)
+		var result executionStartResult
+		select {
+		case result = <-startResult:
+		case <-time.After(2 * time.Second):
+			t.Fatal("execution start did not finish after releasing materialization")
+		}
+		s.ObjectTargets = realTargetProtector
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		execution := result.execution
+		var racedUploadErr error
+		select {
+		case racedUploadErr = <-uploadResult:
+		case <-time.After(2 * time.Second):
+			t.Fatal("upload finalization did not finish after execution start")
+		}
+		if racedUploadErr == nil || !strings.Contains(racedUploadErr.Error(), "privacy_media_execution_in_progress") {
+			t.Fatalf("concurrent upload finalization error=%v", racedUploadErr)
+		}
+		var racedFinalized bool
+		if err := pool.QueryRow(ctx, `SELECT finalized_at IS NOT NULL FROM `+protectedSchema+`.object_upload_intent_reservations WHERE id=$1`, racedIntent).Scan(&racedFinalized); err != nil {
+			t.Fatal(err)
+		}
+		if racedFinalized {
+			t.Fatal("rejected upload reservation was finalized")
+		}
+
+		// Hold the upload-intent row as a removal does, then prove capture waits
+		// before taking the source advisory lock. The removal must be able to
+		// finish without forming an intent/source lock cycle with capture.
+		removalTx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		removalOpen := true
+		defer func() {
+			if removalOpen {
+				_ = removalTx.Rollback(ctx)
+			}
+		}()
+		if _, err = removalTx.Exec(ctx, `SELECT id FROM `+protectedSchema+`.object_upload_intents WHERE id=$1 FOR UPDATE`, prepared.IntentID); err != nil {
+			t.Fatal(err)
+		}
+		captureConn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer captureConn.Release()
+		captureResult := make(chan error, 1)
+		go func() {
+			_, captureErr := captureConn.Exec(ctx, `SELECT * FROM privacy_execution_capture_media_sources($1,$2,'profile-photo')`, execution.ID, subject)
+			captureResult <- captureErr
+		}()
+		capturePID := captureConn.Conn().PgConn().PID()
+		captureWaitDeadline := time.Now().Add(2 * time.Second)
+		for {
+			select {
+			case captureErr := <-captureResult:
+				t.Fatalf("capture did not wait behind the lifecycle intent lock: %v", captureErr)
+			default:
+			}
+			var waitEventType *string
+			if err = pool.QueryRow(ctx, `SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1`, capturePID).Scan(&waitEventType); err != nil {
+				t.Fatal(err)
+			}
+			if waitEventType != nil && *waitEventType == "Lock" {
+				break
+			}
+			if time.Now().After(captureWaitDeadline) {
+				t.Fatal("capture did not wait on the lifecycle intent lock")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		removeCtx, cancelRemove := context.WithTimeout(ctx, 2*time.Second)
+		_, removeErr := removalTx.Exec(removeCtx, `SELECT privacy_upload_remove($1,$2,'MEMBER_PROFILE_PHOTO',$2)`, prepared.IntentID, subject)
+		cancelRemove()
+		if removeErr != nil {
+			t.Fatalf("removal deadlocked with capture: %v", removeErr)
+		}
+		if err = removalTx.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		removalOpen = false
+		select {
+		case captureErr := <-captureResult:
+			if captureErr == nil {
+				t.Fatal("duplicate capture unexpectedly succeeded")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("capture did not finish after lifecycle lock release")
 		}
 
 		var binding ObjectTargetBinding
@@ -3052,8 +3231,8 @@ FROM ` + protectedSchema + `.object_targets t WHERE t.execution_id=$1`
 		if openErr != nil || opened != prepared.ObjectKey {
 			t.Fatalf("opened=%q err=%v", opened, openErr)
 		}
-		blockedIntent := uuid.New()
-		if _, err := pool.Exec(ctx, `SELECT privacy_upload_begin($1,$2,$2,'MEMBER_PROFILE_PHOTO',$2,'private-media','image/png',5,$3)`, blockedIntent, subject, bytes.Repeat([]byte{9}, 32)); err == nil {
+		postCaptureIntent := uuid.New()
+		if _, err := pool.Exec(ctx, `SELECT privacy_upload_begin($1,$2,$2,'MEMBER_PROFILE_PHOTO',$2,'private-media','image/png',5,$3)`, postCaptureIntent, subject, bytes.Repeat([]byte{9}, 32)); err == nil {
 			t.Fatal("post-capture profile upload was not blocked")
 		}
 
