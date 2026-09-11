@@ -31,6 +31,8 @@ A pesquisa legal, exemplos comparados e correspondência com os issues estão re
 | [Procedimento de apagamento e restauro](procedimento-apagamento-restauro.md) | Execução entre base de dados, objetos, sessões, fornecedores, registos e cópias de segurança |
 | [Procedimento de fotografias privadas](procedimento-fotografias-privadas.md) | Consentimento, moderação, denúncia, retirada e conservação para #150–#152 |
 | [Registo de adoção e governação](adocao-e-governacao.md) | Deliberação, responsáveis, versões, revisão e decisões em aberto |
+| [Registo de prestadores e destinatários](registo-prestadores.md) | Inventário governado de fornecedores, subprocessadores e responsáveis autónomos |
+| [Verificação de prestadores de 2026-09-11](evidencia-prestadores-2026-09-11.md) | Fontes oficiais, factos técnicos observados e prova de conta/fluxo ainda em falta |
 
 ## Decisões estruturais adotadas
 
