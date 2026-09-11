@@ -55,7 +55,7 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 	for _, statement := range []string{
 		`GRANT CONNECT ON DATABASE ` + databaseIdentifier + ` TO ` + roleIdentifier,
 		`GRANT USAGE ON SCHEMA public TO ` + roleIdentifier,
-		`GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid) TO ` + roleIdentifier,
+		`GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO ` + roleIdentifier,
 	} {
 		if _, err = admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -63,7 +63,7 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 	}
 	var canDisable, canReadBroker, canActivateBroker, canReadActivationTable bool
 	if err = admin.QueryRow(ctx, `SELECT
-		has_function_privilege($1,'privacy_activation_disable(uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_activation_disable(uuid,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_activation_broker_material(text)','EXECUTE'),
 		has_function_privilege($1,'privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)','EXECUTE'),
 		has_table_privilege($1,'privacy_request_activation','SELECT')`, privacyActivationDisableRole).
@@ -95,8 +95,9 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 		t.Fatal(err)
 	}
 	env := map[string]string{
-		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": parsed.String(),
-		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":    actor.String(),
+		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL":      parsed.String(),
+		"PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": admin.Config().Database,
+		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor.String(),
 	}
 	withDisableRuntime(t, 0, nil)
 	var output bytes.Buffer

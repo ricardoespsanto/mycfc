@@ -94,11 +94,14 @@ run "backup_version_expiration_is_inert" {
   }
 
   assert {
-    condition = length(setintersection(
-      toset(concat(local.backup_base_list_actions, local.backup_object_actions, local.backup_encryption_actions)),
-      toset(concat(local.backup_cleanup_list_actions, local.backup_cleanup_actions)),
-    )) == 0
-    error_message = "The standing backup writer and its boundary must never receive cleanup permissions."
+    condition = (
+      toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions)) == toset(["s3:ListBucket", "s3:ListBucketVersions"]) &&
+      length(setintersection(
+        toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions, local.backup_object_actions, local.backup_encryption_actions)),
+        toset(local.backup_cleanup_actions),
+      )) == 0
+    )
+    error_message = "The standing backup identity may inventory versions for restore, but must never receive deletion permission."
   }
 }
 

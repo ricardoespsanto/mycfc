@@ -78,10 +78,11 @@ PRIVACY_ACTIVATION_POLICY_VERSION=REVIEWED_POLICY_VERSION
 PRIVACY_ACTIVATION_ARTIFACT_SIGNING_KEY_ID=REVIEWED_KEY_ID
 ```
 
-Keep the emergency disable credential in a different root-owned file, `/etc/mycfc/privacy-activation-disable.env`, with owner `root:root`, mode `0600`, and exactly these two entries:
+Keep the emergency disable credential in a different root-owned file, `/etc/mycfc/privacy-activation-disable.env`, with owner `root:root`, mode `0600`, and exactly these three entries:
 
 ```dotenv
 PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=postgres://mycfc_privacy_activation_disable:INDEPENDENT_DISABLE_PASSWORD@postgres:5432/mycfc?sslmode=disable
+PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE=mycfc
 PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=CANONICAL_OPERATOR_UUID
 ```
 
@@ -95,9 +96,9 @@ Activation is never performed in the web application. After evidence recording, 
 
 ### Emergency activation disable and incident drill
 
-From a root shell on the application host, run `privacy-activation.sh disable`. The wrapper rejects non-root callers, any disable file that is not root-owned mode `0600`, duplicate or unknown environment entries, and noncanonical inputs. The binary independently requires effective UID 0, the exact `mycfc_privacy_activation_disable` database username with a nonempty password, and a canonical nonzero actor UUID. It calls only `privacy_activation_disable(uuid)` and emits the fixed privacy-safe outcome `privacy_activation_disabled kill_switch=engaged readiness=blocked`. Repeating the command is safe and does not increment the switch version again.
+From a root shell on the application host, run `privacy-activation.sh disable`. The wrapper rejects non-root callers, any disable file that is not root-owned mode `0600`, duplicate or unknown environment entries, and noncanonical inputs. The binary independently requires effective UID 0, the exact `mycfc_privacy_activation_disable` database username with a nonempty password, the exact expected database name matching both the URL and server identity, and a canonical nonzero actor UUID. It calls only `privacy_activation_disable(uuid,text)` and emits the fixed privacy-safe outcome `privacy_activation_disabled kill_switch=engaged readiness=blocked` after the database atomically confirms the switch is engaged and readiness is blocked. Repeating the command is safe and does not increment the switch version or add duplicate disable events.
 
-Treat any nonzero exit or missing exact outcome as an unconfirmed disable: stop `mycfc-privacy-worker.service`, preserve the generic failure output, and escalate without printing the environment, database URL, SQL errors, evidence, or identifiers. After success, stop the worker and run `privacy-worker.sh readiness`; exit status 3 with `privacy_worker_readiness_activation_required` is the required result. Do not restart it. Fresh release-bound evidence and two new independent approval envelopes are required to reactivate.
+Treat any nonzero exit or missing exact outcome as an unconfirmed disable: stop `mycfc-privacy-worker.service`, preserve the generic failure output, and escalate without printing the environment, database URL, SQL errors, evidence, or identifiers. After success, stop the worker and run `privacy-worker.sh readiness`; exit status 3 with `privacy_worker_readiness_activation_required` is the required result. Do not restart it. Activation and disable share one transaction lock; disable invalidates all evidence and signed approvals created before its switch generation, so fresh release-bound evidence and two new independent approval envelopes are required to reactivate.
 
 Exercise the incident drill against `mycfc_test`, never a live subject: establish a synthetic unengaged switch, invoke the command through the restricted login, verify the switch transitions to engaged, verify worker readiness is false, invoke it again, and verify the switch version is unchanged. `make test-integration` runs this database-backed drill. A production drill requires a separately approved live-system window because it deliberately revokes activation.
 

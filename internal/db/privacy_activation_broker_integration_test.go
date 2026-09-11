@@ -98,6 +98,9 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 	}
 
 	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	if _, err = adminConn.Exec(ctx, `UPDATE privacy_worker_kill_switch SET engaged=true,activation_approval_id=NULL,changed_at=$1 WHERE singleton`, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	adminID, executorID := uuid.New(), uuid.New()
 	for _, fixture := range []struct {
 		id    uuid.UUID
@@ -182,6 +185,134 @@ func TestPrivacyActivationBrokerRejectsUnboundEnvelopeAndPersistsExactCanonicalB
 	if !bytes.Equal(stored, executorRaw) {
 		t.Fatal("broker did not persist the exact canonical bytes supplied by the verifier")
 	}
+
+	// Prepare a second, fresh authorization set, then queue disable ahead of
+	// activation behind the shared advisory lock. Disable must commit first and
+	// the waiting activation must reject all material from the prior generation.
+	if _, err = adminConn.Exec(ctx, `UPDATE privacy_worker_kill_switch SET changed_at=clock_timestamp()-interval '1 second' WHERE singleton`); err != nil {
+		t.Fatal(err)
+	}
+	raceIssued := time.Now().UTC().Truncate(time.Microsecond)
+	for _, kind := range []string{"RESTORE", "INFRASTRUCTURE", "PROVIDER", "SCHEMA"} {
+		artifact := brokerArtifactFixture(kind, policy, image, digest)
+		payload, _ := json.Marshal(artifact)
+		contract := map[string]string{"RESTORE": "mycfc/privacy-restore-drill-attestation/v2", "INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1", "PROVIDER": "mycfc/privacy-provider-registry/v2", "SCHEMA": "mycfc/schema-migration-inventory/v1"}[kind]
+		kindDigest := sha256.Sum256([]byte("race-" + kind + uuid.NewString()))
+		var evidenceID uuid.UUID
+		if err = adminConn.QueryRow(ctx, `SELECT privacy_activation_record_authenticated_evidence($1,$2,$3,$4,$5,$6,$7)`, adminID, kind, kindDigest[:], contract, raceIssued, raceIssued.Add(90*24*time.Hour), payload).Scan(&evidenceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var raceEvidenceIDs []uuid.UUID
+	var raceEvidenceDigest, raceActivationDigest, raceSchemaDigest []byte
+	var raceExecutorVersion, racePlanVersion, raceImage string
+	if err = brokerConn.QueryRow(ctx, `SELECT evidence_ids,evidence_set_sha256,activation_sha256,executor_version,plan_schema_version,image_digest,schema_migration_digest FROM privacy_activation_broker_material($1)`, policy).
+		Scan(&raceEvidenceIDs, &raceEvidenceDigest, &raceActivationDigest, &raceExecutorVersion, &racePlanVersion, &raceImage, &raceSchemaDigest); err != nil {
+		t.Fatal(err)
+	}
+	raceProposalID := uuid.New()
+	raceExecutorNonce := sha256.Sum256([]byte(uuid.NewString()))
+	raceAdministratorNonce := sha256.Sum256([]byte(uuid.NewString()))
+	raceExecutorEnvelope := brokerApprovalFixture(raceProposalID, policy, raceEvidenceIDs, raceEvidenceDigest, raceActivationDigest, raceExecutorVersion, racePlanVersion, raceImage, raceSchemaDigest, executorID, "EXECUTOR", "executor-key", raceExecutorNonce[:], raceIssued)
+	raceAdministratorEnvelope := brokerApprovalFixture(raceProposalID, policy, raceEvidenceIDs, raceEvidenceDigest, raceActivationDigest, raceExecutorVersion, racePlanVersion, raceImage, raceSchemaDigest, adminID, "ADMINISTRATOR", "administrator-key", raceAdministratorNonce[:], raceIssued)
+	raceExecutorRaw, _ := json.Marshal(raceExecutorEnvelope)
+	raceAdministratorRaw, _ := json.Marshal(raceAdministratorEnvelope)
+	raceExecutorNonceDigest, raceAdministratorNonceDigest := sha256.Sum256(raceExecutorNonce[:]), sha256.Sum256(raceAdministratorNonce[:])
+
+	disableIdentifier := quoteIdentifier(privacyActivationDisableRole)
+	var disableRoleExists bool
+	if err = adminConn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)`, privacyActivationDisableRole).Scan(&disableRoleExists); err != nil {
+		t.Fatal(err)
+	}
+	if !disableRoleExists {
+		if _, err = adminConn.Exec(ctx, `CREATE ROLE `+disableIdentifier+` NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			cleanup, cleanupErr := pgx.Connect(context.Background(), dsn)
+			if cleanupErr == nil {
+				_, _ = cleanup.Exec(context.Background(), `DROP OWNED BY `+disableIdentifier)
+				_, _ = cleanup.Exec(context.Background(), `DROP ROLE `+disableIdentifier)
+				_ = cleanup.Close(context.Background())
+			}
+		})
+	}
+	if _, err = adminConn.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid,text) TO `+disableIdentifier); err != nil {
+		t.Fatal(err)
+	}
+
+	disableConn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disableConn.Close(ctx)
+	if _, err = disableConn.Exec(ctx, `SET SESSION AUTHORIZATION `+disableIdentifier); err != nil {
+		t.Fatal(err)
+	}
+	lockConn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockConn.Close(ctx)
+	lockTx, err := lockConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lockTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0))`); err != nil {
+		t.Fatal(err)
+	}
+
+	disableResult := make(chan error, 1)
+	go func() {
+		var version int64
+		var database string
+		var engaged, ready bool
+		disableResult <- disableConn.QueryRow(context.Background(), `SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_activation_disable($1,$2)`, adminID, adminConn.Config().Database).
+			Scan(&version, &database, &engaged, &ready)
+	}()
+	waitForAdvisoryLock(t, adminConn, disableConn.PgConn().PID())
+
+	activationResult := make(chan error, 1)
+	go func() {
+		var approval uuid.UUID
+		activationResult <- brokerConn.QueryRow(context.Background(), `SELECT privacy_activation_broker_activate($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19)`,
+			raceProposalID, policy, raceEvidenceIDs, raceEvidenceDigest, raceActivationDigest, executorID, adminID, "executor-key", "administrator-key",
+			raceExecutorNonceDigest[:], raceAdministratorNonceDigest[:], raceExecutorRaw, raceAdministratorRaw, string(raceExecutorRaw), string(raceAdministratorRaw),
+			raceIssued, raceIssued.Add(15*time.Minute), raceIssued, raceIssued.Add(15*time.Minute)).Scan(&approval)
+	}()
+	waitForAdvisoryLock(t, adminConn, brokerConn.PgConn().PID())
+	if err = lockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-disableResult; err != nil {
+		t.Fatalf("queued emergency disable failed: %v", err)
+	}
+	if err = <-activationResult; err == nil || !strings.Contains(err.Error(), "privacy_activation_signed_approval_rejected") {
+		t.Fatalf("pre-disable activation was not fenced: %v", err)
+	}
+	var raceEngaged, raceReady bool
+	if err = adminConn.QueryRow(ctx, `SELECT engaged,privacy_worker_activation_ready() FROM privacy_worker_kill_switch WHERE singleton`).Scan(&raceEngaged, &raceReady); err != nil {
+		t.Fatal(err)
+	}
+	if !raceEngaged || raceReady {
+		t.Fatalf("disable did not win race: engaged=%t ready=%t", raceEngaged, raceReady)
+	}
+}
+
+func waitForAdvisoryLock(t *testing.T, admin *pgx.Conn, pid uint32) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := admin.QueryRow(t.Context(), `SELECT COALESCE((SELECT wait_event_type='Lock' FROM pg_stat_activity WHERE pid=$1),false)`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("backend %d did not wait for activation advisory lock", pid)
 }
 
 func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string]any {
@@ -210,7 +341,7 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 		artifact["provider_inventory_contract"] = "mycfc/privacy-provider-registry-source/v2"
 	case "SCHEMA":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110002_privacy_empty_provider_registry_activation"
+		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110003_privacy_activation_emergency_fence"
 	}
 	return artifact
 }

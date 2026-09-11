@@ -35,8 +35,9 @@ func TestPrivacyEmptyProviderRegistryForwardMigrationPreservesHistoryAndFailsClo
 	}
 	const marker = "-- #248 distinguishes a complete zero-registration provider inventory"
 	baselineIndex := strings.LastIndex(baselineSchema, marker)
-	if baselineIndex < 0 || strings.TrimSpace(baselineSchema[baselineIndex:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("empty provider registry migration is not the exact final baseline segment")
+	nextIndex := strings.LastIndex(baselineSchema, "-- Baseline through 202609110003_privacy_activation_emergency_fence.")
+	if baselineIndex < 0 || nextIndex <= baselineIndex || strings.TrimSpace(baselineSchema[baselineIndex:nextIndex]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("empty provider registry migration is not the exact baseline segment")
 	}
 
 	// Restore the exact record routine and constraint from the immediately
@@ -68,7 +69,7 @@ func TestPrivacyEmptyProviderRegistryForwardMigrationPreservesHistoryAndFailsClo
 		ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v5_check`); err != nil {
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v6_check`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP COLUMN provider_inventory_contract`); err != nil {

@@ -21,13 +21,14 @@ if [ "$mode" = disable ]; then
 	if [ "$(id -u 2>/dev/null || true)" != 0 ] || [ ! -f "$disable_env_file" ] || [ -L "$disable_env_file" ] ||
 		[ "$(stat -c '%u:%g:%a' "$disable_env_file" 2>/dev/null || true)" != '0:0:600' ] ||
 		[ "$(grep -c '^PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=' "$disable_env_file" 2>/dev/null || true)" -ne 1 ] ||
+		[ "$(grep -c '^PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE=' "$disable_env_file" 2>/dev/null || true)" -ne 1 ] ||
 		[ "$(grep -c '^PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=' "$disable_env_file" 2>/dev/null || true)" -ne 1 ]; then
 		fail
 	fi
 	while IFS= read -r disable_line || [ -n "$disable_line" ]; do
 		case "$disable_line" in
 			'' | \#*) ;;
-			PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=* | PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=*) ;;
+			PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=* | PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE=* | PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=*) ;;
 			*) fail ;;
 		esac
 	done <"$disable_env_file"

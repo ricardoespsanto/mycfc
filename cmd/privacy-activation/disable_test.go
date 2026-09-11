@@ -35,6 +35,7 @@ func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
 	databaseURL := "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable"
 	env := map[string]string{
 		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL":      databaseURL,
+		"PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": "mycfc",
 		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor.String(),
 		"PRIVACY_ACTIVATION_BROKER_DATABASE_URL":       "postgres://broker:must-not-be-read@postgres/mycfc",
 		"PRIVACY_ACTIVATION_RESTORE_AUTH_KEY_FILE":     "/must/not/be/read",
@@ -47,6 +48,9 @@ func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
 	}
 	database := &disableDatabaseFake{scan: func(destinations ...any) error {
 		*destinations[0].(*int64) = 7
+		*destinations[1].(*string) = "mycfc"
+		*destinations[2].(*bool) = true
+		*destinations[3].(*bool) = false
 		return nil
 	}}
 	withDisableRuntime(t, 0, func(context.Context, string) (activationDisableDatabase, error) { return database, nil })
@@ -55,7 +59,7 @@ func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
 	if err := runDisable(t.Context(), getenv, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !database.closed || strings.TrimSpace(database.query) != "SELECT privacy_activation_disable($1)" || len(database.arguments) != 1 || database.arguments[0] != actor {
+	if !database.closed || strings.TrimSpace(database.query) != "SELECT switch_version,database_name,engaged,fulfilment_ready FROM privacy_activation_disable($1,$2)" || len(database.arguments) != 2 || database.arguments[0] != actor || database.arguments[1] != "mycfc" {
 		t.Fatalf("closed=%t query=%q arguments=%v", database.closed, database.query, database.arguments)
 	}
 	if output.String() != "privacy_activation_disabled kill_switch=engaged readiness=blocked\n" {
@@ -72,27 +76,31 @@ func TestLoadDisableInputsFailsClosed(t *testing.T) {
 	actor := "7f40fdc4-1653-4aa6-8cd5-e44f25c2fd85"
 	validURL := "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable"
 	for _, test := range []struct {
-		name  string
-		euid  int
-		actor string
-		url   string
+		name     string
+		euid     int
+		actor    string
+		url      string
+		database string
 	}{
-		{name: "non root", euid: 1000, actor: actor, url: validURL},
-		{name: "missing actor", euid: 0, url: validURL},
-		{name: "nil actor", euid: 0, actor: uuid.Nil.String(), url: validURL},
-		{name: "non canonical actor", euid: 0, actor: strings.ToUpper(actor), url: validURL},
-		{name: "actor whitespace", euid: 0, actor: " " + actor, url: validURL},
-		{name: "missing url", euid: 0, actor: actor},
-		{name: "wrong role", euid: 0, actor: actor, url: "postgres://broker:secret@postgres:5432/mycfc"},
-		{name: "missing password", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable@postgres:5432/mycfc"},
-		{name: "wrong scheme", euid: 0, actor: actor, url: "https://mycfc_privacy_activation_disable:secret@postgres/mycfc"},
-		{name: "missing database", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable:secret@postgres/"},
-		{name: "url whitespace", euid: 0, actor: actor, url: " " + validURL},
+		{name: "non root", euid: 1000, actor: actor, url: validURL, database: "mycfc"},
+		{name: "missing actor", euid: 0, url: validURL, database: "mycfc"},
+		{name: "nil actor", euid: 0, actor: uuid.Nil.String(), url: validURL, database: "mycfc"},
+		{name: "non canonical actor", euid: 0, actor: strings.ToUpper(actor), url: validURL, database: "mycfc"},
+		{name: "actor whitespace", euid: 0, actor: " " + actor, url: validURL, database: "mycfc"},
+		{name: "missing url", euid: 0, actor: actor, database: "mycfc"},
+		{name: "missing expected database", euid: 0, actor: actor, url: validURL},
+		{name: "database mismatch", euid: 0, actor: actor, url: validURL, database: "other"},
+		{name: "invalid database", euid: 0, actor: actor, url: validURL, database: "mycfc.test"},
+		{name: "wrong role", euid: 0, actor: actor, url: "postgres://broker:secret@postgres:5432/mycfc", database: "mycfc"},
+		{name: "missing password", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable@postgres:5432/mycfc", database: "mycfc"},
+		{name: "wrong scheme", euid: 0, actor: actor, url: "https://mycfc_privacy_activation_disable:secret@postgres/mycfc", database: "mycfc"},
+		{name: "missing database", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable:secret@postgres/", database: "mycfc"},
+		{name: "url whitespace", euid: 0, actor: actor, url: " " + validURL, database: "mycfc"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			withDisableRuntime(t, test.euid, nil)
-			env := map[string]string{"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF": test.actor, "PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": test.url}
-			if _, _, err := loadDisableInputs(func(name string) string { return env[name] }); err == nil {
+			env := map[string]string{"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF": test.actor, "PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": test.url, "PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": test.database}
+			if _, _, _, err := loadDisableInputs(func(name string) string { return env[name] }); err == nil {
 				t.Fatal("invalid disable input accepted")
 			}
 		})
@@ -102,8 +110,9 @@ func TestLoadDisableInputsFailsClosed(t *testing.T) {
 func TestRunDisableFailsClosedWithoutSuccessOutput(t *testing.T) {
 	actor := uuid.New().String()
 	env := map[string]string{
-		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc",
-		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":    actor,
+		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL":      "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc",
+		"PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": "mycfc",
+		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor,
 	}
 	for _, test := range []struct {
 		name string
@@ -131,7 +140,13 @@ func TestRunDisableFailsClosedWithoutSuccessOutput(t *testing.T) {
 		})
 	}
 	withDisableRuntime(t, 0, func(context.Context, string) (activationDisableDatabase, error) {
-		return &disableDatabaseFake{scan: func(destinations ...any) error { *destinations[0].(*int64) = 1; return nil }}, nil
+		return &disableDatabaseFake{scan: func(destinations ...any) error {
+			*destinations[0].(*int64) = 1
+			*destinations[1].(*string) = "mycfc"
+			*destinations[2].(*bool) = true
+			*destinations[3].(*bool) = false
+			return nil
+		}}, nil
 	})
 	if err := runDisable(t.Context(), func(name string) string { return env[name] }, io.Discard); err != nil {
 		t.Fatal(err)

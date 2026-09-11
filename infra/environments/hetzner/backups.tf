@@ -189,6 +189,18 @@ data "aws_iam_policy_document" "postgres_backups_boundary" {
 
   statement {
     effect    = "Allow"
+    actions   = local.backup_cleanup_list_actions
+    resources = [aws_s3_bucket.postgres_backups.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = local.backup_recovery_prefixes
+    }
+  }
+
+  statement {
+    effect    = "Allow"
     actions   = local.backup_encryption_actions
     resources = [aws_kms_key.postgres_backups.arn]
   }
@@ -206,7 +218,7 @@ data "aws_iam_policy_document" "postgres_backups" {
   statement {
     sid       = "ListBackupObjects"
     effect    = "Allow"
-    actions   = local.backup_base_list_actions
+    actions   = concat(local.backup_base_list_actions, local.backup_cleanup_list_actions)
     resources = [aws_s3_bucket.postgres_backups.arn]
 
     condition {

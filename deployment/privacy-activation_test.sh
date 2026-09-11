@@ -32,6 +32,7 @@ printf '%s\n' 'MYCFC_IMAGE=registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaa
 touch "$test_dir/activation.env"
 cat >"$test_dir/privacy-activation-disable.env" <<'EOF'
 PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable
+PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE=mycfc
 PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=7f40fdc4-1653-4aa6-8cd5-e44f25c2fd85
 EOF
 for file in restore-attestation.json restore-attestation.key infrastructure.json provider-registry.json schema-inventory.json artifact-public.key; do
