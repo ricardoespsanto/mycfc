@@ -65,7 +65,7 @@ PRIVACY_WORKER_ENABLED=false
 # PRIVACY_ACTIVATION_BROKER_DB_USER=mycfc_privacy_activation_broker
 # PRIVACY_ACTIVATION_BROKER_DB_PASSWORD=<generated root-only broker password>
 # PRIVACY_ACTIVATION_DISABLE_DB_USER=mycfc_privacy_activation_disable
-# PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD=<generated root-only disable password>
+# PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD=<generated root-only bootstrap password>
 
 GALLERY_URL=https://example.com/gallery
 
@@ -87,7 +87,7 @@ Only `POSTGRES_*` remains duplicated in the host bootstrap file because the Post
 
 The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
 
-The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a separate one-shot evidence recorder and never enables the worker.
+The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a root-only one-shot activation operator. Its `disable` mode uses only `/etc/mycfc/privacy-activation-disable.env` (root-owned mode `0600`) and the separate `mycfc_privacy_activation_disable` credential; that container receives no broker configuration, evidence files, or signing keys. See `docs/privacy-worker-infrastructure.md` for custody, incident, and verification steps.
 
 ## Required AWS configuration
 

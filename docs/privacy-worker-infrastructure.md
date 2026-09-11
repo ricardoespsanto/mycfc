@@ -78,11 +78,28 @@ PRIVACY_ACTIVATION_POLICY_VERSION=REVIEWED_POLICY_VERSION
 PRIVACY_ACTIVATION_ARTIFACT_SIGNING_KEY_ID=REVIEWED_KEY_ID
 ```
 
+Keep the emergency disable credential in a different root-owned file, `/etc/mycfc/privacy-activation-disable.env`, with owner `root:root`, mode `0600`, and exactly these two entries:
+
+```dotenv
+PRIVACY_ACTIVATION_DISABLE_DATABASE_URL=postgres://mycfc_privacy_activation_disable:INDEPENDENT_DISABLE_PASSWORD@postgres:5432/mycfc?sslmode=disable
+PRIVACY_ACTIVATION_DISABLE_ACTOR_REF=CANONICAL_OPERATOR_UUID
+```
+
+The password must be generated and held independently from the executor and activation-broker credentials. Do not copy this file into `mycfc.env`, `privacy-worker.env`, `privacy-activation.env`, a signer workstation, a container image, or an evidence directory. The dedicated disable container receives only this file: it has no broker environment, evidence mount, restore key, artifact trust root, approval envelope, or private approval key. Custody must ensure an on-call root operator can retrieve this single break-glass credential without gaining any activation authority.
+
 For `prepare-approvals`, capture the single stdout JSON document into a new root-owned mode-0600 host file under an owner-only umask; the evidence mount remains deliberately read-only. Each offline signer sets `PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE`, `PRIVACY_ACTIVATION_APPROVAL_ROLE`, `PRIVACY_ACTIVATION_APPROVAL_ACTOR_REF`, `PRIVACY_ACTIVATION_APPROVAL_SIGNING_KEY_ID`, `PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE`, and a new `PRIVACY_ACTIVATION_APPROVAL_OUTPUT`. For `activate`, install the returned canonical envelopes and configure `PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE`, `PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE`, `PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE`, their two public-key files, and exact allowlisted signing-key IDs. The prepare output contains only proposal/evidence/release digests and UUIDs; it contains no database credential or private signing material.
 
 The runner derives the current image digest from the active immutable `MYCFC_IMAGE` in `/etc/mycfc/mycfc.env`; it cannot be supplied as a standalone approval shortcut. The activation binary derives the schema migration digest from its embedded migration inventory and ignores any externally asserted schema digest. It passes those trusted current-release values to the shared strict verifier, validates the complete four-item set before recording the first row, and repeats verification at each broker write boundary. Identical evidence recording is idempotent, so an interrupted four-item write can be safely resumed.
 
 Activation is never performed in the web application. After evidence recording, run `privacy-activation prepare-approvals` through the root-only broker environment and distribute the mode-0600 material to two independent signers. Each signer runs `privacy-activation sign-approval` outside the app/worker host with its own allowlisted Ed25519 private key, role (`EXECUTOR` or `ADMINISTRATOR`), and actor UUID. The exact canonical envelope binds the proposal UUID, ordered evidence IDs and digest, activation digest, current policy/executor/plan/image/schema tuple, role, actor, key ID, a random nonce, and a maximum 15-minute lifetime. Run `privacy-activation activate` only after receiving both envelopes and configuring their independent public trust roots. The broker re-verifies both signatures before one atomic SQL call; PostgreSQL rebinds every envelope field, persists the exact signed bytes, rejects reused nonces, and only then records the proposal/approval and clears the kill switch. Broker credentials and approval private keys are root/operator secrets and must never be mounted into the web app or worker.
+
+### Emergency activation disable and incident drill
+
+From a root shell on the application host, run `privacy-activation.sh disable`. The wrapper rejects non-root callers, any disable file that is not root-owned mode `0600`, duplicate or unknown environment entries, and noncanonical inputs. The binary independently requires effective UID 0, the exact `mycfc_privacy_activation_disable` database username with a nonempty password, and a canonical nonzero actor UUID. It calls only `privacy_activation_disable(uuid)` and emits the fixed privacy-safe outcome `privacy_activation_disabled kill_switch=engaged readiness=blocked`. Repeating the command is safe and does not increment the switch version again.
+
+Treat any nonzero exit or missing exact outcome as an unconfirmed disable: stop `mycfc-privacy-worker.service`, preserve the generic failure output, and escalate without printing the environment, database URL, SQL errors, evidence, or identifiers. After success, stop the worker and run `privacy-worker.sh readiness`; exit status 3 with `privacy_worker_readiness_activation_required` is the required result. Do not restart it. Fresh release-bound evidence and two new independent approval envelopes are required to reactivate.
+
+Exercise the incident drill against `mycfc_test`, never a live subject: establish a synthetic unengaged switch, invoke the command through the restricted login, verify the switch transitions to engaged, verify worker readiness is false, invoke it again, and verify the switch version is unchanged. `make test-integration` runs this database-backed drill. A production drill requires a separately approved live-system window because it deliberately revokes activation.
 
 ## Staged rollout and checks
 
@@ -103,6 +120,6 @@ Logs contain only fixed lifecycle/operation codes and aggregate counts: start, c
 
 ## Rollback
 
-Stop `mycfc-privacy-worker.service` first and set both `PRIVACY_WORKER_ENABLED=false` and `PRIVACY_COMPLETION_ENABLED=false`. Revoke the database activation through the approved application procedure. Then review and apply Terraform with broker invocation, S3 deletion, rewrite, and monitoring gates false. Preserve the IAM identity, empty secret container, log group, database evidence, queued jobs, and failed leases while diagnosing; protected Terraform resources intentionally have destroy protection.
+Invoke `privacy-activation.sh disable` first so the database kill switch blocks new worker work, verify the fixed success outcome, and then stop `mycfc-privacy-worker.service`. Confirm `privacy-worker.sh readiness` exits 3 before setting both `PRIVACY_WORKER_ENABLED=false` and `PRIVACY_COMPLETION_ENABLED=false`. Then review and apply Terraform with broker invocation, S3 deletion, rewrite, and monitoring gates false. Preserve the IAM identity, empty secret container, log group, database evidence, queued jobs, and failed leases while diagnosing; protected Terraform resources intentionally have destroy protection.
 
 Rollback is compensating, not restorative. Disabling capability cannot restore deleted versions, scrubbed identifiers, sent notices, or written Object Lock evidence. Recovery must use the separately governed authenticated backup and tombstone-replay procedure. Do not delete evidence or attempt a reverse migration.

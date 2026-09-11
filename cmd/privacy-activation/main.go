@@ -88,11 +88,17 @@ func main() {
 		err = runSign(os.Getenv)
 	case "activate":
 		err = runActivate(context.Background(), os.Getenv, os.Stdout)
+	case "disable":
+		err = runDisable(context.Background(), os.Getenv, os.Stdout)
 	default:
 		err = errors.New("privacy activation mode rejected")
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "privacy_activation_evidence_failed")
+		if mode == "disable" {
+			fmt.Fprintln(os.Stderr, "privacy_activation_disable_failed")
+		} else {
+			fmt.Fprintln(os.Stderr, "privacy_activation_evidence_failed")
+		}
 		os.Exit(1)
 	}
 }

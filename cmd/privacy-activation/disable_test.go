@@ -1,0 +1,151 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+type disableDatabaseFake struct {
+	query     string
+	arguments []any
+	scan      func(...any) error
+	closed    bool
+}
+
+func (f *disableDatabaseFake) QueryRow(_ context.Context, query string, arguments ...any) pgx.Row {
+	f.query, f.arguments = query, arguments
+	return disableRowFake{scan: f.scan}
+}
+
+func (f *disableDatabaseFake) Close() { f.closed = true }
+
+type disableRowFake struct{ scan func(...any) error }
+
+func (f disableRowFake) Scan(destinations ...any) error { return f.scan(destinations...) }
+
+func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
+	actor := uuid.New()
+	databaseURL := "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable"
+	env := map[string]string{
+		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL":      databaseURL,
+		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor.String(),
+		"PRIVACY_ACTIVATION_BROKER_DATABASE_URL":       "postgres://broker:must-not-be-read@postgres/mycfc",
+		"PRIVACY_ACTIVATION_RESTORE_AUTH_KEY_FILE":     "/must/not/be/read",
+		"PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE": "/must/not/be/read",
+	}
+	read := map[string]bool{}
+	getenv := func(name string) string {
+		read[name] = true
+		return env[name]
+	}
+	database := &disableDatabaseFake{scan: func(destinations ...any) error {
+		*destinations[0].(*int64) = 7
+		return nil
+	}}
+	withDisableRuntime(t, 0, func(context.Context, string) (activationDisableDatabase, error) { return database, nil })
+
+	var output bytes.Buffer
+	if err := runDisable(t.Context(), getenv, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !database.closed || strings.TrimSpace(database.query) != "SELECT privacy_activation_disable($1)" || len(database.arguments) != 1 || database.arguments[0] != actor {
+		t.Fatalf("closed=%t query=%q arguments=%v", database.closed, database.query, database.arguments)
+	}
+	if output.String() != "privacy_activation_disabled kill_switch=engaged readiness=blocked\n" {
+		t.Fatalf("output=%q", output.String())
+	}
+	for _, forbidden := range []string{"PRIVACY_ACTIVATION_BROKER_DATABASE_URL", "PRIVACY_ACTIVATION_RESTORE_AUTH_KEY_FILE", "PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE"} {
+		if read[forbidden] {
+			t.Fatalf("disable command read forbidden environment %s", forbidden)
+		}
+	}
+}
+
+func TestLoadDisableInputsFailsClosed(t *testing.T) {
+	actor := "7f40fdc4-1653-4aa6-8cd5-e44f25c2fd85"
+	validURL := "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable"
+	for _, test := range []struct {
+		name  string
+		euid  int
+		actor string
+		url   string
+	}{
+		{name: "non root", euid: 1000, actor: actor, url: validURL},
+		{name: "missing actor", euid: 0, url: validURL},
+		{name: "nil actor", euid: 0, actor: uuid.Nil.String(), url: validURL},
+		{name: "non canonical actor", euid: 0, actor: strings.ToUpper(actor), url: validURL},
+		{name: "actor whitespace", euid: 0, actor: " " + actor, url: validURL},
+		{name: "missing url", euid: 0, actor: actor},
+		{name: "wrong role", euid: 0, actor: actor, url: "postgres://broker:secret@postgres:5432/mycfc"},
+		{name: "missing password", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable@postgres:5432/mycfc"},
+		{name: "wrong scheme", euid: 0, actor: actor, url: "https://mycfc_privacy_activation_disable:secret@postgres/mycfc"},
+		{name: "missing database", euid: 0, actor: actor, url: "postgres://mycfc_privacy_activation_disable:secret@postgres/"},
+		{name: "url whitespace", euid: 0, actor: actor, url: " " + validURL},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			withDisableRuntime(t, test.euid, nil)
+			env := map[string]string{"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF": test.actor, "PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": test.url}
+			if _, _, err := loadDisableInputs(func(name string) string { return env[name] }); err == nil {
+				t.Fatal("invalid disable input accepted")
+			}
+		})
+	}
+}
+
+func TestRunDisableFailsClosedWithoutSuccessOutput(t *testing.T) {
+	actor := uuid.New().String()
+	env := map[string]string{
+		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL": "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc",
+		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":    actor,
+	}
+	for _, test := range []struct {
+		name string
+		open func(context.Context, string) (activationDisableDatabase, error)
+	}{
+		{name: "open", open: func(context.Context, string) (activationDisableDatabase, error) {
+			return nil, errors.New("unavailable")
+		}},
+		{name: "call", open: func(context.Context, string) (activationDisableDatabase, error) {
+			return &disableDatabaseFake{scan: func(...any) error { return errors.New("rejected") }}, nil
+		}},
+		{name: "invalid version", open: func(context.Context, string) (activationDisableDatabase, error) {
+			return &disableDatabaseFake{scan: func(destinations ...any) error { *destinations[0].(*int64) = 0; return nil }}, nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			withDisableRuntime(t, 0, test.open)
+			var output bytes.Buffer
+			if err := runDisable(t.Context(), func(name string) string { return env[name] }, &output); err == nil {
+				t.Fatal("disable failure accepted")
+			}
+			if output.Len() != 0 {
+				t.Fatalf("failure emitted success output %q", output.String())
+			}
+		})
+	}
+	withDisableRuntime(t, 0, func(context.Context, string) (activationDisableDatabase, error) {
+		return &disableDatabaseFake{scan: func(destinations ...any) error { *destinations[0].(*int64) = 1; return nil }}, nil
+	})
+	if err := runDisable(t.Context(), func(name string) string { return env[name] }, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func withDisableRuntime(t *testing.T, euid int, open func(context.Context, string) (activationDisableDatabase, error)) {
+	t.Helper()
+	originalEUID, originalOpen := effectiveUserID, openActivationDisableDatabase
+	effectiveUserID = func() int { return euid }
+	if open != nil {
+		openActivationDisableDatabase = open
+	}
+	t.Cleanup(func() {
+		effectiveUserID, openActivationDisableDatabase = originalEUID, originalOpen
+	})
+}

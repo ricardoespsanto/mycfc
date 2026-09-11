@@ -164,7 +164,7 @@ test-deployment: ## Run production release orchestration tests
 	$(MAKE) test-privacy-ledger-broker
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/... ./cmd/privacy-restore-replay/... ./cmd/privacy-retention/... ./cmd/privacy-worker/...
+	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/... ./cmd/privacy-restore-replay/... ./cmd/privacy-retention/... ./cmd/privacy-worker/... ./cmd/privacy-activation/...
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e

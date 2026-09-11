@@ -167,6 +167,24 @@ services:
     pids_limit: 64
     restart: "no"
 
+  privacy-activation-disable:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-activation"]
+    command: ["disable"]
+    env_file:
+      - path: /etc/mycfc/privacy-activation-disable.env
+        required: false
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [privacy-activation-disable]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
   caddy:
     image: mycfc-caddy-ratelimit:2.10.2-v0.1.0
     build:

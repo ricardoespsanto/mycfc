@@ -156,6 +156,10 @@ case "${PRIVACY_WORKER_ENABLED:-false}" in
 			printf '%s\n' '/etc/mycfc/privacy-worker.env must be owned by root and have mode 0600.' >&2
 			exit 1
 		fi
+		if [ ! -f /etc/mycfc/privacy-activation-disable.env ] || [ -L /etc/mycfc/privacy-activation-disable.env ] || [ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-activation-disable.env)" != '0:0:600' ]; then
+			printf '%s\n' '/etc/mycfc/privacy-activation-disable.env must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
 		if [ ! -d /etc/mycfc/privacy-worker/keys ] || [ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-worker/keys)" != '0:65532:750' ]; then
 			printf '%s\n' '/etc/mycfc/privacy-worker/keys must be root-owned, group 65532, and mode 0750.' >&2
 			exit 1
