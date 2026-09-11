@@ -71,8 +71,19 @@ variable "privacy_restore_ledger_replay_enabled" {
   }
 }
 
-variable "postgres_backup_noncurrent_cleanup_enabled" {
-  description = "Grant and configure exact-version PostgreSQL backup cleanup, with S3 lifecycle as a best-effort backstop. Requires a separately reviewed destructive plan."
+variable "postgres_backup_cleanup_identity_enabled" {
+  description = "Provision an inert cleanup-only IAM identity with version-inventory permission. Terraform creates no access key and grants no deletion."
   type        = bool
   default     = false
+}
+
+variable "postgres_backup_noncurrent_cleanup_enabled" {
+  description = "Grant exact-version deletion to the separate cleanup identity and configure lifecycle as a best-effort backstop. Requires a separately reviewed destructive plan."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.postgres_backup_noncurrent_cleanup_enabled || var.postgres_backup_cleanup_identity_enabled
+    error_message = "postgres_backup_noncurrent_cleanup_enabled requires postgres_backup_cleanup_identity_enabled."
+  }
 }

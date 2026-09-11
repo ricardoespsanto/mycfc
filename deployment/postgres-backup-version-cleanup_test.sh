@@ -12,6 +12,9 @@ BACKUP_NONCURRENT_CLEANER_ENABLED=true
 BACKUP_NONCURRENT_CLEANER_DRY_RUN=false
 EOF
 : >"$test_dir/credentials"
+: >"$test_dir/writer-credentials"
+chmod 0600 "$test_dir/credentials"
+chmod 0600 "$test_dir/writer-credentials"
 
 candidate_time=$(date -u -d 'now - 23 hours - 30 minutes' +%Y-%m-%dT%H:%M:%SZ)
 overdue_time=$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)
@@ -65,6 +68,8 @@ chmod +x "$test_dir/bin/logger"
 cat >"$test_dir/bin/aws" <<'EOF'
 #!/bin/sh
 set -eu
+test "$AWS_SHARED_CREDENTIALS_FILE" = "$EXPECTED_CLEANUP_CREDENTIALS_FILE"
+test "$AWS_PROFILE" = mycfc-backup-cleanup
 test "$1" = s3api
 operation=$2
 shift 2
@@ -118,7 +123,11 @@ run_cleanup() {
     FAKE_INITIAL_OVERDUE="${FAKE_INITIAL_OVERDUE:-false}" \
     FAKE_LIST_FAILURE="${FAKE_LIST_FAILURE:-false}" \
     MYCFC_ENV_FILE="$test_dir/env" \
-    MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/credentials" \
+    MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/writer-credentials" \
+    MYCFC_BACKUP_CLEANUP_CREDENTIALS_FILE="$test_dir/credentials" \
+    MYCFC_BACKUP_CLEANUP_AWS_PROFILE=mycfc-backup-cleanup \
+    AWS_PROFILE=mycfc-backup \
+    EXPECTED_CLEANUP_CREDENTIALS_FILE="$test_dir/credentials" \
     sh "$root_dir/deployment/postgres-backup-version-cleanup.sh"
 }
 
@@ -169,7 +178,11 @@ grep -q 'backup_noncurrent_cleanup_sla_breached' "$test_dir/cleaned-breach-outpu
 
 if PATH="$test_dir/bin:$PATH" \
   MYCFC_ENV_FILE="$test_dir/env" \
-  MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/credentials" \
+  MYCFC_BACKUP_CREDENTIALS_FILE="$test_dir/writer-credentials" \
+  MYCFC_BACKUP_CLEANUP_CREDENTIALS_FILE="$test_dir/credentials" \
+  MYCFC_BACKUP_CLEANUP_AWS_PROFILE=mycfc-backup-cleanup \
+  AWS_PROFILE=mycfc-backup \
+  EXPECTED_CLEANUP_CREDENTIALS_FILE="$test_dir/credentials" \
   BACKUP_NONCURRENT_CLEANER_ENABLED=true \
   BACKUP_NONCURRENT_CLEANER_DRY_RUN=false \
   BACKUP_NONCURRENT_DELETE_AGE_SECONDS=86400 \

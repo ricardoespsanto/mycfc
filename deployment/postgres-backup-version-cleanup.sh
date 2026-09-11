@@ -2,7 +2,7 @@
 set -eu
 
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
-credentials_file=${MYCFC_BACKUP_CREDENTIALS_FILE:-/etc/mycfc/backup-aws/credentials}
+credentials_file=${MYCFC_BACKUP_CLEANUP_CREDENTIALS_FILE:-/etc/mycfc/backup-cleanup-aws/credentials}
 work_dir=
 
 on_exit() {
@@ -50,7 +50,7 @@ case "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" in
 esac
 
 export AWS_SHARED_CREDENTIALS_FILE="$credentials_file"
-export AWS_PROFILE="${AWS_PROFILE:-mycfc-backup}"
+export AWS_PROFILE="${MYCFC_BACKUP_CLEANUP_AWS_PROFILE:-mycfc-backup-cleanup}"
 export AWS_REGION="${AWS_REGION:-eu-west-1}"
 export AWS_PAGER=""
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN

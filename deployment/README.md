@@ -43,6 +43,10 @@ BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<exact-KMS-key-ARN>
 BACKUP_MANIFEST_AUTH_ENABLED=false
 
+# Separate backup-version inventory/deletion identity; both host gates are inert.
+BACKUP_NONCURRENT_CLEANER_ENABLED=false
+BACKUP_NONCURRENT_CLEANER_DRY_RUN=true
+
 # Independent privacy-restore controls; all remain inert by default.
 PRIVACY_RESTORE_LEDGER_BUCKET=<private-privacy-ledger-bucket>
 PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN=<exact-ledger-KMS-key-ARN>
@@ -193,6 +197,17 @@ aws_access_key_id=<backup-access-key-id>
 aws_secret_access_key=<backup-secret-access-key>
 ```
 
+The standing `mycfc-backup` profile has no version-inventory or deletion permission. When the separate cleanup identity has been explicitly provisioned, install its independently created credential in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
+
+```text
+[mycfc-backup-cleanup]
+aws_access_key_id=<cleanup-access-key-id>
+aws_secret_access_key=<cleanup-secret-access-key>
+# aws_session_token=<required for a preferred short-lived STS credential>
+```
+
+Never put the cleanup credential in `/etc/mycfc/backup-aws/credentials` or the application environment. With `BACKUP_NONCURRENT_CLEANER_ENABLED=true` and `BACKUP_NONCURRENT_CLEANER_DRY_RUN=true`, the cleanup service can be invoked manually for inventory but the timer stays disabled. Exact-version deletion additionally requires the reviewed Terraform destructive gate and host dry-run false; see `docs/privacy-restore-infrastructure.md`.
+
 The installer refuses to proceed until this credential file and `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID` are present, then enables both the release-poll and nightly backup timers.
 
 ## Operations
@@ -238,7 +253,7 @@ For a host incident, use the separate operator SSH key from an approved SSH CIDR
 
 ## PostgreSQL recovery
 
-`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
+`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Its standing credential cannot list or delete object versions. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
 
 The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
 

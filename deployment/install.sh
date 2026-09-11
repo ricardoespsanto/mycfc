@@ -75,6 +75,22 @@ case "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" in
 	*) printf '%s\n' 'BACKUP_MANIFEST_AUTH_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
 
+case "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" in
+	true)
+		if [ ! -f /etc/mycfc/backup-cleanup-aws/credentials ] || [ "$(stat -c '%u:%a' /etc/mycfc/backup-cleanup-aws/credentials)" != '0:600' ]; then
+			printf '%s\n' '/etc/mycfc/backup-cleanup-aws/credentials must be owned by root and have mode 0600.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'BACKUP_NONCURRENT_CLEANER_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
+case "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" in
+	true | false) ;;
+	*) printf '%s\n' 'BACKUP_NONCURRENT_CLEANER_DRY_RUN must be true or false.' >&2; exit 1 ;;
+esac
+
 case "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" in
 	true)
 		if [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
