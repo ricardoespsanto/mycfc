@@ -30,36 +30,10 @@ SELECT id, name, email, password_hash, credential_version, guardian_id,
 FROM account;
 
 -- name: CreateDependentUser :one
-WITH privacy_guard AS (
-    SELECT pg_advisory_xact_lock(110, 110)
-), eligible_guardian AS (
-    SELECT guardian.id
-    FROM users guardian, privacy_guard
-    WHERE guardian.id = sqlc.arg(guardian_id)
-      AND guardian.is_active
-      AND NOT guardian.is_dependent
-      AND (guardian.date_of_birth IS NULL OR guardian.date_of_birth <= ((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date - INTERVAL '18 years')::date)
-    FOR UPDATE OF guardian
-), account AS (
-INSERT INTO users (
-    name,
-    email,
-    password_hash,
-    guardian_id,
-    is_dependent,
-    date_of_birth
-) SELECT
-    sqlc.arg(name),
-    NULL,
-    NULL,
-    eligible_guardian.id,
-    true,
-    sqlc.arg(date_of_birth)
-FROM eligible_guardian
-RETURNING id, name, email, password_hash, guardian_id,
-          is_dependent, date_of_birth, is_active, created_at, updated_at
-)
-SELECT * FROM account;
+SELECT account.id,account.name,account.email,account.password_hash,
+       sqlc.arg(guardian_id)::uuid AS guardian_id,account.is_dependent,
+       account.date_of_birth,account.is_active,account.created_at,account.updated_at
+FROM guardian_authority_create_dependent(sqlc.arg(name),sqlc.arg(date_of_birth),sqlc.arg(guardian_id)) account;
 
 -- name: GetUserByID :one
 SELECT id, name, email, password_hash, guardian_id,
@@ -88,7 +62,9 @@ SELECT u.id, u.name, u.guardian_id, u.is_dependent,
        true::boolean AS profile_complete,
        false::boolean AS has_profile_photo
 FROM users u
-WHERE u.guardian_id = sqlc.arg(guardian_id)
+JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+WHERE relationship.guardian_user_id = sqlc.narg(guardian_id)::uuid
+  AND guardian_authority_current(relationship.guardian_user_id,u.id)
   AND u.is_dependent = true
   AND u.is_active = true
 ORDER BY lower(u.name), u.id
@@ -96,10 +72,12 @@ LIMIT sqlc.arg(row_limit);
 
 -- name: CountDependentsByGuardian :one
 SELECT count(*)::bigint
-FROM users
-WHERE guardian_id = sqlc.arg(guardian_id)
-  AND is_dependent = true
-  AND is_active = true;
+FROM guardian_authority_relationships relationship
+JOIN users subject ON subject.id=relationship.subject_user_id
+WHERE relationship.guardian_user_id=sqlc.narg(guardian_id)::uuid
+  AND relationship.state NOT IN('EXPIRED','REJECTED')
+  AND subject.is_dependent AND subject.is_active AND subject.erased_at IS NULL
+  AND subject.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date;
 
 -- name: LockActiveAdult :one
 SELECT id
@@ -121,22 +99,26 @@ WHERE id = sqlc.arg(id)
 SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
        u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at, u.credential_version
 FROM users u
-JOIN users guardian ON guardian.id = u.guardian_id AND guardian.is_active = true AND guardian.is_dependent = false
 WHERE u.minor_login_id = sqlc.arg(minor_login_id)
   AND u.is_active = true
-  AND u.is_dependent = true;
+  AND u.erased_at IS NULL
+  AND u.is_dependent = true
+  AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date;
 
 -- name: IssueMinorCredential :one
 WITH issued AS (
     UPDATE users minor
     SET minor_login_id = sqlc.arg(minor_login_id), password_hash = sqlc.arg(password_hash),
         credential_version = minor.credential_version + 1, updated_at = now()
-    FROM users guardian
+    FROM guardian_authority_relationships relationship
+    JOIN users guardian ON guardian.id=relationship.guardian_user_id
     WHERE minor.id = sqlc.arg(minor_user_id)
       AND minor.is_dependent = true
       AND minor.is_active = true
-      AND minor.guardian_id = guardian.id
+      AND minor.erased_at IS NULL
+      AND relationship.subject_user_id=minor.id
       AND guardian.id = sqlc.arg(guardian_user_id)
+      AND guardian_authority_current(guardian.id,minor.id)
       AND guardian.is_active = true
       AND guardian.is_dependent = false
       AND EXISTS (
@@ -166,7 +148,9 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
        COALESCE(p.emergency_contact_name <> '' AND p.emergency_contact_relationship <> '' AND p.emergency_contact_phone <> '' AND p.medical_declaration <> 'UNKNOWN', false)::boolean AS profile_complete
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
-WHERE u.id = sqlc.arg(id);
+WHERE u.id = sqlc.arg(id)
+  AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date));
 
 -- name: GetActiveAccountByIDWithoutProfile :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
@@ -178,7 +162,9 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
            WHERE assignment.user_id = u.id AND role.code = 'ADMIN'
        ) AS is_admin
 FROM users u
-WHERE u.id = sqlc.arg(id);
+WHERE u.id = sqlc.arg(id)
+  AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date));
 
 -- name: UpdateOwnLeaderboardVisibility :execrows
 UPDATE users
@@ -190,7 +176,7 @@ WHERE id = sqlc.arg(user_id)
 UPDATE users
 SET leaderboard_visible = sqlc.arg(leaderboard_visible), updated_at = now()
 WHERE id = sqlc.arg(dependent_user_id)
-  AND guardian_id = sqlc.arg(guardian_user_id)
+  AND guardian_authority_current(sqlc.narg(guardian_user_id)::uuid,id)
   AND is_dependent = true
   AND is_active = true;
 
@@ -220,10 +206,11 @@ SET is_active = false,
 WHERE id = sqlc.arg(id);
 
 -- name: ListMembersForAdmin :many
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS guardian_id, guardian.name AS guardian_name,
        u.is_dependent, u.date_of_birth, u.is_active
 FROM users u
-LEFT JOIN users guardian ON guardian.id = u.guardian_id
+LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
 WHERE sqlc.narg(search)::text IS NULL
    OR u.name ILIKE '%' || sqlc.narg(search)::text || '%'
    OR u.email::text ILIKE '%' || sqlc.narg(search)::text || '%'
@@ -233,10 +220,11 @@ LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
 
 -- name: GetMemberForAdmin :one
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS guardian_id, guardian.name AS guardian_name,
        u.is_dependent, u.date_of_birth, u.is_active
 FROM users u
-LEFT JOIN users guardian ON guardian.id = u.guardian_id
+LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
 WHERE u.id = sqlc.arg(id);
 
 -- name: ListActiveAdultsForAdmin :many

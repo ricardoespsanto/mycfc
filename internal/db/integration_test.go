@@ -495,10 +495,7 @@ func TestTeamScopedEventVisibilityAndResponseAuthorization(t *testing.T) {
 		outsiderID, "team-event-outsider-"+uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth)
-		VALUES ($1, 'Atleta dependente da equipa', $2, true, CURRENT_DATE - INTERVAL '14 years')`, dependentID, guardianID); err != nil {
-		t.Fatal(err)
-	}
+	insertVerifiedDependentFixture(t, ctx, tx, guardianID, dependentID, "Atleta dependente da equipa", time.Now().AddDate(-14, 0, 0))
 
 	programme, err := queries.GetProgrammeByCode(ctx, "Competition")
 	if err != nil {
@@ -757,9 +754,7 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Menor leaderboard', $2, true, '2014-01-01')`, dependentID, guardianID); err != nil {
-		t.Fatal(err)
-	}
+	insertVerifiedDependentFixture(t, ctx, pool, guardianID, dependentID, "Menor leaderboard", "2014-01-01")
 	if _, err := pool.Exec(ctx, `UPDATE users SET leaderboard_visible = false WHERE id = $1`, privateAthlete); err != nil {
 		t.Fatal(err)
 	}
@@ -960,9 +955,7 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Atleta menor estruturada', $2, true, CURRENT_DATE - INTERVAL '14 years')`, athleteID, guardianID); err != nil {
-		t.Fatal(err)
-	}
+	insertVerifiedDependentFixture(t, ctx, conn, guardianID, athleteID, "Atleta menor estruturada", time.Now().AddDate(-14, 0, 0))
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	if _, err := conn.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época estruturada', $3, $4)`, seasonID, "ST_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
 		t.Fatal(err)

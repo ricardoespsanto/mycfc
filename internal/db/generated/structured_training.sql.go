@@ -1499,7 +1499,7 @@ JOIN LATERAL (
 WHERE prescription.id = $1
   AND (
     athlete.id = $2
-    OR (athlete.guardian_id = $2 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current($2,athlete.id)
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -2692,7 +2692,7 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 WHERE (subject.id = $1
-       OR (subject.guardian_id = $1 AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
+       OR guardian_authority_current($1,subject.id))
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
@@ -3001,7 +3001,7 @@ WHERE prescription.session_id = $1
   )
   AND (
     athlete.id = $2
-    OR (athlete.guardian_id = $2 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current($2,athlete.id)
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -3081,7 +3081,7 @@ JOIN LATERAL (
 ) latest ON true
 WHERE (
     athlete.id = $1
-    OR (athlete.guardian_id = $1 AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current($1,athlete.id)
     OR $2::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row

@@ -1031,7 +1031,7 @@ func (q *Queries) ExpireLegacyPrivacySessionsBy(ctx context.Context) (int64, err
 }
 
 const getPrivacyAccountForUpdate = `-- name: GetPrivacyAccountForUpdate :one
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM users WHERE id = $1 FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM guardian_authority_privacy_account_for_update($1)
 `
 
 func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
@@ -1984,7 +1984,7 @@ func (q *Queries) ListPrivacyDependantResolutions(ctx context.Context, requestID
 }
 
 const listPrivacyDependantsForUpdate = `-- name: ListPrivacyDependantsForUpdate :many
-SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM users WHERE guardian_id = $1 ORDER BY id FOR UPDATE
+SELECT id, name, email, email_verified_at, minor_login_id, password_hash, credential_version, guardian_id, is_dependent, date_of_birth, is_active, leaderboard_visible, created_at, updated_at, erased_at, erasure_execution_id, erasure_replay_run_id FROM guardian_authority_privacy_dependants_for_update($1::uuid) ORDER BY id
 `
 
 func (q *Queries) ListPrivacyDependantsForUpdate(ctx context.Context, guardianID *uuid.UUID) ([]User, error) {

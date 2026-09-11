@@ -69,7 +69,7 @@ func TestPrivacyEmptyProviderRegistryForwardMigrationPreservesHistoryAndFailsClo
 		ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v6_check`); err != nil {
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v7_check`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP COLUMN provider_inventory_contract`); err != nil {

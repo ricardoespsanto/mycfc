@@ -275,6 +275,10 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records, privacy_erasure_completion_manifests FROM PUBLIC`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_completion_access_links, privacy_terminal_requeue_proposals`,
+		`REVOKE ALL PRIVILEGES ON TABLE guardian_authority_policies, guardian_authority_policy_events, guardian_verifier_grants, guardian_verifier_grant_events, guardian_authority_relationships, guardian_authority_events FROM PUBLIC`,
+		`REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE guardian_authority_policies`,
+		`GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO "mycfc_app"`,
+		`guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid)`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)`,
 		`REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid)`,
@@ -881,5 +885,34 @@ func TestResetBaselineIncludesEveryBundledMigration(t *testing.T) {
 	latest := migrationVersion(entries[len(entries)-1])
 	if baselineIncludesThrough != latest {
 		t.Fatalf("baseline cutoff = %q, latest migration = %q; update the complete reset baseline and cutoff together", baselineIncludesThrough, latest)
+	}
+}
+
+func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609110004_guardian_authority_verification.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Guardian authority is an explicit, reviewed capability."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("guardian authority migration is not the exact final baseline segment")
+	}
+	for _, expected := range []string{
+		"state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED','REJECTED')",
+		"CREATE UNIQUE INDEX guardian_authority_one_enabled_policy_uidx",
+		"CREATE FUNCTION guardian_authority_current",
+		"INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,created_at,updated_at)",
+		"UPDATE users SET guardian_id=NULL WHERE guardian_id IS NOT NULL",
+		"CREATE TRIGGER users_legacy_guardian_pointer_guard",
+		"UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false",
+		"UPDATE privacy_worker_kill_switch SET engaged=true",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("guardian authority migration missing %q", expected)
+		}
+	}
+	if strings.Contains(string(migration), "WITHDRAWN") {
+		t.Fatal("guardian authority migration contains unsupported WITHDRAWN state")
 	}
 }

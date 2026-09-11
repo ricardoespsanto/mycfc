@@ -23,7 +23,7 @@ FROM (
     OR EXISTS (
         SELECT 1
         FROM whatsapp_group_targets target
-        JOIN users subject ON subject.is_active AND (subject.id = $1 OR subject.guardian_id = $1)
+        JOIN users subject ON subject.is_active AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
         LEFT JOIN user_memberships membership ON membership.user_id = subject.id
             AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
         LEFT JOIN programmes programme ON programme.id = membership.programme_id
@@ -31,7 +31,7 @@ FROM (
         WHERE target.whatsapp_group_id = whatsapp_groups.id
           AND programme.code = $2
           AND (
-              (target.target_type = 'GUARDIAN' AND subject.guardian_id = $1)
+              (target.target_type = 'GUARDIAN' AND guardian_authority_current($1,subject.id))
               OR (target.target_type = 'PROGRAMME' AND target.target_id = membership.programme_id)
               OR (target.target_type = 'TEAM' AND target.target_id = membership.team_id)
               OR (target.target_type = 'CATEGORY' AND target.target_id = membership.competition_category_id)

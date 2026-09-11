@@ -1703,6 +1703,104 @@ type FeatureFlagEvent struct {
 	ActorPrincipalID *uuid.UUID              `json:"actor_principal_id"`
 }
 
+type GuardianAuthorityEvent struct {
+	ID                  int64              `json:"id"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	RelationshipVersion int64              `json:"relationship_version"`
+	ActorRef            uuid.UUID          `json:"actor_ref"`
+	ActorRole           string             `json:"actor_role"`
+	Action              string             `json:"action"`
+	FromState           *string            `json:"from_state"`
+	ToState             string             `json:"to_state"`
+	PolicyVersion       *string            `json:"policy_version"`
+	EvidenceType        *string            `json:"evidence_type"`
+	EvidenceReference   *string            `json:"evidence_reference"`
+	EvidenceSha256      []byte             `json:"evidence_sha256"`
+	ReasonCode          *string            `json:"reason_code"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+	VerifiedUntil       pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt         pgtype.Timestamptz `json:"review_due_at"`
+}
+
+type GuardianAuthorityGuardianDisclosure struct {
+	RelationshipID     uuid.UUID          `json:"relationship_id"`
+	RelationshipRef    uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID     uuid.UUID          `json:"guardian_user_id"`
+	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
+	SubmittedLabel     string             `json:"submitted_label"`
+	State              string             `json:"state"`
+	Version            int64              `json:"version"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	VerifiedUntil      pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt        pgtype.Timestamptz `json:"review_due_at"`
+	Conflict           bool               `json:"conflict"`
+	SubjectName        string             `json:"subject_name"`
+	DateOfBirth        pgtype.Date        `json:"date_of_birth"`
+	MinorLoginID       string             `json:"minor_login_id"`
+	LeaderboardVisible bool               `json:"leaderboard_visible"`
+	ProfileComplete    bool               `json:"profile_complete"`
+}
+
+type GuardianAuthorityPolicy struct {
+	ID            uuid.UUID          `json:"id"`
+	Version       string             `json:"version"`
+	EvidenceTypes []string           `json:"evidence_types"`
+	ReasonCodes   []string           `json:"reason_codes"`
+	ValidityDays  int32              `json:"validity_days"`
+	ReviewDays    int32              `json:"review_days"`
+	AdoptedAt     pgtype.Timestamptz `json:"adopted_at"`
+	AdoptedBy     uuid.UUID          `json:"adopted_by"`
+	Enabled       bool               `json:"enabled"`
+	EnabledAt     pgtype.Timestamptz `json:"enabled_at"`
+	EnabledBy     *uuid.UUID         `json:"enabled_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type GuardianAuthorityPolicyEvent struct {
+	ID            int64              `json:"id"`
+	PolicyID      uuid.UUID          `json:"policy_id"`
+	PolicyVersion string             `json:"policy_version"`
+	ActorRef      uuid.UUID          `json:"actor_ref"`
+	Action        string             `json:"action"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type GuardianAuthorityRelationship struct {
+	ID               uuid.UUID          `json:"id"`
+	PublicRef        uuid.UUID          `json:"public_ref"`
+	GuardianUserID   uuid.UUID          `json:"guardian_user_id"`
+	SubjectUserID    uuid.UUID          `json:"subject_user_id"`
+	SubmittedLabel   string             `json:"submitted_label"`
+	State            string             `json:"state"`
+	Version          int64              `json:"version"`
+	PolicyVersion    *string            `json:"policy_version"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	VerifiedBy       *uuid.UUID         `json:"verified_by"`
+	VerifiedUntil    pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt      pgtype.Timestamptz `json:"review_due_at"`
+	Conflict         bool               `json:"conflict"`
+	ConflictActorRef *uuid.UUID         `json:"conflict_actor_ref"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GuardianVerifierGrant struct {
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
+	GrantedBy uuid.UUID          `json:"granted_by"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy *uuid.UUID         `json:"revoked_by"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type GuardianVerifierGrantEvent struct {
+	ID         int64              `json:"id"`
+	GrantID    uuid.UUID          `json:"grant_id"`
+	ActorRef   uuid.UUID          `json:"actor_ref"`
+	Action     string             `json:"action"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
 type GymBlockPrescription struct {
 	BlockID              uuid.UUID          `json:"block_id"`
 	Structure            GymBlockStructure  `json:"structure"`

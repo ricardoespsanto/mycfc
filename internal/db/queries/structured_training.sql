@@ -607,7 +607,7 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 WHERE (subject.id = sqlc.arg(user_id)
-       OR (subject.guardian_id = sqlc.arg(user_id) AND subject.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
+       OR guardian_authority_current(sqlc.arg(user_id),subject.id))
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
@@ -1111,7 +1111,7 @@ JOIN LATERAL (
 ) latest ON true
 WHERE (
     athlete.id = sqlc.arg(user_id)
-    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current(sqlc.arg(user_id),athlete.id)
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1163,7 +1163,7 @@ JOIN LATERAL (
 WHERE prescription.id = sqlc.arg(id)
   AND (
     athlete.id = sqlc.arg(user_id)
-    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current(sqlc.arg(user_id),athlete.id)
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1188,7 +1188,7 @@ WHERE prescription.session_id = sqlc.arg(session_id)
   )
   AND (
     athlete.id = sqlc.arg(user_id)
-    OR (athlete.guardian_id = sqlc.arg(user_id) AND athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years')
+    OR guardian_authority_current(sqlc.arg(user_id),athlete.id)
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row

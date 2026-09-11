@@ -8,13 +8,13 @@ SELECT privacy_activation_ready(sqlc.arg(policy_version));
 SELECT * FROM privacy_request_policies WHERE version = sqlc.arg(version);
 
 -- name: GetPrivacyAccountForUpdate :one
-SELECT * FROM users WHERE id = sqlc.arg(id) FOR UPDATE;
+SELECT * FROM guardian_authority_privacy_account_for_update(sqlc.arg(id));
 
 -- name: GetPrivacyReviewerGrantForShare :one
 SELECT * FROM privacy_reviewer_grants WHERE user_id = sqlc.arg(user_id) AND revoked_at IS NULL FOR SHARE;
 
 -- name: ListPrivacyDependantsForUpdate :many
-SELECT * FROM users WHERE guardian_id = sqlc.arg(guardian_id) ORDER BY id FOR UPDATE;
+SELECT * FROM guardian_authority_privacy_dependants_for_update(sqlc.narg(guardian_id)::uuid) ORDER BY id;
 
 -- name: CountPrivacyActiveAdministrators :one
 SELECT count(*) FROM users account JOIN user_platform_roles grant_row ON grant_row.user_id = account.id

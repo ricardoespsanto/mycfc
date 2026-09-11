@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609110003_privacy_activation_emergency_fence"
+	baselineIncludesThrough      = "202609110004_guardian_authority_verification"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
@@ -216,16 +216,29 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		"privacy_worker_kill_switch",
 		"privacy_worker_kill_switch_events",
 	}, ", ")
+	guardianAuthorityTables := strings.Join([]string{
+		"guardian_authority_policies",
+		"guardian_authority_policy_events",
+		"guardian_verifier_grants",
+		"guardian_verifier_grant_events",
+		"guardian_authority_relationships",
+		"guardian_authority_events",
+	}, ", ")
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
 		{"revoke public retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM PUBLIC"},
 		{"revoke public completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM PUBLIC"},
+		{"revoke public guardian authority table access", "REVOKE ALL PRIVILEGES ON TABLE " + guardianAuthorityTables + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
 		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
 		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},
+		{"revoke web guardian authority mutations", "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE " + guardianAuthorityTables + " FROM " + app},
+		{"grant web guardian authority metadata reads", "GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO " + app},
+		{"revoke web guardian authority routines", "REVOKE EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) FROM " + app},
+		{"grant web guardian authority routines", "GRANT EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) TO " + app},
 		{"restrict web consent evidence writes", "REVOKE UPDATE, DELETE ON TABLE consent_forms FROM " + app},
 		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
