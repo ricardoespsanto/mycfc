@@ -8,8 +8,10 @@ locals {
   backup_attestation_prefixes = ["restore-attestations/*", "restore-evidence/*"]
   backup_prefixes             = concat(local.backup_recovery_prefixes, local.backup_attestation_prefixes)
   backup_base_list_actions    = ["s3:ListBucket"]
+  backup_cleanup_role_name    = "${local.name}-postgres-backup-cleanup"
   backup_cleanup_list_actions = ["s3:ListBucketVersions"]
   backup_object_actions       = ["s3:GetObject", "s3:PutObject"]
+  backup_version_read_actions = ["s3:GetObjectVersion"]
   backup_cleanup_actions      = ["s3:DeleteObjectVersion"]
   backup_encryption_actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
 }
@@ -182,6 +184,18 @@ data "aws_iam_policy_document" "postgres_backups_boundary" {
 
   statement {
     effect    = "Allow"
+    actions   = local.backup_object_actions
+    resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.backup_version_read_actions
+    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    effect    = "Allow"
     actions   = local.backup_cleanup_list_actions
     resources = [aws_s3_bucket.postgres_backups.arn]
 
@@ -194,18 +208,6 @@ data "aws_iam_policy_document" "postgres_backups_boundary" {
 
   statement {
     effect    = "Allow"
-    actions   = local.backup_object_actions
-    resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = local.backup_cleanup_actions
-    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
-  }
-
-  statement {
-    effect    = "Allow"
     actions   = local.backup_encryption_actions
     resources = [aws_kms_key.postgres_backups.arn]
   }
@@ -213,7 +215,7 @@ data "aws_iam_policy_document" "postgres_backups_boundary" {
 
 resource "aws_iam_policy" "postgres_backups_boundary" {
   name        = "${local.name}-postgres-backups-boundary"
-  description = "Maximum backup and gated exact-version cleanup permissions"
+  description = "Maximum write-only backup and restore-read permissions without version deletion"
   policy      = data.aws_iam_policy_document.postgres_backups_boundary.json
 
   lifecycle { prevent_destroy = true }
@@ -221,12 +223,9 @@ resource "aws_iam_policy" "postgres_backups_boundary" {
 
 data "aws_iam_policy_document" "postgres_backups" {
   statement {
-    sid    = "ListBackupObjects"
-    effect = "Allow"
-    actions = concat(
-      local.backup_base_list_actions,
-      var.postgres_backup_noncurrent_cleanup_enabled ? local.backup_cleanup_list_actions : [],
-    )
+    sid       = "ListBackupObjects"
+    effect    = "Allow"
+    actions   = concat(local.backup_base_list_actions, local.backup_cleanup_list_actions)
     resources = [aws_s3_bucket.postgres_backups.arn]
 
     condition {
@@ -243,15 +242,11 @@ data "aws_iam_policy_document" "postgres_backups" {
     resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
   }
 
-  dynamic "statement" {
-    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? [1] : []
-
-    content {
-      sid       = "DeleteExpiredBackupVersions"
-      effect    = "Allow"
-      actions   = local.backup_cleanup_actions
-      resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
-    }
+  statement {
+    sid       = "ReadExactRecoveryPointVersions"
+    effect    = "Allow"
+    actions   = local.backup_version_read_actions
+    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
   }
 
   statement {
@@ -268,10 +263,80 @@ resource "aws_iam_user_policy" "postgres_backups" {
   policy = data.aws_iam_policy_document.postgres_backups.json
 }
 
+data "aws_iam_policy_document" "postgres_backup_cleanup_boundary" {
+  count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
+
+  statement {
+    sid       = "ListRecoveryPointVersions"
+    effect    = "Allow"
+    actions   = local.backup_cleanup_list_actions
+    resources = [aws_s3_bucket.postgres_backups.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = local.backup_recovery_prefixes
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? [1] : []
+
+    content {
+      sid       = "DeleteExpiredRecoveryPointVersions"
+      effect    = "Allow"
+      actions   = local.backup_cleanup_actions
+      resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "postgres_backup_cleanup_boundary" {
+  count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
+
+  name        = "${local.backup_cleanup_role_name}-boundary"
+  description = "Maximum independently gated PostgreSQL backup version-cleanup permissions"
+  policy      = data.aws_iam_policy_document.postgres_backup_cleanup_boundary[0].json
+
+  lifecycle { prevent_destroy = true }
+}
+
+resource "aws_iam_role" "postgres_backup_cleanup" {
+  count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
+
+  name = local.backup_cleanup_role_name
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowApprovedCredentialRenewers"
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { AWS = sort(tolist(var.postgres_backup_cleanup_assumer_arns)) }
+    }]
+  })
+  max_session_duration = 3600
+  permissions_boundary = aws_iam_policy.postgres_backup_cleanup_boundary[0].arn
+
+  lifecycle { prevent_destroy = true }
+}
+
+resource "aws_iam_role_policy" "postgres_backup_cleanup" {
+  count = var.postgres_backup_cleanup_identity_enabled ? 1 : 0
+
+  name   = "postgres-backup-cleanup"
+  role   = aws_iam_role.postgres_backup_cleanup[0].name
+  policy = data.aws_iam_policy_document.postgres_backup_cleanup_boundary[0].json
+}
+
 output "postgres_backup_bucket" {
   value = aws_s3_bucket.postgres_backups.bucket
 }
 
 output "postgres_backup_kms_key_arn" {
   value = aws_kms_key.postgres_backups.arn
+}
+
+output "postgres_backup_cleanup_role_arn" {
+  description = "Dedicated cleanup role issuing sessions of at most one hour when its inert infrastructure gate is enabled."
+  value       = try(aws_iam_role.postgres_backup_cleanup[0].arn, null)
 }

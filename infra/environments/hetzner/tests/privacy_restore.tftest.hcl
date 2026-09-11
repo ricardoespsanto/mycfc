@@ -15,8 +15,9 @@ mock_provider "aws" {
 mock_provider "hcloud" {}
 
 variables {
-  ssh_public_key        = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOperatorKey"
-  deploy_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestDeployKey"
+  ssh_public_key                       = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOperatorKey"
+  deploy_ssh_public_key                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestDeployKey"
+  postgres_backup_cleanup_assumer_arns = ["arn:aws:iam::123456789012:role/mycfc-test-backup-cleanup-renewer"]
 }
 
 run "server_backup_intent_is_explicit" {
@@ -45,6 +46,9 @@ run "defaults_are_inert" {
       aws_lambda_function.privacy_restore_broker,
       aws_iam_user_policy.privacy_restore_writer,
       aws_iam_user_policy.privacy_restore_reader,
+      aws_iam_policy.postgres_backup_cleanup_boundary,
+      aws_iam_role.postgres_backup_cleanup,
+      aws_iam_role_policy.postgres_backup_cleanup,
     ]
   }
 
@@ -57,7 +61,10 @@ run "defaults_are_inert" {
       length(aws_iam_role.privacy_restore_broker) == 0 &&
       length(aws_lambda_function.privacy_restore_broker) == 0 &&
       length(aws_iam_user_policy.privacy_restore_writer) == 0 &&
-      length(aws_iam_user_policy.privacy_restore_reader) == 0
+      length(aws_iam_user_policy.privacy_restore_reader) == 0 &&
+      length(aws_iam_policy.postgres_backup_cleanup_boundary) == 0 &&
+      length(aws_iam_role.postgres_backup_cleanup) == 0 &&
+      length(aws_iam_role_policy.postgres_backup_cleanup) == 0
     )
     error_message = "Default flags must provision no privacy-restore infrastructure or access policy."
   }
@@ -70,12 +77,14 @@ run "backup_version_expiration_is_inert" {
     target = [
       aws_s3_bucket_lifecycle_configuration.postgres_backups,
       aws_iam_user_policy.postgres_backups,
+      aws_iam_role_policy.postgres_backup_cleanup,
     ]
   }
 
   assert {
     condition = (
       !var.postgres_backup_noncurrent_cleanup_enabled &&
+      !var.postgres_backup_cleanup_identity_enabled &&
       length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 4 &&
       one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "retain-privacy-restore-attestations"]).expiration[0].days == 400 &&
       one([for rule in aws_s3_bucket_lifecycle_configuration.postgres_backups.rule : rule if rule.id == "retain-privacy-restore-attestations"]).noncurrent_version_expiration[0].noncurrent_days == 1 &&
@@ -84,9 +93,76 @@ run "backup_version_expiration_is_inert" {
     )
     error_message = "A routine plan must retain only the existing current daily/monthly backup rules."
   }
+
+  assert {
+    condition = (
+      toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions)) == toset(["s3:ListBucket", "s3:ListBucketVersions"]) &&
+      length(setintersection(
+        toset(concat(local.backup_base_list_actions, local.backup_cleanup_list_actions, local.backup_object_actions, local.backup_version_read_actions, local.backup_encryption_actions)),
+        toset(local.backup_cleanup_actions),
+      )) == 0 &&
+      toset(local.backup_version_read_actions) == toset(["s3:GetObjectVersion"]) &&
+      toset(local.backup_recovery_prefixes) == toset(["daily/*", "monthly/*"])
+    )
+    error_message = "The standing backup identity may inventory and read exact recovery-point versions for restore, but must never receive deletion permission."
+  }
+
+  assert {
+    condition = toset(one([
+      for statement in data.aws_iam_policy_document.postgres_backups.statement : statement.actions
+      if statement.sid == "ReadExactRecoveryPointVersions"
+    ])) == toset(["s3:GetObjectVersion"])
+    error_message = "The standing backup policy must wire exact-version restore reads into a dedicated statement."
+  }
 }
 
-run "backup_version_expiration_requires_its_gate" {
+run "backup_cleanup_identity_is_inventory_only" {
+  command = plan
+
+  variables {
+    postgres_backup_cleanup_identity_enabled = true
+  }
+
+  plan_options {
+    target = [
+      aws_s3_bucket_lifecycle_configuration.postgres_backups,
+      aws_iam_role.postgres_backup_cleanup,
+      aws_iam_role_policy.postgres_backup_cleanup,
+    ]
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role.postgres_backup_cleanup) == 1 &&
+      length(aws_iam_role_policy.postgres_backup_cleanup) == 1 &&
+      aws_iam_role.postgres_backup_cleanup[0].max_session_duration == 3600 &&
+      jsondecode(aws_iam_role.postgres_backup_cleanup[0].assume_role_policy).Statement[0].Principal.AWS == ["arn:aws:iam::123456789012:role/mycfc-test-backup-cleanup-renewer"] &&
+      length(aws_s3_bucket_lifecycle_configuration.postgres_backups.rule) == 4 &&
+      toset(concat(
+        local.backup_cleanup_list_actions,
+        var.postgres_backup_noncurrent_cleanup_enabled ? local.backup_cleanup_actions : [],
+      )) == toset(["s3:ListBucketVersions"])
+    )
+    error_message = "The inert cleanup identity must support inventory without deletion or lifecycle changes."
+  }
+}
+
+run "backup_cleanup_identity_requires_credential_renewer" {
+  command = plan
+
+  variables {
+    postgres_backup_cleanup_identity_enabled = true
+    postgres_backup_cleanup_assumer_arns     = []
+  }
+
+  plan_options {
+    target = [aws_iam_role.postgres_backup_cleanup]
+  }
+
+  expect_failures = [var.postgres_backup_cleanup_identity_enabled]
+}
+
+run "backup_deletion_requires_cleanup_identity" {
   command = plan
 
   variables {
@@ -94,9 +170,25 @@ run "backup_version_expiration_requires_its_gate" {
   }
 
   plan_options {
+    target = [aws_s3_bucket_lifecycle_configuration.postgres_backups]
+  }
+
+  expect_failures = [var.postgres_backup_noncurrent_cleanup_enabled]
+}
+
+run "backup_version_expiration_requires_its_gate" {
+  command = plan
+
+  variables {
+    postgres_backup_cleanup_identity_enabled   = true
+    postgres_backup_noncurrent_cleanup_enabled = true
+  }
+
+  plan_options {
     target = [
       aws_s3_bucket_lifecycle_configuration.postgres_backups,
       aws_iam_user_policy.postgres_backups,
+      aws_iam_role_policy.postgres_backup_cleanup,
     ]
   }
 
@@ -119,6 +211,18 @@ run "backup_version_expiration_requires_its_gate" {
       toset(local.backup_attestation_prefixes) == toset(["restore-attestations/*", "restore-evidence/*"])
     )
     error_message = "Backup cleanup must list and delete exact recovery-point versions without reaching durable restore attestations."
+  }
+
+  assert {
+    condition = (
+      toset(concat(
+        local.backup_cleanup_list_actions,
+        var.postgres_backup_noncurrent_cleanup_enabled ? local.backup_cleanup_actions : [],
+      )) == toset(["s3:ListBucketVersions", "s3:DeleteObjectVersion"]) &&
+      toset(local.backup_recovery_prefixes) == toset(["daily/*", "monthly/*"]) &&
+      length(setintersection(toset(local.backup_recovery_prefixes), toset(local.backup_attestation_prefixes))) == 0
+    )
+    error_message = "Only the cleanup identity may receive prefix-scoped exact-version deletion."
   }
 }
 

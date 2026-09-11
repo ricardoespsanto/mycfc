@@ -277,7 +277,7 @@ func observeSchema(versionsPath string) (schemaObservation, error) {
 	if len(want) < 2 || strings.Join(versions, "\n") != strings.Join(want, "\n") || digest(payload) != db.EmbeddedMigrationDigest() {
 		return schemaObservation{}, errors.New("schema version inventory rejected")
 	}
-	const baselineThrough = "202609110002_privacy_empty_provider_registry_activation"
+	const baselineThrough = "202609110003_privacy_activation_emergency_fence"
 	if !containsExact(versions, "reset-baseline-v1") || !containsExact(versions, baselineThrough) {
 		return schemaObservation{}, errors.New("schema version inventory mismatch")
 	}

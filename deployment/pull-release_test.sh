@@ -444,7 +444,7 @@ if printf '%s\n' "$database_service_config" | grep -Eq 'APP_DB_|MIGRATION_DB_|^[
 	printf '%s\n' 'production database jobs must not consume duplicated host database settings' >&2
 	exit 1
 fi
-test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 2
+test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 3
 production_config=$(sed -n '/^x-production-config:/,/^x-app:/p' "$compose_file")
 for field in APP_ENV APP_VERSION GIT_SHA AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
 	printf '%s\n' "$production_config" | grep -q "^[[:space:]]*$field:"

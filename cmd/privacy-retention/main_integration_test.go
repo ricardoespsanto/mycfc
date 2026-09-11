@@ -61,6 +61,20 @@ func TestRunUsesRetentionCapabilityAndEmitsAggregateEvidence(t *testing.T) {
 			}
 		})
 	}
+	var publicUsageGranted bool
+	if err = admin.QueryRow(t.Context(), `SELECT has_schema_privilege($1,'public','USAGE')`, retentionRole).Scan(&publicUsageGranted); err != nil {
+		t.Fatal(err)
+	}
+	if !publicUsageGranted {
+		if _, err = admin.Exec(t.Context(), `GRANT USAGE ON SCHEMA public TO `+roleIdentifier); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, cleanupErr := admin.Exec(context.Background(), `REVOKE USAGE ON SCHEMA public FROM `+roleIdentifier); cleanupErr != nil {
+				t.Errorf("restore retention schema ACL: %v", cleanupErr)
+			}
+		})
+	}
 	env := map[string]string{
 		"PRIVACY_RETENTION_ENABLED":      "true",
 		"PRIVACY_RETENTION_DATABASE_URL": databaseURL,

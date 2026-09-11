@@ -43,6 +43,11 @@ BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
 BACKUP_KMS_KEY_ID=<exact-KMS-key-ARN>
 BACKUP_MANIFEST_AUTH_ENABLED=false
 
+# Separate backup-version inventory/deletion role; both host gates are inert.
+BACKUP_CLEANUP_ROLE_ARN=arn:aws:iam::<account-id>:role/mycfc-production-postgres-backup-cleanup
+BACKUP_NONCURRENT_CLEANER_ENABLED=false
+BACKUP_NONCURRENT_CLEANER_DRY_RUN=true
+
 # Independent privacy-restore controls; all remain inert by default.
 PRIVACY_RESTORE_LEDGER_BUCKET=<private-privacy-ledger-bucket>
 PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN=<exact-ledger-KMS-key-ARN>
@@ -60,8 +65,6 @@ PRIVACY_WORKER_ENABLED=false
 # PRIVACY_EXECUTOR_DB_PASSWORD=<generated executor password>
 # PRIVACY_ACTIVATION_BROKER_DB_USER=mycfc_privacy_activation_broker
 # PRIVACY_ACTIVATION_BROKER_DB_PASSWORD=<generated root-only broker password>
-# PRIVACY_ACTIVATION_DISABLE_DB_USER=mycfc_privacy_activation_disable
-# PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD=<generated root-only disable password>
 
 GALLERY_URL=https://example.com/gallery
 
@@ -79,11 +82,11 @@ COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
 DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
-Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. The disabled #248 worker uses a distinct executor PostgreSQL login. Its activation broker and disable-only boundary use two more exact, independent logins; all three are provisioned as a complete set. These bootstrap credentials may be present in the root-only host environment only for one-shot bootstrap/migration containers. The web app and worker never receive the broker credential or human approval keys. Never add them to `/mycfc/production/app-secrets`, which the web identity can read. Provisioning, activation, and rollback are documented in `docs/privacy-worker-infrastructure.md`.
+Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. The disabled #248 worker and its activation broker use two distinct logins provisioned by routine release bootstrap. Their credentials may be present in the root-only host environment only for those one-shot database jobs. The disable-only login is provisioned separately from `/etc/mycfc/privacy-activation-disable.env`; its password must never be copied into the main host environment or application-readable AWS secrets. The web app and worker never receive broker credentials or human approval keys. Provisioning, activation, and rollback are documented in `docs/privacy-worker-infrastructure.md`.
 
 The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
 
-The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a separate one-shot evidence recorder and never enables the worker.
+The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a root-only one-shot activation operator. Its explicit `provision-disable` mode provisions or rotates the fixed break-glass database login after migration; routine releases never receive that password. Its `disable` mode uses only `/etc/mycfc/privacy-activation-disable.env` (root-owned mode `0600`) and the separate `mycfc_privacy_activation_disable` credential; that runtime container receives no broker configuration, evidence files, or signing keys. See `docs/privacy-worker-infrastructure.md` for custody, incident, and verification steps.
 
 ## Required AWS configuration
 
@@ -193,7 +196,20 @@ aws_access_key_id=<backup-access-key-id>
 aws_secret_access_key=<backup-secret-access-key>
 ```
 
-The installer refuses to proceed until this credential file and `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID` are present, then enables both the release-poll and nightly backup timers.
+The standing `mycfc-backup` profile and its permissions boundary retain prefix-scoped, read-only `s3:ListBucketVersions` because the restore drill inventories exact recovery points through that profile. They never receive `s3:DeleteObjectVersion`. When the separate cleanup role has been explicitly provisioned, an approved credential renewer may assume it for at most one hour. Install only that temporary session in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
+
+```text
+[mycfc-backup-cleanup]
+aws_access_key_id=ASIA<temporary-cleanup-access-key-id>
+aws_secret_access_key=<temporary-cleanup-secret-access-key>
+aws_session_token=<required-temporary-session-token>
+```
+
+The installer and runtime reject long-lived access-key profiles, extra profiles, missing session tokens, expired or otherwise rejected sessions, and sessions whose caller ARN does not match `BACKUP_CLEANUP_ROLE_ARN`. Never put the cleanup session in `/etc/mycfc/backup-aws/credentials` or the application environment. The installer writes only the allowlisted bucket, region, role ARN, gates, and age boundary to `/etc/mycfc/backup-cleanup.env`; systemd presents that file and the temporary AWS session as service credentials to a transient unprivileged `mycfc-backup-cleanup` account. `/etc/mycfc` is otherwise inaccessible to that account, including ordinary backup, release, application, restore, and activation secrets.
+
+With `BACKUP_NONCURRENT_CLEANER_ENABLED=true` and `BACKUP_NONCURRENT_CLEANER_DRY_RUN=true`, the cleanup service can be invoked manually for inventory but the timer stays disabled. Exact-version deletion additionally requires the reviewed Terraform destructive gate and host dry-run false. The cleanup process writes only fixed event codes and aggregate counts to its protected runtime result. A separate root-owned logger service validates that allowlist before using the release logger to upload it to CloudWatch; raw AWS stderr and object keys are discarded locally and never enter that upload. Renew the session before its one-hour expiry or the cleanup fails closed and its existing alarm reports the missed boundary. See `docs/privacy-restore-infrastructure.md`.
+
+The installer always requires the standing backup credential plus `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID`, then enables the release-poll and nightly backup timers. It requires the separate temporary cleanup session only when `BACKUP_NONCURRENT_CLEANER_ENABLED=true`.
 
 ## Operations
 
@@ -238,7 +254,7 @@ For a host incident, use the separate operator SSH key from an approved SSH CIDR
 
 ## PostgreSQL recovery
 
-`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
+`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Its standing credential can inventory exact versions only under the daily and monthly recovery prefixes for restore verification, but cannot delete object versions. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
 
 The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
 

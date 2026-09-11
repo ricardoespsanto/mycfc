@@ -79,8 +79,6 @@ services:
       PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
       PRIVACY_ACTIVATION_BROKER_DB_USER: ${PRIVACY_ACTIVATION_BROKER_DB_USER:-}
       PRIVACY_ACTIVATION_BROKER_DB_PASSWORD: ${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-}
-      PRIVACY_ACTIVATION_DISABLE_DB_USER: ${PRIVACY_ACTIVATION_DISABLE_DB_USER:-}
-      PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD: ${PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,13 +94,32 @@ services:
       PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
       PRIVACY_ACTIVATION_BROKER_DB_USER: ${PRIVACY_ACTIVATION_BROKER_DB_USER:-}
       PRIVACY_ACTIVATION_BROKER_DB_PASSWORD: ${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-}
-      PRIVACY_ACTIVATION_DISABLE_DB_USER: ${PRIVACY_ACTIVATION_DISABLE_DB_USER:-}
-      PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD: ${PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
     networks: [mycfc]
     profiles: [release]
+
+  privacy-activation-disable-bootstrap:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["provision-privacy-activation-disable"]
+    environment:
+      <<: *production-config
+    env_file:
+      - path: /etc/mycfc/privacy-activation-disable.env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [privacy-activation-disable-bootstrap]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
 
   privacy-retention:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
@@ -165,6 +182,24 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 64
+    restart: "no"
+
+  privacy-activation-disable:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-activation"]
+    command: ["disable"]
+    env_file:
+      - path: /etc/mycfc/privacy-activation-disable.env
+        required: false
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [privacy-activation-disable]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
     restart: "no"
 
   caddy:

@@ -108,7 +108,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110002_privacy_empty_provider_registry_activation"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110003_privacy_activation_emergency_fence"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -176,6 +176,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	schema := pgx.Identifier{schemaName}.Sanitize()
 	protectedSchemaName := schemaName + "_protected"
 	protectedSchema := pgx.Identifier{protectedSchemaName}.Sanitize()
+	disableSchemaName := schemaName + "_disable"
+	disableSchema := pgx.Identifier{disableSchemaName}.Sanitize()
 	if _, e = admin.Exec(ctx, "CREATE SCHEMA "+schema); e != nil {
 		t.Fatal(e)
 	}
@@ -184,6 +186,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Error(err)
 		}
 		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+protectedSchema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+disableSchema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -205,6 +210,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path = pg_catalog, public", "SET search_path = pg_catalog, "+schemaName+", public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path=pg_catalog,public", "SET search_path=pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_disable", disableSchemaName)
 	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
 	}

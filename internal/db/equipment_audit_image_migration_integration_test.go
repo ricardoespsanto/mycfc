@@ -26,6 +26,7 @@ func TestEquipmentAuditImageSanitizationMigrationPreservesMeaningAndImmutability
 
 	schemaName := "equipment_audit_sanitize_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	protectedSchemaName := "privacy_protected_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	disableSchemaName := "privacy_disable_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	schema := pgx.Identifier{schemaName}.Sanitize()
 	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
@@ -33,6 +34,7 @@ func TestEquipmentAuditImageSanitizationMigrationPreservesMeaningAndImmutability
 	defer func() {
 		_, _ = conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 		_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{protectedSchemaName}.Sanitize()+" CASCADE")
+		_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{disableSchemaName}.Sanitize()+" CASCADE")
 	}()
 	if _, err = conn.Exec(ctx, "SET search_path TO "+schema+",public"); err != nil {
 		t.Fatal(err)
@@ -41,6 +43,7 @@ func TestEquipmentAuditImageSanitizationMigrationPreservesMeaningAndImmutability
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog, public", "pg_catalog, "+schemaName+", public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_disable", disableSchemaName)
 	if _, err = conn.PgConn().Exec(ctx, isolatedBaseline).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
 	}

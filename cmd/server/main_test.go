@@ -230,6 +230,28 @@ func TestRunDatabaseCommandBootstrapsUsingExplicitEnvironmentConnection(t *testi
 	}
 }
 
+func TestRunDatabaseCommandExplicitlyProvisionsBreakGlassDisableRole(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL", "postgres://mycfc_privacy_activation_disable:independent@postgres:5432/mycfc?sslmode=disable")
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connection := &databaseCommandConnectionFake{}
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
+	if err := runDatabaseCommand(t.Context(), "provision-privacy-activation-disable"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(connection.sql, "\n")
+	if !strings.Contains(joined, `CREATE ROLE "mycfc_privacy_activation_disable" LOGIN`) ||
+		!strings.Contains(joined, `GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text)`) {
+		t.Fatalf("provisioning statements=%#v", connection.sql)
+	}
+
+	t.Setenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL", "postgres://wrong:independent@postgres:5432/mycfc?sslmode=disable")
+	if err := runDatabaseCommand(t.Context(), "provision-privacy-activation-disable"); err == nil {
+		t.Fatal("wrong break-glass role was accepted")
+	}
+}
+
 func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("DB_NAME", "mycfc")

@@ -1,0 +1,14 @@
+[Unit]
+Description=Upload sanitized MyCFC PostgreSQL backup cleanup result
+After=mycfc-postgres-backup-version-cleanup.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/postgres-backup-version-cleanup-cloudwatch.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/release-aws/credentials -/run/mycfc-backup-cleanup/result.log
+ReadWritePaths=/run
