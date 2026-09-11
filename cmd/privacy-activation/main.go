@@ -62,6 +62,7 @@ func (s postgresActivationEvidenceStore) Close() { s.close() }
 
 var verifyRestoreActivationAttestation = privacyrequests.VerifyRestoreActivationAttestation
 var verifyActivationArtifact = privacyrequests.VerifyActivationArtifact
+var exitProcess = os.Exit
 var openActivationEvidenceStore = func(ctx context.Context, databaseURL string) (activationEvidenceStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -76,7 +77,8 @@ func main() {
 		mode = os.Args[1]
 	} else if len(os.Args) > 2 {
 		fmt.Fprintln(os.Stderr, "privacy_activation_usage_rejected")
-		os.Exit(2)
+		exitProcess(2)
+		return
 	}
 	var err error
 	switch mode {
@@ -99,7 +101,7 @@ func main() {
 		} else {
 			fmt.Fprintln(os.Stderr, "privacy_activation_evidence_failed")
 		}
-		os.Exit(1)
+		exitProcess(1)
 	}
 }
 

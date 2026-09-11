@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -69,6 +70,80 @@ func TestRunDisableUsesOnlyNarrowCredentialAndEmitsFixedOutcome(t *testing.T) {
 		if read[forbidden] {
 			t.Fatalf("disable command read forbidden environment %s", forbidden)
 		}
+	}
+}
+
+func TestMainDispatchesDisableAndReportsDedicatedFailures(t *testing.T) {
+	actor := uuid.New()
+	for name, value := range map[string]string{
+		"PRIVACY_ACTIVATION_DISABLE_DATABASE_URL":      "postgres://mycfc_privacy_activation_disable:secret@postgres:5432/mycfc?sslmode=disable",
+		"PRIVACY_ACTIVATION_DISABLE_EXPECTED_DATABASE": "mycfc",
+		"PRIVACY_ACTIVATION_DISABLE_ACTOR_REF":         actor.String(),
+	} {
+		t.Setenv(name, value)
+	}
+	originalArgs, originalStdout, originalStderr, originalExit := os.Args, os.Stdout, os.Stderr, exitProcess
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = stdout, stderr
+	t.Cleanup(func() {
+		os.Args, os.Stdout, os.Stderr, exitProcess = originalArgs, originalStdout, originalStderr, originalExit
+		_ = stdout.Close()
+		_ = stderr.Close()
+	})
+
+	database := &disableDatabaseFake{scan: func(destinations ...any) error {
+		*destinations[0].(*int64) = 1
+		*destinations[1].(*string) = "mycfc"
+		*destinations[2].(*bool) = true
+		*destinations[3].(*bool) = false
+		return nil
+	}}
+	withDisableRuntime(t, 0, func(context.Context, string) (activationDisableDatabase, error) { return database, nil })
+	exitCode := 0
+	exitProcess = func(code int) { exitCode = code }
+	os.Args = []string{"privacy-activation", "disable"}
+	main()
+	if exitCode != 0 || !database.closed {
+		t.Fatalf("successful disable exit=%d closed=%t", exitCode, database.closed)
+	}
+
+	openActivationDisableDatabase = func(context.Context, string) (activationDisableDatabase, error) {
+		return nil, errors.New("unavailable")
+	}
+	main()
+	if exitCode != 1 {
+		t.Fatalf("failed disable exit=%d", exitCode)
+	}
+	if _, err = stderr.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	failure, err := io.ReadAll(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(failure), "privacy_activation_disable_failed") {
+		t.Fatalf("dedicated failure marker missing from %q", failure)
+	}
+
+	exitCode = 0
+	os.Args = []string{"privacy-activation", "disable", "unexpected"}
+	main()
+	if exitCode != 2 {
+		t.Fatalf("usage rejection exit=%d", exitCode)
+	}
+
+	exitCode = 0
+	os.Args = []string{"privacy-activation", "unknown"}
+	main()
+	if exitCode != 1 {
+		t.Fatalf("unknown mode exit=%d", exitCode)
 	}
 }
 
