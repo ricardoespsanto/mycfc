@@ -2,6 +2,14 @@ package handlers
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	csrf "filippo.io/csrf/gorilla"
@@ -14,6 +22,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,14 +37,23 @@ type PrivacyRequestStore interface {
 	Submit(context.Context, pr.SubmitInput) (dbgen.DataErasureRequest, error)
 	Change(context.Context, pr.ReviewInput) (dbgen.DataErasureRequest, error)
 	StartExecution(context.Context, pr.StartInput) (dbgen.PrivacyErasureExecution, error)
+	ValidateCompletionLink(context.Context, string) error
+	ConsumeCompletionDetail(context.Context, string) (pr.CompletionDetail, error)
+	CompletionControlSnapshot(context.Context, uuid.UUID, uuid.UUID) (pr.CompletionControlSnapshot, error)
+	ProposeTerminalRequeue(context.Context, uuid.UUID, uuid.UUID) (pr.TerminalRequeueProposal, error)
+	ApproveTerminalRequeue(context.Context, uuid.UUID, uuid.UUID, []byte) error
+	ActivationControlSnapshot(context.Context, uuid.UUID) (pr.ActivationControlSnapshot, error)
 }
 type PrivacyRequests struct {
-	Service    PrivacyRequestStore
-	Sessions   *scs.SessionManager
-	System     System
-	PageMeta   components.PageMeta
-	ContactURL string
-	Now        func() time.Time
+	Service               PrivacyRequestStore
+	Sessions              *scs.SessionManager
+	System                System
+	PageMeta              components.PageMeta
+	ContactURL            string
+	CompletionLinkKey     []byte
+	CompletionStateRandom io.Reader
+	SecureCookies         bool
+	Now                   func() time.Time
 }
 
 func (h PrivacyRequests) now() time.Time {
@@ -60,6 +78,12 @@ func privacyHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "same-origin")
 }
+
+func completionDetailHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive")
+}
 func (h PrivacyRequests) render(w http.ResponseWriter, r *http.Request, status int, c templ.Component) {
 	privacyHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -74,6 +98,326 @@ func privacyManagement(r *http.Request) bool {
 func privacyDate(t time.Time) string {
 	l, _ := time.LoadLocation("Europe/Lisbon")
 	return t.In(l).Format("02/01/2006 15:04")
+}
+
+func (h PrivacyRequests) CompletionDetail(w http.ResponseWriter, r *http.Request) {
+	completionDetailHeaders(w)
+	token := r.PathValue("token")
+	if err := h.Service.ValidateCompletionLink(r.Context(), token); err != nil {
+		h.clearCompletionState(w)
+		if !errors.Is(err, pr.ErrCompletionLinkUnavailable) {
+			h.System.InternalError(w, r)
+			return
+		}
+		h.renderCompletionDetail(w, r, http.StatusNotFound, pages.PrivacyCompletionDetailPage{Meta: h.completionMeta(r), Unavailable: true, ContactURL: h.ContactURL})
+		return
+	}
+	state, confirmationNonce, err := h.sealCompletionState(token)
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	h.setCompletionState(w, state)
+	h.renderCompletionDetail(w, r, http.StatusOK, pages.PrivacyCompletionDetailPage{Meta: h.completionMeta(r), Confirm: true, ConfirmationNonce: confirmationNonce, ContactURL: h.ContactURL})
+}
+
+func (h PrivacyRequests) ConsumeCompletionDetail(w http.ResponseWriter, r *http.Request) {
+	completionDetailHeaders(w)
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	cookie, err := r.Cookie(privacyCompletionStateCookie)
+	h.clearCompletionState(w)
+	if err != nil {
+		h.renderCompletionDetail(w, r, http.StatusNotFound, pages.PrivacyCompletionDetailPage{Meta: h.completionMeta(r), Unavailable: true, ContactURL: h.ContactURL})
+		return
+	}
+	token, confirmationNonce, err := h.openCompletionState(cookie.Value)
+	if err != nil || subtle.ConstantTimeCompare([]byte(confirmationNonce), []byte(r.PostForm.Get("completion_state"))) != 1 {
+		h.renderCompletionDetail(w, r, http.StatusNotFound, pages.PrivacyCompletionDetailPage{Meta: h.completionMeta(r), Unavailable: true, ContactURL: h.ContactURL})
+		return
+	}
+	detail, err := h.Service.ConsumeCompletionDetail(r.Context(), token)
+	if err != nil {
+		if !errors.Is(err, pr.ErrCompletionLinkUnavailable) {
+			h.System.InternalError(w, r)
+			return
+		}
+		h.renderCompletionDetail(w, r, http.StatusNotFound, pages.PrivacyCompletionDetailPage{Meta: h.completionMeta(r), Unavailable: true, ContactURL: h.ContactURL})
+		return
+	}
+	h.renderCompletionDetail(w, r, http.StatusOK, pages.PrivacyCompletionDetailPage{
+		Meta: h.completionMeta(r), Reference: detail.RequestReference.String(), CompletedAt: privacyDate(detail.CompletedAt),
+		ManifestSHA256: detail.ManifestSHA256, Categories: detail.Categories, Checkpoints: detail.Checkpoints,
+		ObjectTargets: detail.ObjectTargets, ProviderTargets: detail.ProviderTargets, ContactURL: h.ContactURL,
+	})
+}
+
+const (
+	privacyCompletionStateCookie = "mycfc_privacy_completion"
+	privacyCompletionStateTTL    = 5 * time.Minute
+	privacyCompletionStateAAD    = "mycfc/privacy-completion-browser-state/v1"
+	privacyCompletionNonceBytes  = 16
+)
+
+func (h PrivacyRequests) completionMeta(r *http.Request) components.PageMeta {
+	meta := h.PageMeta
+	meta.Title = "Conclusão do pedido de privacidade | MyCFCoimbra"
+	meta.PageLabel = "Conclusão do pedido de privacidade"
+	meta.CurrentPath = "/privacidade/conclusao/*"
+	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	return meta
+}
+
+func (h PrivacyRequests) completionStateAEAD() (cipher.AEAD, error) {
+	if len(h.CompletionLinkKey) < sha256.Size {
+		return nil, errors.New("completion browser state key is unavailable")
+	}
+	mac := hmac.New(sha256.New, h.CompletionLinkKey)
+	_, _ = mac.Write([]byte(privacyCompletionStateAAD))
+	block, err := aes.NewCipher(mac.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (h PrivacyRequests) sealCompletionState(token string) (string, string, error) {
+	if token == "" || len(token) > 128 {
+		return "", "", errors.New("completion browser state is invalid")
+	}
+	aead, err := h.completionStateAEAD()
+	if err != nil {
+		return "", "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	confirmationNonce := make([]byte, privacyCompletionNonceBytes)
+	random := h.CompletionStateRandom
+	if random == nil {
+		random = rand.Reader
+	}
+	if _, err = io.ReadFull(random, nonce); err != nil {
+		return "", "", err
+	}
+	if _, err = io.ReadFull(random, confirmationNonce); err != nil {
+		return "", "", err
+	}
+	plain := make([]byte, 8+len(confirmationNonce)+len(token))
+	binary.BigEndian.PutUint64(plain[:8], uint64(h.now().Add(privacyCompletionStateTTL).Unix()))
+	copy(plain[8:], confirmationNonce)
+	copy(plain[8+len(confirmationNonce):], token)
+	sealed := aead.Seal(nonce, nonce, plain, []byte(privacyCompletionStateAAD))
+	return base64.RawURLEncoding.EncodeToString(sealed), base64.RawURLEncoding.EncodeToString(confirmationNonce), nil
+}
+
+func (h PrivacyRequests) openCompletionState(value string) (string, string, error) {
+	aead, err := h.completionStateAEAD()
+	if err != nil {
+		return "", "", err
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(sealed) < aead.NonceSize()+aead.Overhead()+9+privacyCompletionNonceBytes {
+		return "", "", errors.New("completion browser state is invalid")
+	}
+	nonce := sealed[:aead.NonceSize()]
+	plain, err := aead.Open(nil, nonce, sealed[aead.NonceSize():], []byte(privacyCompletionStateAAD))
+	if err != nil || len(plain) < 9+privacyCompletionNonceBytes {
+		return "", "", errors.New("completion browser state is invalid")
+	}
+	expiresAt := time.Unix(int64(binary.BigEndian.Uint64(plain[:8])), 0)
+	if !expiresAt.After(h.now()) || expiresAt.After(h.now().Add(privacyCompletionStateTTL+time.Minute)) {
+		return "", "", errors.New("completion browser state is expired")
+	}
+	confirmationNonce := base64.RawURLEncoding.EncodeToString(plain[8 : 8+privacyCompletionNonceBytes])
+	return string(plain[8+privacyCompletionNonceBytes:]), confirmationNonce, nil
+}
+
+func (h PrivacyRequests) setCompletionState(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{Name: privacyCompletionStateCookie, Value: value, Path: "/privacidade/conclusao", MaxAge: int(privacyCompletionStateTTL.Seconds()), HttpOnly: true, Secure: h.SecureCookies, SameSite: http.SameSiteStrictMode})
+}
+
+func (h PrivacyRequests) clearCompletionState(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: privacyCompletionStateCookie, Path: "/privacidade/conclusao", MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: h.SecureCookies, SameSite: http.SameSiteStrictMode})
+}
+
+func (h PrivacyRequests) ControlLookup(w http.ResponseWriter, r *http.Request) {
+	privacyHeaders(w)
+	u, _ := CurrentUserFromContext(r.Context())
+	if !u.IsAdmin && !u.CanExecutePrivacy {
+		h.System.NotFound(w, r)
+		return
+	}
+	page := pages.PrivacyControlLookupPage{Meta: h.meta(r), Reference: strings.TrimSpace(r.URL.Query().Get("ref"))}
+	if page.Reference == "" {
+		h.render(w, r, http.StatusOK, pages.PrivacyControlLookup(page))
+		return
+	}
+	if _, err := uuid.Parse(page.Reference); err != nil {
+		page.Error = "Introduza uma referência de pedido válida."
+		h.render(w, r, http.StatusUnprocessableEntity, pages.PrivacyControlLookup(page))
+		return
+	}
+	http.Redirect(w, r, "/admin/privacidade/controlo/"+page.Reference, http.StatusSeeOther)
+}
+
+func (h PrivacyRequests) CompletionControl(w http.ResponseWriter, r *http.Request) {
+	privacyHeaders(w)
+	h.renderCompletionControl(w, r, http.StatusOK, "")
+}
+
+func (h PrivacyRequests) renderCompletionControl(w http.ResponseWriter, r *http.Request, status int, actionError string) {
+	u, _ := CurrentUserFromContext(r.Context())
+	ref, err := uuid.Parse(r.PathValue("ref"))
+	if err != nil {
+		h.System.NotFound(w, r)
+		return
+	}
+	snapshot, err := h.Service.CompletionControlSnapshot(r.Context(), u.ID, ref)
+	if err != nil {
+		if errors.Is(err, pr.ErrForbidden) || errors.Is(err, pr.ErrCompletionUnavailable) || errors.Is(err, pr.ErrInvalid) {
+			h.System.NotFound(w, r)
+			return
+		}
+		h.System.InternalError(w, r)
+		return
+	}
+	page := pages.PrivacyCompletionControlPage{
+		Meta: h.meta(r), Reference: snapshot.RequestReference.String(), RequestStatus: snapshot.RequestStatus,
+		ExecutionStatus: snapshot.ExecutionStatus, Error: actionError, ContactURL: h.ContactURL,
+	}
+	switch r.URL.Query().Get("resultado") {
+	case "":
+	case "proposta":
+		page.Success = "A nova tentativa foi proposta e aguarda aprovação independente."
+	case "aprovada":
+		page.Success = "A nova tentativa foi aprovada e ficou disponível para processamento."
+	default:
+		h.System.RequestRejected(w, r)
+		return
+	}
+	for _, job := range snapshot.Jobs {
+		item := pages.PrivacyControlJob{
+			ID: job.JobID.String(), CategoryCode: job.CategoryCode, PurposeCode: job.PurposeCode,
+			Status: job.Status, AttemptCount: strconv.FormatInt(int64(job.AttemptCount), 10), FailureStage: job.FailureStage,
+			FailureCode: job.FailureCode, CanPropose: job.CanProposeRequeue, CanApprove: job.CanApproveRequeue,
+		}
+		if job.PendingRequeueProposal != nil {
+			item.ProposedAt = privacyDate(job.PendingRequeueProposal.ProposedAt)
+		}
+		page.Jobs = append(page.Jobs, item)
+	}
+	h.render(w, r, status, pages.PrivacyCompletionControl(page))
+}
+
+func (h PrivacyRequests) ProposeTerminalRequeue(w http.ResponseWriter, r *http.Request) {
+	h.terminalRequeue(w, r, false)
+}
+
+func (h PrivacyRequests) ApproveTerminalRequeue(w http.ResponseWriter, r *http.Request) {
+	h.terminalRequeue(w, r, true)
+}
+
+func (h PrivacyRequests) terminalRequeue(w http.ResponseWriter, r *http.Request, approve bool) {
+	privacyHeaders(w)
+	if err := r.ParseForm(); err != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	u, _ := CurrentUserFromContext(r.Context())
+	ref, refErr := uuid.Parse(r.PathValue("ref"))
+	jobID, jobErr := uuid.Parse(r.PostForm.Get("job_id"))
+	if refErr != nil || jobErr != nil {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	if r.PostForm.Get("confirmed") != "yes" {
+		h.renderCompletionControl(w, r, http.StatusUnprocessableEntity, "Confirme a revisão antes de continuar.")
+		return
+	}
+	snapshot, err := h.Service.CompletionControlSnapshot(r.Context(), u.ID, ref)
+	if err != nil {
+		h.controlFailure(w, r, err)
+		return
+	}
+	var selected *pr.CompletionControlJob
+	for i := range snapshot.Jobs {
+		if snapshot.Jobs[i].JobID == jobID {
+			selected = &snapshot.Jobs[i]
+			break
+		}
+	}
+	if selected == nil || (!approve && !selected.CanProposeRequeue) || (approve && (!selected.CanApproveRequeue || selected.PendingRequeueProposal == nil)) {
+		h.renderCompletionControl(w, r, http.StatusUnprocessableEntity, "A ação já não está disponível. Atualize o estado e volte a rever.")
+		return
+	}
+	if approve {
+		err = h.Service.ApproveTerminalRequeue(r.Context(), u.ID, selected.PendingRequeueProposal.ID, selected.PendingRequeueProposal.Digest)
+	} else {
+		_, err = h.Service.ProposeTerminalRequeue(r.Context(), u.ID, jobID)
+	}
+	if err != nil {
+		if errors.Is(err, pr.ErrRequeueUnavailable) || errors.Is(err, pr.ErrInvalid) {
+			h.renderCompletionControl(w, r, http.StatusUnprocessableEntity, "A ação já não está disponível. Atualize o estado e volte a rever.")
+			return
+		}
+		h.controlFailure(w, r, err)
+		return
+	}
+	result := "proposta"
+	if approve {
+		result = "aprovada"
+	}
+	http.Redirect(w, r, "/admin/privacidade/controlo/"+ref.String()+"?resultado="+result, http.StatusSeeOther)
+}
+
+func (h PrivacyRequests) ActivationControl(w http.ResponseWriter, r *http.Request) {
+	privacyHeaders(w)
+	h.renderActivationControl(w, r, http.StatusOK, "")
+}
+
+func (h PrivacyRequests) renderActivationControl(w http.ResponseWriter, r *http.Request, status int, actionError string) {
+	u, _ := CurrentUserFromContext(r.Context())
+	snapshot, err := h.Service.ActivationControlSnapshot(r.Context(), u.ID)
+	if err != nil {
+		h.controlFailure(w, r, err)
+		return
+	}
+	page := pages.PrivacyActivationControlPage{
+		Meta: h.meta(r), PolicyVersion: snapshot.PolicyVersion, Ready: snapshot.Ready, Error: actionError,
+	}
+	switch r.URL.Query().Get("resultado") {
+	case "":
+	case "proposta":
+		page.Success = "A ativação foi proposta e aguarda aprovação independente."
+	case "aprovada":
+		page.Success = "A ativação foi aprovada com os quatro comprovativos atuais."
+	default:
+		h.System.RequestRejected(w, r)
+		return
+	}
+	for _, evidence := range snapshot.Evidence {
+		page.Evidence = append(page.Evidence, pages.PrivacyActivationEvidence{ID: evidence.ID.String(), Kind: evidence.Kind, ObservedAt: privacyDate(evidence.ObservedAt)})
+	}
+	if snapshot.PendingProposal != nil {
+		page.ProposedAt = privacyDate(snapshot.PendingProposal.ProposedAt)
+	}
+	h.render(w, r, status, pages.PrivacyActivationControl(page))
+}
+
+func (h PrivacyRequests) controlFailure(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, pr.ErrForbidden) || errors.Is(err, pr.ErrCompletionUnavailable) || errors.Is(err, pr.ErrActivationUnavailable) || errors.Is(err, pr.ErrInvalid) {
+		h.System.NotFound(w, r)
+		return
+	}
+	h.System.InternalError(w, r)
+}
+
+func (h PrivacyRequests) renderCompletionDetail(w http.ResponseWriter, r *http.Request, status int, page pages.PrivacyCompletionDetailPage) {
+	completionDetailHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.PrivacyCompletionDetail(page).Render(r.Context(), w)
 }
 func (h PrivacyRequests) Index(w http.ResponseWriter, r *http.Request) {
 	privacyHeaders(w)

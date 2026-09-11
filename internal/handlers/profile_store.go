@@ -140,9 +140,18 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 					return ErrHealthConsentRequired
 				}
 				grantedBy := input.ActorID
-				if _, err := q.CreateConsentForm(ctx, dbgen.CreateConsentFormParams{UserID: input.SubjectID, GrantedByUserID: &grantedBy, ConsentType: "Dados_Saude", DocumentVersion: input.HealthVersion, DocumentSha256: input.HealthSHA256, IpAddress: input.IP, UserAgent: input.UserAgent}); err != nil {
+				consent, createErr := q.CreateConsentForm(ctx, dbgen.CreateConsentFormParams{UserID: input.SubjectID, GrantedByUserID: &grantedBy, ConsentType: "Dados_Saude", DocumentVersion: input.HealthVersion, DocumentSha256: input.HealthSHA256, IpAddress: input.IP, UserAgent: input.UserAgent})
+				if createErr != nil {
+					return createErr
+				}
+				if _, err := q.CeaseConsentForms(ctx, dbgen.CeaseConsentFormsParams{UserID: input.SubjectID, ConsentType: "Dados_Saude", ExceptID: &consent.ID, Reason: "SUPERSEDED"}); err != nil {
 					return err
 				}
+			}
+		}
+		if profileRecordHasHealthData(current) && !profileHasHealthData(input.Profile) {
+			if _, err := q.CeaseConsentForms(ctx, dbgen.CeaseConsentFormsParams{UserID: input.SubjectID, ConsentType: "Dados_Saude", Reason: "WITHDRAWN"}); err != nil {
+				return err
 			}
 		}
 		if input.Identity != nil {
@@ -230,6 +239,9 @@ func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoU
 			return err
 		}
 		consentID := consent.ID
+		if _, err := q.CeaseConsentForms(ctx, dbgen.CeaseConsentFormsParams{UserID: input.SubjectID, ConsentType: "Foto_Perfil", ExceptID: &consentID, Reason: "SUPERSEDED"}); err != nil {
+			return err
+		}
 		oldKey = current.PhotoObjectKey
 		if input.Upload.IntentID == uuid.Nil || len(input.Upload.HoldToken) != 32 || input.Upload.ObjectKey == "" {
 			return privacyrequests.ErrUploadProvenanceUnavailable
@@ -271,6 +283,9 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 		oldKey = current.PhotoObjectKey
 		if current.PhotoUploadIntentID == nil {
 			return privacyrequests.ErrUploadProvenanceUnavailable
+		}
+		if _, err := q.CeaseConsentForms(ctx, dbgen.CeaseConsentFormsParams{UserID: subjectID, ConsentType: "Foto_Perfil", Reason: "WITHDRAWN"}); err != nil {
+			return err
 		}
 		if err := q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: *current.PhotoUploadIntentID, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}); err != nil {
 			return err

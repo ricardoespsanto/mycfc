@@ -50,6 +50,168 @@ resource "aws_cloudwatch_metric_alarm" "repeated_release_agent_failures" {
   depends_on = [aws_cloudwatch_log_metric_filter.release_agent_failure]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "backup_noncurrent_cleanup_failure" {
+  name           = "${local.name}-backup-noncurrent-cleanup-failure"
+  pattern        = "%backup_noncurrent_cleanup_delete_failed|backup_noncurrent_cleanup_verification_failed|backup_noncurrent_cleanup_sla_breached|backup_noncurrent_cleanup_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "BackupNoncurrentCleanupFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "backup_noncurrent_cleanup_failure" {
+  alarm_name          = "${local.name}-backup-noncurrent-cleanup-failure"
+  alarm_description   = "Exact-version PostgreSQL backup cleanup failed verification or exceeded the approved 24-hour maximum."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "BackupNoncurrentCleanupFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.backup_noncurrent_cleanup_failure]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_restore_drill_failure" {
+  name           = "${local.name}-privacy-restore-drill-failure"
+  pattern        = "%privacy_restore_drill_failed|privacy_restore_promotion_gate_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyRestoreDrillFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_restore_drill_failure" {
+  alarm_name          = "${local.name}-privacy-restore-drill-failure"
+  alarm_description   = "The isolated privacy restore drill or its authenticated promotion evidence failed."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyRestoreDrillFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_restore_drill_failure]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_retention_failure" {
+  name           = "${local.name}-privacy-retention-failure"
+  pattern        = "%privacy_retention_sla_breach|privacy_retention_backlog_breach|privacy_retention_failed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyRetentionFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_retention_failure" {
+  alarm_name          = "${local.name}-privacy-retention-failure"
+  alarm_description   = "Bounded privacy retention maintenance failed, exceeded its backlog limit, or missed exact repair-object absence by day 30."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyRetentionFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_retention_failure]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_worker_failure" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-worker-failure"
+  pattern        = "%event=privacy_worker_terminal_failure|event=privacy_worker_aged_nonterminal_breach|event=privacy_worker_completion_unavailable%"
+  log_group_name = aws_cloudwatch_log_group.privacy_worker[0].name
+
+  metric_transformation {
+    name          = "PrivacyWorkerFailure"
+    namespace     = "MyCFC/Privacy"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_worker_failure" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-worker-failure"
+  alarm_description   = "The privacy worker reached a terminal job failure, found work non-terminal for more than 15 minutes, or could not seal a completed execution."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyWorkerFailure"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_worker_failure]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_worker_heartbeat" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-worker-heartbeat"
+  pattern        = "\"event=privacy_worker_heartbeat\""
+  log_group_name = aws_cloudwatch_log_group.privacy_worker[0].name
+
+  metric_transformation {
+    name      = "PrivacyWorkerHeartbeat"
+    namespace = "MyCFC/Privacy"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_worker_heartbeat_missing" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-worker-heartbeat-missing"
+  alarm_description   = "The activated privacy worker has not emitted an aggregate heartbeat for two consecutive five-minute periods."
+  namespace           = "MyCFC/Privacy"
+  metric_name         = "PrivacyWorkerHeartbeat"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }

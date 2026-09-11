@@ -4,12 +4,14 @@ package db
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
@@ -29,10 +31,14 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 	appRole := "privacy_web_" + suffix
 	executorRole := "privacy_worker_" + suffix
-	for _, role := range []string{appRole, executorRole} {
+	observerRole := "privacy_observer_" + suffix
+	for _, role := range []string{appRole, executorRole, observerRole} {
 		if _, err = tx.Exec(ctx, `CREATE ROLE `+quoteIdentifier(role)+` NOLOGIN`); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err = tx.Exec(ctx, `DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_retention') THEN CREATE ROLE mycfc_privacy_retention NOLOGIN; END IF; END $$`); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid) TO `+quoteIdentifier(appRole)); err != nil {
 		t.Fatal(err)
@@ -44,6 +50,7 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		AppUsername: appRole, AppPassword: "unused-app-password",
 		MigrationUsername: "unused_migrator", MigrationPassword: "unused-migration-password",
 		PrivacyExecutorUsername: executorRole, PrivacyExecutorPassword: "unused-executor-password",
+		PrivacyRestoreObserverUsername: observerRole, PrivacyRestoreObserverPassword: "unused-observer-password",
 	}
 	for range 2 {
 		if err = HardenPrivacyExecutionRoles(ctx, tx, conn.Config().Database, credentials); err != nil {
@@ -126,31 +133,107 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 			}
 		})
 	}
-	var canExecute, canMutate, canBypass, canCleanup, canUpload bool
+	var canExecute, canMutate, canBypass, canCallInner, canCallPostconditionInner, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects bool
+	var canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders bool
+	var canPrepareClosureV2, canConfirmClosureV2, canPrepareClosureV3, canConfirmClosureV3, canPrepareClosureV4, canConfirmClosureV4, canCallMembershipLock, canCheckCompletionPostcondition bool
 	if err := tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'privacy_worker_claim(bigint,uuid)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v3_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_execute_checkpoint_inner_015(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
 		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
-		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCleanup, &canUpload); err != nil {
+		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v2(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v3(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_prepare_closure_v4(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_membership_history_lock_source(uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_completion_membership_postcondition_ready(uuid)','EXECUTE')`, executorRole).Scan(&canExecute, &canMutate, &canBypass, &canCallInner, &canCallPostconditionInner, &canCleanup, &canUpload, &canListObjects, &canRecordObjectEvidence, &canCompleteObjectCheckpoint, &canCaptureObjects, &canListProviders, &canRecordProviderEvidence, &canCompleteProviderCheckpoint, &canCaptureProviders, &canPrepareClosureV2, &canConfirmClosureV2, &canPrepareClosureV3, &canConfirmClosureV3, &canPrepareClosureV4, &canConfirmClosureV4, &canCallMembershipLock, &canCheckCompletionPostcondition); err != nil {
 		t.Fatal(err)
 	}
-	if !canExecute || !canMutate || canBypass || !canCleanup || canUpload {
-		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v upload_cleanup=%v upload_lifecycle=%v", canExecute, canMutate, canBypass, canCleanup, canUpload)
+	if !canExecute || !canMutate || canBypass || canCallInner || canCallPostconditionInner || !canCleanup || canUpload || !canListObjects || !canRecordObjectEvidence || !canCompleteObjectCheckpoint || canCaptureObjects || !canListProviders || !canRecordProviderEvidence || !canCompleteProviderCheckpoint || canCaptureProviders || canPrepareClosureV2 || canConfirmClosureV2 || canPrepareClosureV3 || canConfirmClosureV3 || !canPrepareClosureV4 || !canConfirmClosureV4 || canCallMembershipLock || canCheckCompletionPostcondition {
+		t.Fatalf("worker function boundary claim=%v mutate=%v legacy_bypass=%v release_guard_inner=%v postcondition_inner=%v upload_cleanup=%v upload_lifecycle=%v object_list=%v object_evidence=%v object_complete=%v object_capture=%v provider_list=%v provider_evidence=%v provider_complete=%v provider_capture=%v closure_v2_prepare=%v closure_v2_confirm=%v closure_v3_prepare=%v closure_v3_confirm=%v closure_v4_prepare=%v closure_v4_confirm=%v membership_lock=%v completion_postcondition=%v",
+			canExecute, canMutate, canBypass, canCallInner, canCallPostconditionInner, canCleanup, canUpload, canListObjects, canRecordObjectEvidence, canCompleteObjectCheckpoint, canCaptureObjects,
+			canListProviders, canRecordProviderEvidence, canCompleteProviderCheckpoint, canCaptureProviders, canPrepareClosureV2, canConfirmClosureV2, canPrepareClosureV3, canConfirmClosureV3, canPrepareClosureV4, canConfirmClosureV4, canCallMembershipLock, canCheckCompletionPostcondition)
 	}
-	var appCanUpload, appCanCleanup bool
-	if err := tx.QueryRow(ctx, `SELECT has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup); err != nil {
+	var appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects bool
+	var appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders bool
+	if err := tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_media_sources(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_complete_object_capture(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_capture_provider_connections(uuid,uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea)','EXECUTE'),
+		has_function_privilege($1,'privacy_execution_complete_provider_capture(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)','EXECUTE')`, appRole).Scan(&appCanUpload, &appCanCleanup, &appCanCapture, &appCanMaterialize, &appCanCompleteCapture, &appCanListObjects, &appCanCaptureProviders, &appCanMaterializeProvider, &appCanCompleteProviderCapture, &appCanListProviders); err != nil {
 		t.Fatal(err)
 	}
-	if !appCanUpload || appCanCleanup {
-		t.Fatalf("web upload boundary lifecycle=%v cleanup=%v", appCanUpload, appCanCleanup)
+	if !appCanUpload || appCanCleanup || !appCanCapture || !appCanMaterialize || !appCanCompleteCapture || appCanListObjects || !appCanCaptureProviders || !appCanMaterializeProvider || !appCanCompleteProviderCapture || appCanListProviders {
+		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v provider_capture=%v provider_materialize=%v provider_complete=%v provider_list=%v",
+			appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects,
+			appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders)
+	}
+	var retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage bool
+	var retentionRuns, retentionStatus, retentionInternal, retentionCleanup bool
+	if err = tx.QueryRow(ctx, `SELECT
+	 (SELECT rolcanlogin FROM pg_roles WHERE rolname='mycfc_privacy_retention'),
+	 has_table_privilege('mycfc_privacy_retention','users','SELECT'),
+	 has_table_privilege('mycfc_privacy_retention','privacy_retention_runs','SELECT'),
+	 has_schema_privilege('mycfc_privacy_retention','privacy_protected','USAGE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_run(uuid,integer)','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_status()','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_retention_pseudonymize_audit(integer)','EXECUTE'),
+	 has_function_privilege('mycfc_privacy_retention','privacy_upload_cleanup_claim(bigint,uuid)','EXECUTE')`).Scan(
+		&retentionLogin, &retentionReadsUsers, &retentionReadsRuns, &retentionProtectedUsage,
+		&retentionRuns, &retentionStatus, &retentionInternal, &retentionCleanup); err != nil {
+		t.Fatal(err)
+	}
+	if retentionLogin || retentionReadsUsers || retentionReadsRuns || retentionProtectedUsage || !retentionRuns || !retentionStatus || retentionInternal || retentionCleanup {
+		t.Fatalf("retention boundary login=%v users=%v runs_table=%v protected=%v run=%v status=%v internal=%v cleanup=%v",
+			retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage, retentionRuns, retentionStatus, retentionInternal, retentionCleanup)
+	}
+	var observerReadsUsers, observerReadsAttestations, observerProtectedUsage, observerRunsReplay, observerRunsAggregate bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_table_privilege($1,'users','SELECT'),
+		has_table_privilege($1,'privacy_protected.restore_replay_inventory_attestations','SELECT'),
+		has_schema_privilege($1,'privacy_protected','USAGE'),
+		has_function_privilege($1,'privacy_restore_begin_replay_hardened(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text)','EXECUTE')`, observerRole).
+		Scan(&observerReadsUsers, &observerReadsAttestations, &observerProtectedUsage, &observerRunsReplay, &observerRunsAggregate); err != nil {
+		t.Fatal(err)
+	}
+	if observerReadsUsers || observerReadsAttestations || observerProtectedUsage || observerRunsReplay || !observerRunsAggregate {
+		t.Fatalf("observer boundary users=%v attestations=%v protected=%v replay=%v aggregate=%v",
+			observerReadsUsers, observerReadsAttestations, observerProtectedUsage, observerRunsReplay, observerRunsAggregate)
 	}
 	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = tx.Exec(ctx, `SAVEPOINT disabled_claim`); err != nil {
+		t.Fatal(err)
+	}
 	var claimed int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM privacy_worker_claim(1000,$1)`, uuid.New()).Scan(&claimed); err != nil {
-		t.Fatalf("restricted worker could not invoke fenced claim: %v", err)
+	err = tx.QueryRow(ctx, `SELECT count(*) FROM privacy_worker_claim(1000,$1)`, uuid.New()).Scan(&claimed)
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) || postgresError.Code != "42501" || postgresError.Message != "privacy_worker_disabled" {
+		t.Fatalf("restricted worker bypassed disabled claim: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT disabled_claim`); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `RESET ROLE`); err != nil {
 		t.Fatal(err)

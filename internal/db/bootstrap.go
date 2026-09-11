@@ -2,11 +2,14 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -22,20 +25,52 @@ var migrationFiles embed.FS
 var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
-	baselineVersion         = "reset-baseline-v1"
-	baselineIncludesThrough = "202609100004_privacy_upload_provenance"
+	baselineVersion              = "reset-baseline-v1"
+	baselineIncludesThrough      = "202609100015_privacy_membership_postcondition"
+	privacyRetentionRole         = "mycfc_privacy_retention"
+	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
+	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
 )
 
 type RoleCredentials struct {
-	AppUsername             string
-	AppPassword             string
-	MigrationUsername       string
-	MigrationPassword       string
-	PrivacyExecutorUsername string
-	PrivacyExecutorPassword string
+	AppUsername                      string
+	AppPassword                      string
+	MigrationUsername                string
+	MigrationPassword                string
+	PrivacyExecutorUsername          string
+	PrivacyExecutorPassword          string
+	PrivacyActivationBrokerUsername  string
+	PrivacyActivationBrokerPassword  string
+	PrivacyActivationDisableUsername string
+	PrivacyActivationDisablePassword string
+	PrivacyRestoreObserverUsername   string
+	PrivacyRestoreObserverPassword   string
 }
 
 type namedStatement struct{ name, sql string }
+
+// EmbeddedMigrationInventory returns the exact ordered inventory represented
+// by a database created or upgraded by this binary. It deliberately includes
+// the baseline marker because the restore observer hashes schema_migrations,
+// not only the forward migration files.
+func EmbeddedMigrationInventory() []string {
+	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		return nil
+	}
+	versions := make([]string, 0, len(entries)+1)
+	versions = append(versions, baselineVersion)
+	for _, name := range entries {
+		versions = append(versions, migrationVersion(name))
+	}
+	sort.Strings(versions)
+	return versions
+}
+
+func EmbeddedMigrationDigest() string {
+	digest := sha256.Sum256([]byte(strings.Join(EmbeddedMigrationInventory(), "\n")))
+	return hex.EncodeToString(digest[:])
+}
 
 type bootstrapConnection interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -58,13 +93,16 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
 		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
 		{"configure migration role", roleStatement(credentials.MigrationUsername, credentials.MigrationPassword)},
+		{"configure privacy retention capability role", noLoginRoleStatement(privacyRetentionRole)},
 		{"grant migration membership", "GRANT " + migration + " TO CURRENT_USER"},
 		{"revoke public database access", "REVOKE ALL ON DATABASE " + database + " FROM PUBLIC"},
 		{"grant database access", "GRANT CONNECT, CREATE ON DATABASE " + database + " TO " + migration},
 		{"grant app database access", "GRANT CONNECT ON DATABASE " + database + " TO " + app},
+		{"grant privacy retention database access", "GRANT CONNECT ON DATABASE " + database + " TO " + quoteIdentifier(privacyRetentionRole)},
 		{"revoke public schema access", "REVOKE ALL ON SCHEMA public FROM PUBLIC"},
 		{"set public schema owner", "ALTER SCHEMA public OWNER TO " + migration},
 		{"grant app schema usage", "GRANT USAGE ON SCHEMA public TO " + app},
+		{"grant privacy retention schema usage", "GRANT USAGE ON SCHEMA public TO " + quoteIdentifier(privacyRetentionRole)},
 		{"create metadata schema", "CREATE SCHEMA IF NOT EXISTS mycfc_meta AUTHORIZATION " + migration},
 		{"set metadata schema owner", "ALTER SCHEMA mycfc_meta OWNER TO " + migration},
 		{"revoke public metadata access", "REVOKE ALL ON SCHEMA mycfc_meta FROM PUBLIC"},
@@ -80,6 +118,26 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 			namedStatement{"configure privacy executor role", roleStatement(credentials.PrivacyExecutorUsername, credentials.PrivacyExecutorPassword)},
 			namedStatement{"grant privacy executor database access", "GRANT CONNECT ON DATABASE " + database + " TO " + executor},
 			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
+		)
+	}
+	if privacyActivationBrokerConfigured(credentials) {
+		broker := quoteIdentifier(credentials.PrivacyActivationBrokerUsername)
+		disable := quoteIdentifier(credentials.PrivacyActivationDisableUsername)
+		statements = append(statements,
+			namedStatement{"configure privacy activation broker role", roleStatement(credentials.PrivacyActivationBrokerUsername, credentials.PrivacyActivationBrokerPassword)},
+			namedStatement{"grant privacy activation broker database access", "GRANT CONNECT ON DATABASE " + database + " TO " + broker},
+			namedStatement{"grant privacy activation broker schema usage", "GRANT USAGE ON SCHEMA public TO " + broker},
+			namedStatement{"configure privacy activation disable role", roleStatement(credentials.PrivacyActivationDisableUsername, credentials.PrivacyActivationDisablePassword)},
+			namedStatement{"grant privacy activation disable database access", "GRANT CONNECT ON DATABASE " + database + " TO " + disable},
+			namedStatement{"grant privacy activation disable schema usage", "GRANT USAGE ON SCHEMA public TO " + disable},
+		)
+	}
+	if privacyRestoreObserverConfigured(credentials) {
+		observer := quoteIdentifier(credentials.PrivacyRestoreObserverUsername)
+		statements = append(statements,
+			namedStatement{"configure privacy restore observer role", roleStatement(credentials.PrivacyRestoreObserverUsername, credentials.PrivacyRestoreObserverPassword)},
+			namedStatement{"grant privacy restore observer database access", "GRANT CONNECT ON DATABASE " + database + " TO " + observer},
+			namedStatement{"grant privacy restore observer schema usage", "GRANT USAGE ON SCHEMA public TO " + observer},
 		)
 	}
 	for _, statement := range statements {
@@ -100,6 +158,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		return err
 	}
 	app := quoteIdentifier(credentials.AppUsername)
+	retention := quoteIdentifier(privacyRetentionRole)
 	executionTables := strings.Join([]string{
 		"privacy_pseudonymous_principals",
 		"privacy_erasure_executions",
@@ -111,19 +170,39 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		"privacy_erasure_failures",
 		"privacy_erasure_retention_anchors",
 		"privacy_erasure_restricted_records",
+		"privacy_erasure_completion_manifests",
 	}, ", ")
+	retentionTables := "privacy_retention_runs, privacy_outbox_delivery_evidence"
 	webHandoffTables := strings.Join([]string{
 		"privacy_erasure_executions",
 		"privacy_erasure_access_revocations",
 		"privacy_erasure_category_jobs",
 		"privacy_erasure_job_checkpoints",
 	}, ", ")
+	completionControlTables := strings.Join([]string{
+		"privacy_completion_access_links",
+		"privacy_terminal_requeue_proposals",
+		"privacy_terminal_requeue_approvals",
+		"privacy_activation_evidence",
+		"privacy_activation_authenticated_artifacts",
+		"privacy_activation_proposals",
+		"privacy_activation_approvals",
+		"privacy_request_activation",
+		"privacy_request_activation_events",
+		"privacy_worker_kill_switch",
+		"privacy_worker_kill_switch_events",
+	}, ", ")
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
+		{"revoke public retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM PUBLIC"},
+		{"revoke public completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
+		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},
+		{"restrict web consent evidence writes", "REVOKE UPDATE, DELETE ON TABLE consent_forms FROM " + app},
 		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + app},
@@ -134,10 +213,29 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"grant web checkpoint insert", "GRANT INSERT (job_id, operation_position, operation_code, action_version, created_at) ON TABLE privacy_erasure_job_checkpoints TO " + app},
 		{"revoke web upload capabilities", "REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid), privacy_upload_pointer_references(uuid,text,uuid), privacy_upload_pointer_matches(uuid,text,uuid,bytea,text,bigint), privacy_upload_enforce_pointer_state(), privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid), privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM " + app},
 		{"grant web upload lifecycle", "GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid) TO " + app},
+		{"revoke web object execution internals", "REVOKE EXECUTE ON FUNCTION privacy_media_subject_lock(uuid), privacy_execution_capture_media_sources(uuid,uuid,text), privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea), privacy_execution_complete_object_capture(uuid,text), privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
+		{"grant web object capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_media_sources(uuid,uuid,text), privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea), privacy_execution_complete_object_capture(uuid,text) TO " + app},
+		{"revoke web provider worker routines", "REVOKE EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM " + app},
+		{"grant web provider capture routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) TO " + app},
+		{"revoke web completion worker routines", "REVOKE EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() FROM " + app},
+		{"revoke web activation mutations", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_disable(uuid) FROM " + app},
+		{"grant web completion control routines", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_control_snapshot(uuid) TO " + app},
+		{"revoke web restore and retention routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea), privacy_retention_run(uuid,integer) FROM " + app},
+		{"revoke web hardened restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_verify_operation_inner_013(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_begin_replay_hardened_inner_013(uuid,uuid), privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + app},
+		{"revoke web v4 restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v4(uuid,uuid), privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v4_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea,text,bytea,bigint,bigint), privacy_restore_verify_operation_inner_015(uuid,text,boolean), privacy_restore_begin_replay_hardened_inner_015(uuid,uuid), privacy_restore_execute_checkpoint_inner_015(uuid,uuid,smallint,text,text,bytea), privacy_restore_membership_postcondition(uuid), privacy_restore_record_inventory_attestation_v4(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer,text,bytea,integer,bigint,bigint) FROM " + app},
+		{"revoke web retention internals", "REVOKE EXECUTE ON FUNCTION privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_status() FROM " + app},
+		{"grant web consent cessation", "GRANT EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz) TO " + app},
+		{"revoke privacy retention table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + retention},
+		{"revoke privacy retention protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + retention},
+		{"revoke privacy retention sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + retention},
+		{"revoke privacy retention protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + retention},
+		{"revoke privacy retention internals", "REVOKE EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz), privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer) FROM " + retention},
+		{"grant privacy retention fixed API", "GRANT EXECUTE ON FUNCTION privacy_retention_run(uuid,integer), privacy_retention_status() TO " + retention},
 	}
 	if privacyExecutorConfigured(credentials) {
 		executor := quoteIdentifier(credentials.PrivacyExecutorUsername)
 		statements = append(statements,
+			namedStatement{"revoke privacy executor activation broker capabilities", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_disable(uuid) FROM " + executor},
 			namedStatement{"revoke privacy executor upload lifecycle", "REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid), privacy_upload_pointer_references(uuid,text,uuid), privacy_upload_pointer_matches(uuid,text,uuid,bytea,text,bigint), privacy_upload_enforce_pointer_state(), privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea), privacy_upload_finalize(uuid,bytea,text,text,text,bytea,bytea,bytea,text,bytea,bytea), privacy_upload_confirm_put(uuid,bytea), privacy_upload_mark_cleanup(uuid,bytea,text), privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint), privacy_upload_remove(uuid,uuid,text,uuid), privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM " + executor},
 			namedStatement{"revoke privacy executor schema creation", "REVOKE CREATE ON SCHEMA public FROM " + executor},
 			namedStatement{"grant privacy executor schema usage", "GRANT USAGE ON SCHEMA public TO " + executor},
@@ -145,12 +243,49 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			namedStatement{"revoke privacy executor protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + executor},
 			namedStatement{"revoke privacy executor protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM " + executor},
 			namedStatement{"revoke privacy executor table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + executor},
+			namedStatement{"revoke privacy executor completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + executor},
 			namedStatement{"revoke privacy executor sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + executor},
 			namedStatement{"revoke legacy checkpoint bypass", "REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM " + executor},
+			namedStatement{"revoke privacy executor release guard internals", "REVOKE EXECUTE ON FUNCTION privacy_activation_authenticated_set_digest(text,uuid[]), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_worker_require_activation(), privacy_upload_cleanup_claim_inner_013(bigint,uuid), privacy_upload_cleanup_complete_inner_013(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail_inner_013(uuid,uuid,bigint,uuid,boolean,bigint), privacy_worker_claim_inner_013(bigint,uuid), privacy_worker_heartbeat_inner_013(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_complete_job_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job_inner_013(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_execute_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_list_object_targets_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_prepare_v2_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2_inner_013(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v2_inner_013(uuid,uuid), privacy_tombstone_confirm_closure_v2_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v3_inner_013(uuid,uuid), privacy_tombstone_confirm_closure_v3_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_worker_list_provider_targets_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid), privacy_completion_prepare_inner_013(uuid,uuid), privacy_completion_list_pending_inner_013(uuid,integer), privacy_completion_finalize_inner_013(uuid,uuid,bytea,bytea) FROM " + executor},
 			namedStatement{"grant privacy executor execution reads", "GRANT SELECT ON TABLE " + executionTables + ", privacy_request_execution_plans TO " + executor},
 			namedStatement{"grant privacy executor request lifecycle reads", "GRANT SELECT (id, status, version, updated_at) ON TABLE data_erasure_requests TO " + executor},
 			namedStatement{"grant privacy executor fenced routines", "GRANT EXECUTE ON FUNCTION privacy_worker_claim(bigint,uuid), privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint), privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text), privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid), privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea), privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) TO " + executor},
 			namedStatement{"grant privacy executor upload cleanup routines", "GRANT EXECUTE ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid), privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) TO " + executor},
+			namedStatement{"grant privacy executor object routines", "GRANT EXECUTE ON FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea), privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO " + executor},
+			namedStatement{"revoke privacy executor provider capture routines", "REVOKE EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text), privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea), privacy_execution_complete_provider_capture(uuid,text) FROM " + executor},
+			namedStatement{"grant privacy executor provider routines", "GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid), privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea), privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO " + executor},
+			namedStatement{"revoke privacy executor legacy and offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure(uuid,uuid), privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea), privacy_restore_begin_replay(uuid,uuid), privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text), privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) FROM " + executor},
+			namedStatement{"revoke privacy executor hardened offline restore routines", "REVOKE EXECUTE ON FUNCTION privacy_restore_create_synthetic_fixture(uuid), privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea), privacy_restore_verify_operation(uuid,text,boolean), privacy_restore_verify_operation_inner_013(uuid,text,boolean), privacy_restore_apply_hardened_operation(uuid,text), privacy_restore_begin_replay_hardened(uuid,uuid), privacy_restore_begin_replay_hardened_inner_013(uuid,uuid), privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea), privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer), privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM " + executor},
+			namedStatement{"revoke privacy executor v4 restore internals", "REVOKE EXECUTE ON FUNCTION privacy_worker_execute_checkpoint_inner_015(uuid,uuid,uuid,bigint,uuid,text,text), privacy_restore_import_authenticated_v4_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea,text,bytea,bigint,bigint), privacy_restore_verify_operation_inner_015(uuid,text,boolean), privacy_restore_begin_replay_hardened_inner_015(uuid,uuid), privacy_restore_execute_checkpoint_inner_015(uuid,uuid,smallint,text,text,bytea), privacy_restore_membership_postcondition(uuid), privacy_restore_record_inventory_attestation_v4(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer,text,bytea,integer,bigint,bigint) FROM " + executor},
+			namedStatement{"revoke privacy executor legacy closure routines", "REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v3(uuid,uuid), privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM " + executor},
+			namedStatement{"grant privacy executor tombstone routines", "GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz), privacy_tombstone_prepare_closure_v4(uuid,uuid), privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) TO " + executor},
+			namedStatement{"revoke privacy executor operator completion routines", "REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea), privacy_completion_validate(bytea), privacy_completion_notice_deliverable(uuid,timestamptz), privacy_terminal_requeue_propose(uuid,uuid), privacy_terminal_requeue_approve(uuid,bytea,uuid), privacy_completion_control_snapshot(uuid,uuid), privacy_activation_ready(text), privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_control_snapshot(uuid) FROM " + executor},
+			namedStatement{"grant privacy executor completion routines", "GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO " + executor},
+			namedStatement{"revoke privacy executor retention routine", "REVOKE EXECUTE ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz), privacy_retention_queue_repair_attachments(integer), privacy_retention_pseudonymize_audit(integer), privacy_retention_run(uuid,integer), privacy_retention_status() FROM " + executor},
+		)
+	}
+	if privacyActivationBrokerConfigured(credentials) {
+		broker := quoteIdentifier(credentials.PrivacyActivationBrokerUsername)
+		disable := quoteIdentifier(credentials.PrivacyActivationDisableUsername)
+		statements = append(statements,
+			namedStatement{"revoke privacy activation broker table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + broker},
+			namedStatement{"revoke privacy activation broker protected access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + broker},
+			namedStatement{"revoke privacy activation broker raw routines", "REVOKE EXECUTE ON FUNCTION privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz), privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_propose(uuid,text,uuid[]), privacy_activation_approve(uuid,uuid,bytea), privacy_activation_authenticated_set_digest(text,uuid[]) FROM " + broker},
+			namedStatement{"grant privacy activation broker fixed API", "GRANT EXECUTE ON FUNCTION privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb), privacy_activation_broker_material(text), privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz), privacy_activation_ready(text) TO " + broker},
+			namedStatement{"revoke privacy disable table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + disable},
+			namedStatement{"revoke privacy disable protected access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + disable},
+			namedStatement{"grant privacy disable fixed API", "GRANT EXECUTE ON FUNCTION privacy_activation_disable(uuid) TO " + disable},
+		)
+	}
+	if privacyRestoreObserverConfigured(credentials) {
+		observer := quoteIdentifier(credentials.PrivacyRestoreObserverUsername)
+		statements = append(statements,
+			namedStatement{"revoke privacy restore observer schema creation", "REVOKE CREATE ON SCHEMA public FROM " + observer},
+			namedStatement{"revoke privacy restore observer tables", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + observer},
+			namedStatement{"revoke privacy restore observer protected schema", "REVOKE ALL ON SCHEMA privacy_protected FROM " + observer},
+			namedStatement{"revoke privacy restore observer protected tables", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + observer},
+			namedStatement{"revoke privacy restore observer functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + observer},
+			namedStatement{"grant privacy restore observer fixed API", "GRANT EXECUTE ON FUNCTION privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) TO " + observer},
 		)
 	}
 	for _, statement := range statements {
@@ -334,6 +469,22 @@ func validateBootstrapInput(databaseName string, credentials RoleCredentials) er
 	if (executorUser == "") != (executorPassword == "") {
 		return errors.New("privacy executor database user and password must either both be set or both be empty")
 	}
+	observerUser := strings.TrimSpace(credentials.PrivacyRestoreObserverUsername)
+	observerPassword := strings.TrimSpace(credentials.PrivacyRestoreObserverPassword)
+	if (observerUser == "") != (observerPassword == "") {
+		return errors.New("privacy restore observer database user and password must either both be set or both be empty")
+	}
+	for _, role := range []struct{ label, username, password string }{
+		{"privacy activation broker", credentials.PrivacyActivationBrokerUsername, credentials.PrivacyActivationBrokerPassword},
+		{"privacy activation disable", credentials.PrivacyActivationDisableUsername, credentials.PrivacyActivationDisablePassword},
+	} {
+		if (strings.TrimSpace(role.username) == "") != (strings.TrimSpace(role.password) == "") {
+			return fmt.Errorf("%s database user and password must either both be set or both be empty", role.label)
+		}
+	}
+	if privacyActivationRolesPartiallyConfigured(credentials) && !privacyActivationRolesComplete(credentials) {
+		return errors.New("privacy executor, activation broker, and activation disable database identities must be configured together")
+	}
 	return nil
 }
 
@@ -359,6 +510,40 @@ func validateDatabaseRoleIdentifiers(databaseName string, credentials RoleCreden
 			return errors.New("privacy executor, app, and migration database users must differ")
 		}
 	}
+	observerUser := strings.TrimSpace(credentials.PrivacyRestoreObserverUsername)
+	if observerUser != "" {
+		if !postgresIdentifier.MatchString(observerUser) {
+			return fmt.Errorf("privacy restore observer database user %q must be a PostgreSQL identifier", observerUser)
+		}
+		if observerUser == credentials.AppUsername || observerUser == credentials.MigrationUsername || observerUser == executorUser {
+			return errors.New("privacy restore observer, executor, app, and migration database users must differ")
+		}
+	}
+	for label, user := range map[string]string{
+		"privacy activation broker":  strings.TrimSpace(credentials.PrivacyActivationBrokerUsername),
+		"privacy activation disable": strings.TrimSpace(credentials.PrivacyActivationDisableUsername),
+	} {
+		if user == "" {
+			continue
+		}
+		if !postgresIdentifier.MatchString(user) {
+			return fmt.Errorf("%s database user %q must be a PostgreSQL identifier", label, user)
+		}
+		for _, existing := range []string{credentials.AppUsername, credentials.MigrationUsername, executorUser, observerUser} {
+			if user == existing {
+				return fmt.Errorf("%s database user must be distinct", label)
+			}
+		}
+	}
+	if credentials.PrivacyActivationBrokerUsername != "" && credentials.PrivacyActivationBrokerUsername == credentials.PrivacyActivationDisableUsername {
+		return errors.New("privacy activation broker and disable database users must differ")
+	}
+	if credentials.PrivacyActivationBrokerUsername != "" && credentials.PrivacyActivationBrokerUsername != privacyActivationBrokerRole {
+		return fmt.Errorf("privacy activation broker database user must be %q", privacyActivationBrokerRole)
+	}
+	if credentials.PrivacyActivationDisableUsername != "" && credentials.PrivacyActivationDisableUsername != privacyActivationDisableRole {
+		return fmt.Errorf("privacy activation disable database user must be %q", privacyActivationDisableRole)
+	}
 	return nil
 }
 
@@ -366,10 +551,35 @@ func privacyExecutorConfigured(credentials RoleCredentials) bool {
 	return strings.TrimSpace(credentials.PrivacyExecutorUsername) != "" && strings.TrimSpace(credentials.PrivacyExecutorPassword) != ""
 }
 
+func privacyRestoreObserverConfigured(credentials RoleCredentials) bool {
+	return strings.TrimSpace(credentials.PrivacyRestoreObserverUsername) != "" && strings.TrimSpace(credentials.PrivacyRestoreObserverPassword) != ""
+}
+
+func privacyActivationBrokerConfigured(credentials RoleCredentials) bool {
+	return strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" && strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != "" &&
+		strings.TrimSpace(credentials.PrivacyActivationDisableUsername) != "" && strings.TrimSpace(credentials.PrivacyActivationDisablePassword) != ""
+}
+
+func privacyActivationRolesPartiallyConfigured(credentials RoleCredentials) bool {
+	return strings.TrimSpace(credentials.PrivacyExecutorUsername) != "" || strings.TrimSpace(credentials.PrivacyExecutorPassword) != "" ||
+		strings.TrimSpace(credentials.PrivacyActivationBrokerUsername) != "" || strings.TrimSpace(credentials.PrivacyActivationBrokerPassword) != "" ||
+		strings.TrimSpace(credentials.PrivacyActivationDisableUsername) != "" || strings.TrimSpace(credentials.PrivacyActivationDisablePassword) != ""
+}
+
+func privacyActivationRolesComplete(credentials RoleCredentials) bool {
+	return privacyExecutorConfigured(credentials) && privacyActivationBrokerConfigured(credentials)
+}
+
 func roleStatement(username, password string) string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
 		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
 		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD " + quoteLiteral(password) + "; END $$"
+}
+
+func noLoginRoleStatement(username string) string {
+	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
+		"CREATE ROLE " + quoteIdentifier(username) + " NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
+		"ALTER ROLE " + quoteIdentifier(username) + " WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END $$"
 }
 
 func transferOwnershipStatement(migrationUsername string) string {

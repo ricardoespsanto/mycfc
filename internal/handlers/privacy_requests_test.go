@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,22 +23,47 @@ import (
 
 type privacyHandlerStore struct {
 	PrivacyRequestStore
-	policy                              pr.AdoptedPolicy
-	availableErr, subjectsErr, listErr  error
-	subjects                            []dbgen.User
-	list                                []dbgen.DataErasureRequest
-	listManagement                      bool
-	listStatus, listDeadline, listOrder string
-	view                                pr.View
-	viewErr                             error
-	submitResult                        dbgen.DataErasureRequest
-	submitErr                           error
-	submitInput                         pr.SubmitInput
-	changeErr                           error
-	changeInput                         pr.ReviewInput
-	startResult                         dbgen.PrivacyErasureExecution
-	startErr                            error
-	startInput                          pr.StartInput
+	policy                               pr.AdoptedPolicy
+	availableErr, subjectsErr, listErr   error
+	subjects                             []dbgen.User
+	list                                 []dbgen.DataErasureRequest
+	listManagement                       bool
+	listStatus, listDeadline, listOrder  string
+	view                                 pr.View
+	viewErr                              error
+	submitResult                         dbgen.DataErasureRequest
+	submitErr                            error
+	submitInput                          pr.SubmitInput
+	changeErr                            error
+	changeInput                          pr.ReviewInput
+	startResult                          dbgen.PrivacyErasureExecution
+	startErr                             error
+	startInput                           pr.StartInput
+	completionResult                     pr.CompletionDetail
+	completionErr                        error
+	completionToken                      string
+	completionValidateErr                error
+	completionValidatedToken             string
+	controlSnapshot                      pr.CompletionControlSnapshot
+	controlErr                           error
+	controlActor, controlReference       uuid.UUID
+	requeueProposal                      pr.TerminalRequeueProposal
+	requeueProposeErr, requeueApproveErr error
+	requeueActor, requeueJob             uuid.UUID
+	requeueApprovalActor                 uuid.UUID
+	requeueApprovalProposal              uuid.UUID
+	requeueApprovalDigest                []byte
+	activationSnapshot                   pr.ActivationControlSnapshot
+	activationErr                        error
+	activationActor                      uuid.UUID
+	activationProposal                   pr.ActivationProposal
+	activationProposeErr                 error
+	activationPolicy                     string
+	activationEvidence                   []uuid.UUID
+	activationApproveErr                 error
+	activationApprovalActor              uuid.UUID
+	activationApprovalProposal           uuid.UUID
+	activationApprovalDigest             []byte
 }
 
 func (s *privacyHandlerStore) Available(context.Context) (pr.AdoptedPolicy, error) {
@@ -64,6 +90,38 @@ func (s *privacyHandlerStore) Change(_ context.Context, in pr.ReviewInput) (dbge
 func (s *privacyHandlerStore) StartExecution(_ context.Context, in pr.StartInput) (dbgen.PrivacyErasureExecution, error) {
 	s.startInput = in
 	return s.startResult, s.startErr
+}
+func (s *privacyHandlerStore) ConsumeCompletionDetail(_ context.Context, token string) (pr.CompletionDetail, error) {
+	s.completionToken = token
+	return s.completionResult, s.completionErr
+}
+func (s *privacyHandlerStore) ValidateCompletionLink(_ context.Context, token string) error {
+	s.completionValidatedToken = token
+	return s.completionValidateErr
+}
+func (s *privacyHandlerStore) CompletionControlSnapshot(_ context.Context, actor, reference uuid.UUID) (pr.CompletionControlSnapshot, error) {
+	s.controlActor, s.controlReference = actor, reference
+	return s.controlSnapshot, s.controlErr
+}
+func (s *privacyHandlerStore) ProposeTerminalRequeue(_ context.Context, actor, job uuid.UUID) (pr.TerminalRequeueProposal, error) {
+	s.requeueActor, s.requeueJob = actor, job
+	return s.requeueProposal, s.requeueProposeErr
+}
+func (s *privacyHandlerStore) ApproveTerminalRequeue(_ context.Context, actor, proposal uuid.UUID, digest []byte) error {
+	s.requeueApprovalActor, s.requeueApprovalProposal, s.requeueApprovalDigest = actor, proposal, append([]byte(nil), digest...)
+	return s.requeueApproveErr
+}
+func (s *privacyHandlerStore) ActivationControlSnapshot(_ context.Context, actor uuid.UUID) (pr.ActivationControlSnapshot, error) {
+	s.activationActor = actor
+	return s.activationSnapshot, s.activationErr
+}
+func (s *privacyHandlerStore) ProposeActivation(_ context.Context, actor uuid.UUID, policy string, evidence []uuid.UUID) (pr.ActivationProposal, error) {
+	s.activationActor, s.activationPolicy, s.activationEvidence = actor, policy, append([]uuid.UUID(nil), evidence...)
+	return s.activationProposal, s.activationProposeErr
+}
+func (s *privacyHandlerStore) ApproveActivation(_ context.Context, actor, proposal uuid.UUID, digest []byte) error {
+	s.activationApprovalActor, s.activationApprovalProposal, s.activationApprovalDigest = actor, proposal, append([]byte(nil), digest...)
+	return s.activationApproveErr
 }
 func privacyHandlerRequest(method, path string, form url.Values) *http.Request {
 	return privacyHandlerRequestFor(method, path, form, CurrentUser{ID: uuid.New(), Name: "Current person"})
@@ -170,6 +228,301 @@ func TestPrivacyIndexStatesFiltersAndFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrivacyCompletionDetailIsSessionIndependentOneUseAndPrivate(t *testing.T) {
+	completedAt := time.Date(2026, 9, 10, 18, 30, 0, 0, time.UTC)
+	manifest := strings.Repeat("a", 64)
+	s := privacyHandlerFixture(t)
+	s.completionResult = pr.CompletionDetail{
+		RequestReference: uuid.MustParse("11000000-0000-0000-0000-000000000099"),
+		CompletedAt:      completedAt, Status: "COMPLETED", ManifestSHA256: manifest,
+		Categories: 3, Checkpoints: 8, ObjectTargets: 2, ProviderTargets: 1,
+	}
+	token := "never-render-or-log-this-token"
+	r := httptest.NewRequest(http.MethodGet, "/privacidade/conclusao/"+token, nil)
+	r.SetPathValue("token", token)
+	w := httptest.NewRecorder()
+	h := PrivacyRequests{Service: s, ContactURL: "/legal/direitos", CompletionLinkKey: bytes.Repeat([]byte{7}, 32), CompletionStateRandom: bytes.NewReader(bytes.Repeat([]byte{8}, 32)), SecureCookies: true, Now: func() time.Time { return completedAt }}
+	h.CompletionDetail(w, r)
+	if w.Code != http.StatusOK || s.completionValidatedToken != token || s.completionToken != "" {
+		t.Fatalf("prefetch status=%d validated=%q consumed=%q", w.Code, s.completionValidatedToken, s.completionToken)
+	}
+	for _, want := range []string{"Consultar resultado", "Consultar resultado agora"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("prefetch page missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{token, "11000000-0000-0000-0000-000000000099", manifest} {
+		if strings.Contains(w.Body.String(), forbidden) {
+			t.Fatalf("prefetch page rendered protected value %q", forbidden)
+		}
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Referrer-Policy") != "no-referrer" || w.Header().Get("X-Robots-Tag") != "noindex, nofollow, noarchive" {
+		t.Fatalf("completion privacy headers=%v", w.Header())
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == "" || strings.Contains(cookies[0].Value, token) || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatalf("completion state cookie=%+v", cookies)
+	}
+	_, confirmationNonce, stateErr := h.openCompletionState(cookies[0].Value)
+	if stateErr != nil || confirmationNonce == "" || !strings.Contains(w.Body.String(), `name="completion_state" value="`+confirmationNonce+`"`) {
+		t.Fatalf("completion confirmation binding nonce=%q err=%v body=%s", confirmationNonce, stateErr, w.Body.String())
+	}
+
+	post := httptest.NewRequest(http.MethodPost, "/privacidade/conclusao/consultar", strings.NewReader(url.Values{"completion_state": {confirmationNonce}}.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.AddCookie(cookies[0])
+	w = httptest.NewRecorder()
+	h.ConsumeCompletionDetail(w, post)
+	if w.Code != http.StatusOK || s.completionToken != token {
+		t.Fatalf("explicit consume status=%d token=%q", w.Code, s.completionToken)
+	}
+	for _, want := range []string{"Pedido concluído", "11000000-0000-0000-0000-000000000099", "3", "8", manifest} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("completion page missing %q", want)
+		}
+	}
+	if strings.Contains(w.Body.String(), token) {
+		t.Fatal("completion page rendered its bearer token")
+	}
+
+	// A second POST has no browser state and must not call the core consumer.
+	s.completionToken = ""
+	w = httptest.NewRecorder()
+	h.ConsumeCompletionDetail(w, httptest.NewRequest(http.MethodPost, "/privacidade/conclusao/consultar", nil))
+	if w.Code != http.StatusNotFound || s.completionToken != "" || !strings.Contains(w.Body.String(), "inválida, já foi utilizada ou expirou") {
+		t.Fatalf("replay status=%d token=%q body=%s", w.Code, s.completionToken, w.Body.String())
+	}
+
+	post = httptest.NewRequest(http.MethodPost, "/privacidade/conclusao/consultar", strings.NewReader("completion_state=wrong-browser-state"))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.AddCookie(cookies[0])
+	w = httptest.NewRecorder()
+	h.ConsumeCompletionDetail(w, post)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("mismatched completion state status=%d", w.Code)
+	}
+
+	for _, unavailable := range []error{pr.ErrCompletionLinkUnavailable, errors.Join(pr.ErrCompletionLinkUnavailable, errors.New("opaque"))} {
+		s.completionValidateErr = unavailable
+		w = httptest.NewRecorder()
+		h.CompletionDetail(w, r)
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "inválida, já foi utilizada ou expirou") || strings.Contains(w.Body.String(), token) {
+			t.Fatalf("unavailable completion status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	s.completionValidateErr = errors.New("database unavailable")
+	w = httptest.NewRecorder()
+	h.CompletionDetail(w, r)
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), token) {
+		t.Fatalf("internal completion status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPrivacyCompletionControlUsesSafeSnapshotAndServerBoundDualControl(t *testing.T) {
+	actor, reference, jobID, proposalID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	digest := bytes.Repeat([]byte{9}, 32)
+	s := privacyHandlerFixture(t)
+	s.controlSnapshot = pr.CompletionControlSnapshot{
+		RequestReference: reference, RequestStatus: "TERMINAL_FAILED", ExecutionID: uuid.New(), ExecutionStatus: "TERMINAL_FAILED",
+		Jobs: []pr.CompletionControlJob{{JobID: jobID, CategoryCode: "identity-core", PurposeCode: "ACCOUNT_ERASURE", Status: "TERMINAL_FAILED", AttemptCount: 5, FailureStage: "VERIFY", FailureCode: "VERIFICATION_FAILED", CanProposeRequeue: true}},
+	}
+	h := PrivacyRequests{Service: s}
+	r := privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/controlo/"+reference.String(), nil, CurrentUser{ID: actor, CanExecutePrivacy: true})
+	r.SetPathValue("ref", reference.String())
+	w := httptest.NewRecorder()
+	h.CompletionControl(w, r)
+	for _, want := range []string{"Estado técnico limitado", reference.String(), "identity-core", "VERIFICATION_FAILED", "Propor nova tentativa"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("control page missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"protected subject", "recipient@example", "raw database error"} {
+		if strings.Contains(w.Body.String(), forbidden) {
+			t.Errorf("control page exposed %q", forbidden)
+		}
+	}
+
+	post := privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/controlo/"+reference.String()+"/reagendar", url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, CurrentUser{ID: actor, CanExecutePrivacy: true})
+	post.SetPathValue("ref", reference.String())
+	w = httptest.NewRecorder()
+	h.ProposeTerminalRequeue(w, post)
+	if w.Code != http.StatusSeeOther || s.requeueActor != actor || s.requeueJob != jobID || !strings.Contains(w.Header().Get("Location"), "resultado=proposta") {
+		t.Fatalf("requeue proposal status=%d actor=%s job=%s location=%q", w.Code, s.requeueActor, s.requeueJob, w.Header().Get("Location"))
+	}
+
+	s.controlSnapshot.Jobs[0].CanProposeRequeue = false
+	s.controlSnapshot.Jobs[0].CanApproveRequeue = true
+	s.controlSnapshot.Jobs[0].PendingRequeueProposal = &pr.ControlProposal{ID: proposalID, Digest: digest, ProposedAt: time.Now()}
+	post = privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/controlo/"+reference.String()+"/reagendar/aprovar", url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, CurrentUser{ID: actor, IsAdmin: true})
+	post.SetPathValue("ref", reference.String())
+	w = httptest.NewRecorder()
+	h.ApproveTerminalRequeue(w, post)
+	if w.Code != http.StatusSeeOther || s.requeueApprovalActor != actor || s.requeueApprovalProposal != proposalID || !bytes.Equal(s.requeueApprovalDigest, digest) || !strings.Contains(w.Header().Get("Location"), "resultado=aprovada") {
+		t.Fatalf("requeue approval status=%d actor=%s proposal=%s digest=%x location=%q", w.Code, s.requeueApprovalActor, s.requeueApprovalProposal, s.requeueApprovalDigest, w.Header().Get("Location"))
+	}
+
+	post = privacyHandlerRequestFor(http.MethodPost, "/admin/privacidade/controlo/"+reference.String()+"/reagendar/aprovar", url.Values{"job_id": {jobID.String()}}, CurrentUser{ID: actor, IsAdmin: true})
+	post.SetPathValue("ref", reference.String())
+	w = httptest.NewRecorder()
+	h.ApproveTerminalRequeue(w, post)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Confirme a revisão") {
+		t.Fatalf("unconfirmed approval status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPrivacyControlLookupAndActivationUseCurrentServerSnapshot(t *testing.T) {
+	actor, reference := uuid.New(), uuid.New()
+	s := privacyHandlerFixture(t)
+	h := PrivacyRequests{Service: s}
+
+	r := privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/controlo?ref="+reference.String(), nil, CurrentUser{ID: actor, IsAdmin: true})
+	w := httptest.NewRecorder()
+	h.ControlLookup(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/privacidade/controlo/"+reference.String() {
+		t.Fatalf("control lookup status=%d location=%q", w.Code, w.Header().Get("Location"))
+	}
+	r = privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/controlo", nil, CurrentUser{ID: actor})
+	w = httptest.NewRecorder()
+	h.ControlLookup(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unauthorized lookup status=%d", w.Code)
+	}
+
+	evidence := []pr.ActivationEvidenceSummary{
+		{ID: uuid.New(), Kind: "RESTORE", ObservedAt: time.Now()}, {ID: uuid.New(), Kind: "INFRASTRUCTURE", ObservedAt: time.Now()},
+		{ID: uuid.New(), Kind: "PROVIDER", ObservedAt: time.Now()}, {ID: uuid.New(), Kind: "SCHEMA", ObservedAt: time.Now()},
+	}
+	s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2", Evidence: evidence, CanPropose: true,
+		PendingProposal: &pr.ControlProposal{ID: uuid.New(), Digest: bytes.Repeat([]byte{3}, 32), ProposedAt: time.Now()}}
+	r = privacyHandlerRequestFor(http.MethodGet, "/admin/privacidade/ativacao", nil, CurrentUser{ID: actor, CanExecutePrivacy: true})
+	w = httptest.NewRecorder()
+	h.ActivationControl(w, r)
+	for _, want := range []string{"policy-v2", "Restauro isolado", "Infraestrutura", "Destinatários externos", "Esquema de dados"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("activation page missing %q", want)
+		}
+	}
+	if strings.Contains(w.Body.String(), "auth_hmac") || strings.Contains(w.Body.String(), `name="evidence_id"`) {
+		t.Fatal("activation page exposed trusted evidence input")
+	}
+	if strings.Contains(w.Body.String(), "Propor ativação") || strings.Contains(w.Body.String(), "Aprovar e ativar") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/propor") || strings.Contains(w.Body.String(), "/admin/privacidade/ativacao/aprovar") {
+		t.Fatal("read-only activation page exposed a mutation control")
+	}
+}
+
+func TestPrivacyOperationalControlFailureAndStaleStateBoundaries(t *testing.T) {
+	actor, reference, jobID := uuid.New(), uuid.New(), uuid.New()
+	request := func(method, path string, form url.Values) *http.Request {
+		r := privacyHandlerRequestFor(method, path, form, CurrentUser{ID: actor, IsAdmin: true, CanExecutePrivacy: true})
+		r.SetPathValue("ref", reference.String())
+		return r
+	}
+	t.Run("lookup empty and invalid", func(t *testing.T) {
+		s := privacyHandlerFixture(t)
+		h := PrivacyRequests{Service: s}
+		for path, want := range map[string]int{"/admin/privacidade/controlo": http.StatusOK, "/admin/privacidade/controlo?ref=not-a-uuid": http.StatusUnprocessableEntity} {
+			w := httptest.NewRecorder()
+			h.ControlLookup(w, request(http.MethodGet, path, nil))
+			if w.Code != want {
+				t.Fatalf("lookup %s status=%d want=%d", path, w.Code, want)
+			}
+		}
+	})
+	t.Run("completion snapshot errors and result states", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, result string
+			err          error
+			want         int
+		}{
+			{"forbidden", "", pr.ErrForbidden, http.StatusNotFound},
+			{"unavailable", "", pr.ErrCompletionUnavailable, http.StatusNotFound},
+			{"internal", "", errors.New("database unavailable"), http.StatusInternalServerError},
+			{"invalid result", "unexpected", nil, http.StatusForbidden},
+			{"proposal result", "proposta", nil, http.StatusOK},
+			{"approval result", "aprovada", nil, http.StatusOK},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := privacyHandlerFixture(t)
+				s.controlErr = tc.err
+				s.controlSnapshot = pr.CompletionControlSnapshot{RequestReference: reference, Jobs: []pr.CompletionControlJob{{JobID: jobID}}}
+				w := httptest.NewRecorder()
+				r := request(http.MethodGet, "/admin/privacidade/controlo/"+reference.String()+"?resultado="+tc.result, nil)
+				PrivacyRequests{Service: s}.CompletionControl(w, r)
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d body=%s", w.Code, tc.want, w.Body.String())
+				}
+			})
+		}
+		w := httptest.NewRecorder()
+		r := request(http.MethodGet, "/admin/privacidade/controlo/not-a-uuid", nil)
+		r.SetPathValue("ref", "not-a-uuid")
+		PrivacyRequests{Service: privacyHandlerFixture(t)}.CompletionControl(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("invalid reference status=%d", w.Code)
+		}
+	})
+	t.Run("terminal mutation stale and service failures", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			approve bool
+			setup   func(*privacyHandlerStore)
+			form    url.Values
+			want    int
+		}{
+			{"invalid job", false, nil, url.Values{"job_id": {"bad"}, "confirmed": {"yes"}}, http.StatusForbidden},
+			{"stale selection", false, nil, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+			{"snapshot unavailable", false, func(s *privacyHandlerStore) { s.controlErr = pr.ErrCompletionUnavailable }, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusNotFound},
+			{"proposal unavailable", false, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanProposeRequeue: true}}
+				s.requeueProposeErr = pr.ErrRequeueUnavailable
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+			{"proposal internal", false, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanProposeRequeue: true}}
+				s.requeueProposeErr = errors.New("database unavailable")
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusInternalServerError},
+			{"approval missing proposal", true, func(s *privacyHandlerStore) {
+				s.controlSnapshot.Jobs = []pr.CompletionControlJob{{JobID: jobID, CanApproveRequeue: true}}
+			}, url.Values{"job_id": {jobID.String()}, "confirmed": {"yes"}}, http.StatusUnprocessableEntity},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := privacyHandlerFixture(t)
+				if tc.setup != nil {
+					tc.setup(s)
+				}
+				w := httptest.NewRecorder()
+				r := request(http.MethodPost, "/admin/privacidade/controlo/"+reference.String(), tc.form)
+				h := PrivacyRequests{Service: s}
+				if tc.approve {
+					h.ApproveTerminalRequeue(w, r)
+				} else {
+					h.ProposeTerminalRequeue(w, r)
+				}
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d body=%s", w.Code, tc.want, w.Body.String())
+				}
+			})
+		}
+	})
+	t.Run("activation failure and result states", func(t *testing.T) {
+		for _, tc := range []struct {
+			result string
+			err    error
+			want   int
+		}{{"", pr.ErrActivationUnavailable, http.StatusNotFound}, {"", errors.New("database unavailable"), http.StatusInternalServerError}, {"unexpected", nil, http.StatusForbidden}, {"proposta", nil, http.StatusOK}, {"aprovada", nil, http.StatusOK}} {
+			s := privacyHandlerFixture(t)
+			s.activationErr = tc.err
+			s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2"}
+			w := httptest.NewRecorder()
+			r := request(http.MethodGet, "/admin/privacidade/ativacao?resultado="+tc.result, nil)
+			PrivacyRequests{Service: s}.ActivationControl(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("activation result=%q status=%d want=%d", tc.result, w.Code, tc.want)
+			}
+		}
+	})
 }
 
 func TestPrivacyNewLoadsApprovedSubjectsAndFailsClosed(t *testing.T) {

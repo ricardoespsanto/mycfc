@@ -30,6 +30,9 @@ type Service struct {
 	ContactURL            string
 	Now                   func() time.Time
 	ExecutionCapabilities map[string]bool
+	ObjectTargets         ObjectTargetProtector
+	ProviderRegistry      *ProviderExecutionRegistry
+	ProviderTargets       ProviderTargetProtector
 }
 
 func (s Service) now() time.Time {
@@ -108,6 +111,10 @@ func (s Service) Available(ctx context.Context) (AdoptedPolicy, error) {
 func activePolicy(ctx context.Context, q *dbgen.Queries) (AdoptedPolicy, error) {
 	a, e := q.GetPrivacyActivation(ctx)
 	if e != nil || !a.Enabled || !a.FulfilmentReady {
+		return AdoptedPolicy{}, ErrPolicyUnresolved
+	}
+	ready, e := q.PrivacyActivationReady(ctx, a.PolicyVersion)
+	if e != nil || !ready {
 		return AdoptedPolicy{}, ErrPolicyUnresolved
 	}
 	r, e := q.GetPrivacyPolicy(ctx, a.PolicyVersion)
@@ -366,7 +373,7 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 	}
 	v.Subject = subject
 	v.Requester = requester
-	if json.Unmarshal(r.PolicySnapshot, &v.Policy) != nil || v.Policy.Validate() != nil {
+	if json.Unmarshal(r.PolicySnapshot, &v.Policy) != nil || v.Policy.validateCompatible() != nil {
 		return View{}, ErrPolicyUnresolved
 	}
 	v.Events, e = q.ListPrivacyRequestEvents(ctx, r.ID)
@@ -446,7 +453,7 @@ func (s Service) executionViewBlockers(ctx context.Context, tx pgx.Tx, q *dbgen.
 			return nil, err
 		}
 		add("ACTIVATION_DISABLED")
-	} else if !executionActivationReady(activation) {
+	} else if ready, readyErr := q.PrivacyActivationReady(ctx, activation.PolicyVersion); !executionActivationReady(activation) || readyErr != nil || !ready {
 		add("ACTIVATION_DISABLED")
 	}
 	if r.ScopeKind != string(AccountClosure) {
@@ -612,7 +619,7 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 		return zero, ErrInvalidTransition
 	}
 	var p AdoptedPolicy
-	if json.Unmarshal(r.PolicySnapshot, &p) != nil || p.Validate() != nil {
+	if json.Unmarshal(r.PolicySnapshot, &p) != nil || p.validateCompatible() != nil {
 		return zero, ErrPolicyUnresolved
 	}
 	scope := scopeOf(r)

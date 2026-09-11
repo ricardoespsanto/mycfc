@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,29 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+func TestVersionedStoreConstructorsAndOpaqueFormatting(t *testing.T) {
+	client := &s3.Client{}
+	plain := NewS3VersionedStore(client, "private")
+	if plain.client == nil || plain.bucket != "private" || plain.maxPasses != 10 || plain.stableChecks != 2 || plain.beforeDelete != nil {
+		t.Fatalf("plain constructor=%+v", plain)
+	}
+	guard := func(context.Context) error { return nil }
+	guarded := NewGuardedS3VersionedStore(client, "private", guard)
+	if guarded.client == nil || guarded.beforeDelete == nil || guarded.maxPasses != 10 || guarded.stableChecks != 2 {
+		t.Fatalf("guarded constructor=%+v", guarded)
+	}
+	secret := errors.New("provider secret")
+	err := opaqueVersionError{kind: ErrVersionListing, cause: secret}
+	if !errors.Is(err, ErrVersionListing) || !errors.Is(err, secret) || fmt.Sprintf("%v", err) != ErrVersionListing.Error() {
+		t.Fatalf("opaque error semantics=%v", err)
+	}
+	var formatted bytes.Buffer
+	_, _ = fmt.Fprintf(&formatted, "%+v", err)
+	if formatted.String() != ErrVersionListing.Error() {
+		t.Fatalf("opaque formatting=%q", formatted.String())
+	}
+}
 
 type versionedAPIFake struct {
 	list    func(*s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error)
@@ -181,6 +205,29 @@ func TestVersionedStoreBatchesDeletesAndReportsConfirmedProgressBeforeFailure(t 
 	evidence, err := (&S3VersionedStore{client: api, bucket: "private"}).DeleteAllVersions(context.Background(), key)
 	if !errors.Is(err, ErrVersionDeletion) || deleteCalls != 2 || evidence.DeletedVersions != 1000 {
 		t.Fatalf("evidence=%+v delete_calls=%d err=%v", evidence, deleteCalls, err)
+	}
+}
+
+func TestVersionedStoreRechecksGuardBeforeEveryDestructiveBatch(t *testing.T) {
+	key := "profiles/many-versions.png"
+	versions := make([]types.ObjectVersion, 1001)
+	for index := range versions {
+		versions[index] = types.ObjectVersion{Key: aws.String(key), VersionId: aws.String(fmt.Sprintf("v-%04d", index))}
+	}
+	api := &versionedAPIFake{list: func(*s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error) {
+		return &s3.ListObjectVersionsOutput{Versions: versions}, nil
+	}}
+	guardCalls := 0
+	store := &S3VersionedStore{client: api, bucket: "private", beforeDelete: func(context.Context) error {
+		guardCalls++
+		if guardCalls == 2 {
+			return errors.New("activation revoked")
+		}
+		return nil
+	}}
+	evidence, err := store.DeleteAllVersions(context.Background(), key)
+	if !errors.Is(err, ErrVersionDeletion) || guardCalls != 2 || len(api.deleted) != 1 || evidence.DeletedVersions != 1000 {
+		t.Fatalf("evidence=%+v guards=%d deletes=%d err=%v", evidence, guardCalls, len(api.deleted), err)
 	}
 }
 

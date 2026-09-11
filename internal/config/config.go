@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -24,10 +25,11 @@ import (
 )
 
 var (
-	lowerHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowerHex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	bucketName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
-	awsRegion  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	lowerHex40     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowerHex64     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	bucketName     = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
+	awsRegion      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	lambdaFunction = regexp.MustCompile(`^(?:[A-Za-z0-9_-]{1,64}|arn:(?:aws|aws-us-gov|aws-cn):lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]+)?)$`)
 )
 
 const productionParameterPrefix = "/mycfc/production"
@@ -117,6 +119,7 @@ func (s Secret) Value() string  { return string(s) }
 type Config struct {
 	PrivacyRequestsEnabled           bool   `env:"PRIVACY_REQUESTS_ENABLED" envDefault:"false"`
 	PrivacyExecutionTestCapabilities string `env:"PRIVACY_EXECUTION_TEST_CAPABILITIES"`
+	PrivacyRetentionEnabled          bool   `env:"PRIVACY_RETENTION_ENABLED" envDefault:"false"`
 	AppEnv                           string `env:"APP_ENV,required"`
 	AppVersion                       string `env:"APP_VERSION,required"`
 	GITSHA                           string `env:"GIT_SHA,required"`
@@ -155,10 +158,23 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	PrivacyUploadPublicKeyB64    string `env:"PRIVACY_UPLOAD_PUBLIC_KEY_B64"`
-	PrivacyUploadEncryptionKeyID string `env:"PRIVACY_UPLOAD_ENCRYPTION_KEY_ID"`
-	PrivacyUploadDigestKeyID     string `env:"PRIVACY_UPLOAD_DIGEST_KEY_ID"`
-	PrivacyUploadDigestKeyB64    Secret `env:"PRIVACY_UPLOAD_DIGEST_KEY_B64"`
+	PrivacyUploadPublicKeyB64          string `env:"PRIVACY_UPLOAD_PUBLIC_KEY_B64"`
+	PrivacyUploadEncryptionKeyID       string `env:"PRIVACY_UPLOAD_ENCRYPTION_KEY_ID"`
+	PrivacyUploadDigestKeyID           string `env:"PRIVACY_UPLOAD_DIGEST_KEY_ID"`
+	PrivacyUploadDigestKeyB64          Secret `env:"PRIVACY_UPLOAD_DIGEST_KEY_B64"`
+	PrivacyObjectTargetPublicKeyB64    string `env:"PRIVACY_OBJECT_TARGET_PUBLIC_KEY_B64"`
+	PrivacyObjectTargetEncryptionKeyID string `env:"PRIVACY_OBJECT_TARGET_ENCRYPTION_KEY_ID"`
+	PrivacyObjectTargetDigestKeyID     string `env:"PRIVACY_OBJECT_TARGET_DIGEST_KEY_ID"`
+	PrivacyObjectTargetDigestKeyB64    Secret `env:"PRIVACY_OBJECT_TARGET_DIGEST_KEY_B64"`
+
+	// The restore tombstone ledger is a worker-only, independently stored
+	// capability. Merely shipping these fields never enables it.
+	PrivacyTombstoneEnabled            bool   `env:"PRIVACY_TOMBSTONE_ENABLED" envDefault:"false"`
+	PrivacyTombstoneBrokerFunctionName string `env:"PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME"`
+	PrivacyTombstonePublicKeyB64       string `env:"PRIVACY_TOMBSTONE_PUBLIC_KEY_B64"`
+	PrivacyTombstoneEncryptionKeyID    string `env:"PRIVACY_TOMBSTONE_ENCRYPTION_KEY_ID"`
+	PrivacyTombstoneLocatorKeyID       string `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_ID"`
+	PrivacyTombstoneLocatorKeyB64      Secret `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_B64"`
 
 	GalleryURL string `env:"GALLERY_URL"`
 
@@ -617,6 +633,60 @@ func (c Config) PrivacyUploadKeys() (publicKey, digestKey []byte, configured boo
 	return publicKey, digestKey, true, nil
 }
 
+func (c Config) PrivacyObjectTargetKeys() (publicKey, digestKey []byte, configured bool, err error) {
+	values := []string{c.PrivacyObjectTargetPublicKeyB64, c.PrivacyObjectTargetEncryptionKeyID, c.PrivacyObjectTargetDigestKeyID, c.PrivacyObjectTargetDigestKeyB64.Value()}
+	configured = slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
+	if !configured {
+		return nil, nil, false, nil
+	}
+	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
+		return nil, nil, true, errors.New("privacy object target key configuration must be complete")
+	}
+	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyObjectTargetPublicKeyB64)
+	if err != nil || len(publicKey) != 32 {
+		return nil, nil, true, errors.New("PRIVACY_OBJECT_TARGET_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
+	}
+	digestKey, err = base64.StdEncoding.DecodeString(c.PrivacyObjectTargetDigestKeyB64.Value())
+	if err != nil || len(digestKey) < 32 {
+		return nil, nil, true, errors.New("PRIVACY_OBJECT_TARGET_DIGEST_KEY_B64 must decode to at least 32 bytes")
+	}
+	uploadPublicKey, uploadDigestKey, uploadConfigured, uploadErr := c.PrivacyUploadKeys()
+	if uploadErr == nil && uploadConfigured && (c.PrivacyObjectTargetEncryptionKeyID == c.PrivacyUploadEncryptionKeyID ||
+		c.PrivacyObjectTargetDigestKeyID == c.PrivacyUploadDigestKeyID || bytes.Equal(publicKey, uploadPublicKey) || bytes.Equal(digestKey, uploadDigestKey)) {
+		return nil, nil, true, errors.New("privacy object target keys must be distinct from privacy upload keys")
+	}
+	return publicKey, digestKey, true, nil
+}
+
+func (c Config) PrivacyTombstoneKeys() (publicKey, locatorKey []byte, enabled bool, err error) {
+	values := []string{
+		c.PrivacyTombstoneBrokerFunctionName, c.PrivacyTombstonePublicKeyB64, c.PrivacyTombstoneEncryptionKeyID,
+		c.PrivacyTombstoneLocatorKeyID, c.PrivacyTombstoneLocatorKeyB64.Value(),
+	}
+	configured := slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
+	if !c.PrivacyTombstoneEnabled {
+		if configured {
+			return nil, nil, false, errors.New("privacy tombstone settings require explicit enablement")
+		}
+		return nil, nil, false, nil
+	}
+	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
+		return nil, nil, true, errors.New("privacy tombstone key configuration must be complete")
+	}
+	if !lambdaFunction.MatchString(strings.TrimSpace(c.PrivacyTombstoneBrokerFunctionName)) {
+		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME is invalid")
+	}
+	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyTombstonePublicKeyB64)
+	if err != nil || len(publicKey) != 32 {
+		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
+	}
+	locatorKey, err = base64.StdEncoding.DecodeString(c.PrivacyTombstoneLocatorKeyB64.Value())
+	if err != nil || len(locatorKey) != 32 {
+		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_LOCATOR_KEY_B64 must decode to exactly 32 bytes")
+	}
+	return publicKey, locatorKey, true, nil
+}
+
 func (c Config) TrustedProxyCIDRs() ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(c.TrustedProxyCIDRValues))
 	for _, raw := range c.TrustedProxyCIDRValues {
@@ -644,6 +714,12 @@ func (c Config) Validate() error {
 	}
 	if _, _, _, err := c.PrivacyUploadKeys(); err != nil {
 		problems.Add("PRIVACY_UPLOAD_KEYS", err.Error())
+	}
+	if _, _, _, err := c.PrivacyObjectTargetKeys(); err != nil {
+		problems.Add("PRIVACY_OBJECT_TARGET_KEYS", err.Error())
+	}
+	if _, _, _, err := c.PrivacyTombstoneKeys(); err != nil {
+		problems.Add("PRIVACY_TOMBSTONE_KEYS", err.Error())
 	}
 	if strings.TrimSpace(c.AppVersion) == "" {
 		problems.Add("APP_VERSION", "must not be empty")

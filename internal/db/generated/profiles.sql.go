@@ -73,6 +73,7 @@ FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
   AND c.user_id = u.id AND c.consent_type = 'Foto_Perfil' AND c.is_accepted = true
+  AND c.ceased_at IS NULL
   AND c.document_version = $1
   AND c.document_sha256 = $2
 WHERE u.id = $3

@@ -149,10 +149,18 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 
 func databaseRoleCredentialsFromConfig(cfg config.Config) db.RoleCredentials {
 	return db.RoleCredentials{
-		AppUsername:       cfg.DBUser,
-		AppPassword:       cfg.DBPassword.Value(),
-		MigrationUsername: cfg.MigrationDBUser,
-		MigrationPassword: cfg.MigrationDBPassword.Value(),
+		AppUsername:                      cfg.DBUser,
+		AppPassword:                      cfg.DBPassword.Value(),
+		MigrationUsername:                cfg.MigrationDBUser,
+		MigrationPassword:                cfg.MigrationDBPassword.Value(),
+		PrivacyExecutorUsername:          os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
+		PrivacyExecutorPassword:          os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+		PrivacyActivationBrokerUsername:  os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_USER"),
+		PrivacyActivationBrokerPassword:  os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_PASSWORD"),
+		PrivacyActivationDisableUsername: os.Getenv("PRIVACY_ACTIVATION_DISABLE_DB_USER"),
+		PrivacyActivationDisablePassword: os.Getenv("PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD"),
+		PrivacyRestoreObserverUsername:   os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_USER"),
+		PrivacyRestoreObserverPassword:   os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD"),
 	}
 }
 
@@ -178,17 +186,26 @@ func logDatabaseCommandConfiguration(command, source, host, databaseName, connec
 		"app_role", credentials.AppUsername,
 		"migration_role", credentials.MigrationUsername,
 		"privacy_executor_configured", credentials.PrivacyExecutorUsername != "",
+		"privacy_activation_broker_configured", credentials.PrivacyActivationBrokerUsername != "",
+		"privacy_activation_disable_configured", credentials.PrivacyActivationDisableUsername != "",
+		"privacy_restore_observer_configured", credentials.PrivacyRestoreObserverUsername != "",
 	)
 }
 
 func databaseRoleCredentialsFromEnvironment() db.RoleCredentials {
 	return db.RoleCredentials{
-		AppUsername:             os.Getenv("APP_DB_USER"),
-		AppPassword:             os.Getenv("APP_DB_PASSWORD"),
-		MigrationUsername:       os.Getenv("MIGRATION_DB_USER"),
-		MigrationPassword:       os.Getenv("MIGRATION_DB_PASSWORD"),
-		PrivacyExecutorUsername: os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
-		PrivacyExecutorPassword: os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+		AppUsername:                      os.Getenv("APP_DB_USER"),
+		AppPassword:                      os.Getenv("APP_DB_PASSWORD"),
+		MigrationUsername:                os.Getenv("MIGRATION_DB_USER"),
+		MigrationPassword:                os.Getenv("MIGRATION_DB_PASSWORD"),
+		PrivacyExecutorUsername:          os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
+		PrivacyExecutorPassword:          os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
+		PrivacyActivationBrokerUsername:  os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_USER"),
+		PrivacyActivationBrokerPassword:  os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_PASSWORD"),
+		PrivacyActivationDisableUsername: os.Getenv("PRIVACY_ACTIVATION_DISABLE_DB_USER"),
+		PrivacyActivationDisablePassword: os.Getenv("PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD"),
+		PrivacyRestoreObserverUsername:   os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_USER"),
+		PrivacyRestoreObserverPassword:   os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD"),
 	}
 }
 

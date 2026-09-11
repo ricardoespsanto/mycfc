@@ -1524,16 +1524,19 @@ type CompetitionDocument struct {
 }
 
 type ConsentForm struct {
-	ID              uuid.UUID          `json:"id"`
-	UserID          uuid.UUID          `json:"user_id"`
-	GrantedByUserID *uuid.UUID         `json:"granted_by_user_id"`
-	ConsentType     string             `json:"consent_type"`
-	DocumentVersion string             `json:"document_version"`
-	DocumentSha256  string             `json:"document_sha256"`
-	IsAccepted      bool               `json:"is_accepted"`
-	DateSigned      pgtype.Timestamptz `json:"date_signed"`
-	IpAddress       *netip.Addr        `json:"ip_address"`
-	UserAgent       string             `json:"user_agent"`
+	ID                uuid.UUID          `json:"id"`
+	UserID            uuid.UUID          `json:"user_id"`
+	GrantedByUserID   *uuid.UUID         `json:"granted_by_user_id"`
+	ConsentType       string             `json:"consent_type"`
+	DocumentVersion   string             `json:"document_version"`
+	DocumentSha256    string             `json:"document_sha256"`
+	IsAccepted        bool               `json:"is_accepted"`
+	DateSigned        pgtype.Timestamptz `json:"date_signed"`
+	IpAddress         *netip.Addr        `json:"ip_address"`
+	UserAgent         string             `json:"user_agent"`
+	CeasedAt          pgtype.Timestamptz `json:"ceased_at"`
+	CessationReason   *string            `json:"cessation_reason"`
+	EvidenceExpiresAt pgtype.Timestamptz `json:"evidence_expires_at"`
 }
 
 type DataErasureRequest struct {
@@ -1878,6 +1881,89 @@ type PlatformRole struct {
 	NamePt string    `json:"name_pt"`
 }
 
+type PrivacyActivationApproval struct {
+	ID               uuid.UUID          `json:"id"`
+	ProposalID       uuid.UUID          `json:"proposal_id"`
+	ActivationSha256 []byte             `json:"activation_sha256"`
+	ApprovedByRef    uuid.UUID          `json:"approved_by_ref"`
+	ApprovedAt       pgtype.Timestamptz `json:"approved_at"`
+}
+
+type PrivacyActivationAuthenticatedArtifact struct {
+	EvidenceID                                  uuid.UUID          `json:"evidence_id"`
+	Kind                                        string             `json:"kind"`
+	PolicyVersion                               string             `json:"policy_version"`
+	ExecutorVersion                             string             `json:"executor_version"`
+	PlanSchemaVersion                           string             `json:"plan_schema_version"`
+	ImageDigest                                 string             `json:"image_digest"`
+	ImmutableEvidenceRef                        *string            `json:"immutable_evidence_ref"`
+	ImmutableEvidenceSha256                     []byte             `json:"immutable_evidence_sha256"`
+	SigningKeyID                                *string            `json:"signing_key_id"`
+	SchemaMigrationDigest                       []byte             `json:"schema_migration_digest"`
+	BaselineIncludesThrough                     *string            `json:"baseline_includes_through"`
+	ProductionStateSerial                       *int64             `json:"production_state_serial"`
+	HetznerStateSerial                          *int64             `json:"hetzner_state_serial"`
+	ProductionStateSha256                       []byte             `json:"production_state_sha256"`
+	HetznerStateSha256                          []byte             `json:"hetzner_state_sha256"`
+	ProductionPlanSha256                        []byte             `json:"production_plan_sha256"`
+	HetznerPlanSha256                           []byte             `json:"hetzner_plan_sha256"`
+	WorkerIdentityEnabled                       *bool              `json:"worker_identity_enabled"`
+	S3VersionDeletionEnabled                    *bool              `json:"s3_version_deletion_enabled"`
+	LedgerBrokerInvokeEnabled                   *bool              `json:"ledger_broker_invoke_enabled"`
+	WorkerMonitoringEnabled                     *bool              `json:"worker_monitoring_enabled"`
+	RestoreInfrastructureEnabled                *bool              `json:"restore_infrastructure_enabled"`
+	RestoreLedgerWriteEnabled                   *bool              `json:"restore_ledger_write_enabled"`
+	ProviderRegistryState                       *string            `json:"provider_registry_state"`
+	ProviderRegistrationCount                   *int64             `json:"provider_registration_count"`
+	ProviderRegistrySha256                      []byte             `json:"provider_registry_sha256"`
+	RestoreInputSource                          *string            `json:"restore_input_source"`
+	RestoreInputContract                        *string            `json:"restore_input_contract"`
+	RestoreReplayContract                       *string            `json:"restore_replay_contract"`
+	RestoreClosureContract                      *string            `json:"restore_closure_contract"`
+	RestoreCandidateSha256                      []byte             `json:"restore_candidate_sha256"`
+	RestoreInventorySha256                      []byte             `json:"restore_inventory_sha256"`
+	RestoreObjectCount                          *int64             `json:"restore_object_count"`
+	RestoreReplayedCount                        *int64             `json:"restore_replayed_count"`
+	RestoreSyntheticCount                       *int64             `json:"restore_synthetic_count"`
+	RestoreObserverSha256                       []byte             `json:"restore_observer_sha256"`
+	AuthenticatedAt                             pgtype.Timestamptz `json:"authenticated_at"`
+	RestoreMembershipPostconditionContract      *string            `json:"restore_membership_postcondition_contract"`
+	RestoreMembershipPostconditionSha256        []byte             `json:"restore_membership_postcondition_sha256"`
+	RestoreMembershipPostconditionVerifiedCount *int64             `json:"restore_membership_postcondition_verified_count"`
+	RestoreMembershipCount                      *int64             `json:"restore_membership_count"`
+	RestoreVariationCount                       *int64             `json:"restore_variation_count"`
+}
+
+type PrivacyActivationEvidence struct {
+	ID             uuid.UUID          `json:"id"`
+	Kind           string             `json:"kind"`
+	EvidenceSha256 []byte             `json:"evidence_sha256"`
+	ReferenceCode  string             `json:"reference_code"`
+	ObservedAt     pgtype.Timestamptz `json:"observed_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	RecordedByRef  uuid.UUID          `json:"recorded_by_ref"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyActivationProposal struct {
+	ID                uuid.UUID          `json:"id"`
+	PolicyVersion     string             `json:"policy_version"`
+	EvidenceIds       []uuid.UUID        `json:"evidence_ids"`
+	EvidenceSetSha256 []byte             `json:"evidence_set_sha256"`
+	ActivationSha256  []byte             `json:"activation_sha256"`
+	ProposedByRef     uuid.UUID          `json:"proposed_by_ref"`
+	ProposedAt        pgtype.Timestamptz `json:"proposed_at"`
+}
+
+type PrivacyCompletionAccessLink struct {
+	ID          uuid.UUID          `json:"id"`
+	ExecutionID uuid.UUID          `json:"execution_id"`
+	TokenSha256 []byte             `json:"token_sha256"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	UsedAt      pgtype.Timestamptz `json:"used_at"`
+}
+
 type PrivacyErasureAccessRevocation struct {
 	ID             uuid.UUID          `json:"id"`
 	ExecutionID    uuid.UUID          `json:"execution_id"`
@@ -1889,19 +1975,36 @@ type PrivacyErasureAccessRevocation struct {
 }
 
 type PrivacyErasureCategoryJob struct {
-	ID                uuid.UUID          `json:"id"`
-	ExecutionID       uuid.UUID          `json:"execution_id"`
-	PlanEntryPosition int16              `json:"plan_entry_position"`
-	EntrySha256       []byte             `json:"entry_sha256"`
-	CategoryKey       string             `json:"category_key"`
-	PurposeCode       string             `json:"purpose_code"`
-	Status            string             `json:"status"`
-	NextAttemptAt     pgtype.Timestamptz `json:"next_attempt_at"`
-	LeaseEpoch        int64              `json:"lease_epoch"`
-	AttemptCount      int32              `json:"attempt_count"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ID                     uuid.UUID          `json:"id"`
+	ExecutionID            uuid.UUID          `json:"execution_id"`
+	PlanEntryPosition      int16              `json:"plan_entry_position"`
+	EntrySha256            []byte             `json:"entry_sha256"`
+	CategoryKey            string             `json:"category_key"`
+	PurposeCode            string             `json:"purpose_code"`
+	Status                 string             `json:"status"`
+	NextAttemptAt          pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseEpoch             int64              `json:"lease_epoch"`
+	AttemptCount           int32              `json:"attempt_count"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt            pgtype.Timestamptz `json:"completed_at"`
+	ManualAttemptAllowance int32              `json:"manual_attempt_allowance"`
+}
+
+type PrivacyErasureCompletionManifest struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	RequestID           uuid.UUID          `json:"request_id"`
+	ManifestVersion     string             `json:"manifest_version"`
+	PlanSha256          []byte             `json:"plan_sha256"`
+	Manifest            []byte             `json:"manifest"`
+	ManifestSha256      []byte             `json:"manifest_sha256"`
+	CategoryCount       int32              `json:"category_count"`
+	CheckpointCount     int32              `json:"checkpoint_count"`
+	ObjectTargetCount   int32              `json:"object_target_count"`
+	ProviderTargetCount int32              `json:"provider_target_count"`
+	CompletedByRef      uuid.UUID          `json:"completed_by_ref"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	EvidenceExpiresAt   pgtype.Timestamptz `json:"evidence_expires_at"`
 }
 
 type PrivacyErasureExecution struct {
@@ -1991,12 +2094,13 @@ type PrivacyErasureRetentionAnchor struct {
 }
 
 type PrivacyExecutorGrant struct {
-	ID        uuid.UUID          `json:"id"`
-	UserID    uuid.UUID          `json:"user_id"`
-	GrantedBy uuid.UUID          `json:"granted_by"`
-	GrantedAt pgtype.Timestamptz `json:"granted_at"`
-	RevokedBy *uuid.UUID         `json:"revoked_by"`
-	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	GrantedBy            uuid.UUID          `json:"granted_by"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy            *uuid.UUID         `json:"revoked_by"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type PrivacyExecutorGrantEvent struct {
@@ -2005,6 +2109,101 @@ type PrivacyExecutorGrantEvent struct {
 	ActorRef   uuid.UUID          `json:"actor_ref"`
 	Action     string             `json:"action"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyOutboxDeliveryEvidence struct {
+	OutboxID    uuid.UUID          `json:"outbox_id"`
+	MessageType string             `json:"message_type"`
+	FinalStatus string             `json:"final_status"`
+	Attempts    int32              `json:"attempts"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	TerminalAt  pgtype.Timestamptz `json:"terminal_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+type PrivacyProtectedActivationBrokerReceipt struct {
+	ProposalID              uuid.UUID          `json:"proposal_id"`
+	ApprovalID              uuid.UUID          `json:"approval_id"`
+	ExecutorEnvelopeID      uuid.UUID          `json:"executor_envelope_id"`
+	AdministratorEnvelopeID uuid.UUID          `json:"administrator_envelope_id"`
+	EvidenceSetSha256       []byte             `json:"evidence_set_sha256"`
+	ActivationSha256        []byte             `json:"activation_sha256"`
+	RecordedAt              pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedActivationSignedApproval struct {
+	ID             uuid.UUID          `json:"id"`
+	ProposalID     uuid.UUID          `json:"proposal_id"`
+	SignerRole     string             `json:"signer_role"`
+	ActorRef       uuid.UUID          `json:"actor_ref"`
+	SigningKeyID   string             `json:"signing_key_id"`
+	NonceSha256    []byte             `json:"nonce_sha256"`
+	EnvelopeSha256 []byte             `json:"envelope_sha256"`
+	RawEnvelope    []byte             `json:"raw_envelope"`
+	ParsedEnvelope []byte             `json:"parsed_envelope"`
+	IssuedAt       pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedCompletionNoticeTarget struct {
+	ExecutionID    uuid.UUID          `json:"execution_id"`
+	SealedDelivery []byte             `json:"sealed_delivery"`
+	CapturedAt     pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayCapture struct {
+	RunID      uuid.UUID          `json:"run_id"`
+	CapturedAt pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayPostcondition struct {
+	RunID               uuid.UUID          `json:"run_id"`
+	Contract            string             `json:"contract"`
+	PostconditionSha256 []byte             `json:"postcondition_sha256"`
+	MembershipCount     int64              `json:"membership_count"`
+	VariationCount      int64              `json:"variation_count"`
+	CanonicalSize       int64              `json:"canonical_size"`
+	RecordedAt          pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedMembershipHistoryReplayRow struct {
+	RunID        uuid.UUID `json:"run_id"`
+	MembershipID uuid.UUID `json:"membership_id"`
+}
+
+type PrivacyProtectedMembershipHistorySourceCapture struct {
+	ExecutionID uuid.UUID          `json:"execution_id"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedMembershipHistorySourcePostcondition struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	EffectiveAt         pgtype.Timestamptz `json:"effective_at"`
+	Contract            string             `json:"contract"`
+	PostconditionSha256 []byte             `json:"postcondition_sha256"`
+	MembershipCount     int64              `json:"membership_count"`
+	VariationCount      int64              `json:"variation_count"`
+	CanonicalSize       int64              `json:"canonical_size"`
+	RecordedAt          pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedMembershipHistorySourceRow struct {
+	ExecutionID  uuid.UUID `json:"execution_id"`
+	MembershipID uuid.UUID `json:"membership_id"`
+}
+
+type PrivacyProtectedObjectCaptureSet struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	JobID               uuid.UUID          `json:"job_id"`
+	CheckpointID        uuid.UUID          `json:"checkpoint_id"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	CategoryKey         string             `json:"category_key"`
+	SourceKinds         []string           `json:"source_kinds"`
+	ExpectedTargetCount int32              `json:"expected_target_count"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	OperationCode       string             `json:"operation_code"`
+	ActionVersion       string             `json:"action_version"`
 }
 
 type PrivacyProtectedObjectEvidence struct {
@@ -2044,6 +2243,7 @@ type PrivacyProtectedObjectTarget struct {
 	Nonce                   []byte             `json:"nonce"`
 	Ciphertext              []byte             `json:"ciphertext"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UploadIntentID          *uuid.UUID         `json:"upload_intent_id"`
 }
 
 type PrivacyProtectedObjectTargetDigest struct {
@@ -2146,6 +2346,265 @@ type PrivacyProtectedObjectUploadIntentReservation struct {
 	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 }
 
+type PrivacyProtectedProviderCaptureSet struct {
+	ExecutionID         uuid.UUID          `json:"execution_id"`
+	JobID               uuid.UUID          `json:"job_id"`
+	CheckpointID        uuid.UUID          `json:"checkpoint_id"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	CategoryKey         string             `json:"category_key"`
+	ExpectedTargetCount int32              `json:"expected_target_count"`
+	OperationCode       string             `json:"operation_code"`
+	ActionVersion       string             `json:"action_version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedProviderConnection struct {
+	ID                      uuid.UUID          `json:"id"`
+	SubjectUserID           uuid.UUID          `json:"subject_user_id"`
+	ServiceCode             string             `json:"service_code"`
+	ProviderRole            string             `json:"provider_role"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	RegistryEvidenceKeyID   string             `json:"registry_evidence_key_id"`
+	RegistryEvidenceDigest  []byte             `json:"registry_evidence_digest"`
+	TargetKeyID             string             `json:"target_key_id"`
+	TargetOpaque            []byte             `json:"target_opaque"`
+	CredentialKeyID         *string            `json:"credential_key_id"`
+	CredentialOpaque        []byte             `json:"credential_opaque"`
+	State                   string             `json:"state"`
+	StateVersion            int64              `json:"state_version"`
+	SyncEnabled             bool               `json:"sync_enabled"`
+	WebhookEnabled          bool               `json:"webhook_enabled"`
+	ReconnectEnabled        bool               `json:"reconnect_enabled"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PrivacyProtectedProviderCredentialQuarantine struct {
+	TargetID              uuid.UUID          `json:"target_id"`
+	SourceCommitmentKeyID string             `json:"source_commitment_key_id"`
+	SourceCommitment      []byte             `json:"source_commitment"`
+	EnvelopeVersion       string             `json:"envelope_version"`
+	Algorithm             string             `json:"algorithm"`
+	EncryptionKeyID       string             `json:"encryption_key_id"`
+	Encapsulation         []byte             `json:"encapsulation"`
+	Nonce                 []byte             `json:"nonce"`
+	Ciphertext            []byte             `json:"ciphertext"`
+	QuarantinedAt         pgtype.Timestamptz `json:"quarantined_at"`
+}
+
+type PrivacyProtectedProviderEvidence struct {
+	ID               uuid.UUID          `json:"id"`
+	TargetID         uuid.UUID          `json:"target_id"`
+	JobID            uuid.UUID          `json:"job_id"`
+	AttemptID        uuid.UUID          `json:"attempt_id"`
+	EvidenceVersion  string             `json:"evidence_version"`
+	OutcomeCode      string             `json:"outcome_code"`
+	AdapterAttempts  int32              `json:"adapter_attempts"`
+	EvidenceCode     string             `json:"evidence_code"`
+	RecipientRole    *string            `json:"recipient_role"`
+	ChannelCode      *string            `json:"channel_code"`
+	NotificationCode *string            `json:"notification_code"`
+	ReasonCode       *string            `json:"reason_code"`
+	GuidanceCode     *string            `json:"guidance_code"`
+	TranscriptKeyID  string             `json:"transcript_key_id"`
+	TranscriptDigest []byte             `json:"transcript_digest"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyProtectedProviderTarget struct {
+	ID                      uuid.UUID          `json:"id"`
+	ConnectionID            uuid.UUID          `json:"connection_id"`
+	ExecutionID             uuid.UUID          `json:"execution_id"`
+	JobID                   uuid.UUID          `json:"job_id"`
+	CheckpointID            uuid.UUID          `json:"checkpoint_id"`
+	PlanEntrySha256         []byte             `json:"plan_entry_sha256"`
+	CategoryKey             string             `json:"category_key"`
+	ServiceCode             string             `json:"service_code"`
+	TargetKind              string             `json:"target_kind"`
+	ProviderRole            string             `json:"provider_role"`
+	TargetVersion           int64              `json:"target_version"`
+	OperationCode           string             `json:"operation_code"`
+	ActionVersion           string             `json:"action_version"`
+	ProviderContractVersion string             `json:"provider_contract_version"`
+	RegistryEvidenceKeyID   string             `json:"registry_evidence_key_id"`
+	RegistryEvidenceDigest  []byte             `json:"registry_evidence_digest"`
+	LocalState              string             `json:"local_state"`
+	TargetEnvelopeVersion   string             `json:"target_envelope_version"`
+	TargetAlgorithm         string             `json:"target_algorithm"`
+	TargetEncryptionKeyID   string             `json:"target_encryption_key_id"`
+	TargetEncapsulation     []byte             `json:"target_encapsulation"`
+	TargetNonce             []byte             `json:"target_nonce"`
+	TargetCiphertext        []byte             `json:"target_ciphertext"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedProviderTargetDigest struct {
+	TargetID     uuid.UUID          `json:"target_id"`
+	ExecutionID  uuid.UUID          `json:"execution_id"`
+	ServiceCode  string             `json:"service_code"`
+	TargetKind   string             `json:"target_kind"`
+	DigestKeyID  string             `json:"digest_key_id"`
+	TargetDigest []byte             `json:"target_digest"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedRestoreLedgerImport struct {
+	ID                              uuid.UUID          `json:"id"`
+	Kind                            string             `json:"kind"`
+	RecordVersion                   string             `json:"record_version"`
+	EnvelopeVersion                 string             `json:"envelope_version"`
+	EncryptionKeyID                 string             `json:"encryption_key_id"`
+	LocatorKeyID                    string             `json:"locator_key_id"`
+	LocatorDigest                   []byte             `json:"locator_digest"`
+	CiphertextSha256                []byte             `json:"ciphertext_sha256"`
+	ObjectVersionID                 string             `json:"object_version_id"`
+	WrittenAt                       pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt                      pgtype.Timestamptz `json:"verified_at"`
+	RetainUntil                     pgtype.Timestamptz `json:"retain_until"`
+	SourceExecutionID               uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID                 uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef                uuid.UUID          `json:"source_request_ref"`
+	SubjectUserID                   uuid.UUID          `json:"subject_user_id"`
+	PlanSha256                      []byte             `json:"plan_sha256"`
+	WorksetSha256                   []byte             `json:"workset_sha256"`
+	ExecutionStartedAt              pgtype.Timestamptz `json:"execution_started_at"`
+	ReplayVersion                   string             `json:"replay_version"`
+	ActionVersion                   string             `json:"action_version"`
+	Operations                      []string           `json:"operations"`
+	PrescriptionSha256              []byte             `json:"prescription_sha256"`
+	RecordSha256                    []byte             `json:"record_sha256"`
+	ImportedByRef                   uuid.UUID          `json:"imported_by_ref"`
+	ImportedAt                      pgtype.Timestamptz `json:"imported_at"`
+	ErasureEffectiveAt              pgtype.Timestamptz `json:"erasure_effective_at"`
+	ClosureVersion                  *string            `json:"closure_version"`
+	SyntheticFixture                *string            `json:"synthetic_fixture"`
+	MembershipPostconditionContract *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256   []byte             `json:"membership_postcondition_sha256"`
+	MembershipCount                 *int64             `json:"membership_count"`
+	VariationCount                  *int64             `json:"variation_count"`
+}
+
+type PrivacyProtectedRestoreReplayAlreadyAppliedEvidence struct {
+	RunID              uuid.UUID          `json:"run_id"`
+	ImportID           uuid.UUID          `json:"import_id"`
+	EvidenceCode       string             `json:"evidence_code"`
+	SourceExecutionID  uuid.UUID          `json:"source_execution_id"`
+	ErasureEffectiveAt pgtype.Timestamptz `json:"erasure_effective_at"`
+	VerifiedOperations []string           `json:"verified_operations"`
+	VerificationSha256 []byte             `json:"verification_sha256"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedRestoreReplayCheckpoint struct {
+	ID                uuid.UUID          `json:"id"`
+	RunID             uuid.UUID          `json:"run_id"`
+	OperationPosition int16              `json:"operation_position"`
+	OperationCode     string             `json:"operation_code"`
+	ActionVersion     string             `json:"action_version"`
+	Status            string             `json:"status"`
+	AffectedRows      *int64             `json:"affected_rows"`
+	ResultSha256      []byte             `json:"result_sha256"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+}
+
+type PrivacyProtectedRestoreReplayInventoryAttestation struct {
+	ID                                   uuid.UUID          `json:"id"`
+	InputSource                          string             `json:"input_source"`
+	InventorySha256                      []byte             `json:"inventory_sha256"`
+	ObjectCount                          int32              `json:"object_count"`
+	PolicyVersion                        string             `json:"policy_version"`
+	ExecutorVersion                      string             `json:"executor_version"`
+	PlanSchemaVersion                    string             `json:"plan_schema_version"`
+	ImageDigest                          string             `json:"image_digest"`
+	SchemaMigrationDigest                []byte             `json:"schema_migration_digest"`
+	ImportedCount                        int32              `json:"imported_count"`
+	ReplayedCount                        int32              `json:"replayed_count"`
+	AlreadyAppliedCount                  int32              `json:"already_applied_count"`
+	AbsenceVerifiedCount                 int32              `json:"absence_verified_count"`
+	SyntheticReplayedCount               int32              `json:"synthetic_replayed_count"`
+	ClosureV3Count                       int32              `json:"closure_v3_count"`
+	IntentOnlyCount                      int32              `json:"intent_only_count"`
+	LegacyClosureV2Count                 int32              `json:"legacy_closure_v2_count"`
+	ErasureEffectiveAtVerifiedCount      int32              `json:"erasure_effective_at_verified_count"`
+	EvidenceSha256                       []byte             `json:"evidence_sha256"`
+	RecordedAt                           pgtype.Timestamptz `json:"recorded_at"`
+	ClosureV4Count                       *int32             `json:"closure_v4_count"`
+	MembershipPostconditionContract      *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256        []byte             `json:"membership_postcondition_sha256"`
+	MembershipPostconditionVerifiedCount *int32             `json:"membership_postcondition_verified_count"`
+	MembershipCount                      *int64             `json:"membership_count"`
+	VariationCount                       *int64             `json:"variation_count"`
+}
+
+type PrivacyProtectedRestoreReplayInventoryAttestationRun struct {
+	AttestationID uuid.UUID `json:"attestation_id"`
+	RunID         uuid.UUID `json:"run_id"`
+}
+
+type PrivacyProtectedRestoreReplayRun struct {
+	ID          uuid.UUID          `json:"id"`
+	ImportID    uuid.UUID          `json:"import_id"`
+	WorkerRef   uuid.UUID          `json:"worker_ref"`
+	Status      string             `json:"status"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	OutcomeCode *string            `json:"outcome_code"`
+}
+
+type PrivacyProtectedRestoreSyntheticFixture struct {
+	SubjectUserID                   uuid.UUID          `json:"subject_user_id"`
+	SourceExecutionID               uuid.UUID          `json:"source_execution_id"`
+	SourceRequestID                 uuid.UUID          `json:"source_request_id"`
+	SourceRequestRef                uuid.UUID          `json:"source_request_ref"`
+	PlanSha256                      []byte             `json:"plan_sha256"`
+	WorksetSha256                   []byte             `json:"workset_sha256"`
+	ErasureEffectiveAt              pgtype.Timestamptz `json:"erasure_effective_at"`
+	Operations                      []string           `json:"operations"`
+	FixtureMarker                   string             `json:"fixture_marker"`
+	CreatedByRef                    uuid.UUID          `json:"created_by_ref"`
+	CreatedAt                       pgtype.Timestamptz `json:"created_at"`
+	MembershipPostconditionContract *string            `json:"membership_postcondition_contract"`
+	MembershipPostconditionSha256   []byte             `json:"membership_postcondition_sha256"`
+	MembershipCount                 *int64             `json:"membership_count"`
+	VariationCount                  *int64             `json:"variation_count"`
+}
+
+type PrivacyProtectedRestoreTombstoneClosureIntent struct {
+	ExecutionID       uuid.UUID          `json:"execution_id"`
+	ClosedAt          pgtype.Timestamptz `json:"closed_at"`
+	EvidenceExpiresAt pgtype.Timestamptz `json:"evidence_expires_at"`
+	PreparedAt        pgtype.Timestamptz `json:"prepared_at"`
+}
+
+type PrivacyProtectedRestoreTombstoneClosureReceipt struct {
+	ExecutionID      uuid.UUID          `json:"execution_id"`
+	LedgerVersion    string             `json:"ledger_version"`
+	EncryptionKeyID  string             `json:"encryption_key_id"`
+	LocatorKeyID     string             `json:"locator_key_id"`
+	LocatorDigest    []byte             `json:"locator_digest"`
+	ObjectVersionID  string             `json:"object_version_id"`
+	CiphertextSha256 []byte             `json:"ciphertext_sha256"`
+	SizeBytes        int64              `json:"size_bytes"`
+	WrittenAt        pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type PrivacyProtectedRestoreTombstoneReceipt struct {
+	ExecutionID      uuid.UUID          `json:"execution_id"`
+	RequestID        uuid.UUID          `json:"request_id"`
+	LedgerVersion    string             `json:"ledger_version"`
+	EncryptionKeyID  string             `json:"encryption_key_id"`
+	LocatorKeyID     string             `json:"locator_key_id"`
+	LocatorDigest    []byte             `json:"locator_digest"`
+	ObjectVersionID  string             `json:"object_version_id"`
+	CiphertextSha256 []byte             `json:"ciphertext_sha256"`
+	SizeBytes        int64              `json:"size_bytes"`
+	WrittenAt        pgtype.Timestamptz `json:"written_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type PrivacyPseudonymousPrincipal struct {
 	ID        uuid.UUID          `json:"id"`
 	Purpose   string             `json:"purpose"`
@@ -2159,6 +2618,7 @@ type PrivacyRequestActivation struct {
 	FulfilmentReady bool               `json:"fulfilment_ready"`
 	UpdatedBy       uuid.UUID          `json:"updated_by"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ApprovalID      *uuid.UUID         `json:"approval_id"`
 }
 
 type PrivacyRequestActivationEvent struct {
@@ -2235,13 +2695,36 @@ type PrivacyRequestRetentionException struct {
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
+type PrivacyRetentionRun struct {
+	ID                            uuid.UUID          `json:"id"`
+	WorkerRef                     uuid.UUID          `json:"worker_ref"`
+	StartedAt                     pgtype.Timestamptz `json:"started_at"`
+	FinishedAt                    pgtype.Timestamptz `json:"finished_at"`
+	BatchLimit                    int32              `json:"batch_limit"`
+	SessionsDeleted               int32              `json:"sessions_deleted"`
+	TokensDeleted                 int32              `json:"tokens_deleted"`
+	OutboxStopped                 int32              `json:"outbox_stopped"`
+	OutboxPayloadsDeleted         int32              `json:"outbox_payloads_deleted"`
+	OutboxEvidenceDeleted         int32              `json:"outbox_evidence_deleted"`
+	ConsentNetworkScrubbed        int32              `json:"consent_network_scrubbed"`
+	EventResponsesDeleted         int32              `json:"event_responses_deleted"`
+	AnnouncementDeliveriesDeleted int32              `json:"announcement_deliveries_deleted"`
+	SuggestionsDeleted            int32              `json:"suggestions_deleted"`
+	PrivacyWorkingScrubbed        int32              `json:"privacy_working_scrubbed"`
+	AuthLimitsDeleted             int32              `json:"auth_limits_deleted"`
+	ConsentEvidenceDeleted        int32              `json:"consent_evidence_deleted"`
+	AuditEventsPseudonymized      int32              `json:"audit_events_pseudonymized"`
+	RepairAttachmentsQueued       int32              `json:"repair_attachments_queued"`
+}
+
 type PrivacyReviewerGrant struct {
-	ID        uuid.UUID          `json:"id"`
-	UserID    uuid.UUID          `json:"user_id"`
-	GrantedBy uuid.UUID          `json:"granted_by"`
-	GrantedAt pgtype.Timestamptz `json:"granted_at"`
-	RevokedBy *uuid.UUID         `json:"revoked_by"`
-	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	GrantedBy            uuid.UUID          `json:"granted_by"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedBy            *uuid.UUID         `json:"revoked_by"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type PrivacyReviewerGrantEvent struct {
@@ -2250,6 +2733,41 @@ type PrivacyReviewerGrantEvent struct {
 	ActorRef   uuid.UUID          `json:"actor_ref"`
 	Action     string             `json:"action"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PrivacyTerminalRequeueApproval struct {
+	ProposalID     uuid.UUID          `json:"proposal_id"`
+	ProposalSha256 []byte             `json:"proposal_sha256"`
+	ApprovedByRef  uuid.UUID          `json:"approved_by_ref"`
+	ApprovedAt     pgtype.Timestamptz `json:"approved_at"`
+}
+
+type PrivacyTerminalRequeueProposal struct {
+	ID                       uuid.UUID          `json:"id"`
+	JobID                    uuid.UUID          `json:"job_id"`
+	ExecutionID              uuid.UUID          `json:"execution_id"`
+	FailureID                uuid.UUID          `json:"failure_id"`
+	ExpectedExecutionVersion int64              `json:"expected_execution_version"`
+	ExpectedLeaseEpoch       int64              `json:"expected_lease_epoch"`
+	ProposalSha256           []byte             `json:"proposal_sha256"`
+	ProposedByRef            uuid.UUID          `json:"proposed_by_ref"`
+	ProposedAt               pgtype.Timestamptz `json:"proposed_at"`
+}
+
+type PrivacyWorkerKillSwitch struct {
+	Singleton            bool               `json:"singleton"`
+	Engaged              bool               `json:"engaged"`
+	Version              int64              `json:"version"`
+	ActivationApprovalID *uuid.UUID         `json:"activation_approval_id"`
+	ChangedAt            pgtype.Timestamptz `json:"changed_at"`
+}
+
+type PrivacyWorkerKillSwitchEvent struct {
+	ID                   uuid.UUID          `json:"id"`
+	Version              int64              `json:"version"`
+	Engaged              bool               `json:"engaged"`
+	ActivationApprovalID *uuid.UUID         `json:"activation_approval_id"`
+	OccurredAt           pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type Programme struct {
@@ -2294,16 +2812,17 @@ type Session struct {
 }
 
 type StaffGrant struct {
-	ID           uuid.UUID          `json:"id"`
-	UserID       uuid.UUID          `json:"user_id"`
-	Capability   StaffCapability    `json:"capability"`
-	ProgrammeID  *uuid.UUID         `json:"programme_id"`
-	TeamID       *uuid.UUID         `json:"team_id"`
-	GrantedByID  uuid.UUID          `json:"granted_by_id"`
-	GrantedAt    pgtype.Timestamptz `json:"granted_at"`
-	RevokedByID  *uuid.UUID         `json:"revoked_by_id"`
-	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
-	RevokeReason *string            `json:"revoke_reason"`
+	ID                   uuid.UUID          `json:"id"`
+	UserID               uuid.UUID          `json:"user_id"`
+	Capability           StaffCapability    `json:"capability"`
+	ProgrammeID          *uuid.UUID         `json:"programme_id"`
+	TeamID               *uuid.UUID         `json:"team_id"`
+	GrantedByID          uuid.UUID          `json:"granted_by_id"`
+	GrantedAt            pgtype.Timestamptz `json:"granted_at"`
+	RevokedByID          *uuid.UUID         `json:"revoked_by_id"`
+	RevokedAt            pgtype.Timestamptz `json:"revoked_at"`
+	RevokeReason         *string            `json:"revoke_reason"`
+	RevokedByReplayRunID *uuid.UUID         `json:"revoked_by_replay_run_id"`
 }
 
 type StaffGrantAuditEvent struct {
@@ -2314,6 +2833,7 @@ type StaffGrantAuditEvent struct {
 	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
 	Reason           *string            `json:"reason"`
 	ActorPrincipalID *uuid.UUID         `json:"actor_principal_id"`
+	ActorReplayRunID *uuid.UUID         `json:"actor_replay_run_id"`
 }
 
 type Suggestion struct {
@@ -2618,6 +3138,7 @@ type User struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	ErasedAt           pgtype.Timestamptz `json:"erased_at"`
 	ErasureExecutionID *uuid.UUID         `json:"erasure_execution_id"`
+	ErasureReplayRunID *uuid.UUID         `json:"erasure_replay_run_id"`
 }
 
 type UserMembership struct {

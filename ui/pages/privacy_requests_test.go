@@ -41,6 +41,98 @@ func TestPrivacySafeReceiptDoesNotDiscloseProtectedFields(t *testing.T) {
 	}
 }
 
+func TestPrivacyCompletionDetailHasGenericUnavailableStateAndWrapSafeEvidence(t *testing.T) {
+	manifest := strings.Repeat("a", 64)
+	body := privacyRender(t, privacyCompletionDetailContent(PrivacyCompletionDetailPage{
+		Reference: "opaque-request", CompletedAt: "10/09/2026 19:30", ManifestSHA256: manifest,
+		Categories: 3, Checkpoints: 8, ObjectTargets: 2, ProviderTargets: 1,
+	}))
+	for _, want := range []string{"Pedido concluído", "opaque-request", "10/09/2026 19:30", manifest, `class="privacy-fingerprint"`, "Categorias processadas", "Destinatários externos verificados"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("completion detail missing %q", want)
+		}
+	}
+
+	body = privacyRender(t, privacyCompletionDetailContent(PrivacyCompletionDetailPage{Unavailable: true}))
+	for _, want := range []string{"Ligação indisponível", "inválida, já foi utilizada ou expirou", "uma única vez durante 24 horas"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("unavailable detail missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"opaque-request", manifest, "Pedido concluído"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("unavailable detail exposed %q", forbidden)
+		}
+	}
+
+	body = privacyRender(t, privacyCompletionDetailContent(PrivacyCompletionDetailPage{Meta: privacyCSRF(), Confirm: true, ConfirmationNonce: "browser-state-nonce"}))
+	for _, want := range []string{`method="post"`, `action="/privacidade/conclusao/consultar"`, `name="completion_state" value="browser-state-nonce"`, "csrf-proof", "Consultar resultado agora"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("confirmation page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "token") || strings.Contains(body, "opaque-request") {
+		t.Fatal("confirmation page exposes capability state")
+	}
+}
+
+func TestPrivacyOperationalControlsAreBoundedNativeAndDualControl(t *testing.T) {
+	page := PrivacyCompletionControlPage{
+		Meta: privacyCSRF(), Reference: "opaque-ref", RequestStatus: "TERMINAL_FAILED", ExecutionStatus: "TERMINAL_FAILED",
+		Jobs: []PrivacyControlJob{
+			{ID: "job-propose", CategoryCode: "identity-core", PurposeCode: "ACCOUNT_ERASURE", Status: "TERMINAL_FAILED", AttemptCount: "5", FailureStage: "VERIFY", FailureCode: "VERIFICATION_FAILED", CanPropose: true},
+			{ID: "job-approve", CategoryCode: "external-provider", PurposeCode: "PROVIDER_DISCONNECT", Status: "TERMINAL_FAILED", AttemptCount: "2", FailureStage: "EXECUTE", FailureCode: "DEPENDENCY_UNAVAILABLE", ProposedAt: "10/09/2026 20:00", CanApprove: true},
+		},
+	}
+	body := privacyRender(t, privacyCompletionControlContent(page))
+	for _, want := range []string{
+		"Estado técnico limitado", "Intervenção necessária", "identity-core", "ACCOUNT_ERASURE",
+		"VERIFICATION_FAILED", "DEPENDENCY_UNAVAILABLE", `name="confirmed" value="yes" required`,
+		`action="/admin/privacidade/controlo/opaque-ref/reagendar"`,
+		`action="/admin/privacidade/controlo/opaque-ref/reagendar/aprovar"`, "Propor nova tentativa", "Aprovar nova tentativa",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("completion control missing %q", want)
+		}
+	}
+	if forms := strings.Count(body, `method="post"`); forms != 2 || strings.Count(body, "csrf-proof") != forms {
+		t.Fatalf("every control mutation must carry CSRF; body=%s", body)
+	}
+	for _, forbidden := range []string{"secret-subject", "secret-recipient", "raw stack", "provider-object-id"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("control surface exposed %q", forbidden)
+		}
+	}
+}
+
+func TestPrivacyActivationUsesRecordedEvidenceAndIndependentNativeApproval(t *testing.T) {
+	evidence := []PrivacyActivationEvidence{
+		{ID: "restore-id", Kind: "RESTORE", ObservedAt: "10/09/2026 18:00"},
+		{ID: "infra-id", Kind: "INFRASTRUCTURE", ObservedAt: "10/09/2026 18:01"},
+		{ID: "provider-id", Kind: "PROVIDER", ObservedAt: "10/09/2026 18:02"},
+		{ID: "schema-id", Kind: "SCHEMA", ObservedAt: "10/09/2026 18:03"},
+	}
+	body := privacyRender(t, privacyActivationControlContent(PrivacyActivationControlPage{Meta: privacyCSRF(), PolicyVersion: "policy-v2", Evidence: evidence, CanPropose: true}))
+	for _, want := range []string{"Processamento", "Inativo", "quatro comprovativos", "Não envie chaves", `action="/admin/privacidade/ativacao/propor"`, "Propor ativação", "csrf-proof"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("activation proposal missing %q", want)
+		}
+	}
+	if strings.Contains(body, `name="evidence_id"`) || strings.Contains(body, "auth_hmac") {
+		t.Fatalf("activation proposal evidence boundary changed: %s", body)
+	}
+
+	body = privacyRender(t, privacyActivationControlContent(PrivacyActivationControlPage{Meta: privacyCSRF(), PolicyVersion: "policy-v2", Evidence: evidence, ProposedAt: "10/09/2026 20:10", CanApprove: true}))
+	for _, want := range []string{`action="/admin/privacidade/ativacao/aprovar"`, "pessoa administradora diferente", "Aprovar ativação", `name="confirmed" value="yes" required`, "csrf-proof"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("activation approval missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Propor ativação") {
+		t.Fatal("pending activation exposed a second proposal")
+	}
+}
+
 func TestPrivacyApprovalClearlyAwaitsExecution(t *testing.T) {
 	for _, status := range []string{"AWAITING_EXECUTION", "PARTIALLY_APPROVED"} {
 		body := privacyRender(t, privacyRequestDetailContent(PrivacyRequestDetailPage{Status: status, History: []PrivacyHistoryItem{{At: "08/09/2026", Label: "Decisão registada"}}, Categories: []PrivacyCategory{{Label: "Fotografias", Outcome: "RETAIN", Ground: "GROUND", Grounds: []PrivacyOption{{Value: "GROUND", Label: "Fundamento aprovado"}}}}}))
@@ -198,5 +290,42 @@ func TestPrivacyPageHelpersMapStatusesErrorsAndFallbacks(t *testing.T) {
 		if !targets[want] {
 			t.Errorf("detail error target missing %q: %+v", want, targets)
 		}
+	}
+	for status, want := range map[string]string{
+		"PENDING": "Pendente", "LEASED": "Em processamento", "RUNNING": "Em processamento", "PROCESSING": "Em processamento",
+		"RETRYABLE_FAILED": "Nova tentativa pendente", "TERMINAL_FAILED": "Intervenção necessária",
+		"SUCCEEDED": "Concluído", "COMPLETED": "Concluído", "UNKNOWN": "Estado indisponível",
+	} {
+		if got := privacyControlStatus(status); got != want {
+			t.Errorf("control status %s=%q want=%q", status, got, want)
+		}
+	}
+	for stage, want := range map[string]string{"SYNC": "Sincronização", "EXECUTE": "Execução", "VERIFY": "Verificação", "UNKNOWN": "Etapa protegida"} {
+		if got := privacyFailureStage(stage); got != want {
+			t.Errorf("failure stage %s=%q want=%q", stage, got, want)
+		}
+	}
+	for code, want := range map[string]string{
+		"ACTION_FAILED":          "ACTION_FAILED — a operação não terminou",
+		"DEPENDENCY_UNAVAILABLE": "DEPENDENCY_UNAVAILABLE — dependência indisponível",
+		"UNSUPPORTED_OPERATION":  "UNSUPPORTED_OPERATION — operação não suportada",
+		"VERIFICATION_FAILED":    "VERIFICATION_FAILED — verificação sem sucesso",
+		"RETRY_LIMIT_REACHED":    "RETRY_LIMIT_REACHED — limite de tentativas atingido",
+		"UNKNOWN":                "OPERATIONAL_FAILURE — falha operacional protegida",
+	} {
+		if got := privacyFailureCode(code); got != want {
+			t.Errorf("failure code %s=%q want=%q", code, got, want)
+		}
+	}
+	for kind, want := range map[string]string{
+		"RESTORE": "Restauro isolado", "INFRASTRUCTURE": "Infraestrutura", "PROVIDER": "Destinatários externos",
+		"SCHEMA": "Esquema de dados", "UNKNOWN": "Evidência não reconhecida",
+	} {
+		if got := privacyEvidenceKind(kind); got != want {
+			t.Errorf("evidence kind %s=%q want=%q", kind, got, want)
+		}
+	}
+	if privacyReadyLabel(true) != "Ativo" || privacyReadyLabel(false) != "Inativo" || privacyCount(42) != "42" {
+		t.Fatal("privacy operational label helpers changed")
 	}
 }

@@ -3,7 +3,15 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  backup_bucket = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-postgres-backups"
+  backup_bucket               = "${local.name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-postgres-backups"
+  backup_recovery_prefixes    = ["daily/*", "monthly/*"]
+  backup_attestation_prefixes = ["restore-attestations/*", "restore-evidence/*"]
+  backup_prefixes             = concat(local.backup_recovery_prefixes, local.backup_attestation_prefixes)
+  backup_base_list_actions    = ["s3:ListBucket"]
+  backup_cleanup_list_actions = ["s3:ListBucketVersions"]
+  backup_object_actions       = ["s3:GetObject", "s3:PutObject"]
+  backup_cleanup_actions      = ["s3:DeleteObjectVersion"]
+  backup_encryption_actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
 }
 
 resource "aws_kms_key" "postgres_backups" {
@@ -39,6 +47,7 @@ resource "aws_s3_bucket_ownership_controls" "postgres_backups" {
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
+
 }
 
 resource "aws_s3_bucket_versioning" "postgres_backups" {
@@ -80,6 +89,52 @@ resource "aws_s3_bucket_lifecycle_configuration" "postgres_backups" {
 
     expiration { days = 365 }
   }
+
+  rule {
+    id     = "retain-privacy-restore-attestations"
+    status = "Enabled"
+
+    filter { prefix = "restore-attestations/" }
+
+    expiration { days = 400 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+  }
+
+  rule {
+    id     = "retain-privacy-restore-evidence"
+    status = "Enabled"
+
+    filter { prefix = "restore-evidence/" }
+
+    expiration { days = 400 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+  }
+
+  dynamic "rule" {
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? toset(["daily/", "monthly/"]) : toset([])
+
+    content {
+      id     = "expire-noncurrent-${trimsuffix(rule.value, "/")}-backup-versions"
+      status = "Enabled"
+
+      filter { prefix = rule.value }
+
+      noncurrent_version_expiration { noncurrent_days = 1 }
+    }
+  }
+
+  dynamic "rule" {
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? toset(["daily/", "monthly/"]) : toset([])
+
+    content {
+      id     = "remove-expired-${trimsuffix(rule.value, "/")}-backup-delete-markers"
+      status = "Enabled"
+
+      filter { prefix = rule.value }
+
+      expiration { expired_object_delete_marker = true }
+    }
+  }
 }
 
 data "aws_iam_policy_document" "postgres_backups_bucket" {
@@ -108,34 +163,101 @@ resource "aws_s3_bucket_policy" "postgres_backups" {
 }
 
 resource "aws_iam_user" "postgres_backups" {
-  name = "${local.name}-postgres-backups"
+  name                 = "${local.name}-postgres-backups"
+  permissions_boundary = aws_iam_policy.postgres_backups_boundary.arn
 }
 
-data "aws_iam_policy_document" "postgres_backups" {
+data "aws_iam_policy_document" "postgres_backups_boundary" {
   statement {
-    sid       = "ListBackupObjects"
     effect    = "Allow"
-    actions   = ["s3:ListBucket"]
+    actions   = local.backup_base_list_actions
     resources = [aws_s3_bucket.postgres_backups.arn]
 
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["daily/*", "monthly/*"]
+      values   = local.backup_prefixes
+    }
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.backup_cleanup_list_actions
+    resources = [aws_s3_bucket.postgres_backups.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = local.backup_recovery_prefixes
+    }
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.backup_object_actions
+    resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.backup_cleanup_actions
+    resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = local.backup_encryption_actions
+    resources = [aws_kms_key.postgres_backups.arn]
+  }
+}
+
+resource "aws_iam_policy" "postgres_backups_boundary" {
+  name        = "${local.name}-postgres-backups-boundary"
+  description = "Maximum backup and gated exact-version cleanup permissions"
+  policy      = data.aws_iam_policy_document.postgres_backups_boundary.json
+
+  lifecycle { prevent_destroy = true }
+}
+
+data "aws_iam_policy_document" "postgres_backups" {
+  statement {
+    sid    = "ListBackupObjects"
+    effect = "Allow"
+    actions = concat(
+      local.backup_base_list_actions,
+      var.postgres_backup_noncurrent_cleanup_enabled ? local.backup_cleanup_list_actions : [],
+    )
+    resources = [aws_s3_bucket.postgres_backups.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = local.backup_recovery_prefixes
     }
   }
 
   statement {
     sid       = "ReadAndWriteBackupObjects"
     effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.postgres_backups.arn}/daily/*", "${aws_s3_bucket.postgres_backups.arn}/monthly/*"]
+    actions   = local.backup_object_actions
+    resources = [for prefix in local.backup_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+  }
+
+  dynamic "statement" {
+    for_each = var.postgres_backup_noncurrent_cleanup_enabled ? [1] : []
+
+    content {
+      sid       = "DeleteExpiredBackupVersions"
+      effect    = "Allow"
+      actions   = local.backup_cleanup_actions
+      resources = [for prefix in local.backup_recovery_prefixes : "${aws_s3_bucket.postgres_backups.arn}/${prefix}"]
+    }
   }
 
   statement {
     sid       = "EnvelopeEncryption"
     effect    = "Allow"
-    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+    actions   = local.backup_encryption_actions
     resources = [aws_kms_key.postgres_backups.arn]
   }
 }

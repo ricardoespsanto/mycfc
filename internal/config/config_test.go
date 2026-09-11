@@ -55,6 +55,101 @@ func TestPrivacyUploadKeysAreOptionalButAtomic(t *testing.T) {
 	}
 }
 
+func TestPrivacyObjectTargetKeysAreOptionalDistinctAndAtomic(t *testing.T) {
+	if _, _, configured, err := (Config{}).PrivacyObjectTargetKeys(); err != nil || configured {
+		t.Fatalf("empty configuration configured=%t err=%v", configured, err)
+	}
+	partial := Config{PrivacyObjectTargetEncryptionKeyID: "target-key-v1"}
+	if _, _, configured, err := partial.PrivacyObjectTargetKeys(); err == nil || !configured {
+		t.Fatalf("partial configuration configured=%t err=%v", configured, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
+	complete := Config{
+		PrivacyObjectTargetPublicKeyB64: encoded, PrivacyObjectTargetEncryptionKeyID: "target-key-v1",
+		PrivacyObjectTargetDigestKeyID: "target-digest-v1", PrivacyObjectTargetDigestKeyB64: Secret(encoded),
+	}
+	publicKey, digestKey, configured, err := complete.PrivacyObjectTargetKeys()
+	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
+		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
+	}
+	complete.PrivacyUploadPublicKeyB64 = complete.PrivacyObjectTargetPublicKeyB64
+	complete.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+	complete.PrivacyUploadDigestKeyID = "upload-digest-v1"
+	complete.PrivacyUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("u", 32))))
+	if _, _, configured, err = complete.PrivacyObjectTargetKeys(); err == nil || !configured || !strings.Contains(err.Error(), "distinct") {
+		t.Fatalf("shared upload public key configured=%t err=%v", configured, err)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"invalid public": func(c *Config) { c.PrivacyObjectTargetPublicKeyB64 = "not-base64" },
+		"short digest": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+		},
+		"shared encryption id": func(c *Config) {
+			c.PrivacyObjectTargetEncryptionKeyID = c.PrivacyUploadEncryptionKeyID
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+		"shared digest id": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyID = c.PrivacyUploadDigestKeyID
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+		"shared digest bytes": func(c *Config) {
+			c.PrivacyObjectTargetDigestKeyB64 = c.PrivacyUploadDigestKeyB64
+			c.PrivacyObjectTargetPublicKeyB64 = encoded
+		},
+	} {
+		candidate := complete
+		mutate(&candidate)
+		if _, _, configured, err = candidate.PrivacyObjectTargetKeys(); err == nil || !configured {
+			t.Errorf("%s configuration was accepted", name)
+		}
+	}
+	cfg := validConfig()
+	cfg.PrivacyObjectTargetDigestKeyID = "partial"
+	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_OBJECT_TARGET_KEYS") {
+		t.Fatalf("validation error=%v", err)
+	}
+}
+
+func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
+	if _, _, enabled, err := (Config{}).PrivacyTombstoneKeys(); err != nil || enabled {
+		t.Fatalf("empty configuration enabled=%t err=%v", enabled, err)
+	}
+	partial := Config{PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker"}
+	if _, _, enabled, err := partial.PrivacyTombstoneKeys(); err == nil || enabled {
+		t.Fatalf("disabled partial configuration enabled=%t err=%v", enabled, err)
+	}
+	complete := Config{
+		PrivacyTombstoneEnabled: true, PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker",
+		PrivacyTombstonePublicKeyB64: encoded, PrivacyTombstoneEncryptionKeyID: "tombstone-key-v1",
+		PrivacyTombstoneLocatorKeyID: "locator-key-v1", PrivacyTombstoneLocatorKeyB64: Secret(encoded),
+	}
+	publicKey, locatorKey, enabled, err := complete.PrivacyTombstoneKeys()
+	if err != nil || !enabled || len(publicKey) != 32 || len(locatorKey) != 32 {
+		t.Fatalf("complete configuration enabled=%t public=%d locator=%d err=%v", enabled, len(publicKey), len(locatorKey), err)
+	}
+	invalid := complete
+	invalid.PrivacyTombstoneBrokerFunctionName = "*"
+	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "BROKER_FUNCTION_NAME") {
+		t.Fatalf("invalid broker function error=%v", err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstoneLocatorKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "LOCATOR_KEY") {
+		t.Fatalf("invalid locator key error=%v", err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstonePublicKeyB64 = "not-base64"
+	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "PUBLIC_KEY") {
+		t.Fatalf("invalid public key enabled=%t err=%v", enabled, err)
+	}
+	invalid = complete
+	invalid.PrivacyTombstoneLocatorKeyB64 = ""
+	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("partial enabled configuration enabled=%t err=%v", enabled, err)
+	}
+}
+
 type recordingSecretGetter struct {
 	output *secretsmanager.GetSecretValueOutput
 	err    error

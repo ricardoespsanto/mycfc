@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly MyCFC bounded privacy retention maintenance
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=mycfc-privacy-retention.service
+
+[Install]
+WantedBy=timers.target

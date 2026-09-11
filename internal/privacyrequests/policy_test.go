@@ -160,6 +160,24 @@ func TestExecutablePolicyFailsClosedAndPlanIsDeterministic(t *testing.T) {
 	if _, err = ReadExecutionPlan(row); err != nil {
 		t.Fatalf("compiled plan rejected: %v", err)
 	}
+	legacyPlan := planA
+	legacyPlan.ExecutorVersion = LegacyExecutorVersion
+	legacyPlan.SchemaVersion = LegacyPlanSchemaVersion
+	legacyPayload, _ := json.Marshal(legacyPlan)
+	legacyRow := row
+	legacyRow.ExecutorVersion = LegacyExecutorVersion
+	legacyRow.SchemaVersion = LegacyPlanSchemaVersion
+	legacyRow.Plan = legacyPayload
+	legacyRow.PlanSha256 = executionPlanDigest(requestID, created, legacyRow.PolicyVersion, legacyRow.ExecutorVersion, legacyRow.SchemaVersion, legacyPayload)
+	if _, err = ReadExecutionPlan(legacyRow); err != nil {
+		t.Fatalf("historical v1 plan is no longer readable: %v", err)
+	}
+	legacyPolicy := p
+	legacyPolicy.ExecutorVersion = LegacyExecutorVersion
+	legacyPolicy.PlanSchemaVersion = LegacyPlanSchemaVersion
+	if legacyPolicy.validateCompatible() != nil || legacyPolicy.Validate() == nil {
+		t.Fatal("historical policy must remain readable without becoming newly importable")
+	}
 	row.RequestID = uuid.New()
 	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
 		t.Fatalf("transplanted plan accepted: %v", err)

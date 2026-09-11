@@ -83,7 +83,7 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if !errors.Is(existingErr, pgx.ErrNoRows) {
 		return zero, existingErr
 	}
-	if !s.Enabled {
+	if !s.Enabled || !currentPlanVersion(plan.ExecutorVersion, plan.SchemaVersion) {
 		return zero, ErrExecutorUnavailable
 	}
 
@@ -119,6 +119,10 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if err != nil || !executionActivationReady(activation) {
 		return zero, ErrExecutorUnavailable
 	}
+	ready, err := q.PrivacyActivationReady(ctx, activation.PolicyVersion)
+	if err != nil || !ready {
+		return zero, ErrExecutorUnavailable
+	}
 	if r.Version != in.Version {
 		return zero, ErrStaleVersion
 	}
@@ -127,7 +131,7 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	}
 
 	var adopted AdoptedPolicy
-	if json.Unmarshal(r.PolicySnapshot, &adopted) != nil || adopted.Validate() != nil || adopted.Version != plan.PolicyVersion || adopted.ExecutorVersion != plan.ExecutorVersion || adopted.PlanSchemaVersion != plan.SchemaVersion {
+	if json.Unmarshal(r.PolicySnapshot, &adopted) != nil || adopted.validateCompatible() != nil || adopted.Version != plan.PolicyVersion || adopted.ExecutorVersion != plan.ExecutorVersion || adopted.PlanSchemaVersion != plan.SchemaVersion {
 		return zero, ErrPolicyUnresolved
 	}
 	policy, err := adopted.Snapshot(scopeOf(r))
@@ -178,6 +182,12 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if counts.JobCount != int64(expectedJobs) || counts.CheckpointCount != int64(expectedCheckpoints) {
 		return zero, ErrExecutorUnavailable
 	}
+	if err = s.materializeObjectTargets(ctx, tx, q, execution, plan, subject.ID); err != nil {
+		return zero, err
+	}
+	if err = s.materializeProviderTargets(ctx, tx, q, execution, plan, subject.ID); err != nil {
+		return zero, err
+	}
 
 	updated, err := q.TransitionPrivacyRequestExecutionStatus(ctx, dbgen.TransitionPrivacyRequestExecutionStatusParams{
 		ToStatus: string(transition.Case.Status), UpdatedAt: stamp(now), ID: r.ID,
@@ -207,6 +217,13 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if err = s.enqueue(ctx, q, updated, requester, event.ID, "PRIVACY_PROCESSING_STARTED", now); err != nil {
 		return zero, err
 	}
+	var capturedExecutionID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT privacy_execution_capture_completion_notice($1,$2)`, execution.ID, event.ID).Scan(&capturedExecutionID); err != nil || capturedExecutionID != execution.ID {
+		if err == nil {
+			err = ErrExecutorUnavailable
+		}
+		return zero, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return zero, err
 	}
@@ -224,7 +241,7 @@ func executionActivationReady(activation dbgen.PrivacyRequestActivation) bool {
 // until every exact operation has an explicitly installed implementation.
 // StartExecution always repeats this check inside its transaction.
 func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
-	if len(s.ExecutionCapabilities) == 0 || len(plan.Entries) == 0 {
+	if !currentPlanVersion(plan.ExecutorVersion, plan.SchemaVersion) || len(s.ExecutionCapabilities) == 0 || len(plan.Entries) == 0 {
 		return false
 	}
 	for _, entry := range plan.Entries {
@@ -232,7 +249,9 @@ func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
 			return false
 		}
 		for _, operation := range entry.Operations {
-			if !supportedOperation(operation) || !relationalExecutableOperation(operation) || !s.ExecutionCapabilities[operation] {
+			if !supportedOperation(operation) || !executableOperation(operation) || !s.ExecutionCapabilities[operation] ||
+				(operation == "OBJECT_VERSION_DELETE" && s.ObjectTargets == nil) ||
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderTargets == nil || s.ProviderRegistry == nil || !s.ProviderRegistry.Ready())) {
 				return false
 			}
 		}
@@ -567,7 +586,8 @@ func executionWorkGraph(plan ExecutionPlan) ([]executionWorkJob, error) {
 		spec := executionWorkJob{Position: int16(entryIndex + 1), EntryDigest: slices.Clone(digest[:]), Category: entry.Category, Purpose: entry.Purpose}
 		seenOperations := make(map[string]bool, len(entry.Operations))
 		for operationIndex, operation := range entry.Operations {
-			if !supportedOperation(operation) || seenOperations[operation] {
+			if !supportedOperation(operation) || seenOperations[operation] ||
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && !currentPlanVersion(plan.ExecutorVersion, plan.SchemaVersion)) {
 				return nil, ErrExecutorUnavailable
 			}
 			seenOperations[operation] = true
@@ -603,6 +623,10 @@ var relationalExecutableOperations = map[string]bool{
 
 func relationalExecutableOperation(operation string) bool {
 	return relationalExecutableOperations[operation]
+}
+
+func executableOperation(operation string) bool {
+	return operation == "OBJECT_VERSION_DELETE" || operation == "PROVIDER_RECIPIENT_NOTIFY" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
 }
 
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {
@@ -776,7 +800,11 @@ func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
 	}
 	job := ExecutionJob{PrivacyErasureCategoryJob: jobRow, ActiveLeaseID: leaseID, WorkerRef: leaseRow.WorkerRef, LeaseExpiresAt: leaseRow.ExpiresAt, ActiveAttemptID: attemptID}
 	lease := ExecutionLease{Job: job}
-	if job.AttemptCount > w.maxAttempts() {
+	var attemptAllowed bool
+	if err = tx.QueryRow(ctx, `SELECT attempt_count <= $2 + manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE id=$1`, job.ID, w.maxAttempts()).Scan(&attemptAllowed); err != nil {
+		return zero, err
+	}
+	if !attemptAllowed {
 		failure := ExecutionFailure{Classification: FailureTerminal, Stage: FailureStageExecute, Code: FailureRetryLimitReached}
 		if err = w.failInTransaction(ctx, tx, q, lease, failure); err != nil {
 			return zero, err
@@ -962,7 +990,11 @@ func (w ExecutionWorker) failInTransaction(ctx context.Context, tx pgx.Tx, q *db
 		return ErrInvalid
 	}
 	classification := string(failure.Classification)
-	if lease.Job.AttemptCount >= w.maxAttempts() {
+	var manualAttemptAllowance int32
+	if err := tx.QueryRow(ctx, `SELECT manual_attempt_allowance FROM privacy_erasure_category_jobs WHERE id=$1`, lease.Job.ID).Scan(&manualAttemptAllowance); err != nil {
+		return err
+	}
+	if lease.Job.AttemptCount >= w.maxAttempts()+manualAttemptAllowance {
 		classification = string(FailureTerminal)
 	}
 	retryMilliseconds := int64(0)
@@ -1003,7 +1035,7 @@ func validateClaimedWork(job ExecutionJob, checkpoints []dbgen.PrivacyErasureJob
 	seen := make(map[string]bool, len(checkpoints))
 	for index, checkpoint := range checkpoints {
 		if checkpoint.JobID != job.ID || checkpoint.OperationPosition != int16(index+1) || checkpoint.ActionVersion != SupportedActionVersion ||
-			!supportedOperation(checkpoint.OperationCode) || !relationalExecutableOperation(checkpoint.OperationCode) || seen[checkpoint.OperationCode] ||
+			!supportedOperation(checkpoint.OperationCode) || !executableOperation(checkpoint.OperationCode) || seen[checkpoint.OperationCode] ||
 			(checkpoint.Status != "PENDING" && checkpoint.Status != "SUCCEEDED") {
 			return ErrExecutorUnavailable
 		}

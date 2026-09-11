@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"strings"
@@ -10,6 +12,64 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
+	inventory := EmbeddedMigrationInventory()
+	if len(inventory) < 2 || inventory[len(inventory)-1] != baselineVersion {
+		t.Fatalf("unexpected migration inventory: %v", inventory)
+	}
+	want := sha256.Sum256([]byte(strings.Join(inventory, "\n")))
+	if got := EmbeddedMigrationDigest(); got != hex.EncodeToString(want[:]) {
+		t.Fatalf("migration digest=%q want=%x", got, want)
+	}
+}
+
+func TestActivationBrokerMigrationIsExactBaselineSegmentAndPurgesInheritedACLs(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "-- #248 trusted activation boundary."
+	index := strings.LastIndex(baselineSchema, marker)
+	v4Marker := "-- Baseline through 202609100015_privacy_membership_postcondition."
+	v4Index := strings.LastIndex(baselineSchema, v4Marker)
+	if index < 0 || v4Index <= index || strings.TrimSpace(baselineSchema[index:v4Index]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("activation broker migration is not the exact baseline segment")
+	}
+	for _, required := range []string{
+		"aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner)))",
+		"proc.proname LIKE '%\\_inner\\_013'",
+		"privacy_inner_capability_revoke_failed",
+		"session_user<>'mycfc_privacy_activation_broker'",
+		"session_user<>'mycfc_privacy_activation_disable'",
+		"activation_signed_approvals",
+		"p_executor_envelope_raw",
+		"p_executor_envelope->>'issued_at'",
+		"p_executor_envelope->>'nonce'",
+	} {
+		if !strings.Contains(string(migration), required) {
+			t.Fatalf("activation broker migration missing %q", required)
+		}
+	}
+}
+
+func TestMembershipPostconditionMigrationIsRepresentedByFreshBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609100015_privacy_membership_postcondition.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"restore-tombstone-closure/v4", "mycfc/membership-history-postcondition/v1",
+		"membership_history_source_rows", "membership_history_replay_postconditions",
+		"privacy_membership_history_lock_source", "pg_advisory_xact_lock",
+		"privacy_worker_execute_checkpoint_inner_015", "proc.proname IN('privacy_worker_execute_checkpoint'",
+		"privacy_inner_capability_revoke_failed",
+	} {
+		if !strings.Contains(string(migration), required) || !strings.Contains(baselineSchema, required) {
+			t.Fatalf("membership postcondition migration or baseline missing %q", required)
+		}
+	}
+}
 
 type bootstrapTransactionFake struct {
 	pgx.Tx
@@ -134,6 +194,8 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		AppUsername: "mycfc_app", AppPassword: "app-password",
 		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
 		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+		PrivacyActivationBrokerUsername: "mycfc_privacy_activation_broker", PrivacyActivationBrokerPassword: "broker-password",
+		PrivacyActivationDisableUsername: "mycfc_privacy_activation_disable", PrivacyActivationDisablePassword: "disable-password",
 	}
 	conn := &bootstrapRoleConnectionFake{}
 	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
@@ -144,6 +206,30 @@ func TestBootstrapRolesProvisionOptionalDistinctPrivacyExecutor(t *testing.T) {
 		`CREATE ROLE "mycfc_privacy_executor" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
 		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_executor"`,
 		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_executor"`,
+		`CREATE ROLE "mycfc_privacy_activation_broker" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`CREATE ROLE "mycfc_privacy_activation_disable" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("bootstrap statements missing %q", expected)
+		}
+	}
+}
+
+func TestBootstrapRolesProvisionOptionalDistinctPrivacyRestoreObserver(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyRestoreObserverUsername: "mycfc_privacy_restore_observer", PrivacyRestoreObserverPassword: "observer-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := BootstrapRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_privacy_restore_observer" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_privacy_restore_observer"`,
+		`GRANT USAGE ON SCHEMA public TO "mycfc_privacy_restore_observer"`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("bootstrap statements missing %q", expected)
@@ -163,8 +249,9 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	}
 	joined := strings.Join(conn.statements, "\n")
 	for _, expected := range []string{
-		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records FROM PUBLIC`,
+		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records, privacy_erasure_completion_manifests FROM PUBLIC`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`,
+		`REVOKE ALL PRIVILEGES ON TABLE privacy_completion_access_links, privacy_terminal_requeue_proposals`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)`,
 		`REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid)`,
@@ -180,6 +267,22 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`REVOKE ALL ON SCHEMA privacy_protected FROM "mycfc_app"`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_worker_complete_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_media_sources(uuid,uuid,text)`,
+		`privacy_execution_complete_object_capture(uuid,text) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid)`,
+		`privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text)`,
+		`privacy_execution_complete_provider_capture(uuid,text) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)`,
+		`privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
+		`REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2`,
+		`privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM "mycfc_privacy_executor"`,
+		`GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2`,
+		`privacy_tombstone_prepare_closure_v4(uuid,uuid), privacy_tombstone_confirm_closure_v4`,
+		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid)`,
+		`privacy_activation_control_snapshot(uuid) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO "mycfc_privacy_executor"`,
+		`REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea)`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("hardening statements missing %q", expected)
@@ -227,6 +330,29 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	failed := &bootstrapRoleConnectionFake{err: errors.New("permission denied")}
 	if err := HardenPrivacyExecutionRoles(t.Context(), failed, "mycfc", credentials); !errors.Is(err, failed.err) || !strings.Contains(err.Error(), "revoke public execution table access") {
 		t.Fatalf("HardenPrivacyExecutionRoles() error=%v", err)
+	}
+}
+
+func TestHardenPrivacyExecutionRolesRestrictsRestoreObserverToBoundAggregate(t *testing.T) {
+	credentials := RoleCredentials{
+		AppUsername: "mycfc_app", AppPassword: "app-password",
+		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
+		PrivacyRestoreObserverUsername: "mycfc_privacy_restore_observer", PrivacyRestoreObserverPassword: "observer-password",
+	}
+	conn := &bootstrapRoleConnectionFake{}
+	if err := HardenPrivacyExecutionRoles(t.Context(), conn, "mycfc", credentials); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_restore_observer"`,
+		`REVOKE ALL ON SCHEMA privacy_protected FROM "mycfc_privacy_restore_observer"`,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM "mycfc_privacy_restore_observer"`,
+		`GRANT EXECUTE ON FUNCTION privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) TO "mycfc_privacy_restore_observer"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("hardening statements missing %q", expected)
+		}
 	}
 }
 
@@ -294,6 +420,29 @@ func TestValidateBootstrapInput(t *testing.T) {
 		}},
 		{"executor identifier invalid", func(c *RoleCredentials) {
 			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "privacy-executor", "secret"
+		}},
+		{"observer password missing", func(c *RoleCredentials) { c.PrivacyRestoreObserverUsername = "mycfc_privacy_restore_observer" }},
+		{"observer username missing", func(c *RoleCredentials) { c.PrivacyRestoreObserverPassword = "secret" }},
+		{"observer aliases app", func(c *RoleCredentials) {
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = c.AppUsername, "secret"
+		}},
+		{"observer aliases executor", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = c.PrivacyExecutorUsername, "secret"
+		}},
+		{"observer identifier invalid", func(c *RoleCredentials) {
+			c.PrivacyRestoreObserverUsername, c.PrivacyRestoreObserverPassword = "privacy-observer", "secret"
+		}},
+		{"broker without executor and disable", func(c *RoleCredentials) {
+			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "mycfc_privacy_activation_broker", "secret"
+		}},
+		{"executor without broker and disable", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+		}},
+		{"wrong broker identity", func(c *RoleCredentials) {
+			c.PrivacyExecutorUsername, c.PrivacyExecutorPassword = "mycfc_privacy_executor", "secret"
+			c.PrivacyActivationBrokerUsername, c.PrivacyActivationBrokerPassword = "other_broker", "secret"
+			c.PrivacyActivationDisableUsername, c.PrivacyActivationDisablePassword = "mycfc_privacy_activation_disable", "secret"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

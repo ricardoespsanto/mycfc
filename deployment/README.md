@@ -8,7 +8,7 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 
 1. Clone this repository at `/opt/mycfc` on the host. The one-off migration container applies the embedded baseline when PostgreSQL is empty.
 2. Install Docker Engine with the Compose plugin. Do not permit inbound TCP 80 or 443.
-3. Install AWS CLI v2, `curl`, `jq`, and Docker Engine with the Compose plugin.
+3. Install AWS CLI v2, `curl`, `jq`, `openssl`, `python3`, and Docker Engine with the Compose plugin.
 4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
 5. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` with the dedicated release-agent credentials described below.
 6. Run `sudo sh deployment/install.sh` from this checkout.
@@ -40,7 +40,28 @@ AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
 
 # Root-only backup identity, stored separately from these application credentials.
 BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
-BACKUP_KMS_KEY_ID=<KMS-key-ARN-or-alias>
+BACKUP_KMS_KEY_ID=<exact-KMS-key-ARN>
+BACKUP_MANIFEST_AUTH_ENABLED=false
+
+# Independent privacy-restore controls; all remain inert by default.
+PRIVACY_RESTORE_LEDGER_BUCKET=<private-privacy-ledger-bucket>
+PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN=<exact-ledger-KMS-key-ARN>
+PRIVACY_RESTORE_DRILL_ENABLED=false
+PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=false
+
+# Independent bounded retention maintenance; remains inert by default.
+PRIVACY_RETENTION_ENABLED=false
+
+# Evidence-bound privacy execution; every independent gate remains inert by default.
+PRIVACY_REQUESTS_ENABLED=false
+PRIVACY_COMPLETION_ENABLED=false
+PRIVACY_WORKER_ENABLED=false
+# PRIVACY_EXECUTOR_DB_USER=<exact reviewed executor login>
+# PRIVACY_EXECUTOR_DB_PASSWORD=<generated executor password>
+# PRIVACY_ACTIVATION_BROKER_DB_USER=mycfc_privacy_activation_broker
+# PRIVACY_ACTIVATION_BROKER_DB_PASSWORD=<generated root-only broker password>
+# PRIVACY_ACTIVATION_DISABLE_DB_USER=mycfc_privacy_activation_disable
+# PRIVACY_ACTIVATION_DISABLE_DB_PASSWORD=<generated root-only disable password>
 
 GALLERY_URL=https://example.com/gallery
 
@@ -58,7 +79,11 @@ COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
 DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```
 
-Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. #244 supports an optional distinct privacy-executor PostgreSQL login, but this source release does not install or start a privacy worker. #248 must separately approve and provision that credential through a worker-only AWS identity and secret; never add the executor password to `/mycfc/production/app-secrets`, which the web identity can read.
+Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. The disabled #248 worker uses a distinct executor PostgreSQL login. Its activation broker and disable-only boundary use two more exact, independent logins; all three are provisioned as a complete set. These bootstrap credentials may be present in the root-only host environment only for one-shot bootstrap/migration containers. The web app and worker never receive the broker credential or human approval keys. Never add them to `/mycfc/production/app-secrets`, which the web identity can read. Provisioning, activation, and rollback are documented in `docs/privacy-worker-infrastructure.md`.
+
+The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
+
+The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a separate one-shot evidence recorder and never enables the worker.
 
 ## Required AWS configuration
 
@@ -217,12 +242,41 @@ For a host incident, use the separate operator SSH key from an approved SSH CIDR
 
 The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
 
-Run a non-destructive restore drill with:
+Privacy-safe recovery additionally requires the independent tombstone ledger and isolated replay controls described in `docs/privacy-restore-infrastructure.md`. A normal database restore is never eligible for production traffic until current migrations, tombstone replay and absence verification have succeeded. The infrastructure remains disabled by default until its separate rollout gates are approved and evidenced.
+
+Non-current PostgreSQL backup versions use a separately gated exact-version cleaner. Its Terraform permission/lifecycle gate and host scheduling gate both default to false; rollout and privacy-safe event output are documented in `docs/privacy-restore-infrastructure.md`.
+
+The Hetzner backup-posture check is separately disabled by default. It uses a dedicated project-bound read token at `/etc/mycfc/hetzner-read/token` (owned by `root`, mode `0600`) to verify the exact configured server and its paginated image inventory without changing or deleting anything. To schedule the daily check, set all three protected host values and rerun the installer:
+
+```dotenv
+HETZNER_BACKUP_POSTURE_ENABLED=true
+HETZNER_SERVER_ID=123456789
+HETZNER_PROJECT_REF=mycfc
+```
+
+The server must have its Terraform `project` label and a provider-reported backup window. At most seven automatic images may be bound to it. Every snapshot created from it must carry `mycfc-owner-ref`, `mycfc-reason-code`, `mycfc-created-at`, and `mycfc-expires-at` labels. The owner is an opaque accountable operator reference, never a name or email; the reason is a non-identifying uppercase code. Both timestamp labels are ten-digit Unix seconds, the declared creation must equal the provider creation time, and expiry must be after creation, no later than 30 days after creation, and still in the future. A failing check only reports an allowlisted reason and never deletes a snapshot.
+
+The successful CloudWatch/journal event contains only automatic and manual counts, oldest ages, and a canonical inventory SHA-256 digest. It never contains provider image/server IDs, names, labels, or the project reference. The dedicated token establishes the project boundary; the exact server lookup, Terraform project label, `bound_to`, and `created_from` fields establish the server boundary. Run an unscheduled read-only check with `sudo systemctl start mycfc-hetzner-backup-posture.service` and inspect it with `sudo journalctl -u mycfc-hetzner-backup-posture.service -n 100 --no-pager`.
+
+The privacy-safe restore drill is disabled by default. It accepts only authenticated `mycfc/postgres-backup/v3` manifests; legacy v1/v2 manifests remain available to a separately reviewed emergency procedure but can never satisfy privacy promotion evidence. Version 3 derives the OpenSSL key through PBKDF2 from a root-private file so the decrypted KMS data key never appears in process arguments or shell tracing. Before enabling it, create three independently generated 32-byte values/keys and two dedicated AWS credential files:
+
+- `/etc/mycfc/backup-auth/manifest.key`: 64 hexadecimal characters, `root:root` mode `0600`; used by the nightly backup job to authenticate v3 manifests.
+- `/etc/mycfc/privacy-restore/attestation.key`: a different 64-character hexadecimal key, `root:root` mode `0600`; authenticates restore attestations checked by the release agent.
+- `/etc/mycfc/privacy-restore/tombstone-replay.key`: the protected X25519 private replay key, `root:root` mode `0600`; never supplied to the web application or an AWS-connected container.
+- `/etc/mycfc/privacy-restore/credentials`: `root:root` mode `0600`, containing only the dedicated offline ledger-reader profile described in `docs/privacy-restore-infrastructure.md`.
+
+Set `BACKUP_MANIFEST_AUTH_ENABLED=true` first and run/verify a new nightly backup. Then set `PRIVACY_RESTORE_LEDGER_BUCKET`, `PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN`, and `PRIVACY_RESTORE_DRILL_ENABLED=true`, rerun the installer, and run a non-destructive drill with:
 
 ```sh
 sudo /opt/mycfc/deployment/postgres-restore-drill.sh
 ```
 
-The drill downloads the newest daily recovery point, verifies its ciphertext checksum, decrypts the envelope key through KMS, restores into an isolated temporary PostgreSQL container with `--no-owner`, verifies the application `users` table, and removes the container and temporary files. Run it after any backup-script, PostgreSQL-major-version, KMS-policy, or credential change, and at least quarterly. Record its date, recovery-point timestamp, duration, and result in the #43 issue.
+The drill stably inventories both retention classes, skips invalid or unsigned candidates, and selects the oldest retained recovery point whose exact manifest version, manifest HMAC, exact dump version, S3 checksum, KMS identity and ciphertext checksum all verify. It then stably prefetches every exact current privacy-ledger version and its S3/KMS/Object-Lock evidence before creating a Docker `--internal` network. Only a temporary PostgreSQL container and the immutable candidate application image join that network. They receive no application AWS keys, SMTP settings, provider credentials or public route.
+
+Inside the isolated network the drill restores with `--no-owner --no-acl`, applies every current migration from the candidate image, and creates an ephemeral `mycfc_restore_observer` login with access only to the fixed aggregate observation function. It imports and decrypts the bounded v2 ledger through `/app/privacy-restore-replay`, idempotently reapplies the current relational prescriptions, and requires closure-v4 authenticated `erasure_effective_at`, complete membership-history postcondition digest, checkpoint, consent-clock, provider-absence and subject-absence verification. The independently pinned PostgreSQL observer image then queries only those aggregate postconditions and must agree exactly with the candidate counts and digests. Any closure-v1 through closure-v3 record, intent-only record, non-replayable v1 entry, incomplete checkpoint set, replay error, digest mismatch or absence failure rejects the drill before activation evidence is accepted. If the live ledger is empty, the candidate may create the authenticated `mycfc/privacy-restore-synthetic-fixture/v1` only inside the isolated database; that fixture must pass the same ordinary replay and independent observer path and can never enable live deletion. Teardown always removes the temporary database, observer credential, network and plaintext workspace.
+
+A successful run first uploads a canonical non-identifying candidate/observer evidence bundle to the encrypted, versioned `restore-evidence/` prefix and verifies its exact checksum, version and KMS identity. It then atomically writes a root-only `mycfc/privacy-restore-drill-attestation/v2` HMAC envelope at `/etc/mycfc/privacy-restore/attestations/latest.json` and uploads the same uniquely named envelope to `restore-attestations/` for 400 days. The envelope binds the immutable candidate and observer images, current policy/executor/plan/schema versions, exact versioned backup and source-evidence references, migrated-schema and ledger-inventory digests, closure/replay contracts, and both sets of aggregate counts. Logs contain only allowlisted contracts, digests, counts and ages. The attestation expires exactly 90 days after observation.
+
+`mycfc-postgres-restore-drill.timer` runs annually on 15 January with up to one day of jitter and is enabled only with `PRIVACY_RESTORE_DRILL_ENABLED=true`. Also rerun the drill after a backup/encryption/ledger change and after every material privacy or schema change. Setting `PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true` makes the release agent run the candidate image against the oldest valid retained backup before touching the production database, then independently verify the current attestation HMAC and exact candidate digest. A failure leaves traffic and the production database unchanged and quarantines the release through the existing rollback path. Keep this gate false until the reader credential, replay key, at least one fresh authenticated v3 backup, and a successful synthetic drill have all been reviewed. A v3 backup is necessary but not sufficient: every retained ledger entry must use the current closure-v4 contract and membership-history postcondition; any retained v1-v3 closure entry blocks activation.
 
 Check backup status with `sudo systemctl status mycfc-postgres-backup.service` and `sudo journalctl -u mycfc-postgres-backup.service -n 100 --no-pager`. Investigate any failed run before the next backup window; confirm free disk space before retrying. Rotate the `mycfc-production-postgres-backups` IAM access key by creating its replacement, atomically replacing `/etc/mycfc/backup-aws/credentials` as root mode `0600`, running a backup and restore drill, then disabling and deleting the previous key. Review Docker, PostgreSQL, Caddy, and application releases monthly; apply Ubuntu security updates automatically and schedule PostgreSQL major-version upgrades with a tested restore path.

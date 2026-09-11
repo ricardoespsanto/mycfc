@@ -106,6 +106,10 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
 		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
 		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
+		cfg.PrivacyObjectTargetEncryptionKeyID = "object-target-key-v1"
+		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
+		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
 		return cfg, nil
 	}
 	openApplicationPool = func(ctx context.Context, poolConfig *pgxpool.Config) (*pgxpool.Pool, error) {
@@ -193,6 +197,27 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy upload protection") {
 		t.Fatalf("privacy upload protector error=%v", err)
+	}
+
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PrivacyObjectTargetEncryptionKeyID = "partial"
+		return cfg, nil
+	}
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy object target key configuration") {
+		t.Fatalf("privacy object target key error=%v", err)
+	}
+
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.PrivacyObjectTargetEncryptionKeyID = "invalid key id"
+		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
+		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
+		return cfg, nil
+	}
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy object target protection") {
+		t.Fatalf("privacy object target protector error=%v", err)
 	}
 
 	loadApplicationConfig = func(context.Context) (config.Config, error) {

@@ -12,6 +12,32 @@ import (
 	"github.com/google/uuid"
 )
 
+const ceaseConsentForms = `-- name: CeaseConsentForms :one
+SELECT privacy_consent_cease(
+    $1, $2, $3,
+    $4, clock_timestamp()
+)::integer
+`
+
+type CeaseConsentFormsParams struct {
+	UserID      uuid.UUID  `json:"user_id"`
+	ConsentType string     `json:"consent_type"`
+	ExceptID    *uuid.UUID `json:"except_id"`
+	Reason      string     `json:"reason"`
+}
+
+func (q *Queries) CeaseConsentForms(ctx context.Context, arg CeaseConsentFormsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, ceaseConsentForms,
+		arg.UserID,
+		arg.ConsentType,
+		arg.ExceptID,
+		arg.Reason,
+	)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createConsentForm = `-- name: CreateConsentForm :one
 INSERT INTO consent_forms (
     user_id,
@@ -33,7 +59,8 @@ INSERT INTO consent_forms (
     $7
 )
 RETURNING id, user_id, granted_by_user_id, consent_type, document_version,
-          document_sha256, is_accepted, date_signed, ip_address, user_agent
+          document_sha256, is_accepted, date_signed, ip_address, user_agent,
+          ceased_at, cessation_reason, evidence_expires_at
 `
 
 type CreateConsentFormParams struct {
@@ -68,6 +95,9 @@ func (q *Queries) CreateConsentForm(ctx context.Context, arg CreateConsentFormPa
 		&i.DateSigned,
 		&i.IpAddress,
 		&i.UserAgent,
+		&i.CeasedAt,
+		&i.CessationReason,
+		&i.EvidenceExpiresAt,
 	)
 	return i, err
 }
@@ -81,6 +111,7 @@ SELECT EXISTS (
       AND document_version = $3
       AND document_sha256 = $4
       AND is_accepted = true
+      AND ceased_at IS NULL
 )::boolean
 `
 
@@ -105,7 +136,8 @@ func (q *Queries) HasConsentVersion(ctx context.Context, arg HasConsentVersionPa
 
 const listConsentFormsForUser = `-- name: ListConsentFormsForUser :many
 SELECT id, user_id, granted_by_user_id, consent_type, document_version,
-       document_sha256, is_accepted, date_signed, ip_address, user_agent
+       document_sha256, is_accepted, date_signed, ip_address, user_agent,
+       ceased_at, cessation_reason, evidence_expires_at
 FROM consent_forms
 WHERE user_id = $1
 ORDER BY date_signed DESC, id DESC
@@ -137,6 +169,9 @@ func (q *Queries) ListConsentFormsForUser(ctx context.Context, arg ListConsentFo
 			&i.DateSigned,
 			&i.IpAddress,
 			&i.UserAgent,
+			&i.CeasedAt,
+			&i.CessationReason,
+			&i.EvidenceExpiresAt,
 		); err != nil {
 			return nil, err
 		}

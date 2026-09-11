@@ -1,6 +1,9 @@
 -- name: GetPrivacyActivation :one
 SELECT * FROM privacy_request_activation WHERE singleton = true;
 
+-- name: PrivacyActivationReady :one
+SELECT privacy_activation_ready(sqlc.arg(policy_version));
+
 -- name: GetPrivacyPolicy :one
 SELECT * FROM privacy_request_policies WHERE version = sqlc.arg(version);
 
@@ -190,6 +193,55 @@ SELECT
  (SELECT count(*) FROM privacy_erasure_category_jobs counted_job WHERE counted_job.execution_id=sqlc.arg(execution_ref))::bigint AS job_count,
  (SELECT count(*) FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id WHERE job.execution_id=sqlc.arg(execution_ref))::bigint AS checkpoint_count;
 
+-- name: MaterializePrivacyObjectTarget :one
+SELECT privacy_execution_materialize_object_target(
+ sqlc.arg(target_id),sqlc.arg(execution_id),sqlc.arg(job_id),sqlc.arg(checkpoint_id),sqlc.arg(plan_entry_sha256),sqlc.arg(category_key),
+ sqlc.arg(source_kind),sqlc.arg(source_ref),sqlc.arg(upload_intent_id),sqlc.arg(object_key),
+ sqlc.arg(envelope_version),sqlc.arg(algorithm),sqlc.arg(encryption_key_id),sqlc.arg(encapsulation),sqlc.arg(nonce),sqlc.arg(ciphertext),
+ sqlc.arg(digest_key_id),sqlc.arg(locator_digest)
+) AS target_id;
+
+-- name: CompletePrivacyObjectCapture :one
+SELECT privacy_execution_complete_object_capture(sqlc.arg(execution_id),sqlc.arg(category_key)) AS target_count;
+
+-- name: MaterializePrivacyProviderTarget :one
+SELECT privacy_execution_materialize_provider_target(
+ sqlc.arg(target_id),sqlc.arg(connection_id),sqlc.arg(execution_id),sqlc.arg(job_id),sqlc.arg(checkpoint_id),sqlc.arg(plan_entry_sha256),sqlc.arg(category_key),
+ sqlc.arg(service_code),sqlc.arg(provider_role),sqlc.arg(provider_contract_version),sqlc.arg(target_version),sqlc.arg(local_state),
+ sqlc.arg(registry_evidence_key_id),sqlc.arg(registry_evidence_digest),sqlc.arg(target_envelope_version),sqlc.arg(target_algorithm),
+ sqlc.arg(target_encryption_key_id),sqlc.arg(target_encapsulation),sqlc.arg(target_nonce),sqlc.arg(target_ciphertext),
+ sqlc.narg(credential_envelope_version),sqlc.narg(credential_algorithm),sqlc.narg(credential_encryption_key_id),sqlc.narg(credential_encapsulation),
+ sqlc.narg(credential_nonce),sqlc.narg(credential_ciphertext),sqlc.narg(credential_commitment_key_id),sqlc.narg(credential_source_commitment),
+ sqlc.arg(digest_key_id),sqlc.arg(target_digest)
+) AS target_id;
+
+-- name: CompletePrivacyProviderCapture :one
+SELECT privacy_execution_complete_provider_capture(sqlc.arg(execution_id),sqlc.arg(category_key)) AS target_count;
+
+-- name: RecordPrivacyWorkerObjectEvidence :one
+SELECT id FROM (SELECT privacy_worker_record_object_evidence(
+ sqlc.arg(target_id),sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(deleted_versions),sqlc.arg(deleted_markers),sqlc.arg(list_calls),sqlc.arg(stable_checks),
+ sqlc.arg(transcript_key_id),sqlc.arg(transcript_digest)
+) AS id) recorded WHERE id IS NOT NULL;
+
+-- name: CompletePrivacyWorkerObjectCheckpoint :one
+SELECT id FROM (SELECT privacy_worker_complete_object_checkpoint(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS id) completed WHERE id IS NOT NULL;
+
+-- name: RecordPrivacyWorkerProviderEvidence :one
+SELECT id FROM (SELECT privacy_worker_record_provider_evidence(
+ sqlc.arg(target_id),sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(outcome_code),sqlc.arg(adapter_attempts),sqlc.arg(evidence_code),sqlc.narg(recipient_role),sqlc.narg(channel_code),
+ sqlc.narg(notification_code),sqlc.narg(reason_code),sqlc.narg(guidance_code),sqlc.arg(transcript_key_id),sqlc.arg(transcript_digest)
+) AS id) recorded WHERE id IS NOT NULL;
+
+-- name: CompletePrivacyWorkerProviderCheckpoint :one
+SELECT id FROM (SELECT privacy_worker_complete_provider_checkpoint(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS id) completed WHERE id IS NOT NULL;
+
 -- name: GetPrivacyErasureCategoryJob :one
 SELECT * FROM privacy_erasure_category_jobs WHERE id=sqlc.arg(id);
 
@@ -198,6 +250,185 @@ SELECT * FROM privacy_erasure_job_leases WHERE id=sqlc.arg(id);
 
 -- name: GetPrivacyErasureJobCheckpoint :one
 SELECT * FROM privacy_erasure_job_checkpoints WHERE id=sqlc.arg(id);
+
+-- name: PreparePrivacyRestoreTombstone :one
+SELECT prepared.execution_id::uuid AS execution_id,
+ prepared.request_id::uuid AS request_id,
+ prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,
+ prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,
+ prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_v2(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref)
+) AS prepared;
+
+-- name: ConfirmPrivacyRestoreTombstone :one
+SELECT privacy_tombstone_confirm_v2(
+ sqlc.arg(job_id),sqlc.arg(lease_id),sqlc.arg(attempt_id),sqlc.arg(lease_epoch),sqlc.arg(worker_ref),
+ sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),sqlc.arg(locator_digest),
+ sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: RunPrivacyRetention :one
+SELECT retained.run_id::uuid AS run_id,
+ retained.sessions_deleted::integer AS sessions_deleted,
+ retained.tokens_deleted::integer AS tokens_deleted,
+ retained.outbox_stopped::integer AS outbox_stopped,
+ retained.outbox_payloads_deleted::integer AS outbox_payloads_deleted,
+ retained.outbox_evidence_deleted::integer AS outbox_evidence_deleted,
+ retained.consent_network_scrubbed::integer AS consent_network_scrubbed,
+ retained.consent_evidence_deleted::integer AS consent_evidence_deleted,
+ retained.audit_events_pseudonymized::integer AS audit_events_pseudonymized,
+ retained.repair_attachments_queued::integer AS repair_attachments_queued,
+ retained.event_responses_deleted::integer AS event_responses_deleted,
+ retained.announcement_deliveries_deleted::integer AS announcement_deliveries_deleted,
+ retained.suggestions_deleted::integer AS suggestions_deleted,
+ retained.privacy_working_scrubbed::integer AS privacy_working_scrubbed,
+ retained.auth_limits_deleted::integer AS auth_limits_deleted
+FROM privacy_retention_run(sqlc.arg(worker_ref),sqlc.arg(batch_limit)) AS retained;
+
+-- name: GetPrivacyRetentionStatus :one
+SELECT status.due_count::bigint AS due_count,
+ status.oldest_due_age_seconds::bigint AS oldest_due_age_seconds,
+ status.repair_due_count::bigint AS repair_due_count,
+ status.repair_overdue_count::bigint AS repair_overdue_count,
+ status.repair_terminal_failures::bigint AS repair_terminal_failures,
+ status.repair_legacy_due_count::bigint AS repair_legacy_due_count,
+ status.last_run_age_seconds::bigint AS last_run_age_seconds
+FROM privacy_retention_status() AS status;
+
+-- name: PreparePrivacyTombstoneClosure :one
+SELECT prepared.execution_id::uuid AS execution_id,
+ prepared.request_id::uuid AS request_id,
+ prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,
+ prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,
+ prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,
+ prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v2(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
+-- name: PreparePrivacyTombstoneClosureV3 :one
+SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS request_id,prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations
+FROM privacy_tombstone_prepare_closure_v3(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
+-- name: PreparePrivacyTombstoneClosureV4 :one
+SELECT prepared.execution_id::uuid AS execution_id,prepared.request_id::uuid AS request_id,prepared.request_ref::uuid AS request_ref,
+ prepared.subject_user_id::uuid AS subject_user_id,prepared.plan_sha256::bytea AS plan_sha256,
+ prepared.workset_sha256::bytea AS workset_sha256,prepared.execution_started_at::timestamptz AS execution_started_at,
+ prepared.closed_at::timestamptz AS closed_at,prepared.evidence_expires_at::timestamptz AS evidence_expires_at,
+ prepared.erasure_effective_at::timestamptz AS erasure_effective_at,prepared.replay_operations::text[] AS replay_operations,
+ prepared.membership_postcondition_contract::text AS membership_postcondition_contract,
+ prepared.membership_postcondition_sha256::bytea AS membership_postcondition_sha256,
+ prepared.membership_count::bigint AS membership_count,prepared.variation_count::bigint AS variation_count
+FROM privacy_tombstone_prepare_closure_v4(sqlc.arg(execution_id),sqlc.arg(worker_ref)) AS prepared;
+
+-- name: ConfirmPrivacyTombstoneClosure :one
+SELECT privacy_tombstone_confirm_closure_v2(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),
+ sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ConfirmPrivacyTombstoneClosureV3 :one
+SELECT privacy_tombstone_confirm_closure_v3(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),
+ sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ConfirmPrivacyTombstoneClosureV4 :one
+SELECT privacy_tombstone_confirm_closure_v4(
+ sqlc.arg(execution_id),sqlc.arg(worker_ref),sqlc.arg(ledger_version),sqlc.arg(encryption_key_id),sqlc.arg(locator_key_id),
+ sqlc.arg(locator_digest),sqlc.arg(object_version_id),sqlc.arg(ciphertext_sha256),sqlc.arg(size_bytes),sqlc.arg(written_at),sqlc.arg(verified_at)
+)::uuid;
+
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2 :one
+SELECT privacy_restore_import_authenticated_v2(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.narg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
+)::uuid;
+
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened :one
+SELECT privacy_restore_import_authenticated_v2_hardened(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.narg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(erasure_effective_at),sqlc.narg(closure_version),sqlc.narg(synthetic_fixture),sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],
+ sqlc.arg(prescription_sha256),sqlc.arg(record_sha256)
+)::uuid;
+
+-- name: ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened :one
+SELECT privacy_restore_import_authenticated_v4_hardened(
+ sqlc.arg(worker_ref),sqlc.arg(kind),sqlc.arg(record_version),sqlc.arg(envelope_version),sqlc.arg(encryption_key_id),
+ sqlc.arg(locator_key_id),sqlc.arg(locator_digest),sqlc.arg(ciphertext_sha256),sqlc.arg(object_version_id),
+ sqlc.arg(written_at),sqlc.arg(verified_at),sqlc.arg(retain_until),sqlc.arg(source_execution_id),sqlc.arg(source_request_id),
+ sqlc.arg(source_request_ref),sqlc.arg(subject_user_id),sqlc.arg(plan_sha256),sqlc.arg(workset_sha256),sqlc.arg(execution_started_at),
+ sqlc.arg(erasure_effective_at),sqlc.arg(closure_version),sqlc.narg(synthetic_fixture),sqlc.arg(replay_version),sqlc.arg(action_version),sqlc.arg(operations)::text[],
+ sqlc.arg(prescription_sha256),sqlc.arg(record_sha256),sqlc.arg(membership_postcondition_contract),sqlc.arg(membership_postcondition_sha256),
+ sqlc.arg(membership_count),sqlc.arg(variation_count)
+)::uuid;
+
+-- name: BeginPrivacyRestoreReplay :one
+SELECT privacy_restore_begin_replay(sqlc.arg(import_id),sqlc.arg(worker_ref))::uuid;
+
+-- name: BeginPrivacyRestoreReplayHardened :one
+SELECT begun.run_id::uuid, COALESCE(begun.outcome_code,'')::text AS outcome_code
+FROM privacy_restore_begin_replay_hardened(sqlc.arg(import_id),sqlc.arg(worker_ref)) AS begun;
+
+-- name: CreatePrivacyRestoreSyntheticFixture :one
+SELECT fixture.source_execution_id::uuid,fixture.source_request_id::uuid,fixture.source_request_ref::uuid,
+ fixture.subject_user_id::uuid,fixture.plan_sha256::bytea,fixture.workset_sha256::bytea,
+ fixture.erasure_effective_at::timestamptz,fixture.operations::text[],fixture.membership_postcondition_contract::text,
+ fixture.membership_postcondition_sha256::bytea,fixture.membership_count::bigint,fixture.variation_count::bigint
+FROM privacy_restore_create_synthetic_fixture(sqlc.arg(worker_ref)) AS fixture;
+
+-- name: GetPrivacyRestoreMembershipPostcondition :one
+SELECT postcondition.membership_postcondition_contract::text,postcondition.membership_postcondition_sha256::bytea,
+ postcondition.membership_count::bigint,postcondition.variation_count::bigint
+FROM privacy_restore_membership_postcondition(sqlc.arg(run_id)) AS postcondition;
+
+-- name: PrivacyRestoreReplayAlreadyApplied :one
+SELECT EXISTS(
+ SELECT 1 FROM privacy_protected.restore_ledger_imports imported
+ JOIN privacy_protected.restore_replay_runs run ON run.import_id=imported.id
+ WHERE imported.locator_key_id=sqlc.arg(locator_key_id) AND imported.locator_digest=sqlc.arg(locator_digest)
+  AND run.status='SUCCEEDED'
+)::boolean;
+
+-- name: ExecutePrivacyRestoreReplayCheckpoint :one
+SELECT privacy_restore_execute_checkpoint(
+ sqlc.arg(run_id),sqlc.arg(worker_ref),sqlc.arg(operation_position),sqlc.arg(operation_code),sqlc.arg(action_version),sqlc.arg(prescription_sha256)
+)::uuid;
+
+-- name: RecordPrivacyRestoreReplayInventoryAttestation :one
+SELECT privacy_restore_record_inventory_attestation(
+ sqlc.arg(input_source),sqlc.arg(inventory_sha256),sqlc.arg(schema_migration_digest),sqlc.arg(policy_version),sqlc.arg(executor_version),
+ sqlc.arg(plan_schema_version),sqlc.arg(image_digest),sqlc.arg(run_ids)::uuid[],sqlc.arg(object_count),sqlc.arg(imported_count),
+ sqlc.arg(replayed_count),sqlc.arg(already_applied_count),sqlc.arg(absence_verified_count),sqlc.arg(synthetic_replayed_count)
+ ,sqlc.arg(closure_v3_count),sqlc.arg(intent_only_count),sqlc.arg(legacy_closure_v2_count),sqlc.arg(erasure_effective_at_verified_count)
+)::bytea;
+
+-- name: RecordPrivacyRestoreReplayInventoryAttestationV4 :one
+SELECT privacy_restore_record_inventory_attestation_v4(
+ sqlc.arg(input_source),sqlc.arg(inventory_sha256),sqlc.arg(schema_migration_digest),sqlc.arg(policy_version),sqlc.arg(executor_version),
+ sqlc.arg(plan_schema_version),sqlc.arg(image_digest),sqlc.arg(run_ids)::uuid[],sqlc.arg(object_count),sqlc.arg(imported_count),
+ sqlc.arg(replayed_count),sqlc.arg(already_applied_count),sqlc.arg(absence_verified_count),sqlc.arg(synthetic_replayed_count),
+ sqlc.arg(closure_v4_count),sqlc.arg(intent_only_count),sqlc.arg(legacy_closure_v2_count),sqlc.arg(erasure_effective_at_verified_count),
+ sqlc.arg(membership_postcondition_contract),sqlc.arg(membership_postcondition_sha256),sqlc.arg(membership_postcondition_verified_count),
+ sqlc.arg(membership_count),sqlc.arg(variation_count)
+)::bytea;
 
 -- name: AuthorizePrivacyErasureJobLease :one
 SELECT lease.*

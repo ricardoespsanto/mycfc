@@ -51,5 +51,5 @@ Atualizações de 7 e 8 de setembro de 2026: foram aprovados isoladamente **24 m
 - a eliminação comum de objetos em bucket versionado não remove necessariamente versões antigas (até 90 dias na configuração conhecida) e a permissão atual pode não permitir eliminação completa; fechar a lacuna antes de prometer conclusão;
 - o ensaio de restauro atual verifica a base mas ainda não reaplica tombstones; #111 tem de implementar e provar esse passo;
 - inspecionar todos os JSON de auditoria antes de permitir pseudonimização;
-- implementar no #111 a expiração da prova mínima de consentimento após a vigência mais 3 anos e de IP/UA após no máximo 12 meses, conforme aprovação de 8 de setembro de 2026;
+- validar e ativar separadamente o executor já implementado em fonte que expira a prova mínima de consentimento 3 anos após a cessação e remove IP/UA após no máximo 12 meses, conforme aprovação de 8 de setembro de 2026;
 - atualizar esta matriz antes de ativar pagamentos, transporte, álbuns, Polar/Garmin ou importação de resultados.

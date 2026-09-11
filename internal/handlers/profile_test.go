@@ -67,12 +67,16 @@ func TestPostgresProfileStoreSavePhotoCreatesConsentAndAuditsReplacement(t *test
 	if err != nil || old == nil || *old != oldKey || !tx.committed {
 		t.Fatalf("old=%v error=%v committed=%t", old, err, tx.committed)
 	}
-	if len(tx.execCalls) != 2 || len(tx.queryCalls) != 4 {
+	if len(tx.execCalls) != 2 || len(tx.queryCalls) != 5 {
 		t.Fatalf("exec=%#v query=%#v", tx.execCalls, tx.queryCalls)
 	}
 	consentArgs := tx.argsFor("CreateConsentForm")
 	if len(consentArgs) != 7 || consentArgs[0] != subjectID || consentArgs[2] != "Foto_Perfil" || consentArgs[3] != "2026-09" || consentArgs[4] != "digest" {
 		t.Fatalf("consent args=%#v", consentArgs)
+	}
+	cessationArgs := tx.argsFor("CeaseConsentForms")
+	if len(cessationArgs) != 4 || cessationArgs[0] != subjectID || cessationArgs[1] != "Foto_Perfil" || cessationArgs[2] == nil || *cessationArgs[2].(*uuid.UUID) != consentID || cessationArgs[3] != "SUPERSEDED" {
+		t.Fatalf("cessation args=%#v", cessationArgs)
 	}
 	photoArgs := tx.argsFor("UpdateMemberProfilePhoto")
 	if len(photoArgs) != 6 {
@@ -131,6 +135,38 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 	}
 }
 
+func TestPostgresProfileStoreConsentCessationFailuresRollback(t *testing.T) {
+	subjectID, consentID, intentID := uuid.New(), uuid.New(), uuid.New()
+	cessationErr := errors.New("consent cessation unavailable")
+	t.Run("health withdrawal", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, medicalDeclaration: "PROVIDED", allergies: "Pólen", queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), ProfileUpdate{
+			ActorID: subjectID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "UNKNOWN"},
+		})
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("health withdrawal err=%v committed=%t", err, tx.committed)
+		}
+	})
+	t.Run("photo supersession", func(t *testing.T) {
+		tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{
+			ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42),
+			ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true,
+		})
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("photo supersession err=%v committed=%t", err, tx.committed)
+		}
+	})
+	t.Run("photo withdrawal", func(t *testing.T) {
+		oldKey := "profiles/old.png"
+		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID, queryErrs: map[string]error{"CeaseConsentForms": cessationErr}}
+		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
+		if !errors.Is(err, cessationErr) || tx.committed {
+			t.Fatalf("photo withdrawal err=%v committed=%t", err, tx.committed)
+		}
+	})
+}
+
 func TestPostgresProfileStoreSavePhotoRequiresFreshConsentForEveryObject(t *testing.T) {
 	subjectID, consentID := uuid.New(), uuid.New()
 	tx := &profileTransactionFake{subjectID: subjectID, consentID: consentID, currentConsent: true}
@@ -154,8 +190,12 @@ func TestPostgresProfileStoreRemovePhotoClearsObjectReferenceAndAudits(t *testin
 	tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID}
 	store := PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}
 	removed, err := store.RemovePhoto(context.Background(), subjectID, subjectID, false)
-	if err != nil || removed == nil || *removed != oldKey || !tx.committed || len(tx.queryCalls) != 3 {
+	if err != nil || removed == nil || *removed != oldKey || !tx.committed || len(tx.queryCalls) != 4 {
 		t.Fatalf("removed=%v error=%v committed=%t query=%#v", removed, err, tx.committed, tx.queryCalls)
+	}
+	cessationArgs := tx.argsFor("CeaseConsentForms")
+	if len(cessationArgs) != 4 || cessationArgs[0] != subjectID || cessationArgs[1] != "Foto_Perfil" || cessationArgs[2] != (*uuid.UUID)(nil) || cessationArgs[3] != "WITHDRAWN" {
+		t.Fatalf("cessation args=%#v", cessationArgs)
 	}
 	auditArgs := tx.argsFor("CreateMemberProfileAudit")
 	if len(auditArgs) != 4 || auditArgs[0] == nil || *auditArgs[0].(*uuid.UUID) != subjectID || auditArgs[1] == nil || *auditArgs[1].(*uuid.UUID) != subjectID || auditArgs[2] != "PHOTO_REMOVED" {
@@ -260,6 +300,23 @@ func TestPostgresProfileStoreRequiresAndRecordsExplicitHealthConsent(t *testing.
 	args := tx.argsFor("CreateConsentForm")
 	if len(args) != 7 || args[0] != subjectID || args[2] != "Dados_Saude" || args[3] != "2026-09-06" || args[4] != "privacy-digest" {
 		t.Fatalf("health consent args=%#v", args)
+	}
+	cessationArgs := tx.argsFor("CeaseConsentForms")
+	if len(cessationArgs) != 4 || cessationArgs[1] != "Dados_Saude" || cessationArgs[3] != "SUPERSEDED" {
+		t.Fatalf("health cessation args=%#v", cessationArgs)
+	}
+}
+
+func TestPostgresProfileStoreCeasesHealthConsentWhenDataIsWithdrawn(t *testing.T) {
+	subjectID := uuid.New()
+	tx := &profileTransactionFake{subjectID: subjectID, medicalDeclaration: "PROVIDED", allergies: "Pólen"}
+	input := ProfileUpdate{ActorID: subjectID, SubjectID: subjectID, Profile: dbgen.UpdateMemberProfileParams{MedicalDeclaration: "UNKNOWN"}, ChangedFields: []string{"medical_declaration", "allergies"}}
+	if err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).Update(context.Background(), input); err != nil || !tx.committed {
+		t.Fatalf("error=%v committed=%t", err, tx.committed)
+	}
+	args := tx.argsFor("CeaseConsentForms")
+	if len(args) != 4 || args[0] != subjectID || args[1] != "Dados_Saude" || args[2] != (*uuid.UUID)(nil) || args[3] != "WITHDRAWN" {
+		t.Fatalf("cessation args=%#v", args)
 	}
 }
 

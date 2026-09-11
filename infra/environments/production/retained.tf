@@ -53,10 +53,22 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "repairs" {
 resource "aws_s3_bucket_lifecycle_configuration" "repairs" {
   bucket = aws_s3_bucket.repairs.id
   rule {
-    id     = "expire-noncurrent-repair-images"
+    id     = "repair-photo-retention-backstop"
     status = "Enabled"
+
+    filter { prefix = "repairs/" }
+
+    expiration { days = 30 }
     abort_incomplete_multipart_upload { days_after_initiation = 7 }
-    noncurrent_version_expiration { noncurrent_days = 90 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+  }
+
+  rule {
+    id     = "remove-expired-repair-delete-markers"
+    status = "Enabled"
+
+    filter { prefix = "repairs/" }
+    expiration { expired_object_delete_marker = true }
   }
 }
 

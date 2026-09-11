@@ -1359,7 +1359,7 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION privacy_worker_execute_checkpoint(
+CREATE FUNCTION privacy_worker_execute_checkpoint_without_tombstone_guard(
  p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE checkpoint_ref uuid; subject_ref uuid; execution_ref uuid; principal_ref uuid; category text; entry jsonb;
@@ -1485,22 +1485,23 @@ BEGIN
   WHERE id=subject_ref AND erased_at IS NULL; GET DIAGNOSTICS changed=ROW_COUNT;
  WHEN 'MEMBERSHIP_ACTIVE_REVOKE' THEN
   IF EXISTS(SELECT 1 FROM training_prescriptions prescription JOIN user_memberships membership ON membership.id=prescription.membership_id
-   WHERE membership.user_id=subject_ref AND membership.starts_on>=CURRENT_DATE) THEN
+   WHERE membership.user_id=subject_ref AND membership.starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref)) THEN
    RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_dependency_unsupported';
   END IF;
   DELETE FROM training_variations WHERE target_membership_id IN(
-   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=CURRENT_DATE);
+   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref));
   GET DIAGNOSTICS changed=ROW_COUNT;
   DELETE FROM training_variation_group_members WHERE membership_id IN(
-   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=CURRENT_DATE);
+   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref));
   GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
   DELETE FROM training_group_members WHERE membership_id IN(
-   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=CURRENT_DATE);
+   SELECT id FROM user_memberships WHERE user_id=subject_ref AND starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref));
   GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
-  DELETE FROM user_memberships WHERE user_id=subject_ref AND starts_on>=CURRENT_DATE;
+  DELETE FROM user_memberships WHERE user_id=subject_ref AND starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref);
   GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
-  UPDATE user_memberships SET ends_on=CURRENT_DATE-1,updated_at=clock_timestamp()
-   WHERE user_id=subject_ref AND starts_on<CURRENT_DATE AND (ends_on IS NULL OR ends_on>=CURRENT_DATE);
+  UPDATE user_memberships SET ends_on=public.privacy_membership_history_effective_date(execution_ref,subject_ref)-1,updated_at=clock_timestamp()
+   WHERE user_id=subject_ref AND starts_on<public.privacy_membership_history_effective_date(execution_ref,subject_ref)
+    AND (ends_on IS NULL OR ends_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref));
   GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
  WHEN 'MEMBERSHIP_HISTORY_ANONYMIZE' THEN
   IF EXISTS(SELECT 1 FROM training_prescriptions prescription JOIN user_memberships membership ON membership.id=prescription.membership_id
@@ -1575,10 +1576,10 @@ BEGIN
  WHEN 'DEPENDANT_RELATIONSHIP_DELETE' THEN IF EXISTS(SELECT 1 FROM users WHERE guardian_id=subject_ref) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
  WHEN 'EVENT_RESPONSE_DELETE' THEN IF EXISTS(SELECT 1 FROM event_responses WHERE user_id=subject_ref) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
  WHEN 'IDENTITY_CLEAR' THEN IF NOT EXISTS(SELECT 1 FROM users WHERE id=subject_ref AND erased_at IS NOT NULL AND NOT is_active AND email IS NULL AND minor_login_id IS NULL AND password_hash IS NULL AND guardian_id IS NULL) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
- WHEN 'MEMBERSHIP_ACTIVE_REVOKE' THEN IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=subject_ref AND (starts_on>=CURRENT_DATE OR ends_on IS NULL OR ends_on>=CURRENT_DATE)) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
+ WHEN 'MEMBERSHIP_ACTIVE_REVOKE' THEN IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=subject_ref AND (starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref) OR ends_on IS NULL OR ends_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref))) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
  WHEN 'MEMBERSHIP_HISTORY_ANONYMIZE' THEN
   IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=subject_ref)
-   OR EXISTS(SELECT 1 FROM user_memberships WHERE principal_id=principal_ref AND (starts_on>=CURRENT_DATE OR ends_on IS NULL OR ends_on>=CURRENT_DATE))
+   OR EXISTS(SELECT 1 FROM user_memberships WHERE principal_id=principal_ref AND (starts_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref) OR ends_on IS NULL OR ends_on>=public.privacy_membership_history_effective_date(execution_ref,subject_ref)))
    OR EXISTS(SELECT 1 FROM training_variations variation JOIN user_memberships membership ON membership.id=variation.target_membership_id
       WHERE membership.principal_id=principal_ref
        AND (variation.change_summary IS DISTINCT FROM privacy_scrub_audit_text(variation.change_summary,subject_ref,subject_name,subject_email,subject_login)
@@ -1659,7 +1660,7 @@ WHERE EXISTS(SELECT 1 FROM execution_started);
 $$;
 
 REVOKE ALL ON TABLE privacy_pseudonymous_principals,privacy_erasure_retention_anchors,privacy_erasure_restricted_records FROM PUBLIC;
-REVOKE ALL ON FUNCTION privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
 DO $$
 DECLARE role_name text;
 BEGIN
@@ -2263,3 +2264,4322 @@ REVOKE ALL ON FUNCTION public.privacy_upload_source_lock(text,uuid),public.priva
  public.privacy_upload_mark_cleanup(uuid,bytea,text),public.privacy_upload_attach(uuid,bytea,uuid,text,uuid,text,text,bigint),public.privacy_upload_remove(uuid,uuid,text,uuid),
  public.privacy_upload_cleanup_claim(bigint,uuid),public.privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
  public.privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM PUBLIC;
+
+-- Connect protected media targets to the v2 execution handoff. Historical v1
+-- plans remain immutable and cannot use these routines.
+ALTER TABLE privacy_protected.object_targets
+ ADD COLUMN IF NOT EXISTS upload_intent_id uuid NULL REFERENCES privacy_protected.object_upload_intents(id) ON DELETE RESTRICT;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_protected.object_targets'::regclass AND conname='privacy_object_targets_capture_source_unique') THEN
+  ALTER TABLE privacy_protected.object_targets
+   ADD CONSTRAINT privacy_object_targets_capture_source_unique UNIQUE(execution_id,source_kind,source_ref,upload_intent_id);
+ END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS privacy_protected.object_capture_sets (
+ execution_id uuid NOT NULL REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,
+ job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT, checkpoint_id uuid NOT NULL,
+ subject_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ category_key varchar(120) NOT NULL,
+ source_kinds text[] NOT NULL,
+ expected_target_count integer NOT NULL CHECK(expected_target_count>=0),
+ created_at timestamptz NOT NULL,
+ PRIMARY KEY(checkpoint_id), UNIQUE(execution_id,category_key),
+ FOREIGN KEY(checkpoint_id,job_id,operation_code,action_version)
+  REFERENCES privacy_erasure_job_checkpoints(id,job_id,operation_code,action_version) ON DELETE RESTRICT,
+ operation_code varchar(120) NOT NULL CHECK(operation_code='OBJECT_VERSION_DELETE'),
+ action_version varchar(40) NOT NULL CHECK(action_version='v1'),
+ CHECK(category_key IN ('profile-photo','object-storage')),
+ CHECK(cardinality(source_kinds) BETWEEN 1 AND 2 AND array_position(source_kinds,NULL) IS NULL),
+ CHECK((category_key='profile-photo' AND source_kinds=ARRAY['MEMBER_PROFILE_PHOTO']::text[])
+    OR (category_key='object-storage' AND source_kinds=ARRAY['EQUIPMENT_PHOTO','REPAIR_ATTACHMENT']::text[]))
+);
+
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='privacy_protected.object_capture_sets'::regclass AND tgname='privacy_object_capture_sets_immutable') THEN
+  CREATE TRIGGER privacy_object_capture_sets_immutable BEFORE UPDATE OR DELETE ON privacy_protected.object_capture_sets
+   FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+ END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_media_subject_lock(p_subject_user_id uuid) RETURNS void
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT pg_advisory_xact_lock(hashtextextended('mycfc/media-subject/v1:'||p_subject_user_id::text,0));
+$$;
+
+CREATE OR REPLACE FUNCTION public.privacy_execution_capture_media_sources(
+ p_execution_id uuid,p_subject_user_id uuid,p_category_key text
+) RETURNS TABLE(job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,
+ source_kind text,source_ref uuid,upload_intent_id uuid,object_key text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_job uuid; v_checkpoint uuid; v_entry bytea; v_expected integer; v_kind text; v_ref uuid;
+BEGIN
+ PERFORM public.privacy_media_subject_lock(p_subject_user_id);
+ SELECT job.id,checkpoint.id,job.entry_sha256 INTO v_job,v_checkpoint,v_entry
+ FROM public.privacy_erasure_executions execution
+ JOIN public.data_erasure_requests request ON request.id=execution.request_id
+ JOIN public.privacy_erasure_category_jobs job ON job.execution_id=execution.id AND job.category_key=p_category_key
+ JOIN public.privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+  AND checkpoint.operation_code='OBJECT_VERSION_DELETE' AND checkpoint.action_version='v1'
+ WHERE execution.id=p_execution_id AND execution.executor_version='privacy-erasure-executor/v2'
+  AND execution.schema_version='privacy-erasure-plan/v2' AND request.subject_user_id=p_subject_user_id;
+ IF v_checkpoint IS NULL OR p_category_key NOT IN ('profile-photo','object-storage') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_object_capture_invalid';
+ END IF;
+
+ IF p_category_key='profile-photo' THEN
+  IF EXISTS(SELECT 1 FROM public.member_profiles p WHERE p.user_id=p_subject_user_id AND p.photo_object_key IS NOT NULL AND p.photo_upload_intent_id IS NULL) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_legacy_media_unresolved';
+  END IF;
+ ELSE
+  IF EXISTS(SELECT 1 FROM public.repair_requests r WHERE r.reported_by_id=p_subject_user_id AND r.image_object_key IS NOT NULL AND r.image_upload_intent_id IS NULL)
+    OR EXISTS(SELECT 1 FROM public.equipment e WHERE e.image_object_key IS NOT NULL AND e.image_upload_intent_id IS NULL) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_legacy_media_unresolved';
+  END IF;
+ END IF;
+
+ -- Any unfinished upload for this subject can still own a version that is not
+ -- represented by a pointer. Start remains blocked until it attaches or its
+ -- cleanup records stable absence.
+ IF EXISTS(
+  SELECT 1 FROM privacy_protected.object_upload_intents i
+  JOIN LATERAL (SELECT e.status FROM privacy_protected.object_upload_intent_events e WHERE e.intent_id=i.id ORDER BY e.sequence DESC LIMIT 1) latest ON true
+  WHERE (i.subject_user_id=p_subject_user_id OR (i.source_kind='EQUIPMENT_PHOTO' AND i.provenance_actor_user_id=p_subject_user_id))
+    AND ((p_category_key='profile-photo' AND i.source_kind='MEMBER_PROFILE_PHOTO')
+      OR (p_category_key='object-storage' AND i.source_kind IN ('REPAIR_ATTACHMENT','EQUIPMENT_PHOTO')))
+    AND latest.status NOT IN ('ATTACHED','ABSENCE_VERIFIED')
+ ) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_media_upload_in_flight'; END IF;
+
+ SELECT count(*)::integer INTO v_expected FROM (
+  SELECT p.photo_upload_intent_id FROM public.member_profiles p
+   JOIN privacy_protected.object_upload_intents i ON i.id=p.photo_upload_intent_id
+   WHERE p_category_key='profile-photo' AND p.user_id=p_subject_user_id AND p.photo_object_key IS NOT NULL
+  UNION ALL
+  SELECT r.image_upload_intent_id FROM public.repair_requests r
+   JOIN privacy_protected.object_upload_intents i ON i.id=r.image_upload_intent_id
+   WHERE p_category_key='object-storage' AND i.subject_user_id=p_subject_user_id AND r.image_object_key IS NOT NULL
+  UNION ALL
+  SELECT e.image_upload_intent_id FROM public.equipment e
+   JOIN privacy_protected.object_upload_intents i ON i.id=e.image_upload_intent_id
+   WHERE p_category_key='object-storage' AND i.provenance_actor_user_id=p_subject_user_id AND e.image_object_key IS NOT NULL
+ ) candidates;
+
+ INSERT INTO privacy_protected.object_capture_sets(execution_id,job_id,checkpoint_id,subject_user_id,category_key,source_kinds,
+  expected_target_count,operation_code,action_version,created_at)
+ VALUES(p_execution_id,v_job,v_checkpoint,p_subject_user_id,p_category_key,
+  CASE WHEN p_category_key='profile-photo' THEN ARRAY['MEMBER_PROFILE_PHOTO']::text[] ELSE ARRAY['EQUIPMENT_PHOTO','REPAIR_ATTACHMENT']::text[] END,
+  v_expected,'OBJECT_VERSION_DELETE','v1',clock_timestamp());
+
+ FOR v_kind,v_ref IN
+  SELECT i.source_kind,i.source_ref FROM privacy_protected.object_upload_intents i
+  WHERE (i.subject_user_id=p_subject_user_id OR (i.source_kind='EQUIPMENT_PHOTO' AND i.provenance_actor_user_id=p_subject_user_id))
+   AND ((p_category_key='profile-photo' AND i.source_kind='MEMBER_PROFILE_PHOTO')
+     OR (p_category_key='object-storage' AND i.source_kind IN ('REPAIR_ATTACHMENT','EQUIPMENT_PHOTO')))
+  ORDER BY i.source_kind,i.source_ref
+ LOOP PERFORM public.privacy_upload_source_lock(v_kind,v_ref); END LOOP;
+
+ RETURN QUERY
+  SELECT v_job,v_checkpoint,v_entry,p_category_key::text,'MEMBER_PROFILE_PHOTO'::text,p.user_id,p.photo_upload_intent_id,p.photo_object_key::text
+  FROM public.member_profiles p JOIN privacy_protected.object_upload_intents i ON i.id=p.photo_upload_intent_id
+  WHERE p_category_key='profile-photo' AND p.user_id=p_subject_user_id AND p.photo_object_key IS NOT NULL
+    AND public.privacy_upload_pointer_matches(i.id,i.source_kind,i.source_ref,i.locator_commitment,i.content_type,i.size_bytes)
+    AND (SELECT status FROM privacy_protected.object_upload_intent_events x WHERE x.intent_id=i.id ORDER BY sequence DESC LIMIT 1)='ATTACHED'
+  UNION ALL
+  SELECT v_job,v_checkpoint,v_entry,p_category_key::text,'REPAIR_ATTACHMENT'::text,r.id,r.image_upload_intent_id,r.image_object_key::text
+  FROM public.repair_requests r JOIN privacy_protected.object_upload_intents i ON i.id=r.image_upload_intent_id
+  WHERE p_category_key='object-storage' AND i.subject_user_id=p_subject_user_id AND r.image_object_key IS NOT NULL
+    AND public.privacy_upload_pointer_matches(i.id,i.source_kind,i.source_ref,i.locator_commitment,i.content_type,i.size_bytes)
+    AND (SELECT status FROM privacy_protected.object_upload_intent_events x WHERE x.intent_id=i.id ORDER BY sequence DESC LIMIT 1)='ATTACHED'
+  UNION ALL
+  SELECT v_job,v_checkpoint,v_entry,p_category_key::text,'EQUIPMENT_PHOTO'::text,e.id,e.image_upload_intent_id,e.image_object_key::text
+  FROM public.equipment e JOIN privacy_protected.object_upload_intents i ON i.id=e.image_upload_intent_id
+  WHERE p_category_key='object-storage' AND i.provenance_actor_user_id=p_subject_user_id AND e.image_object_key IS NOT NULL
+    AND public.privacy_upload_pointer_matches(i.id,i.source_kind,i.source_ref,i.locator_commitment,i.content_type,i.size_bytes)
+    AND (SELECT status FROM privacy_protected.object_upload_intent_events x WHERE x.intent_id=i.id ORDER BY sequence DESC LIMIT 1)='ATTACHED'
+  ORDER BY 5,6;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_execution_materialize_object_target(
+ p_target_id uuid,p_execution_id uuid,p_job_id uuid,p_checkpoint_id uuid,p_plan_entry_sha256 bytea,p_category_key text,
+ p_source_kind text,p_source_ref uuid,p_upload_intent_id uuid,p_object_key text,
+ p_envelope_version text,p_algorithm text,p_encryption_key_id text,p_encapsulation bytea,p_nonce bytea,p_ciphertext bytea,
+ p_digest_key_id text,p_locator_digest bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE c privacy_protected.object_capture_sets%ROWTYPE; i privacy_protected.object_upload_intents%ROWTYPE;
+BEGIN
+ SELECT * INTO c FROM privacy_protected.object_capture_sets WHERE checkpoint_id=p_checkpoint_id AND execution_id=p_execution_id FOR SHARE;
+ SELECT * INTO i FROM privacy_protected.object_upload_intents WHERE id=p_upload_intent_id FOR SHARE;
+ IF c.checkpoint_id IS NULL OR c.job_id<>p_job_id OR c.category_key<>p_category_key OR c.expected_target_count<=
+    (SELECT count(*) FROM privacy_protected.object_targets t WHERE t.checkpoint_id=p_checkpoint_id)
+   OR i.id IS NULL OR i.source_kind<>p_source_kind OR i.source_ref<>p_source_ref
+   OR NOT (p_source_kind=ANY(c.source_kinds)) OR digest(convert_to(p_object_key,'UTF8'),'sha256') IS DISTINCT FROM i.locator_commitment
+   OR (p_source_kind='MEMBER_PROFILE_PHOTO' AND (i.subject_user_id IS DISTINCT FROM c.subject_user_id OR i.source_ref<>c.subject_user_id))
+   OR (p_source_kind='REPAIR_ATTACHMENT' AND i.subject_user_id IS DISTINCT FROM c.subject_user_id)
+   OR (p_source_kind='EQUIPMENT_PHOTO' AND i.provenance_actor_user_id IS DISTINCT FROM c.subject_user_id)
+   OR NOT public.privacy_upload_pointer_matches(i.id,i.source_kind,i.source_ref,i.locator_commitment,i.content_type,i.size_bytes)
+   OR (SELECT status FROM privacy_protected.object_upload_intent_events e WHERE e.intent_id=i.id ORDER BY sequence DESC LIMIT 1)<>'ATTACHED' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_object_target_invalid';
+ END IF;
+ INSERT INTO privacy_protected.object_targets(id,execution_id,job_id,checkpoint_id,plan_entry_sha256,category_key,service_code,target_kind,
+  source_kind,source_ref,operation_code,action_version,provider_contract_version,envelope_version,algorithm,encryption_key_id,
+  encapsulation,nonce,ciphertext,created_at,upload_intent_id)
+ VALUES(p_target_id,p_execution_id,p_job_id,p_checkpoint_id,p_plan_entry_sha256,p_category_key,'private-media','OBJECT_KEY',p_source_kind,
+  p_source_ref,'OBJECT_VERSION_DELETE','v1','s3-versioned/v1',p_envelope_version,p_algorithm,p_encryption_key_id,
+  p_encapsulation,p_nonce,p_ciphertext,clock_timestamp(),p_upload_intent_id);
+ INSERT INTO privacy_protected.object_target_digests(target_id,execution_id,service_code,target_kind,digest_key_id,locator_digest,created_at)
+ VALUES(p_target_id,p_execution_id,'private-media','OBJECT_KEY',p_digest_key_id,p_locator_digest,clock_timestamp());
+ RETURN p_target_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_execution_complete_object_capture(p_execution_id uuid,p_category_key text) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE expected integer; actual integer; p_checkpoint_id uuid;
+BEGIN
+ SELECT checkpoint_id,expected_target_count INTO p_checkpoint_id,expected FROM privacy_protected.object_capture_sets
+  WHERE execution_id=p_execution_id AND category_key=p_category_key FOR SHARE;
+ SELECT count(*)::integer INTO actual FROM privacy_protected.object_targets WHERE execution_id=p_execution_id AND checkpoint_id=p_checkpoint_id;
+ IF expected IS NULL OR actual<>expected THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_object_capture_incomplete'; END IF;
+ RETURN actual;
+END; $$;
+
+-- Block new in-scope uploads after a v2 capture set commits. The subject lock
+-- closes the enumeration/creation gap, including category-only requests.
+CREATE OR REPLACE FUNCTION public.privacy_upload_begin(
+ p_intent_id uuid,p_subject_user_id uuid,p_actor_user_id uuid,p_source_kind text,p_source_ref uuid,
+ p_service_code text,p_content_type text,p_size_bytes bigint,p_token bytea
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_now timestamptz:=clock_timestamp(); v_token_digest bytea; v_privacy_subject uuid:=COALESCE(p_subject_user_id,p_actor_user_id);
+BEGIN
+ IF p_intent_id IS NULL OR p_actor_user_id IS NULL OR p_source_ref IS NULL OR octet_length(p_token)<>32 THEN RAISE EXCEPTION 'invalid upload reservation'; END IF;
+ IF p_source_kind NOT IN ('MEMBER_PROFILE_PHOTO','REPAIR_ATTACHMENT','EQUIPMENT_PHOTO') OR p_service_code<>'private-media'
+    OR p_content_type NOT IN ('image/jpeg','image/png','image/webp') OR p_size_bytes NOT BETWEEN 1 AND 10485760 THEN RAISE EXCEPTION 'invalid upload reservation'; END IF;
+ IF p_source_kind IN ('MEMBER_PROFILE_PHOTO','REPAIR_ATTACHMENT') AND p_subject_user_id IS DISTINCT FROM p_actor_user_id THEN RAISE EXCEPTION 'upload actor is not authorized'; END IF;
+ IF p_source_kind='EQUIPMENT_PHOTO' AND (p_subject_user_id IS NOT NULL OR NOT EXISTS(
+   SELECT 1 FROM public.users u JOIN public.user_platform_roles ur ON ur.user_id=u.id JOIN public.platform_roles r ON r.id=ur.role_id
+   WHERE u.id=p_actor_user_id AND u.is_active AND u.erased_at IS NULL AND NOT u.is_dependent AND r.code='ADMIN')) THEN RAISE EXCEPTION 'upload actor is not authorized'; END IF;
+ IF p_source_kind='MEMBER_PROFILE_PHOTO' AND p_source_ref<>p_subject_user_id THEN RAISE EXCEPTION 'invalid upload source'; END IF;
+ PERFORM public.privacy_media_subject_lock(v_privacy_subject);
+ IF EXISTS(SELECT 1 FROM privacy_protected.object_capture_sets c
+  JOIN public.privacy_erasure_executions x ON x.id=c.execution_id
+  JOIN public.data_erasure_requests r ON r.id=x.request_id
+  WHERE c.subject_user_id=v_privacy_subject AND p_source_kind=ANY(c.source_kinds)
+    AND r.status IN ('PROCESSING','RETRYABLE_FAILED','TERMINAL_FAILED')) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_media_execution_in_progress';
+ END IF;
+ PERFORM public.privacy_upload_source_lock(p_source_kind,p_source_ref);
+ v_token_digest:=digest(p_token,'sha256');
+ INSERT INTO privacy_protected.object_upload_intent_reservations(id,subject_user_id,provenance_actor_user_id,source_kind,source_ref,service_code,content_type,size_bytes,token_digest,created_at,cleanup_after)
+ VALUES(p_intent_id,p_subject_user_id,p_actor_user_id,p_source_kind,p_source_ref,p_service_code,p_content_type,p_size_bytes,v_token_digest,v_now,v_now+interval '24 hours');
+ INSERT INTO privacy_protected.object_upload_intent_holds(intent_id,hold_epoch,token_digest,held_until,updated_at)
+ VALUES(p_intent_id,1,v_token_digest,v_now+interval '15 minutes',v_now);
+ RETURN jsonb_build_object('created_at',v_now,'cleanup_after',v_now+interval '24 hours','hold_epoch',1);
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_worker_list_object_targets(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid
+) RETURNS TABLE(target_id uuid,execution_id uuid,job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,
+ service_code text,target_kind text,source_kind text,source_ref uuid,operation_code text,action_version text,
+ provider_contract_version text,envelope_version text,algorithm text,encryption_key_id text,encapsulation bytea,nonce bytea,ciphertext bytea)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT t.id,t.execution_id,t.job_id,t.checkpoint_id,t.plan_entry_sha256,t.category_key::text,t.service_code::text,t.target_kind::text,
+  t.source_kind::text,t.source_ref,t.operation_code::text,t.action_version::text,t.provider_contract_version::text,t.envelope_version::text,
+  t.algorithm::text,t.encryption_key_id::text,t.encapsulation,t.nonce,t.ciphertext
+ FROM privacy_protected.object_targets t
+ JOIN public.privacy_erasure_category_jobs j ON j.id=t.job_id
+ JOIN public.privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN public.privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ LEFT JOIN privacy_protected.object_evidence e ON e.target_id=t.id
+ WHERE j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref AND l.released_at IS NULL
+  AND l.expires_at>clock_timestamp() AND a.finished_at IS NULL AND e.target_id IS NULL
+ ORDER BY t.id;
+$$;
+
+CREATE OR REPLACE FUNCTION public.privacy_worker_record_object_evidence(
+ p_target_id uuid,p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,
+ p_deleted_versions integer,p_deleted_markers integer,p_list_calls integer,p_stable_checks integer,
+ p_transcript_key_id text,p_transcript_digest bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM 1 FROM public.privacy_erasure_category_jobs j
+ JOIN public.privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN public.privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ JOIN privacy_protected.object_targets t ON t.id=p_target_id AND t.job_id=j.id
+ WHERE j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref AND l.released_at IS NULL
+  AND l.expires_at>clock_timestamp() AND a.finished_at IS NULL FOR UPDATE OF j,l,a;
+ IF NOT FOUND OR p_deleted_versions<0 OR p_deleted_markers<0 OR p_list_calls<2 OR p_stable_checks<2
+  OR p_transcript_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR octet_length(p_transcript_digest)<>32 THEN RETURN NULL; END IF;
+ INSERT INTO privacy_protected.object_evidence(target_id,job_id,attempt_id,evidence_version,outcome_code,deleted_version_count,
+  deleted_marker_count,list_call_count,stable_empty_check_count,transcript_key_id,transcript_digest,occurred_at)
+ VALUES(p_target_id,p_job_id,p_attempt_id,'s3-absence/v1','ABSENCE_VERIFIED',p_deleted_versions,p_deleted_markers,p_list_calls,
+  p_stable_checks,p_transcript_key_id,p_transcript_digest,clock_timestamp()) ON CONFLICT(target_id) DO NOTHING;
+ RETURN p_target_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_worker_complete_object_checkpoint(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid; expected integer; evidenced integer;
+BEGIN
+ SELECT checkpoint.id,c.expected_target_count INTO checkpoint_ref,expected
+ FROM public.privacy_erasure_category_jobs j
+ JOIN public.privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN public.privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ JOIN public.privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=j.id AND checkpoint.operation_code='OBJECT_VERSION_DELETE' AND checkpoint.action_version='v1'
+ JOIN privacy_protected.object_capture_sets c ON c.checkpoint_id=checkpoint.id
+ WHERE j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref AND l.released_at IS NULL
+  AND l.expires_at>clock_timestamp() AND a.finished_at IS NULL FOR UPDATE OF j,l,a,checkpoint;
+ IF checkpoint_ref IS NULL THEN RETURN NULL; END IF;
+ IF (SELECT status FROM public.privacy_erasure_job_checkpoints WHERE id=checkpoint_ref)='SUCCEEDED' THEN RETURN checkpoint_ref; END IF;
+ SELECT count(*)::integer INTO evidenced FROM privacy_protected.object_targets t
+ JOIN privacy_protected.object_evidence e ON e.target_id=t.id WHERE t.checkpoint_id=checkpoint_ref;
+ IF evidenced<>expected OR EXISTS(SELECT 1 FROM public.privacy_erasure_job_checkpoints p
+   WHERE p.job_id=p_job_id AND p.operation_position<(SELECT operation_position FROM public.privacy_erasure_job_checkpoints WHERE id=checkpoint_ref)
+    AND p.status<>'SUCCEEDED')
+  OR EXISTS(SELECT 1 FROM public.privacy_erasure_category_jobs prior
+   WHERE prior.execution_id=(SELECT execution_id FROM public.privacy_erasure_category_jobs WHERE id=p_job_id)
+    AND prior.plan_entry_position<(SELECT plan_entry_position FROM public.privacy_erasure_category_jobs WHERE id=p_job_id) AND prior.status<>'SUCCEEDED') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_object_evidence_incomplete';
+ END IF;
+ UPDATE public.privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_at=clock_timestamp(),completed_by_attempt_id=p_attempt_id,
+  affected_rows=evidenced,result_sha256=digest(convert_to('OBJECT_VERSION_DELETE:'||evidenced::text,'UTF8'),'sha256')
+ WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END; $$;
+
+REVOKE ALL ON TABLE privacy_protected.object_capture_sets FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_media_subject_lock(uuid),public.privacy_execution_capture_media_sources(uuid,uuid,text),
+ public.privacy_execution_materialize_object_target(uuid,uuid,uuid,uuid,bytea,text,text,uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,bytea),
+ public.privacy_execution_complete_object_capture(uuid,text),public.privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid),
+ public.privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
+ public.privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+-- #247 restore-independent tombstone receipt foundation.
+CREATE TABLE privacy_protected.restore_tombstone_receipts (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ request_id uuid NOT NULL REFERENCES public.data_erasure_requests(id) ON DELETE RESTRICT,
+ ledger_version varchar(40) NOT NULL CHECK(ledger_version='restore-tombstone/v1'),
+ encryption_key_id varchar(80) NOT NULL CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_key_id varchar(80) NOT NULL CHECK(locator_key_id=btrim(locator_key_id) AND locator_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_digest bytea NOT NULL CHECK(octet_length(locator_digest)=32),
+ object_version_id varchar(1024) NOT NULL CHECK(object_version_id=btrim(object_version_id) AND char_length(object_version_id) BETWEEN 1 AND 1024),
+ ciphertext_sha256 bytea NOT NULL CHECK(octet_length(ciphertext_sha256)=32),
+ size_bytes bigint NOT NULL CHECK(size_bytes BETWEEN 1 AND 1048576),
+ written_at timestamptz NOT NULL, verified_at timestamptz NOT NULL,
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(), CHECK(verified_at>=written_at),
+ UNIQUE(request_id), UNIQUE(locator_key_id,locator_digest)
+);
+CREATE TRIGGER privacy_restore_tombstone_receipts_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_receipts FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.restore_tombstone_closure_intents (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ closed_at timestamptz NOT NULL,evidence_expires_at timestamptz NOT NULL,prepared_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(evidence_expires_at=closed_at+interval '24 months')
+);
+CREATE TRIGGER privacy_restore_tombstone_closure_intents_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_closure_intents FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TABLE privacy_protected.restore_tombstone_closure_receipts (
+ execution_id uuid PRIMARY KEY REFERENCES privacy_protected.restore_tombstone_closure_intents(execution_id) ON DELETE RESTRICT,
+ ledger_version varchar(40) NOT NULL CHECK(ledger_version='restore-tombstone-closure/v1'),
+ encryption_key_id varchar(80) NOT NULL CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_key_id varchar(80) NOT NULL CHECK(locator_key_id=btrim(locator_key_id) AND locator_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_digest bytea NOT NULL CHECK(octet_length(locator_digest)=32),object_version_id varchar(1024) NOT NULL CHECK(object_version_id=btrim(object_version_id) AND char_length(object_version_id) BETWEEN 1 AND 1024),
+ ciphertext_sha256 bytea NOT NULL CHECK(octet_length(ciphertext_sha256)=32),size_bytes bigint NOT NULL CHECK(size_bytes BETWEEN 1 AND 1048576),
+ written_at timestamptz NOT NULL,verified_at timestamptz NOT NULL,recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),CHECK(verified_at>=written_at),UNIQUE(locator_key_id,locator_digest)
+);
+CREATE TRIGGER privacy_restore_tombstone_closure_receipts_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_tombstone_closure_receipts FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION public.privacy_tombstone_prepare(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+ digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,'|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),execution.accepted_at
+ FROM privacy_erasure_job_leases lease
+ JOIN privacy_erasure_category_jobs selected_job ON selected_job.id=lease.job_id AND selected_job.lease_epoch=lease.epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=selected_job.id
+ JOIN privacy_erasure_executions execution ON execution.id=selected_job.execution_id
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE selected_job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref
+ AND selected_job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp()
+ AND selected_job.category_key='backup-tombstones' AND EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints selected_checkpoint
+  WHERE selected_checkpoint.job_id=selected_job.id AND selected_checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND selected_checkpoint.action_version='v1' AND selected_checkpoint.status='PENDING')
+ AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id;
+$$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,
+ p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid; execution_ref uuid; request_ref uuid; existing privacy_protected.restore_tombstone_receipts%ROWTYPE;
+BEGIN
+ SELECT checkpoint.id,job.execution_id,execution.request_id INTO checkpoint_ref,execution_ref,request_ref
+ FROM privacy_erasure_category_jobs job JOIN privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=job.id
+ JOIN privacy_erasure_executions execution ON execution.id=job.execution_id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref AND job.status='LEASED'
+ AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp() AND job.category_key='backup-tombstones'
+ AND checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND checkpoint.action_version='v1' FOR UPDATE OF job,lease,attempt,checkpoint;
+ IF checkpoint_ref IS NULL OR p_ledger_version<>'restore-tombstone/v1'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_receipts WHERE execution_id=execution_ref;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_receipts(execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(execution_ref,request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.request_id,existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_conflict'; END IF;
+ UPDATE privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_by_attempt_id=p_attempt_id,completed_at=clock_timestamp(),affected_rows=1,
+  result_sha256=digest(p_ciphertext_sha256||convert_to(p_object_version_id,'UTF8'),'sha256') WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_tombstone_prepare_closure(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+#variable_conflict use_column
+DECLARE v_closed_at timestamptz;
+BEGIN
+ IF p_execution_id IS NULL OR p_worker_ref IS NULL OR NOT EXISTS(SELECT 1 FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+  WHERE execution.id=p_execution_id AND execution.status='SUCCEEDED' AND request.status IN ('PROCESSING','RETRYABLE_FAILED')
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+  AND EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution.id))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_unavailable'; END IF;
+ v_closed_at:=clock_timestamp();
+ INSERT INTO privacy_protected.restore_tombstone_closure_intents(execution_id,closed_at,evidence_expires_at)
+ VALUES(p_execution_id,v_closed_at,v_closed_at+interval '24 months') ON CONFLICT(execution_id) DO NOTHING;
+ RETURN QUERY SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+  digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,'|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),
+  execution.accepted_at,intent.closed_at,intent.evidence_expires_at
+ FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ JOIN privacy_protected.restore_tombstone_closure_intents intent ON intent.execution_id=execution.id
+ WHERE execution.id=p_execution_id AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id,intent.closed_at,intent.evidence_expires_at;
+END; $$;
+CREATE FUNCTION public.privacy_tombstone_confirm_closure(p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE; existing privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+BEGIN
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id;
+ IF intent.execution_id IS NULL OR p_worker_ref IS NULL OR p_ledger_version<>'restore-tombstone-closure/v1'
+ OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+ OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id)
+ OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024 OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(p_execution_id,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+ IS DISTINCT FROM ROW(p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_conflict'; END IF;
+ RETURN p_execution_id;
+END; $$;
+
+REVOKE ALL ON FUNCTION public.privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+CREATE FUNCTION public.privacy_worker_execute_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE execution_ref uuid;
+BEGIN
+	SELECT job.execution_id INTO execution_ref FROM privacy_erasure_category_jobs job
+	JOIN privacy_erasure_job_leases lease ON lease.id=p_lease_id AND lease.job_id=job.id AND lease.epoch=p_lease_epoch
+	JOIN privacy_erasure_job_attempts attempt ON attempt.id=p_attempt_id AND attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_lease_epoch
+	WHERE job.id=p_job_id AND job.status='LEASED' AND lease.worker_ref=p_worker_ref AND lease.released_at IS NULL
+	 AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL FOR UPDATE OF job,lease,attempt;
+	IF NOT FOUND THEN RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version); END IF;
+ IF p_operation_code<>'BACKUP_TOMBSTONE_REPLAY' AND NOT EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution_ref)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_tombstone_required'; END IF;
+ RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+END; $$;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_prepare(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_confirm(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_prepare_closure(uuid,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_tombstone_confirm_closure(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) FROM PUBLIC;
+
+-- #247 bounded conservative retention maintenance.
+CREATE TABLE privacy_retention_runs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),worker_ref uuid NOT NULL,started_at timestamptz NOT NULL,finished_at timestamptz NOT NULL,
+ batch_limit integer NOT NULL CHECK(batch_limit BETWEEN 1 AND 10000),sessions_deleted integer NOT NULL CHECK(sessions_deleted>=0),tokens_deleted integer NOT NULL CHECK(tokens_deleted>=0),
+ outbox_stopped integer NOT NULL CHECK(outbox_stopped>=0),outbox_payloads_deleted integer NOT NULL CHECK(outbox_payloads_deleted>=0),outbox_evidence_deleted integer NOT NULL CHECK(outbox_evidence_deleted>=0),
+ consent_network_scrubbed integer NOT NULL CHECK(consent_network_scrubbed>=0),event_responses_deleted integer NOT NULL CHECK(event_responses_deleted>=0),
+ announcement_deliveries_deleted integer NOT NULL CHECK(announcement_deliveries_deleted>=0),suggestions_deleted integer NOT NULL CHECK(suggestions_deleted>=0),
+ privacy_working_scrubbed integer NOT NULL CHECK(privacy_working_scrubbed>=0),auth_limits_deleted integer NOT NULL CHECK(auth_limits_deleted>=0),CHECK(finished_at>=started_at)
+);
+CREATE TABLE privacy_outbox_delivery_evidence (
+ outbox_id uuid PRIMARY KEY,message_type varchar(30) NOT NULL,final_status varchar(20) NOT NULL CHECK(final_status IN ('SENT','FAILED','CANCELLED')),
+ attempts integer NOT NULL CHECK(attempts>=0),created_at timestamptz NOT NULL,terminal_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,CHECK(expires_at=created_at+interval '90 days')
+);
+CREATE INDEX privacy_outbox_delivery_evidence_expiry_idx ON privacy_outbox_delivery_evidence(expires_at,outbox_id);
+CREATE INDEX email_verification_tokens_retention_idx ON email_verification_tokens((GREATEST(expires_at,COALESCE(consumed_at,expires_at))),id);
+CREATE INDEX password_reset_tokens_retention_idx ON password_reset_tokens((GREATEST(expires_at,COALESCE(consumed_at,expires_at))),id);
+CREATE INDEX event_responses_retention_idx ON event_responses(event_id,user_id);
+CREATE INDEX announcement_deliveries_retention_idx ON announcement_deliveries(delivered_at,announcement_id,user_id);
+CREATE INDEX suggestions_retention_idx ON suggestions(responded_at,id) WHERE status IN ('DECLINED','COMPLETED');
+CREATE FUNCTION privacy_retention_run(p_worker_ref uuid,p_batch_limit integer)
+RETURNS TABLE(run_id uuid,sessions_deleted integer,tokens_deleted integer,outbox_stopped integer,outbox_payloads_deleted integer,outbox_evidence_deleted integer,
+ consent_network_scrubbed integer,event_responses_deleted integer,announcement_deliveries_deleted integer,suggestions_deleted integer,privacy_working_scrubbed integer,auth_limits_deleted integer)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_now timestamptz:=clock_timestamp();v_started timestamptz:=v_now;
+BEGIN
+ IF p_worker_ref IS NULL OR p_batch_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy retention input rejected'; END IF;
+ IF NOT pg_try_advisory_xact_lock(247,247) THEN RAISE EXCEPTION USING ERRCODE='55P03',MESSAGE='privacy retention already running'; END IF;
+ run_id:=gen_random_uuid();sessions_deleted:=0;tokens_deleted:=0;outbox_stopped:=0;outbox_payloads_deleted:=0;outbox_evidence_deleted:=0;
+ consent_network_scrubbed:=0;event_responses_deleted:=0;announcement_deliveries_deleted:=0;suggestions_deleted:=0;privacy_working_scrubbed:=0;auth_limits_deleted:=0;
+ WITH candidate AS (SELECT token FROM sessions WHERE expiry<=v_now ORDER BY expiry,token FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM sessions row USING candidate WHERE row.token=candidate.token;GET DIAGNOSTICS sessions_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM email_outbox WHERE created_at<=v_now-interval '7 days' AND status IN ('PENDING','SENDING') ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE email_outbox row SET status='FAILED',claimed_at=NULL,last_error=NULL,updated_at=v_now FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_stopped=ROW_COUNT;
+ WITH candidate AS MATERIALIZED (SELECT id FROM email_outbox WHERE created_at<=v_now-interval '30 days' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ evidence AS (INSERT INTO privacy_outbox_delivery_evidence(outbox_id,message_type,final_status,attempts,created_at,terminal_at,expires_at)
+  SELECT row.id,row.message_type,CASE WHEN row.status IN ('SENT','FAILED','CANCELLED') THEN row.status ELSE 'FAILED' END,row.attempts,row.created_at,COALESCE(row.sent_at,row.updated_at,row.created_at),row.created_at+interval '90 days'
+  FROM email_outbox row JOIN candidate USING(id) ON CONFLICT(outbox_id) DO NOTHING RETURNING outbox_id)
+ DELETE FROM email_outbox row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_payloads_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT outbox_id FROM privacy_outbox_delivery_evidence WHERE expires_at<=v_now ORDER BY expires_at,outbox_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_outbox_delivery_evidence row USING candidate WHERE row.outbox_id=candidate.outbox_id;GET DIAGNOSTICS outbox_evidence_deleted=ROW_COUNT;
+ WITH verification AS (SELECT id FROM email_verification_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ deleted_verification AS (DELETE FROM email_verification_tokens row USING verification WHERE row.id=verification.id RETURNING 1),
+ reset AS (SELECT id FROM password_reset_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ deleted_reset AS (DELETE FROM password_reset_tokens row USING reset WHERE row.id=reset.id RETURNING 1)
+ SELECT (SELECT count(*) FROM deleted_verification)+(SELECT count(*) FROM deleted_reset) INTO tokens_deleted;
+ WITH candidate AS (SELECT id FROM consent_forms WHERE date_signed<=v_now-interval '12 months' AND (ip_address IS NOT NULL OR user_agent<>'') ORDER BY date_signed,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE consent_forms row SET ip_address=NULL,user_agent='' FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS consent_network_scrubbed=ROW_COUNT;
+ WITH candidate AS (SELECT response.event_id,response.user_id FROM event_responses response JOIN events event ON event.id=response.event_id WHERE event.ends_at<=v_now-interval '90 days' ORDER BY event.ends_at,response.event_id,response.user_id FOR UPDATE OF response SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM event_responses row USING candidate WHERE row.event_id=candidate.event_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS event_responses_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT announcement_id,user_id FROM announcement_deliveries WHERE delivered_at<=v_now-interval '90 days' ORDER BY delivered_at,announcement_id,user_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM announcement_deliveries row USING candidate WHERE row.announcement_id=candidate.announcement_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS announcement_deliveries_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM suggestions WHERE status IN ('DECLINED','COMPLETED') AND responded_at<=v_now-interval '12 months' ORDER BY responded_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM suggestions row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS suggestions_deleted=ROW_COUNT;
+ WITH candidate AS (SELECT id FROM data_erasure_requests WHERE status IN ('REFUSED','CANCELLED','COMPLETED') AND working_expires_at<=v_now AND working_erased_at IS NULL ORDER BY working_expires_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ removed_mail AS (DELETE FROM email_outbox row USING candidate WHERE row.privacy_request_id=candidate.id RETURNING row.id),
+ removed_dependants AS (DELETE FROM privacy_request_dependant_resolutions row USING candidate WHERE row.request_id=candidate.id RETURNING 1)
+ UPDATE data_erasure_requests row SET decision_explanation='',category_decisions='[]',categories='{}',policy_snapshot=NULL,policy_version=NULL,
+ identity_verified_at=NULL,identity_verified_by=NULL,identity_method=NULL,representation_verified_at=NULL,representation_verified_by=NULL,representation_method=NULL,
+ representation_guardian_id=NULL,representation_relationship_updated_at=NULL,representation_conflict=false,requester_user_id=NULL,subject_user_id=NULL,claimed_by=NULL,decided_by=NULL,working_erased_at=v_now
+ FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS privacy_working_scrubbed=ROW_COUNT;
+ WITH candidate AS (SELECT bucket FROM privacy_request_auth_limits WHERE window_start<v_now-interval '1 day' ORDER BY window_start,bucket FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_request_auth_limits row USING candidate WHERE row.bucket=candidate.bucket;GET DIAGNOSTICS auth_limits_deleted=ROW_COUNT;
+ INSERT INTO privacy_retention_runs VALUES(run_id,p_worker_ref,v_started,clock_timestamp(),p_batch_limit,sessions_deleted,tokens_deleted,outbox_stopped,outbox_payloads_deleted,
+ outbox_evidence_deleted,consent_network_scrubbed,event_responses_deleted,announcement_deliveries_deleted,suggestions_deleted,privacy_working_scrubbed,auth_limits_deleted);
+ RETURN NEXT;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_retention_run(uuid,integer) FROM PUBLIC;
+REVOKE ALL ON TABLE privacy_retention_runs,privacy_outbox_delivery_evidence FROM PUBLIC;
+-- #247 P0: authenticated v2 tombstones carry a bounded relational-only replay
+-- prescription. V1 receipts remain readable evidence, but cannot authorize new
+-- destructive work or be imported for replay.
+ALTER TABLE privacy_protected.restore_tombstone_receipts
+ DROP CONSTRAINT restore_tombstone_receipts_ledger_version_check,
+ ADD CONSTRAINT restore_tombstone_receipts_ledger_version_check
+ CHECK(ledger_version IN ('restore-tombstone/v1','restore-tombstone/v2'));
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts
+ DROP CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check,
+ ADD CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check
+ CHECK(ledger_version IN ('restore-tombstone-closure/v1','restore-tombstone-closure/v2'));
+
+CREATE FUNCTION public.privacy_relational_replay_operation_supported(p_operation_code text)
+RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT p_operation_code IN (
+  'ACTIVITY_CONNECTION_DISCONNECT','ACTIVITY_SUBJECT_DELETE','ANNOUNCEMENT_DELIVERY_DELETE',
+  'AUTH_ACCESS_REVOKE','AUTH_TOKEN_DELETE','DEPENDANT_RELATIONSHIP_DELETE','EVENT_RESPONSE_DELETE',
+  'IDENTITY_CLEAR','MEMBERSHIP_ACTIVE_REVOKE','MEMBERSHIP_HISTORY_ANONYMIZE','PROFILE_HEALTH_DELETE',
+  'PROFILE_IDENTITY_DELETE','REPAIR_REPORTER_ANONYMIZE','SUGGESTION_SUBJECT_DELETE',
+  'TRAINING_PRESCRIPTION_DELETE','TRAINING_RESULT_DELETE'
+ );
+$$;
+
+CREATE FUNCTION public.privacy_tombstone_prepare_v2(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid
+) RETURNS TABLE(
+ execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,
+ execution_started_at timestamptz,replay_operations text[]
+) LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+  digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,
+   '|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),execution.accepted_at,
+  (array_agg(checkpoint.operation_code ORDER BY job.plan_entry_position,checkpoint.operation_position)
+   FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code)))::text[]
+ FROM privacy_erasure_job_leases lease
+ JOIN privacy_erasure_category_jobs selected_job ON selected_job.id=lease.job_id AND selected_job.lease_epoch=lease.epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=selected_job.id
+ JOIN privacy_erasure_executions execution ON execution.id=selected_job.execution_id
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE selected_job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref
+  AND selected_job.status='LEASED' AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp()
+  AND selected_job.category_key='backup-tombstones' AND EXISTS(
+   SELECT 1 FROM privacy_erasure_job_checkpoints selected_checkpoint WHERE selected_checkpoint.job_id=selected_job.id
+    AND selected_checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND selected_checkpoint.action_version='v1' AND selected_checkpoint.status='PENDING')
+  AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id
+ HAVING count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code)) BETWEEN 1 AND 16
+  AND count(DISTINCT checkpoint.operation_code) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code))
+   =count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code))
+  AND count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code) AND checkpoint.action_version='v1')
+   =count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code));
+$$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm_v2(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,
+ p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid; execution_ref uuid; request_ref uuid; existing privacy_protected.restore_tombstone_receipts%ROWTYPE;
+BEGIN
+ SELECT checkpoint.id,job.execution_id,execution.request_id INTO checkpoint_ref,execution_ref,request_ref
+ FROM privacy_erasure_category_jobs job JOIN privacy_erasure_job_leases lease ON lease.job_id=job.id AND lease.epoch=job.lease_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.lease_id=lease.id AND attempt.job_id=job.id
+ JOIN privacy_erasure_executions execution ON execution.id=job.execution_id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ WHERE job.id=p_job_id AND lease.id=p_lease_id AND attempt.id=p_attempt_id AND lease.epoch=p_lease_epoch AND lease.worker_ref=p_worker_ref AND job.status='LEASED'
+  AND lease.released_at IS NULL AND attempt.finished_at IS NULL AND lease.expires_at>clock_timestamp() AND job.category_key='backup-tombstones'
+  AND checkpoint.operation_code='BACKUP_TOMBSTONE_REPLAY' AND checkpoint.action_version='v1' FOR UPDATE OF job,lease,attempt,checkpoint;
+ IF checkpoint_ref IS NULL OR p_ledger_version<>'restore-tombstone/v2'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_receipts WHERE execution_id=execution_ref;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_receipts(execution_id,request_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(execution_ref,request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.request_id,existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(request_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_receipt_conflict'; END IF;
+ UPDATE privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_by_attempt_id=p_attempt_id,completed_at=clock_timestamp(),affected_rows=1,
+  result_sha256=digest(p_ciphertext_sha256||convert_to(p_object_version_id,'UTF8'),'sha256') WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_tombstone_prepare_closure_v2(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,
+ execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz,replay_operations text[])
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+#variable_conflict use_column
+DECLARE v_closed_at timestamptz;
+BEGIN
+ IF p_execution_id IS NULL OR p_worker_ref IS NULL OR NOT EXISTS(
+  SELECT 1 FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+  WHERE execution.id=p_execution_id AND execution.status='SUCCEEDED' AND request.status IN ('PROCESSING','RETRYABLE_FAILED')
+   AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+   AND EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution.id AND receipt.ledger_version='restore-tombstone/v2'))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_unavailable'; END IF;
+ v_closed_at:=clock_timestamp();
+ INSERT INTO privacy_protected.restore_tombstone_closure_intents(execution_id,closed_at,evidence_expires_at)
+ VALUES(p_execution_id,v_closed_at,v_closed_at+interval '24 months') ON CONFLICT(execution_id) DO NOTHING;
+ RETURN QUERY SELECT execution.id,request.id,request.public_ref,COALESCE(request.subject_user_id,request.requester_user_id),execution.plan_sha256,
+  digest(convert_to(string_agg(job.plan_entry_position::text||':'||encode(job.entry_sha256,'hex')||':'||checkpoint.operation_position::text||':'||checkpoint.operation_code||':'||checkpoint.action_version,
+   '|' ORDER BY job.plan_entry_position,checkpoint.operation_position),'UTF8'),'sha256'),execution.accepted_at,intent.closed_at,intent.evidence_expires_at,
+  (array_agg(checkpoint.operation_code ORDER BY job.plan_entry_position,checkpoint.operation_position)
+   FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code)))::text[]
+ FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+ JOIN privacy_protected.restore_tombstone_closure_intents intent ON intent.execution_id=execution.id
+ WHERE execution.id=p_execution_id AND COALESCE(request.subject_user_id,request.requester_user_id) IS NOT NULL
+ GROUP BY execution.id,request.id,request.public_ref,request.subject_user_id,request.requester_user_id,intent.closed_at,intent.evidence_expires_at
+ HAVING count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code)) BETWEEN 1 AND 16
+  AND count(DISTINCT checkpoint.operation_code) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code))
+   =count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code))
+  AND count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code) AND checkpoint.action_version='v1')
+   =count(*) FILTER(WHERE public.privacy_relational_replay_operation_supported(checkpoint.operation_code));
+END; $$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm_closure_v2(
+ p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE; existing privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+BEGIN
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id;
+ IF intent.execution_id IS NULL OR p_worker_ref IS NULL OR p_ledger_version<>'restore-tombstone-closure/v2'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(p_execution_id,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_conflict'; END IF;
+ RETURN p_execution_id;
+END; $$;
+
+CREATE TABLE privacy_protected.restore_ledger_imports (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),kind varchar(16) NOT NULL CHECK(kind IN ('intent','closure')),
+ record_version varchar(40) NOT NULL CHECK(record_version='restore-tombstone/v2'),
+ envelope_version varchar(48) NOT NULL CHECK(envelope_version='x25519-aes256gcm-hkdfsha256/v2'),
+ encryption_key_id varchar(80) NOT NULL CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_key_id varchar(80) NOT NULL CHECK(locator_key_id=btrim(locator_key_id) AND locator_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ locator_digest bytea NOT NULL CHECK(octet_length(locator_digest)=32),ciphertext_sha256 bytea NOT NULL CHECK(octet_length(ciphertext_sha256)=32),
+ object_version_id varchar(1024) NOT NULL CHECK(object_version_id=btrim(object_version_id) AND char_length(object_version_id) BETWEEN 1 AND 1024),
+ written_at timestamptz NOT NULL,verified_at timestamptz NOT NULL,retain_until timestamptz NULL,
+ source_execution_id uuid NOT NULL,source_request_id uuid NOT NULL,source_request_ref uuid NOT NULL,subject_user_id uuid NOT NULL,
+ plan_sha256 bytea NOT NULL CHECK(octet_length(plan_sha256)=32),workset_sha256 bytea NOT NULL CHECK(octet_length(workset_sha256)=32),
+ execution_started_at timestamptz NOT NULL,replay_version varchar(40) NOT NULL CHECK(replay_version='relational-erasure-replay/v1'),
+ action_version varchar(16) NOT NULL CHECK(action_version='v1'),operations text[] NOT NULL,
+ prescription_sha256 bytea NOT NULL CHECK(octet_length(prescription_sha256)=32),record_sha256 bytea NOT NULL CHECK(octet_length(record_sha256)=32),
+ imported_by_ref uuid NOT NULL,imported_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(verified_at>=written_at),CHECK((kind='intent' AND retain_until IS NULL) OR (kind='closure' AND retain_until IS NOT NULL)),
+ CHECK(cardinality(operations) BETWEEN 1 AND 16),UNIQUE(locator_key_id,locator_digest),UNIQUE(source_execution_id)
+);
+CREATE TRIGGER privacy_restore_ledger_imports_immutable BEFORE UPDATE OR DELETE ON privacy_protected.restore_ledger_imports
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.restore_replay_runs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),import_id uuid NOT NULL UNIQUE REFERENCES privacy_protected.restore_ledger_imports(id) ON DELETE RESTRICT,
+ worker_ref uuid NOT NULL,status varchar(16) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SUCCEEDED')),
+ started_at timestamptz NOT NULL DEFAULT clock_timestamp(),completed_at timestamptz NULL,
+ CHECK((status='PENDING' AND completed_at IS NULL) OR (status='SUCCEEDED' AND completed_at IS NOT NULL))
+);
+CREATE TABLE privacy_protected.restore_replay_checkpoints (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),run_id uuid NOT NULL REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ operation_position smallint NOT NULL CHECK(operation_position>0),operation_code varchar(80) NOT NULL,action_version varchar(16) NOT NULL,
+ status varchar(16) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SUCCEEDED')),affected_rows bigint NULL CHECK(affected_rows IS NULL OR affected_rows>=0),
+ result_sha256 bytea NULL CHECK(result_sha256 IS NULL OR octet_length(result_sha256)=32),completed_at timestamptz NULL,
+ UNIQUE(run_id,operation_position),UNIQUE(run_id,operation_code),
+ CHECK((status='PENDING' AND affected_rows IS NULL AND result_sha256 IS NULL AND completed_at IS NULL) OR
+       (status='SUCCEEDED' AND affected_rows IS NOT NULL AND result_sha256 IS NOT NULL AND completed_at IS NOT NULL))
+);
+
+-- Account cutoff happens before ordinary live checkpoints, so a restore from
+-- an older backup must carry those privilege revocations into replay too.
+-- Dedicated replay provenance avoids inventing a user actor.
+ALTER TABLE staff_grants
+ ADD COLUMN revoked_by_replay_run_id uuid NULL REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ DROP CONSTRAINT staff_grants_revocation_valid,
+ ADD CONSTRAINT staff_grants_revocation_valid CHECK(
+  (revoked_at IS NULL AND revoked_by_id IS NULL AND revoked_by_replay_run_id IS NULL AND revoke_reason IS NULL)
+  OR (revoked_at IS NOT NULL AND num_nonnulls(revoked_by_id,revoked_by_replay_run_id)=1
+      AND revoke_reason=btrim(revoke_reason) AND char_length(revoke_reason) BETWEEN 1 AND 500)
+ ) NOT VALID;
+ALTER TABLE privacy_reviewer_grants
+ ADD COLUMN revoked_by_replay_run_id uuid NULL REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ DROP CONSTRAINT privacy_reviewer_grants_check,
+ ADD CONSTRAINT privacy_reviewer_grants_revocation_actor_exactly_one CHECK(
+  (revoked_at IS NULL AND revoked_by IS NULL AND revoked_by_replay_run_id IS NULL)
+  OR (revoked_at IS NOT NULL AND num_nonnulls(revoked_by,revoked_by_replay_run_id)=1)
+ ) NOT VALID;
+ALTER TABLE privacy_executor_grants
+ ADD COLUMN revoked_by_replay_run_id uuid NULL REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ DROP CONSTRAINT privacy_executor_grants_check,
+ ADD CONSTRAINT privacy_executor_grants_revocation_actor_exactly_one CHECK(
+  (revoked_at IS NULL AND revoked_by IS NULL AND revoked_by_replay_run_id IS NULL)
+  OR (revoked_at IS NOT NULL AND num_nonnulls(revoked_by,revoked_by_replay_run_id)=1)
+ ) NOT VALID;
+ALTER TABLE staff_grant_audit_events
+ ADD COLUMN actor_replay_run_id uuid NULL REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ DROP CONSTRAINT staff_grant_audit_actor_principal_exactly_one,
+ ADD CONSTRAINT staff_grant_audit_actor_principal_exactly_one
+  CHECK(num_nonnulls(actor_user_id,actor_principal_id,actor_replay_run_id)=1) NOT VALID;
+ALTER TABLE staff_grants VALIDATE CONSTRAINT staff_grants_revocation_valid;
+ALTER TABLE privacy_reviewer_grants VALIDATE CONSTRAINT privacy_reviewer_grants_revocation_actor_exactly_one;
+ALTER TABLE privacy_executor_grants VALIDATE CONSTRAINT privacy_executor_grants_revocation_actor_exactly_one;
+ALTER TABLE staff_grant_audit_events VALIDATE CONSTRAINT staff_grant_audit_actor_principal_exactly_one;
+
+CREATE OR REPLACE FUNCTION public.audit_staff_grant_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='INSERT' THEN
+  INSERT INTO staff_grant_audit_events(staff_grant_id,action,actor_user_id) VALUES(NEW.id,'GRANTED',NEW.granted_by_id);
+  RETURN NEW;
+ END IF;
+ IF OLD.user_id<>NEW.user_id OR OLD.capability<>NEW.capability OR OLD.programme_id IS DISTINCT FROM NEW.programme_id
+  OR OLD.team_id IS DISTINCT FROM NEW.team_id OR OLD.granted_by_id<>NEW.granted_by_id OR OLD.granted_at<>NEW.granted_at
+  OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL THEN
+  RAISE EXCEPTION 'staff grants are immutable except for one revocation';
+ END IF;
+ INSERT INTO staff_grant_audit_events(staff_grant_id,action,actor_user_id,actor_replay_run_id,occurred_at,reason)
+ VALUES(NEW.id,'REVOKED',NEW.revoked_by_id,NEW.revoked_by_replay_run_id,NEW.revoked_at,NEW.revoke_reason);
+ RETURN NEW;
+END; $$;
+
+ALTER TABLE users ADD COLUMN erasure_replay_run_id uuid NULL
+ REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT;
+CREATE UNIQUE INDEX users_erasure_replay_run_uidx ON users(erasure_replay_run_id) WHERE erasure_replay_run_id IS NOT NULL;
+ALTER TABLE users DROP CONSTRAINT users_identity_shape;
+ALTER TABLE users ADD CONSTRAINT users_identity_shape CHECK (
+ (erased_at IS NULL AND erasure_execution_id IS NULL AND erasure_replay_run_id IS NULL AND (
+   (is_dependent AND guardian_id IS NOT NULL AND email IS NULL AND
+    ((minor_login_id IS NULL AND password_hash IS NULL) OR (minor_login_id IS NOT NULL AND password_hash IS NOT NULL)))
+   OR
+   (NOT is_dependent AND guardian_id IS NULL AND email IS NOT NULL AND password_hash IS NOT NULL AND minor_login_id IS NULL)
+ ))
+ OR
+ (erased_at IS NOT NULL AND num_nonnulls(erasure_execution_id,erasure_replay_run_id)=1 AND NOT is_active
+  AND NOT leaderboard_visible AND NOT is_dependent AND guardian_id IS NULL
+  AND email IS NULL AND email_verified_at IS NULL AND minor_login_id IS NULL
+  AND password_hash IS NULL AND name='Conta eliminada' AND date_of_birth=DATE '1900-01-01')
+) NOT VALID;
+ALTER TABLE users VALIDATE CONSTRAINT users_identity_shape;
+
+CREATE FUNCTION public.privacy_restore_import_authenticated_v2(
+ p_worker_ref uuid,p_kind text,p_record_version text,p_envelope_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_ciphertext_sha256 bytea,p_object_version_id text,p_written_at timestamptz,p_verified_at timestamptz,p_retain_until timestamptz,
+ p_source_execution_id uuid,p_source_request_id uuid,p_source_request_ref uuid,p_subject_user_id uuid,p_plan_sha256 bytea,p_workset_sha256 bytea,
+ p_execution_started_at timestamptz,p_replay_version text,p_action_version text,p_operations text[],p_prescription_sha256 bytea,p_record_sha256 bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE import_ref uuid; existing privacy_protected.restore_ledger_imports%ROWTYPE;
+BEGIN
+ IF p_worker_ref IS NULL OR p_kind NOT IN ('intent','closure') OR p_record_version<>'restore-tombstone/v2'
+  OR p_envelope_version<>'x25519-aes256gcm-hkdfsha256/v2' OR p_replay_version<>'relational-erasure-replay/v1' OR p_action_version<>'v1'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR octet_length(p_plan_sha256)<>32
+  OR octet_length(p_workset_sha256)<>32 OR octet_length(p_prescription_sha256)<>32 OR octet_length(p_record_sha256)<>32
+  OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_source_execution_id IS NULL OR p_source_request_id IS NULL
+  OR p_source_request_ref IS NULL OR p_subject_user_id IS NULL OR p_execution_started_at IS NULL
+  OR cardinality(p_operations) NOT BETWEEN 1 AND 16 OR EXISTS(SELECT 1 FROM unnest(p_operations) operation WHERE NOT public.privacy_relational_replay_operation_supported(operation))
+  OR cardinality(p_operations)<>(SELECT count(DISTINCT operation) FROM unnest(p_operations) operation)
+  OR (p_kind='intent' AND p_retain_until IS NOT NULL) OR (p_kind='closure' AND (p_retain_until IS NULL OR p_verified_at>p_retain_until)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_ledger_imports
+  WHERE (locator_key_id=p_locator_key_id AND locator_digest=p_locator_digest) OR source_execution_id=p_source_execution_id FOR UPDATE;
+ IF existing.id IS NULL THEN
+  INSERT INTO privacy_protected.restore_ledger_imports(kind,record_version,envelope_version,encryption_key_id,locator_key_id,locator_digest,ciphertext_sha256,
+   object_version_id,written_at,verified_at,retain_until,source_execution_id,source_request_id,source_request_ref,subject_user_id,plan_sha256,workset_sha256,
+   execution_started_at,replay_version,action_version,operations,prescription_sha256,record_sha256,imported_by_ref)
+  VALUES(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,p_object_version_id,p_written_at,
+   p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,p_plan_sha256,p_workset_sha256,
+   p_execution_started_at,p_replay_version,p_action_version,p_operations,p_prescription_sha256,p_record_sha256,p_worker_ref) RETURNING id INTO import_ref;
+ ELSIF ROW(existing.kind,existing.record_version,existing.envelope_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,
+   existing.ciphertext_sha256,existing.object_version_id,existing.written_at,existing.verified_at,existing.retain_until,existing.source_execution_id,
+   existing.source_request_id,existing.source_request_ref,existing.subject_user_id,existing.plan_sha256,existing.workset_sha256,existing.execution_started_at,
+   existing.replay_version,existing.action_version,existing.operations,existing.prescription_sha256,existing.record_sha256)
+  IS DISTINCT FROM ROW(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,
+   p_object_version_id,p_written_at,p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,
+   p_plan_sha256,p_workset_sha256,p_execution_started_at,p_replay_version,p_action_version,p_operations,p_prescription_sha256,p_record_sha256) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_conflict';
+ ELSE import_ref:=existing.id; END IF;
+ RETURN import_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_begin_replay(p_import_id uuid,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE run_ref uuid; imported privacy_protected.restore_ledger_imports%ROWTYPE;
+BEGIN
+ SELECT * INTO imported FROM privacy_protected.restore_ledger_imports WHERE id=p_import_id;
+ IF imported.id IS NULL OR p_worker_ref IS NULL OR imported.record_version<>'restore-tombstone/v2' OR imported.envelope_version<>'x25519-aes256gcm-hkdfsha256/v2'
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_rejected'; END IF;
+ INSERT INTO privacy_protected.restore_replay_runs(import_id,worker_ref) VALUES(p_import_id,p_worker_ref) ON CONFLICT(import_id) DO NOTHING;
+ SELECT id INTO run_ref FROM privacy_protected.restore_replay_runs WHERE import_id=p_import_id FOR UPDATE;
+ -- Isolated replay may resume after a process crash. The authenticated import
+ -- is immutable; moving only its execution fence to the new worker preserves
+ -- exact idempotency without weakening the prescription.
+ UPDATE privacy_protected.restore_replay_runs SET worker_ref=p_worker_ref
+  WHERE id=run_ref AND status='PENDING' AND worker_ref<>p_worker_ref;
+ INSERT INTO privacy_protected.restore_replay_checkpoints(run_id,operation_position,operation_code,action_version)
+ SELECT run_ref,ordinality::smallint,operation,imported.action_version FROM unnest(imported.operations) WITH ORDINALITY item(operation,ordinality)
+ ON CONFLICT(run_id,operation_position) DO NOTHING;
+ IF (SELECT count(*) FROM privacy_protected.restore_replay_checkpoints WHERE run_id=run_ref)<>cardinality(imported.operations)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_conflict'; END IF;
+ RETURN run_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_apply_relational_operation(
+ p_replay_run_id uuid,p_subject_user_id uuid,p_effective_at timestamptz,p_operation_code text
+) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE changed bigint:=0; n bigint:=0; principal_ref uuid; subject_name text; subject_email text; subject_login text;
+BEGIN
+ IF p_replay_run_id IS NULL OR p_subject_user_id IS NULL OR p_effective_at IS NULL OR NOT public.privacy_relational_replay_operation_supported(p_operation_code)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_operation_rejected'; END IF;
+ SELECT name,email::text,minor_login_id::text INTO subject_name,subject_email,subject_login FROM users WHERE id=p_subject_user_id FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_subject_missing'; END IF;
+ CASE p_operation_code
+ WHEN 'ACTIVITY_CONNECTION_DISCONNECT' THEN
+  UPDATE activity_connections SET status='DISCONNECTED',provider_user_id='erased-'||id::text,credentials_ciphertext=NULL,credential_key_id=NULL,
+   credential_expires_at=NULL,scopes='{}',sync_cursor=NULL,last_error_code=NULL,last_error_message=NULL,last_error_at=NULL,
+   disconnected_at=COALESCE(disconnected_at,clock_timestamp()),updated_at=clock_timestamp()
+  WHERE user_id=p_subject_user_id AND status<>'DISCONNECTED'; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'ACTIVITY_SUBJECT_DELETE' THEN
+  DELETE FROM activity_connections WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'ANNOUNCEMENT_DELIVERY_DELETE' THEN
+  DELETE FROM announcement_deliveries WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'AUTH_ACCESS_REVOKE' THEN
+  DELETE FROM sessions WHERE subject_indexed AND user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM user_platform_roles WHERE user_id=p_subject_user_id; GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  UPDATE staff_grants SET revoked_by_id=NULL,revoked_by_replay_run_id=p_replay_run_id,revoked_at=p_effective_at,
+   revoke_reason='PRIVACY_ACCOUNT_CLOSURE' WHERE user_id=p_subject_user_id AND revoked_at IS NULL;
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  WITH revoked AS(UPDATE privacy_reviewer_grants SET revoked_by=NULL,revoked_by_replay_run_id=p_replay_run_id,revoked_at=p_effective_at
+   WHERE user_id=p_subject_user_id AND revoked_at IS NULL RETURNING id)
+  INSERT INTO privacy_reviewer_grant_events(grant_id,actor_ref,action,occurred_at) SELECT id,p_replay_run_id,'REVOKED',p_effective_at FROM revoked;
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  WITH revoked AS(UPDATE privacy_executor_grants SET revoked_by=NULL,revoked_by_replay_run_id=p_replay_run_id,revoked_at=p_effective_at
+   WHERE user_id=p_subject_user_id AND revoked_at IS NULL RETURNING id)
+  INSERT INTO privacy_executor_grant_events(grant_id,actor_ref,action,occurred_at) SELECT id,p_replay_run_id,'REVOKED',p_effective_at FROM revoked;
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+ WHEN 'AUTH_TOKEN_DELETE' THEN
+  DELETE FROM email_verification_tokens WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM password_reset_tokens WHERE user_id=p_subject_user_id; GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+ WHEN 'DEPENDANT_RELATIONSHIP_DELETE' THEN
+  IF EXISTS(SELECT 1 FROM users WHERE guardian_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_dependants_unresolved'; END IF;
+ WHEN 'EVENT_RESPONSE_DELETE' THEN
+  DELETE FROM event_responses WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'IDENTITY_CLEAR' THEN
+  IF EXISTS(SELECT 1 FROM sessions WHERE NOT subject_indexed AND expiry>clock_timestamp()) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_legacy_sessions_unresolved'; END IF;
+  IF EXISTS(SELECT 1 FROM users WHERE guardian_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_dependants_unresolved'; END IF;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=p_subject_user_id;
+  DELETE FROM email_verification_tokens WHERE user_id=p_subject_user_id;
+  DELETE FROM password_reset_tokens WHERE user_id=p_subject_user_id;
+  DELETE FROM user_platform_roles WHERE user_id=p_subject_user_id;
+  UPDATE users SET name='Conta eliminada',email=NULL,email_verified_at=NULL,minor_login_id=NULL,password_hash=NULL,guardian_id=NULL,is_dependent=false,
+   date_of_birth=DATE '1900-01-01',is_active=false,leaderboard_visible=false,credential_version=credential_version+1,
+   erased_at=clock_timestamp(),erasure_execution_id=NULL,erasure_replay_run_id=p_replay_run_id,updated_at=clock_timestamp()
+  WHERE id=p_subject_user_id AND erased_at IS NULL; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'MEMBERSHIP_ACTIVE_REVOKE' THEN
+  IF EXISTS(SELECT 1 FROM training_prescriptions prescription JOIN user_memberships membership ON membership.id=prescription.membership_id
+   WHERE membership.user_id=p_subject_user_id AND membership.starts_on>=p_effective_at::date) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_dependency_unsupported'; END IF;
+  DELETE FROM training_variations WHERE target_membership_id IN(SELECT id FROM user_memberships WHERE user_id=p_subject_user_id AND starts_on>=p_effective_at::date);
+  GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM training_variation_group_members WHERE membership_id IN(SELECT id FROM user_memberships WHERE user_id=p_subject_user_id AND starts_on>=p_effective_at::date);
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  DELETE FROM training_group_members WHERE membership_id IN(SELECT id FROM user_memberships WHERE user_id=p_subject_user_id AND starts_on>=p_effective_at::date);
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  DELETE FROM user_memberships WHERE user_id=p_subject_user_id AND starts_on>=p_effective_at::date;
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  UPDATE user_memberships SET ends_on=p_effective_at::date-1,updated_at=clock_timestamp()
+   WHERE user_id=p_subject_user_id AND starts_on<p_effective_at::date AND (ends_on IS NULL OR ends_on>=p_effective_at::date);
+  GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+ WHEN 'MEMBERSHIP_HISTORY_ANONYMIZE' THEN
+  IF EXISTS(SELECT 1 FROM training_prescriptions prescription JOIN user_memberships membership ON membership.id=prescription.membership_id
+   WHERE membership.user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_dependency_unsupported'; END IF;
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=p_subject_user_id) THEN
+   INSERT INTO privacy_pseudonymous_principals(purpose) VALUES('MEMBERSHIP') RETURNING id INTO principal_ref;
+   PERFORM set_config('mycfc.privacy_erasure_operation','MEMBERSHIP_HISTORY_ANONYMIZE',true);
+   UPDATE training_variations SET change_summary=privacy_scrub_audit_text(change_summary,p_subject_user_id,subject_name,subject_email,subject_login),
+    patch=privacy_scrub_audit_json(patch,p_subject_user_id,subject_name,subject_email,subject_login),updated_at=clock_timestamp()
+   WHERE target_membership_id IN(SELECT id FROM user_memberships WHERE user_id=p_subject_user_id); GET DIAGNOSTICS changed=ROW_COUNT;
+   UPDATE user_memberships SET user_id=NULL,principal_id=principal_ref,updated_at=clock_timestamp() WHERE user_id=p_subject_user_id;
+   GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  END IF;
+ WHEN 'PROFILE_HEALTH_DELETE' THEN
+  UPDATE member_profiles SET emergency_contact_name='',emergency_contact_relationship='',emergency_contact_phone='',emergency_contact_alternate_phone='',
+   medical_declaration='UNKNOWN',allergies='',medical_conditions='',medication='',activity_restrictions='',medical_notes='',updated_at=clock_timestamp()
+  WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'PROFILE_IDENTITY_DELETE' THEN
+  DELETE FROM member_profiles WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'REPAIR_REPORTER_ANONYMIZE' THEN
+  UPDATE repair_requests SET reported_by_id=NULL,updated_at=clock_timestamp() WHERE reported_by_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'SUGGESTION_SUBJECT_DELETE' THEN
+  DELETE FROM suggestions WHERE requester_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'TRAINING_PRESCRIPTION_DELETE' THEN
+  UPDATE training_session_outcomes SET prescription_id=NULL,updated_at=clock_timestamp()
+   WHERE prescription_id IN(SELECT id FROM training_prescriptions WHERE athlete_user_id=p_subject_user_id);
+  PERFORM set_config('mycfc.privacy_erasure_operation','TRAINING_PRESCRIPTION_DELETE',true);
+  DELETE FROM training_prescriptions WHERE athlete_user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'TRAINING_RESULT_DELETE' THEN
+  DELETE FROM training_session_outcomes WHERE user_id=p_subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM training_logs WHERE user_id=p_subject_user_id; GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+  DELETE FROM performance_metrics WHERE user_id=p_subject_user_id; GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+ END CASE;
+
+ CASE p_operation_code
+ WHEN 'ACTIVITY_CONNECTION_DISCONNECT' THEN
+  IF EXISTS(SELECT 1 FROM activity_connections WHERE user_id=p_subject_user_id AND (status<>'DISCONNECTED' OR credentials_ciphertext IS NOT NULL OR credential_key_id IS NOT NULL OR cardinality(scopes)>0 OR sync_cursor IS NOT NULL)) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'ACTIVITY_SUBJECT_DELETE' THEN IF EXISTS(SELECT 1 FROM activity_connections WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'ANNOUNCEMENT_DELIVERY_DELETE' THEN IF EXISTS(SELECT 1 FROM announcement_deliveries WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'AUTH_ACCESS_REVOKE' THEN IF EXISTS(SELECT 1 FROM sessions WHERE subject_indexed AND user_id=p_subject_user_id)
+  OR EXISTS(SELECT 1 FROM user_platform_roles WHERE user_id=p_subject_user_id)
+  OR EXISTS(SELECT 1 FROM staff_grants WHERE user_id=p_subject_user_id AND revoked_at IS NULL)
+  OR EXISTS(SELECT 1 FROM privacy_reviewer_grants WHERE user_id=p_subject_user_id AND revoked_at IS NULL)
+  OR EXISTS(SELECT 1 FROM privacy_executor_grants WHERE user_id=p_subject_user_id AND revoked_at IS NULL)
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'AUTH_TOKEN_DELETE' THEN IF EXISTS(SELECT 1 FROM email_verification_tokens WHERE user_id=p_subject_user_id) OR EXISTS(SELECT 1 FROM password_reset_tokens WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'DEPENDANT_RELATIONSHIP_DELETE' THEN IF EXISTS(SELECT 1 FROM users WHERE guardian_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'EVENT_RESPONSE_DELETE' THEN IF EXISTS(SELECT 1 FROM event_responses WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'IDENTITY_CLEAR' THEN IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_subject_user_id AND erased_at IS NOT NULL AND erasure_execution_id IS NULL
+  AND erasure_replay_run_id=p_replay_run_id AND NOT is_active AND email IS NULL AND minor_login_id IS NULL AND password_hash IS NULL AND guardian_id IS NULL)
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'MEMBERSHIP_ACTIVE_REVOKE' THEN IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=p_subject_user_id AND (starts_on>=p_effective_at::date OR ends_on IS NULL OR ends_on>=p_effective_at::date)) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'MEMBERSHIP_HISTORY_ANONYMIZE' THEN
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=p_subject_user_id)
+   OR EXISTS(SELECT 1 FROM user_memberships WHERE principal_id=principal_ref AND (starts_on>=p_effective_at::date OR ends_on IS NULL OR ends_on>=p_effective_at::date))
+   OR EXISTS(SELECT 1 FROM training_variations variation JOIN user_memberships membership ON membership.id=variation.target_membership_id
+      WHERE membership.principal_id=principal_ref
+       AND (variation.change_summary IS DISTINCT FROM privacy_scrub_audit_text(variation.change_summary,p_subject_user_id,subject_name,subject_email,subject_login)
+        OR variation.patch IS DISTINCT FROM privacy_scrub_audit_json(variation.patch,p_subject_user_id,subject_name,subject_email,subject_login)))
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'PROFILE_HEALTH_DELETE' THEN IF EXISTS(SELECT 1 FROM member_profiles WHERE user_id=p_subject_user_id AND (emergency_contact_name<>'' OR emergency_contact_relationship<>'' OR emergency_contact_phone<>'' OR emergency_contact_alternate_phone<>'' OR medical_declaration<>'UNKNOWN' OR allergies<>'' OR medical_conditions<>'' OR medication<>'' OR activity_restrictions<>'' OR medical_notes<>'')) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'PROFILE_IDENTITY_DELETE' THEN IF EXISTS(SELECT 1 FROM member_profiles WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'REPAIR_REPORTER_ANONYMIZE' THEN IF EXISTS(SELECT 1 FROM repair_requests WHERE reported_by_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'SUGGESTION_SUBJECT_DELETE' THEN IF EXISTS(SELECT 1 FROM suggestions WHERE requester_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'TRAINING_PRESCRIPTION_DELETE' THEN IF EXISTS(SELECT 1 FROM training_prescriptions WHERE athlete_user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'TRAINING_RESULT_DELETE' THEN IF EXISTS(SELECT 1 FROM training_session_outcomes WHERE user_id=p_subject_user_id) OR EXISTS(SELECT 1 FROM training_logs WHERE user_id=p_subject_user_id) OR EXISTS(SELECT 1 FROM performance_metrics WHERE user_id=p_subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ END CASE;
+ RETURN changed;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_execute_checkpoint(
+ p_run_id uuid,p_worker_ref uuid,p_operation_position smallint,p_operation_code text,p_action_version text,p_prescription_sha256 bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE run_row privacy_protected.restore_replay_runs%ROWTYPE; imported privacy_protected.restore_ledger_imports%ROWTYPE;
+ checkpoint_row privacy_protected.restore_replay_checkpoints%ROWTYPE; changed bigint; result_digest bytea;
+BEGIN
+ SELECT * INTO run_row FROM privacy_protected.restore_replay_runs WHERE id=p_run_id FOR UPDATE;
+ SELECT * INTO imported FROM privacy_protected.restore_ledger_imports WHERE id=run_row.import_id;
+ SELECT * INTO checkpoint_row FROM privacy_protected.restore_replay_checkpoints
+  WHERE run_id=p_run_id AND operation_position=p_operation_position FOR UPDATE;
+ IF run_row.id IS NULL OR imported.id IS NULL OR checkpoint_row.id IS NULL OR run_row.worker_ref<>p_worker_ref OR run_row.status NOT IN ('PENDING','SUCCEEDED')
+  OR checkpoint_row.operation_code<>p_operation_code OR checkpoint_row.action_version<>p_action_version
+  OR imported.prescription_sha256<>p_prescription_sha256 OR imported.action_version<>p_action_version
+  OR imported.operations[p_operation_position]<>p_operation_code OR NOT public.privacy_relational_replay_operation_supported(p_operation_code)
+  OR EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints prior WHERE prior.run_id=p_run_id AND prior.operation_position<p_operation_position AND prior.status<>'SUCCEEDED')
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_checkpoint_rejected'; END IF;
+ IF checkpoint_row.status='SUCCEEDED' THEN RETURN checkpoint_row.id; END IF;
+ changed:=public.privacy_restore_apply_relational_operation(p_run_id,imported.subject_user_id,imported.execution_started_at,p_operation_code);
+ result_digest:=digest(convert_to(p_operation_position::text||':'||p_operation_code||':'||changed::text,'UTF8'),'sha256');
+ UPDATE privacy_protected.restore_replay_checkpoints SET status='SUCCEEDED',affected_rows=changed,result_sha256=result_digest,completed_at=clock_timestamp()
+  WHERE id=checkpoint_row.id;
+ IF NOT EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints WHERE run_id=p_run_id AND status<>'SUCCEEDED') THEN
+  UPDATE privacy_protected.restore_replay_runs SET status='SUCCEEDED',completed_at=clock_timestamp() WHERE id=p_run_id;
+ END IF;
+ RETURN checkpoint_row.id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_worker_execute_checkpoint(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE execution_ref uuid;
+BEGIN
+ SELECT job.execution_id INTO execution_ref FROM privacy_erasure_category_jobs job
+ JOIN privacy_erasure_job_leases lease ON lease.id=p_lease_id AND lease.job_id=job.id AND lease.epoch=p_lease_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.id=p_attempt_id AND attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_lease_epoch
+ WHERE job.id=p_job_id AND job.status='LEASED' AND lease.worker_ref=p_worker_ref AND lease.released_at IS NULL
+  AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL FOR UPDATE OF job,lease,attempt;
+ IF NOT FOUND THEN RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version); END IF;
+ IF p_operation_code<>'BACKUP_TOMBSTONE_REPLAY' AND NOT EXISTS(
+  SELECT 1 FROM privacy_protected.restore_tombstone_receipts receipt WHERE receipt.execution_id=execution_ref AND receipt.ledger_version='restore-tombstone/v2')
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_tombstone_required'; END IF;
+ RETURN public.privacy_worker_execute_checkpoint_without_tombstone_guard(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+END; $$;
+
+REVOKE ALL ON TABLE privacy_protected.restore_ledger_imports,privacy_protected.restore_replay_runs,privacy_protected.restore_replay_checkpoints FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_relational_replay_operation_supported(text),
+ public.privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid),
+ public.privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),
+ public.privacy_tombstone_prepare_closure_v2(uuid,uuid),
+ public.privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),
+ public.privacy_restore_import_authenticated_v2(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,text,text,text[],bytea,bytea),
+ public.privacy_restore_begin_replay(uuid,uuid),
+ public.privacy_restore_apply_relational_operation(uuid,uuid,timestamptz,text),
+ public.privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) FROM PUBLIC;
+
+-- #246 external provider/recipient execution foundation. The source registry is
+-- deliberately empty in production. These protected rows and routines remain
+-- inert until #109 facts, runtime adapters, worker credentials, and activation
+-- are separately approved.
+
+CREATE TABLE privacy_protected.provider_connections (
+ id uuid PRIMARY KEY, subject_user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+ service_code varchar(120) NOT NULL, provider_role varchar(30) NOT NULL CHECK(provider_role IN ('PROCESSOR','AUTONOMOUS_RECIPIENT')),
+ provider_contract_version varchar(80) NOT NULL, registry_evidence_key_id varchar(80) NOT NULL,
+ registry_evidence_digest bytea NOT NULL CHECK(octet_length(registry_evidence_digest)=32),
+ target_key_id varchar(80) NOT NULL, target_opaque bytea NOT NULL CHECK(octet_length(target_opaque) BETWEEN 1 AND 16384),
+ credential_key_id varchar(80) NULL, credential_opaque bytea NULL,
+ state varchar(20) NOT NULL CHECK(state IN ('ACTIVE','QUARANTINED','DISCONNECTED')),
+ state_version bigint NOT NULL DEFAULT 1 CHECK(state_version>0), sync_enabled boolean NOT NULL DEFAULT false,
+ webhook_enabled boolean NOT NULL DEFAULT false, reconnect_enabled boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ CHECK(service_code=btrim(service_code) AND service_code~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK(provider_contract_version=btrim(provider_contract_version) AND provider_contract_version~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK(registry_evidence_key_id=btrim(registry_evidence_key_id) AND registry_evidence_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK(target_key_id=btrim(target_key_id) AND target_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK((credential_key_id IS NULL)=(credential_opaque IS NULL)),
+ CHECK(credential_key_id IS NULL OR (credential_key_id=btrim(credential_key_id) AND credential_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' AND octet_length(credential_opaque) BETWEEN 1 AND 16384)),
+ CHECK((state='ACTIVE' AND credential_opaque IS NOT NULL)
+    OR (state IN ('QUARANTINED','DISCONNECTED') AND credential_opaque IS NULL AND NOT sync_enabled AND NOT webhook_enabled AND NOT reconnect_enabled)),
+ CHECK(updated_at>=created_at)
+);
+CREATE INDEX privacy_provider_connections_subject_idx ON privacy_protected.provider_connections(subject_user_id,state,service_code,id);
+
+CREATE TABLE privacy_protected.provider_capture_sets (
+ execution_id uuid NOT NULL REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ job_id uuid NOT NULL, checkpoint_id uuid PRIMARY KEY, subject_user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+ category_key varchar(120) NOT NULL, expected_target_count integer NOT NULL CHECK(expected_target_count>=0),
+ operation_code varchar(120) NOT NULL CHECK(operation_code='PROVIDER_RECIPIENT_NOTIFY'),
+ action_version varchar(40) NOT NULL CHECK(action_version='v1'), created_at timestamptz NOT NULL,
+ FOREIGN KEY(job_id) REFERENCES public.privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ FOREIGN KEY(checkpoint_id,job_id,operation_code,action_version) REFERENCES public.privacy_erasure_job_checkpoints(id,job_id,operation_code,action_version) ON DELETE RESTRICT,
+ UNIQUE(execution_id,category_key)
+);
+
+CREATE TABLE privacy_protected.provider_targets (
+ id uuid PRIMARY KEY, connection_id uuid NOT NULL, execution_id uuid NOT NULL, job_id uuid NOT NULL, checkpoint_id uuid NOT NULL,
+ plan_entry_sha256 bytea NOT NULL CHECK(octet_length(plan_entry_sha256)=32), category_key varchar(120) NOT NULL,
+ service_code varchar(120) NOT NULL, target_kind varchar(40) NOT NULL CHECK(target_kind='REMOTE_ACCOUNT'),
+ provider_role varchar(30) NOT NULL CHECK(provider_role IN ('PROCESSOR','AUTONOMOUS_RECIPIENT')),
+ target_version bigint NOT NULL CHECK(target_version>0), operation_code varchar(120) NOT NULL CHECK(operation_code='PROVIDER_RECIPIENT_NOTIFY'),
+ action_version varchar(40) NOT NULL CHECK(action_version='v1'), provider_contract_version varchar(80) NOT NULL,
+ registry_evidence_key_id varchar(80) NOT NULL, registry_evidence_digest bytea NOT NULL CHECK(octet_length(registry_evidence_digest)=32),
+ local_state varchar(20) NOT NULL CHECK(local_state IN ('ACTIVE','DISCONNECTED')),
+ target_envelope_version varchar(100) NOT NULL CHECK(target_envelope_version='x25519-aes256gcm-hkdfsha256/provider-target-v1'),
+ target_algorithm varchar(80) NOT NULL CHECK(target_algorithm='X25519-HKDF-SHA256-AES-256-GCM'), target_encryption_key_id varchar(80) NOT NULL,
+ target_encapsulation bytea NOT NULL CHECK(octet_length(target_encapsulation)=32), target_nonce bytea NOT NULL CHECK(octet_length(target_nonce)=12),
+ target_ciphertext bytea NOT NULL CHECK(octet_length(target_ciphertext) BETWEEN 17 AND 18432), created_at timestamptz NOT NULL,
+ FOREIGN KEY(job_id,execution_id,plan_entry_sha256,category_key) REFERENCES public.privacy_erasure_category_jobs(id,execution_id,entry_sha256,category_key) ON DELETE RESTRICT,
+ FOREIGN KEY(checkpoint_id,job_id,operation_code,action_version) REFERENCES public.privacy_erasure_job_checkpoints(id,job_id,operation_code,action_version) ON DELETE RESTRICT,
+ CHECK(service_code=btrim(service_code) AND service_code~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK(provider_contract_version=btrim(provider_contract_version) AND provider_contract_version~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK(registry_evidence_key_id=btrim(registry_evidence_key_id) AND registry_evidence_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK(target_encryption_key_id=btrim(target_encryption_key_id) AND target_encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ UNIQUE(id,job_id), UNIQUE(connection_id), UNIQUE(id,execution_id,service_code,target_kind)
+);
+CREATE INDEX privacy_provider_targets_checkpoint_idx ON privacy_protected.provider_targets(checkpoint_id,id);
+
+CREATE TABLE privacy_protected.provider_target_digests (
+ target_id uuid NOT NULL, execution_id uuid NOT NULL REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ service_code varchar(120) NOT NULL, target_kind varchar(40) NOT NULL CHECK(target_kind='REMOTE_ACCOUNT'),
+ digest_key_id varchar(80) NOT NULL, target_digest bytea NOT NULL CHECK(octet_length(target_digest)=32), created_at timestamptz NOT NULL,
+ PRIMARY KEY(target_id,digest_key_id),
+ FOREIGN KEY(target_id,execution_id,service_code,target_kind) REFERENCES privacy_protected.provider_targets(id,execution_id,service_code,target_kind) ON DELETE RESTRICT,
+ CHECK(digest_key_id=btrim(digest_key_id) AND digest_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ UNIQUE(execution_id,service_code,target_kind,digest_key_id,target_digest)
+);
+
+CREATE TABLE privacy_protected.provider_credential_quarantine (
+ target_id uuid PRIMARY KEY REFERENCES privacy_protected.provider_targets(id) ON DELETE RESTRICT,
+ source_commitment_key_id varchar(80) NOT NULL, source_commitment bytea NOT NULL CHECK(octet_length(source_commitment)=32),
+ envelope_version varchar(100) NOT NULL CHECK(envelope_version='x25519-aes256gcm-hkdfsha256/provider-target-v1'),
+ algorithm varchar(80) NOT NULL CHECK(algorithm='X25519-HKDF-SHA256-AES-256-GCM'), encryption_key_id varchar(80) NOT NULL,
+ encapsulation bytea NOT NULL CHECK(octet_length(encapsulation)=32), nonce bytea NOT NULL CHECK(octet_length(nonce)=12),
+ ciphertext bytea NOT NULL CHECK(octet_length(ciphertext) BETWEEN 17 AND 18432), quarantined_at timestamptz NOT NULL,
+ CHECK(source_commitment_key_id=btrim(source_commitment_key_id) AND source_commitment_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK(encryption_key_id=btrim(encryption_key_id) AND encryption_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$')
+);
+
+CREATE TABLE privacy_protected.provider_evidence (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), target_id uuid NOT NULL UNIQUE, job_id uuid NOT NULL, attempt_id uuid NOT NULL,
+ evidence_version varchar(50) NOT NULL CHECK(evidence_version='provider-structured-evidence/v1'),
+ outcome_code varchar(40) NOT NULL CHECK(outcome_code IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED','NOT_CONTROLLABLE')),
+ adapter_attempts integer NOT NULL CHECK(adapter_attempts BETWEEN 1 AND 5),
+ evidence_code varchar(50) NOT NULL CHECK(evidence_code IN ('REMOTE_DELETION_RECEIPT','REMOTE_ALREADY_DISCONNECTED','RECIPIENT_NOTIFICATION_CONFIRMED')),
+ recipient_role varchar(40) NULL CHECK(recipient_role='AUTONOMOUS_RECIPIENT'),
+ channel_code varchar(30) NULL CHECK(channel_code IN ('API','EMAIL','PORTAL','REGISTERED_POST')),
+ notification_code varchar(30) NULL CHECK(notification_code IN ('ACCEPTED','DELIVERED')),
+ reason_code varchar(40) NULL CHECK(reason_code='REGISTRY_DECLARED_AUTONOMOUS'),
+ guidance_code varchar(40) NULL CHECK(guidance_code='CONTACT_RECIPIENT'),
+ transcript_key_id varchar(80) NOT NULL, transcript_digest bytea NOT NULL CHECK(octet_length(transcript_digest)=32), occurred_at timestamptz NOT NULL,
+ FOREIGN KEY(target_id,job_id) REFERENCES privacy_protected.provider_targets(id,job_id) ON DELETE RESTRICT,
+ FOREIGN KEY(attempt_id,job_id) REFERENCES public.privacy_erasure_job_attempts(id,job_id) ON DELETE RESTRICT,
+ CHECK(transcript_key_id=btrim(transcript_key_id) AND transcript_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'),
+ CHECK((outcome_code IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED') AND recipient_role IS NULL AND channel_code IS NULL AND notification_code IS NULL AND reason_code IS NULL AND guidance_code IS NULL)
+    OR (outcome_code='NOT_CONTROLLABLE' AND evidence_code='RECIPIENT_NOTIFICATION_CONFIRMED' AND recipient_role IS NOT NULL AND channel_code IS NOT NULL AND notification_code IS NOT NULL AND reason_code IS NOT NULL AND guidance_code IS NOT NULL)),
+ CHECK((outcome_code='REMOTE_DELETION_VERIFIED')=(evidence_code='REMOTE_DELETION_RECEIPT') OR outcome_code NOT IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED')),
+ CHECK((outcome_code='ALREADY_DISCONNECTED')=(evidence_code='REMOTE_ALREADY_DISCONNECTED') OR outcome_code NOT IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED'))
+);
+
+CREATE TRIGGER privacy_provider_capture_sets_immutable BEFORE UPDATE OR DELETE ON privacy_protected.provider_capture_sets FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_provider_targets_immutable BEFORE UPDATE OR DELETE ON privacy_protected.provider_targets FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_provider_target_digests_immutable BEFORE UPDATE OR DELETE ON privacy_protected.provider_target_digests FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_provider_evidence_immutable BEFORE UPDATE OR DELETE ON privacy_protected.provider_evidence FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION public.privacy_execution_capture_provider_connections(p_execution_id uuid,p_subject_user_id uuid,p_category_key text)
+RETURNS TABLE(connection_id uuid,job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,service_code text,
+ provider_role text,provider_contract_version text,target_version bigint,local_state text,registry_evidence_key_id text,registry_evidence_digest bytea,
+ target_source_key_id text,target_opaque bytea,credential_source_key_id text,credential_opaque bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_job uuid;v_checkpoint uuid;v_entry bytea;v_expected integer;
+BEGIN
+ SELECT job.id,checkpoint.id,job.entry_sha256 INTO v_job,v_checkpoint,v_entry
+ FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id AND job.category_key=p_category_key
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id AND checkpoint.operation_code='PROVIDER_RECIPIENT_NOTIFY' AND checkpoint.action_version='v1'
+ WHERE execution.id=p_execution_id AND execution.status='RUNNING' AND execution.request_version_at_start=request.version
+ AND execution.executor_version='privacy-erasure-executor/v2' AND execution.schema_version='privacy-erasure-plan/v2'
+ AND request.subject_user_id=p_subject_user_id AND request.status IN ('AWAITING_EXECUTION','PARTIALLY_APPROVED') FOR SHARE OF execution,request,job,checkpoint;
+ IF v_checkpoint IS NULL OR EXISTS(SELECT 1 FROM privacy_protected.provider_capture_sets WHERE execution_id=p_execution_id) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_capture_invalid'; END IF;
+ IF EXISTS(SELECT 1 FROM privacy_protected.provider_connections WHERE subject_user_id=p_subject_user_id AND state='QUARANTINED') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_quarantine_unresolved'; END IF;
+ SELECT count(*)::integer INTO v_expected FROM privacy_protected.provider_connections WHERE subject_user_id=p_subject_user_id AND state IN ('ACTIVE','DISCONNECTED');
+ INSERT INTO privacy_protected.provider_capture_sets(execution_id,job_id,checkpoint_id,subject_user_id,category_key,expected_target_count,operation_code,action_version,created_at)
+ VALUES(p_execution_id,v_job,v_checkpoint,p_subject_user_id,p_category_key,v_expected,'PROVIDER_RECIPIENT_NOTIFY','v1',clock_timestamp());
+ RETURN QUERY WITH selected AS MATERIALIZED (
+  SELECT c.*,c.state AS prior_state,c.credential_opaque AS prior_credential FROM privacy_protected.provider_connections c
+  WHERE c.subject_user_id=p_subject_user_id AND c.state IN ('ACTIVE','DISCONNECTED') ORDER BY c.service_code,c.id FOR UPDATE
+ ), fenced AS (
+ UPDATE privacy_protected.provider_connections c SET state=CASE WHEN selected.prior_state='ACTIVE' THEN 'QUARANTINED' ELSE 'DISCONNECTED' END,
+   state_version=c.state_version+1,sync_enabled=false,webhook_enabled=false,reconnect_enabled=false,
+   credential_key_id=NULL,credential_opaque=NULL,updated_at=clock_timestamp()
+  FROM selected WHERE c.id=selected.id
+  RETURNING c.id,c.service_code,c.provider_role,c.provider_contract_version,c.state_version,c.registry_evidence_key_id,c.registry_evidence_digest,
+   c.target_key_id,c.target_opaque
+ )
+ SELECT fenced.id,v_job,v_checkpoint,v_entry,p_category_key::text,fenced.service_code::text,fenced.provider_role::text,
+  fenced.provider_contract_version::text,fenced.state_version,selected.prior_state::text,fenced.registry_evidence_key_id::text,fenced.registry_evidence_digest,
+  fenced.target_key_id::text,fenced.target_opaque,selected.credential_key_id::text,selected.prior_credential
+ FROM fenced JOIN selected ON selected.id=fenced.id ORDER BY fenced.service_code,fenced.id;
+END;$$;
+
+CREATE FUNCTION public.privacy_execution_materialize_provider_target(
+ p_target_id uuid,p_connection_id uuid,p_execution_id uuid,p_job_id uuid,p_checkpoint_id uuid,p_plan_entry_sha256 bytea,p_category_key text,
+ p_service_code text,p_provider_role text,p_provider_contract_version text,p_target_version bigint,p_local_state text,
+ p_registry_evidence_key_id text,p_registry_evidence_digest bytea,p_target_envelope_version text,p_target_algorithm text,
+ p_target_encryption_key_id text,p_target_encapsulation bytea,p_target_nonce bytea,p_target_ciphertext bytea,
+ p_credential_envelope_version text,p_credential_algorithm text,p_credential_encryption_key_id text,p_credential_encapsulation bytea,
+ p_credential_nonce bytea,p_credential_ciphertext bytea,p_credential_commitment_key_id text,p_credential_source_commitment bytea,
+ p_digest_key_id text,p_target_digest bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE c privacy_protected.provider_capture_sets%ROWTYPE;s privacy_protected.provider_connections%ROWTYPE;
+BEGIN
+ SELECT * INTO c FROM privacy_protected.provider_capture_sets WHERE checkpoint_id=p_checkpoint_id AND execution_id=p_execution_id FOR SHARE;
+ SELECT * INTO s FROM privacy_protected.provider_connections WHERE id=p_connection_id FOR SHARE;
+ IF c.checkpoint_id IS NULL OR c.job_id<>p_job_id OR c.category_key<>p_category_key OR c.expected_target_count<=(SELECT count(*) FROM privacy_protected.provider_targets WHERE checkpoint_id=p_checkpoint_id)
+  OR s.id IS NULL OR s.subject_user_id<>c.subject_user_id OR s.service_code<>p_service_code OR s.provider_role<>p_provider_role
+  OR s.provider_contract_version<>p_provider_contract_version OR s.state_version<>p_target_version
+  OR s.registry_evidence_key_id<>p_registry_evidence_key_id OR s.registry_evidence_digest<>p_registry_evidence_digest
+  OR p_local_state NOT IN ('ACTIVE','DISCONNECTED') OR (p_local_state='ACTIVE' AND s.state<>'QUARANTINED')
+  OR (p_local_state='DISCONNECTED' AND (s.state<>'DISCONNECTED' OR p_credential_ciphertext IS NOT NULL)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_target_invalid'; END IF;
+ INSERT INTO privacy_protected.provider_targets(id,connection_id,execution_id,job_id,checkpoint_id,plan_entry_sha256,category_key,service_code,target_kind,
+  provider_role,target_version,operation_code,action_version,provider_contract_version,registry_evidence_key_id,registry_evidence_digest,local_state,
+  target_envelope_version,target_algorithm,target_encryption_key_id,target_encapsulation,target_nonce,target_ciphertext,created_at)
+ VALUES(p_target_id,p_connection_id,p_execution_id,p_job_id,p_checkpoint_id,p_plan_entry_sha256,p_category_key,p_service_code,'REMOTE_ACCOUNT',p_provider_role,
+  p_target_version,'PROVIDER_RECIPIENT_NOTIFY','v1',p_provider_contract_version,p_registry_evidence_key_id,p_registry_evidence_digest,p_local_state,
+  p_target_envelope_version,p_target_algorithm,p_target_encryption_key_id,p_target_encapsulation,p_target_nonce,p_target_ciphertext,clock_timestamp());
+ INSERT INTO privacy_protected.provider_target_digests VALUES(p_target_id,p_execution_id,p_service_code,'REMOTE_ACCOUNT',p_digest_key_id,p_target_digest,clock_timestamp());
+ IF p_local_state='ACTIVE' THEN
+  IF p_credential_envelope_version IS NULL OR p_credential_algorithm IS NULL OR p_credential_encryption_key_id IS NULL OR p_credential_encapsulation IS NULL OR p_credential_nonce IS NULL OR p_credential_ciphertext IS NULL
+   OR p_credential_commitment_key_id IS NULL OR p_credential_source_commitment IS NULL THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_quarantine_invalid'; END IF;
+  INSERT INTO privacy_protected.provider_credential_quarantine VALUES(p_target_id,p_credential_commitment_key_id,p_credential_source_commitment,p_credential_envelope_version,p_credential_algorithm,
+   p_credential_encryption_key_id,p_credential_encapsulation,p_credential_nonce,p_credential_ciphertext,clock_timestamp());
+ END IF;
+ RETURN p_target_id;
+END;$$;
+
+CREATE FUNCTION public.privacy_execution_complete_provider_capture(p_execution_id uuid,p_category_key text) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE expected integer;actual integer;checkpoint_ref uuid;
+BEGIN
+ SELECT checkpoint_id,expected_target_count INTO checkpoint_ref,expected FROM privacy_protected.provider_capture_sets WHERE execution_id=p_execution_id AND category_key=p_category_key FOR SHARE;
+ SELECT count(*)::integer INTO actual FROM privacy_protected.provider_targets WHERE execution_id=p_execution_id AND checkpoint_id=checkpoint_ref;
+ IF expected IS NULL OR actual<>expected THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_capture_incomplete'; END IF;
+ RETURN actual;
+END;$$;
+
+CREATE FUNCTION public.privacy_worker_list_provider_targets(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(target_id uuid,execution_id uuid,job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,service_code text,target_kind text,
+ provider_role text,target_version bigint,operation_code text,action_version text,provider_contract_version text,registry_evidence_key_id text,
+ registry_evidence_digest bytea,local_state text,
+ target_envelope_version text,target_algorithm text,target_encryption_key_id text,target_encapsulation bytea,target_nonce bytea,target_ciphertext bytea,
+ credential_envelope_version text,credential_algorithm text,credential_encryption_key_id text,credential_encapsulation bytea,credential_nonce bytea,
+ credential_ciphertext bytea,credential_commitment_key_id text,credential_source_commitment bytea)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT t.id,t.execution_id,t.job_id,t.checkpoint_id,t.plan_entry_sha256,t.category_key::text,t.service_code::text,t.target_kind::text,t.provider_role::text,
+  t.target_version,t.operation_code::text,t.action_version::text,t.provider_contract_version::text,t.registry_evidence_key_id::text,t.registry_evidence_digest,t.local_state::text,
+  t.target_envelope_version::text,t.target_algorithm::text,t.target_encryption_key_id::text,t.target_encapsulation,t.target_nonce,t.target_ciphertext,
+  q.envelope_version::text,q.algorithm::text,q.encryption_key_id::text,q.encapsulation,q.nonce,q.ciphertext,q.source_commitment_key_id::text,q.source_commitment
+ FROM privacy_protected.provider_targets t JOIN privacy_erasure_category_jobs j ON j.id=t.job_id
+ JOIN privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ LEFT JOIN privacy_protected.provider_credential_quarantine q ON q.target_id=t.id LEFT JOIN privacy_protected.provider_evidence e ON e.target_id=t.id
+ WHERE j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref AND l.released_at IS NULL AND l.expires_at>clock_timestamp()
+  AND a.finished_at IS NULL AND e.target_id IS NULL AND ((t.local_state='ACTIVE' AND q.target_id IS NOT NULL) OR (t.local_state='DISCONNECTED' AND q.target_id IS NULL)) ORDER BY t.id;
+$$;
+
+CREATE FUNCTION public.privacy_worker_record_provider_evidence(p_target_id uuid,p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,
+ p_outcome_code text,p_adapter_attempts integer,p_evidence_code text,p_recipient_role text,p_channel_code text,p_notification_code text,p_reason_code text,p_guidance_code text,
+ p_transcript_key_id text,p_transcript_digest bytea) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE target privacy_protected.provider_targets%ROWTYPE;
+BEGIN
+ SELECT t.* INTO target FROM privacy_protected.provider_targets t JOIN privacy_erasure_category_jobs j ON j.id=t.job_id
+ JOIN privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ WHERE t.id=p_target_id AND j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref AND l.released_at IS NULL
+ AND l.expires_at>clock_timestamp() AND a.finished_at IS NULL FOR UPDATE OF j,l,a;
+ IF target.id IS NULL OR p_adapter_attempts NOT BETWEEN 1 AND 5 OR p_transcript_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR octet_length(p_transcript_digest)<>32
+  OR p_outcome_code NOT IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED','NOT_CONTROLLABLE')
+  OR (p_outcome_code='NOT_CONTROLLABLE' AND target.provider_role<>'AUTONOMOUS_RECIPIENT')
+  OR (p_outcome_code='REMOTE_DELETION_VERIFIED' AND p_evidence_code<>'REMOTE_DELETION_RECEIPT')
+  OR (p_outcome_code='ALREADY_DISCONNECTED' AND p_evidence_code<>'REMOTE_ALREADY_DISCONNECTED')
+  OR (p_outcome_code IN ('REMOTE_DELETION_VERIFIED','ALREADY_DISCONNECTED') AND (p_recipient_role IS NOT NULL OR p_channel_code IS NOT NULL OR p_notification_code IS NOT NULL OR p_reason_code IS NOT NULL OR p_guidance_code IS NOT NULL))
+  OR (p_outcome_code='NOT_CONTROLLABLE' AND (p_evidence_code<>'RECIPIENT_NOTIFICATION_CONFIRMED' OR p_recipient_role<>'AUTONOMOUS_RECIPIENT'
+   OR p_channel_code NOT IN ('API','EMAIL','PORTAL','REGISTERED_POST') OR p_notification_code NOT IN ('ACCEPTED','DELIVERED')
+   OR p_reason_code<>'REGISTRY_DECLARED_AUTONOMOUS' OR p_guidance_code<>'CONTACT_RECIPIENT')) THEN RETURN NULL; END IF;
+ INSERT INTO privacy_protected.provider_evidence(target_id,job_id,attempt_id,evidence_version,outcome_code,adapter_attempts,evidence_code,recipient_role,channel_code,notification_code,reason_code,guidance_code,transcript_key_id,transcript_digest,occurred_at)
+ VALUES(p_target_id,p_job_id,p_attempt_id,'provider-structured-evidence/v1',p_outcome_code,p_adapter_attempts,p_evidence_code,p_recipient_role,p_channel_code,p_notification_code,p_reason_code,p_guidance_code,p_transcript_key_id,p_transcript_digest,clock_timestamp())
+ ON CONFLICT(target_id) DO NOTHING;
+ DELETE FROM privacy_protected.provider_credential_quarantine WHERE target_id=p_target_id;
+ DELETE FROM privacy_protected.provider_connections WHERE id=target.connection_id;
+ RETURN p_target_id;
+END;$$;
+
+CREATE FUNCTION public.privacy_worker_complete_provider_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid;expected integer;evidenced integer;
+BEGIN
+ SELECT checkpoint.id,c.expected_target_count INTO checkpoint_ref,expected FROM privacy_erasure_category_jobs j
+ JOIN privacy_erasure_job_leases l ON l.id=p_lease_id AND l.job_id=j.id AND l.epoch=p_epoch
+ JOIN privacy_erasure_job_attempts a ON a.id=p_attempt_id AND a.job_id=j.id AND a.lease_id=l.id AND a.lease_epoch=p_epoch
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=j.id AND checkpoint.operation_code='PROVIDER_RECIPIENT_NOTIFY' AND checkpoint.action_version='v1'
+ JOIN privacy_protected.provider_capture_sets c ON c.checkpoint_id=checkpoint.id WHERE j.id=p_job_id AND j.status='LEASED' AND l.worker_ref=p_worker_ref
+ AND l.released_at IS NULL AND l.expires_at>clock_timestamp() AND a.finished_at IS NULL FOR UPDATE OF j,l,a,checkpoint;
+ IF checkpoint_ref IS NULL THEN RETURN NULL; END IF;
+ IF (SELECT status FROM privacy_erasure_job_checkpoints WHERE id=checkpoint_ref)='SUCCEEDED' THEN RETURN checkpoint_ref; END IF;
+ SELECT count(*)::integer INTO evidenced FROM privacy_protected.provider_targets t JOIN privacy_protected.provider_evidence e ON e.target_id=t.id WHERE t.checkpoint_id=checkpoint_ref;
+ IF evidenced<>expected OR EXISTS(SELECT 1 FROM privacy_protected.provider_credential_quarantine q JOIN privacy_protected.provider_targets t ON t.id=q.target_id WHERE t.checkpoint_id=checkpoint_ref)
+ OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints prior WHERE prior.job_id=p_job_id AND prior.operation_position<(SELECT operation_position FROM privacy_erasure_job_checkpoints WHERE id=checkpoint_ref) AND prior.status<>'SUCCEEDED')
+ OR EXISTS(SELECT 1 FROM privacy_erasure_category_jobs prior WHERE prior.execution_id=(SELECT execution_id FROM privacy_erasure_category_jobs WHERE id=p_job_id)
+  AND prior.plan_entry_position<(SELECT plan_entry_position FROM privacy_erasure_category_jobs WHERE id=p_job_id) AND prior.status<>'SUCCEEDED') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_provider_evidence_incomplete'; END IF;
+ UPDATE privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_at=clock_timestamp(),completed_by_attempt_id=p_attempt_id,affected_rows=evidenced,
+  result_sha256=digest(convert_to('PROVIDER_RECIPIENT_NOTIFY:'||evidenced::text,'UTF8'),'sha256') WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END;$$;
+
+REVOKE ALL ON TABLE privacy_protected.provider_connections,privacy_protected.provider_capture_sets,privacy_protected.provider_targets,
+ privacy_protected.provider_target_digests,privacy_protected.provider_credential_quarantine,privacy_protected.provider_evidence FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_execution_capture_provider_connections(uuid,uuid,text),
+ public.privacy_execution_materialize_provider_target(uuid,uuid,uuid,uuid,uuid,bytea,text,text,text,text,bigint,text,text,bytea,text,text,text,bytea,bytea,bytea,text,text,text,bytea,bytea,bytea,text,bytea,text,bytea),
+ public.privacy_execution_complete_provider_capture(uuid,text),public.privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid),
+ public.privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea),
+ public.privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) FROM PUBLIC;
+-- #247: complete the approved consent, audit and repair-object retention
+-- clocks and expose one bounded, least-privilege maintenance API. This remains
+-- inactive until a separate login is granted the NOLOGIN maintenance role and
+-- the host timer is explicitly enabled.
+
+ALTER TABLE consent_forms
+ ADD COLUMN ceased_at timestamptz NULL,
+ ADD COLUMN cessation_reason varchar(40) NULL,
+ ADD COLUMN evidence_expires_at timestamptz NULL,
+ ADD CONSTRAINT consent_cessation_complete CHECK (
+  (ceased_at IS NULL AND cessation_reason IS NULL AND evidence_expires_at IS NULL)
+  OR (ceased_at IS NOT NULL AND ceased_at>=date_signed
+      AND cessation_reason IN ('SUPERSEDED','WITHDRAWN','PROCESSING_ENDED','ACCOUNT_ERASURE')
+      AND evidence_expires_at=ceased_at+interval '3 years')
+ ) NOT VALID;
+ALTER TABLE consent_forms VALIDATE CONSTRAINT consent_cessation_complete;
+CREATE INDEX consent_forms_evidence_expiry_idx ON consent_forms(evidence_expires_at,id) WHERE evidence_expires_at IS NOT NULL;
+
+CREATE FUNCTION privacy_consent_cessation_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.ceased_at IS NOT NULL AND ROW(NEW.ceased_at,NEW.cessation_reason,NEW.evidence_expires_at)
+    IS DISTINCT FROM ROW(OLD.ceased_at,OLD.cessation_reason,OLD.evidence_expires_at) THEN
+  RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='consent_cessation_is_immutable';
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER consent_forms_cessation_immutable BEFORE UPDATE ON consent_forms
+ FOR EACH ROW EXECUTE FUNCTION privacy_consent_cessation_immutable();
+
+CREATE FUNCTION privacy_consent_cease(
+ p_user_id uuid,p_consent_type text,p_except_id uuid,p_reason text,p_ceased_at timestamptz
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE changed integer;
+BEGIN
+ IF p_user_id IS NULL OR p_consent_type NOT IN ('Termos_Gerais','Uso_Imagem','Responsabilidade_Menor','Dados_Saude','Foto_Perfil')
+    OR p_reason NOT IN ('SUPERSEDED','WITHDRAWN','PROCESSING_ENDED','ACCOUNT_ERASURE')
+    OR p_ceased_at IS NULL OR p_ceased_at>clock_timestamp()+interval '1 minute' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='consent_cessation_rejected';
+ END IF;
+ UPDATE consent_forms SET ceased_at=p_ceased_at,cessation_reason=p_reason,evidence_expires_at=p_ceased_at+interval '3 years'
+ WHERE user_id=p_user_id AND consent_type::text=p_consent_type AND ceased_at IS NULL
+   AND id IS DISTINCT FROM p_except_id AND date_signed<=p_ceased_at;
+ GET DIAGNOSTICS changed=ROW_COUNT;
+ RETURN changed;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_consent_cease(uuid,text,uuid,text,timestamptz) FROM PUBLIC;
+
+CREATE FUNCTION privacy_consent_cease_on_erasure() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF OLD.erased_at IS NULL AND NEW.erased_at IS NOT NULL THEN
+  PERFORM privacy_consent_cease(NEW.id,kind::text,NULL,'ACCOUNT_ERASURE',NEW.erased_at)
+  FROM (SELECT DISTINCT consent_type AS kind FROM consent_forms WHERE user_id=NEW.id AND ceased_at IS NULL) active;
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER users_consent_cessation AFTER UPDATE OF erased_at ON users
+ FOR EACH ROW EXECUTE FUNCTION privacy_consent_cease_on_erasure();
+CREATE FUNCTION privacy_profile_photo_requires_active_consent() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.photo_consent_form_id IS NOT NULL AND NOT EXISTS(
+  SELECT 1 FROM consent_forms consent WHERE consent.id=NEW.photo_consent_form_id
+    AND consent.user_id=NEW.user_id AND consent.consent_type='Foto_Perfil' AND consent.ceased_at IS NULL
+ ) THEN
+  RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='profile_photo_active_consent_required';
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER member_profiles_photo_active_consent BEFORE INSERT OR UPDATE OF user_id,photo_consent_form_id ON member_profiles
+ FOR EACH ROW EXECUTE FUNCTION privacy_profile_photo_requires_active_consent();
+REVOKE ALL ON FUNCTION privacy_consent_cessation_immutable(),privacy_consent_cease_on_erasure(),privacy_profile_photo_requires_active_consent() FROM PUBLIC;
+
+-- Repair photos are still useful during active triage, but the accepted
+-- technical-retention ceiling is 30 days from upload/report creation. Queue at
+-- day 23 to leave a full seven-day verification window. Legacy pointers are
+-- never guessed; monitoring reports them as a release-blocking backlog.
+CREATE FUNCTION privacy_retention_queue_repair_attachments(p_batch_limit integer)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE item record; latest_status text; latest_sequence integer; changed integer:=0; v_now timestamptz:=clock_timestamp();
+BEGIN
+ IF p_batch_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy retention input rejected'; END IF;
+ FOR item IN
+  SELECT repair.id,repair.image_upload_intent_id
+  FROM repair_requests repair
+  WHERE repair.date_reported<=v_now-interval '23 days' AND repair.image_object_key IS NOT NULL
+    AND repair.image_upload_intent_id IS NOT NULL
+  ORDER BY repair.date_reported,repair.id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit
+ LOOP
+  PERFORM privacy_upload_source_lock('REPAIR_ATTACHMENT',item.id);
+  SELECT status,sequence INTO latest_status,latest_sequence
+  FROM privacy_protected.object_upload_intent_events WHERE intent_id=item.image_upload_intent_id
+  ORDER BY sequence DESC LIMIT 1 FOR UPDATE;
+  IF latest_status='ATTACHED' THEN
+   INSERT INTO privacy_protected.object_upload_intent_events(intent_id,sequence,status,reason_code,occurred_at)
+   VALUES(item.image_upload_intent_id,latest_sequence+1,'CLEANUP_REQUIRED','RETENTION_EXPIRED',v_now);
+   INSERT INTO privacy_protected.object_upload_cleanup_jobs(intent_id,status,next_attempt_at,updated_at)
+   VALUES(item.image_upload_intent_id,'PENDING',v_now,v_now) ON CONFLICT(intent_id) DO NOTHING;
+   UPDATE repair_requests SET image_object_key=NULL,image_content_type=NULL,image_size_bytes=NULL,image_upload_intent_id=NULL,updated_at=v_now
+   WHERE id=item.id AND image_upload_intent_id=item.image_upload_intent_id;
+   IF FOUND THEN changed:=changed+1; END IF;
+  ELSIF latest_status NOT IN ('CLEANUP_REQUIRED','ABSENCE_VERIFIED') THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_repair_retention_state_invalid';
+  END IF;
+ END LOOP;
+ RETURN changed;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_retention_queue_repair_attachments(integer) FROM PUBLIC;
+
+-- Pseudonymise only audit rows whose own 24-month clock has elapsed. Newer
+-- rows for the same person remain accountable until their independent clock.
+CREATE FUNCTION privacy_retention_pseudonymize_audit(p_batch_limit integer)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE audit_row record; subject_ref uuid; subject_refs uuid[]; principal_ref uuid;
+ subject_name text; subject_email text; subject_login text; subject_erased timestamptz;
+ changed integer:=0; cutoff timestamptz:=clock_timestamp()-interval '24 months';
+BEGIN
+ IF p_batch_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy retention input rejected'; END IF;
+ FOR audit_row IN
+  SELECT kind,id,occurred_at FROM (
+   SELECT 'MINOR'::text kind,id,created_at occurred_at FROM minor_credential_audit WHERE created_at<=cutoff AND (minor_user_id IS NOT NULL OR guardian_user_id IS NOT NULL OR actor_user_id IS NOT NULL)
+   UNION ALL SELECT 'EQUIPMENT',id,occurred_at FROM equipment_audit_events WHERE occurred_at<=cutoff AND actor_user_id IS NOT NULL
+   UNION ALL SELECT 'PROFILE',id,occurred_at FROM member_profile_audit_events WHERE occurred_at<=cutoff AND (actor_user_id IS NOT NULL OR subject_user_id IS NOT NULL)
+   UNION ALL SELECT 'STAFF',id,occurred_at FROM staff_grant_audit_events WHERE occurred_at<=cutoff AND actor_user_id IS NOT NULL
+   UNION ALL SELECT 'ALBUM',id,occurred_at FROM photo_album_audit_events WHERE occurred_at<=cutoff AND actor_user_id IS NOT NULL
+   UNION ALL SELECT 'ANNOUNCEMENT',id,occurred_at FROM announcement_audit_events WHERE occurred_at<=cutoff AND actor_user_id IS NOT NULL
+   UNION ALL SELECT 'FEATURE',id,occurred_at FROM feature_flag_events WHERE occurred_at<=cutoff AND actor_user_id IS NOT NULL
+   UNION ALL SELECT 'TRAINING_COPY',id,copied_at FROM training_copy_events WHERE copied_at<=cutoff AND copied_by_id IS NOT NULL
+  ) due ORDER BY occurred_at,kind,id LIMIT p_batch_limit
+ LOOP
+  CASE audit_row.kind
+  WHEN 'MINOR' THEN SELECT ARRAY(SELECT DISTINCT x FROM unnest(ARRAY[minor_user_id,guardian_user_id,actor_user_id]) x WHERE x IS NOT NULL) INTO subject_refs FROM minor_credential_audit WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'PROFILE' THEN SELECT ARRAY(SELECT DISTINCT x FROM unnest(ARRAY[actor_user_id,subject_user_id]) x WHERE x IS NOT NULL) INTO subject_refs FROM member_profile_audit_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'EQUIPMENT' THEN SELECT ARRAY[actor_user_id] INTO subject_refs FROM equipment_audit_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'STAFF' THEN SELECT ARRAY[actor_user_id] INTO subject_refs FROM staff_grant_audit_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'ALBUM' THEN SELECT ARRAY[actor_user_id] INTO subject_refs FROM photo_album_audit_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'ANNOUNCEMENT' THEN SELECT ARRAY[actor_user_id] INTO subject_refs FROM announcement_audit_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'FEATURE' THEN SELECT ARRAY[actor_user_id] INTO subject_refs FROM feature_flag_events WHERE id=audit_row.id FOR UPDATE;
+  WHEN 'TRAINING_COPY' THEN SELECT ARRAY[copied_by_id] INTO subject_refs FROM training_copy_events WHERE id=audit_row.id FOR UPDATE;
+  END CASE;
+  FOREACH subject_ref IN ARRAY subject_refs LOOP
+   SELECT name,email::text,minor_login_id::text,erased_at INTO subject_name,subject_email,subject_login,subject_erased FROM users WHERE id=subject_ref;
+   IF NOT FOUND OR (subject_erased IS NOT NULL AND audit_row.kind IN ('EQUIPMENT','STAFF')) THEN
+    RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_audit_identity_unavailable';
+   END IF;
+   INSERT INTO privacy_pseudonymous_principals(purpose) VALUES('AUDIT') RETURNING id INTO principal_ref;
+   PERFORM set_config('mycfc.privacy_erasure_operation','AUDIT_ACTOR_ANONYMIZE',true);
+   CASE audit_row.kind
+   WHEN 'MINOR' THEN UPDATE minor_credential_audit SET
+     minor_principal_id=CASE WHEN minor_user_id=subject_ref THEN principal_ref ELSE minor_principal_id END,
+     minor_user_id=CASE WHEN minor_user_id=subject_ref THEN NULL ELSE minor_user_id END,
+     guardian_principal_id=CASE WHEN guardian_user_id=subject_ref THEN principal_ref ELSE guardian_principal_id END,
+     guardian_user_id=CASE WHEN guardian_user_id=subject_ref THEN NULL ELSE guardian_user_id END,
+     actor_principal_id=CASE WHEN actor_user_id=subject_ref THEN principal_ref ELSE actor_principal_id END,
+     actor_user_id=CASE WHEN actor_user_id=subject_ref THEN NULL ELSE actor_user_id END,
+     issued_login_id=CASE WHEN minor_user_id=subject_ref THEN 'anonymised' ELSE privacy_scrub_audit_text(issued_login_id::text,subject_ref,subject_name,subject_email,subject_login) END
+    WHERE id=audit_row.id;
+   WHEN 'EQUIPMENT' THEN UPDATE equipment_audit_events SET actor_user_id=NULL,actor_principal_id=principal_ref,
+     before_state=privacy_scrub_audit_json(before_state,subject_ref,subject_name,subject_email,subject_login),
+     after_state=privacy_scrub_audit_json(after_state,subject_ref,subject_name,subject_email,subject_login) WHERE id=audit_row.id AND actor_user_id=subject_ref;
+   WHEN 'PROFILE' THEN UPDATE member_profile_audit_events SET
+     actor_principal_id=CASE WHEN actor_user_id=subject_ref THEN principal_ref ELSE actor_principal_id END,
+     actor_user_id=CASE WHEN actor_user_id=subject_ref THEN NULL ELSE actor_user_id END,
+     subject_principal_id=CASE WHEN subject_user_id=subject_ref THEN principal_ref ELSE subject_principal_id END,
+     subject_user_id=CASE WHEN subject_user_id=subject_ref THEN NULL ELSE subject_user_id END WHERE id=audit_row.id;
+   WHEN 'STAFF' THEN UPDATE staff_grant_audit_events SET actor_user_id=NULL,actor_principal_id=principal_ref,
+     reason=privacy_scrub_audit_text(reason,subject_ref,subject_name,subject_email,subject_login) WHERE id=audit_row.id AND actor_user_id=subject_ref;
+   WHEN 'ALBUM' THEN UPDATE photo_album_audit_events SET actor_user_id=NULL,actor_principal_id=principal_ref WHERE id=audit_row.id AND actor_user_id=subject_ref;
+   WHEN 'ANNOUNCEMENT' THEN UPDATE announcement_audit_events SET actor_user_id=NULL,actor_principal_id=principal_ref WHERE id=audit_row.id AND actor_user_id=subject_ref;
+   WHEN 'FEATURE' THEN UPDATE feature_flag_events SET actor_user_id=NULL,actor_principal_id=principal_ref WHERE id=audit_row.id AND actor_user_id=subject_ref;
+   WHEN 'TRAINING_COPY' THEN UPDATE training_copy_events SET copied_by_id=NULL,copied_by_principal_id=principal_ref WHERE id=audit_row.id AND copied_by_id=subject_ref;
+   END CASE;
+  END LOOP;
+  changed:=changed+1;
+ END LOOP;
+ RETURN changed;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_retention_pseudonymize_audit(integer) FROM PUBLIC;
+
+ALTER TABLE privacy_retention_runs
+ ADD COLUMN consent_evidence_deleted integer NOT NULL DEFAULT 0 CHECK(consent_evidence_deleted>=0),
+ ADD COLUMN audit_events_pseudonymized integer NOT NULL DEFAULT 0 CHECK(audit_events_pseudonymized>=0),
+ ADD COLUMN repair_attachments_queued integer NOT NULL DEFAULT 0 CHECK(repair_attachments_queued>=0);
+
+DROP FUNCTION privacy_retention_run(uuid,integer);
+CREATE FUNCTION privacy_retention_run(p_worker_ref uuid,p_batch_limit integer)
+RETURNS TABLE(
+ run_id uuid,sessions_deleted integer,tokens_deleted integer,outbox_stopped integer,
+ outbox_payloads_deleted integer,outbox_evidence_deleted integer,consent_network_scrubbed integer,
+ consent_evidence_deleted integer,audit_events_pseudonymized integer,repair_attachments_queued integer,
+ event_responses_deleted integer,announcement_deliveries_deleted integer,suggestions_deleted integer,
+ privacy_working_scrubbed integer,auth_limits_deleted integer
+) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_now timestamptz:=clock_timestamp(); v_started timestamptz:=v_now;
+BEGIN
+ IF p_worker_ref IS NULL OR p_batch_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy retention input rejected'; END IF;
+ IF NOT pg_try_advisory_xact_lock(247,247) THEN RAISE EXCEPTION USING ERRCODE='55P03',MESSAGE='privacy retention already running'; END IF;
+ run_id:=gen_random_uuid(); sessions_deleted:=0;tokens_deleted:=0;outbox_stopped:=0;outbox_payloads_deleted:=0;outbox_evidence_deleted:=0;
+ consent_network_scrubbed:=0;consent_evidence_deleted:=0;audit_events_pseudonymized:=0;repair_attachments_queued:=0;
+ event_responses_deleted:=0;announcement_deliveries_deleted:=0;suggestions_deleted:=0;privacy_working_scrubbed:=0;auth_limits_deleted:=0;
+
+ WITH candidate AS(SELECT token FROM sessions WHERE expiry<=v_now ORDER BY expiry,token FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM sessions row USING candidate WHERE row.token=candidate.token;GET DIAGNOSTICS sessions_deleted=ROW_COUNT;
+ WITH candidate AS(SELECT id FROM email_outbox WHERE created_at<=v_now-interval '7 days' AND status IN('PENDING','SENDING') ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE email_outbox row SET status='FAILED',claimed_at=NULL,last_error=NULL,updated_at=v_now FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_stopped=ROW_COUNT;
+ WITH candidate AS MATERIALIZED(SELECT id FROM email_outbox WHERE created_at<=v_now-interval '30 days' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ evidence AS(INSERT INTO privacy_outbox_delivery_evidence(outbox_id,message_type,final_status,attempts,created_at,terminal_at,expires_at)
+  SELECT row.id,row.message_type,CASE WHEN row.status IN('SENT','FAILED','CANCELLED') THEN row.status ELSE 'FAILED' END,row.attempts,row.created_at,COALESCE(row.sent_at,row.updated_at,row.created_at),row.created_at+interval '90 days'
+  FROM email_outbox row JOIN candidate USING(id) ON CONFLICT(outbox_id) DO NOTHING RETURNING outbox_id)
+ DELETE FROM email_outbox row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS outbox_payloads_deleted=ROW_COUNT;
+ WITH candidate AS(SELECT outbox_id FROM privacy_outbox_delivery_evidence WHERE expires_at<=v_now ORDER BY expires_at,outbox_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_outbox_delivery_evidence row USING candidate WHERE row.outbox_id=candidate.outbox_id;GET DIAGNOSTICS outbox_evidence_deleted=ROW_COUNT;
+ WITH verification AS(SELECT id FROM email_verification_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ dv AS(DELETE FROM email_verification_tokens row USING verification WHERE row.id=verification.id RETURNING 1),
+ reset AS(SELECT id FROM password_reset_tokens WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))<=v_now-interval '30 days' ORDER BY GREATEST(expires_at,COALESCE(consumed_at,expires_at)),id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ dr AS(DELETE FROM password_reset_tokens row USING reset WHERE row.id=reset.id RETURNING 1)
+ SELECT (SELECT count(*) FROM dv)+(SELECT count(*) FROM dr) INTO tokens_deleted;
+ WITH candidate AS(SELECT id FROM consent_forms WHERE date_signed<=v_now-interval '12 months' AND(ip_address IS NOT NULL OR user_agent<>'') ORDER BY date_signed,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ UPDATE consent_forms row SET ip_address=NULL,user_agent='' FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS consent_network_scrubbed=ROW_COUNT;
+ WITH candidate AS(SELECT id FROM consent_forms WHERE evidence_expires_at<=v_now AND NOT EXISTS(SELECT 1 FROM member_profiles p WHERE p.photo_consent_form_id=consent_forms.id) ORDER BY evidence_expires_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM consent_forms row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS consent_evidence_deleted=ROW_COUNT;
+ audit_events_pseudonymized:=privacy_retention_pseudonymize_audit(p_batch_limit);
+ repair_attachments_queued:=privacy_retention_queue_repair_attachments(p_batch_limit);
+ WITH candidate AS(SELECT response.event_id,response.user_id FROM event_responses response JOIN events event ON event.id=response.event_id WHERE event.ends_at<=v_now-interval '90 days' ORDER BY event.ends_at,response.event_id,response.user_id FOR UPDATE OF response SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM event_responses row USING candidate WHERE row.event_id=candidate.event_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS event_responses_deleted=ROW_COUNT;
+ WITH candidate AS(SELECT announcement_id,user_id FROM announcement_deliveries WHERE delivered_at<=v_now-interval '90 days' ORDER BY delivered_at,announcement_id,user_id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM announcement_deliveries row USING candidate WHERE row.announcement_id=candidate.announcement_id AND row.user_id=candidate.user_id;GET DIAGNOSTICS announcement_deliveries_deleted=ROW_COUNT;
+ WITH candidate AS(SELECT id FROM suggestions WHERE status IN('DECLINED','COMPLETED') AND responded_at<=v_now-interval '12 months' ORDER BY responded_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM suggestions row USING candidate WHERE row.id=candidate.id;GET DIAGNOSTICS suggestions_deleted=ROW_COUNT;
+ WITH candidate AS(SELECT id FROM data_erasure_requests WHERE status IN('REFUSED','CANCELLED','COMPLETED') AND working_expires_at<=v_now AND working_erased_at IS NULL ORDER BY working_expires_at,id FOR UPDATE SKIP LOCKED LIMIT p_batch_limit),
+ removed_mail AS(DELETE FROM email_outbox row USING candidate WHERE row.privacy_request_id=candidate.id RETURNING row.id),
+ removed_dependants AS(DELETE FROM privacy_request_dependant_resolutions row USING candidate WHERE row.request_id=candidate.id RETURNING 1)
+ UPDATE data_erasure_requests row SET decision_explanation='',category_decisions='[]',categories='{}',policy_snapshot=NULL,policy_version=NULL,
+  identity_verified_at=NULL,identity_verified_by=NULL,identity_method=NULL,representation_verified_at=NULL,representation_verified_by=NULL,representation_method=NULL,
+  representation_guardian_id=NULL,representation_relationship_updated_at=NULL,representation_conflict=false,requester_user_id=NULL,subject_user_id=NULL,claimed_by=NULL,decided_by=NULL,working_erased_at=v_now
+ FROM candidate WHERE row.id=candidate.id;GET DIAGNOSTICS privacy_working_scrubbed=ROW_COUNT;
+ WITH candidate AS(SELECT bucket FROM privacy_request_auth_limits WHERE window_start<v_now-interval '1 day' ORDER BY window_start,bucket FOR UPDATE SKIP LOCKED LIMIT p_batch_limit)
+ DELETE FROM privacy_request_auth_limits row USING candidate WHERE row.bucket=candidate.bucket;GET DIAGNOSTICS auth_limits_deleted=ROW_COUNT;
+ INSERT INTO privacy_retention_runs(id,worker_ref,started_at,finished_at,batch_limit,sessions_deleted,tokens_deleted,outbox_stopped,outbox_payloads_deleted,outbox_evidence_deleted,
+  consent_network_scrubbed,event_responses_deleted,announcement_deliveries_deleted,suggestions_deleted,privacy_working_scrubbed,auth_limits_deleted,
+  consent_evidence_deleted,audit_events_pseudonymized,repair_attachments_queued)
+ VALUES(run_id,p_worker_ref,v_started,clock_timestamp(),p_batch_limit,sessions_deleted,tokens_deleted,outbox_stopped,outbox_payloads_deleted,outbox_evidence_deleted,
+  consent_network_scrubbed,event_responses_deleted,announcement_deliveries_deleted,suggestions_deleted,privacy_working_scrubbed,auth_limits_deleted,
+  consent_evidence_deleted,audit_events_pseudonymized,repair_attachments_queued);
+ RETURN NEXT;
+END; $$;
+REVOKE ALL ON FUNCTION privacy_retention_run(uuid,integer) FROM PUBLIC;
+
+CREATE FUNCTION privacy_retention_status() RETURNS TABLE(
+ due_count bigint,oldest_due_age_seconds bigint,repair_due_count bigint,repair_overdue_count bigint,
+ repair_terminal_failures bigint,repair_legacy_due_count bigint,last_run_age_seconds bigint
+) LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ WITH clock AS(SELECT clock_timestamp() now),
+ due AS(
+  SELECT expiry due_at FROM sessions,clock WHERE expiry<=now
+  UNION ALL SELECT created_at+interval '7 days' FROM email_outbox,clock WHERE status IN('PENDING','SENDING') AND created_at+interval '7 days'<=now
+  UNION ALL SELECT created_at+interval '30 days' FROM email_outbox,clock WHERE created_at+interval '30 days'<=now
+  UNION ALL SELECT expires_at FROM privacy_outbox_delivery_evidence,clock WHERE expires_at<=now
+  UNION ALL SELECT GREATEST(expires_at,COALESCE(consumed_at,expires_at))+interval '30 days' FROM email_verification_tokens,clock WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))+interval '30 days'<=now
+  UNION ALL SELECT GREATEST(expires_at,COALESCE(consumed_at,expires_at))+interval '30 days' FROM password_reset_tokens,clock WHERE GREATEST(expires_at,COALESCE(consumed_at,expires_at))+interval '30 days'<=now
+  UNION ALL SELECT date_signed+interval '12 months' FROM consent_forms,clock WHERE (ip_address IS NOT NULL OR user_agent<>'') AND date_signed+interval '12 months'<=now
+  UNION ALL SELECT evidence_expires_at FROM consent_forms,clock WHERE evidence_expires_at<=now
+  UNION ALL SELECT created_at+interval '24 months' FROM minor_credential_audit,clock WHERE (minor_user_id IS NOT NULL OR guardian_user_id IS NOT NULL OR actor_user_id IS NOT NULL) AND created_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM equipment_audit_events,clock WHERE actor_user_id IS NOT NULL AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM member_profile_audit_events,clock WHERE (actor_user_id IS NOT NULL OR subject_user_id IS NOT NULL) AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM staff_grant_audit_events,clock WHERE actor_user_id IS NOT NULL AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM photo_album_audit_events,clock WHERE actor_user_id IS NOT NULL AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM announcement_audit_events,clock WHERE actor_user_id IS NOT NULL AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT occurred_at+interval '24 months' FROM feature_flag_events,clock WHERE actor_user_id IS NOT NULL AND occurred_at+interval '24 months'<=now
+  UNION ALL SELECT copied_at+interval '24 months' FROM training_copy_events,clock WHERE copied_by_id IS NOT NULL AND copied_at+interval '24 months'<=now
+  UNION ALL SELECT date_reported+interval '23 days' FROM repair_requests,clock WHERE image_object_key IS NOT NULL AND date_reported+interval '23 days'<=now
+  UNION ALL SELECT event.ends_at+interval '90 days' FROM event_responses response JOIN events event ON event.id=response.event_id,clock WHERE event.ends_at+interval '90 days'<=now
+  UNION ALL SELECT delivered_at+interval '90 days' FROM announcement_deliveries,clock WHERE delivered_at+interval '90 days'<=now
+  UNION ALL SELECT responded_at+interval '12 months' FROM suggestions,clock WHERE status IN('DECLINED','COMPLETED') AND responded_at+interval '12 months'<=now
+  UNION ALL SELECT working_expires_at FROM data_erasure_requests,clock WHERE status IN('REFUSED','CANCELLED','COMPLETED') AND working_erased_at IS NULL AND working_expires_at<=now
+  UNION ALL SELECT window_start+interval '1 day' FROM privacy_request_auth_limits,clock WHERE window_start+interval '1 day'<=now
+ ), repair AS(
+  SELECT i.id,r.date_reported,latest.status,job.status job_status
+  FROM privacy_protected.object_upload_intents i JOIN repair_requests r ON r.id=i.source_ref AND i.source_kind='REPAIR_ATTACHMENT'
+  JOIN LATERAL(SELECT e.status FROM privacy_protected.object_upload_intent_events e WHERE e.intent_id=i.id ORDER BY e.sequence DESC LIMIT 1) latest ON true
+  LEFT JOIN privacy_protected.object_upload_cleanup_jobs job ON job.intent_id=i.id
+ )
+ SELECT (SELECT count(*) FROM due),
+  COALESCE((SELECT floor(extract(epoch FROM((SELECT now FROM clock)-min(due.due_at))))::bigint FROM due),0),
+  (SELECT count(*) FROM repair,clock WHERE date_reported+interval '23 days'<=clock.now AND status<>'ABSENCE_VERIFIED'),
+  (SELECT count(*) FROM repair,clock WHERE date_reported+interval '30 days'<=clock.now AND status<>'ABSENCE_VERIFIED'),
+  (SELECT count(*) FROM repair WHERE job_status='TERMINAL_FAILED'),
+  (SELECT count(*) FROM repair_requests,clock WHERE image_upload_intent_id IS NULL AND image_object_key IS NOT NULL AND date_reported+interval '23 days'<=clock.now),
+  COALESCE((SELECT floor(extract(epoch FROM((SELECT now FROM clock)-max(finished_at))))::bigint FROM privacy_retention_runs),-1);
+$$;
+REVOKE ALL ON FUNCTION privacy_retention_status() FROM PUBLIC;
+
+ALTER TABLE privacy_protected.object_upload_intent_events DROP CONSTRAINT object_upload_intent_events_reason_code_check;
+ALTER TABLE privacy_protected.object_upload_intent_events ADD CONSTRAINT object_upload_intent_events_reason_code_check CHECK(reason_code IN(
+ 'UPLOAD_RESERVED','PUT_ACKNOWLEDGED','POINTER_ATTACHED','PUT_AMBIGUOUS','PUT_FAILED','ATTACH_FAILED','POINTER_SUPERSEDED','POINTER_REMOVED','STALE_TIMEOUT','RETENTION_EXPIRED','CLEANUP_CONFIRMED'));
+ALTER TABLE privacy_protected.object_upload_intent_events DROP CONSTRAINT object_upload_intent_events_check;
+ALTER TABLE privacy_protected.object_upload_intent_events ADD CONSTRAINT object_upload_intent_events_check CHECK(
+ (status='PREPARED' AND reason_code='UPLOAD_RESERVED') OR(status='PUT_CONFIRMED' AND reason_code='PUT_ACKNOWLEDGED') OR(status='ATTACHED' AND reason_code='POINTER_ATTACHED')
+ OR(status='CLEANUP_REQUIRED' AND reason_code IN('PUT_AMBIGUOUS','PUT_FAILED','ATTACH_FAILED','POINTER_SUPERSEDED','POINTER_REMOVED','STALE_TIMEOUT','RETENTION_EXPIRED'))
+ OR(status='ABSENCE_VERIFIED' AND reason_code='CLEANUP_CONFIRMED'));
+
+-- #248 completion, exceptional requeue and evidence-bound activation control.
+-- This migration is additive and leaves privacy execution disabled. Migration
+-- 202609100010 must be applied first in the release sequence.
+
+ALTER TABLE privacy_erasure_category_jobs
+ ADD COLUMN manual_attempt_allowance integer NOT NULL DEFAULT 0 CHECK(manual_attempt_allowance BETWEEN 0 AND 10);
+
+CREATE TABLE privacy_protected.completion_notice_targets (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ sealed_delivery bytea NOT NULL CHECK(octet_length(sealed_delivery) BETWEEN 29 AND 8192),
+ captured_at timestamptz NOT NULL
+);
+CREATE TRIGGER privacy_completion_notice_targets_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.completion_notice_targets FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_erasure_completion_manifests (
+ execution_id uuid PRIMARY KEY REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,
+ request_id uuid NOT NULL UNIQUE REFERENCES data_erasure_requests(id) ON DELETE RESTRICT,
+ manifest_version varchar(40) NOT NULL CHECK(manifest_version='privacy-completion/v1'),
+ plan_sha256 bytea NOT NULL CHECK(octet_length(plan_sha256)=32),
+ manifest jsonb NOT NULL CHECK(jsonb_typeof(manifest)='object' AND octet_length(manifest::text)<=262144),
+ manifest_sha256 bytea NOT NULL CHECK(octet_length(manifest_sha256)=32),
+ category_count integer NOT NULL CHECK(category_count BETWEEN 1 AND 50),
+ checkpoint_count integer NOT NULL CHECK(checkpoint_count BETWEEN 1 AND 5000),
+ object_target_count integer NOT NULL CHECK(object_target_count>=0),
+ provider_target_count integer NOT NULL CHECK(provider_target_count>=0),
+ completed_by_ref uuid NOT NULL,completed_at timestamptz NOT NULL,evidence_expires_at timestamptz NOT NULL,
+ CHECK(evidence_expires_at=completed_at+interval '24 months'),
+ UNIQUE(manifest_version,manifest_sha256)
+);
+CREATE TRIGGER privacy_erasure_completion_manifests_immutable BEFORE UPDATE OR DELETE
+ ON privacy_erasure_completion_manifests FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_completion_access_links (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),execution_id uuid NOT NULL UNIQUE REFERENCES privacy_erasure_completion_manifests(execution_id) ON DELETE RESTRICT,
+ token_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(token_sha256)=32),
+ created_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,used_at timestamptz NULL,
+ CHECK(expires_at=created_at+interval '24 hours'),CHECK(used_at IS NULL OR (used_at>=created_at AND used_at<=expires_at))
+);
+CREATE INDEX privacy_completion_access_links_expiry_idx ON privacy_completion_access_links(expires_at,id) WHERE used_at IS NULL;
+CREATE FUNCTION protect_privacy_completion_access_link() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' OR NEW.id<>OLD.id OR NEW.execution_id<>OLD.execution_id OR NEW.token_sha256<>OLD.token_sha256
+  OR NEW.created_at<>OLD.created_at OR NEW.expires_at<>OLD.expires_at OR OLD.used_at IS NOT NULL OR NEW.used_at IS NULL THEN
+  RAISE EXCEPTION 'privacy completion access link is immutable';
+ END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER privacy_completion_access_links_protected BEFORE UPDATE OR DELETE ON privacy_completion_access_links
+ FOR EACH ROW EXECUTE FUNCTION protect_privacy_completion_access_link();
+
+-- Capture only the already-encrypted generic recipient used for the processing
+-- notice. The completion worker can recover it without retaining cleartext
+-- identity after account erasure.
+CREATE FUNCTION privacy_execution_capture_completion_notice(p_execution_id uuid,p_processing_event_id uuid)
+RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ INSERT INTO privacy_protected.completion_notice_targets(execution_id,sealed_delivery,captured_at)
+ SELECT execution.id,outbox.sealed_payload,clock_timestamp()
+ FROM privacy_erasure_executions execution
+ JOIN email_outbox outbox ON outbox.privacy_request_id=execution.request_id
+ WHERE execution.id=p_execution_id AND outbox.privacy_event_key=p_processing_event_id
+  AND outbox.message_type='PRIVACY_PROCESSING_STARTED' AND outbox.sealed_payload IS NOT NULL
+ ON CONFLICT(execution_id) DO NOTHING RETURNING execution_id;
+$$;
+
+CREATE FUNCTION privacy_completion_prepare(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(sealed_delivery bytea) LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT target.sealed_delivery
+ FROM privacy_erasure_executions execution
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_protected.completion_notice_targets target ON target.execution_id=execution.id
+ JOIN privacy_protected.restore_tombstone_closure_intents intent ON intent.execution_id=execution.id
+ JOIN privacy_protected.restore_tombstone_closure_receipts receipt ON receipt.execution_id=execution.id
+ WHERE execution.id=p_execution_id AND p_worker_ref IS NOT NULL AND execution.status='SUCCEEDED'
+  AND request.status IN ('PROCESSING','RETRYABLE_FAILED')
+  AND receipt.ledger_version='restore-tombstone-closure/v2'
+  AND receipt.verified_at>=receipt.written_at AND receipt.verified_at<=intent.evidence_expires_at
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_completion_manifests manifest WHERE manifest.execution_id=execution.id)
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+ FOR SHARE OF execution,request,target,intent,receipt;
+$$;
+
+CREATE FUNCTION privacy_completion_list_pending(p_worker_ref uuid,p_limit integer)
+RETURNS TABLE(execution_id uuid) LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT execution.id
+ FROM privacy_erasure_executions execution
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_protected.completion_notice_targets target ON target.execution_id=execution.id
+ WHERE p_worker_ref IS NOT NULL AND p_limit BETWEEN 1 AND 100
+  AND execution.status='SUCCEEDED' AND request.status IN ('PROCESSING','RETRYABLE_FAILED')
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_completion_manifests manifest WHERE manifest.execution_id=execution.id)
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+ ORDER BY execution.finished_at,execution.id LIMIT p_limit;
+$$;
+
+-- The finalizer locks and reconstructs every evidence-bearing work row. It
+-- accepts no caller-supplied counts, category outcomes or completion time.
+CREATE FUNCTION privacy_completion_finalize(
+ p_execution_id uuid,p_worker_ref uuid,p_token_sha256 bytea,p_sealed_delivery bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE execution privacy_erasure_executions%ROWTYPE;request data_erasure_requests%ROWTYPE;plan privacy_request_execution_plans%ROWTYPE;
+ intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE;receipt privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+ category_total integer;checkpoint_total integer;object_total integer;provider_total integer;object_evidence_total integer;provider_evidence_total integer;
+ document jsonb;document_digest bytea;event_id uuid;request_version bigint;finalized_at timestamptz;
+BEGIN
+ IF p_execution_id IS NULL OR p_worker_ref IS NULL OR octet_length(p_token_sha256)<>32 OR octet_length(p_sealed_delivery) NOT BETWEEN 29 AND 8192 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_completion_input_rejected'; END IF;
+ SELECT * INTO execution FROM privacy_erasure_executions WHERE id=p_execution_id FOR UPDATE;
+ IF execution.id IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_unavailable'; END IF;
+ SELECT * INTO request FROM data_erasure_requests WHERE id=execution.request_id FOR UPDATE;
+ SELECT * INTO plan FROM privacy_request_execution_plans WHERE request_id=execution.request_id FOR SHARE;
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=execution.id FOR SHARE;
+ SELECT * INTO receipt FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=execution.id FOR SHARE;
+ PERFORM 1 FROM privacy_erasure_category_jobs WHERE execution_id=execution.id ORDER BY plan_entry_position FOR UPDATE;
+ PERFORM 1 FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id
+  WHERE job.execution_id=execution.id ORDER BY job.plan_entry_position,checkpoint.operation_position FOR UPDATE OF checkpoint;
+ PERFORM 1 FROM privacy_protected.object_targets WHERE execution_id=execution.id ORDER BY id FOR SHARE;
+ PERFORM 1 FROM privacy_protected.provider_targets WHERE execution_id=execution.id ORDER BY id FOR SHARE;
+
+ IF execution.status<>'SUCCEEDED' OR request.status NOT IN ('PROCESSING','RETRYABLE_FAILED') OR plan.request_id IS NULL
+  OR execution.plan_sha256<>plan.plan_sha256 OR execution.executor_version<>plan.executor_version OR execution.schema_version<>plan.schema_version
+  OR intent.execution_id IS NULL OR receipt.execution_id IS NULL OR receipt.ledger_version<>'restore-tombstone-closure/v2'
+  OR intent.closed_at<execution.finished_at OR receipt.verified_at<intent.closed_at OR receipt.verified_at<receipt.written_at OR receipt.verified_at>intent.evidence_expires_at
+  OR NOT EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_receipts r WHERE r.execution_id=execution.id AND r.ledger_version='restore-tombstone/v2')
+  OR NOT EXISTS(SELECT 1 FROM privacy_protected.completion_notice_targets n WHERE n.execution_id=execution.id)
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_leases lease JOIN privacy_erasure_category_jobs job ON job.id=lease.job_id WHERE job.execution_id=execution.id AND lease.released_at IS NULL)
+  OR EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND job.status<>'SUCCEEDED')
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id
+      WHERE job.execution_id=execution.id AND (checkpoint.status<>'SUCCEEDED' OR checkpoint.affected_rows IS NULL OR checkpoint.result_sha256 IS NULL))
+  OR EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND
+      (job.category_key IS DISTINCT FROM plan.plan->'entries'->(job.plan_entry_position-1)->>'category'
+       OR job.purpose_code IS DISTINCT FROM plan.plan->'entries'->(job.plan_entry_position-1)->>'purpose'))
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id
+      WHERE job.execution_id=execution.id AND (checkpoint.operation_code IS DISTINCT FROM plan.plan->'entries'->(job.plan_entry_position-1)->'operations'->>(checkpoint.operation_position-1)
+       OR checkpoint.action_version IS DISTINCT FROM plan.plan->'entries'->(job.plan_entry_position-1)->>'action_version'))
+  OR (SELECT count(*) FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id)<>(SELECT count(*) FROM jsonb_array_elements(plan.plan->'entries'))
+  OR EXISTS(SELECT 1 FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id AND
+       (SELECT count(*) FROM privacy_erasure_job_checkpoints c WHERE c.job_id=job.id)<>(SELECT count(*) FROM jsonb_array_elements(plan.plan->'entries'->(job.plan_entry_position-1)->'operations')))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_evidence_incomplete'; END IF;
+
+ SELECT count(DISTINCT job.id),count(checkpoint.*) INTO category_total,checkpoint_total FROM privacy_erasure_category_jobs job
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id WHERE job.execution_id=execution.id;
+ SELECT count(*),(SELECT count(*) FROM privacy_protected.object_evidence evidence JOIN privacy_protected.object_targets target ON target.id=evidence.target_id WHERE target.execution_id=execution.id)
+ INTO object_total,object_evidence_total FROM privacy_protected.object_targets WHERE execution_id=execution.id;
+ SELECT count(*),(SELECT count(*) FROM privacy_protected.provider_evidence evidence JOIN privacy_protected.provider_targets target ON target.id=evidence.target_id WHERE target.execution_id=execution.id)
+ INTO provider_total,provider_evidence_total FROM privacy_protected.provider_targets WHERE execution_id=execution.id;
+
+ IF object_total<>object_evidence_total
+  OR EXISTS(SELECT 1 FROM privacy_protected.object_capture_sets capture WHERE capture.execution_id=execution.id AND
+      (capture.expected_target_count<>(SELECT count(*) FROM privacy_protected.object_targets target WHERE target.checkpoint_id=capture.checkpoint_id)
+       OR capture.expected_target_count<>(SELECT count(*) FROM privacy_protected.object_evidence evidence JOIN privacy_protected.object_targets target ON target.id=evidence.target_id WHERE target.checkpoint_id=capture.checkpoint_id)
+       OR EXISTS(SELECT 1 FROM privacy_protected.object_targets target WHERE target.checkpoint_id=capture.checkpoint_id
+          AND NOT EXISTS(SELECT 1 FROM privacy_protected.object_target_digests digest_row WHERE digest_row.target_id=target.id))))
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id
+      WHERE job.execution_id=execution.id AND checkpoint.operation_code='OBJECT_VERSION_DELETE'
+       AND NOT EXISTS(SELECT 1 FROM privacy_protected.object_capture_sets capture WHERE capture.checkpoint_id=checkpoint.id))
+  OR provider_total<>provider_evidence_total
+  OR EXISTS(SELECT 1 FROM privacy_protected.provider_capture_sets capture WHERE capture.execution_id=execution.id AND
+      (capture.expected_target_count<>(SELECT count(*) FROM privacy_protected.provider_targets target WHERE target.checkpoint_id=capture.checkpoint_id)
+       OR capture.expected_target_count<>(SELECT count(*) FROM privacy_protected.provider_evidence evidence JOIN privacy_protected.provider_targets target ON target.id=evidence.target_id WHERE target.checkpoint_id=capture.checkpoint_id)
+       OR EXISTS(SELECT 1 FROM privacy_protected.provider_targets target WHERE target.checkpoint_id=capture.checkpoint_id
+          AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_target_digests digest_row WHERE digest_row.target_id=target.id))
+       OR EXISTS(SELECT 1 FROM privacy_protected.provider_credential_quarantine q JOIN privacy_protected.provider_targets target ON target.id=q.target_id WHERE target.checkpoint_id=capture.checkpoint_id)))
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id
+      WHERE job.execution_id=execution.id AND checkpoint.operation_code='PROVIDER_RECIPIENT_NOTIFY'
+       AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_capture_sets capture WHERE capture.checkpoint_id=checkpoint.id))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_target_evidence_incomplete'; END IF;
+
+ SELECT jsonb_build_object(
+  'version','privacy-completion/v1','execution_id',execution.id,'request_id',request.id,'plan_sha256',encode(execution.plan_sha256,'hex'),
+  'work',COALESCE((SELECT jsonb_agg(jsonb_build_object('position',job.plan_entry_position,'entry_sha256',encode(job.entry_sha256,'hex'),
+    'category',job.category_key,'purpose',job.purpose_code,'checkpoints',(SELECT jsonb_agg(jsonb_build_object('position',checkpoint.operation_position,
+      'operation',checkpoint.operation_code,'action_version',checkpoint.action_version,'affected_rows',checkpoint.affected_rows,
+      'result_sha256',encode(checkpoint.result_sha256,'hex')) ORDER BY checkpoint.operation_position) FROM privacy_erasure_job_checkpoints checkpoint WHERE checkpoint.job_id=job.id))
+    ORDER BY job.plan_entry_position) FROM privacy_erasure_category_jobs job WHERE job.execution_id=execution.id),'[]'::jsonb),
+  'objects',jsonb_build_object('targets',object_total,'evidence',object_evidence_total,'sha256',encode(digest(convert_to(COALESCE((SELECT string_agg(
+    target.id::text||':'||digest_row.digest_key_id||':'||encode(digest_row.locator_digest,'hex')||':'||evidence.outcome_code||':'||encode(evidence.transcript_digest,'hex'),
+    '|' ORDER BY target.id,digest_row.digest_key_id) FROM privacy_protected.object_targets target JOIN privacy_protected.object_target_digests digest_row ON digest_row.target_id=target.id
+    JOIN privacy_protected.object_evidence evidence ON evidence.target_id=target.id WHERE target.execution_id=execution.id),''),'UTF8'),'sha256'),'hex')),
+  'providers',jsonb_build_object('targets',provider_total,'evidence',provider_evidence_total,'sha256',encode(digest(convert_to(COALESCE((SELECT string_agg(
+    target.id::text||':'||digest_row.digest_key_id||':'||encode(digest_row.target_digest,'hex')||':'||evidence.outcome_code||':'||evidence.evidence_code||':'||encode(evidence.transcript_digest,'hex'),
+    '|' ORDER BY target.id,digest_row.digest_key_id) FROM privacy_protected.provider_targets target JOIN privacy_protected.provider_target_digests digest_row ON digest_row.target_id=target.id
+    JOIN privacy_protected.provider_evidence evidence ON evidence.target_id=target.id WHERE target.execution_id=execution.id),''),'UTF8'),'sha256'),'hex')),
+  'ledger',jsonb_build_object('intent_sha256',encode((SELECT ciphertext_sha256 FROM privacy_protected.restore_tombstone_receipts WHERE execution_id=execution.id),'hex'),
+    'closure_sha256',encode(receipt.ciphertext_sha256,'hex'))
+ ) INTO document;
+ document_digest:=digest(convert_to(document::text,'UTF8'),'sha256');
+	finalized_at:=clock_timestamp();
+
+ INSERT INTO privacy_erasure_completion_manifests(execution_id,request_id,manifest_version,plan_sha256,manifest,manifest_sha256,
+  category_count,checkpoint_count,object_target_count,provider_target_count,completed_by_ref,completed_at,evidence_expires_at)
+ VALUES(execution.id,request.id,'privacy-completion/v1',execution.plan_sha256,document,document_digest,category_total,checkpoint_total,
+  object_total,provider_total,p_worker_ref,intent.closed_at,intent.evidence_expires_at);
+ INSERT INTO privacy_completion_access_links(execution_id,token_sha256,created_at,expires_at)
+ VALUES(execution.id,p_token_sha256,finalized_at,finalized_at+interval '24 hours');
+ UPDATE data_erasure_requests SET status='COMPLETED',version=version+1,closed_at=intent.closed_at,evidence_expires_at=intent.evidence_expires_at,
+  working_expires_at=intent.closed_at+interval '90 days',updated_at=intent.closed_at WHERE id=request.id RETURNING version INTO request_version;
+ INSERT INTO data_erasure_request_events(request_id,actor_role,actor_ref,action,reason_code,from_status,to_status,version,occurred_at)
+ VALUES(request.id,'SYSTEM',p_worker_ref,'COMPLETED','EXECUTION_COMPLETED',request.status,'COMPLETED',request_version,intent.closed_at) RETURNING id INTO event_id;
+ INSERT INTO email_outbox(message_type,privacy_request_id,privacy_requester_id,privacy_event_key,sealed_payload,next_attempt_at,created_at,updated_at)
+ VALUES('PRIVACY_COMPLETED',request.id,request.requester_user_id,event_id,p_sealed_delivery,finalized_at,finalized_at,finalized_at);
+ RETURN execution.id;
+END;$$;
+
+CREATE FUNCTION privacy_completion_consume(p_token_sha256 bytea)
+RETURNS TABLE(request_ref uuid,completed_at timestamptz,summary jsonb) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE link privacy_completion_access_links%ROWTYPE;
+BEGIN
+ IF octet_length(p_token_sha256)<>32 THEN RETURN; END IF;
+ SELECT * INTO link FROM privacy_completion_access_links WHERE token_sha256=p_token_sha256 FOR UPDATE;
+ IF link.id IS NULL OR link.used_at IS NOT NULL OR link.expires_at<=clock_timestamp() THEN RETURN; END IF;
+ UPDATE privacy_completion_access_links SET used_at=clock_timestamp() WHERE id=link.id;
+ RETURN QUERY SELECT request.public_ref,manifest.completed_at,
+  jsonb_build_object('status','COMPLETED','manifest_sha256',encode(manifest.manifest_sha256,'hex'),
+   'categories',manifest.category_count,'checkpoints',manifest.checkpoint_count,
+   'object_targets',manifest.object_target_count,'provider_targets',manifest.provider_target_count)
+ FROM privacy_erasure_completion_manifests manifest JOIN data_erasure_requests request ON request.id=manifest.request_id
+ WHERE manifest.execution_id=link.execution_id;
+END;$$;
+
+CREATE FUNCTION privacy_completion_validate(p_token_sha256 bytea)
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT octet_length(p_token_sha256)=32 AND EXISTS(
+  SELECT 1 FROM privacy_completion_access_links link
+  WHERE link.token_sha256=p_token_sha256 AND link.used_at IS NULL AND link.expires_at>clock_timestamp()
+ );
+$$;
+
+CREATE FUNCTION privacy_completion_notice_deliverable(p_request_id uuid,p_at timestamptz)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT EXISTS(SELECT 1 FROM privacy_erasure_completion_manifests manifest
+  JOIN privacy_completion_access_links link ON link.execution_id=manifest.execution_id
+  WHERE manifest.request_id=p_request_id AND link.used_at IS NULL AND link.expires_at>p_at);
+$$;
+
+CREATE TABLE privacy_terminal_requeue_proposals (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),job_id uuid NOT NULL REFERENCES privacy_erasure_category_jobs(id) ON DELETE RESTRICT,
+ execution_id uuid NOT NULL REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT,failure_id uuid NOT NULL UNIQUE REFERENCES privacy_erasure_failures(id) ON DELETE RESTRICT,
+ expected_execution_version bigint NOT NULL CHECK(expected_execution_version>0),expected_lease_epoch bigint NOT NULL CHECK(expected_lease_epoch>0),
+ proposal_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(proposal_sha256)=32),proposed_by_ref uuid NOT NULL,proposed_at timestamptz NOT NULL
+);
+CREATE TABLE privacy_terminal_requeue_approvals (
+ proposal_id uuid PRIMARY KEY REFERENCES privacy_terminal_requeue_proposals(id) ON DELETE RESTRICT,
+ proposal_sha256 bytea NOT NULL CHECK(octet_length(proposal_sha256)=32),approved_by_ref uuid NOT NULL,approved_at timestamptz NOT NULL,
+ CHECK(octet_length(proposal_sha256)=32)
+);
+CREATE TRIGGER privacy_terminal_requeue_proposals_immutable BEFORE UPDATE OR DELETE ON privacy_terminal_requeue_proposals
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_terminal_requeue_approvals_immutable BEFORE UPDATE OR DELETE ON privacy_terminal_requeue_approvals
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION privacy_terminal_requeue_propose(p_job_id uuid,p_actor uuid)
+RETURNS TABLE(proposal_id uuid,proposal_sha256 bytea) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE job privacy_erasure_category_jobs%ROWTYPE;execution privacy_erasure_executions%ROWTYPE;failure privacy_erasure_failures%ROWTYPE;digest_value bytea;
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_requeue_forbidden'; END IF;
+ SELECT * INTO job FROM privacy_erasure_category_jobs WHERE id=p_job_id FOR UPDATE;
+ SELECT * INTO execution FROM privacy_erasure_executions WHERE id=job.execution_id FOR UPDATE;
+ SELECT failure_row.* INTO failure FROM privacy_erasure_failures failure_row WHERE failure_row.job_id=job.id AND failure_row.classification='TERMINAL'
+  ORDER BY failure_row.occurred_at DESC,failure_row.id DESC LIMIT 1 FOR SHARE;
+ IF job.id IS NULL OR job.status<>'TERMINAL_FAILED' OR execution.status<>'TERMINAL_FAILED' OR failure.id IS NULL OR job.manual_attempt_allowance>=10
+  OR EXISTS(SELECT 1 FROM privacy_terminal_requeue_proposals proposal WHERE proposal.failure_id=failure.id) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_requeue_unavailable'; END IF;
+ digest_value:=digest(convert_to('privacy-terminal-requeue/v1:'||job.id::text||':'||execution.id::text||':'||failure.id::text||':'||
+  execution.version::text||':'||job.lease_epoch::text||':'||job.attempt_count::text,'UTF8'),'sha256');
+ RETURN QUERY INSERT INTO privacy_terminal_requeue_proposals(job_id,execution_id,failure_id,expected_execution_version,expected_lease_epoch,
+  proposal_sha256,proposed_by_ref,proposed_at) VALUES(job.id,execution.id,failure.id,execution.version,job.lease_epoch,digest_value,p_actor,clock_timestamp())
+ RETURNING id,privacy_terminal_requeue_proposals.proposal_sha256;
+END;$$;
+
+CREATE FUNCTION privacy_terminal_requeue_approve(p_proposal_id uuid,p_proposal_sha256 bytea,p_actor uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE proposal privacy_terminal_requeue_proposals%ROWTYPE;job privacy_erasure_category_jobs%ROWTYPE;execution privacy_erasure_executions%ROWTYPE;
+ request data_erasure_requests%ROWTYPE;new_version bigint;now_at timestamptz;
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id JOIN platform_roles role ON role.id=assignment.role_id
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN') THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_requeue_forbidden'; END IF;
+ SELECT * INTO proposal FROM privacy_terminal_requeue_proposals WHERE id=p_proposal_id FOR SHARE;
+ IF proposal.id IS NULL OR proposal.proposed_by_ref=p_actor OR proposal.proposal_sha256<>p_proposal_sha256
+  OR EXISTS(SELECT 1 FROM privacy_terminal_requeue_approvals approval WHERE approval.proposal_id=proposal.id) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_requeue_unavailable'; END IF;
+ SELECT * INTO job FROM privacy_erasure_category_jobs WHERE id=proposal.job_id FOR UPDATE;
+ SELECT * INTO execution FROM privacy_erasure_executions WHERE id=proposal.execution_id FOR UPDATE;
+ SELECT * INTO request FROM data_erasure_requests WHERE id=execution.request_id FOR UPDATE;
+ IF job.status<>'TERMINAL_FAILED' OR execution.status<>'TERMINAL_FAILED' OR request.status<>'TERMINAL_FAILED'
+  OR execution.version<>proposal.expected_execution_version OR job.lease_epoch<>proposal.expected_lease_epoch
+  OR NOT EXISTS(SELECT 1 FROM privacy_erasure_failures failure WHERE failure.id=proposal.failure_id AND failure.job_id=job.id AND failure.classification='TERMINAL')
+  OR EXISTS(SELECT 1 FROM privacy_erasure_failures later WHERE later.job_id=job.id AND later.occurred_at>(SELECT occurred_at FROM privacy_erasure_failures WHERE id=proposal.failure_id))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_requeue_stale'; END IF;
+ now_at:=clock_timestamp();
+ INSERT INTO privacy_terminal_requeue_approvals VALUES(proposal.id,proposal.proposal_sha256,p_actor,now_at);
+ UPDATE privacy_erasure_category_jobs SET status='PENDING',next_attempt_at=now_at,updated_at=now_at,completed_at=NULL,
+  manual_attempt_allowance=manual_attempt_allowance+1 WHERE id=job.id;
+ IF EXISTS(SELECT 1 FROM privacy_erasure_category_jobs sibling WHERE sibling.execution_id=execution.id AND sibling.id<>job.id AND sibling.status='TERMINAL_FAILED') THEN
+  RETURN job.id;
+ END IF;
+ UPDATE privacy_erasure_executions SET status='RUNNING',version=version+1,finished_at=NULL,updated_at=now_at WHERE id=execution.id;
+ UPDATE data_erasure_requests SET status='PROCESSING',version=version+1,updated_at=now_at WHERE id=request.id RETURNING version INTO new_version;
+ INSERT INTO data_erasure_request_events(request_id,actor_role,actor_ref,action,reason_code,from_status,to_status,version,occurred_at)
+ VALUES(request.id,'SYSTEM',p_actor,'EXECUTION_RESUMED','EXECUTION_RETRY_STARTED','TERMINAL_FAILED','PROCESSING',new_version,now_at);
+ RETURN job.id;
+END;$$;
+
+CREATE FUNCTION privacy_completion_control_snapshot(p_actor uuid,p_request_reference uuid)
+RETURNS TABLE(request_reference uuid,request_status text,execution_id uuid,execution_status text,job_id uuid,category_code text,purpose_code text,
+ job_status text,attempt_count integer,failure_stage text,failure_code text,proposal_id uuid,proposal_sha256 bytea,proposed_at timestamptz,can_propose boolean,can_approve boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE actor_executor boolean;actor_admin boolean;
+BEGIN
+ SELECT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent),
+  EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id
+   JOIN platform_roles role ON role.id=assignment.role_id WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN')
+ INTO actor_executor,actor_admin;
+ IF NOT actor_executor AND NOT actor_admin THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_control_forbidden'; END IF;
+ RETURN QUERY
+ SELECT request.public_ref,request.status::text,execution.id,execution.status::text,job.id,job.category_key::text,job.purpose_code::text,job.status::text,job.attempt_count,
+  (CASE WHEN failure.stage_code IN ('EXECUTE','VERIFY') THEN failure.stage_code ELSE NULL END)::text,
+  (CASE WHEN failure.failure_code IN ('ACTION_FAILED','DEPENDENCY_UNAVAILABLE','UNSUPPORTED_OPERATION','VERIFICATION_FAILED','RETRY_LIMIT_REACHED') THEN failure.failure_code ELSE NULL END)::text,
+  proposal.id,proposal.proposal_sha256,proposal.proposed_at,
+  (actor_executor AND request.status='TERMINAL_FAILED' AND execution.status='TERMINAL_FAILED' AND job.status='TERMINAL_FAILED'
+   AND job.manual_attempt_allowance<10 AND proposal.id IS NULL),
+  (actor_admin AND proposal.id IS NOT NULL AND proposal.proposed_by_ref<>p_actor)
+ FROM data_erasure_requests request JOIN privacy_erasure_executions execution ON execution.request_id=request.id
+ JOIN privacy_erasure_category_jobs job ON job.execution_id=execution.id
+ LEFT JOIN LATERAL(SELECT candidate.stage_code,candidate.failure_code FROM privacy_erasure_failures candidate
+  WHERE candidate.job_id=job.id ORDER BY candidate.occurred_at DESC,candidate.id DESC LIMIT 1) failure ON true
+ LEFT JOIN LATERAL(SELECT candidate.id,candidate.proposal_sha256,candidate.proposed_at,candidate.proposed_by_ref FROM privacy_terminal_requeue_proposals candidate
+  WHERE candidate.job_id=job.id AND NOT EXISTS(SELECT 1 FROM privacy_terminal_requeue_approvals approval WHERE approval.proposal_id=candidate.id)
+  ORDER BY candidate.proposed_at DESC,candidate.id DESC LIMIT 1) proposal ON true
+ WHERE request.public_ref=p_request_reference ORDER BY job.plan_entry_position LIMIT 50;
+END;$$;
+
+CREATE TABLE privacy_activation_evidence (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),kind varchar(20) NOT NULL CHECK(kind IN ('RESTORE','INFRASTRUCTURE','PROVIDER','SCHEMA')),
+ evidence_sha256 bytea NOT NULL CHECK(octet_length(evidence_sha256)=32),reference_code varchar(120) NOT NULL,
+ observed_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,recorded_by_ref uuid NOT NULL,recorded_at timestamptz NOT NULL,
+ CHECK(reference_code=btrim(reference_code) AND reference_code~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ CHECK(expires_at=observed_at+interval '90 days'),UNIQUE(kind,evidence_sha256)
+);
+CREATE TABLE privacy_activation_proposals (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),policy_version varchar(80) NOT NULL REFERENCES privacy_request_policies(version) ON DELETE RESTRICT,
+ evidence_ids uuid[] NOT NULL CHECK(cardinality(evidence_ids)=4 AND array_position(evidence_ids,NULL) IS NULL),
+ evidence_set_sha256 bytea NOT NULL CHECK(octet_length(evidence_set_sha256)=32),activation_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(activation_sha256)=32),
+ proposed_by_ref uuid NOT NULL,proposed_at timestamptz NOT NULL
+);
+CREATE TABLE privacy_activation_approvals (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),proposal_id uuid NOT NULL UNIQUE REFERENCES privacy_activation_proposals(id) ON DELETE RESTRICT,
+ activation_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(activation_sha256)=32),approved_by_ref uuid NOT NULL,approved_at timestamptz NOT NULL
+);
+ALTER TABLE privacy_request_activation ADD COLUMN approval_id uuid NULL REFERENCES privacy_activation_approvals(id) ON DELETE RESTRICT;
+WITH migration_clock AS (SELECT clock_timestamp() occurred_at), disabled AS (
+ UPDATE privacy_request_activation activation SET enabled=false,fulfilment_ready=false,updated_at=migration_clock.occurred_at
+ FROM migration_clock WHERE activation.enabled OR activation.fulfilment_ready
+ RETURNING activation.policy_version,activation.updated_by,migration_clock.occurred_at
+)
+INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ SELECT policy_version,updated_by,false,false,occurred_at FROM disabled;
+ALTER TABLE privacy_request_activation ADD CONSTRAINT privacy_activation_requires_evidence_approval
+ CHECK(NOT enabled OR (fulfilment_ready AND approval_id IS NOT NULL));
+CREATE TRIGGER privacy_activation_evidence_immutable BEFORE UPDATE OR DELETE ON privacy_activation_evidence FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TRIGGER privacy_activation_proposals_immutable BEFORE UPDATE OR DELETE ON privacy_activation_proposals FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TRIGGER privacy_activation_approvals_immutable BEFORE UPDATE OR DELETE ON privacy_activation_approvals FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+
+CREATE FUNCTION guard_privacy_activation_evidence() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF NEW.enabled AND (NOT NEW.fulfilment_ready OR NEW.approval_id IS NULL OR NOT EXISTS(
+  SELECT 1 FROM privacy_activation_approvals approval JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  WHERE approval.id=NEW.approval_id AND approval.activation_sha256=proposal.activation_sha256 AND proposal.policy_version=NEW.policy_version
+   AND (SELECT count(DISTINCT evidence.kind) FROM privacy_activation_evidence evidence WHERE evidence.id=ANY(proposal.evidence_ids) AND evidence.expires_at>clock_timestamp())=4
+ )) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_requires_approval'; END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER privacy_activation_evidence_guard BEFORE INSERT OR UPDATE OF enabled,fulfilment_ready,approval_id ON privacy_request_activation
+ FOR EACH ROW EXECUTE FUNCTION guard_privacy_activation_evidence();
+
+CREATE FUNCTION privacy_activation_ready(p_policy_version text)
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT EXISTS(
+  SELECT 1
+  FROM privacy_request_activation activation
+  JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  WHERE activation.singleton AND activation.enabled AND activation.fulfilment_ready
+   AND activation.policy_version=p_policy_version AND proposal.policy_version=activation.policy_version
+   AND approval.activation_sha256=proposal.activation_sha256
+   AND approval.approved_by_ref<>proposal.proposed_by_ref
+   AND cardinality(proposal.evidence_ids)=4
+   AND (SELECT count(*) FROM privacy_activation_evidence evidence
+        WHERE evidence.id=ANY(proposal.evidence_ids)
+         AND evidence.expires_at>clock_timestamp()
+         AND ((evidence.kind='RESTORE' AND evidence.reference_code='mycfc/privacy-restore-drill-attestation/v1')
+          OR (evidence.kind='INFRASTRUCTURE' AND evidence.reference_code='mycfc/privacy-infrastructure-posture/v1')
+          OR (evidence.kind='PROVIDER' AND evidence.reference_code='mycfc/privacy-provider-registry/v1')
+          OR (evidence.kind='SCHEMA' AND evidence.reference_code='mycfc/schema-migration-inventory/v1')))=4
+   AND (SELECT count(DISTINCT evidence.kind) FROM privacy_activation_evidence evidence
+        WHERE evidence.id=ANY(proposal.evidence_ids) AND evidence.expires_at>clock_timestamp())=4
+ );
+$$;
+
+CREATE FUNCTION privacy_worker_activation_ready()
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT COALESCE((SELECT privacy_activation_ready(activation.policy_version)
+  FROM privacy_request_activation activation WHERE activation.singleton),false);
+$$;
+
+CREATE FUNCTION privacy_worker_status()
+RETURNS TABLE(pending bigint,leased bigint,retryable bigint,terminal bigint,aged_nonterminal bigint)
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT count(*) FILTER(WHERE job.status='PENDING'),count(*) FILTER(WHERE job.status='LEASED'),
+  count(*) FILTER(WHERE job.status='RETRY_WAIT'),count(*) FILTER(WHERE job.status='TERMINAL_FAILED'),
+  count(*) FILTER(WHERE job.status IN ('PENDING','LEASED','RETRY_WAIT') AND job.updated_at<=clock_timestamp()-interval '15 minutes')
+ FROM privacy_erasure_category_jobs job;
+$$;
+
+CREATE FUNCTION privacy_activation_record_evidence(p_actor uuid,p_kind text,p_evidence_sha256 bytea,p_reference_code text,p_observed_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE evidence_id uuid;now_at timestamptz:=clock_timestamp();
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id JOIN platform_roles role ON role.id=assignment.role_id
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN')
+  OR p_kind NOT IN ('RESTORE','INFRASTRUCTURE','PROVIDER','SCHEMA') OR octet_length(p_evidence_sha256)<>32
+  OR p_reference_code!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$' OR p_observed_at>now_at OR p_observed_at<=now_at-interval '90 days' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_rejected'; END IF;
+ IF (p_kind='RESTORE' AND p_reference_code<>'mycfc/privacy-restore-drill-attestation/v1')
+  OR (p_kind='INFRASTRUCTURE' AND p_reference_code<>'mycfc/privacy-infrastructure-posture/v1')
+  OR (p_kind='PROVIDER' AND p_reference_code<>'mycfc/privacy-provider-registry/v1')
+  OR (p_kind='SCHEMA' AND p_reference_code<>'mycfc/schema-migration-inventory/v1') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_contract_rejected'; END IF;
+ INSERT INTO privacy_activation_evidence(kind,evidence_sha256,reference_code,observed_at,expires_at,recorded_by_ref,recorded_at)
+ VALUES(p_kind,p_evidence_sha256,p_reference_code,p_observed_at,p_observed_at+interval '90 days',p_actor,now_at)
+ ON CONFLICT(kind,evidence_sha256) DO NOTHING RETURNING id INTO evidence_id;
+ IF evidence_id IS NULL THEN
+  SELECT evidence.id INTO evidence_id FROM privacy_activation_evidence evidence
+  WHERE evidence.kind=p_kind AND evidence.evidence_sha256=p_evidence_sha256 AND evidence.reference_code=p_reference_code
+   AND evidence.observed_at=p_observed_at AND evidence.expires_at=p_observed_at+interval '90 days';
+  IF evidence_id IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_conflict'; END IF;
+ END IF;
+ RETURN evidence_id;
+END;$$;
+
+CREATE FUNCTION privacy_activation_propose(p_actor uuid,p_policy_version text,p_evidence_ids uuid[])
+RETURNS TABLE(proposal_id uuid,activation_sha256 bytea) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE policy privacy_request_policies%ROWTYPE;evidence_digest bytea;activation_digest bytea;now_at timestamptz:=clock_timestamp();
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent) OR cardinality(p_evidence_ids)<>4 THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_forbidden'; END IF;
+ SELECT * INTO policy FROM privacy_request_policies WHERE version=p_policy_version FOR SHARE;
+ IF policy.version IS NULL OR policy.adopted_at IS NULL OR policy.working_retention_days<>90
+  OR (SELECT count(DISTINCT kind) FROM privacy_activation_evidence WHERE id=ANY(p_evidence_ids) AND expires_at>now_at)<>4
+  OR (SELECT count(*) FROM privacy_activation_evidence WHERE id=ANY(p_evidence_ids) AND expires_at>now_at)<>4 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_incomplete'; END IF;
+ SELECT digest(convert_to(string_agg(kind||':'||encode(evidence_sha256,'hex')||':'||to_char(observed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')||':'||to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'|' ORDER BY kind),'UTF8'),'sha256')
+ INTO evidence_digest FROM privacy_activation_evidence WHERE id=ANY(p_evidence_ids);
+ activation_digest:=digest(convert_to('privacy-activation/v1:'||policy.version||':'||COALESCE(policy.executor_version,'')||':'||COALESCE(policy.plan_schema_version,'')||':'||
+  encode(digest(convert_to(policy.category_catalogue::text,'UTF8'),'sha256'),'hex')||':'||encode(evidence_digest,'hex'),'UTF8'),'sha256');
+ RETURN QUERY INSERT INTO privacy_activation_proposals(policy_version,evidence_ids,evidence_set_sha256,activation_sha256,proposed_by_ref,proposed_at)
+ VALUES(policy.version,(SELECT array_agg(id ORDER BY kind) FROM privacy_activation_evidence WHERE id=ANY(p_evidence_ids)),evidence_digest,activation_digest,p_actor,now_at)
+ RETURNING id,privacy_activation_proposals.activation_sha256;
+END;$$;
+
+CREATE FUNCTION privacy_activation_approve(p_actor uuid,p_proposal_id uuid,p_activation_sha256 bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE proposal privacy_activation_proposals%ROWTYPE;approval_id uuid;now_at timestamptz:=clock_timestamp();recomputed bytea;
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id JOIN platform_roles role ON role.id=assignment.role_id
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN') THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_forbidden'; END IF;
+ SELECT * INTO proposal FROM privacy_activation_proposals WHERE id=p_proposal_id FOR SHARE;
+ IF proposal.id IS NULL OR proposal.proposed_by_ref=p_actor OR proposal.activation_sha256<>p_activation_sha256
+  OR EXISTS(SELECT 1 FROM privacy_activation_approvals approval WHERE approval.proposal_id=proposal.id)
+  OR (SELECT count(DISTINCT kind) FROM privacy_activation_evidence WHERE id=ANY(proposal.evidence_ids) AND expires_at>now_at)<>4 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_unavailable'; END IF;
+ SELECT digest(convert_to(string_agg(kind||':'||encode(evidence_sha256,'hex')||':'||to_char(observed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')||':'||to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'|' ORDER BY kind),'UTF8'),'sha256')
+ INTO recomputed FROM privacy_activation_evidence WHERE id=ANY(proposal.evidence_ids);
+ IF recomputed<>proposal.evidence_set_sha256 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_stale'; END IF;
+ INSERT INTO privacy_activation_approvals(proposal_id,activation_sha256,approved_by_ref,approved_at)
+ VALUES(proposal.id,proposal.activation_sha256,p_actor,now_at) RETURNING id INTO approval_id;
+ PERFORM set_config('mycfc.privacy_activation_approval','approved',true);
+ INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at,approval_id)
+ VALUES(true,proposal.policy_version,true,true,p_actor,now_at,approval_id)
+ ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=true,fulfilment_ready=true,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,approval_id=EXCLUDED.approval_id;
+ INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ VALUES(proposal.policy_version,p_actor,true,true,now_at);
+ RETURN approval_id;
+END;$$;
+
+CREATE FUNCTION privacy_activation_control_snapshot(p_actor uuid)
+RETURNS TABLE(policy_version text,ready boolean,evidence_id uuid,evidence_kind text,evidence_observed_at timestamptz,
+ proposal_id uuid,proposal_sha256 bytea,proposal_created_at timestamptz,can_propose boolean,can_renew boolean,can_approve boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE actor_executor boolean;actor_admin boolean;selected_policy text;pending privacy_activation_proposals%ROWTYPE;current_evidence integer;renewal_evidence boolean;
+BEGIN
+ SELECT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent),
+  EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id
+   JOIN platform_roles role ON role.id=assignment.role_id WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN')
+ INTO actor_executor,actor_admin;
+ IF NOT actor_executor AND NOT actor_admin THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_control_forbidden'; END IF;
+ SELECT COALESCE((SELECT activation.policy_version FROM privacy_request_activation activation WHERE activation.singleton AND activation.enabled),
+  (SELECT policy.version FROM privacy_request_policies policy WHERE policy.adopted_at IS NOT NULL ORDER BY policy.adopted_at DESC,policy.version DESC LIMIT 1))
+ INTO selected_policy;
+ IF selected_policy IS NULL THEN RETURN; END IF;
+ SELECT proposal.* INTO pending FROM privacy_activation_proposals proposal
+  WHERE proposal.policy_version=selected_policy AND NOT EXISTS(SELECT 1 FROM privacy_activation_approvals approval WHERE approval.proposal_id=proposal.id)
+  ORDER BY proposal.proposed_at DESC,proposal.id DESC LIMIT 1;
+ SELECT count(*) INTO current_evidence FROM (
+  SELECT DISTINCT ON(evidence.kind) evidence.kind FROM privacy_activation_evidence evidence WHERE evidence.expires_at>clock_timestamp()
+  ORDER BY evidence.kind,evidence.observed_at DESC,evidence.id DESC
+ ) current_rows;
+ SELECT EXISTS(
+  SELECT 1 FROM (
+   SELECT DISTINCT ON(evidence.kind) evidence.id,evidence.kind
+   FROM privacy_activation_evidence evidence WHERE evidence.expires_at>clock_timestamp()
+   ORDER BY evidence.kind,evidence.observed_at DESC,evidence.id DESC
+  ) latest
+  JOIN privacy_request_activation activation ON activation.singleton AND activation.enabled AND activation.policy_version=selected_policy
+  JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  WHERE NOT latest.id=ANY(proposal.evidence_ids)
+ ) INTO renewal_evidence;
+ RETURN QUERY
+ SELECT selected_policy,privacy_activation_ready(selected_policy),evidence.id,evidence.kind::text,evidence.observed_at,
+  pending.id,pending.activation_sha256,pending.proposed_at,
+  (actor_executor AND current_evidence=4 AND pending.id IS NULL AND NOT privacy_activation_ready(selected_policy)),
+  (actor_executor AND current_evidence=4 AND pending.id IS NULL AND privacy_activation_ready(selected_policy) AND renewal_evidence),
+  (actor_admin AND pending.id IS NOT NULL AND pending.proposed_by_ref<>p_actor)
+ FROM (SELECT true singleton) seed LEFT JOIN LATERAL(
+  SELECT DISTINCT ON(candidate.kind) candidate.id,candidate.kind,candidate.observed_at FROM privacy_activation_evidence candidate
+  WHERE candidate.expires_at>clock_timestamp() ORDER BY candidate.kind,candidate.observed_at DESC,candidate.id DESC
+ ) evidence ON true ORDER BY evidence.kind;
+END;$$;
+
+ALTER TABLE email_outbox DROP CONSTRAINT email_outbox_message_valid;
+ALTER TABLE email_outbox ADD CONSTRAINT email_outbox_message_valid CHECK (
+ (message_type='EMAIL_VERIFICATION' AND verification_token_id IS NOT NULL AND password_reset_token_id IS NULL AND sealed_payload IS NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL)
+ OR (message_type='PASSWORD_RESET' AND verification_token_id IS NULL AND password_reset_token_id IS NOT NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL)
+ OR (message_type IN ('PRIVACY_ACKNOWLEDGEMENT','PRIVACY_DECISION','PRIVACY_PROCESSING_STARTED','PRIVACY_COMPLETED') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NOT NULL AND privacy_event_key IS NOT NULL)
+);
+
+REVOKE ALL ON TABLE privacy_protected.completion_notice_targets,privacy_erasure_completion_manifests,privacy_completion_access_links,
+ privacy_terminal_requeue_proposals,privacy_terminal_requeue_approvals,privacy_activation_evidence,privacy_activation_proposals,privacy_activation_approvals FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid),privacy_completion_prepare(uuid,uuid),privacy_completion_list_pending(uuid,integer),privacy_completion_finalize(uuid,uuid,bytea,bytea),
+ privacy_completion_consume(bytea),privacy_completion_validate(bytea),privacy_completion_notice_deliverable(uuid,timestamptz),privacy_terminal_requeue_propose(uuid,uuid),privacy_terminal_requeue_approve(uuid,bytea,uuid),privacy_completion_control_snapshot(uuid,uuid),
+ privacy_activation_ready(text),privacy_worker_activation_ready(),privacy_worker_status(),privacy_activation_record_evidence(uuid,text,bytea,text,timestamptz),privacy_activation_propose(uuid,text,uuid[]),privacy_activation_approve(uuid,uuid,bytea),privacy_activation_control_snapshot(uuid) FROM PUBLIC;
+-- #247 replay hardening: source-state verification, local provider fencing,
+-- original erasure clocks, and an explicitly synthetic offline drill path.
+ALTER TABLE privacy_protected.restore_ledger_imports
+ ADD COLUMN erasure_effective_at timestamptz NULL,
+ ADD COLUMN closure_version varchar(48) NULL,
+ ADD COLUMN synthetic_fixture varchar(80) NULL,
+ ADD CONSTRAINT restore_ledger_imports_synthetic_fixture_check
+ CHECK(synthetic_fixture IS NULL OR synthetic_fixture='mycfc/privacy-restore-synthetic-fixture/v1') NOT VALID;
+ALTER TABLE privacy_protected.restore_ledger_imports VALIDATE CONSTRAINT restore_ledger_imports_synthetic_fixture_check;
+ALTER TABLE privacy_protected.restore_ledger_imports ADD CONSTRAINT restore_ledger_imports_closure_version_check
+ CHECK((kind='intent' AND closure_version IS NULL) OR (kind='closure' AND closure_version IN ('restore-tombstone-closure/v2','restore-tombstone-closure/v3'))) NOT VALID;
+ALTER TABLE privacy_protected.restore_ledger_imports VALIDATE CONSTRAINT restore_ledger_imports_closure_version_check;
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts DROP CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check;
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts ADD CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check
+ CHECK(ledger_version IN ('restore-tombstone-closure/v1','restore-tombstone-closure/v2','restore-tombstone-closure/v3')) NOT VALID;
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts VALIDATE CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check;
+ALTER TABLE privacy_protected.restore_ledger_imports DROP CONSTRAINT restore_ledger_imports_operations_check;
+ALTER TABLE privacy_protected.restore_ledger_imports ADD CONSTRAINT restore_ledger_imports_operation_count CHECK(cardinality(operations) BETWEEN 1 AND 17) NOT VALID;
+ALTER TABLE privacy_protected.restore_ledger_imports VALIDATE CONSTRAINT restore_ledger_imports_operation_count;
+
+ALTER TABLE privacy_protected.restore_replay_runs
+ ADD COLUMN outcome_code varchar(32) NULL,
+ ADD CONSTRAINT restore_replay_runs_outcome_check CHECK(
+  (status='PENDING' AND completed_at IS NULL AND outcome_code IS NULL)
+  OR (status='SUCCEEDED' AND completed_at IS NOT NULL AND outcome_code IN ('REPLAYED','ALREADY_APPLIED_SOURCE'))
+ ) NOT VALID;
+UPDATE privacy_protected.restore_replay_runs SET outcome_code='REPLAYED' WHERE status='SUCCEEDED';
+ALTER TABLE privacy_protected.restore_replay_runs VALIDATE CONSTRAINT restore_replay_runs_outcome_check;
+
+CREATE TABLE privacy_protected.restore_replay_already_applied_evidence (
+ run_id uuid PRIMARY KEY REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ import_id uuid NOT NULL UNIQUE REFERENCES privacy_protected.restore_ledger_imports(id) ON DELETE RESTRICT,
+ evidence_code varchar(40) NOT NULL CHECK(evidence_code='ALREADY_APPLIED'),
+ source_execution_id uuid NOT NULL,erasure_effective_at timestamptz NOT NULL,
+ verified_operations text[] NOT NULL CHECK(cardinality(verified_operations) BETWEEN 1 AND 17),
+ verification_sha256 bytea NOT NULL CHECK(octet_length(verification_sha256)=32),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER privacy_restore_replay_already_applied_evidence_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_replay_already_applied_evidence FOR EACH ROW
+ EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.restore_synthetic_fixtures (
+ subject_user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE RESTRICT,
+ source_execution_id uuid NOT NULL UNIQUE,source_request_id uuid NOT NULL UNIQUE,source_request_ref uuid NOT NULL UNIQUE,
+ plan_sha256 bytea NOT NULL CHECK(octet_length(plan_sha256)=32),workset_sha256 bytea NOT NULL CHECK(octet_length(workset_sha256)=32),
+ erasure_effective_at timestamptz NOT NULL,operations text[] NOT NULL CHECK(cardinality(operations) BETWEEN 1 AND 17),
+ fixture_marker varchar(80) NOT NULL CHECK(fixture_marker='mycfc/privacy-restore-synthetic-fixture/v1'),
+ created_by_ref uuid NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER privacy_restore_synthetic_fixtures_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_synthetic_fixtures FOR EACH ROW
+ EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.restore_replay_inventory_attestations (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),input_source varchar(32) NOT NULL CHECK(input_source IN ('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP')),
+ inventory_sha256 bytea NOT NULL CHECK(octet_length(inventory_sha256)=32),object_count integer NOT NULL CHECK(object_count>0),
+ policy_version varchar(80) NOT NULL,executor_version varchar(80) NOT NULL,plan_schema_version varchar(80) NOT NULL,
+ image_digest varchar(71) NOT NULL CHECK(image_digest~'^sha256:[0-9a-f]{64}$'),schema_migration_digest bytea NOT NULL CHECK(octet_length(schema_migration_digest)=32),
+ imported_count integer NOT NULL CHECK(imported_count>=0),replayed_count integer NOT NULL CHECK(replayed_count>0),
+ already_applied_count integer NOT NULL CHECK(already_applied_count>=0),absence_verified_count integer NOT NULL,
+ synthetic_replayed_count integer NOT NULL CHECK(synthetic_replayed_count>=0),closure_v3_count integer NOT NULL CHECK(closure_v3_count>=0),
+ intent_only_count integer NOT NULL CHECK(intent_only_count>=0),legacy_closure_v2_count integer NOT NULL CHECK(legacy_closure_v2_count>=0),
+ erasure_effective_at_verified_count integer NOT NULL CHECK(erasure_effective_at_verified_count>=0),
+ evidence_sha256 bytea NOT NULL CHECK(octet_length(evidence_sha256)=32),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),UNIQUE(input_source,inventory_sha256),
+ CHECK(replayed_count=imported_count+already_applied_count),CHECK(absence_verified_count=replayed_count),
+ CHECK(closure_v3_count=replayed_count AND intent_only_count=0 AND legacy_closure_v2_count=0 AND erasure_effective_at_verified_count=replayed_count),
+ CHECK((input_source='LIVE_LEDGER' AND synthetic_replayed_count=0) OR (input_source='SYNTHETIC_BOOTSTRAP' AND synthetic_replayed_count=replayed_count))
+);
+CREATE TABLE privacy_protected.restore_replay_inventory_attestation_runs (
+ attestation_id uuid NOT NULL REFERENCES privacy_protected.restore_replay_inventory_attestations(id) ON DELETE RESTRICT,
+ run_id uuid NOT NULL UNIQUE REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ PRIMARY KEY(attestation_id,run_id)
+);
+CREATE TRIGGER privacy_restore_replay_inventory_attestations_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_replay_inventory_attestations FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_restore_replay_inventory_attestation_runs_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.restore_replay_inventory_attestation_runs FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION public.privacy_tombstone_prepare_closure_v3(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,
+ execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz,erasure_effective_at timestamptz,replay_operations text[])
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT prepared.execution_id,prepared.request_id,prepared.request_ref,prepared.subject_user_id,prepared.plan_sha256,prepared.workset_sha256,
+  prepared.execution_started_at,prepared.closed_at,prepared.evidence_expires_at,subject.erased_at,prepared.replay_operations
+ FROM public.privacy_tombstone_prepare_closure_v2(p_execution_id,p_worker_ref) prepared
+ JOIN users subject ON subject.id=prepared.subject_user_id
+ WHERE subject.erased_at IS NOT NULL AND subject.erasure_execution_id=prepared.execution_id AND subject.erasure_replay_run_id IS NULL
+  AND subject.erased_at>=prepared.execution_started_at AND subject.erased_at<=prepared.closed_at
+  AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=subject.id AND consent.ceased_at IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=subject.id AND consent.cessation_reason='ACCOUNT_ERASURE'
+   AND (consent.ceased_at<>subject.erased_at OR consent.evidence_expires_at<>subject.erased_at+interval '3 years'));
+$$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm_closure_v3(
+ p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE;existing privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+BEGIN
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id;
+ IF intent.execution_id IS NULL OR p_worker_ref IS NULL OR p_ledger_version<>'restore-tombstone-closure/v3'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at
+  OR NOT EXISTS(SELECT 1 FROM users subject JOIN privacy_erasure_executions execution ON execution.id=subject.erasure_execution_id
+   WHERE execution.id=p_execution_id AND subject.erased_at BETWEEN execution.accepted_at AND intent.closed_at)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(p_execution_id,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_conflict'; END IF;
+ RETURN p_execution_id;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_create_synthetic_fixture(p_worker_ref uuid)
+RETURNS TABLE(source_execution_id uuid,source_request_id uuid,source_request_ref uuid,subject_user_id uuid,
+ plan_sha256 bytea,workset_sha256 bytea,erasure_effective_at timestamptz,operations text[])
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_subject uuid:=gen_random_uuid();v_execution uuid:=gen_random_uuid();v_request uuid:=gen_random_uuid();v_ref uuid:=gen_random_uuid();
+ v_plan bytea:=gen_random_bytes(32);v_workset bytea:=gen_random_bytes(32);v_effective timestamptz:=clock_timestamp();
+ v_operations text[]:=ARRAY['AUTH_ACCESS_REVOKE','AUTH_TOKEN_DELETE','PROFILE_IDENTITY_DELETE','PROVIDER_LOCAL_FENCE','IDENTITY_CLEAR'];
+BEGIN
+ IF p_worker_ref IS NULL OR current_setting('mycfc.privacy_restore_isolated',true)<>'on' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_synthetic_fixture_rejected'; END IF;
+ INSERT INTO users(id,name,email,password_hash,date_of_birth,created_at,updated_at)
+ VALUES(v_subject,'Synthetic restore fixture',('synthetic-'||v_subject::text||'@invalid.invalid')::citext,'synthetic-disabled','1900-01-01',v_effective,v_effective);
+ INSERT INTO member_profiles(user_id,address_line1,created_at,updated_at) VALUES(v_subject,'Synthetic fixture only',v_effective,v_effective);
+ INSERT INTO privacy_protected.provider_connections(id,subject_user_id,service_code,provider_role,provider_contract_version,
+  registry_evidence_key_id,registry_evidence_digest,target_key_id,target_opaque,credential_key_id,credential_opaque,state,
+  sync_enabled,webhook_enabled,reconnect_enabled,created_at,updated_at)
+ VALUES(gen_random_uuid(),v_subject,'synthetic.restore.fixture','PROCESSOR','synthetic-v1','synthetic-key',gen_random_bytes(32),
+  'synthetic-key',gen_random_bytes(32),'synthetic-key',gen_random_bytes(32),'ACTIVE',true,true,true,v_effective,v_effective);
+ INSERT INTO privacy_protected.restore_synthetic_fixtures(subject_user_id,source_execution_id,source_request_id,source_request_ref,
+  plan_sha256,workset_sha256,erasure_effective_at,operations,fixture_marker,created_by_ref,created_at)
+ VALUES(v_subject,v_execution,v_request,v_ref,v_plan,v_workset,v_effective,v_operations,'mycfc/privacy-restore-synthetic-fixture/v1',p_worker_ref,v_effective);
+ RETURN QUERY SELECT v_execution,v_request,v_ref,v_subject,v_plan,v_workset,v_effective,v_operations;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_import_authenticated_v2_hardened(
+ p_worker_ref uuid,p_kind text,p_record_version text,p_envelope_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_ciphertext_sha256 bytea,p_object_version_id text,p_written_at timestamptz,p_verified_at timestamptz,p_retain_until timestamptz,
+ p_source_execution_id uuid,p_source_request_id uuid,p_source_request_ref uuid,p_subject_user_id uuid,p_plan_sha256 bytea,p_workset_sha256 bytea,
+ p_execution_started_at timestamptz,p_erasure_effective_at timestamptz,p_closure_version text,p_synthetic_fixture text,p_replay_version text,p_action_version text,
+ p_operations text[],p_prescription_sha256 bytea,p_record_sha256 bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE import_ref uuid; existing privacy_protected.restore_ledger_imports%ROWTYPE; synthetic_match boolean;
+BEGIN
+ SELECT EXISTS(SELECT 1 FROM privacy_protected.restore_synthetic_fixtures fixture
+  WHERE fixture.subject_user_id=p_subject_user_id AND fixture.source_execution_id=p_source_execution_id
+   AND fixture.source_request_id=p_source_request_id AND fixture.source_request_ref=p_source_request_ref
+   AND fixture.plan_sha256=p_plan_sha256 AND fixture.workset_sha256=p_workset_sha256
+   AND fixture.erasure_effective_at=p_erasure_effective_at AND fixture.operations=p_operations
+   AND fixture.fixture_marker=p_synthetic_fixture) INTO synthetic_match;
+ IF p_worker_ref IS NULL OR p_kind NOT IN ('intent','closure') OR p_record_version<>'restore-tombstone/v2'
+  OR p_envelope_version<>'x25519-aes256gcm-hkdfsha256/v2' OR p_replay_version<>'relational-erasure-replay/v1' OR p_action_version<>'v1'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR octet_length(p_plan_sha256)<>32
+  OR octet_length(p_workset_sha256)<>32 OR octet_length(p_prescription_sha256)<>32 OR octet_length(p_record_sha256)<>32
+  OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_source_execution_id IS NULL OR p_source_request_id IS NULL
+  OR p_source_request_ref IS NULL OR p_subject_user_id IS NULL OR p_execution_started_at IS NULL OR p_erasure_effective_at IS NULL
+  OR p_erasure_effective_at<p_execution_started_at OR cardinality(p_operations) NOT BETWEEN 1 AND 17
+  OR (p_kind='intent' AND (p_closure_version IS NOT NULL OR p_erasure_effective_at<>p_execution_started_at))
+  OR (p_kind='closure' AND p_closure_version NOT IN ('restore-tombstone-closure/v2','restore-tombstone-closure/v3'))
+  OR EXISTS(SELECT 1 FROM unnest(p_operations) operation WHERE NOT(public.privacy_relational_replay_operation_supported(operation) OR operation='PROVIDER_LOCAL_FENCE'))
+  OR cardinality(p_operations)<>(SELECT count(DISTINCT operation) FROM unnest(p_operations) operation)
+  OR (p_synthetic_fixture IS NULL AND EXISTS(SELECT 1 FROM privacy_protected.restore_synthetic_fixtures WHERE subject_user_id=p_subject_user_id))
+  OR (p_synthetic_fixture IS NOT NULL AND (p_synthetic_fixture<>'mycfc/privacy-restore-synthetic-fixture/v1' OR NOT synthetic_match))
+  OR (p_kind='intent' AND p_retain_until IS NOT NULL) OR (p_kind='closure' AND (p_retain_until IS NULL OR p_verified_at>p_retain_until)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_ledger_imports
+  WHERE (locator_key_id=p_locator_key_id AND locator_digest=p_locator_digest) OR source_execution_id=p_source_execution_id FOR UPDATE;
+ IF existing.id IS NULL THEN
+  INSERT INTO privacy_protected.restore_ledger_imports(kind,record_version,envelope_version,encryption_key_id,locator_key_id,locator_digest,
+   ciphertext_sha256,object_version_id,written_at,verified_at,retain_until,source_execution_id,source_request_id,source_request_ref,subject_user_id,
+   plan_sha256,workset_sha256,execution_started_at,erasure_effective_at,closure_version,synthetic_fixture,replay_version,action_version,operations,
+   prescription_sha256,record_sha256,imported_by_ref)
+  VALUES(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,p_object_version_id,
+   p_written_at,p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,p_plan_sha256,p_workset_sha256,
+   p_execution_started_at,p_erasure_effective_at,p_closure_version,p_synthetic_fixture,p_replay_version,p_action_version,p_operations,p_prescription_sha256,p_record_sha256,p_worker_ref)
+  RETURNING id INTO import_ref;
+ ELSIF ROW(existing.kind,existing.record_version,existing.envelope_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,
+   existing.ciphertext_sha256,existing.object_version_id,existing.written_at,existing.verified_at,existing.retain_until,existing.source_execution_id,
+   existing.source_request_id,existing.source_request_ref,existing.subject_user_id,existing.plan_sha256,existing.workset_sha256,existing.execution_started_at,
+   existing.erasure_effective_at,existing.closure_version,existing.synthetic_fixture,existing.replay_version,existing.action_version,existing.operations,existing.prescription_sha256,existing.record_sha256)
+  IS DISTINCT FROM ROW(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,
+   p_object_version_id,p_written_at,p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,
+   p_plan_sha256,p_workset_sha256,p_execution_started_at,p_erasure_effective_at,p_closure_version,p_synthetic_fixture,p_replay_version,p_action_version,p_operations,
+   p_prescription_sha256,p_record_sha256) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_conflict';
+ ELSE import_ref:=existing.id; END IF;
+ RETURN import_ref;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_verify_operation(p_run_id uuid,p_operation_code text,p_source_already_applied boolean)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE; effective_at timestamptz;
+BEGIN
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run
+ JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id;
+ IF imported.id IS NULL OR NOT(p_operation_code=ANY(imported.operations)) OR
+  NOT(public.privacy_relational_replay_operation_supported(p_operation_code) OR p_operation_code='PROVIDER_LOCAL_FENCE') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ effective_at:=imported.erasure_effective_at;
+ IF p_source_already_applied AND NOT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id
+  AND erasure_execution_id=imported.source_execution_id AND erased_at=imported.erasure_effective_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ CASE p_operation_code
+ WHEN 'ACTIVITY_CONNECTION_DISCONNECT' THEN
+  IF EXISTS(SELECT 1 FROM activity_connections WHERE user_id=imported.subject_user_id AND (status<>'DISCONNECTED' OR credentials_ciphertext IS NOT NULL OR credential_key_id IS NOT NULL OR cardinality(scopes)>0 OR sync_cursor IS NOT NULL)) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'ACTIVITY_SUBJECT_DELETE' THEN IF EXISTS(SELECT 1 FROM activity_connections WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'ANNOUNCEMENT_DELIVERY_DELETE' THEN IF EXISTS(SELECT 1 FROM announcement_deliveries WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'AUTH_ACCESS_REVOKE' THEN IF EXISTS(SELECT 1 FROM sessions WHERE subject_indexed AND user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM user_platform_roles WHERE user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM staff_grants WHERE user_id=imported.subject_user_id AND revoked_at IS NULL) OR EXISTS(SELECT 1 FROM privacy_reviewer_grants WHERE user_id=imported.subject_user_id AND revoked_at IS NULL) OR EXISTS(SELECT 1 FROM privacy_executor_grants WHERE user_id=imported.subject_user_id AND revoked_at IS NULL) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'AUTH_TOKEN_DELETE' THEN IF EXISTS(SELECT 1 FROM email_verification_tokens WHERE user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM password_reset_tokens WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'DEPENDANT_RELATIONSHIP_DELETE' THEN IF EXISTS(SELECT 1 FROM users WHERE guardian_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'EVENT_RESPONSE_DELETE' THEN IF EXISTS(SELECT 1 FROM event_responses WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'IDENTITY_CLEAR' THEN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id AND erased_at=effective_at AND NOT is_active AND email IS NULL AND minor_login_id IS NULL AND password_hash IS NULL AND guardian_id IS NULL AND ((p_source_already_applied AND erasure_execution_id=imported.source_execution_id AND erasure_replay_run_id IS NULL) OR (NOT p_source_already_applied AND erasure_execution_id IS NULL AND erasure_replay_run_id=p_run_id))) OR EXISTS(SELECT 1 FROM consent_forms WHERE user_id=imported.subject_user_id AND ceased_at IS NULL) OR EXISTS(SELECT 1 FROM consent_forms WHERE user_id=imported.subject_user_id AND cessation_reason='ACCOUNT_ERASURE' AND (ceased_at<>effective_at OR evidence_expires_at<>effective_at+interval '3 years')) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'MEMBERSHIP_ACTIVE_REVOKE','MEMBERSHIP_HISTORY_ANONYMIZE' THEN IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'PROFILE_HEALTH_DELETE' THEN IF EXISTS(SELECT 1 FROM member_profiles WHERE user_id=imported.subject_user_id AND (emergency_contact_name<>'' OR emergency_contact_relationship<>'' OR emergency_contact_phone<>'' OR emergency_contact_alternate_phone<>'' OR medical_declaration<>'UNKNOWN' OR allergies<>'' OR medical_conditions<>'' OR medication<>'' OR activity_restrictions<>'' OR medical_notes<>'')) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'PROFILE_IDENTITY_DELETE' THEN IF EXISTS(SELECT 1 FROM member_profiles WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'PROVIDER_LOCAL_FENCE' THEN IF EXISTS(SELECT 1 FROM privacy_protected.provider_connections WHERE subject_user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM privacy_protected.provider_credential_quarantine q JOIN privacy_protected.provider_targets target ON target.id=q.target_id JOIN privacy_protected.provider_capture_sets capture ON capture.execution_id=target.execution_id WHERE capture.subject_user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'REPAIR_REPORTER_ANONYMIZE' THEN IF EXISTS(SELECT 1 FROM repair_requests WHERE reported_by_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'SUGGESTION_SUBJECT_DELETE' THEN IF EXISTS(SELECT 1 FROM suggestions WHERE requester_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'TRAINING_PRESCRIPTION_DELETE' THEN IF EXISTS(SELECT 1 FROM training_prescriptions WHERE athlete_user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ WHEN 'TRAINING_RESULT_DELETE' THEN IF EXISTS(SELECT 1 FROM training_session_outcomes WHERE user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM training_logs WHERE user_id=imported.subject_user_id) OR EXISTS(SELECT 1 FROM performance_metrics WHERE user_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ ELSE RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed';
+ END CASE;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_apply_hardened_operation(p_run_id uuid,p_operation_code text)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;changed bigint:=0;n bigint:=0;
+BEGIN
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id FOR UPDATE OF run;
+ IF imported.id IS NULL OR imported.erasure_effective_at IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_operation_rejected'; END IF;
+ IF p_operation_code='PROVIDER_LOCAL_FENCE' THEN
+  DELETE FROM privacy_protected.provider_credential_quarantine q USING privacy_protected.provider_targets target,privacy_protected.provider_capture_sets capture
+   WHERE q.target_id=target.id AND target.execution_id=capture.execution_id AND capture.subject_user_id=imported.subject_user_id; GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM privacy_protected.provider_connections WHERE subject_user_id=imported.subject_user_id; GET DIAGNOSTICS n=ROW_COUNT; changed:=changed+n;
+ ELSIF p_operation_code='IDENTITY_CLEAR' THEN
+  IF EXISTS(SELECT 1 FROM sessions WHERE NOT subject_indexed AND expiry>clock_timestamp()) OR EXISTS(SELECT 1 FROM users WHERE guardian_id=imported.subject_user_id) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_operation_rejected'; END IF;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=imported.subject_user_id;
+  DELETE FROM email_verification_tokens WHERE user_id=imported.subject_user_id;
+  DELETE FROM password_reset_tokens WHERE user_id=imported.subject_user_id;
+  DELETE FROM user_platform_roles WHERE user_id=imported.subject_user_id;
+  UPDATE users SET name='Conta eliminada',email=NULL,email_verified_at=NULL,minor_login_id=NULL,password_hash=NULL,guardian_id=NULL,is_dependent=false,
+   date_of_birth=DATE '1900-01-01',is_active=false,leaderboard_visible=false,credential_version=credential_version+1,
+   erased_at=imported.erasure_effective_at,erasure_execution_id=NULL,erasure_replay_run_id=p_run_id,updated_at=clock_timestamp()
+  WHERE id=imported.subject_user_id AND erased_at IS NULL; GET DIAGNOSTICS changed=ROW_COUNT;
+ ELSE changed:=public.privacy_restore_apply_relational_operation(p_run_id,imported.subject_user_id,imported.erasure_effective_at,p_operation_code);
+ END IF;
+ PERFORM public.privacy_restore_verify_operation(p_run_id,p_operation_code,false);
+ RETURN changed;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_begin_replay_hardened(p_import_id uuid,p_worker_ref uuid)
+RETURNS TABLE(run_id uuid,outcome_code text) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;run_ref uuid;operation text;verification bytea;existing_outcome text;
+BEGIN
+ SELECT * INTO imported FROM privacy_protected.restore_ledger_imports WHERE id=p_import_id;
+ IF imported.id IS NULL OR imported.erasure_effective_at IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_rejected'; END IF;
+ run_ref:=public.privacy_restore_begin_replay(p_import_id,p_worker_ref);
+ SELECT run.outcome_code INTO existing_outcome FROM privacy_protected.restore_replay_runs run WHERE run.id=run_ref FOR UPDATE;
+ IF existing_outcome IS NOT NULL THEN RETURN QUERY SELECT run_ref,existing_outcome; RETURN; END IF;
+ IF EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id AND erased_at IS NOT NULL) THEN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id AND erasure_execution_id=imported.source_execution_id
+   AND erasure_replay_run_id IS NULL AND erased_at=imported.erasure_effective_at) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_source_conflict'; END IF;
+  FOREACH operation IN ARRAY imported.operations LOOP PERFORM public.privacy_restore_verify_operation(run_ref,operation,true); END LOOP;
+  verification:=digest(convert_to(array_to_string(imported.operations,':')||':ALREADY_APPLIED','UTF8'),'sha256');
+  UPDATE privacy_protected.restore_replay_checkpoints SET status='SUCCEEDED',affected_rows=0,
+   result_sha256=digest(convert_to(operation_position::text||':'||operation_code||':ALREADY_APPLIED','UTF8'),'sha256'),completed_at=clock_timestamp()
+   WHERE restore_replay_checkpoints.run_id=run_ref AND status='PENDING';
+  INSERT INTO privacy_protected.restore_replay_already_applied_evidence(run_id,import_id,evidence_code,source_execution_id,
+   erasure_effective_at,verified_operations,verification_sha256)
+  SELECT run_ref,imported.id,'ALREADY_APPLIED',imported.source_execution_id,imported.erasure_effective_at,imported.operations,verification
+   FROM users WHERE users.id=imported.subject_user_id;
+  UPDATE privacy_protected.restore_replay_runs SET status='SUCCEEDED',outcome_code='ALREADY_APPLIED_SOURCE',completed_at=clock_timestamp() WHERE id=run_ref;
+  existing_outcome:='ALREADY_APPLIED_SOURCE';
+ END IF;
+ RETURN QUERY SELECT run_ref,existing_outcome;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.privacy_restore_execute_checkpoint(
+ p_run_id uuid,p_worker_ref uuid,p_operation_position smallint,p_operation_code text,p_action_version text,p_prescription_sha256 bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE run_row privacy_protected.restore_replay_runs%ROWTYPE;imported privacy_protected.restore_ledger_imports%ROWTYPE;
+ checkpoint_row privacy_protected.restore_replay_checkpoints%ROWTYPE;changed bigint;result_digest bytea;
+BEGIN
+ SELECT * INTO run_row FROM privacy_protected.restore_replay_runs WHERE id=p_run_id FOR UPDATE;
+ SELECT * INTO imported FROM privacy_protected.restore_ledger_imports WHERE id=run_row.import_id;
+ SELECT * INTO checkpoint_row FROM privacy_protected.restore_replay_checkpoints WHERE run_id=p_run_id AND operation_position=p_operation_position FOR UPDATE;
+ IF run_row.id IS NULL OR imported.id IS NULL OR imported.erasure_effective_at IS NULL OR checkpoint_row.id IS NULL OR run_row.worker_ref<>p_worker_ref
+  OR run_row.status NOT IN ('PENDING','SUCCEEDED') OR checkpoint_row.operation_code<>p_operation_code OR checkpoint_row.action_version<>p_action_version
+  OR imported.prescription_sha256<>p_prescription_sha256 OR imported.action_version<>p_action_version OR imported.operations[p_operation_position]<>p_operation_code
+  OR NOT(public.privacy_relational_replay_operation_supported(p_operation_code) OR p_operation_code='PROVIDER_LOCAL_FENCE')
+  OR EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints prior WHERE prior.run_id=p_run_id AND prior.operation_position<p_operation_position AND prior.status<>'SUCCEEDED')
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_checkpoint_rejected'; END IF;
+ IF checkpoint_row.status='SUCCEEDED' THEN RETURN checkpoint_row.id; END IF;
+ changed:=public.privacy_restore_apply_hardened_operation(p_run_id,p_operation_code);
+ result_digest:=digest(convert_to(p_operation_position::text||':'||p_operation_code||':'||changed::text,'UTF8'),'sha256');
+ UPDATE privacy_protected.restore_replay_checkpoints SET status='SUCCEEDED',affected_rows=changed,result_sha256=result_digest,completed_at=clock_timestamp() WHERE id=checkpoint_row.id;
+ IF NOT EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints WHERE run_id=p_run_id AND status<>'SUCCEEDED') THEN
+  UPDATE privacy_protected.restore_replay_runs SET status='SUCCEEDED',outcome_code='REPLAYED',completed_at=clock_timestamp() WHERE id=p_run_id;
+ END IF;
+ RETURN checkpoint_row.id;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_record_inventory_attestation(p_input_source text,p_inventory_sha256 bytea,p_schema_migration_digest bytea,
+ p_policy_version text,p_executor_version text,p_plan_schema_version text,p_image_digest text,p_run_ids uuid[],
+ p_object_count integer,p_imported_count integer,p_replayed_count integer,p_already_applied_count integer,
+ p_absence_verified_count integer,p_synthetic_replayed_count integer,p_closure_v3_count integer,p_intent_only_count integer,
+ p_legacy_closure_v2_count integer,p_erasure_effective_at_verified_count integer)
+RETURNS bytea LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE attestation_ref uuid;evidence bytea;run_ref uuid;operation text;source_mode boolean;
+ existing privacy_protected.restore_replay_inventory_attestations%ROWTYPE;
+BEGIN
+ IF p_input_source NOT IN ('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP') OR octet_length(p_inventory_sha256)<>32 OR octet_length(p_schema_migration_digest)<>32
+  OR p_policy_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_executor_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_plan_schema_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_image_digest!~'^sha256:[0-9a-f]{64}$' OR p_object_count<1
+  OR p_replayed_count<1 OR cardinality(p_run_ids)<>p_replayed_count
+  OR cardinality(p_run_ids)<>(SELECT count(DISTINCT listed.run_id) FROM unnest(p_run_ids) AS listed(run_id))
+  OR p_replayed_count<>p_imported_count+p_already_applied_count OR p_absence_verified_count<>p_replayed_count
+  OR (p_input_source='LIVE_LEDGER' AND p_synthetic_replayed_count<>0) OR (p_input_source='SYNTHETIC_BOOTSTRAP' AND p_synthetic_replayed_count<>p_replayed_count)
+  OR p_closure_v3_count<>p_replayed_count OR p_intent_only_count<>0 OR p_legacy_closure_v2_count<>0
+  OR p_erasure_effective_at_verified_count<>p_replayed_count
+  OR EXISTS(SELECT 1 FROM unnest(p_run_ids) AS listed(run_id)
+   LEFT JOIN privacy_protected.restore_replay_runs run ON run.id=listed.run_id
+   LEFT JOIN privacy_protected.restore_ledger_imports imported ON imported.id=run.import_id
+   WHERE run.status<>'SUCCEEDED' OR imported.closure_version<>'restore-tombstone-closure/v3'
+    OR (p_input_source='LIVE_LEDGER')<>(imported.synthetic_fixture IS NULL))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_attestation_rejected'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended(p_input_source||':'||encode(p_inventory_sha256,'hex'),0));
+ FOREACH run_ref IN ARRAY p_run_ids LOOP
+  SELECT outcome_code='ALREADY_APPLIED_SOURCE' INTO source_mode FROM privacy_protected.restore_replay_runs WHERE id=run_ref;
+  FOR operation IN SELECT checkpoint.operation_code FROM privacy_protected.restore_replay_checkpoints checkpoint WHERE checkpoint.run_id=run_ref ORDER BY checkpoint.operation_position LOOP
+   PERFORM public.privacy_restore_verify_operation(run_ref,operation,source_mode);
+  END LOOP;
+ END LOOP;
+ SELECT digest(convert_to(string_agg(encode(checkpoint.result_sha256,'hex'),':' ORDER BY encode(checkpoint.result_sha256,'hex')),'UTF8'),'sha256') INTO evidence
+ FROM privacy_protected.restore_replay_checkpoints checkpoint WHERE checkpoint.run_id=ANY(p_run_ids);
+ SELECT * INTO existing FROM privacy_protected.restore_replay_inventory_attestations
+ WHERE input_source=p_input_source AND inventory_sha256=p_inventory_sha256;
+ IF existing.id IS NOT NULL THEN
+  IF ROW(existing.schema_migration_digest,existing.policy_version,existing.executor_version,existing.plan_schema_version,existing.image_digest,
+    existing.object_count,existing.imported_count,existing.replayed_count,existing.already_applied_count,existing.absence_verified_count,
+    existing.synthetic_replayed_count,existing.closure_v3_count,existing.intent_only_count,existing.legacy_closure_v2_count,
+    existing.erasure_effective_at_verified_count,existing.evidence_sha256)
+   IS DISTINCT FROM ROW(p_schema_migration_digest,p_policy_version,p_executor_version,p_plan_schema_version,p_image_digest,
+    p_object_count,p_imported_count,p_replayed_count,p_already_applied_count,p_absence_verified_count,p_synthetic_replayed_count,
+    p_closure_v3_count,p_intent_only_count,p_legacy_closure_v2_count,p_erasure_effective_at_verified_count,evidence)
+   OR EXISTS(SELECT link.run_id FROM privacy_protected.restore_replay_inventory_attestation_runs link WHERE link.attestation_id=existing.id
+    EXCEPT SELECT listed.run_id FROM unnest(p_run_ids) AS listed(run_id))
+   OR EXISTS(SELECT listed.run_id FROM unnest(p_run_ids) AS listed(run_id)
+    EXCEPT SELECT link.run_id FROM privacy_protected.restore_replay_inventory_attestation_runs link WHERE link.attestation_id=existing.id)
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_attestation_conflict'; END IF;
+  RETURN existing.evidence_sha256;
+ END IF;
+ INSERT INTO privacy_protected.restore_replay_inventory_attestations(input_source,inventory_sha256,schema_migration_digest,policy_version,executor_version,plan_schema_version,image_digest,object_count,imported_count,replayed_count,
+  already_applied_count,absence_verified_count,synthetic_replayed_count,closure_v3_count,intent_only_count,legacy_closure_v2_count,
+  erasure_effective_at_verified_count,evidence_sha256)
+ VALUES(p_input_source,p_inventory_sha256,p_schema_migration_digest,p_policy_version,p_executor_version,p_plan_schema_version,p_image_digest,
+  p_object_count,p_imported_count,p_replayed_count,p_already_applied_count,p_absence_verified_count,p_synthetic_replayed_count,
+  p_closure_v3_count,p_intent_only_count,p_legacy_closure_v2_count,p_erasure_effective_at_verified_count,evidence)
+ RETURNING id INTO attestation_ref;
+ INSERT INTO privacy_protected.restore_replay_inventory_attestation_runs(attestation_id,run_id)
+ SELECT attestation_ref,listed.run_id FROM unnest(p_run_ids) AS listed(run_id);
+ RETURN evidence;
+END; $$;
+
+CREATE FUNCTION public.privacy_restore_observe_inventory(p_input_source text,p_inventory_sha256 bytea,p_schema_migration_digest bytea,
+ p_policy_version text,p_executor_version text,p_plan_schema_version text,p_image_digest text)
+RETURNS TABLE(replay_count integer,source_already_applied_count integer,synthetic_count integer,verified_run_count integer,
+ expected_checkpoint_count integer,succeeded_checkpoint_count integer,provider_absent_count integer,consent_clock_verified_count integer,
+ closure_v3_count integer,erasure_effective_at_verified_count integer,evidence_sha256 bytea)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT attestation.replayed_count,
+  count(DISTINCT run.id) FILTER(WHERE run.outcome_code='ALREADY_APPLIED_SOURCE')::integer,
+  count(DISTINCT run.id) FILTER(WHERE imported.synthetic_fixture='mycfc/privacy-restore-synthetic-fixture/v1')::integer,
+  count(DISTINCT run.id) FILTER(WHERE cardinality(imported.operations)=(SELECT count(*) FROM privacy_protected.restore_replay_checkpoints exact_checkpoint WHERE exact_checkpoint.run_id=run.id)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints failed_checkpoint WHERE failed_checkpoint.run_id=run.id AND failed_checkpoint.status<>'SUCCEEDED'))::integer,
+  count(checkpoint.*)::integer,
+  count(checkpoint.*) FILTER(WHERE checkpoint.status='SUCCEEDED')::integer,
+  count(DISTINCT run.id) FILTER(WHERE 'PROVIDER_LOCAL_FENCE'=ANY(imported.operations)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_connections connection WHERE connection.subject_user_id=imported.subject_user_id)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_credential_quarantine quarantine
+    JOIN privacy_protected.provider_targets target ON target.id=quarantine.target_id
+    JOIN privacy_protected.provider_capture_sets capture ON capture.execution_id=target.execution_id
+    WHERE capture.subject_user_id=imported.subject_user_id))::integer,
+  count(DISTINCT run.id) FILTER(WHERE 'IDENTITY_CLEAR'=ANY(imported.operations)
+   AND EXISTS(SELECT 1 FROM users WHERE users.id=imported.subject_user_id AND users.erased_at=imported.erasure_effective_at)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.ceased_at IS NULL)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.cessation_reason='ACCOUNT_ERASURE'
+    AND (consent.ceased_at<>imported.erasure_effective_at OR consent.evidence_expires_at<>imported.erasure_effective_at+interval '3 years')))::integer,
+  count(DISTINCT run.id) FILTER(WHERE imported.closure_version='restore-tombstone-closure/v3')::integer,
+  count(DISTINCT run.id) FILTER(WHERE EXISTS(SELECT 1 FROM users WHERE users.id=imported.subject_user_id AND users.erased_at=imported.erasure_effective_at)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.ceased_at IS NULL)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.cessation_reason='ACCOUNT_ERASURE'
+    AND (consent.ceased_at<>imported.erasure_effective_at OR consent.evidence_expires_at<>imported.erasure_effective_at+interval '3 years')))::integer,
+  attestation.evidence_sha256
+ FROM privacy_protected.restore_replay_inventory_attestations attestation
+ JOIN privacy_protected.restore_replay_inventory_attestation_runs link ON link.attestation_id=attestation.id
+ JOIN privacy_protected.restore_replay_runs run ON run.id=link.run_id
+ JOIN privacy_protected.restore_ledger_imports imported ON imported.id=run.import_id
+ JOIN privacy_protected.restore_replay_checkpoints checkpoint ON checkpoint.run_id=run.id
+ WHERE attestation.input_source=p_input_source AND attestation.inventory_sha256=p_inventory_sha256
+  AND attestation.schema_migration_digest=p_schema_migration_digest AND attestation.policy_version=p_policy_version
+  AND attestation.executor_version=p_executor_version AND attestation.plan_schema_version=p_plan_schema_version AND attestation.image_digest=p_image_digest
+ GROUP BY attestation.id,attestation.replayed_count,attestation.evidence_sha256
+ HAVING count(DISTINCT run.id)=attestation.replayed_count;
+$$;
+
+REVOKE ALL ON TABLE privacy_protected.restore_replay_already_applied_evidence,privacy_protected.restore_synthetic_fixtures,
+ privacy_protected.restore_replay_inventory_attestations,privacy_protected.restore_replay_inventory_attestation_runs FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_restore_create_synthetic_fixture(uuid),
+ public.privacy_tombstone_prepare_closure_v3(uuid,uuid),public.privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),
+ public.privacy_restore_import_authenticated_v2_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea),
+ public.privacy_restore_verify_operation(uuid,text,boolean),public.privacy_restore_apply_hardened_operation(uuid,text),
+ public.privacy_restore_begin_replay_hardened(uuid,uuid),public.privacy_restore_record_inventory_attestation(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer),
+ public.privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM PUBLIC;
+
+-- #248 release guard: fail the privacy erasure executor closed at the
+-- database boundary and bind
+-- activation to authenticated, release-specific evidence. The switch starts
+-- engaged deliberately; only a distinct approval of a complete current
+-- evidence set may clear it.
+
+ALTER TABLE privacy_activation_evidence DROP CONSTRAINT privacy_activation_evidence_check;
+ALTER TABLE privacy_activation_evidence ADD CONSTRAINT privacy_activation_evidence_expiry_bounded
+ CHECK(expires_at>observed_at AND expires_at<=observed_at+interval '2160 hours') NOT VALID;
+
+CREATE TABLE privacy_worker_kill_switch (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+ engaged boolean NOT NULL DEFAULT true,
+ version bigint NOT NULL DEFAULT 1 CHECK(version>0),
+ activation_approval_id uuid NULL REFERENCES privacy_activation_approvals(id) ON DELETE RESTRICT,
+ changed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO privacy_worker_kill_switch(singleton,engaged) VALUES(true,true);
+
+CREATE TABLE privacy_worker_kill_switch_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ version bigint NOT NULL UNIQUE CHECK(version>0),
+ engaged boolean NOT NULL,
+ activation_approval_id uuid NULL REFERENCES privacy_activation_approvals(id) ON DELETE RESTRICT,
+ occurred_at timestamptz NOT NULL
+);
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) VALUES(1,true,clock_timestamp());
+CREATE TRIGGER privacy_worker_kill_switch_events_immutable BEFORE UPDATE OR DELETE ON privacy_worker_kill_switch_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+
+CREATE TABLE privacy_activation_authenticated_artifacts (
+ evidence_id uuid PRIMARY KEY REFERENCES privacy_activation_evidence(id) ON DELETE RESTRICT,
+ kind text NOT NULL CHECK(kind IN ('RESTORE','INFRASTRUCTURE','PROVIDER','SCHEMA')),
+ policy_version text NOT NULL REFERENCES privacy_request_policies(version) ON DELETE RESTRICT,
+ executor_version text NOT NULL CHECK(executor_version='privacy-erasure-executor/v2'),
+ plan_schema_version text NOT NULL CHECK(plan_schema_version='privacy-erasure-plan/v2'),
+ image_digest text NOT NULL CHECK(image_digest~'^sha256:[0-9a-f]{64}$'),
+ immutable_evidence_ref text NULL,
+ immutable_evidence_sha256 bytea NOT NULL CHECK(octet_length(immutable_evidence_sha256)=32),
+ signing_key_id text NULL,
+ schema_migration_digest bytea NULL CHECK(schema_migration_digest IS NULL OR octet_length(schema_migration_digest)=32),
+ baseline_includes_through text NULL,
+ production_state_serial bigint NULL,
+ hetzner_state_serial bigint NULL,
+ production_state_sha256 bytea NULL,
+ hetzner_state_sha256 bytea NULL,
+ production_plan_sha256 bytea NULL,
+ hetzner_plan_sha256 bytea NULL,
+ worker_identity_enabled boolean NULL,
+ s3_version_deletion_enabled boolean NULL,
+ ledger_broker_invoke_enabled boolean NULL,
+ worker_monitoring_enabled boolean NULL,
+ restore_infrastructure_enabled boolean NULL,
+ restore_ledger_write_enabled boolean NULL,
+ provider_registry_state text NULL,
+ provider_registration_count bigint NULL,
+ provider_registry_sha256 bytea NULL,
+ restore_input_source text NULL,
+ restore_input_contract text NULL,
+ restore_replay_contract text NULL,
+ restore_closure_contract text NULL,
+ restore_candidate_sha256 bytea NULL,
+ restore_inventory_sha256 bytea NULL,
+ restore_object_count bigint NULL,
+ restore_replayed_count bigint NULL,
+ restore_synthetic_count bigint NULL,
+ restore_observer_sha256 bytea NULL,
+ authenticated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(evidence_id,kind),
+ CHECK(((kind='RESTORE' AND signing_key_id IS NULL AND immutable_evidence_ref IS NOT NULL
+        AND schema_migration_digest IS NOT NULL AND baseline_includes_through IS NULL
+        AND restore_input_source IN ('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP') AND restore_input_contract='mycfc/privacy-restore-ledger-input/v2'
+        AND restore_replay_contract='relational-erasure-replay/v1' AND restore_closure_contract='restore-tombstone-closure/v3'
+        AND restore_candidate_sha256 IS NOT NULL AND octet_length(restore_candidate_sha256)=32
+        AND restore_inventory_sha256 IS NOT NULL AND octet_length(restore_inventory_sha256)=32
+        AND restore_observer_sha256 IS NOT NULL AND octet_length(restore_observer_sha256)=32
+        AND restore_object_count>=restore_replayed_count AND restore_replayed_count>0
+        AND ((restore_input_source='LIVE_LEDGER' AND restore_synthetic_count=0)
+          OR (restore_input_source='SYNTHETIC_BOOTSTRAP' AND restore_synthetic_count=restore_replayed_count)))
+    OR (kind='INFRASTRUCTURE' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL
+        AND production_state_serial>0 AND hetzner_state_serial>0
+        AND octet_length(production_state_sha256)=32 AND octet_length(hetzner_state_sha256)=32
+        AND octet_length(production_plan_sha256)=32 AND octet_length(hetzner_plan_sha256)=32
+        AND worker_identity_enabled AND s3_version_deletion_enabled AND ledger_broker_invoke_enabled
+        AND worker_monitoring_enabled AND restore_infrastructure_enabled AND restore_ledger_write_enabled)
+    OR (kind='PROVIDER' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL
+        AND provider_registry_state='READY' AND provider_registration_count>0 AND octet_length(provider_registry_sha256)=32)
+    OR (kind='SCHEMA' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL
+        AND octet_length(schema_migration_digest)=32
+        AND baseline_includes_through='202609100013_privacy_worker_release_guard')) IS TRUE)
+);
+CREATE TRIGGER privacy_activation_authenticated_artifacts_immutable BEFORE UPDATE OR DELETE ON privacy_activation_authenticated_artifacts
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+
+-- Existing evidence was accepted without signature and release bindings. It is
+-- retained as audit history but cannot be used by the v2 activation contract.
+CREATE OR REPLACE FUNCTION privacy_activation_record_evidence(p_actor uuid,p_kind text,p_evidence_sha256 bytea,p_reference_code text,p_observed_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_authenticated_evidence_required';
+END;$$;
+
+-- Correct the restore verifier without weakening historical preservation.
+-- Active membership revocation is an effective-date boundary: strictly
+-- historical rows remain until the following anonymization operation. The
+-- history verifier then requires every direct subject link and every unique
+-- subject token in variation text/JSON to be gone. This same verifier is used
+-- for ordinary replay and the already-applied proof path.
+ALTER FUNCTION privacy_restore_verify_operation(uuid,text,boolean) RENAME TO privacy_restore_verify_operation_inner_013;
+CREATE OR REPLACE FUNCTION privacy_restore_verify_operation(p_run_id uuid,p_operation_code text,p_source_already_applied boolean)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;subject_email text;subject_login text;
+BEGIN
+ IF p_operation_code NOT IN ('MEMBERSHIP_ACTIVE_REVOKE','MEMBERSHIP_HISTORY_ANONYMIZE') THEN
+  PERFORM privacy_restore_verify_operation_inner_013(p_run_id,p_operation_code,p_source_already_applied);
+  RETURN;
+ END IF;
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run
+ JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id;
+ IF imported.id IS NULL OR imported.kind<>'closure' OR imported.closure_version<>'restore-tombstone-closure/v3'
+  OR NOT(p_operation_code=ANY(imported.operations)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ IF p_source_already_applied AND NOT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id
+  AND erasure_execution_id=imported.source_execution_id AND erased_at=imported.erasure_effective_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ SELECT email::text,minor_login_id INTO subject_email,subject_login FROM users WHERE id=imported.subject_user_id;
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id
+   AND (starts_on>=imported.erasure_effective_at::date OR ends_on IS NULL OR ends_on>=imported.erasure_effective_at::date)) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ ELSE
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id)
+   OR EXISTS(SELECT 1 FROM training_variations variation
+    WHERE variation.change_summary IS DISTINCT FROM privacy_scrub_audit_text(variation.change_summary,imported.subject_user_id,NULL,subject_email,subject_login)
+     OR variation.patch IS DISTINCT FROM privacy_scrub_audit_json(variation.patch,imported.subject_user_id,NULL,subject_email,subject_login)) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ END IF;
+END;$$;
+
+-- Reject intent and legacy closure inventories before a replay run or a
+-- checkpoint can be created/mutated. Older formats remain readable only.
+ALTER FUNCTION privacy_restore_begin_replay_hardened(uuid,uuid) RENAME TO privacy_restore_begin_replay_hardened_inner_013;
+CREATE OR REPLACE FUNCTION privacy_restore_begin_replay_hardened(p_import_id uuid,p_worker_ref uuid)
+RETURNS TABLE(run_id uuid,outcome_code text) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM privacy_protected.restore_ledger_imports imported
+  WHERE imported.id=p_import_id AND imported.kind='closure' AND imported.closure_version='restore-tombstone-closure/v3') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_rejected'; END IF;
+ RETURN QUERY SELECT * FROM privacy_restore_begin_replay_hardened_inner_013(p_import_id,p_worker_ref);
+END;$$;
+ALTER FUNCTION privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) RENAME TO privacy_restore_execute_checkpoint_inner_013;
+CREATE OR REPLACE FUNCTION privacy_restore_execute_checkpoint(p_run_id uuid,p_worker_ref uuid,p_operation_position smallint,p_operation_code text,p_action_version text,p_prescription_sha256 bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM privacy_protected.restore_replay_runs run
+  JOIN privacy_protected.restore_ledger_imports imported ON imported.id=run.import_id
+  WHERE run.id=p_run_id AND imported.kind='closure' AND imported.closure_version='restore-tombstone-closure/v3') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_checkpoint_rejected'; END IF;
+ RETURN privacy_restore_execute_checkpoint_inner_013(p_run_id,p_worker_ref,p_operation_position,p_operation_code,p_action_version,p_prescription_sha256);
+END;$$;
+REVOKE ALL ON FUNCTION privacy_restore_verify_operation_inner_013(uuid,text,boolean),privacy_restore_begin_replay_hardened_inner_013(uuid,uuid),
+ privacy_restore_execute_checkpoint_inner_013(uuid,uuid,smallint,text,text,bytea),privacy_restore_verify_operation(uuid,text,boolean),
+ privacy_restore_begin_replay_hardened(uuid,uuid),privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) FROM PUBLIC;
+
+-- Retain the reviewed implementations as owner-only inner routines. The
+-- public names become narrow guard wrappers so a stale executor credential
+-- cannot bypass a disabled/expired activation. A disabled worker cannot renew
+-- or complete an existing lease; the lease remains recoverable and expires by
+-- its original clock.
+ALTER FUNCTION privacy_upload_cleanup_claim(bigint,uuid) RENAME TO privacy_upload_cleanup_claim_inner_013;
+ALTER FUNCTION privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea) RENAME TO privacy_upload_cleanup_complete_inner_013;
+ALTER FUNCTION privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) RENAME TO privacy_upload_cleanup_fail_inner_013;
+ALTER FUNCTION privacy_worker_claim(bigint,uuid) RENAME TO privacy_worker_claim_inner_013;
+ALTER FUNCTION privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint) RENAME TO privacy_worker_heartbeat_inner_013;
+ALTER FUNCTION privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_complete_job_inner_013;
+ALTER FUNCTION privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea) RENAME TO privacy_worker_fail_job_inner_013;
+ALTER FUNCTION privacy_worker_sync(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_sync_inner_013;
+ALTER FUNCTION privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text) RENAME TO privacy_worker_execute_checkpoint_inner_013;
+ALTER FUNCTION privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_list_object_targets_inner_013;
+ALTER FUNCTION privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea) RENAME TO privacy_worker_record_object_evidence_inner_013;
+ALTER FUNCTION privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_complete_object_checkpoint_inner_013;
+ALTER FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_tombstone_prepare_v2_inner_013;
+ALTER FUNCTION privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) RENAME TO privacy_tombstone_confirm_v2_inner_013;
+ALTER FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid) RENAME TO privacy_tombstone_prepare_closure_v2_inner_013;
+ALTER FUNCTION privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) RENAME TO privacy_tombstone_confirm_closure_v2_inner_013;
+ALTER FUNCTION privacy_tombstone_prepare_closure_v3(uuid,uuid) RENAME TO privacy_tombstone_prepare_closure_v3_inner_013;
+ALTER FUNCTION privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz) RENAME TO privacy_tombstone_confirm_closure_v3_inner_013;
+ALTER FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_list_provider_targets_inner_013;
+ALTER FUNCTION privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea) RENAME TO privacy_worker_record_provider_evidence_inner_013;
+ALTER FUNCTION privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) RENAME TO privacy_worker_complete_provider_checkpoint_inner_013;
+ALTER FUNCTION privacy_completion_prepare(uuid,uuid) RENAME TO privacy_completion_prepare_inner_013;
+ALTER FUNCTION privacy_completion_list_pending(uuid,integer) RENAME TO privacy_completion_list_pending_inner_013;
+ALTER FUNCTION privacy_completion_finalize(uuid,uuid,bytea,bytea) RENAME TO privacy_completion_finalize_inner_013;
+
+CREATE OR REPLACE FUNCTION privacy_upload_cleanup_claim(p_lease_milliseconds bigint,p_worker_ref uuid)
+RETURNS TABLE(intent_id uuid,lease_epoch bigint,attempt_id uuid,attempt_count integer,subject_user_id uuid,provenance_actor_user_id uuid,
+ source_kind text,source_ref uuid,service_code text,target_kind text,provider_contract_version text,envelope_version text,algorithm text,
+ encryption_key_id text,encapsulation bytea,nonce bytea,ciphertext bytea,content_type text,size_bytes bigint,cleanup_after timestamptz,created_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_upload_cleanup_claim_inner_013(p_lease_milliseconds,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_upload_cleanup_complete(p_intent_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,
+ p_deleted_versions integer,p_deleted_markers integer,p_list_calls integer,p_stable_checks integer,p_transcript_key_id text,p_transcript_digest bytea)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); PERFORM privacy_upload_cleanup_complete_inner_013(p_intent_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_deleted_versions,p_deleted_markers,p_list_calls,p_stable_checks,p_transcript_key_id,p_transcript_digest); END;$$;
+CREATE OR REPLACE FUNCTION privacy_upload_cleanup_fail(p_intent_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_retryable boolean,p_retry_delay_milliseconds bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); PERFORM privacy_upload_cleanup_fail_inner_013(p_intent_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_retryable,p_retry_delay_milliseconds); END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_worker_claim(p_lease_milliseconds bigint,p_worker_ref uuid)
+RETURNS TABLE(job_id uuid,lease_id uuid,attempt_id uuid) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_worker_claim_inner_013(p_lease_milliseconds,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_heartbeat(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_lease_milliseconds bigint)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_heartbeat_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref,p_lease_milliseconds); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_complete_job(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_complete_job_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_fail_job(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_classification text,p_retry_milliseconds bigint,p_stage_code text,p_failure_code text,p_diagnostic_digest bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_fail_job_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref,p_classification,p_retry_milliseconds,p_stage_code,p_failure_code,p_diagnostic_digest); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_sync(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_sync_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_execute_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_execute_checkpoint_inner_013(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version); END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_worker_list_object_targets(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(target_id uuid,execution_id uuid,job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,service_code text,target_kind text,source_kind text,source_ref uuid,operation_code text,action_version text,provider_contract_version text,envelope_version text,algorithm text,encryption_key_id text,encapsulation bytea,nonce bytea,ciphertext bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_worker_list_object_targets_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_record_object_evidence(p_target_id uuid,p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_deleted_versions integer,p_deleted_markers integer,p_list_calls integer,p_stable_checks integer,p_transcript_key_id text,p_transcript_digest bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_record_object_evidence_inner_013(p_target_id,p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref,p_deleted_versions,p_deleted_markers,p_list_calls,p_stable_checks,p_transcript_key_id,p_transcript_digest); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_complete_object_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_complete_object_checkpoint_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_tombstone_prepare_v2(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz,replay_operations text[])
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_tombstone_prepare_v2_inner_013(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_tombstone_confirm_v2(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_tombstone_confirm_v2_inner_013(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at); END;$$;
+CREATE OR REPLACE FUNCTION privacy_tombstone_prepare_closure_v2(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz,replay_operations text[])
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_tombstone_prepare_closure_v2_inner_013(p_execution_id,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_tombstone_confirm_closure_v2(p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_tombstone_confirm_closure_v2_inner_013(p_execution_id,p_worker_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at); END;$$;
+CREATE OR REPLACE FUNCTION privacy_tombstone_prepare_closure_v3(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz,erasure_effective_at timestamptz,replay_operations text[])
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_tombstone_prepare_closure_v3_inner_013(p_execution_id,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_tombstone_confirm_closure_v3(p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_tombstone_confirm_closure_v3_inner_013(p_execution_id,p_worker_ref,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at); END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_worker_list_provider_targets(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS TABLE(target_id uuid,execution_id uuid,job_id uuid,checkpoint_id uuid,plan_entry_sha256 bytea,category_key text,service_code text,target_kind text,provider_role text,target_version bigint,operation_code text,action_version text,provider_contract_version text,registry_evidence_key_id text,registry_evidence_digest bytea,local_state text,target_envelope_version text,target_algorithm text,target_encryption_key_id text,target_encapsulation bytea,target_nonce bytea,target_ciphertext bytea,credential_envelope_version text,credential_algorithm text,credential_encryption_key_id text,credential_encapsulation bytea,credential_nonce bytea,credential_ciphertext bytea,credential_commitment_key_id text,credential_source_commitment bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_worker_list_provider_targets_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_record_provider_evidence(p_target_id uuid,p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_outcome_code text,p_adapter_attempts integer,p_evidence_code text,p_recipient_role text,p_channel_code text,p_notification_code text,p_reason_code text,p_guidance_code text,p_transcript_key_id text,p_transcript_digest bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_record_provider_evidence_inner_013(p_target_id,p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref,p_outcome_code,p_adapter_attempts,p_evidence_code,p_recipient_role,p_channel_code,p_notification_code,p_reason_code,p_guidance_code,p_transcript_key_id,p_transcript_digest); END;$$;
+CREATE OR REPLACE FUNCTION privacy_worker_complete_provider_checkpoint(p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_worker_complete_provider_checkpoint_inner_013(p_job_id,p_lease_id,p_attempt_id,p_epoch,p_worker_ref); END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_completion_prepare(p_execution_id uuid,p_worker_ref uuid) RETURNS TABLE(sealed_delivery bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_completion_prepare_inner_013(p_execution_id,p_worker_ref); END;$$;
+CREATE OR REPLACE FUNCTION privacy_completion_list_pending(p_worker_ref uuid,p_limit integer) RETURNS TABLE(execution_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN QUERY SELECT * FROM privacy_completion_list_pending_inner_013(p_worker_ref,p_limit); END;$$;
+CREATE OR REPLACE FUNCTION privacy_completion_finalize(p_execution_id uuid,p_worker_ref uuid,p_token_sha256 bytea,p_sealed_delivery bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN PERFORM privacy_worker_require_activation(); RETURN privacy_completion_finalize_inner_013(p_execution_id,p_worker_ref,p_token_sha256,p_sealed_delivery); END;$$;
+
+REVOKE ALL ON TABLE privacy_worker_kill_switch,privacy_worker_kill_switch_events,privacy_activation_authenticated_artifacts FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_upload_cleanup_claim_inner_013(bigint,uuid),privacy_upload_cleanup_complete_inner_013(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
+ privacy_upload_cleanup_fail_inner_013(uuid,uuid,bigint,uuid,boolean,bigint),privacy_worker_claim_inner_013(bigint,uuid),privacy_worker_heartbeat_inner_013(uuid,uuid,uuid,bigint,uuid,bigint),
+ privacy_worker_complete_job_inner_013(uuid,uuid,uuid,bigint,uuid),privacy_worker_fail_job_inner_013(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea),
+ privacy_worker_sync_inner_013(uuid,uuid,uuid,bigint,uuid),privacy_worker_execute_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid,text,text),
+ privacy_worker_list_object_targets_inner_013(uuid,uuid,uuid,bigint,uuid),privacy_worker_record_object_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
+ privacy_worker_complete_object_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid),privacy_tombstone_prepare_v2_inner_013(uuid,uuid,uuid,bigint,uuid),
+ privacy_tombstone_confirm_v2_inner_013(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_tombstone_prepare_closure_v2_inner_013(uuid,uuid),
+ privacy_tombstone_confirm_closure_v2_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_tombstone_prepare_closure_v3_inner_013(uuid,uuid),
+ privacy_tombstone_confirm_closure_v3_inner_013(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_worker_list_provider_targets_inner_013(uuid,uuid,uuid,bigint,uuid),
+ privacy_worker_record_provider_evidence_inner_013(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea),privacy_worker_complete_provider_checkpoint_inner_013(uuid,uuid,uuid,bigint,uuid),
+ privacy_completion_prepare_inner_013(uuid,uuid),privacy_completion_list_pending_inner_013(uuid,integer),privacy_completion_finalize_inner_013(uuid,uuid,bytea,bytea) FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_upload_cleanup_claim(bigint,uuid),privacy_upload_cleanup_complete(uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),
+ privacy_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint),privacy_worker_claim(bigint,uuid),privacy_worker_heartbeat(uuid,uuid,uuid,bigint,uuid,bigint),privacy_worker_complete_job(uuid,uuid,uuid,bigint,uuid),
+ privacy_worker_fail_job(uuid,uuid,uuid,bigint,uuid,text,bigint,text,text,bytea),privacy_worker_sync(uuid,uuid,uuid,bigint,uuid),privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text),
+ privacy_worker_list_object_targets(uuid,uuid,uuid,bigint,uuid),privacy_worker_record_object_evidence(uuid,uuid,uuid,uuid,bigint,uuid,integer,integer,integer,integer,text,bytea),privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid),
+ privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid),privacy_tombstone_confirm_v2(uuid,uuid,uuid,bigint,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_tombstone_prepare_closure_v2(uuid,uuid),
+ privacy_tombstone_confirm_closure_v2(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_tombstone_prepare_closure_v3(uuid,uuid),
+ privacy_tombstone_confirm_closure_v3(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid),
+ privacy_worker_record_provider_evidence(uuid,uuid,uuid,uuid,bigint,uuid,text,integer,text,text,text,text,text,text,text,bytea),privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid),
+ privacy_completion_prepare(uuid,uuid),privacy_completion_list_pending(uuid,integer),privacy_completion_finalize(uuid,uuid,bytea,bytea) FROM PUBLIC;
+
+-- The migration deliberately disables any older activation. This also keeps
+-- the switch engaged until a v2 evidence proposal is approved.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,updated_at=clock_timestamp() WHERE singleton;
+
+CREATE OR REPLACE FUNCTION privacy_activation_authenticated_set_digest(p_policy_version text,p_evidence_ids uuid[])
+RETURNS bytea LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE policy privacy_request_policies%ROWTYPE;now_at timestamptz:=clock_timestamp();result bytea;
+BEGIN
+ SELECT * INTO policy FROM privacy_request_policies WHERE version=p_policy_version;
+ IF policy.version IS NULL OR policy.adopted_at IS NULL OR policy.working_retention_days<>90 OR cardinality(p_evidence_ids)<>4
+  OR policy.executor_version<>'privacy-erasure-executor/v2' OR policy.plan_schema_version<>'privacy-erasure-plan/v2'
+  OR (SELECT count(*) FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+      WHERE evidence.id=ANY(p_evidence_ids) AND evidence.expires_at>now_at AND artifact.policy_version=policy.version
+       AND artifact.executor_version=policy.executor_version AND artifact.plan_schema_version=policy.plan_schema_version)<>4
+  OR (SELECT count(DISTINCT evidence.kind) FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+      WHERE evidence.id=ANY(p_evidence_ids) AND evidence.expires_at>now_at)<>4
+  OR (SELECT count(DISTINCT artifact.image_digest) FROM privacy_activation_authenticated_artifacts artifact WHERE artifact.evidence_id=ANY(p_evidence_ids))<>1
+  OR (SELECT restore.schema_migration_digest IS DISTINCT FROM schema_row.schema_migration_digest
+      FROM privacy_activation_authenticated_artifacts restore CROSS JOIN privacy_activation_authenticated_artifacts schema_row
+      WHERE restore.evidence_id=ANY(p_evidence_ids) AND restore.kind='RESTORE' AND schema_row.evidence_id=ANY(p_evidence_ids) AND schema_row.kind='SCHEMA')
+ THEN RETURN NULL; END IF;
+ SELECT digest(convert_to(string_agg(evidence.kind||':'||encode(evidence.evidence_sha256,'hex')||':'||
+   encode(digest(convert_to((to_jsonb(artifact)-'authenticated_at')::text,'UTF8'),'sha256'),'hex')||':'||
+   to_char(evidence.observed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')||':'||
+   to_char(evidence.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'|' ORDER BY evidence.kind),'UTF8'),'sha256')
+ INTO result FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+ WHERE evidence.id=ANY(p_evidence_ids);
+ RETURN result;
+END;$$;
+
+REVOKE ALL ON FUNCTION privacy_activation_authenticated_set_digest(text,uuid[]) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION privacy_activation_propose(p_actor uuid,p_policy_version text,p_evidence_ids uuid[])
+RETURNS TABLE(proposal_id uuid,activation_sha256 bytea) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE policy privacy_request_policies%ROWTYPE;evidence_digest bytea;activation_digest bytea;now_at timestamptz:=clock_timestamp();ordered_ids uuid[];
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_forbidden'; END IF;
+ SELECT * INTO policy FROM privacy_request_policies WHERE version=p_policy_version FOR SHARE;
+ evidence_digest:=privacy_activation_authenticated_set_digest(p_policy_version,p_evidence_ids);
+ IF evidence_digest IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_incomplete'; END IF;
+ SELECT array_agg(evidence.id ORDER BY evidence.kind) INTO ordered_ids FROM privacy_activation_evidence evidence WHERE evidence.id=ANY(p_evidence_ids);
+ activation_digest:=digest(convert_to('privacy-activation/v2:'||policy.version||':'||policy.executor_version||':'||policy.plan_schema_version||':'||
+  encode(digest(convert_to(policy.category_catalogue::text,'UTF8'),'sha256'),'hex')||':'||encode(evidence_digest,'hex'),'UTF8'),'sha256');
+ RETURN QUERY INSERT INTO privacy_activation_proposals(policy_version,evidence_ids,evidence_set_sha256,activation_sha256,proposed_by_ref,proposed_at)
+ VALUES(policy.version,ordered_ids,evidence_digest,activation_digest,p_actor,now_at) RETURNING id,privacy_activation_proposals.activation_sha256;
+END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_activation_approve(p_actor uuid,p_proposal_id uuid,p_activation_sha256 bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE proposal privacy_activation_proposals%ROWTYPE;approval_id uuid;now_at timestamptz:=clock_timestamp();recomputed bytea;switch_version bigint;
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id JOIN platform_roles role ON role.id=assignment.role_id
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN') THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_forbidden'; END IF;
+ SELECT * INTO proposal FROM privacy_activation_proposals WHERE id=p_proposal_id FOR SHARE;
+ recomputed:=privacy_activation_authenticated_set_digest(proposal.policy_version,proposal.evidence_ids);
+ IF proposal.id IS NULL OR proposal.proposed_by_ref=p_actor OR proposal.activation_sha256<>p_activation_sha256
+  OR EXISTS(SELECT 1 FROM privacy_activation_approvals approval WHERE approval.proposal_id=proposal.id)
+  OR recomputed IS NULL OR recomputed<>proposal.evidence_set_sha256 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_unavailable'; END IF;
+ INSERT INTO privacy_activation_approvals(proposal_id,activation_sha256,approved_by_ref,approved_at)
+ VALUES(proposal.id,proposal.activation_sha256,p_actor,now_at) RETURNING id INTO approval_id;
+ PERFORM set_config('mycfc.privacy_activation_approval','approved',true);
+ INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at,approval_id)
+ VALUES(true,proposal.policy_version,true,true,p_actor,now_at,approval_id)
+ ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=true,fulfilment_ready=true,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,approval_id=EXCLUDED.approval_id;
+ INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ VALUES(proposal.policy_version,p_actor,true,true,now_at);
+ UPDATE privacy_worker_kill_switch SET engaged=false,version=version+1,activation_approval_id=approval_id,changed_at=now_at
+ WHERE singleton RETURNING version INTO switch_version;
+ INSERT INTO privacy_worker_kill_switch_events(version,engaged,activation_approval_id,occurred_at) VALUES(switch_version,false,approval_id,now_at);
+ RETURN approval_id;
+END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_activation_ready(p_policy_version text)
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT EXISTS(
+  SELECT 1 FROM privacy_request_activation activation
+  JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  JOIN privacy_worker_kill_switch switch_row ON switch_row.singleton AND NOT switch_row.engaged
+  WHERE activation.singleton AND activation.enabled AND activation.fulfilment_ready AND activation.policy_version=p_policy_version
+   AND proposal.policy_version=activation.policy_version AND approval.activation_sha256=proposal.activation_sha256
+   AND approval.approved_by_ref<>proposal.proposed_by_ref
+   AND privacy_activation_authenticated_set_digest(proposal.policy_version,proposal.evidence_ids)=proposal.evidence_set_sha256
+ );
+$$;
+
+CREATE OR REPLACE FUNCTION privacy_worker_activation_ready()
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT COALESCE((SELECT privacy_activation_ready(activation.policy_version) FROM privacy_request_activation activation WHERE activation.singleton),false);
+$$;
+
+CREATE OR REPLACE FUNCTION privacy_activation_control_snapshot(p_actor uuid)
+RETURNS TABLE(policy_version text,ready boolean,evidence_id uuid,evidence_kind text,evidence_observed_at timestamptz,
+ proposal_id uuid,proposal_sha256 bytea,proposal_created_at timestamptz,can_propose boolean,can_renew boolean,can_approve boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE actor_executor boolean;actor_admin boolean;selected_policy text;pending privacy_activation_proposals%ROWTYPE;
+ current_ids uuid[];current_digest bytea;renewal_evidence boolean;
+BEGIN
+ SELECT EXISTS(SELECT 1 FROM users account JOIN privacy_executor_grants grant_row ON grant_row.user_id=account.id AND grant_row.revoked_at IS NULL
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent),
+  EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id JOIN platform_roles role ON role.id=assignment.role_id
+   WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN') INTO actor_executor,actor_admin;
+ IF NOT actor_executor AND NOT actor_admin THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_control_forbidden'; END IF;
+ SELECT COALESCE((SELECT activation.policy_version FROM privacy_request_activation activation WHERE activation.singleton AND activation.enabled),
+  (SELECT policy.version FROM privacy_request_policies policy WHERE policy.adopted_at IS NOT NULL ORDER BY policy.adopted_at DESC,policy.version DESC LIMIT 1)) INTO selected_policy;
+ IF selected_policy IS NULL THEN RETURN; END IF;
+ SELECT array_agg(latest.id ORDER BY latest.kind) INTO current_ids FROM (
+  SELECT DISTINCT ON(evidence.kind) evidence.id,evidence.kind FROM privacy_activation_evidence evidence
+  JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id AND artifact.kind=evidence.kind
+  JOIN privacy_request_policies policy ON policy.version=selected_policy AND artifact.policy_version=policy.version
+   AND artifact.executor_version=policy.executor_version AND artifact.plan_schema_version=policy.plan_schema_version
+  WHERE evidence.expires_at>clock_timestamp() ORDER BY evidence.kind,evidence.observed_at DESC,evidence.id DESC
+ ) latest;
+ current_digest:=privacy_activation_authenticated_set_digest(selected_policy,current_ids);
+ SELECT proposal.* INTO pending FROM privacy_activation_proposals proposal
+  WHERE proposal.policy_version=selected_policy AND privacy_activation_authenticated_set_digest(proposal.policy_version,proposal.evidence_ids)=proposal.evidence_set_sha256
+   AND NOT EXISTS(SELECT 1 FROM privacy_activation_approvals approval WHERE approval.proposal_id=proposal.id)
+  ORDER BY proposal.proposed_at DESC,proposal.id DESC LIMIT 1;
+ SELECT EXISTS(SELECT 1 FROM privacy_request_activation activation JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  WHERE activation.singleton AND activation.enabled AND activation.policy_version=selected_policy AND current_digest IS NOT NULL
+   AND EXISTS(SELECT 1 FROM unnest(current_ids) AS current_id(evidence_id) WHERE NOT current_id.evidence_id=ANY(proposal.evidence_ids))) INTO renewal_evidence;
+ RETURN QUERY SELECT selected_policy,privacy_activation_ready(selected_policy),evidence.id,evidence.kind::text,evidence.observed_at,
+  pending.id,pending.activation_sha256,pending.proposed_at,
+  (actor_executor AND current_digest IS NOT NULL AND pending.id IS NULL AND NOT privacy_activation_ready(selected_policy)),
+  (actor_executor AND current_digest IS NOT NULL AND pending.id IS NULL AND privacy_activation_ready(selected_policy) AND renewal_evidence),
+  (actor_admin AND pending.id IS NOT NULL AND pending.proposed_by_ref<>p_actor)
+ FROM (SELECT true singleton) seed LEFT JOIN LATERAL(
+  SELECT candidate.id,candidate.kind,candidate.observed_at FROM privacy_activation_evidence candidate
+  WHERE candidate.id=ANY(current_ids) ORDER BY candidate.kind
+ ) evidence ON true ORDER BY evidence.kind;
+END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_worker_engage_kill_switch() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE switch_version bigint;
+BEGIN
+ IF NEW.enabled=false AND (TG_OP='INSERT' OR OLD.enabled IS DISTINCT FROM NEW.enabled) THEN
+  UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp()
+  WHERE singleton AND NOT engaged RETURNING version INTO switch_version;
+  IF switch_version IS NOT NULL THEN
+   INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) VALUES(switch_version,true,clock_timestamp());
+  END IF;
+ END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER privacy_worker_engage_kill_switch AFTER INSERT OR UPDATE OF enabled ON privacy_request_activation
+ FOR EACH ROW EXECUTE FUNCTION privacy_worker_engage_kill_switch();
+
+CREATE OR REPLACE FUNCTION privacy_worker_require_activation() RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM 1 FROM privacy_worker_kill_switch switch_row WHERE switch_row.singleton AND NOT switch_row.engaged FOR SHARE;
+ IF NOT FOUND OR NOT privacy_worker_activation_ready() THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_worker_disabled';
+ END IF;
+END;$$;
+
+CREATE OR REPLACE FUNCTION privacy_activation_record_authenticated_evidence(
+ p_actor uuid,p_kind text,p_evidence_sha256 bytea,p_reference_code text,p_observed_at timestamptz,p_expires_at timestamptz,p_artifact jsonb
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_evidence_id uuid;now_at timestamptz:=clock_timestamp();expected_keys text[];
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id
+   JOIN platform_roles role ON role.id=assignment.role_id WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN')
+  OR p_kind NOT IN ('RESTORE','INFRASTRUCTURE','PROVIDER','SCHEMA') OR octet_length(p_evidence_sha256)<>32
+  OR p_observed_at>now_at OR p_observed_at<=now_at-interval '2160 hours' OR p_expires_at<=now_at OR p_expires_at>p_observed_at+interval '2160 hours'
+  OR jsonb_typeof(p_artifact)<>'object' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_rejected'; END IF;
+ expected_keys:=CASE p_kind
+  WHEN 'RESTORE' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','schema_migration_digest','restore_input_source','restore_input_contract','restore_replay_contract','restore_closure_contract','restore_candidate_sha256','restore_inventory_sha256','restore_object_count','restore_replayed_count','restore_synthetic_count','restore_observer_sha256']
+  WHEN 'INFRASTRUCTURE' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','production_state_serial','hetzner_state_serial','production_state_sha256','hetzner_state_sha256','production_plan_sha256','hetzner_plan_sha256','worker_identity_enabled','s3_version_deletion_enabled','ledger_broker_invoke_enabled','worker_monitoring_enabled','restore_infrastructure_enabled','restore_ledger_write_enabled']
+  WHEN 'PROVIDER' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','provider_registry_state','provider_registration_count','provider_registry_sha256']
+  WHEN 'SCHEMA' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','schema_migration_digest','baseline_includes_through'] END;
+ IF NOT p_artifact ?& expected_keys OR (SELECT count(*) FROM jsonb_object_keys(p_artifact))<>cardinality(expected_keys)
+  OR p_artifact->>'policy_version' IS NULL OR p_artifact->>'executor_version'<>'privacy-erasure-executor/v2'
+  OR p_artifact->>'plan_schema_version'<>'privacy-erasure-plan/v2' OR p_artifact->>'image_digest'!~'^sha256:[0-9a-f]{64}$' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected'; END IF;
+ IF (p_kind='RESTORE' AND p_reference_code<>'mycfc/privacy-restore-drill-attestation/v2')
+  OR (p_kind='INFRASTRUCTURE' AND p_reference_code<>'mycfc/privacy-infrastructure-posture/v1')
+  OR (p_kind='PROVIDER' AND p_reference_code<>'mycfc/privacy-provider-registry/v1')
+  OR (p_kind='SCHEMA' AND p_reference_code<>'mycfc/schema-migration-inventory/v1') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_contract_rejected'; END IF;
+ INSERT INTO privacy_activation_evidence(kind,evidence_sha256,reference_code,observed_at,expires_at,recorded_by_ref,recorded_at)
+ VALUES(p_kind,p_evidence_sha256,p_reference_code,p_observed_at,p_expires_at,p_actor,now_at)
+ ON CONFLICT(kind,evidence_sha256) DO NOTHING RETURNING id INTO v_evidence_id;
+ IF v_evidence_id IS NULL THEN
+  SELECT evidence.id INTO v_evidence_id FROM privacy_activation_evidence evidence WHERE evidence.kind=p_kind AND evidence.evidence_sha256=p_evidence_sha256
+   AND evidence.reference_code=p_reference_code AND evidence.observed_at=p_observed_at AND evidence.expires_at=p_expires_at;
+  IF v_evidence_id IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_conflict'; END IF;
+ END IF;
+ INSERT INTO privacy_activation_authenticated_artifacts(
+  evidence_id,kind,policy_version,executor_version,plan_schema_version,image_digest,immutable_evidence_ref,immutable_evidence_sha256,signing_key_id,
+  schema_migration_digest,baseline_includes_through,production_state_serial,hetzner_state_serial,production_state_sha256,hetzner_state_sha256,
+  production_plan_sha256,hetzner_plan_sha256,worker_identity_enabled,s3_version_deletion_enabled,ledger_broker_invoke_enabled,worker_monitoring_enabled,
+  restore_infrastructure_enabled,restore_ledger_write_enabled,provider_registry_state,provider_registration_count,provider_registry_sha256,restore_input_source,
+  restore_input_contract,restore_replay_contract,restore_closure_contract,restore_candidate_sha256,restore_inventory_sha256,restore_object_count,restore_replayed_count,
+  restore_synthetic_count,restore_observer_sha256,authenticated_at)
+ VALUES(v_evidence_id,p_kind,p_artifact->>'policy_version',p_artifact->>'executor_version',p_artifact->>'plan_schema_version',p_artifact->>'image_digest',
+  p_artifact->>'evidence_ref',decode(p_artifact->>'evidence_sha256','base64'),p_artifact->>'signing_key_id',decode(p_artifact->>'schema_migration_digest','base64'),
+  p_artifact->>'baseline_includes_through',(p_artifact->>'production_state_serial')::bigint,(p_artifact->>'hetzner_state_serial')::bigint,
+  decode(p_artifact->>'production_state_sha256','base64'),decode(p_artifact->>'hetzner_state_sha256','base64'),decode(p_artifact->>'production_plan_sha256','base64'),
+  decode(p_artifact->>'hetzner_plan_sha256','base64'),(p_artifact->>'worker_identity_enabled')::boolean,(p_artifact->>'s3_version_deletion_enabled')::boolean,
+  (p_artifact->>'ledger_broker_invoke_enabled')::boolean,(p_artifact->>'worker_monitoring_enabled')::boolean,(p_artifact->>'restore_infrastructure_enabled')::boolean,
+  (p_artifact->>'restore_ledger_write_enabled')::boolean,p_artifact->>'provider_registry_state',(p_artifact->>'provider_registration_count')::bigint,
+  decode(p_artifact->>'provider_registry_sha256','base64'),p_artifact->>'restore_input_source',p_artifact->>'restore_input_contract',p_artifact->>'restore_replay_contract',
+  p_artifact->>'restore_closure_contract',decode(p_artifact->>'restore_candidate_sha256','base64'),
+  decode(p_artifact->>'restore_inventory_sha256','base64'),(p_artifact->>'restore_object_count')::bigint,(p_artifact->>'restore_replayed_count')::bigint,
+  (p_artifact->>'restore_synthetic_count')::bigint,decode(p_artifact->>'restore_observer_sha256','base64'),now_at)
+ ON CONFLICT ON CONSTRAINT privacy_activation_authenticated_artifacts_pkey DO NOTHING;
+ IF NOT EXISTS(SELECT 1 FROM privacy_activation_authenticated_artifacts authenticated WHERE authenticated.evidence_id=v_evidence_id
+   AND authenticated.kind=p_kind AND authenticated.policy_version=p_artifact->>'policy_version' AND authenticated.image_digest=p_artifact->>'image_digest') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_artifact_conflict'; END IF;
+ RETURN v_evidence_id;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR check_violation THEN
+ RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected';
+END;$$;
+
+REVOKE ALL ON FUNCTION privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb),privacy_worker_require_activation() FROM PUBLIC;
+-- #248 trusted activation boundary. The web and executor roles remain unable
+-- to create evidence, propose, approve, enable, or clear the kill switch.
+
+ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_check;
+ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_check CHECK((
+ (kind='RESTORE' AND signing_key_id IS NULL AND immutable_evidence_ref IS NOT NULL AND schema_migration_digest IS NOT NULL AND baseline_includes_through IS NULL
+  AND restore_input_source IN ('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP') AND restore_input_contract='mycfc/privacy-restore-ledger-input/v2'
+  AND restore_replay_contract='relational-erasure-replay/v1' AND restore_closure_contract='restore-tombstone-closure/v3'
+  AND restore_candidate_sha256 IS NOT NULL AND octet_length(restore_candidate_sha256)=32 AND restore_inventory_sha256 IS NOT NULL
+  AND octet_length(restore_inventory_sha256)=32 AND restore_observer_sha256 IS NOT NULL AND octet_length(restore_observer_sha256)=32
+  AND restore_object_count>=restore_replayed_count AND restore_replayed_count>0
+  AND ((restore_input_source='LIVE_LEDGER' AND restore_synthetic_count=0) OR (restore_input_source='SYNTHETIC_BOOTSTRAP' AND restore_synthetic_count=restore_replayed_count)))
+ OR (kind='INFRASTRUCTURE' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL AND production_state_serial>0 AND hetzner_state_serial>0
+  AND octet_length(production_state_sha256)=32 AND octet_length(hetzner_state_sha256)=32 AND octet_length(production_plan_sha256)=32
+  AND octet_length(hetzner_plan_sha256)=32 AND worker_identity_enabled AND s3_version_deletion_enabled AND ledger_broker_invoke_enabled
+  AND worker_monitoring_enabled AND restore_infrastructure_enabled AND restore_ledger_write_enabled)
+ OR (kind='PROVIDER' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL AND provider_registry_state='READY'
+  AND provider_registration_count>0 AND octet_length(provider_registry_sha256)=32)
+ OR (kind='SCHEMA' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL AND octet_length(schema_migration_digest)=32
+  AND baseline_includes_through='202609100014_privacy_activation_broker')) IS TRUE);
+
+CREATE TABLE privacy_protected.activation_signed_approvals (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ proposal_id uuid NOT NULL REFERENCES privacy_activation_proposals(id) ON DELETE RESTRICT,
+ signer_role varchar(20) NOT NULL CHECK(signer_role IN ('EXECUTOR','ADMINISTRATOR')),
+ actor_ref uuid NOT NULL,
+ signing_key_id varchar(120) NOT NULL CHECK(signing_key_id=btrim(signing_key_id) AND signing_key_id~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'),
+ nonce_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(nonce_sha256)=32),
+ envelope_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(envelope_sha256)=32),
+ raw_envelope bytea NOT NULL CHECK(octet_length(raw_envelope) BETWEEN 1 AND 16384),
+ parsed_envelope jsonb NOT NULL,
+ issued_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(proposal_id,signer_role),
+ CHECK(expires_at>issued_at AND expires_at<=issued_at+interval '15 minutes')
+);
+CREATE TRIGGER privacy_activation_signed_approvals_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.activation_signed_approvals FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.activation_broker_receipts (
+ proposal_id uuid PRIMARY KEY REFERENCES privacy_activation_proposals(id) ON DELETE RESTRICT,
+ approval_id uuid NOT NULL UNIQUE REFERENCES privacy_activation_approvals(id) ON DELETE RESTRICT,
+ executor_envelope_id uuid NOT NULL UNIQUE REFERENCES privacy_protected.activation_signed_approvals(id) ON DELETE RESTRICT,
+ administrator_envelope_id uuid NOT NULL UNIQUE REFERENCES privacy_protected.activation_signed_approvals(id) ON DELETE RESTRICT,
+ evidence_set_sha256 bytea NOT NULL CHECK(octet_length(evidence_set_sha256)=32),
+ activation_sha256 bytea NOT NULL CHECK(octet_length(activation_sha256)=32),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER privacy_activation_broker_receipts_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.activation_broker_receipts FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+
+-- Renaming SECURITY DEFINER functions preserves their ACL. Remove every
+-- inherited EXECUTE capability from every non-owner, including PUBLIC, and
+-- assert that the cleanup really took effect before this migration commits.
+DO $$ DECLARE capability record; grantee_name text;
+BEGIN
+ FOR capability IN
+  SELECT proc.oid,proc.proowner,acl.grantee
+  FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+  CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
+  WHERE namespace.nspname='public' AND proc.proname LIKE '%\_inner\_013' ESCAPE '\'
+   AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner
+ LOOP
+  grantee_name:=CASE WHEN capability.grantee=0 THEN 'PUBLIC' ELSE quote_ident((SELECT rolname FROM pg_roles WHERE oid=capability.grantee)) END;
+  IF grantee_name IS NOT NULL THEN
+   EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %s',capability.oid::regprocedure,grantee_name);
+  END IF;
+ END LOOP;
+ IF EXISTS(
+  SELECT 1 FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+  CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
+  WHERE namespace.nspname='public' AND proc.proname LIKE '%\_inner\_013' ESCAPE '\'
+   AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner
+ ) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_inner_capability_revoke_failed'; END IF;
+END $$;
+
+-- No ordinary application identity may call the raw mutation primitives.
+DO $$ DECLARE capability record; grantee_name text;
+BEGIN
+ FOR capability IN
+  SELECT proc.oid,proc.proowner,acl.grantee
+  FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+  CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
+  WHERE namespace.nspname='public' AND proc.proname IN (
+   'privacy_activation_record_evidence','privacy_activation_record_authenticated_evidence',
+   'privacy_activation_propose','privacy_activation_approve','privacy_activation_authenticated_set_digest')
+   AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner
+ LOOP
+  grantee_name:=CASE WHEN capability.grantee=0 THEN 'PUBLIC' ELSE quote_ident((SELECT rolname FROM pg_roles WHERE oid=capability.grantee)) END;
+  IF grantee_name IS NOT NULL THEN
+   EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %s',capability.oid::regprocedure,grantee_name);
+  END IF;
+ END LOOP;
+END $$;
+
+CREATE FUNCTION privacy_activation_broker_record_authenticated_evidence(
+ p_actor uuid,p_kind text,p_evidence_sha256 bytea,p_reference_code text,p_observed_at timestamptz,p_expires_at timestamptz,p_artifact jsonb
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_broker' THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_broker_required';
+ END IF;
+ RETURN privacy_activation_record_authenticated_evidence(p_actor,p_kind,p_evidence_sha256,p_reference_code,p_observed_at,p_expires_at,p_artifact);
+END;$$;
+
+CREATE FUNCTION privacy_activation_broker_material(p_policy_version text)
+RETURNS TABLE(evidence_ids uuid[],evidence_set_sha256 bytea,activation_sha256 bytea,executor_version text,plan_schema_version text,image_digest text,schema_migration_digest bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE policy privacy_request_policies%ROWTYPE;selected_ids uuid[];set_digest bytea;
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_broker' THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_broker_required';
+ END IF;
+ SELECT * INTO policy FROM privacy_request_policies WHERE version=p_policy_version AND adopted_at IS NOT NULL FOR SHARE;
+ SELECT array_agg(latest.id ORDER BY latest.kind) INTO selected_ids FROM (
+  SELECT DISTINCT ON(e.kind) e.id,e.kind FROM privacy_activation_evidence e
+  JOIN privacy_activation_authenticated_artifacts a ON a.evidence_id=e.id AND a.kind=e.kind
+  WHERE a.policy_version=p_policy_version AND e.expires_at>clock_timestamp()
+  ORDER BY e.kind,e.observed_at DESC,e.id DESC
+ ) latest;
+ set_digest:=privacy_activation_authenticated_set_digest(p_policy_version,selected_ids);
+ IF policy.version IS NULL OR set_digest IS NULL THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_incomplete';
+ END IF;
+ RETURN QUERY SELECT selected_ids,set_digest,
+  digest(convert_to('privacy-activation/v2:'||policy.version||':'||policy.executor_version||':'||policy.plan_schema_version||':'||
+   encode(digest(convert_to(policy.category_catalogue::text,'UTF8'),'sha256'),'hex')||':'||encode(set_digest,'hex'),'UTF8'),'sha256'),
+  policy.executor_version::text,policy.plan_schema_version::text,
+  (SELECT a.image_digest FROM privacy_activation_authenticated_artifacts a WHERE a.evidence_id=selected_ids[1]),
+  (SELECT a.schema_migration_digest FROM privacy_activation_authenticated_artifacts a WHERE a.evidence_id=ANY(selected_ids) AND a.kind='SCHEMA');
+END;$$;
+
+CREATE FUNCTION privacy_activation_broker_activate(
+ p_proposal_id uuid,p_policy_version text,p_evidence_ids uuid[],p_evidence_set_sha256 bytea,p_activation_sha256 bytea,
+ p_executor_actor uuid,p_administrator_actor uuid,p_executor_key_id text,p_administrator_key_id text,
+ p_executor_nonce_sha256 bytea,p_administrator_nonce_sha256 bytea,p_executor_envelope_raw bytea,p_administrator_envelope_raw bytea,
+ p_executor_envelope jsonb,p_administrator_envelope jsonb,
+ p_executor_issued_at timestamptz,p_executor_expires_at timestamptz,p_administrator_issued_at timestamptz,p_administrator_expires_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE material record;now_at timestamptz:=clock_timestamp();executor_envelope_id uuid;administrator_envelope_id uuid;approval_id uuid;switch_version bigint;
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_broker' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_broker_required'; END IF;
+ SELECT * INTO material FROM privacy_activation_broker_material(p_policy_version);
+ IF p_proposal_id IS NULL OR p_executor_actor IS NULL OR p_administrator_actor IS NULL OR p_executor_actor=p_administrator_actor
+  OR material.evidence_ids IS DISTINCT FROM p_evidence_ids OR material.evidence_set_sha256 IS DISTINCT FROM p_evidence_set_sha256
+  OR material.activation_sha256 IS DISTINCT FROM p_activation_sha256 OR octet_length(p_executor_nonce_sha256)<>32 OR octet_length(p_administrator_nonce_sha256)<>32
+  OR p_executor_nonce_sha256=p_administrator_nonce_sha256 OR p_executor_issued_at>now_at OR p_administrator_issued_at>now_at
+  OR p_executor_expires_at<=now_at OR p_administrator_expires_at<=now_at
+  OR p_executor_expires_at>p_executor_issued_at+interval '15 minutes' OR p_administrator_expires_at>p_administrator_issued_at+interval '15 minutes'
+  OR jsonb_typeof(p_executor_envelope)<>'object' OR jsonb_typeof(p_administrator_envelope)<>'object'
+  OR convert_from(p_executor_envelope_raw,'UTF8')::jsonb IS DISTINCT FROM p_executor_envelope
+  OR convert_from(p_administrator_envelope_raw,'UTF8')::jsonb IS DISTINCT FROM p_administrator_envelope
+  OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(p_executor_envelope) key)<>ARRAY['activation_sha256','actor_ref','contract','evidence_ids','evidence_set_sha256','executor_version','expires_at','image_digest','issued_at','nonce','plan_schema_version','policy_version','proposal_id','role','schema_migration_digest','signature_ed25519','signing_key_id']
+  OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(p_administrator_envelope) key)<>ARRAY['activation_sha256','actor_ref','contract','evidence_ids','evidence_set_sha256','executor_version','expires_at','image_digest','issued_at','nonce','plan_schema_version','policy_version','proposal_id','role','schema_migration_digest','signature_ed25519','signing_key_id']
+  OR p_executor_envelope->>'contract'<>'mycfc/privacy-activation-approval/v1' OR p_administrator_envelope->>'contract'<>'mycfc/privacy-activation-approval/v1'
+  OR p_executor_envelope->>'role'<>'EXECUTOR' OR p_administrator_envelope->>'role'<>'ADMINISTRATOR'
+  OR p_executor_envelope->>'proposal_id'<>p_proposal_id::text OR p_administrator_envelope->>'proposal_id'<>p_proposal_id::text
+  OR p_executor_envelope->>'actor_ref'<>p_executor_actor::text OR p_administrator_envelope->>'actor_ref'<>p_administrator_actor::text
+  OR p_executor_envelope->>'signing_key_id'<>p_executor_key_id OR p_administrator_envelope->>'signing_key_id'<>p_administrator_key_id
+  OR (p_executor_envelope->>'issued_at')::timestamptz IS DISTINCT FROM p_executor_issued_at OR (p_administrator_envelope->>'issued_at')::timestamptz IS DISTINCT FROM p_administrator_issued_at
+  OR (p_executor_envelope->>'expires_at')::timestamptz IS DISTINCT FROM p_executor_expires_at OR (p_administrator_envelope->>'expires_at')::timestamptz IS DISTINCT FROM p_administrator_expires_at
+  OR digest(decode(p_executor_envelope->>'nonce','base64'),'sha256') IS DISTINCT FROM p_executor_nonce_sha256
+  OR digest(decode(p_administrator_envelope->>'nonce','base64'),'sha256') IS DISTINCT FROM p_administrator_nonce_sha256
+  OR octet_length(decode(p_executor_envelope->>'signature_ed25519','base64'))<>64 OR octet_length(decode(p_administrator_envelope->>'signature_ed25519','base64'))<>64
+  OR p_executor_envelope->>'activation_sha256'<>encode(p_activation_sha256,'hex') OR p_administrator_envelope->>'activation_sha256'<>encode(p_activation_sha256,'hex')
+  OR p_executor_envelope->>'evidence_set_sha256'<>encode(p_evidence_set_sha256,'hex') OR p_administrator_envelope->>'evidence_set_sha256'<>encode(p_evidence_set_sha256,'hex')
+  OR p_executor_envelope->'evidence_ids'<>to_jsonb(p_evidence_ids) OR p_administrator_envelope->'evidence_ids'<>to_jsonb(p_evidence_ids)
+  OR p_executor_envelope->>'policy_version'<>p_policy_version OR p_administrator_envelope->>'policy_version'<>p_policy_version
+  OR p_executor_envelope->>'executor_version'<>material.executor_version OR p_administrator_envelope->>'executor_version'<>material.executor_version
+  OR p_executor_envelope->>'plan_schema_version'<>material.plan_schema_version OR p_administrator_envelope->>'plan_schema_version'<>material.plan_schema_version
+  OR p_executor_envelope->>'image_digest'<>material.image_digest OR p_administrator_envelope->>'image_digest'<>material.image_digest
+  OR p_executor_envelope->>'schema_migration_digest'<>encode(material.schema_migration_digest,'hex') OR p_administrator_envelope->>'schema_migration_digest'<>encode(material.schema_migration_digest,'hex')
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN privacy_executor_grants g ON g.user_id=u.id AND g.revoked_at IS NULL WHERE u.id=p_executor_actor AND u.is_active AND NOT u.is_dependent)
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN user_platform_roles a ON a.user_id=u.id JOIN platform_roles r ON r.id=a.role_id WHERE u.id=p_administrator_actor AND u.is_active AND NOT u.is_dependent AND r.code='ADMIN')
+ THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_signed_approval_rejected'; END IF;
+
+ INSERT INTO privacy_activation_proposals(id,policy_version,evidence_ids,evidence_set_sha256,activation_sha256,proposed_by_ref,proposed_at)
+ VALUES(p_proposal_id,p_policy_version,p_evidence_ids,p_evidence_set_sha256,p_activation_sha256,p_executor_actor,now_at);
+ INSERT INTO privacy_protected.activation_signed_approvals(proposal_id,signer_role,actor_ref,signing_key_id,nonce_sha256,envelope_sha256,raw_envelope,parsed_envelope,issued_at,expires_at)
+ VALUES(p_proposal_id,'EXECUTOR',p_executor_actor,p_executor_key_id,p_executor_nonce_sha256,digest(p_executor_envelope_raw,'sha256'),p_executor_envelope_raw,p_executor_envelope,p_executor_issued_at,p_executor_expires_at)
+ RETURNING id INTO executor_envelope_id;
+ INSERT INTO privacy_protected.activation_signed_approvals(proposal_id,signer_role,actor_ref,signing_key_id,nonce_sha256,envelope_sha256,raw_envelope,parsed_envelope,issued_at,expires_at)
+ VALUES(p_proposal_id,'ADMINISTRATOR',p_administrator_actor,p_administrator_key_id,p_administrator_nonce_sha256,digest(p_administrator_envelope_raw,'sha256'),p_administrator_envelope_raw,p_administrator_envelope,p_administrator_issued_at,p_administrator_expires_at)
+ RETURNING id INTO administrator_envelope_id;
+ INSERT INTO privacy_activation_approvals(proposal_id,activation_sha256,approved_by_ref,approved_at)
+ VALUES(p_proposal_id,p_activation_sha256,p_administrator_actor,now_at) RETURNING id INTO approval_id;
+ PERFORM set_config('mycfc.privacy_activation_approval','approved',true);
+ INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at,approval_id)
+ VALUES(true,p_policy_version,true,true,p_administrator_actor,now_at,approval_id)
+ ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=true,fulfilment_ready=true,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,approval_id=EXCLUDED.approval_id;
+ INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ VALUES(p_policy_version,p_administrator_actor,true,true,now_at);
+ UPDATE privacy_worker_kill_switch SET engaged=false,version=version+1,activation_approval_id=approval_id,changed_at=now_at WHERE singleton RETURNING version INTO switch_version;
+ INSERT INTO privacy_worker_kill_switch_events(version,engaged,activation_approval_id,occurred_at) VALUES(switch_version,false,approval_id,now_at);
+ INSERT INTO privacy_protected.activation_broker_receipts(proposal_id,approval_id,executor_envelope_id,administrator_envelope_id,evidence_set_sha256,activation_sha256)
+ VALUES(p_proposal_id,approval_id,executor_envelope_id,administrator_envelope_id,p_evidence_set_sha256,p_activation_sha256);
+ RETURN approval_id;
+EXCEPTION
+ WHEN unique_violation THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_signed_approval_replay';
+ WHEN invalid_text_representation OR character_not_in_repertoire OR datetime_field_overflow THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_signed_approval_rejected';
+END;$$;
+
+CREATE FUNCTION privacy_activation_disable(p_actor uuid) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE now_at timestamptz:=clock_timestamp();switch_version bigint;
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_disable' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_disable_role_required'; END IF;
+ UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=now_at
+ WHERE singleton AND NOT engaged RETURNING version INTO switch_version;
+ IF switch_version IS NOT NULL THEN
+  INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) VALUES(switch_version,true,now_at);
+ ELSE
+  SELECT version INTO switch_version FROM privacy_worker_kill_switch WHERE singleton;
+ END IF;
+ UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_by=p_actor,updated_at=now_at WHERE singleton;
+ INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ SELECT policy_version,p_actor,false,false,now_at FROM privacy_request_activation WHERE singleton;
+ RETURN switch_version;
+END;$$;
+
+REVOKE ALL ON TABLE privacy_protected.activation_signed_approvals,privacy_protected.activation_broker_receipts FROM PUBLIC;
+REVOKE ALL ON FUNCTION
+ privacy_activation_broker_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb),
+ privacy_activation_broker_material(text),
+ privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz),
+ privacy_activation_disable(uuid)
+FROM PUBLIC;
+
+-- Every schema upgrade re-engages the switch. Activation must be renewed
+-- against the new embedded migration digest by the independent broker path.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at)
+ SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+
+-- Baseline through 202609100015_privacy_membership_postcondition.
+-- #247 closure-v4: authenticate the complete retained membership-history
+-- postcondition without retaining a subject or pseudonymous-principal link.
+-- Existing v1-v3 ledger material remains readable but cannot authorize a new
+-- replay or activation after this migration.
+
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts
+ DROP CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check;
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts
+ ADD CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check
+ CHECK(ledger_version IN ('restore-tombstone-closure/v1','restore-tombstone-closure/v2','restore-tombstone-closure/v3','restore-tombstone-closure/v4')) NOT VALID;
+ALTER TABLE privacy_protected.restore_tombstone_closure_receipts
+ VALIDATE CONSTRAINT restore_tombstone_closure_receipts_ledger_version_check;
+
+ALTER TABLE privacy_protected.restore_ledger_imports
+ DROP CONSTRAINT restore_ledger_imports_closure_version_check;
+ALTER TABLE privacy_protected.restore_ledger_imports
+ ADD COLUMN membership_postcondition_contract varchar(64) NULL,
+ ADD COLUMN membership_postcondition_sha256 bytea NULL,
+ ADD COLUMN membership_count bigint NULL,
+ ADD COLUMN variation_count bigint NULL,
+ ADD CONSTRAINT restore_ledger_imports_closure_version_check CHECK(
+  (kind='intent' AND closure_version IS NULL)
+  OR (kind='closure' AND closure_version IN ('restore-tombstone-closure/v2','restore-tombstone-closure/v3','restore-tombstone-closure/v4'))
+ ) NOT VALID,
+ ADD CONSTRAINT restore_ledger_imports_membership_postcondition_check CHECK((
+  (closure_version='restore-tombstone-closure/v4'
+   AND membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+   AND octet_length(membership_postcondition_sha256)=32
+   AND membership_count BETWEEN 0 AND 10000 AND variation_count BETWEEN 0 AND 100000)
+ OR (closure_version IS DISTINCT FROM 'restore-tombstone-closure/v4'
+   AND membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL
+   AND membership_count IS NULL AND variation_count IS NULL)
+ ) IS TRUE) NOT VALID;
+ALTER TABLE privacy_protected.restore_ledger_imports
+ VALIDATE CONSTRAINT restore_ledger_imports_closure_version_check;
+ALTER TABLE privacy_protected.restore_ledger_imports
+ VALIDATE CONSTRAINT restore_ledger_imports_membership_postcondition_check;
+
+CREATE TABLE privacy_protected.membership_history_source_captures (
+ execution_id uuid PRIMARY KEY REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT,
+ captured_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE privacy_protected.membership_history_source_rows (
+ execution_id uuid NOT NULL REFERENCES privacy_protected.membership_history_source_captures(execution_id) ON DELETE RESTRICT,
+ membership_id uuid NOT NULL,
+ PRIMARY KEY(execution_id,membership_id)
+);
+CREATE TABLE privacy_protected.membership_history_source_postconditions (
+ execution_id uuid PRIMARY KEY REFERENCES privacy_protected.membership_history_source_captures(execution_id) ON DELETE RESTRICT,
+ effective_at timestamptz NOT NULL,
+ contract varchar(64) NOT NULL CHECK(contract='mycfc/membership-history-postcondition/v1'),
+ postcondition_sha256 bytea NOT NULL CHECK(octet_length(postcondition_sha256)=32),
+ membership_count bigint NOT NULL CHECK(membership_count BETWEEN 0 AND 10000),
+ variation_count bigint NOT NULL CHECK(variation_count BETWEEN 0 AND 100000),
+ canonical_size bigint NOT NULL CHECK(canonical_size BETWEEN 1 AND 16777216),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE privacy_protected.membership_history_replay_captures (
+ run_id uuid PRIMARY KEY REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT,
+ captured_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE privacy_protected.membership_history_replay_rows (
+ run_id uuid NOT NULL REFERENCES privacy_protected.membership_history_replay_captures(run_id) ON DELETE RESTRICT,
+ membership_id uuid NOT NULL,
+ PRIMARY KEY(run_id,membership_id)
+);
+CREATE TABLE privacy_protected.membership_history_replay_postconditions (
+ run_id uuid PRIMARY KEY REFERENCES privacy_protected.membership_history_replay_captures(run_id) ON DELETE RESTRICT,
+ contract varchar(64) NOT NULL CHECK(contract='mycfc/membership-history-postcondition/v1'),
+ postcondition_sha256 bytea NOT NULL CHECK(octet_length(postcondition_sha256)=32),
+ membership_count bigint NOT NULL CHECK(membership_count BETWEEN 0 AND 10000),
+ variation_count bigint NOT NULL CHECK(variation_count BETWEEN 0 AND 100000),
+ canonical_size bigint NOT NULL CHECK(canonical_size BETWEEN 1 AND 16777216),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TRIGGER privacy_membership_history_source_captures_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_source_captures FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_membership_history_source_rows_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_source_rows FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_membership_history_source_postconditions_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_source_postconditions FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_membership_history_replay_captures_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_replay_captures FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_membership_history_replay_rows_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_replay_rows FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+CREATE TRIGGER privacy_membership_history_replay_postconditions_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.membership_history_replay_postconditions FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+-- Every value is uint32-big-endian length-prefixed UTF-8. NULL uses the
+-- reserved 0xffffffff length, so NULL and the empty string never collide.
+CREATE FUNCTION public.privacy_membership_history_frame(p_value text)
+RETURNS bytea LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT CASE WHEN p_value IS NULL THEN decode('ffffffff','hex')
+  ELSE int4send(octet_length(convert_to(p_value,'UTF8')))||convert_to(p_value,'UTF8') END;
+$$;
+CREATE FUNCTION public.privacy_membership_history_frame(p_value bytea)
+RETURNS bytea LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT CASE WHEN p_value IS NULL THEN decode('ffffffff','hex')
+  ELSE int4send(octet_length(p_value))||p_value END;
+$$;
+
+-- Both arguments are contractually 32 bytes. The loop always examines all
+-- 32 positions and is the database-side companion to Go's constant-time
+-- comparison before a replay receipt is returned.
+CREATE FUNCTION public.privacy_membership_history_digest_equal(p_left bytea,p_right bytea)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE difference integer:=0;position integer;
+BEGIN
+ IF p_left IS NULL OR p_right IS NULL OR octet_length(p_left)<>32 OR octet_length(p_right)<>32 THEN RETURN false; END IF;
+ FOR position IN 0..31 LOOP
+  difference:=difference | (get_byte(p_left,position) # get_byte(p_right,position));
+ END LOOP;
+ RETURN difference=0;
+END;$$;
+
+CREATE FUNCTION public.privacy_membership_history_compute(
+ p_membership_ids uuid[],p_effective_at timestamptz,p_require_anonymized boolean
+) RETURNS TABLE(contract text,postcondition_sha256 bytea,membership_count bigint,variation_count bigint,canonical_size bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE canonical bytea;membership_row record;child record;ids uuid[];actual_count bigint;principal_count bigint;principal_ref uuid;
+ membership_total bigint;variation_total bigint;modality_total bigint;group_total bigint;variation_group_total bigint;
+BEGIN
+ ids:=COALESCE((SELECT array_agg(item.id ORDER BY item.id) FROM unnest(COALESCE(p_membership_ids,ARRAY[]::uuid[])) item(id)),ARRAY[]::uuid[]);
+ membership_total:=cardinality(ids);
+ IF p_effective_at IS NULL OR membership_total>10000 OR membership_total<>(SELECT count(DISTINCT id) FROM unnest(ids) item(id)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+ SELECT count(*),count(DISTINCT membership.principal_id),min(membership.principal_id::text)::uuid
+ INTO actual_count,principal_count,principal_ref FROM user_memberships membership WHERE membership.id=ANY(ids);
+ IF actual_count<>membership_total OR EXISTS(SELECT 1 FROM user_memberships membership WHERE membership.id=ANY(ids)
+   AND (membership.ends_on IS NULL OR membership.ends_on>=(p_effective_at AT TIME ZONE 'UTC')::date))
+  OR (p_require_anonymized AND membership_total>0 AND (principal_count<>1 OR EXISTS(
+    SELECT 1 FROM user_memberships membership WHERE membership.id=ANY(ids) AND (membership.user_id IS NOT NULL OR membership.principal_id IS NULL))))
+  OR (p_require_anonymized AND membership_total>0 AND EXISTS(
+    SELECT 1 FROM user_memberships membership WHERE membership.principal_id=principal_ref AND NOT(membership.id=ANY(ids)))) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+ SELECT count(*) INTO variation_total FROM training_variations variation WHERE variation.target_membership_id=ANY(ids);
+ IF variation_total>100000 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+ canonical:=privacy_membership_history_frame('mycfc/membership-history-postcondition/v1')||
+  privacy_membership_history_frame((p_effective_at AT TIME ZONE 'UTC')::date::text)||
+  privacy_membership_history_frame(membership_total::text);
+ FOR membership_row IN SELECT membership.* FROM user_memberships membership WHERE membership.id=ANY(ids) ORDER BY membership.id LOOP
+  SELECT count(*) INTO modality_total FROM membership_modalities modality WHERE modality.membership_id=membership_row.id;
+  SELECT count(*) INTO group_total FROM training_group_members linked WHERE linked.membership_id=membership_row.id;
+  SELECT count(*) INTO variation_group_total FROM training_variation_group_members linked WHERE linked.membership_id=membership_row.id;
+  canonical:=canonical||privacy_membership_history_frame('membership')||privacy_membership_history_frame(membership_row.id::text)||
+   privacy_membership_history_frame(membership_row.season_id::text)||privacy_membership_history_frame(membership_row.programme_id::text)||
+   privacy_membership_history_frame(membership_row.team_id::text)||privacy_membership_history_frame(membership_row.competition_category_id::text)||
+   privacy_membership_history_frame(membership_row.starts_on::text)||privacy_membership_history_frame(membership_row.ends_on::text)||
+   privacy_membership_history_frame('HISTORICAL')||privacy_membership_history_frame(modality_total::text);
+  FOR child IN SELECT modality.modality_id FROM membership_modalities modality WHERE modality.membership_id=membership_row.id ORDER BY modality.modality_id LOOP
+   canonical:=canonical||privacy_membership_history_frame('modality')||privacy_membership_history_frame(child.modality_id::text);
+   IF octet_length(canonical)>16777216 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+  END LOOP;
+  canonical:=canonical||privacy_membership_history_frame(group_total::text);
+  FOR child IN SELECT linked.group_id FROM training_group_members linked WHERE linked.membership_id=membership_row.id ORDER BY linked.group_id LOOP
+   canonical:=canonical||privacy_membership_history_frame('training-group')||privacy_membership_history_frame(child.group_id::text);
+   IF octet_length(canonical)>16777216 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+  END LOOP;
+  canonical:=canonical||privacy_membership_history_frame(variation_group_total::text);
+  FOR child IN SELECT linked.variation_group_id FROM training_variation_group_members linked WHERE linked.membership_id=membership_row.id ORDER BY linked.variation_group_id LOOP
+   canonical:=canonical||privacy_membership_history_frame('variation-group')||privacy_membership_history_frame(child.variation_group_id::text);
+   IF octet_length(canonical)>16777216 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+  END LOOP;
+  SELECT count(*) INTO actual_count FROM training_variations variation WHERE variation.target_membership_id=membership_row.id;
+  canonical:=canonical||privacy_membership_history_frame(actual_count::text);
+  FOR child IN SELECT variation.* FROM training_variations variation WHERE variation.target_membership_id=membership_row.id ORDER BY variation.id LOOP
+   canonical:=canonical||privacy_membership_history_frame('variation')||privacy_membership_history_frame(child.id::text)||
+    privacy_membership_history_frame(child.plan_id::text)||privacy_membership_history_frame(child.subject_kind::text)||
+    privacy_membership_history_frame(child.subject_id::text)||privacy_membership_history_frame(child.operation::text)||
+    privacy_membership_history_frame(child.change_summary::text)||privacy_membership_history_frame(child.patch::text)||
+    privacy_membership_history_frame(child.version::text)||privacy_membership_history_frame(CASE WHEN child.is_active THEN 'true' ELSE 'false' END)||
+    privacy_membership_history_frame(CASE WHEN child.retired_at IS NULL THEN NULL ELSE to_char(child.retired_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END);
+   IF octet_length(canonical)>16777216 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+  END LOOP;
+  IF octet_length(canonical)>16777216 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+ END LOOP;
+ RETURN QUERY SELECT 'mycfc/membership-history-postcondition/v1'::text,digest(canonical,'sha256'),membership_total,variation_total,octet_length(canonical)::bigint;
+END;$$;
+
+CREATE FUNCTION public.privacy_membership_history_compute_source(p_execution_id uuid,p_effective_at timestamptz)
+RETURNS TABLE(contract text,postcondition_sha256 bytea,membership_count bigint,variation_count bigint,canonical_size bigint)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT computed.* FROM privacy_protected.membership_history_source_captures capture
+ CROSS JOIN LATERAL public.privacy_membership_history_compute(
+  COALESCE((SELECT array_agg(row.membership_id ORDER BY row.membership_id) FROM privacy_protected.membership_history_source_rows row WHERE row.execution_id=capture.execution_id),ARRAY[]::uuid[]),
+  p_effective_at,true) computed WHERE capture.execution_id=p_execution_id;
+$$;
+CREATE FUNCTION public.privacy_membership_history_compute_replay(p_run_id uuid,p_effective_at timestamptz)
+RETURNS TABLE(contract text,postcondition_sha256 bytea,membership_count bigint,variation_count bigint,canonical_size bigint)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT computed.* FROM privacy_protected.membership_history_replay_captures capture
+ CROSS JOIN LATERAL public.privacy_membership_history_compute(
+  COALESCE((SELECT array_agg(row.membership_id ORDER BY row.membership_id) FROM privacy_protected.membership_history_replay_rows row WHERE row.run_id=capture.run_id),ARRAY[]::uuid[]),
+  p_effective_at,true) computed WHERE capture.run_id=p_run_id;
+$$;
+
+-- Membership date boundaries are tied to the persisted erasure instant (or
+-- execution start before identity clearing), never to a retry's wall clock.
+CREATE FUNCTION public.privacy_membership_history_effective_date(p_execution_id uuid,p_subject_user_id uuid)
+RETURNS date LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT (CASE WHEN subject.erasure_execution_id=execution.id AND subject.erased_at IS NOT NULL
+              THEN subject.erased_at ELSE execution.started_at END AT TIME ZONE 'UTC')::date
+ FROM privacy_erasure_executions execution JOIN users subject ON subject.id=p_subject_user_id
+ WHERE execution.id=p_execution_id;
+$$;
+
+-- Upgrade the pre-v4 executor in place. Assert the exact number of legacy or
+-- upgraded cutoff references so an unexpected predecessor cannot migrate.
+DO $$DECLARE definition text;legacy_count integer;current_count integer;
+ current_call text:='public.privacy_membership_history_effective_date(execution_ref,subject_ref)';
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_worker_execute_checkpoint_without_tombstone_guard(uuid,uuid,uuid,bigint,uuid,text,text)'::regprocedure) INTO definition;
+ legacy_count:=(length(definition)-length(replace(definition,'CURRENT_DATE','')))/length('CURRENT_DATE');
+ current_count:=(length(definition)-length(replace(definition,current_call,'')))/length(current_call);
+ IF legacy_count=12 AND current_count=0 THEN EXECUTE replace(definition,'CURRENT_DATE',current_call);
+ ELSIF legacy_count<>0 OR current_count<>12 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_effective_date_predecessor_mismatch';
+ END IF;
+END$$;
+
+-- Serialize sealing and every digest-covered mutation by membership ID.
+CREATE FUNCTION public.privacy_membership_history_lock_source(p_execution_id uuid)
+RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE membership_ref uuid;
+BEGIN
+ FOR membership_ref IN
+  SELECT DISTINCT source_row.membership_id FROM privacy_protected.membership_history_source_rows source_row
+  WHERE source_row.execution_id=p_execution_id ORDER BY source_row.membership_id
+ LOOP
+  PERFORM pg_advisory_xact_lock(hashtextextended('mycfc:privacy-membership-history:'||membership_ref::text,0));
+ END LOOP;
+END;$$;
+
+CREATE FUNCTION public.privacy_membership_history_source_postcondition_ready(p_execution_id uuid)
+RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM public.privacy_membership_history_lock_source(p_execution_id);
+ RETURN EXISTS(
+  SELECT 1
+  FROM privacy_protected.membership_history_source_postconditions postcondition
+  CROSS JOIN LATERAL public.privacy_membership_history_compute_source(postcondition.execution_id,postcondition.effective_at) computed
+  WHERE postcondition.execution_id=p_execution_id
+   AND postcondition.contract='mycfc/membership-history-postcondition/v1'
+   AND computed.contract=postcondition.contract
+   AND public.privacy_membership_history_digest_equal(computed.postcondition_sha256,postcondition.postcondition_sha256)
+   AND computed.membership_count=postcondition.membership_count
+   AND computed.variation_count=postcondition.variation_count
+ );
+END;
+$$;
+
+-- Once closure preparation seals a source postcondition, every digest-covered
+-- membership row and relationship becomes immutable. Erasure itself runs
+-- before that postcondition exists, so its required anonymisation is not
+-- impeded.
+CREATE FUNCTION public.prevent_sealed_membership_history_mutation()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE old_membership uuid;new_membership uuid;column_name text;
+BEGIN
+ column_name:=CASE TG_TABLE_NAME WHEN 'user_memberships' THEN 'id' WHEN 'training_variations' THEN 'target_membership_id' ELSE 'membership_id' END;
+ IF TG_OP<>'INSERT' THEN old_membership:=NULLIF(to_jsonb(OLD)->>column_name,'')::uuid; END IF;
+ IF TG_OP<>'DELETE' THEN new_membership:=NULLIF(to_jsonb(NEW)->>column_name,'')::uuid; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc:privacy-membership-history:'||locked.membership_ref::text,0))
+ FROM (SELECT DISTINCT membership_ref FROM unnest(ARRAY[old_membership,new_membership]) membership_ref
+       WHERE membership_ref IS NOT NULL ORDER BY membership_ref) locked;
+ IF EXISTS(
+  SELECT 1 FROM privacy_protected.membership_history_source_rows source_row
+  JOIN privacy_protected.membership_history_source_postconditions postcondition ON postcondition.execution_id=source_row.execution_id
+  WHERE source_row.membership_id=old_membership OR source_row.membership_id=new_membership
+ ) THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='sealed_membership_history_immutable'; END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER user_memberships_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON user_memberships
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER membership_modalities_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON membership_modalities
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_group_members_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_group_members
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_variation_group_members_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_variation_group_members
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+CREATE TRIGGER training_variations_sealed_history BEFORE INSERT OR UPDATE OR DELETE ON training_variations
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_membership_history_mutation();
+
+-- Capture the final retained membership row set immediately before the
+-- history operation. Identity clearing runs earlier, so its wrapper scrubs
+-- variation canaries while the original name/email/login still exist.
+ALTER FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)
+ RENAME TO privacy_worker_execute_checkpoint_inner_015;
+CREATE OR REPLACE FUNCTION public.privacy_worker_execute_checkpoint(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE execution_ref uuid;subject_ref uuid;checkpoint_status text;subject_name text;subject_email text;subject_login text;capture_inserted bigint;
+ previous_timezone text;checkpoint_ref uuid;
+BEGIN
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  previous_timezone:=current_setting('TimeZone');
+  PERFORM set_config('TimeZone','UTC',true);
+ END IF;
+ PERFORM public.privacy_worker_require_activation();
+ SELECT execution.id,request.subject_user_id,checkpoint.status INTO execution_ref,subject_ref,checkpoint_status
+ FROM privacy_erasure_category_jobs job
+ JOIN privacy_erasure_job_leases lease ON lease.id=p_lease_id AND lease.job_id=job.id AND lease.epoch=p_lease_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.id=p_attempt_id AND attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_lease_epoch
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id AND checkpoint.operation_code=p_operation_code AND checkpoint.action_version=p_action_version
+ JOIN privacy_erasure_executions execution ON execution.id=job.execution_id
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ WHERE job.id=p_job_id AND job.status='LEASED' AND lease.worker_ref=p_worker_ref AND lease.released_at IS NULL
+  AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints prior WHERE prior.job_id=job.id AND prior.operation_position<checkpoint.operation_position AND prior.status<>'SUCCEEDED')
+  AND NOT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs prior WHERE prior.execution_id=execution.id AND prior.plan_entry_position<job.plan_entry_position AND prior.status<>'SUCCEEDED')
+ FOR UPDATE OF job,lease,attempt,checkpoint;
+ IF execution_ref IS NULL OR subject_ref IS NULL THEN
+  checkpoint_ref:=public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+  IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
+  RETURN checkpoint_ref;
+ END IF;
+ IF checkpoint_status='PENDING' AND p_operation_code='IDENTITY_CLEAR' AND EXISTS(
+  SELECT 1 FROM privacy_erasure_category_jobs membership_job JOIN privacy_erasure_job_checkpoints membership_checkpoint ON membership_checkpoint.job_id=membership_job.id
+  WHERE membership_job.execution_id=execution_ref AND membership_checkpoint.operation_code='MEMBERSHIP_HISTORY_ANONYMIZE') THEN
+  SELECT name,email::text,minor_login_id::text INTO subject_name,subject_email,subject_login FROM users WHERE id=subject_ref FOR UPDATE;
+  PERFORM set_config('mycfc.privacy_erasure_operation','MEMBERSHIP_HISTORY_ANONYMIZE',true);
+  UPDATE training_variations SET
+   change_summary=privacy_scrub_audit_text(change_summary,subject_ref,subject_name,subject_email,subject_login),
+   patch=privacy_scrub_audit_json(patch,subject_ref,subject_name,subject_email,subject_login),updated_at=clock_timestamp()
+  WHERE target_membership_id IN(SELECT id FROM user_memberships WHERE user_id=subject_ref);
+ END IF;
+ IF checkpoint_status='PENDING' AND p_operation_code='MEMBERSHIP_HISTORY_ANONYMIZE' THEN
+  INSERT INTO privacy_protected.membership_history_source_captures(execution_id) VALUES(execution_ref) ON CONFLICT DO NOTHING;
+  GET DIAGNOSTICS capture_inserted=ROW_COUNT;
+  IF capture_inserted<>1 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_capture_conflict'; END IF;
+  INSERT INTO privacy_protected.membership_history_source_rows(execution_id,membership_id)
+   SELECT execution_ref,membership.id FROM user_memberships membership WHERE membership.user_id=subject_ref ORDER BY membership.id;
+ END IF;
+ checkpoint_ref:=public.privacy_worker_execute_checkpoint_inner_015(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+ IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
+ RETURN checkpoint_ref;
+END;$$;
+
+CREATE FUNCTION public.privacy_tombstone_prepare_closure_v4(p_execution_id uuid,p_worker_ref uuid)
+RETURNS TABLE(execution_id uuid,request_id uuid,request_ref uuid,subject_user_id uuid,plan_sha256 bytea,workset_sha256 bytea,
+ execution_started_at timestamptz,closed_at timestamptz,evidence_expires_at timestamptz,erasure_effective_at timestamptz,replay_operations text[],
+ membership_postcondition_contract text,membership_postcondition_sha256 bytea,membership_count bigint,variation_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE prepared record;computed record;existing privacy_protected.membership_history_source_postconditions%ROWTYPE;
+BEGIN
+ PERFORM public.privacy_worker_require_activation();
+ SELECT * INTO prepared FROM public.privacy_tombstone_prepare_closure_v3(p_execution_id,p_worker_ref);
+ IF prepared.execution_id IS NULL OR EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_closure_receipts receipt
+   WHERE receipt.execution_id=p_execution_id AND receipt.ledger_version<>'restore-tombstone-closure/v4') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_unavailable'; END IF;
+ IF 'MEMBERSHIP_HISTORY_ANONYMIZE'=ANY(prepared.replay_operations) THEN
+  IF NOT EXISTS(SELECT 1 FROM privacy_protected.membership_history_source_captures capture WHERE capture.execution_id=p_execution_id) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_unavailable'; END IF;
+ ELSE INSERT INTO privacy_protected.membership_history_source_captures(execution_id) VALUES(p_execution_id) ON CONFLICT DO NOTHING;
+ END IF;
+ PERFORM public.privacy_membership_history_lock_source(p_execution_id);
+ SELECT * INTO computed FROM public.privacy_membership_history_compute_source(p_execution_id,prepared.erasure_effective_at);
+ IF computed.contract IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_unavailable'; END IF;
+ SELECT * INTO existing FROM privacy_protected.membership_history_source_postconditions WHERE membership_history_source_postconditions.execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.membership_history_source_postconditions(execution_id,effective_at,contract,postcondition_sha256,membership_count,variation_count,canonical_size)
+  VALUES(p_execution_id,prepared.erasure_effective_at,computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count,computed.canonical_size);
+ ELSIF existing.effective_at IS DISTINCT FROM prepared.erasure_effective_at OR existing.contract<>computed.contract
+  OR NOT public.privacy_membership_history_digest_equal(existing.postcondition_sha256,computed.postcondition_sha256)
+  OR existing.membership_count<>computed.membership_count OR existing.variation_count<>computed.variation_count OR existing.canonical_size<>computed.canonical_size THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_conflict'; END IF;
+ RETURN QUERY SELECT prepared.execution_id,prepared.request_id,prepared.request_ref,prepared.subject_user_id,prepared.plan_sha256,prepared.workset_sha256,
+  prepared.execution_started_at,prepared.closed_at,prepared.evidence_expires_at,prepared.erasure_effective_at,prepared.replay_operations,
+  computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count;
+END;$$;
+
+CREATE FUNCTION public.privacy_tombstone_confirm_closure_v4(
+ p_execution_id uuid,p_worker_ref uuid,p_ledger_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_object_version_id text,p_ciphertext_sha256 bytea,p_size_bytes bigint,p_written_at timestamptz,p_verified_at timestamptz
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE intent privacy_protected.restore_tombstone_closure_intents%ROWTYPE;existing privacy_protected.restore_tombstone_closure_receipts%ROWTYPE;
+BEGIN
+ PERFORM public.privacy_worker_require_activation();
+ SELECT * INTO intent FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id;
+ IF intent.execution_id IS NULL OR p_worker_ref IS NULL OR p_ledger_version<>'restore-tombstone-closure/v4'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR p_object_version_id IS NULL
+  OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_size_bytes NOT BETWEEN 1 AND 1048576 OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_verified_at>intent.evidence_expires_at
+  OR NOT public.privacy_membership_history_source_postcondition_ready(p_execution_id)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=p_execution_id;
+ IF existing.execution_id IS NULL THEN
+  INSERT INTO privacy_protected.restore_tombstone_closure_receipts(execution_id,ledger_version,encryption_key_id,locator_key_id,locator_digest,object_version_id,ciphertext_sha256,size_bytes,written_at,verified_at)
+  VALUES(p_execution_id,p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at);
+ ELSIF ROW(existing.ledger_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,existing.object_version_id,existing.ciphertext_sha256,existing.size_bytes,existing.written_at,existing.verified_at)
+  IS DISTINCT FROM ROW(p_ledger_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_object_version_id,p_ciphertext_sha256,p_size_bytes,p_written_at,p_verified_at)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_tombstone_closure_receipt_conflict'; END IF;
+ RETURN p_execution_id;
+END;$$;
+
+ALTER TABLE privacy_protected.restore_synthetic_fixtures
+ ADD COLUMN membership_postcondition_contract varchar(64) NULL,
+ ADD COLUMN membership_postcondition_sha256 bytea NULL,
+ ADD COLUMN membership_count bigint NULL,
+ ADD COLUMN variation_count bigint NULL,
+ ADD CONSTRAINT restore_synthetic_fixtures_membership_postcondition_check CHECK((
+  (membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL AND membership_count IS NULL AND variation_count IS NULL)
+  OR (membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+   AND octet_length(membership_postcondition_sha256)=32
+   AND membership_count BETWEEN 0 AND 10000 AND variation_count BETWEEN 0 AND 100000)) IS TRUE) NOT VALID;
+ALTER TABLE privacy_protected.restore_synthetic_fixtures VALIDATE CONSTRAINT restore_synthetic_fixtures_membership_postcondition_check;
+
+DROP FUNCTION public.privacy_restore_create_synthetic_fixture(uuid);
+CREATE FUNCTION public.privacy_restore_create_synthetic_fixture(p_worker_ref uuid)
+RETURNS TABLE(source_execution_id uuid,source_request_id uuid,source_request_ref uuid,subject_user_id uuid,
+ plan_sha256 bytea,workset_sha256 bytea,erasure_effective_at timestamptz,operations text[],
+ membership_postcondition_contract text,membership_postcondition_sha256 bytea,membership_count bigint,variation_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_subject uuid:=gen_random_uuid();v_execution uuid:=gen_random_uuid();v_request uuid:=gen_random_uuid();v_ref uuid:=gen_random_uuid();
+ v_plan bytea:=gen_random_bytes(32);v_workset bytea:=gen_random_bytes(32);v_effective timestamptz:=date_trunc('microseconds',clock_timestamp());
+ v_operations text[]:=ARRAY['AUTH_ACCESS_REVOKE','AUTH_TOKEN_DELETE','PROFILE_IDENTITY_DELETE','PROVIDER_LOCAL_FENCE','IDENTITY_CLEAR','MEMBERSHIP_ACTIVE_REVOKE','MEMBERSHIP_HISTORY_ANONYMIZE'];
+ v_season uuid:=gen_random_uuid();v_membership uuid:=gen_random_uuid();v_group uuid:=gen_random_uuid();v_plan_id uuid:=gen_random_uuid();v_variation_group uuid:=gen_random_uuid();
+ v_programme uuid;v_modality uuid;computed record;original_summary text;original_patch jsonb;
+BEGIN
+ IF p_worker_ref IS NULL OR current_setting('mycfc.privacy_restore_isolated',true)<>'on' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_synthetic_fixture_rejected'; END IF;
+ SELECT id INTO v_programme FROM programmes ORDER BY id LIMIT 1;
+ SELECT id INTO v_modality FROM modalities ORDER BY id LIMIT 1;
+ IF v_programme IS NULL OR v_modality IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_synthetic_fixture_unavailable'; END IF;
+ INSERT INTO users(id,name,email,password_hash,date_of_birth,created_at,updated_at)
+ VALUES(v_subject,'Synthetic restore fixture',('synthetic-'||v_subject::text||'@invalid.invalid')::citext,'synthetic-disabled','1900-01-01',v_effective,v_effective);
+ INSERT INTO member_profiles(user_id,address_line1,created_at,updated_at) VALUES(v_subject,'Synthetic fixture only',v_effective,v_effective);
+ INSERT INTO seasons(id,code,name,starts_on,ends_on,is_current,created_at)
+ VALUES(v_season,'SYN-'||substr(v_season::text,1,8),'Synthetic restore fixture',v_effective::date-interval '2 years',v_effective::date-interval '1 year',false,v_effective);
+ INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on,created_at,updated_at)
+ VALUES(v_membership,v_subject,v_season,v_programme,v_effective::date-interval '2 years',v_effective::date-interval '1 year',v_effective,v_effective);
+ INSERT INTO membership_modalities(membership_id,modality_id,created_at) VALUES(v_membership,v_modality,v_effective);
+ INSERT INTO training_groups(id,name,programme_id,created_by_id,created_at,updated_at)
+ VALUES(v_group,'Synthetic restore fixture',v_programme,v_subject,v_effective,v_effective);
+ INSERT INTO training_group_members(group_id,membership_id,added_by_id,added_at) VALUES(v_group,v_membership,v_subject,v_effective);
+ INSERT INTO training_plans(id,title,programme_id,created_by_id,created_at,updated_at)
+ VALUES(v_plan_id,'Synthetic restore fixture',v_programme,v_subject,v_effective,v_effective);
+ INSERT INTO training_variation_groups(id,training_group_id,name,kind,effective_from,effective_until,created_by_id,created_at,updated_at)
+ VALUES(v_variation_group,v_group,'Synthetic restore fixture','SUBGROUP',v_effective::date-interval '2 years',v_effective::date-interval '1 year',v_subject,v_effective,v_effective);
+ INSERT INTO training_variation_group_members(variation_group_id,membership_id,added_by_id,added_at)
+ VALUES(v_variation_group,v_membership,v_subject,v_effective);
+ original_summary:='Fixture '||v_subject::text||' synthetic-'||v_subject::text||'@invalid.invalid';
+ original_patch:=jsonb_build_object('old_name','Synthetic restore fixture','old_login',v_subject::text,'nested',jsonb_build_object('old_email','synthetic-'||v_subject::text||'@invalid.invalid'));
+ INSERT INTO training_variations(plan_id,target_membership_id,subject_kind,subject_id,operation,change_summary,patch,created_by_id,created_at,updated_at)
+ VALUES(v_plan_id,v_membership,'SEGMENT',gen_random_uuid(),'OVERRIDE',original_summary,original_patch,v_subject,v_effective,v_effective);
+ UPDATE training_variations SET change_summary=privacy_scrub_audit_text(change_summary,v_subject,'Synthetic restore fixture','synthetic-'||v_subject::text||'@invalid.invalid',v_subject::text),
+  patch=privacy_scrub_audit_json(patch,v_subject,'Synthetic restore fixture','synthetic-'||v_subject::text||'@invalid.invalid',v_subject::text)
+ WHERE target_membership_id=v_membership;
+ SELECT * INTO computed FROM public.privacy_membership_history_compute(ARRAY[v_membership],v_effective,false);
+ UPDATE training_variations SET change_summary=original_summary,patch=original_patch WHERE target_membership_id=v_membership;
+ INSERT INTO privacy_protected.provider_connections(id,subject_user_id,service_code,provider_role,provider_contract_version,
+  registry_evidence_key_id,registry_evidence_digest,target_key_id,target_opaque,credential_key_id,credential_opaque,state,
+  sync_enabled,webhook_enabled,reconnect_enabled,created_at,updated_at)
+ VALUES(gen_random_uuid(),v_subject,'synthetic.restore.fixture','PROCESSOR','synthetic-v1','synthetic-key',gen_random_bytes(32),
+  'synthetic-key',gen_random_bytes(32),'synthetic-key',gen_random_bytes(32),'ACTIVE',true,true,true,v_effective,v_effective);
+ INSERT INTO privacy_protected.restore_synthetic_fixtures(subject_user_id,source_execution_id,source_request_id,source_request_ref,
+  plan_sha256,workset_sha256,erasure_effective_at,operations,fixture_marker,created_by_ref,created_at,
+  membership_postcondition_contract,membership_postcondition_sha256,membership_count,variation_count)
+ VALUES(v_subject,v_execution,v_request,v_ref,v_plan,v_workset,v_effective,v_operations,'mycfc/privacy-restore-synthetic-fixture/v1',p_worker_ref,v_effective,
+  computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count);
+ RETURN QUERY SELECT v_execution,v_request,v_ref,v_subject,v_plan,v_workset,v_effective,v_operations,
+  computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count;
+END;$$;
+
+CREATE FUNCTION public.privacy_restore_import_authenticated_v4_hardened(
+ p_worker_ref uuid,p_kind text,p_record_version text,p_envelope_version text,p_encryption_key_id text,p_locator_key_id text,p_locator_digest bytea,
+ p_ciphertext_sha256 bytea,p_object_version_id text,p_written_at timestamptz,p_verified_at timestamptz,p_retain_until timestamptz,
+ p_source_execution_id uuid,p_source_request_id uuid,p_source_request_ref uuid,p_subject_user_id uuid,p_plan_sha256 bytea,p_workset_sha256 bytea,
+ p_execution_started_at timestamptz,p_erasure_effective_at timestamptz,p_closure_version text,p_synthetic_fixture text,p_replay_version text,p_action_version text,
+ p_operations text[],p_prescription_sha256 bytea,p_record_sha256 bytea,p_membership_postcondition_contract text,p_membership_postcondition_sha256 bytea,
+ p_membership_count bigint,p_variation_count bigint
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE import_ref uuid;existing privacy_protected.restore_ledger_imports%ROWTYPE;synthetic_match boolean;
+BEGIN
+ SELECT EXISTS(SELECT 1 FROM privacy_protected.restore_synthetic_fixtures fixture
+  WHERE fixture.subject_user_id=p_subject_user_id AND fixture.source_execution_id=p_source_execution_id
+   AND fixture.source_request_id=p_source_request_id AND fixture.source_request_ref=p_source_request_ref
+   AND fixture.plan_sha256=p_plan_sha256 AND fixture.workset_sha256=p_workset_sha256
+   AND fixture.erasure_effective_at=p_erasure_effective_at AND fixture.operations=p_operations AND fixture.fixture_marker=p_synthetic_fixture
+   AND fixture.membership_postcondition_contract=p_membership_postcondition_contract
+   AND public.privacy_membership_history_digest_equal(fixture.membership_postcondition_sha256,p_membership_postcondition_sha256)
+   AND fixture.membership_count=p_membership_count AND fixture.variation_count=p_variation_count) INTO synthetic_match;
+ IF p_worker_ref IS NULL OR p_kind<>'closure' OR p_record_version<>'restore-tombstone/v2'
+  OR p_envelope_version<>'x25519-aes256gcm-hkdfsha256/v2' OR p_closure_version<>'restore-tombstone-closure/v4'
+  OR p_replay_version<>'relational-erasure-replay/v1' OR p_action_version<>'v1'
+  OR p_encryption_key_id IS NULL OR p_encryption_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_locator_key_id IS NULL OR p_locator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR octet_length(p_locator_digest)<>32 OR octet_length(p_ciphertext_sha256)<>32 OR octet_length(p_plan_sha256)<>32
+  OR octet_length(p_workset_sha256)<>32 OR octet_length(p_prescription_sha256)<>32 OR octet_length(p_record_sha256)<>32
+  OR p_membership_postcondition_contract<>'mycfc/membership-history-postcondition/v1' OR octet_length(p_membership_postcondition_sha256) IS DISTINCT FROM 32
+  OR p_membership_count NOT BETWEEN 0 AND 10000 OR p_variation_count NOT BETWEEN 0 AND 100000
+  OR p_object_version_id IS NULL OR p_object_version_id<>btrim(p_object_version_id) OR char_length(p_object_version_id) NOT BETWEEN 1 AND 1024
+  OR p_written_at IS NULL OR p_verified_at<p_written_at OR p_retain_until IS NULL OR p_verified_at>p_retain_until
+  OR p_source_execution_id IS NULL OR p_source_request_id IS NULL OR p_source_request_ref IS NULL OR p_subject_user_id IS NULL
+  OR p_execution_started_at IS NULL OR p_erasure_effective_at IS NULL OR p_erasure_effective_at<p_execution_started_at
+  OR cardinality(p_operations) NOT BETWEEN 1 AND 17 OR cardinality(p_operations)<>(SELECT count(DISTINCT operation) FROM unnest(p_operations) operation)
+  OR EXISTS(SELECT 1 FROM unnest(p_operations) operation WHERE NOT(public.privacy_relational_replay_operation_supported(operation) OR operation='PROVIDER_LOCAL_FENCE'))
+  OR (p_synthetic_fixture IS NULL AND EXISTS(SELECT 1 FROM privacy_protected.restore_synthetic_fixtures WHERE subject_user_id=p_subject_user_id))
+  OR (p_synthetic_fixture IS NOT NULL AND (p_synthetic_fixture<>'mycfc/privacy-restore-synthetic-fixture/v1' OR NOT synthetic_match))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_rejected'; END IF;
+ SELECT * INTO existing FROM privacy_protected.restore_ledger_imports
+  WHERE (locator_key_id=p_locator_key_id AND locator_digest=p_locator_digest) OR source_execution_id=p_source_execution_id FOR UPDATE;
+ IF existing.id IS NULL THEN
+  INSERT INTO privacy_protected.restore_ledger_imports(kind,record_version,envelope_version,encryption_key_id,locator_key_id,locator_digest,
+   ciphertext_sha256,object_version_id,written_at,verified_at,retain_until,source_execution_id,source_request_id,source_request_ref,subject_user_id,
+   plan_sha256,workset_sha256,execution_started_at,erasure_effective_at,closure_version,synthetic_fixture,replay_version,action_version,operations,
+   prescription_sha256,record_sha256,imported_by_ref,membership_postcondition_contract,membership_postcondition_sha256,membership_count,variation_count)
+  VALUES(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,p_object_version_id,
+   p_written_at,p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,p_plan_sha256,p_workset_sha256,
+   p_execution_started_at,p_erasure_effective_at,p_closure_version,p_synthetic_fixture,p_replay_version,p_action_version,p_operations,p_prescription_sha256,p_record_sha256,p_worker_ref,
+   p_membership_postcondition_contract,p_membership_postcondition_sha256,p_membership_count,p_variation_count) RETURNING id INTO import_ref;
+ ELSIF ROW(existing.kind,existing.record_version,existing.envelope_version,existing.encryption_key_id,existing.locator_key_id,existing.locator_digest,
+   existing.ciphertext_sha256,existing.object_version_id,existing.written_at,existing.verified_at,existing.retain_until,existing.source_execution_id,
+   existing.source_request_id,existing.source_request_ref,existing.subject_user_id,existing.plan_sha256,existing.workset_sha256,existing.execution_started_at,
+   existing.erasure_effective_at,existing.closure_version,existing.synthetic_fixture,existing.replay_version,existing.action_version,existing.operations,
+   existing.prescription_sha256,existing.record_sha256,existing.membership_postcondition_contract,existing.membership_postcondition_sha256,existing.membership_count,existing.variation_count)
+  IS DISTINCT FROM ROW(p_kind,p_record_version,p_envelope_version,p_encryption_key_id,p_locator_key_id,p_locator_digest,p_ciphertext_sha256,
+   p_object_version_id,p_written_at,p_verified_at,p_retain_until,p_source_execution_id,p_source_request_id,p_source_request_ref,p_subject_user_id,
+   p_plan_sha256,p_workset_sha256,p_execution_started_at,p_erasure_effective_at,p_closure_version,p_synthetic_fixture,p_replay_version,p_action_version,p_operations,
+   p_prescription_sha256,p_record_sha256,p_membership_postcondition_contract,p_membership_postcondition_sha256,p_membership_count,p_variation_count)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_import_conflict'; ELSE import_ref:=existing.id; END IF;
+ RETURN import_ref;
+END;$$;
+
+CREATE FUNCTION public.privacy_restore_finalize_membership_postcondition(p_run_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;computed record;existing privacy_protected.membership_history_replay_postconditions%ROWTYPE;
+BEGIN
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run
+ JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id;
+ IF imported.id IS NULL OR imported.closure_version<>'restore-tombstone-closure/v4' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_rejected'; END IF;
+ SELECT * INTO computed FROM public.privacy_membership_history_compute_replay(p_run_id,imported.erasure_effective_at);
+ IF computed.contract IS NULL OR computed.contract<>imported.membership_postcondition_contract
+  OR NOT public.privacy_membership_history_digest_equal(computed.postcondition_sha256,imported.membership_postcondition_sha256)
+  OR computed.membership_count<>imported.membership_count OR computed.variation_count<>imported.variation_count THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_mismatch'; END IF;
+ SELECT * INTO existing FROM privacy_protected.membership_history_replay_postconditions WHERE run_id=p_run_id;
+ IF existing.run_id IS NULL THEN
+  INSERT INTO privacy_protected.membership_history_replay_postconditions(run_id,contract,postcondition_sha256,membership_count,variation_count,canonical_size)
+  VALUES(p_run_id,computed.contract,computed.postcondition_sha256,computed.membership_count,computed.variation_count,computed.canonical_size);
+ ELSIF existing.contract<>computed.contract OR NOT public.privacy_membership_history_digest_equal(existing.postcondition_sha256,computed.postcondition_sha256)
+  OR existing.membership_count<>computed.membership_count OR existing.variation_count<>computed.variation_count OR existing.canonical_size<>computed.canonical_size THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_postcondition_conflict'; END IF;
+END;$$;
+
+ALTER FUNCTION public.privacy_restore_verify_operation(uuid,text,boolean) RENAME TO privacy_restore_verify_operation_inner_015;
+CREATE OR REPLACE FUNCTION public.privacy_restore_verify_operation(p_run_id uuid,p_operation_code text,p_source_already_applied boolean)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;subject_email text;subject_login text;
+BEGIN
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id
+ WHERE run.id=p_run_id;
+ IF imported.id IS NULL OR imported.kind<>'closure' OR imported.closure_version<>'restore-tombstone-closure/v4' OR NOT(p_operation_code=ANY(imported.operations)) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ IF p_operation_code NOT IN ('MEMBERSHIP_ACTIVE_REVOKE','MEMBERSHIP_HISTORY_ANONYMIZE') THEN
+  PERFORM public.privacy_restore_verify_operation_inner_013(p_run_id,p_operation_code,p_source_already_applied); RETURN; END IF;
+ IF p_source_already_applied AND NOT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id
+  AND erasure_execution_id=imported.source_execution_id AND erased_at=imported.erasure_effective_at) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ SELECT email::text,minor_login_id INTO subject_email,subject_login FROM users WHERE id=imported.subject_user_id;
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id
+   AND (starts_on>=(imported.erasure_effective_at AT TIME ZONE 'UTC')::date OR ends_on IS NULL OR ends_on>=(imported.erasure_effective_at AT TIME ZONE 'UTC')::date)) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+ ELSE
+  IF EXISTS(SELECT 1 FROM user_memberships WHERE user_id=imported.subject_user_id)
+   OR EXISTS(SELECT 1 FROM training_variations variation
+    WHERE variation.target_membership_id IN(SELECT row.membership_id FROM privacy_protected.membership_history_replay_rows row WHERE row.run_id=p_run_id)
+     AND (variation.change_summary IS DISTINCT FROM privacy_scrub_audit_text(variation.change_summary,imported.subject_user_id,NULL,subject_email,subject_login)
+      OR variation.patch IS DISTINCT FROM privacy_scrub_audit_json(variation.patch,imported.subject_user_id,NULL,subject_email,subject_login))) THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_verification_failed'; END IF;
+  PERFORM public.privacy_restore_finalize_membership_postcondition(p_run_id);
+ END IF;
+END;$$;
+
+ALTER FUNCTION public.privacy_restore_begin_replay_hardened(uuid,uuid) RENAME TO privacy_restore_begin_replay_hardened_inner_015;
+CREATE OR REPLACE FUNCTION public.privacy_restore_begin_replay_hardened(p_import_id uuid,p_worker_ref uuid)
+RETURNS TABLE(run_id uuid,outcome_code text) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;run_ref uuid;outcome text;has_erasure boolean;
+BEGIN
+ SELECT * INTO imported FROM privacy_protected.restore_ledger_imports WHERE id=p_import_id;
+ IF imported.id IS NULL OR imported.kind<>'closure' OR imported.closure_version<>'restore-tombstone-closure/v4' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_rejected'; END IF;
+ run_ref:=public.privacy_restore_begin_replay(p_import_id,p_worker_ref);
+ INSERT INTO privacy_protected.membership_history_replay_captures(run_id) VALUES(run_ref) ON CONFLICT DO NOTHING;
+ SELECT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id AND erased_at IS NOT NULL) INTO has_erasure;
+ IF has_erasure THEN
+  INSERT INTO privacy_protected.membership_history_replay_rows(run_id,membership_id)
+   SELECT run_ref,row.membership_id FROM privacy_protected.membership_history_source_rows row WHERE row.execution_id=imported.source_execution_id
+   ON CONFLICT DO NOTHING;
+ ELSE
+  INSERT INTO privacy_protected.membership_history_replay_rows(run_id,membership_id)
+   SELECT run_ref,membership.id FROM user_memberships membership
+   WHERE membership.user_id=imported.subject_user_id AND membership.starts_on<(imported.erasure_effective_at AT TIME ZONE 'UTC')::date
+   ON CONFLICT DO NOTHING;
+ END IF;
+ SELECT begun.run_id,begun.outcome_code INTO run_ref,outcome FROM public.privacy_restore_begin_replay_hardened_inner_013(p_import_id,p_worker_ref) begun;
+ IF outcome='ALREADY_APPLIED_SOURCE' AND NOT EXISTS(SELECT 1 FROM privacy_protected.membership_history_replay_postconditions postcondition WHERE postcondition.run_id=run_ref) THEN
+  -- Empty prescriptions do not pass through the history checkpoint.
+  IF NOT('MEMBERSHIP_HISTORY_ANONYMIZE'=ANY(imported.operations)) THEN PERFORM public.privacy_restore_finalize_membership_postcondition(run_ref); END IF;
+ END IF;
+ RETURN QUERY SELECT run_ref,outcome;
+END;$$;
+
+ALTER FUNCTION public.privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea) RENAME TO privacy_restore_execute_checkpoint_inner_015;
+CREATE OR REPLACE FUNCTION public.privacy_restore_execute_checkpoint(p_run_id uuid,p_worker_ref uuid,p_operation_position smallint,p_operation_code text,p_action_version text,p_prescription_sha256 bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE imported privacy_protected.restore_ledger_imports%ROWTYPE;subject_name text;subject_email text;subject_login text;checkpoint_ref uuid;
+ previous_timezone text;
+BEGIN
+ SELECT imported_row.* INTO imported FROM privacy_protected.restore_replay_runs run
+ JOIN privacy_protected.restore_ledger_imports imported_row ON imported_row.id=run.import_id WHERE run.id=p_run_id;
+ IF imported.id IS NULL OR imported.closure_version<>'restore-tombstone-closure/v4' THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_checkpoint_rejected'; END IF;
+ IF p_operation_code='IDENTITY_CLEAR' AND 'MEMBERSHIP_HISTORY_ANONYMIZE'=ANY(imported.operations) THEN
+  SELECT name,email::text,minor_login_id::text INTO subject_name,subject_email,subject_login FROM users WHERE id=imported.subject_user_id FOR UPDATE;
+  UPDATE training_variations SET
+   change_summary=privacy_scrub_audit_text(change_summary,imported.subject_user_id,subject_name,subject_email,subject_login),
+   patch=privacy_scrub_audit_json(patch,imported.subject_user_id,subject_name,subject_email,subject_login),updated_at=clock_timestamp()
+  WHERE target_membership_id IN(SELECT row.membership_id FROM privacy_protected.membership_history_replay_rows row WHERE row.run_id=p_run_id);
+ END IF;
+ IF p_operation_code='MEMBERSHIP_ACTIVE_REVOKE' THEN
+  previous_timezone:=current_setting('TimeZone');
+  PERFORM set_config('TimeZone','UTC',true);
+ END IF;
+ checkpoint_ref:=public.privacy_restore_execute_checkpoint_inner_013(p_run_id,p_worker_ref,p_operation_position,p_operation_code,p_action_version,p_prescription_sha256);
+ IF previous_timezone IS NOT NULL THEN PERFORM set_config('TimeZone',previous_timezone,true); END IF;
+ IF NOT('MEMBERSHIP_HISTORY_ANONYMIZE'=ANY(imported.operations)) AND NOT EXISTS(
+  SELECT 1 FROM privacy_protected.restore_replay_checkpoints checkpoint WHERE checkpoint.run_id=p_run_id AND checkpoint.status<>'SUCCEEDED') THEN
+  PERFORM public.privacy_restore_finalize_membership_postcondition(p_run_id);
+ END IF;
+ RETURN checkpoint_ref;
+END;$$;
+
+CREATE FUNCTION public.privacy_restore_membership_postcondition(p_run_id uuid)
+RETURNS TABLE(membership_postcondition_contract text,membership_postcondition_sha256 bytea,membership_count bigint,variation_count bigint)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT postcondition.contract::text,postcondition.postcondition_sha256,postcondition.membership_count,postcondition.variation_count
+ FROM privacy_protected.membership_history_replay_postconditions postcondition
+ JOIN privacy_protected.restore_replay_runs run ON run.id=postcondition.run_id AND run.status='SUCCEEDED'
+ WHERE postcondition.run_id=p_run_id;
+$$;
+
+ALTER TABLE privacy_protected.restore_replay_inventory_attestations
+ ADD COLUMN closure_v4_count integer NULL CHECK(closure_v4_count IS NULL OR closure_v4_count>=0),
+ ADD COLUMN membership_postcondition_contract varchar(64) NULL,
+ ADD COLUMN membership_postcondition_sha256 bytea NULL,
+ ADD COLUMN membership_postcondition_verified_count integer NULL CHECK(membership_postcondition_verified_count IS NULL OR membership_postcondition_verified_count>=0),
+ ADD COLUMN membership_count bigint NULL CHECK(membership_count IS NULL OR membership_count BETWEEN 0 AND 10240000),
+ ADD COLUMN variation_count bigint NULL CHECK(variation_count IS NULL OR variation_count BETWEEN 0 AND 102400000);
+DO $$DECLARE constraint_name text;
+BEGIN
+ SELECT constraint_row.conname INTO constraint_name FROM pg_constraint constraint_row
+ WHERE constraint_row.conrelid='privacy_protected.restore_replay_inventory_attestations'::regclass AND constraint_row.contype='c'
+  AND pg_get_constraintdef(constraint_row.oid) LIKE '%closure_v3_count = replayed_count%' LIMIT 1;
+ IF constraint_name IS NULL THEN RAISE EXCEPTION 'privacy restore attestation compatibility constraint missing'; END IF;
+ EXECUTE format('ALTER TABLE privacy_protected.restore_replay_inventory_attestations DROP CONSTRAINT %I',constraint_name);
+END$$;
+ALTER TABLE privacy_protected.restore_replay_inventory_attestations
+ ADD CONSTRAINT restore_replay_inventory_attestations_closure_compatibility CHECK((
+  (closure_v4_count IS NULL AND membership_postcondition_contract IS NULL AND membership_postcondition_sha256 IS NULL
+   AND membership_postcondition_verified_count IS NULL AND membership_count IS NULL AND variation_count IS NULL
+   AND closure_v3_count=replayed_count AND intent_only_count=0 AND legacy_closure_v2_count=0 AND erasure_effective_at_verified_count=replayed_count)
+  OR (closure_v4_count=replayed_count AND closure_v3_count=0 AND intent_only_count=0 AND legacy_closure_v2_count=0
+   AND erasure_effective_at_verified_count=replayed_count
+   AND membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+   AND octet_length(membership_postcondition_sha256)=32 AND membership_postcondition_verified_count=replayed_count
+   AND membership_count>=0 AND variation_count>=0)) IS TRUE) NOT VALID;
+ALTER TABLE privacy_protected.restore_replay_inventory_attestations
+ VALIDATE CONSTRAINT restore_replay_inventory_attestations_closure_compatibility;
+
+CREATE FUNCTION public.privacy_restore_record_inventory_attestation_v4(p_input_source text,p_inventory_sha256 bytea,p_schema_migration_digest bytea,
+ p_policy_version text,p_executor_version text,p_plan_schema_version text,p_image_digest text,p_run_ids uuid[],
+ p_object_count integer,p_imported_count integer,p_replayed_count integer,p_already_applied_count integer,
+ p_absence_verified_count integer,p_synthetic_replayed_count integer,p_closure_v4_count integer,p_intent_only_count integer,
+ p_legacy_closure_v2_count integer,p_erasure_effective_at_verified_count integer,p_membership_postcondition_contract text,
+ p_membership_postcondition_sha256 bytea,p_membership_postcondition_verified_count integer,p_membership_count bigint,p_variation_count bigint)
+RETURNS bytea LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE attestation_ref uuid;evidence bytea;computed_membership_digest bytea;computed_membership_count bigint;computed_variation_count bigint;
+ existing privacy_protected.restore_replay_inventory_attestations%ROWTYPE;
+BEGIN
+ IF p_input_source NOT IN ('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP') OR octet_length(p_inventory_sha256)<>32 OR octet_length(p_schema_migration_digest)<>32
+  OR p_policy_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_executor_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$'
+  OR p_plan_schema_version!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$' OR p_image_digest!~'^sha256:[0-9a-f]{64}$'
+  OR p_object_count<1 OR p_replayed_count<1 OR cardinality(p_run_ids)<>p_replayed_count
+  OR cardinality(p_run_ids)<>(SELECT count(DISTINCT listed.run_id) FROM unnest(p_run_ids) listed(run_id))
+  OR p_replayed_count<>p_imported_count+p_already_applied_count OR p_absence_verified_count<>p_replayed_count
+  OR (p_input_source='LIVE_LEDGER' AND p_synthetic_replayed_count<>0) OR (p_input_source='SYNTHETIC_BOOTSTRAP' AND p_synthetic_replayed_count<>p_replayed_count)
+  OR p_closure_v4_count<>p_replayed_count OR p_intent_only_count<>0 OR p_legacy_closure_v2_count<>0
+  OR p_erasure_effective_at_verified_count<>p_replayed_count OR p_membership_postcondition_contract<>'mycfc/membership-history-postcondition/v1'
+  OR octet_length(p_membership_postcondition_sha256) IS DISTINCT FROM 32 OR p_membership_postcondition_verified_count<>p_replayed_count
+  OR p_membership_count<0 OR p_variation_count<0
+  OR EXISTS(SELECT 1 FROM unnest(p_run_ids) listed(run_id)
+   LEFT JOIN privacy_protected.restore_replay_runs run ON run.id=listed.run_id
+   LEFT JOIN privacy_protected.restore_ledger_imports imported ON imported.id=run.import_id
+   LEFT JOIN privacy_protected.membership_history_replay_postconditions postcondition ON postcondition.run_id=run.id
+   WHERE run.status<>'SUCCEEDED' OR imported.closure_version<>'restore-tombstone-closure/v4'
+    OR postcondition.contract IS DISTINCT FROM imported.membership_postcondition_contract
+    OR NOT public.privacy_membership_history_digest_equal(postcondition.postcondition_sha256,imported.membership_postcondition_sha256)
+    OR postcondition.membership_count IS DISTINCT FROM imported.membership_count OR postcondition.variation_count IS DISTINCT FROM imported.variation_count
+    OR (p_input_source='LIVE_LEDGER')<>(imported.synthetic_fixture IS NULL))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_attestation_rejected'; END IF;
+ SELECT digest(privacy_membership_history_frame('mycfc/membership-history-postcondition-set/v1')||
+  string_agg(privacy_membership_history_frame(postcondition.postcondition_sha256),''::bytea ORDER BY postcondition.postcondition_sha256), 'sha256'),
+  sum(postcondition.membership_count),sum(postcondition.variation_count)
+ INTO computed_membership_digest,computed_membership_count,computed_variation_count
+ FROM privacy_protected.membership_history_replay_postconditions postcondition WHERE postcondition.run_id=ANY(p_run_ids);
+ IF NOT public.privacy_membership_history_digest_equal(computed_membership_digest,p_membership_postcondition_sha256)
+  OR p_membership_count IS DISTINCT FROM computed_membership_count OR p_variation_count IS DISTINCT FROM computed_variation_count
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_attestation_rejected'; END IF;
+ SELECT digest(privacy_membership_history_frame('mycfc/privacy-restore-attestation-evidence/v4')||
+   privacy_membership_history_frame(p_inventory_sha256)||privacy_membership_history_frame(computed_membership_digest)||
+   privacy_membership_history_frame(COALESCE(string_agg(checkpoint.result_sha256,''::bytea ORDER BY checkpoint.result_sha256),''::bytea)),'sha256') INTO evidence
+ FROM privacy_protected.restore_replay_checkpoints checkpoint WHERE checkpoint.run_id=ANY(p_run_ids);
+ PERFORM pg_advisory_xact_lock(hashtextextended(p_input_source||':'||encode(p_inventory_sha256,'hex'),0));
+ SELECT * INTO existing FROM privacy_protected.restore_replay_inventory_attestations WHERE input_source=p_input_source AND inventory_sha256=p_inventory_sha256;
+ IF existing.id IS NOT NULL THEN
+  IF existing.closure_v4_count IS DISTINCT FROM p_closure_v4_count OR existing.membership_postcondition_contract IS DISTINCT FROM p_membership_postcondition_contract
+   OR NOT public.privacy_membership_history_digest_equal(existing.membership_postcondition_sha256,p_membership_postcondition_sha256)
+   OR existing.membership_postcondition_verified_count IS DISTINCT FROM p_membership_postcondition_verified_count OR existing.evidence_sha256<>evidence
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_attestation_conflict'; END IF;
+  RETURN existing.evidence_sha256;
+ END IF;
+ INSERT INTO privacy_protected.restore_replay_inventory_attestations(input_source,inventory_sha256,schema_migration_digest,policy_version,executor_version,plan_schema_version,image_digest,
+  object_count,imported_count,replayed_count,already_applied_count,absence_verified_count,synthetic_replayed_count,closure_v3_count,intent_only_count,
+  legacy_closure_v2_count,erasure_effective_at_verified_count,evidence_sha256,closure_v4_count,membership_postcondition_contract,
+  membership_postcondition_sha256,membership_postcondition_verified_count,membership_count,variation_count)
+ VALUES(p_input_source,p_inventory_sha256,p_schema_migration_digest,p_policy_version,p_executor_version,p_plan_schema_version,p_image_digest,
+  p_object_count,p_imported_count,p_replayed_count,p_already_applied_count,p_absence_verified_count,p_synthetic_replayed_count,0,p_intent_only_count,
+  p_legacy_closure_v2_count,p_erasure_effective_at_verified_count,evidence,p_closure_v4_count,p_membership_postcondition_contract,
+  p_membership_postcondition_sha256,p_membership_postcondition_verified_count,p_membership_count,p_variation_count) RETURNING id INTO attestation_ref;
+ INSERT INTO privacy_protected.restore_replay_inventory_attestation_runs(attestation_id,run_id)
+ SELECT attestation_ref,listed.run_id FROM unnest(p_run_ids) listed(run_id);
+ RETURN evidence;
+END;$$;
+
+DROP FUNCTION public.privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text);
+CREATE FUNCTION public.privacy_restore_observe_inventory(p_input_source text,p_inventory_sha256 bytea,p_schema_migration_digest bytea,
+ p_policy_version text,p_executor_version text,p_plan_schema_version text,p_image_digest text)
+RETURNS TABLE(replay_count integer,source_already_applied_count integer,synthetic_count integer,verified_run_count integer,
+ expected_checkpoint_count integer,succeeded_checkpoint_count integer,provider_absent_count integer,consent_clock_verified_count integer,
+ closure_v4_count integer,erasure_effective_at_verified_count integer,membership_postcondition_contract text,
+ membership_postcondition_sha256 bytea,membership_postcondition_verified_count integer,membership_count bigint,variation_count bigint,evidence_sha256 bytea)
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT attestation.replayed_count,
+  count(DISTINCT run.id) FILTER(WHERE run.outcome_code='ALREADY_APPLIED_SOURCE')::integer,
+  count(DISTINCT run.id) FILTER(WHERE imported.synthetic_fixture='mycfc/privacy-restore-synthetic-fixture/v1')::integer,
+  count(DISTINCT run.id) FILTER(WHERE cardinality(imported.operations)=(SELECT count(*) FROM privacy_protected.restore_replay_checkpoints exact_checkpoint WHERE exact_checkpoint.run_id=run.id)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.restore_replay_checkpoints failed_checkpoint WHERE failed_checkpoint.run_id=run.id AND failed_checkpoint.status<>'SUCCEEDED'))::integer,
+  count(checkpoint.*)::integer,count(checkpoint.*) FILTER(WHERE checkpoint.status='SUCCEEDED')::integer,
+  count(DISTINCT run.id) FILTER(WHERE 'PROVIDER_LOCAL_FENCE'=ANY(imported.operations)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_connections connection WHERE connection.subject_user_id=imported.subject_user_id)
+   AND NOT EXISTS(SELECT 1 FROM privacy_protected.provider_credential_quarantine quarantine JOIN privacy_protected.provider_targets target ON target.id=quarantine.target_id
+    JOIN privacy_protected.provider_capture_sets capture ON capture.execution_id=target.execution_id WHERE capture.subject_user_id=imported.subject_user_id))::integer,
+  count(DISTINCT run.id) FILTER(WHERE 'IDENTITY_CLEAR'=ANY(imported.operations) AND EXISTS(SELECT 1 FROM users WHERE users.id=imported.subject_user_id AND users.erased_at=imported.erasure_effective_at)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.ceased_at IS NULL)
+   AND NOT EXISTS(SELECT 1 FROM consent_forms consent WHERE consent.user_id=imported.subject_user_id AND consent.cessation_reason='ACCOUNT_ERASURE'
+    AND (consent.ceased_at<>imported.erasure_effective_at OR consent.evidence_expires_at<>imported.erasure_effective_at+interval '3 years')))::integer,
+  count(DISTINCT run.id) FILTER(WHERE imported.closure_version='restore-tombstone-closure/v4')::integer,
+  count(DISTINCT run.id) FILTER(WHERE EXISTS(SELECT 1 FROM users WHERE users.id=imported.subject_user_id AND users.erased_at=imported.erasure_effective_at))::integer,
+  attestation.membership_postcondition_contract::text,attestation.membership_postcondition_sha256,
+  count(DISTINCT run.id) FILTER(WHERE postcondition.contract=imported.membership_postcondition_contract
+   AND public.privacy_membership_history_digest_equal(postcondition.postcondition_sha256,imported.membership_postcondition_sha256)
+   AND postcondition.membership_count=imported.membership_count AND postcondition.variation_count=imported.variation_count)::integer,
+  attestation.membership_count,attestation.variation_count,attestation.evidence_sha256
+ FROM privacy_protected.restore_replay_inventory_attestations attestation
+ JOIN privacy_protected.restore_replay_inventory_attestation_runs link ON link.attestation_id=attestation.id
+ JOIN privacy_protected.restore_replay_runs run ON run.id=link.run_id
+ JOIN privacy_protected.restore_ledger_imports imported ON imported.id=run.import_id
+ JOIN privacy_protected.restore_replay_checkpoints checkpoint ON checkpoint.run_id=run.id
+ JOIN privacy_protected.membership_history_replay_postconditions postcondition ON postcondition.run_id=run.id
+ WHERE attestation.input_source=p_input_source AND attestation.inventory_sha256=p_inventory_sha256
+  AND attestation.schema_migration_digest=p_schema_migration_digest AND attestation.policy_version=p_policy_version
+  AND attestation.executor_version=p_executor_version AND attestation.plan_schema_version=p_plan_schema_version AND attestation.image_digest=p_image_digest
+ GROUP BY attestation.id,attestation.replayed_count,attestation.membership_postcondition_contract,attestation.membership_postcondition_sha256,
+  attestation.membership_count,attestation.variation_count,attestation.evidence_sha256 HAVING count(DISTINCT run.id)=attestation.replayed_count;
+$$;
+
+ALTER TABLE privacy_activation_authenticated_artifacts
+ ADD COLUMN restore_membership_postcondition_contract varchar(64) NULL,
+ ADD COLUMN restore_membership_postcondition_sha256 bytea NULL,
+ ADD COLUMN restore_membership_postcondition_verified_count bigint NULL,
+ ADD COLUMN restore_membership_count bigint NULL,
+ ADD COLUMN restore_variation_count bigint NULL;
+DO $$DECLARE constraint_name text;
+BEGIN
+ SELECT constraint_row.conname INTO constraint_name FROM pg_constraint constraint_row
+ WHERE constraint_row.conrelid='public.privacy_activation_authenticated_artifacts'::regclass AND constraint_row.contype='c'
+  AND pg_get_constraintdef(constraint_row.oid) LIKE '%restore_closure_contract%' LIMIT 1;
+ IF constraint_name IS NULL THEN RAISE EXCEPTION 'privacy activation artifact compatibility constraint missing'; END IF;
+ EXECUTE format('ALTER TABLE public.privacy_activation_authenticated_artifacts DROP CONSTRAINT %I',constraint_name);
+END$$;
+ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v4_check CHECK(
+ ((kind='RESTORE' AND signing_key_id IS NULL AND immutable_evidence_ref IS NOT NULL AND schema_migration_digest IS NOT NULL
+   AND baseline_includes_through IS NULL AND restore_input_source IN('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP')
+   AND restore_input_contract='mycfc/privacy-restore-ledger-input/v2' AND restore_replay_contract='relational-erasure-replay/v1'
+   AND restore_closure_contract IN('restore-tombstone-closure/v3','restore-tombstone-closure/v4')
+   AND octet_length(restore_candidate_sha256)=32 AND octet_length(restore_inventory_sha256)=32 AND octet_length(restore_observer_sha256)=32
+   AND restore_object_count>=restore_replayed_count AND restore_replayed_count>0
+   AND ((restore_input_source='LIVE_LEDGER' AND restore_synthetic_count=0) OR (restore_input_source='SYNTHETIC_BOOTSTRAP' AND restore_synthetic_count=restore_replayed_count))
+   AND ((restore_closure_contract='restore-tombstone-closure/v3' AND restore_membership_postcondition_contract IS NULL
+     AND restore_membership_postcondition_sha256 IS NULL AND restore_membership_postcondition_verified_count IS NULL
+     AND restore_membership_count IS NULL AND restore_variation_count IS NULL)
+    OR (restore_closure_contract='restore-tombstone-closure/v4'
+     AND restore_membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+     AND octet_length(restore_membership_postcondition_sha256)=32
+     AND restore_membership_postcondition_verified_count=restore_replayed_count
+     AND restore_membership_count>=0 AND restore_variation_count>=0)))
+ OR (kind='INFRASTRUCTURE' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL
+   AND production_state_serial>0 AND hetzner_state_serial>0 AND octet_length(production_state_sha256)=32 AND octet_length(hetzner_state_sha256)=32
+   AND octet_length(production_plan_sha256)=32 AND octet_length(hetzner_plan_sha256)=32 AND worker_identity_enabled AND s3_version_deletion_enabled
+   AND ledger_broker_invoke_enabled AND worker_monitoring_enabled AND restore_infrastructure_enabled AND restore_ledger_write_enabled)
+ OR (kind='PROVIDER' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL AND provider_registry_state='READY'
+   AND provider_registration_count>0 AND octet_length(provider_registry_sha256)=32)
+ OR (kind='SCHEMA' AND signing_key_id IS NOT NULL AND immutable_evidence_ref IS NOT NULL AND octet_length(schema_migration_digest)=32
+   AND baseline_includes_through IN('202609100014_privacy_activation_broker','202609100015_privacy_membership_postcondition'))) IS TRUE) NOT VALID;
+ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v4_check;
+CREATE OR REPLACE FUNCTION privacy_activation_record_authenticated_evidence(
+ p_actor uuid,p_kind text,p_evidence_sha256 bytea,p_reference_code text,p_observed_at timestamptz,p_expires_at timestamptz,p_artifact jsonb
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE v_evidence_id uuid;now_at timestamptz:=clock_timestamp();expected_keys text[];
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM users account JOIN user_platform_roles assignment ON assignment.user_id=account.id
+   JOIN platform_roles role ON role.id=assignment.role_id WHERE account.id=p_actor AND account.is_active AND NOT account.is_dependent AND role.code='ADMIN')
+  OR p_kind NOT IN ('RESTORE','INFRASTRUCTURE','PROVIDER','SCHEMA') OR octet_length(p_evidence_sha256)<>32
+  OR p_observed_at>now_at OR p_observed_at<=now_at-interval '2160 hours' OR p_expires_at<=now_at OR p_expires_at>p_observed_at+interval '2160 hours'
+  OR jsonb_typeof(p_artifact)<>'object' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_rejected'; END IF;
+ expected_keys:=CASE p_kind
+  WHEN 'RESTORE' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','schema_migration_digest','restore_input_source','restore_input_contract','restore_replay_contract','restore_closure_contract','restore_candidate_sha256','restore_inventory_sha256','restore_object_count','restore_replayed_count','restore_synthetic_count','restore_observer_sha256','restore_membership_postcondition_contract','restore_membership_postcondition_sha256','restore_membership_postcondition_verified_count','restore_membership_count','restore_variation_count']
+  WHEN 'INFRASTRUCTURE' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','production_state_serial','hetzner_state_serial','production_state_sha256','hetzner_state_sha256','production_plan_sha256','hetzner_plan_sha256','worker_identity_enabled','s3_version_deletion_enabled','ledger_broker_invoke_enabled','worker_monitoring_enabled','restore_infrastructure_enabled','restore_ledger_write_enabled']
+  WHEN 'PROVIDER' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','provider_registry_state','provider_registration_count','provider_registry_sha256']
+  WHEN 'SCHEMA' THEN ARRAY['policy_version','executor_version','plan_schema_version','image_digest','evidence_ref','evidence_sha256','signing_key_id','schema_migration_digest','baseline_includes_through'] END;
+ IF NOT p_artifact ?& expected_keys OR (SELECT count(*) FROM jsonb_object_keys(p_artifact))<>cardinality(expected_keys)
+  OR p_artifact->>'policy_version' IS NULL OR p_artifact->>'executor_version'<>'privacy-erasure-executor/v2'
+  OR p_artifact->>'plan_schema_version'<>'privacy-erasure-plan/v2' OR p_artifact->>'image_digest'!~'^sha256:[0-9a-f]{64}$' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected'; END IF;
+ IF (p_kind='RESTORE' AND p_reference_code<>'mycfc/privacy-restore-drill-attestation/v2')
+  OR (p_kind='INFRASTRUCTURE' AND p_reference_code<>'mycfc/privacy-infrastructure-posture/v1')
+  OR (p_kind='PROVIDER' AND p_reference_code<>'mycfc/privacy-provider-registry/v1')
+  OR (p_kind='SCHEMA' AND p_reference_code<>'mycfc/schema-migration-inventory/v1') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_evidence_contract_rejected'; END IF;
+ IF (p_kind='RESTORE' AND (p_artifact->>'restore_closure_contract'<>'restore-tombstone-closure/v4'
+    OR p_artifact->>'restore_membership_postcondition_contract'<>'mycfc/membership-history-postcondition/v1'
+    OR (p_artifact->>'restore_membership_postcondition_verified_count')::bigint<>(p_artifact->>'restore_replayed_count')::bigint))
+  OR (p_kind='SCHEMA' AND p_artifact->>'baseline_includes_through'<>'202609100015_privacy_membership_postcondition') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected'; END IF;
+ INSERT INTO privacy_activation_evidence(kind,evidence_sha256,reference_code,observed_at,expires_at,recorded_by_ref,recorded_at)
+ VALUES(p_kind,p_evidence_sha256,p_reference_code,p_observed_at,p_expires_at,p_actor,now_at)
+ ON CONFLICT(kind,evidence_sha256) DO NOTHING RETURNING id INTO v_evidence_id;
+ IF v_evidence_id IS NULL THEN
+  SELECT evidence.id INTO v_evidence_id FROM privacy_activation_evidence evidence WHERE evidence.kind=p_kind AND evidence.evidence_sha256=p_evidence_sha256
+   AND evidence.reference_code=p_reference_code AND evidence.observed_at=p_observed_at AND evidence.expires_at=p_expires_at;
+  IF v_evidence_id IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_evidence_conflict'; END IF;
+ END IF;
+ INSERT INTO privacy_activation_authenticated_artifacts(
+  evidence_id,kind,policy_version,executor_version,plan_schema_version,image_digest,immutable_evidence_ref,immutable_evidence_sha256,signing_key_id,
+  schema_migration_digest,baseline_includes_through,production_state_serial,hetzner_state_serial,production_state_sha256,hetzner_state_sha256,
+  production_plan_sha256,hetzner_plan_sha256,worker_identity_enabled,s3_version_deletion_enabled,ledger_broker_invoke_enabled,worker_monitoring_enabled,
+  restore_infrastructure_enabled,restore_ledger_write_enabled,provider_registry_state,provider_registration_count,provider_registry_sha256,restore_input_source,
+  restore_input_contract,restore_replay_contract,restore_closure_contract,restore_candidate_sha256,restore_inventory_sha256,restore_object_count,restore_replayed_count,
+  restore_synthetic_count,restore_observer_sha256,restore_membership_postcondition_contract,restore_membership_postcondition_sha256,restore_membership_postcondition_verified_count,restore_membership_count,restore_variation_count,authenticated_at)
+ VALUES(v_evidence_id,p_kind,p_artifact->>'policy_version',p_artifact->>'executor_version',p_artifact->>'plan_schema_version',p_artifact->>'image_digest',
+  p_artifact->>'evidence_ref',decode(p_artifact->>'evidence_sha256','base64'),p_artifact->>'signing_key_id',decode(p_artifact->>'schema_migration_digest','base64'),
+  p_artifact->>'baseline_includes_through',(p_artifact->>'production_state_serial')::bigint,(p_artifact->>'hetzner_state_serial')::bigint,
+  decode(p_artifact->>'production_state_sha256','base64'),decode(p_artifact->>'hetzner_state_sha256','base64'),decode(p_artifact->>'production_plan_sha256','base64'),
+  decode(p_artifact->>'hetzner_plan_sha256','base64'),(p_artifact->>'worker_identity_enabled')::boolean,(p_artifact->>'s3_version_deletion_enabled')::boolean,
+  (p_artifact->>'ledger_broker_invoke_enabled')::boolean,(p_artifact->>'worker_monitoring_enabled')::boolean,(p_artifact->>'restore_infrastructure_enabled')::boolean,
+  (p_artifact->>'restore_ledger_write_enabled')::boolean,p_artifact->>'provider_registry_state',(p_artifact->>'provider_registration_count')::bigint,
+  decode(p_artifact->>'provider_registry_sha256','base64'),p_artifact->>'restore_input_source',p_artifact->>'restore_input_contract',p_artifact->>'restore_replay_contract',
+  p_artifact->>'restore_closure_contract',decode(p_artifact->>'restore_candidate_sha256','base64'),
+  decode(p_artifact->>'restore_inventory_sha256','base64'),(p_artifact->>'restore_object_count')::bigint,(p_artifact->>'restore_replayed_count')::bigint,
+  (p_artifact->>'restore_synthetic_count')::bigint,decode(p_artifact->>'restore_observer_sha256','base64'),p_artifact->>'restore_membership_postcondition_contract',decode(p_artifact->>'restore_membership_postcondition_sha256','base64'),(p_artifact->>'restore_membership_postcondition_verified_count')::bigint,(p_artifact->>'restore_membership_count')::bigint,(p_artifact->>'restore_variation_count')::bigint,now_at)
+ ON CONFLICT ON CONSTRAINT privacy_activation_authenticated_artifacts_pkey DO NOTHING;
+ IF NOT EXISTS(SELECT 1 FROM privacy_activation_authenticated_artifacts authenticated WHERE authenticated.evidence_id=v_evidence_id
+   AND authenticated.kind=p_kind AND authenticated.policy_version=p_artifact->>'policy_version' AND authenticated.image_digest=p_artifact->>'image_digest') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_artifact_conflict'; END IF;
+ RETURN v_evidence_id;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR check_violation THEN
+ RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_artifact_rejected';
+END;$$;
+
+-- Completion may proceed only from the current authenticated closure and an
+-- immutable membership-history postcondition that still recomputes exactly.
+CREATE FUNCTION public.privacy_completion_membership_postcondition_ready(p_execution_id uuid)
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT public.privacy_membership_history_source_postcondition_ready(p_execution_id);
+$$;
+
+-- The completion implementation predates closure v4 and was wrapped by the
+-- release guard in 013. Replace only the two exact, asserted version clauses;
+-- any unexpected predecessor definition aborts the migration.
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_completion_prepare_inner_013(uuid,uuid)'::regprocedure) INTO definition;
+ old_clause:='receipt.ledger_version=''restore-tombstone-closure/v2''';
+ new_clause:='receipt.ledger_version=''restore-tombstone-closure/v4'' AND public.privacy_completion_membership_postcondition_ready(execution.id)';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_prepare_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_completion_finalize_inner_013(uuid,uuid,bytea,bytea)'::regprocedure) INTO definition;
+ old_clause:='receipt.ledger_version<>''restore-tombstone-closure/v2''';
+ new_clause:='receipt.ledger_version<>''restore-tombstone-closure/v4'' OR NOT public.privacy_completion_membership_postcondition_ready(execution.id)';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_completion_finalize_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+REVOKE ALL ON TABLE privacy_protected.membership_history_source_captures,privacy_protected.membership_history_source_rows,
+ privacy_protected.membership_history_source_postconditions,privacy_protected.membership_history_replay_captures,
+ privacy_protected.membership_history_replay_rows,privacy_protected.membership_history_replay_postconditions FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_membership_history_frame(text),public.privacy_membership_history_frame(bytea),
+ public.privacy_membership_history_digest_equal(bytea,bytea),public.privacy_membership_history_compute(uuid[],timestamptz,boolean),
+ public.privacy_membership_history_compute_source(uuid,timestamptz),public.privacy_membership_history_compute_replay(uuid,timestamptz),
+ public.privacy_membership_history_lock_source(uuid),public.privacy_membership_history_source_postcondition_ready(uuid),public.prevent_sealed_membership_history_mutation(),
+ public.privacy_completion_membership_postcondition_ready(uuid),
+ public.privacy_worker_execute_checkpoint_inner_015(uuid,uuid,uuid,bigint,uuid,text,text),
+ public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text),
+ public.privacy_tombstone_prepare_closure_v4(uuid,uuid),public.privacy_tombstone_confirm_closure_v4(uuid,uuid,text,text,text,bytea,text,bytea,bigint,timestamptz,timestamptz),
+ public.privacy_restore_create_synthetic_fixture(uuid),
+ public.privacy_restore_import_authenticated_v4_hardened(uuid,text,text,text,text,text,bytea,bytea,text,timestamptz,timestamptz,timestamptz,uuid,uuid,uuid,uuid,bytea,bytea,timestamptz,timestamptz,text,text,text,text,text[],bytea,bytea,text,bytea,bigint,bigint),
+ public.privacy_restore_finalize_membership_postcondition(uuid),public.privacy_restore_verify_operation_inner_015(uuid,text,boolean),
+ public.privacy_restore_verify_operation(uuid,text,boolean),public.privacy_restore_begin_replay_hardened_inner_015(uuid,uuid),
+ public.privacy_restore_begin_replay_hardened(uuid,uuid),public.privacy_restore_execute_checkpoint_inner_015(uuid,uuid,smallint,text,text,bytea),
+ public.privacy_restore_execute_checkpoint(uuid,uuid,smallint,text,text,bytea),public.privacy_restore_membership_postcondition(uuid),
+ public.privacy_restore_record_inventory_attestation_v4(text,bytea,bytea,text,text,text,text,uuid[],integer,integer,integer,integer,integer,integer,integer,integer,integer,integer,text,bytea,integer,bigint,bigint),
+ public.privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) FROM PUBLIC;
+
+-- Renaming a previously granted function preserves its ACL. Prove that every
+-- newly-created inner/helper capability is owner-only before the migration
+-- can commit; bootstrap later grants only the reviewed public wrappers.
+DO $$DECLARE capability record;grantee_name text;
+BEGIN
+ FOR capability IN
+  SELECT proc.oid,proc.proowner,acl.grantee FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+  CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
+  WHERE namespace.nspname='public' AND (proc.proname LIKE '%\_inner\_015' ESCAPE '\' OR proc.proname LIKE 'privacy\_membership\_history\_%' ESCAPE '\'
+   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4','privacy_membership_history_source_postcondition_ready','prevent_sealed_membership_history_mutation','privacy_completion_membership_postcondition_ready','privacy_tombstone_prepare_closure_v2','privacy_tombstone_confirm_closure_v2','privacy_tombstone_prepare_closure_v3','privacy_tombstone_confirm_closure_v3'))
+   AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner
+ LOOP
+  grantee_name:=CASE WHEN capability.grantee=0 THEN 'PUBLIC' ELSE quote_ident((SELECT rolname FROM pg_roles WHERE oid=capability.grantee)) END;
+  IF grantee_name IS NOT NULL THEN EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %s',capability.oid::regprocedure,grantee_name); END IF;
+ END LOOP;
+ IF EXISTS(SELECT 1 FROM pg_proc proc JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+  CROSS JOIN LATERAL aclexplode(COALESCE(proc.proacl,acldefault('f',proc.proowner))) acl
+  WHERE namespace.nspname='public' AND (proc.proname LIKE '%\_inner\_015' ESCAPE '\' OR proc.proname LIKE 'privacy\_membership\_history\_%' ESCAPE '\'
+   OR proc.proname IN('privacy_worker_execute_checkpoint','privacy_restore_finalize_membership_postcondition','privacy_restore_membership_postcondition','privacy_restore_import_authenticated_v4_hardened','privacy_restore_record_inventory_attestation_v4','privacy_membership_history_source_postcondition_ready','prevent_sealed_membership_history_mutation','privacy_completion_membership_postcondition_ready','privacy_tombstone_prepare_closure_v2','privacy_tombstone_confirm_closure_v2','privacy_tombstone_prepare_closure_v3','privacy_tombstone_confirm_closure_v3'))
+   AND acl.privilege_type='EXECUTE' AND acl.grantee<>proc.proowner) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_inner_capability_revoke_failed'; END IF;
+END$$;
+
+-- A schema upgrade invalidates all prior release-specific evidence.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at)
+ SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+CREATE OR REPLACE FUNCTION privacy_activation_authenticated_set_digest(p_policy_version text,p_evidence_ids uuid[])
+RETURNS bytea LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE policy privacy_request_policies%ROWTYPE;now_at timestamptz:=clock_timestamp();result bytea;
+BEGIN
+ SELECT * INTO policy FROM privacy_request_policies WHERE version=p_policy_version;
+ IF policy.version IS NULL OR policy.adopted_at IS NULL OR policy.working_retention_days<>90 OR cardinality(p_evidence_ids)<>4
+  OR policy.executor_version<>'privacy-erasure-executor/v2' OR policy.plan_schema_version<>'privacy-erasure-plan/v2'
+  OR (SELECT count(*) FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+      WHERE evidence.id=ANY(p_evidence_ids) AND evidence.expires_at>now_at AND artifact.policy_version=policy.version
+       AND artifact.executor_version=policy.executor_version AND artifact.plan_schema_version=policy.plan_schema_version)<>4
+  OR (SELECT count(DISTINCT evidence.kind) FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+      WHERE evidence.id=ANY(p_evidence_ids) AND evidence.expires_at>now_at)<>4
+  OR (SELECT count(DISTINCT artifact.image_digest) FROM privacy_activation_authenticated_artifacts artifact WHERE artifact.evidence_id=ANY(p_evidence_ids))<>1
+  OR (SELECT restore.schema_migration_digest IS DISTINCT FROM schema_row.schema_migration_digest
+      FROM privacy_activation_authenticated_artifacts restore CROSS JOIN privacy_activation_authenticated_artifacts schema_row
+      WHERE restore.evidence_id=ANY(p_evidence_ids) AND restore.kind='RESTORE' AND schema_row.evidence_id=ANY(p_evidence_ids) AND schema_row.kind='SCHEMA')
+
+  OR NOT EXISTS(SELECT 1 FROM privacy_activation_authenticated_artifacts restore
+   WHERE restore.evidence_id=ANY(p_evidence_ids) AND restore.kind='RESTORE'
+    AND restore.restore_closure_contract='restore-tombstone-closure/v4'
+    AND restore.restore_membership_postcondition_contract='mycfc/membership-history-postcondition/v1'
+    AND octet_length(restore.restore_membership_postcondition_sha256)=32
+    AND restore.restore_membership_postcondition_verified_count=restore.restore_replayed_count)
+  OR NOT EXISTS(SELECT 1 FROM privacy_activation_authenticated_artifacts schema_row
+   WHERE schema_row.evidence_id=ANY(p_evidence_ids) AND schema_row.kind='SCHEMA'
+    AND schema_row.baseline_includes_through='202609100015_privacy_membership_postcondition')
+ THEN RETURN NULL; END IF;
+ SELECT digest(convert_to(string_agg(evidence.kind||':'||encode(evidence.evidence_sha256,'hex')||':'||
+   encode(digest(convert_to((to_jsonb(artifact)-'authenticated_at')::text,'UTF8'),'sha256'),'hex')||':'||
+   to_char(evidence.observed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')||':'||
+   to_char(evidence.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'|' ORDER BY evidence.kind),'UTF8'),'sha256')
+ INTO result FROM privacy_activation_evidence evidence JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id
+ WHERE evidence.id=ANY(p_evidence_ids);
+ RETURN result;
+END;$$;

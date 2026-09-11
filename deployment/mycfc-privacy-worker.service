@@ -1,0 +1,26 @@
+[Unit]
+Description=MyCFC evidence-gated privacy execution worker
+After=network-online.target docker.service mycfc-pull-release.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/opt/mycfc/deployment/privacy-worker.sh readiness
+ExecStart=/opt/mycfc/deployment/privacy-worker.sh start
+ExecStop=/opt/mycfc/deployment/privacy-worker.sh stop
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=60s
+TimeoutStopSec=45s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/privacy-worker.env /etc/mycfc/privacy-worker/keys /opt/mycfc/deployment
+ReadWritePaths=/run/docker.sock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

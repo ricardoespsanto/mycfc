@@ -1,0 +1,16 @@
+[Unit]
+Description=Verify MyCFC Hetzner backup and snapshot posture
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/hetzner-backup-posture.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/hetzner-read/token
+ReadWritePaths=/var/tmp /run
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
