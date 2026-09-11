@@ -198,7 +198,7 @@ aws_access_key_id=<backup-access-key-id>
 aws_secret_access_key=<backup-secret-access-key>
 ```
 
-The standing `mycfc-backup` profile and its permissions boundary have neither `s3:ListBucketVersions` nor `s3:DeleteObjectVersion`; they do not retain even read-only version inventory. When the separate cleanup role has been explicitly provisioned, an approved credential renewer may assume it for at most one hour. Install only that temporary session in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
+The standing `mycfc-backup` profile and its permissions boundary retain prefix-scoped, read-only `s3:ListBucketVersions` because the restore drill inventories exact recovery points through that profile. They never receive `s3:DeleteObjectVersion`. When the separate cleanup role has been explicitly provisioned, an approved credential renewer may assume it for at most one hour. Install only that temporary session in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
 
 ```text
 [mycfc-backup-cleanup]
@@ -256,7 +256,7 @@ For a host incident, use the separate operator SSH key from an approved SSH CIDR
 
 ## PostgreSQL recovery
 
-`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Its standing credential cannot list or delete object versions. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
+`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Its standing credential can inventory exact versions only under the daily and monthly recovery prefixes for restore verification, but cannot delete object versions. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
 
 The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
 
