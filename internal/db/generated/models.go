@@ -1707,7 +1707,7 @@ type GuardianAuthorityEvent struct {
 	ID                  int64              `json:"id"`
 	RelationshipID      uuid.UUID          `json:"relationship_id"`
 	RelationshipVersion int64              `json:"relationship_version"`
-	ActorRef            uuid.UUID          `json:"actor_ref"`
+	ActorRef            *uuid.UUID         `json:"actor_ref"`
 	ActorRole           string             `json:"actor_role"`
 	Action              string             `json:"action"`
 	FromState           *string            `json:"from_state"`

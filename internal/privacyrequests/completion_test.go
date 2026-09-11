@@ -310,7 +310,7 @@ func TestActivationArtifactSupportsInfrastructureAndSchemaContracts(t *testing.T
 
 	schema := signedPayload(map[string]any{
 		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
-		"baseline_includes_through": "202609110004_guardian_authority_verification",
+		"baseline_includes_through": "202609110005_guardian_authority_cutoff_reconciliation",
 	})
 	evidence, err = VerifyActivationArtifact(schema, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
 	if err != nil || evidence.kind != "SCHEMA" || evidence.artifact.BaselineIncludesThrough == "" {

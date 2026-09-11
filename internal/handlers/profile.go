@@ -277,7 +277,7 @@ func (h Profile) Avatar(w http.ResponseWriter, r *http.Request) {
 		h.System.NotFound(w, r)
 		return
 	}
-	avatar, err := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: subjectID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
+	avatar, err := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: subjectID, ActorID: actor.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.NotFound(w, r)
 		return
@@ -375,7 +375,7 @@ func (h Profile) page(r *http.Request, actor CurrentUser, base string, record db
 	if record.ID != actor.ID {
 		meta.SubjectContext = record.Name
 	}
-	avatar, avatarErr := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: record.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
+	avatar, avatarErr := h.Store.Avatar(r.Context(), dbgen.GetMemberAvatarParams{UserID: record.ID, ActorID: actor.ID, IsAdmin: actor.IsAdmin, DocumentVersion: h.ImageVersion, DocumentSha256: h.ImageSHA256})
 	visible := avatarErr == nil && avatar.PhotoObjectKey != nil && avatar.ConsentCurrent
 	nationalHistoryURL, internationalHistoryURL := fpcHistoryURLs(stringValue(record.FederationLicenceNumber))
 	returnURL := profileCollectionReturn(r, actor)

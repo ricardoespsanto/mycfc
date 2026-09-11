@@ -150,6 +150,25 @@ func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUs
 	return i, err
 }
 
+const deactivateMemberForAdmin = `-- name: DeactivateMemberForAdmin :execrows
+UPDATE users AS target
+SET is_active = false,
+    updated_at = now()
+WHERE target.id = $1
+  AND (NOT target.is_dependent OR EXISTS(
+    SELECT 1 FROM guardian_authority_relationships relationship
+    WHERE relationship.subject_user_id=target.id
+      AND guardian_authority_current(relationship.guardian_user_id,target.id)))
+`
+
+func (q *Queries) DeactivateMemberForAdmin(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deactivateMemberForAdmin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deactivateUser = `-- name: DeactivateUser :exec
 UPDATE users
 SET is_active = false,
@@ -210,7 +229,10 @@ FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = $1
   AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
-       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date))
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))))
 `
 
 type GetActiveAccountByIDRow struct {
@@ -256,7 +278,10 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
 FROM users u
 WHERE u.id = $1
   AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
-       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date))
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))))
 `
 
 type GetActiveAccountByIDWithoutProfileRow struct {
@@ -297,6 +322,9 @@ WHERE u.minor_login_id = $1
   AND u.erased_at IS NULL
   AND u.is_dependent = true
   AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+  AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+      WHERE relationship.subject_user_id=u.id
+        AND guardian_authority_current(relationship.guardian_user_id,u.id))
 `
 
 type GetActiveDependentByLoginIDRow struct {
@@ -381,6 +409,7 @@ FROM users u
 LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
 LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
 WHERE u.id = $1
+ AND (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id))
 `
 
 type GetMemberForAdminRow struct {
@@ -673,10 +702,11 @@ SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS
 FROM users u
 LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
 LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
-WHERE $1::text IS NULL
+WHERE (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id))
+ AND ($1::text IS NULL
    OR u.name ILIKE '%' || $1::text || '%'
    OR u.email::text ILIKE '%' || $1::text || '%'
-   OR u.minor_login_id::text ILIKE '%' || $1::text || '%'
+   OR u.minor_login_id::text ILIKE '%' || $1::text || '%')
 ORDER BY u.is_active DESC, lower(u.name), u.id
 LIMIT $3
 OFFSET $2

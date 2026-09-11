@@ -81,6 +81,7 @@ type Dashboard struct {
 	PageMeta              components.PageMeta
 	Location              *time.Location
 	Dependents            GuardianDependentStore
+	GuardianAuthority     GuardianAuthorityStore
 	Now                   func() time.Time
 	ResponsibilityVersion string
 	ResponsibilitySHA256  string
@@ -386,7 +387,11 @@ func (h Dashboard) Guardian(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 10})
+	if h.GuardianAuthority == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	dependents, err := h.GuardianAuthority.ListForGuardian(ctx, user.ID, 10)
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -901,7 +906,7 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 	_ = pages.Dashboard(pages.DashboardPage{Meta: view.Meta, Heading: view.Heading, Intro: view.Intro, EmptyText: view.EmptyText, Agenda: pageAgenda, ShowAgenda: agenda != nil, Sections: pageSections, Actions: dashboardPageActions(path)}).Render(r.Context(), w)
 }
 
-func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, dependents []dbgen.ListDependentsByGuardianRow, form guardianDependentForm) {
+func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, relationships []GuardianAuthorityRelationship, form guardianDependentForm) {
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
 	meta.Title = "Menores a cargo | MyCFCoimbra"
@@ -912,26 +917,58 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	meta.EmailVerificationPending = !user.IsDependent && !user.EmailVerified
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
-	items := guardianDependentItems(dependents, h.now(), h.location())
-	pageItems := make([]pages.GuardianDependent, len(items))
-	for i, item := range items {
-		pageItems[i] = pages.GuardianDependent{ID: dependents[i].ID.String(), Name: item.Title, Detail: item.Detail, LeaderboardVisible: dependents[i].LeaderboardVisible, ProfileIncomplete: !dependents[i].ProfileComplete}
+	pageItems := []pages.GuardianDependent{}
+	requests := []pages.GuardianAuthorityRequest{}
+	for _, relationship := range relationships {
+		if relationship.State == "VERIFIED" && !relationship.Conflict && (relationship.VerifiedUntil == nil || relationship.VerifiedUntil.After(h.now())) {
+			detail := fmt.Sprintf("%d anos · Representação verificada", validation.AgeOn(relationship.DateOfBirth, h.now(), h.location()))
+			if relationship.VerifiedUntil != nil {
+				detail += " até " + relationship.VerifiedUntil.In(h.location()).Format("02/01/2006")
+			}
+			pageItems = append(pageItems, pages.GuardianDependent{ID: relationship.SubjectID.String(), Name: relationship.SubjectName, Detail: detail, LeaderboardVisible: relationship.LeaderboardVisible, ProfileIncomplete: !relationship.ProfileComplete})
+			continue
+		}
+		requests = append(requests, pages.GuardianAuthorityRequest{Reference: relationship.Reference.String(), SubmittedLabel: relationship.SubmittedLabel, Status: guardianAuthorityStatus(relationship.State, relationship.Conflict), Detail: guardianAuthorityGuardianDetail(relationship)})
+	}
+	policyAvailable, err := h.GuardianAuthority.PolicyAvailable(r.Context())
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
 	}
 	success := form.Success
 	if success == "" && h.Sessions != nil {
 		success = h.Sessions.PopString(r.Context(), "guardian_flash")
 	}
 	page := pages.GuardianPage{
-		Meta: meta, Dependents: pageItems,
+		Meta: meta, Dependents: pageItems, Requests: requests, PolicyAvailable: policyAvailable,
 		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, Errors: form.Errors, Success: success,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(status)
 	if r.Header.Get("HX-Request") == "true" {
 		_ = pages.GuardianContent(page).Render(r.Context(), w)
 		return
 	}
 	_ = pages.Guardian(page).Render(r.Context(), w)
+}
+
+func guardianAuthorityGuardianDetail(relationship GuardianAuthorityRelationship) string {
+	if relationship.Conflict {
+		return "O pedido está a ser revisto pelo clube. Contacte o clube se precisar de ajuda."
+	}
+	switch relationship.State {
+	case "PENDING":
+		return "O acesso aos dados permanece indisponível até à decisão do clube."
+	case "SUSPENDED":
+		return "O acesso está suspenso. Contacte o clube para saber o próximo passo."
+	case "EXPIRED":
+		return "A representação deixou de ser válida. Se a pessoa já atingiu a maioridade, contacte o clube para estabelecer ou recuperar o acesso à conta adulta correta; caso contrário, contacte o clube para rever a representação."
+	case "REJECTED":
+		return "O pedido não foi aprovado. Contacte o clube se precisar de esclarecimentos."
+	default:
+		return "O acesso aos dados não está disponível."
+	}
 }
 
 func dashboardPageActions(path string) []components.PageAction {
@@ -1151,6 +1188,10 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 			moderation = append(moderation, components.NavigationItem{Label: "Triar sugestões", Path: "/admin/sugestoes"})
 		}
 	}
+	var verification []components.NavigationItem
+	if user.CanVerifyGuardianAuthority {
+		verification = append(verification, components.NavigationItem{Label: "Verificar representações", Path: "/admin/representacoes"})
+	}
 	var admin []components.NavigationItem
 	if user.CanReviewPrivacy || user.CanExecutePrivacy {
 		admin = append(admin, components.NavigationItem{Label: "Pedidos de privacidade", Path: "/admin/privacidade"})
@@ -1178,6 +1219,9 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	if len(moderation) > 0 {
 		groups = append(groups, components.NavigationGroup{Label: "Moderação", Items: moderation})
 	}
+	if len(verification) > 0 {
+		groups = append(groups, components.NavigationGroup{Label: "Verificação", Items: verification})
+	}
 	if len(admin) > 0 {
 		groups = append(groups, components.NavigationGroup{Label: "Administração", Items: admin})
 	}
@@ -1186,7 +1230,7 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 
 func dashboardCapabilities(user CurrentUser) []string {
 	labels := []string{}
-	if !user.IsDependent {
+	if user.HasVerifiedGuardianAuthority {
 		labels = append(labels, "Tutor")
 	}
 	if user.CanManageEvents {

@@ -1298,6 +1298,17 @@ func (q *Queries) GetPrivacyExecutorGrantForShare(ctx context.Context, userID uu
 	return i, err
 }
 
+const getPrivacyIdentityUpdatedAt = `-- name: GetPrivacyIdentityUpdatedAt :one
+SELECT updated_at FROM users WHERE id = $1
+`
+
+func (q *Queries) GetPrivacyIdentityUpdatedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, getPrivacyIdentityUpdatedAt, id)
+	var updated_at pgtype.Timestamptz
+	err := row.Scan(&updated_at)
+	return updated_at, err
+}
+
 const getPrivacyPolicy = `-- name: GetPrivacyPolicy :one
 SELECT version, category_catalogue, executor_version, plan_schema_version, account_closure_enabled, working_retention_days, response_months, extension_months, adopted_at, adopted_by, created_at FROM privacy_request_policies WHERE version = $1
 `

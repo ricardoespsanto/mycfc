@@ -10,6 +10,9 @@ SELECT * FROM privacy_request_policies WHERE version = sqlc.arg(version);
 -- name: GetPrivacyAccountForUpdate :one
 SELECT * FROM guardian_authority_privacy_account_for_update(sqlc.arg(id));
 
+-- name: GetPrivacyIdentityUpdatedAt :one
+SELECT updated_at FROM users WHERE id = sqlc.arg(id);
+
 -- name: GetPrivacyReviewerGrantForShare :one
 SELECT * FROM privacy_reviewer_grants WHERE user_id = sqlc.arg(user_id) AND revoked_at IS NULL FOR SHARE;
 

@@ -22,6 +22,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
+	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
@@ -34,15 +35,16 @@ import (
 )
 
 type Application struct {
-	Config       config.Config
-	Logger       *slog.Logger
-	Location     *time.Location
-	Pool         *pgxpool.Pool
-	Sessions     *scs.SessionManager
-	SessionStore *sessionstore.PostgresStore
-	ObjectStore  storage.ObjectStore
-	EmailWorker  *emailverification.Worker
-	Server       *http.Server
+	Config                  config.Config
+	Logger                  *slog.Logger
+	Location                *time.Location
+	Pool                    *pgxpool.Pool
+	Sessions                *scs.SessionManager
+	SessionStore            *sessionstore.PostgresStore
+	ObjectStore             storage.ObjectStore
+	EmailWorker             *emailverification.Worker
+	GuardianAuthorityWorker *guardianauthority.Worker
+	Server                  *http.Server
 }
 
 var (
@@ -223,11 +225,13 @@ func New(ctx context.Context) (*Application, error) {
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
 	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter(), Logger: logger}
 	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, Logger: logger}
+	guardianAuthorityWorker := &guardianauthority.Worker{Store: dbgen.New(pool), Logger: logger}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
 		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)
 	}
 	releaseChecker := release.NewChecker(&http.Client{Timeout: cfg.ReleaseCheckTimeout}, cfg.ReleaseRepository, cfg.AppVersion, cfg.GITSHA, appReleasedAt, cfg.ReleaseCheckCacheTTL, time.Now)
+	guardianAuthority := handlers.PostgresGuardianAuthorityStore{DB: pool}
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
 		Fleet:                 dbgen.New(pool),
@@ -239,6 +243,7 @@ func New(ctx context.Context) (*Application, error) {
 		MaxRequestBytes:       cfg.MaxRequestBytes,
 		MaxPhotoBytes:         cfg.MaxPhotoBytes,
 		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
+		GuardianAuthority:     guardianAuthority,
 		PageMeta:              pageMeta,
 		System:                system,
 		Location:              location,
@@ -246,7 +251,7 @@ func New(ctx context.Context) (*Application, error) {
 		ResponsibilityVersion: minorDocument.Version, ResponsibilitySHA256: minorDocument.SHA256,
 		ResponsibilityURL: versionedLegalURL(minorDocument),
 	}
-	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), Sessions: sessions, System: system}
+	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), GuardianAuthority: dbgen.New(pool), Sessions: sessions, System: system}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Uploads: uploadCoordinator, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
@@ -286,15 +291,16 @@ func New(ctx context.Context) (*Application, error) {
 	server := newHTTPServer(cfg, logger, sessions, system, csrfMiddleware, trusted, router)
 
 	return &Application{
-		Config:       cfg,
-		Logger:       logger,
-		Location:     location,
-		Pool:         pool,
-		Sessions:     sessions,
-		SessionStore: sessionStore,
-		ObjectStore:  objectStore,
-		EmailWorker:  emailWorker,
-		Server:       server,
+		Config:                  cfg,
+		Logger:                  logger,
+		Location:                location,
+		Pool:                    pool,
+		Sessions:                sessions,
+		SessionStore:            sessionStore,
+		ObjectStore:             objectStore,
+		EmailWorker:             emailWorker,
+		GuardianAuthorityWorker: guardianAuthorityWorker,
+		Server:                  server,
 	}, nil
 }
 
@@ -334,6 +340,9 @@ func (a *Application) Run(ctx context.Context) error {
 	defer stop()
 	if a.EmailWorker != nil {
 		go a.EmailWorker.Run(signalContext)
+	}
+	if a.GuardianAuthorityWorker != nil {
+		go a.GuardianAuthorityWorker.Run(signalContext)
 	}
 
 	select {

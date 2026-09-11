@@ -103,7 +103,10 @@ WHERE u.minor_login_id = sqlc.arg(minor_login_id)
   AND u.is_active = true
   AND u.erased_at IS NULL
   AND u.is_dependent = true
-  AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date;
+  AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+  AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+      WHERE relationship.subject_user_id=u.id
+        AND guardian_authority_current(relationship.guardian_user_id,u.id));
 
 -- name: IssueMinorCredential :one
 WITH issued AS (
@@ -150,7 +153,10 @@ FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = sqlc.arg(id)
   AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
-       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date));
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))));
 
 -- name: GetActiveAccountByIDWithoutProfile :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
@@ -164,7 +170,10 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
 FROM users u
 WHERE u.id = sqlc.arg(id)
   AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
-       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date));
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))));
 
 -- name: UpdateOwnLeaderboardVisibility :execrows
 UPDATE users
@@ -205,16 +214,27 @@ SET is_active = false,
     updated_at = now()
 WHERE id = sqlc.arg(id);
 
+-- name: DeactivateMemberForAdmin :execrows
+UPDATE users AS target
+SET is_active = false,
+    updated_at = now()
+WHERE target.id = sqlc.arg(id)
+  AND (NOT target.is_dependent OR EXISTS(
+    SELECT 1 FROM guardian_authority_relationships relationship
+    WHERE relationship.subject_user_id=target.id
+      AND guardian_authority_current(relationship.guardian_user_id,target.id)));
+
 -- name: ListMembersForAdmin :many
 SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS guardian_id, guardian.name AS guardian_name,
        u.is_dependent, u.date_of_birth, u.is_active
 FROM users u
 LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
 LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
-WHERE sqlc.narg(search)::text IS NULL
+WHERE (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id))
+ AND (sqlc.narg(search)::text IS NULL
    OR u.name ILIKE '%' || sqlc.narg(search)::text || '%'
    OR u.email::text ILIKE '%' || sqlc.narg(search)::text || '%'
-   OR u.minor_login_id::text ILIKE '%' || sqlc.narg(search)::text || '%'
+   OR u.minor_login_id::text ILIKE '%' || sqlc.narg(search)::text || '%')
 ORDER BY u.is_active DESC, lower(u.name), u.id
 LIMIT sqlc.arg(row_limit)
 OFFSET sqlc.arg(row_offset);
@@ -225,7 +245,8 @@ SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS
 FROM users u
 LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
 LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
-WHERE u.id = sqlc.arg(id);
+WHERE u.id = sqlc.arg(id)
+ AND (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id));
 
 -- name: ListActiveAdultsForAdmin :many
 SELECT id, name, email FROM users

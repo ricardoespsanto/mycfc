@@ -8,6 +8,17 @@ SELECT COALESCE(EXISTS(
   AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id)
 ),false)::boolean;
 
+-- name: IsGuardianAuthorityCurrent :one
+SELECT guardian_authority_current(sqlc.arg(guardian_id),sqlc.arg(subject_id));
+
+-- name: ReconcileGuardianAuthorityCutoffs :one
+SELECT guardian_authority_reconcile_cutoffs();
+
+-- name: HasCurrentGuardianAuthorityForSubject :one
+SELECT EXISTS(SELECT 1 FROM guardian_authority_relationships relationship
+ WHERE relationship.subject_user_id=sqlc.arg(subject_id)
+  AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id));
+
 -- name: ListActiveGuardianAuthorityEvidenceTypes :many
 SELECT unnest(policy.evidence_types)::text AS evidence_type
 FROM guardian_authority_policies policy
@@ -41,7 +52,8 @@ SELECT relationship_id,relationship_ref,subject_user_id,submitted_label,state,ve
  COALESCE(profile_complete,false)::boolean AS profile_complete
 FROM guardian_authority_guardian_disclosures
 WHERE guardian_user_id=sqlc.arg(guardian_id)
-ORDER BY created_at,relationship_id
+ORDER BY CASE WHEN state IN('PENDING','VERIFIED','SUSPENDED') THEN 0 ELSE 1 END,
+ created_at DESC,relationship_id DESC
 LIMIT sqlc.arg(row_limit);
 
 -- name: ListPendingGuardianAuthorityRequests :many
@@ -50,7 +62,8 @@ SELECT relationship.public_ref AS relationship_ref,relationship.guardian_user_id
  disclosure.state,relationship.version,relationship.created_at,
  COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
  latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
- latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,relationship.conflict
+ latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
+ relationship.conflict,relationship.conflict_actor_ref
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id
@@ -62,7 +75,7 @@ LEFT JOIN LATERAL (
  ORDER BY event.relationship_version DESC LIMIT 1
 ) latest ON true
 WHERE guardian_authority_can_verify(sqlc.arg(actor_id))
- AND disclosure.state IN('PENDING','SUSPENDED','EXPIRED')
+ AND disclosure.state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED')
 ORDER BY relationship.created_at,relationship.id
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
@@ -70,10 +83,11 @@ LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 SELECT relationship.id AS relationship_id,relationship.public_ref AS relationship_ref,
  relationship.guardian_user_id,guardian.name AS guardian_name,
  relationship.subject_user_id,subject.name AS subject_name,subject.date_of_birth,
- relationship.submitted_label,disclosure.state,relationship.version,relationship.created_at,
+ relationship.submitted_label,relationship.state AS stored_state,disclosure.state,relationship.version,relationship.created_at,
  COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
  latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
- latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,relationship.conflict
+ latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
+ relationship.conflict,relationship.conflict_actor_ref
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id

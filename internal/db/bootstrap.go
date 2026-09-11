@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609110004_guardian_authority_verification"
+	baselineIncludesThrough      = "202609110005_guardian_authority_cutoff_reconciliation"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
@@ -237,8 +237,8 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},
 		{"revoke web guardian authority mutations", "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE " + guardianAuthorityTables + " FROM " + app},
 		{"grant web guardian authority metadata reads", "GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO " + app},
-		{"revoke web guardian authority routines", "REVOKE EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) FROM " + app},
-		{"grant web guardian authority routines", "GRANT EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) TO " + app},
+		{"revoke web guardian authority routines", "REVOKE EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) FROM " + app},
+		{"grant web guardian authority routines", "GRANT EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid) TO " + app},
 		{"restrict web consent evidence writes", "REVOKE UPDATE, DELETE ON TABLE consent_forms FROM " + app},
 		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
@@ -620,7 +620,7 @@ func noLoginRoleStatement(username string) string {
 func transferOwnershipStatement(migrationUsername string) string {
 	owner := quoteLiteral(migrationUsername)
 	return `DO $$ DECLARE object record; BEGIN
-		FOR object IN SELECT n.nspname, c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'mycfc_meta') AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e') LOOP
+		FOR object IN SELECT n.nspname, c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'mycfc_meta') AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype IN ('e', 'i')) LOOP
 			EXECUTE format(CASE object.relkind WHEN 'S' THEN 'ALTER SEQUENCE %I.%I OWNER TO %I' WHEN 'v' THEN 'ALTER VIEW %I.%I OWNER TO %I' WHEN 'm' THEN 'ALTER MATERIALIZED VIEW %I.%I OWNER TO %I' WHEN 'f' THEN 'ALTER FOREIGN TABLE %I.%I OWNER TO %I' ELSE 'ALTER TABLE %I.%I OWNER TO %I' END, object.nspname, object.relname, ` + owner + `);
 		END LOOP;
 		FOR object IN SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e') LOOP

@@ -79,6 +79,12 @@ LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
 WHERE u.id = $3
   AND u.erased_at IS NULL
   AND (u.is_active OR $4::boolean)
+  AND (NOT u.is_dependent
+    OR u.id = $5
+    OR ($4::boolean AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+        WHERE relationship.subject_user_id=u.id
+          AND guardian_authority_current(relationship.guardian_user_id,u.id)))
+    OR guardian_authority_current($5, u.id))
 `
 
 type GetMemberAvatarParams struct {
@@ -86,6 +92,7 @@ type GetMemberAvatarParams struct {
 	DocumentSha256  string    `json:"document_sha256"`
 	UserID          uuid.UUID `json:"user_id"`
 	IsAdmin         bool      `json:"is_admin"`
+	ActorID         uuid.UUID `json:"actor_id"`
 }
 
 type GetMemberAvatarRow struct {
@@ -102,6 +109,7 @@ func (q *Queries) GetMemberAvatar(ctx context.Context, arg GetMemberAvatarParams
 		arg.DocumentSha256,
 		arg.UserID,
 		arg.IsAdmin,
+		arg.ActorID,
 	)
 	var i GetMemberAvatarRow
 	err := row.Scan(

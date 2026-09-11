@@ -98,17 +98,209 @@ func TestAddDependentReportsMaximumAndSupportsHTMX(t *testing.T) {
 	ctx := context.WithValue(request.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), Name: "Guardião"})
 	response = httptest.NewRecorder()
 	guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{}).AddDependent(response, request.WithContext(ctx))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `id="guardian-content"`) || !strings.Contains(response.Body.String(), "Menor a cargo adicionado.") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `id="guardian-content"`) || !strings.Contains(response.Body.String(), "Pedido recebido.") {
 		t.Fatalf("HTMX response = %d %q", response.Code, response.Body.String())
 	}
 }
 
+func TestGuardianDashboardKeepsPendingRelationshipStatusOnly(t *testing.T) {
+	guardianID, subjectID := uuid.New(), uuid.New()
+	authority := &guardianAuthorityStoreFake{policyAvailable: true, relationships: []GuardianAuthorityRelationship{{Reference: uuid.New(), GuardianID: guardianID, SubjectID: subjectID, SubmittedLabel: "Pedido familiar", SubjectName: "Nome privado", State: "PENDING", DateOfBirth: time.Date(2012, 1, 2, 0, 0, 0, 0, time.UTC), MinorLoginIssued: true, ProfileComplete: true}}}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+	dashboard.GuardianAuthority = authority
+	response := guardianResponse(t, dashboard.Guardian, guardianID, nil)
+	body := response.Body.String()
+	for _, want := range []string{"Pedido familiar", "A aguardar verificação", "não permitem consultar dados"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body does not contain %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Nome privado", subjectID.String(), "Perfil incompleto", "classificação", "Acesso individual"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("pending response exposes %q", forbidden)
+		}
+	}
+	if response.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
+	}
+}
+
+func TestGuardianDashboardClosesNewRequestsWithoutAdoptedPolicy(t *testing.T) {
+	dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+	dashboard.GuardianAuthority = &guardianAuthorityStoreFake{}
+	response := guardianResponse(t, dashboard.Guardian, uuid.New(), nil)
+	body := response.Body.String()
+	if !strings.Contains(body, "Novos pedidos temporariamente indisponíveis") || strings.Contains(body, "Pedir associação</a>") || strings.Contains(body, `action="/guardian/add-dependent"`) {
+		t.Fatalf("closed policy response = %q", body)
+	}
+}
+
+func TestAddDependentRejectsForgedPostWithoutAdoptedPolicy(t *testing.T) {
+	dependents := &guardianDependentStoreFake{}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, dependents)
+	dashboard.GuardianAuthority = &guardianAuthorityStoreFake{}
+	response := guardianResponse(t, dashboard.AddDependent, uuid.New(), validDependentForm())
+	if response.Code != http.StatusConflict || dependents.called || !strings.Contains(response.Body.String(), "política de verificação ainda não foi ativada") {
+		t.Fatalf("response=%d called=%v body=%q", response.Code, dependents.called, response.Body.String())
+	}
+}
+
+func TestGuardianAuthorityDecisionValidatesMetadataAndConcurrency(t *testing.T) {
+	actor, ref := uuid.New(), uuid.New()
+	store := &guardianAuthorityStoreFake{policyAvailable: true, detail: GuardianAuthorityRelationship{Reference: ref, GuardianID: uuid.New(), SubjectName: "Minor", SubmittedLabel: "Guardian", State: "PENDING", Version: 2, DateOfBirth: time.Date(2012, 1, 2, 0, 0, 0, 0, time.UTC)}, evidenceTypes: []GuardianAuthorityEvidenceType{{Code: "COURT_ORDER", Label: "Decisão judicial"}}, reasonCodes: []GuardianAuthorityReasonCode{{Code: "EVIDENCE_CONFIRMED", Label: "Comprovativo confirmado"}}}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+	dashboard.GuardianAuthority = store
+	dashboard.Now = func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) }
+
+	invalid := guardianAuthorityRequest(ref, actor, url.Values{"version": {"2"}, "action": {"VERIFY"}, "reason_code": {"EVIDENCE_CONFIRMED"}, "confirmed": {"yes"}})
+	w := httptest.NewRecorder()
+	dashboard.GuardianAuthorityTransition(w, invalid)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "SHA-256 válida") {
+		t.Fatalf("invalid response=%d %q", w.Code, w.Body.String())
+	}
+
+	form := url.Values{"version": {"2"}, "action": {"VERIFY"}, "evidence_type": {"COURT_ORDER"}, "evidence_reference": {"vault-ref-123"}, "evidence_digest": {strings.Repeat("ab", 32)}, "reason_code": {"EVIDENCE_CONFIRMED"}, "confirmed": {"yes"}}
+	w = httptest.NewRecorder()
+	dashboard.GuardianAuthorityTransition(w, guardianAuthorityRequest(ref, actor, form))
+	if w.Code != http.StatusSeeOther || store.transition.Reference != ref || store.transition.ActorID != actor || store.transition.ExpectedVersion != 2 || len(store.transition.EvidenceDigest) != 32 {
+		t.Fatalf("transition response=%d input=%+v", w.Code, store.transition)
+	}
+
+	store.transitionErr = ErrGuardianAuthorityConflict
+	w = httptest.NewRecorder()
+	dashboard.GuardianAuthorityTransition(w, guardianAuthorityRequest(ref, actor, form))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alterado por outra pessoa") {
+		t.Fatalf("conflict response=%d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestGuardianAuthorityConflictRecorderCannotSeeDecisionForm(t *testing.T) {
+	actor, ref := uuid.New(), uuid.New()
+	store := &guardianAuthorityStoreFake{
+		detail: GuardianAuthorityRelationship{
+			Reference: ref, GuardianID: uuid.New(), GuardianName: "Pessoa requerente", SubjectID: uuid.New(),
+			SubjectName: "Menor", State: "SUSPENDED", Version: 3, Conflict: true, ConflictActorID: &actor,
+			DateOfBirth: time.Date(2012, 1, 2, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+	dashboard.GuardianAuthority = store
+	r := httptest.NewRequest(http.MethodGet, "/admin/representacoes/"+ref.String(), nil)
+	r.SetPathValue("ref", ref.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, Name: "Verifier", CanVerifyGuardianAuthority: true}))
+	w := httptest.NewRecorder()
+	dashboard.GuardianAuthorityDetail(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Outra pessoa verificadora autorizada") || strings.Contains(w.Body.String(), `id="guardian-authority-decision"`) {
+		t.Fatalf("response=%d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestGuardianAuthorityExpiredDetailOffersRenewalAndMaterializedExpiry(t *testing.T) {
+	actor, ref := uuid.New(), uuid.New()
+	reviewDue := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	store := &guardianAuthorityStoreFake{detail: GuardianAuthorityRelationship{Reference: ref, GuardianID: uuid.New(), GuardianName: "Pessoa requerente", SubjectID: uuid.New(), SubjectName: "Menor", State: "EXPIRED", StoredState: "VERIFIED", Version: 2, ReviewDueAt: &reviewDue, DateOfBirth: time.Date(2012, 1, 2, 0, 0, 0, 0, time.UTC)}}
+	dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+	dashboard.GuardianAuthority = store
+	dashboard.Now = func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) }
+	r := httptest.NewRequest(http.MethodGet, "/admin/representacoes/"+ref.String(), nil)
+	r.SetPathValue("ref", ref.String())
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, Name: "Verifier", CanVerifyGuardianAuthority: true}))
+	w := httptest.NewRecorder()
+	dashboard.GuardianAuthorityDetail(w, r)
+	body := w.Body.String()
+	for _, want := range []string{`value="VERIFY"`, `value="EXPIRE"`, `data-task-form`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body does not contain %q", want)
+		}
+	}
+	if strings.Contains(body, `value="REJECT"`) || strings.Contains(body, `value="SUSPEND"`) {
+		t.Fatal("effectively expired relationship offered an invalid action")
+	}
+}
+
+func TestGuardianAuthorityTerminalAndMajorityDetailsAreReadOnly(t *testing.T) {
+	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, state, stored, want string
+		birth                     time.Time
+	}{
+		{name: "rejected", state: "REJECTED", stored: "REJECTED", birth: time.Date(2012, 1, 2, 0, 0, 0, 0, time.UTC), want: "Este pedido terminou sem aprovação"},
+		{name: "majority", state: "EXPIRED", stored: "VERIFIED", birth: time.Date(2008, 9, 11, 0, 0, 0, 0, time.UTC), want: "estabelecer ou recuperar o acesso à conta adulta correta"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor, ref := uuid.New(), uuid.New()
+			store := &guardianAuthorityStoreFake{detail: GuardianAuthorityRelationship{Reference: ref, GuardianID: uuid.New(), GuardianName: "Pessoa requerente", SubjectID: uuid.New(), SubjectName: "Pessoa", State: tc.state, StoredState: tc.stored, Version: 3, DateOfBirth: tc.birth}}
+			dashboard := guardianDashboard(&guardianDashboardStore{}, &guardianDependentStoreFake{})
+			dashboard.GuardianAuthority = store
+			dashboard.Now = func() time.Time { return now }
+			r := httptest.NewRequest(http.MethodGet, "/admin/representacoes/"+ref.String(), nil)
+			r.SetPathValue("ref", ref.String())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, Name: "Verifier", CanVerifyGuardianAuthority: true}))
+			w := httptest.NewRecorder()
+			dashboard.GuardianAuthorityDetail(w, r)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) || strings.Contains(w.Body.String(), `id="guardian-authority-decision"`) {
+				t.Fatalf("response=%d %q", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func guardianAuthorityRequest(ref, actor uuid.UUID, form url.Values) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/admin/representacoes/"+ref.String(), strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("ref", ref.String())
+	return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor, Name: "Verifier", CanVerifyGuardianAuthority: true}))
+}
+
 func guardianDashboard(store DashboardStore, dependents GuardianDependentStore) Dashboard {
+	authority := &guardianAuthorityStoreFake{policyAvailable: true}
+	if source, ok := store.(*guardianDashboardStore); ok {
+		for _, dependent := range source.dependents {
+			authority.relationships = append(authority.relationships, GuardianAuthorityRelationship{Reference: uuid.New(), SubjectID: dependent.ID, SubmittedLabel: dependent.Name, SubjectName: dependent.Name, State: "VERIFIED", Version: 1, DateOfBirth: dependent.DateOfBirth.Time, VerifiedUntil: timePointer(time.Date(2027, 7, 24, 0, 0, 0, 0, time.UTC)), LeaderboardVisible: dependent.LeaderboardVisible, ProfileComplete: dependent.ProfileComplete})
+		}
+	}
 	return Dashboard{
-		Store: store, Dependents: dependents, Location: time.UTC, Now: func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) },
+		Store: store, Dependents: dependents, GuardianAuthority: authority, Location: time.UTC, Now: func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) },
 		PageMeta:              components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"},
 		ResponsibilityVersion: "1.0", ResponsibilitySHA256: strings.Repeat("c", 64), ResponsibilityURL: "https://example.test/responsabilidade",
 	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
+type guardianAuthorityStoreFake struct {
+	policyAvailable bool
+	relationships   []GuardianAuthorityRelationship
+	pending         []GuardianAuthorityRelationship
+	detail          GuardianAuthorityRelationship
+	evidenceTypes   []GuardianAuthorityEvidenceType
+	reasonCodes     []GuardianAuthorityReasonCode
+	transition      GuardianAuthorityTransitionInput
+	err             error
+	transitionErr   error
+}
+
+func (s *guardianAuthorityStoreFake) PolicyAvailable(context.Context) (bool, error) {
+	return s.policyAvailable, s.err
+}
+func (s *guardianAuthorityStoreFake) EvidenceTypes(context.Context) ([]GuardianAuthorityEvidenceType, error) {
+	return s.evidenceTypes, s.err
+}
+func (s *guardianAuthorityStoreFake) ReasonCodes(context.Context) ([]GuardianAuthorityReasonCode, error) {
+	return s.reasonCodes, s.err
+}
+func (s *guardianAuthorityStoreFake) ListForGuardian(context.Context, uuid.UUID, int32) ([]GuardianAuthorityRelationship, error) {
+	return s.relationships, s.err
+}
+func (s *guardianAuthorityStoreFake) ListPending(context.Context, uuid.UUID, int32, int32) ([]GuardianAuthorityRelationship, error) {
+	return s.pending, s.err
+}
+func (s *guardianAuthorityStoreFake) GetForVerifier(context.Context, uuid.UUID, uuid.UUID) (GuardianAuthorityRelationship, error) {
+	return s.detail, s.err
+}
+func (s *guardianAuthorityStoreFake) Transition(_ context.Context, input GuardianAuthorityTransitionInput) error {
+	s.transition = input
+	return s.transitionErr
 }
 
 func validDependentForm() url.Values {

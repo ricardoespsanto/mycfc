@@ -68,10 +68,11 @@ const getGuardianAuthorityRequestForVerifier = `-- name: GetGuardianAuthorityReq
 SELECT relationship.id AS relationship_id,relationship.public_ref AS relationship_ref,
  relationship.guardian_user_id,guardian.name AS guardian_name,
  relationship.subject_user_id,subject.name AS subject_name,subject.date_of_birth,
- relationship.submitted_label,disclosure.state,relationship.version,relationship.created_at,
+ relationship.submitted_label,relationship.state AS stored_state,disclosure.state,relationship.version,relationship.created_at,
  COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
  latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
- latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,relationship.conflict
+ latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
+ relationship.conflict,relationship.conflict_actor_ref
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id
@@ -100,10 +101,11 @@ type GetGuardianAuthorityRequestForVerifierRow struct {
 	SubjectName       string             `json:"subject_name"`
 	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
 	SubmittedLabel    string             `json:"submitted_label"`
+	StoredState       string             `json:"stored_state"`
 	State             string             `json:"state"`
 	Version           int64              `json:"version"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	VerifierUserID    uuid.UUID          `json:"verifier_user_id"`
+	VerifierUserID    *uuid.UUID         `json:"verifier_user_id"`
 	EvidenceType      *string            `json:"evidence_type"`
 	EvidenceReference *string            `json:"evidence_reference"`
 	EvidenceSha256    []byte             `json:"evidence_sha256"`
@@ -112,6 +114,7 @@ type GetGuardianAuthorityRequestForVerifierRow struct {
 	VerifiedUntil     pgtype.Timestamptz `json:"verified_until"`
 	ReviewDueAt       pgtype.Timestamptz `json:"review_due_at"`
 	Conflict          bool               `json:"conflict"`
+	ConflictActorRef  *uuid.UUID         `json:"conflict_actor_ref"`
 }
 
 func (q *Queries) GetGuardianAuthorityRequestForVerifier(ctx context.Context, arg GetGuardianAuthorityRequestForVerifierParams) (GetGuardianAuthorityRequestForVerifierRow, error) {
@@ -126,6 +129,7 @@ func (q *Queries) GetGuardianAuthorityRequestForVerifier(ctx context.Context, ar
 		&i.SubjectName,
 		&i.DateOfBirth,
 		&i.SubmittedLabel,
+		&i.StoredState,
 		&i.State,
 		&i.Version,
 		&i.CreatedAt,
@@ -138,6 +142,7 @@ func (q *Queries) GetGuardianAuthorityRequestForVerifier(ctx context.Context, ar
 		&i.VerifiedUntil,
 		&i.ReviewDueAt,
 		&i.Conflict,
+		&i.ConflictActorRef,
 	)
 	return i, err
 }
@@ -165,6 +170,19 @@ func (q *Queries) GrantGuardianVerifier(ctx context.Context, arg GrantGuardianVe
 	return i, err
 }
 
+const hasCurrentGuardianAuthorityForSubject = `-- name: HasCurrentGuardianAuthorityForSubject :one
+SELECT EXISTS(SELECT 1 FROM guardian_authority_relationships relationship
+ WHERE relationship.subject_user_id=$1
+  AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id))
+`
+
+func (q *Queries) HasCurrentGuardianAuthorityForSubject(ctx context.Context, subjectID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasCurrentGuardianAuthorityForSubject, subjectID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasVerifiedGuardianAuthority = `-- name: HasVerifiedGuardianAuthority :one
 SELECT COALESCE(EXISTS(
  SELECT 1 FROM guardian_authority_relationships relationship
@@ -178,6 +196,22 @@ func (q *Queries) HasVerifiedGuardianAuthority(ctx context.Context, actorID uuid
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const isGuardianAuthorityCurrent = `-- name: IsGuardianAuthorityCurrent :one
+SELECT guardian_authority_current($1,$2)
+`
+
+type IsGuardianAuthorityCurrentParams struct {
+	GuardianID uuid.UUID `json:"guardian_id"`
+	SubjectID  uuid.UUID `json:"subject_id"`
+}
+
+func (q *Queries) IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isGuardianAuthorityCurrent, arg.GuardianID, arg.SubjectID)
+	var guardian_authority_current bool
+	err := row.Scan(&guardian_authority_current)
+	return guardian_authority_current, err
 }
 
 const listActiveGuardianAuthorityEvidenceTypes = `-- name: ListActiveGuardianAuthorityEvidenceTypes :many
@@ -242,7 +276,8 @@ SELECT relationship_id,relationship_ref,subject_user_id,submitted_label,state,ve
  COALESCE(profile_complete,false)::boolean AS profile_complete
 FROM guardian_authority_guardian_disclosures
 WHERE guardian_user_id=$1
-ORDER BY created_at,relationship_id
+ORDER BY CASE WHEN state IN('PENDING','VERIFIED','SUSPENDED') THEN 0 ELSE 1 END,
+ created_at DESC,relationship_id DESC
 LIMIT $2
 `
 
@@ -311,7 +346,8 @@ SELECT relationship.public_ref AS relationship_ref,relationship.guardian_user_id
  disclosure.state,relationship.version,relationship.created_at,
  COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
  latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
- latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,relationship.conflict
+ latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
+ relationship.conflict,relationship.conflict_actor_ref
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id
@@ -323,7 +359,7 @@ LEFT JOIN LATERAL (
  ORDER BY event.relationship_version DESC LIMIT 1
 ) latest ON true
 WHERE guardian_authority_can_verify($1)
- AND disclosure.state IN('PENDING','SUSPENDED','EXPIRED')
+ AND disclosure.state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED')
 ORDER BY relationship.created_at,relationship.id
 LIMIT $3 OFFSET $2
 `
@@ -344,7 +380,7 @@ type ListPendingGuardianAuthorityRequestsRow struct {
 	State             string             `json:"state"`
 	Version           int64              `json:"version"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	VerifierUserID    uuid.UUID          `json:"verifier_user_id"`
+	VerifierUserID    *uuid.UUID         `json:"verifier_user_id"`
 	EvidenceType      *string            `json:"evidence_type"`
 	EvidenceReference *string            `json:"evidence_reference"`
 	EvidenceSha256    []byte             `json:"evidence_sha256"`
@@ -353,6 +389,7 @@ type ListPendingGuardianAuthorityRequestsRow struct {
 	VerifiedUntil     pgtype.Timestamptz `json:"verified_until"`
 	ReviewDueAt       pgtype.Timestamptz `json:"review_due_at"`
 	Conflict          bool               `json:"conflict"`
+	ConflictActorRef  *uuid.UUID         `json:"conflict_actor_ref"`
 }
 
 func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg ListPendingGuardianAuthorityRequestsParams) ([]ListPendingGuardianAuthorityRequestsRow, error) {
@@ -383,6 +420,7 @@ func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg 
 			&i.VerifiedUntil,
 			&i.ReviewDueAt,
 			&i.Conflict,
+			&i.ConflictActorRef,
 		); err != nil {
 			return nil, err
 		}
@@ -392,6 +430,17 @@ func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg 
 		return nil, err
 	}
 	return items, nil
+}
+
+const reconcileGuardianAuthorityCutoffs = `-- name: ReconcileGuardianAuthorityCutoffs :one
+SELECT guardian_authority_reconcile_cutoffs()
+`
+
+func (q *Queries) ReconcileGuardianAuthorityCutoffs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, reconcileGuardianAuthorityCutoffs)
+	var guardian_authority_reconcile_cutoffs int64
+	err := row.Scan(&guardian_authority_reconcile_cutoffs)
+	return guardian_authority_reconcile_cutoffs, err
 }
 
 const revokeGuardianVerifier = `-- name: RevokeGuardianVerifier :one

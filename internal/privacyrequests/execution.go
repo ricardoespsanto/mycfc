@@ -138,7 +138,10 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	if err != nil {
 		return zero, err
 	}
-	checks := verification(r, requester, subject, now)
+	checks, err := verification(ctx, q, r, requester, subject, now)
+	if err != nil {
+		return zero, err
+	}
 	safeguards := ClosureSafeguards{DependantsResolved: true, PreservesAdministrator: true}
 	if r.ScopeKind == string(AccountClosure) {
 		if err = q.LockPrivacyActiveAdministratorSet(ctx); err != nil {

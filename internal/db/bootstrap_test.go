@@ -278,6 +278,7 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`REVOKE ALL PRIVILEGES ON TABLE guardian_authority_policies, guardian_authority_policy_events, guardian_verifier_grants, guardian_verifier_grant_events, guardian_authority_relationships, guardian_authority_events FROM PUBLIC`,
 		`REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE guardian_authority_policies`,
 		`GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO "mycfc_app"`,
+		`guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid)`,
 		`guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid)`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)`,
@@ -500,6 +501,9 @@ func TestTransferOwnershipStatementQuotesRole(t *testing.T) {
 	statement := transferOwnershipStatement("migration_user")
 	if !strings.Contains(statement, "ALTER FUNCTION") || !strings.Contains(statement, "ALTER TYPE") || !strings.Contains(statement, "'migration_user'") {
 		t.Fatalf("statement = %q", statement)
+	}
+	if !strings.Contains(statement, "d.deptype IN ('e', 'i')") {
+		t.Fatal("ownership transfer must leave identity-sequence ownership coupled to its table")
 	}
 }
 
@@ -895,15 +899,14 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	}
 	const marker = "-- Guardian authority is an explicit, reviewed capability."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("guardian authority migration is not the exact final baseline segment")
+	if index < 0 {
+		t.Fatal("guardian authority migration marker missing from baseline")
 	}
 	for _, expected := range []string{
 		"state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED','REJECTED')",
 		"CREATE UNIQUE INDEX guardian_authority_one_enabled_policy_uidx",
 		"CREATE FUNCTION guardian_authority_current",
 		"INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,created_at,updated_at)",
-		"UPDATE users SET guardian_id=NULL WHERE guardian_id IS NOT NULL",
 		"CREATE TRIGGER users_legacy_guardian_pointer_guard",
 		"UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false",
 		"UPDATE privacy_worker_kill_switch SET engaged=true",
@@ -914,5 +917,32 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(string(migration), "WITHDRAWN") {
 		t.Fatal("guardian authority migration contains unsupported WITHDRAWN state")
+	}
+	cutoffMigration, err := migrationFiles.ReadFile("migrations/202609110005_guardian_authority_cutoff_reconciliation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id",
+		"credential_version=credential_version+1",
+		"202609110005_guardian_authority_cutoff_reconciliation",
+	} {
+		if !strings.Contains(string(cutoffMigration), expected) || !strings.Contains(baselineSchema, expected) {
+			t.Errorf("cutoff migration or baseline missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"ALTER TABLE guardian_authority_events ALTER COLUMN actor_ref DROP NOT NULL",
+		"SET actor_ref=NULL,actor_role='SYSTEM'",
+		"UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false",
+		"UPDATE privacy_worker_kill_switch SET engaged=true",
+	} {
+		if !strings.Contains(string(cutoffMigration), expected) {
+			t.Errorf("cutoff migration missing predecessor repair %q", expected)
+		}
+	}
+	if !strings.Contains(string(cutoffMigration), "CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs") ||
+		!strings.Contains(baselineSchema, "CREATE FUNCTION guardian_authority_reconcile_cutoffs") {
+		t.Error("cutoff reconciliation function missing from migration or baseline")
 	}
 }

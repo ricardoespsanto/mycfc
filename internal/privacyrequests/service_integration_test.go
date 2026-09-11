@@ -108,7 +108,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110004_guardian_authority_verification"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110005_guardian_authority_cutoff_reconciliation"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -253,7 +253,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 				 clock_timestamp()+interval '180 days',clock_timestamp(),clock_timestamp()) RETURNING id,created_at)
 				INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
 				 policy_version,evidence_type,evidence_reference,evidence_sha256,occurred_at,verified_until,review_due_at)
-				SELECT id,2,$1,'SYSTEM','VERIFIED','PENDING','VERIFIED',$3,'CIVIL_REGISTRY','fixture/'||id::text,
+				SELECT id,2,NULL,'SYSTEM','VERIFIED','PENDING','VERIFIED',$3,'CIVIL_REGISTRY','fixture/'||id::text,
 				 digest(id::text,'sha256'),created_at,created_at+interval '365 days',created_at+interval '180 days' FROM relationship`,
 				*guardian, id, guardianPolicy)
 			if e != nil {

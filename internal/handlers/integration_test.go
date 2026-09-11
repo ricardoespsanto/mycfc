@@ -119,8 +119,9 @@ func TestPostgresStructuredTrainingStoreCopiesWeeksDaysSessionsAndBlocksIndepend
 	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, 'Treinador cópias', $2, 'hash', '1980-01-01')`, actorID, "copy-store-"+uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	today := time.Now().In(time.Local)
-	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.Local)
+	// Keep this fixture outside the date ranges used by other integration tests;
+	// season inference is intentionally based on the week date.
+	weekStart := time.Date(2042, time.January, 6, 0, 0, 0, 0, time.Local)
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época cópias', $3, $4)`, seasonID, "CP_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -242,8 +243,9 @@ func TestPostgresStructuredTrainingCyclesRemainScopedVersionedAndCopyIndependent
 			t.Fatal(err)
 		}
 	}
-	today := time.Now().In(time.Local)
-	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.Local)
+	// Use an isolated range so both weeks resolve to this fixture season even
+	// when the baseline contains the club's current season.
+	weekStart := time.Date(2044, time.January, 4, 0, 0, 0, 0, time.Local)
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época ciclos', $3, $4)`, seasonID, "CY_"+uuid.NewString()[:8], weekStart.AddDate(0, -2, 0), weekStart.AddDate(0, 6, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -619,6 +621,7 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	enableGuardianAuthorityTestPolicy(t, ctx, pool, guardian.ID)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE guardian_id = $1`, guardian.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, guardian.ID)
@@ -634,14 +637,14 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	if err := store.CreateDependent(ctx, input); err != nil {
 		t.Fatal(err)
 	}
-	dependents, err := queries.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &guardian.ID, RowLimit: 10})
+	relationships, err := (PostgresGuardianAuthorityStore{DB: pool}).ListForGuardian(ctx, guardian.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dependents) != 1 || dependents[0].GuardianID == nil || *dependents[0].GuardianID != guardian.ID {
-		t.Fatalf("dependents = %#v", dependents)
+	if len(relationships) != 1 || relationships[0].State != "PENDING" || relationships[0].SubjectName != "" {
+		t.Fatalf("pending relationships = %#v", relationships)
 	}
-	consents, err := queries.ListConsentFormsForUser(ctx, dbgen.ListConsentFormsForUserParams{UserID: dependents[0].ID, RowLimit: 10})
+	consents, err := queries.ListConsentFormsForUser(ctx, dbgen.ListConsentFormsForUserParams{UserID: relationships[0].SubjectID, RowLimit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,10 +692,12 @@ func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: actor.ID, RoleCode: "ADMIN"}); err != nil {
 		t.Fatal(err)
 	}
+	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, actor.ID)
 	minor, err := queries.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{Name: "Menor com credencial", GuardianID: guardian.ID, DateOfBirth: pgtype.Date{Time: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	verifyGuardianAuthorityTestRelationship(t, ctx, pool, guardian.ID, minor.ID, actor.ID, policy)
 	loginID, passwordHash := "CFC-TEST0001", "hash"
 	if _, err := queries.IssueMinorCredential(ctx, dbgen.IssueMinorCredentialParams{MinorLoginID: &loginID, PasswordHash: &passwordHash, MinorUserID: minor.ID, GuardianUserID: uuid.New(), ActorUserID: actor.ID, Action: "ISSUED"}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("wrong guardian error = %v", err)
@@ -823,9 +828,11 @@ func TestPostgresProfileStoreEnforcesGuardianConsentConflictAndAudit(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Menor perfil', $2, true, '2014-01-01')`, dependentID, guardianID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, is_dependent, date_of_birth) VALUES ($1, 'Menor perfil', true, '2014-01-01')`, dependentID); err != nil {
 		t.Fatal(err)
 	}
+	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, unrelatedID)
+	verifyGuardianAuthorityTestRelationship(t, ctx, pool, guardianID, dependentID, unrelatedID, policy)
 	store := PostgresProfileStore{Pool: pool}
 	profile, err := store.View(ctx, guardianID, dependentID, false)
 	if err != nil {
@@ -962,7 +969,7 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	}
 	for _, user := range users {
 		if user.guardian != uuid.Nil {
-			if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, date_of_birth, guardian_id, is_dependent) VALUES ($1, $2, $3, $4, true)`, user.id, user.name, user.birth, user.guardian); err != nil {
+			if _, err := pool.Exec(ctx, `INSERT INTO users (id, name, date_of_birth, is_dependent) VALUES ($1, $2, $3, true)`, user.id, user.name, user.birth); err != nil {
 				t.Fatal(err)
 			}
 		} else {
@@ -971,6 +978,8 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 			}
 		}
 	}
+	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, actorID)
+	verifyGuardianAuthorityTestRelationship(t, ctx, pool, guardianID, athleteID, actorID, policy)
 	today := time.Now().UTC()
 	weekStart := time.Date(today.Year(), today.Month(), today.Day()-((int(today.Weekday())+6)%7), 0, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época publicação', $3, $4)`, seasonID, "PUB_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
@@ -1116,11 +1125,50 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
 		t.Fatalf("outcome lineage moved after republish: %s err=%v", outcomePrescriptionID, err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE users SET guardian_id = $2 WHERE id = $1`, athleteID, outsiderID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE guardian_authority_relationships SET state='SUSPENDED',version=version+1,updated_at=clock_timestamp() WHERE subject_user_id=$1`, athleteID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("former guardian retained feedback access: %v", err)
+	}
+}
+
+func enableGuardianAuthorityTestPolicy(t *testing.T, ctx context.Context, pool *pgxpool.Pool, actorID uuid.UUID) string {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled`); err != nil {
+		t.Fatal(err)
+	}
+	version := "handler-test-" + uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO guardian_authority_policies
+		(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
+		VALUES($1,'{TEST_EVIDENCE}','{EVIDENCE_CONFIRMED,EVIDENCE_INSUFFICIENT,AUTHORITY_CHANGED,CONFLICT,VALIDITY_ENDED}',365,180,clock_timestamp(),$2,true,clock_timestamp(),$2)`, version, actorID); err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+func verifyGuardianAuthorityTestRelationship(t *testing.T, ctx context.Context, pool *pgxpool.Pool, guardianID, subjectID, verifierID uuid.UUID, policy string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `WITH inserted AS (
+		INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state)
+		SELECT $1,$2,name,'PENDING' FROM users WHERE id=$2
+		ON CONFLICT(subject_user_id) DO NOTHING RETURNING id,created_at)
+		INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,occurred_at)
+		SELECT id,1,$1,'GUARDIAN','DECLARED',NULL,'PENDING',created_at FROM inserted`, guardianID, subjectID); err != nil {
+		t.Fatal(err)
+	}
+	var relationshipID uuid.UUID
+	if err := pool.QueryRow(ctx, `UPDATE guardian_authority_relationships SET state='VERIFIED',version=2,policy_version=$3,
+		verified_at=clock_timestamp(),verified_by=$4,verified_until=clock_timestamp()+interval '365 days',
+		review_due_at=clock_timestamp()+interval '180 days',updated_at=clock_timestamp()
+		WHERE guardian_user_id=$1 AND subject_user_id=$2 RETURNING id`, guardianID, subjectID, policy, verifierID).Scan(&relationshipID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO guardian_authority_events
+		(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,evidence_type,evidence_reference,evidence_sha256,occurred_at,verified_until,review_due_at)
+		SELECT id,2,$2,'VERIFIER','VERIFIED','PENDING','VERIFIED',$3,'TEST_EVIDENCE','handler-fixture/'||id::text,digest(id::text,'sha256'),verified_at,verified_until,review_due_at
+		FROM guardian_authority_relationships WHERE id=$1`, relationshipID, verifierID, policy); err != nil {
+		t.Fatal(err)
 	}
 }
 

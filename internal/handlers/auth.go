@@ -28,22 +28,24 @@ type FeatureFlagLookup interface {
 }
 
 type CurrentUser struct {
-	CanReviewPrivacy   bool
-	CanExecutePrivacy  bool
-	ID                 uuid.UUID
-	Name               string
-	Email              string
-	EmailVerified      bool
-	IsDependent        bool
-	IsAdmin            bool
-	LeaderboardVisible bool
-	ProfileComplete    bool
-	Programmes         map[string]bool
-	CoachProgrammeIDs  map[uuid.UUID]bool
-	CoachTeamIDs       map[uuid.UUID]bool
-	CanManageEvents    bool
-	CanModerateContent bool
-	FeatureModes       map[featureflags.Key]featureflags.Mode
+	CanReviewPrivacy             bool
+	CanExecutePrivacy            bool
+	CanVerifyGuardianAuthority   bool
+	HasVerifiedGuardianAuthority bool
+	ID                           uuid.UUID
+	Name                         string
+	Email                        string
+	EmailVerified                bool
+	IsDependent                  bool
+	IsAdmin                      bool
+	LeaderboardVisible           bool
+	ProfileComplete              bool
+	Programmes                   map[string]bool
+	CoachProgrammeIDs            map[uuid.UUID]bool
+	CoachTeamIDs                 map[uuid.UUID]bool
+	CanManageEvents              bool
+	CanModerateContent           bool
+	FeatureModes                 map[featureflags.Key]featureflags.Mode
 }
 
 type PrivacyReviewLookup interface {
@@ -52,13 +54,18 @@ type PrivacyReviewLookup interface {
 type PrivacyExecutionLookup interface {
 	CanExecute(context.Context, uuid.UUID) (bool, error)
 }
+type GuardianAuthorityVerifierLookup interface {
+	CanVerifyGuardianAuthority(context.Context, uuid.UUID) (bool, error)
+	HasVerifiedGuardianAuthority(context.Context, uuid.UUID) (bool, error)
+}
 type Auth struct {
-	Privacy          PrivacyReviewLookup
-	PrivacyExecution PrivacyExecutionLookup
-	Users            CurrentUserLookup
-	Features         FeatureFlagLookup
-	Sessions         *scs.SessionManager
-	System           System
+	Privacy           PrivacyReviewLookup
+	PrivacyExecution  PrivacyExecutionLookup
+	GuardianAuthority GuardianAuthorityVerifierLookup
+	Users             CurrentUserLookup
+	Features          FeatureFlagLookup
+	Sessions          *scs.SessionManager
+	System            System
 }
 
 type currentUserKey struct{}
@@ -170,10 +177,35 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			}
 			current.CanExecutePrivacy = allowed
 		}
+		if a.GuardianAuthority != nil {
+			allowed, err := a.GuardianAuthority.CanVerifyGuardianAuthority(r.Context(), current.ID)
+			if err != nil {
+				a.System.InternalError(w, r)
+				return
+			}
+			current.CanVerifyGuardianAuthority = allowed
+			verified, err := a.GuardianAuthority.HasVerifiedGuardianAuthority(r.Context(), current.ID)
+			if err != nil {
+				a.System.InternalError(w, r)
+				return
+			}
+			current.HasVerifiedGuardianAuthority = verified
+		}
 		ctx := context.WithValue(r.Context(), currentUserKey{}, current)
 		ctx = httpx.WithUserID(ctx, current.ID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (a Auth) RequireGuardianVerifier(next http.Handler) http.Handler {
+	return a.RequireAuthenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := currentUser(r.Context())
+		if user.CanVerifyGuardianAuthority {
+			next.ServeHTTP(w, r)
+			return
+		}
+		a.System.Forbidden(w, r)
+	}))
 }
 
 func profileSchemaUnavailable(err error) bool {

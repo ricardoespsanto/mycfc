@@ -124,6 +124,7 @@ type Querier interface {
 	CreateWaterIntensityProfile(ctx context.Context, arg CreateWaterIntensityProfileParams) (CreateWaterIntensityProfileRow, error)
 	CreateWaterIntensityZone(ctx context.Context, arg CreateWaterIntensityZoneParams) (uuid.UUID, error)
 	CreateWaterWorkStep(ctx context.Context, arg CreateWaterWorkStepParams) (uuid.UUID, error)
+	DeactivateMemberForAdmin(ctx context.Context, id uuid.UUID) (int64, error)
 	DeactivateUser(ctx context.Context, id uuid.UUID) error
 	DecideActivityMatch(ctx context.Context, arg DecideActivityMatchParams) (TrainingSessionActivityMatch, error)
 	DeleteEventProgrammeAudiences(ctx context.Context, eventID uuid.UUID) error
@@ -182,6 +183,7 @@ type Querier interface {
 	GetPrivacyErasureWorkSetCounts(ctx context.Context, executionRef uuid.UUID) (GetPrivacyErasureWorkSetCountsRow, error)
 	GetPrivacyExecutionPlan(ctx context.Context, requestID uuid.UUID) (PrivacyRequestExecutionPlan, error)
 	GetPrivacyExecutorGrantForShare(ctx context.Context, userID uuid.UUID) (PrivacyExecutorGrant, error)
+	GetPrivacyIdentityUpdatedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error)
 	GetPrivacyPolicy(ctx context.Context, version string) (PrivacyRequestPolicy, error)
 	GetPrivacyRequest(ctx context.Context, id uuid.UUID) (DataErasureRequest, error)
 	GetPrivacyRequestByIdempotency(ctx context.Context, arg GetPrivacyRequestByIdempotencyParams) (DataErasureRequest, error)
@@ -219,11 +221,13 @@ type Querier interface {
 	GrantPrivacyReviewer(ctx context.Context, arg GrantPrivacyReviewerParams) (PrivacyReviewerGrant, error)
 	GrantStaffCapability(ctx context.Context, arg GrantStaffCapabilityParams) (GrantStaffCapabilityRow, error)
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
+	HasCurrentGuardianAuthorityForSubject(ctx context.Context, subjectID uuid.UUID) (bool, error)
 	HasVerifiedGuardianAuthority(ctx context.Context, actorID uuid.UUID) (bool, error)
 	ImportAuthenticatedPrivacyRestoreTombstoneV2(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2Params) (uuid.UUID, error)
 	ImportAuthenticatedPrivacyRestoreTombstoneV2Hardened(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV2HardenedParams) (uuid.UUID, error)
 	ImportAuthenticatedPrivacyRestoreTombstoneV4Hardened(ctx context.Context, arg ImportAuthenticatedPrivacyRestoreTombstoneV4HardenedParams) (uuid.UUID, error)
 	InvalidatePrivacyAccountTokens(ctx context.Context, arg InvalidatePrivacyAccountTokensParams) (InvalidatePrivacyAccountTokensRow, error)
+	IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error)
 	IsPrivacyAdministrator(ctx context.Context, userID uuid.UUID) (bool, error)
 	IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error)
 	ListActiveAdultsForAdmin(ctx context.Context, rowLimit int32) ([]ListActiveAdultsForAdminRow, error)
@@ -334,6 +338,7 @@ type Querier interface {
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
 	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)
+	ReconcileGuardianAuthorityCutoffs(ctx context.Context) (int64, error)
 	RecordActivityConnectionError(ctx context.Context, arg RecordActivityConnectionErrorParams) (ActivityConnection, error)
 	RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error)
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error

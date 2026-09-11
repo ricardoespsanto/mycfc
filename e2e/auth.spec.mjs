@@ -373,7 +373,8 @@ test.describe('authentication', () => {
     await oldSessionContext.close();
   });
 
-  test('creates a dependent', async ({ page, browser }) => {
+  test('requests and verifies authority before dependent profile access', async ({ page, browser }) => {
+    test.setTimeout(300_000);
     await page.goto('/registo');
     await page.getByLabel('Nome').fill('Guardião de teste');
     await page.getByLabel('Correio eletrónico').fill(guardianEmail);
@@ -393,25 +394,78 @@ test.describe('authentication', () => {
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
     await interactivePage.getByLabel('Palavra-passe').fill(password);
     await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await interactivePage.getByRole('link', { name: 'Menores a cargo' }).click();
+    await interactivePage.goto('/dashboard/guardian');
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
-    await interactivePage.getByRole('link', { name: 'Adicionar menor' }).click();
+    await interactivePage.getByRole('link', { name: 'Pedir associação' }).click();
 
     await interactivePage.getByLabel('Nome').fill('X');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Adicionar menor' }).click();
+    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
     await expect(interactivePage.locator('.error-summary')).toBeVisible();
     await expect(interactivePage.getByLabel('Nome')).toHaveValue('X');
 
     await interactivePage.getByLabel('Nome').fill('Menor de teste');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Adicionar menor' }).click();
+    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
 
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
+    await expect(interactivePage.getByRole('status')).toContainText('Pedido recebido');
+    const pendingRequest = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
+    await expect(pendingRequest).toContainText('A aguardar verificação');
+    await expect(pendingRequest.getByRole('link')).toHaveCount(0);
+    await expect(interactivePage.getByRole('link', { name: 'Menor de teste' })).toHaveCount(0);
+    await expectNoSeriousAxeViolations(interactivePage);
+
+    const noJSContext = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 320, height: 720 } });
+    const noJSPage = await noJSContext.newPage();
+    await noJSPage.goto('/login');
+    await noJSPage.getByLabel('Correio eletrónico').fill('e2e-privacy-reviewer@example.test');
+    await noJSPage.getByLabel('Palavra-passe').fill(password);
+    await noJSPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await noJSPage.goto('/admin/representacoes');
+    await noJSPage.getByRole('listitem').filter({ hasText: 'Menor de teste' }).getByRole('link').click();
+    await noJSPage.getByLabel('Decisão').focus();
+    await expect(noJSPage.getByLabel('Decisão')).toBeFocused();
+    await noJSPage.getByLabel('Decisão').selectOption('VERIFY');
+    await noJSPage.getByLabel('Código de motivo').selectOption('APPROVED');
+    await noJSPage.getByLabel(/Confirmo que apliquei a política aprovada/).check();
+    await noJSPage.getByRole('button', { name: 'Registar decisão' }).click();
+	    await expect(noJSPage.locator('.error-summary')).toBeFocused();
+	    await expectNoHorizontalOverflow(noJSPage);
+	    await noJSContext.close();
+
+    // Change actors without depending on a particular navigation layout.
+    await context.clearCookies();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill('e2e-privacy-reviewer@example.test');
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
+    const queueItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
+    await expect(queueItem).toContainText('A aguardar verificação');
+    await queueItem.getByRole('link').click();
+    await interactivePage.getByLabel('Decisão').selectOption('VERIFY');
+    await interactivePage.getByLabel('Tipo de comprovativo').selectOption('IN_PERSON_IDENTITY');
+    await interactivePage.getByLabel('Referência opaca do comprovativo').fill('e2e/guardian-authority');
+    await interactivePage.getByLabel('Impressão digital SHA-256').fill('7'.repeat(64));
+    await interactivePage.getByLabel('Código de motivo').selectOption('APPROVED');
+    await interactivePage.getByLabel(/Confirmo que apliquei a política aprovada/).check();
+    await interactivePage.getByRole('button', { name: 'Registar decisão' }).click();
+    await expect(interactivePage).toHaveURL('/admin/representacoes');
+    await expect(interactivePage.getByRole('status')).toHaveText('Decisão de representação registada.');
+
+    // Change actors without depending on a particular navigation layout.
+    await context.clearCookies();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.goto('/dashboard/guardian');
     const dependentLink = interactivePage.getByRole('link', { name: 'Menor de teste' });
     await expect(dependentLink).toBeVisible();
+    const dependentProfileURL = await dependentLink.getAttribute('href');
     await dependentLink.click();
     await interactivePage.locator('#profile-emergency-name').fill('Guardião de teste');
     await interactivePage.locator('#profile-emergency-relationship').fill('Tutor');
@@ -419,10 +473,118 @@ test.describe('authentication', () => {
     await interactivePage.getByRole('button', { name: 'Guardar perfil' }).click();
     await expect(interactivePage.getByText('Perfil atualizado.')).toBeVisible();
     await interactivePage.getByRole('link', { name: 'Voltar aos menores' }).click();
-    await expect(interactivePage.getByText(/Perfil incompleto/)).toHaveCount(0);
+    await expect(interactivePage.getByText(/Perfil incompleto/)).toContainText('declaração médica');
     await interactivePage.setViewportSize({ width: 320, height: 720 });
     await expectNoHorizontalOverflow(interactivePage);
-    await context.close();
+
+    await interactivePage.setViewportSize({ width: 1280, height: 800 });
+    await interactivePage.getByRole('button', { name: 'Terminar sessão' }).click();
+    await interactivePage.getByLabel('Correio eletrónico').fill('e2e-privacy-reviewer@example.test');
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
+    const verifiedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
+    await expect(verifiedItem).toContainText('Representação verificada');
+    await verifiedItem.getByRole('link').click();
+    await expectNoSeriousAxeViolations(interactivePage);
+    await interactivePage.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(interactivePage);
+    await interactivePage.getByLabel('Decisão').selectOption('SUSPEND');
+    await interactivePage.getByLabel('Código de motivo').selectOption('CONFLICT');
+    await interactivePage.getByLabel(/Confirmo que apliquei a política aprovada/).check();
+    await interactivePage.getByRole('button', { name: 'Registar decisão' }).click();
+    const suspendedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
+    await expect(suspendedItem).toContainText('Em revisão pelo clube');
+    await suspendedItem.getByRole('link').click();
+    await expect(interactivePage.getByText(/Outra pessoa verificadora autorizada/)).toBeVisible();
+    await expect(interactivePage.locator('#guardian-authority-decision')).toHaveCount(0);
+    await expectNoHorizontalOverflow(interactivePage);
+    await expectNoSeriousAxeViolations(interactivePage);
+
+    // A conflicted verifier sees a focused, read-only task surface without the
+    // global shell, so reset the session before continuing as the guardian.
+    await context.clearCookies();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.goto('/dashboard/guardian');
+    await expect(interactivePage.getByRole('link', { name: 'Menor de teste' })).toHaveCount(0);
+    await expect(interactivePage.getByText('Em revisão pelo clube')).toBeVisible();
+    const deniedProfile = await interactivePage.goto(dependentProfileURL);
+    expect(deniedProfile?.status()).toBe(404);
+
+    await interactivePage.setViewportSize({ width: 1280, height: 800 });
+    await interactivePage.goto('/dashboard/guardian');
+    await interactivePage.getByRole('link', { name: 'Pedir associação' }).click();
+    await interactivePage.getByLabel('Nome').fill('Menor rejeitado');
+    await interactivePage.getByLabel('Data de nascimento').fill('2013-02-02');
+    await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
+    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await interactivePage.getByRole('button', { name: 'Terminar sessão' }).click();
+    await interactivePage.getByLabel('Correio eletrónico').fill('e2e-privacy-reviewer@example.test');
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
+    const rejectionItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor rejeitado' });
+    const rejectionURL = await rejectionItem.getByRole('link').getAttribute('href');
+    await rejectionItem.getByRole('link').click();
+    await interactivePage.getByLabel('Decisão').selectOption('REJECT');
+    await interactivePage.getByLabel('Tipo de comprovativo').selectOption('IN_PERSON_IDENTITY');
+    await interactivePage.getByLabel('Referência opaca do comprovativo').fill('e2e/guardian-rejection');
+    await interactivePage.getByLabel('Impressão digital SHA-256').fill('8'.repeat(64));
+    await interactivePage.getByLabel('Código de motivo').selectOption('NO_AUTHORITY');
+    await interactivePage.getByLabel(/Confirmo que apliquei a política aprovada/).check();
+    await interactivePage.getByRole('button', { name: 'Registar decisão' }).click();
+    await interactivePage.goto(rejectionURL);
+    await expect(interactivePage.getByText(/Este pedido terminou sem aprovação/)).toBeVisible();
+    await expect(interactivePage.locator('#guardian-authority-decision')).toHaveCount(0);
+    await interactivePage.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(interactivePage);
+    await expectNoSeriousAxeViolations(interactivePage);
+
+    await context.clearCookies();
+    await interactivePage.goto('/login');
+    await interactivePage.getByLabel('Correio eletrónico').fill('e2e-privacy-alternate@example.test');
+    await interactivePage.getByLabel('Palavra-passe').fill(password);
+    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await interactivePage.goto('/admin/representacoes');
+    const conflictedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
+    await conflictedItem.getByRole('link').click();
+    await interactivePage.getByLabel('Decisão').selectOption('VERIFY');
+    await interactivePage.getByLabel('Tipo de comprovativo').selectOption('IN_PERSON_IDENTITY');
+    await interactivePage.getByLabel('Referência opaca do comprovativo').fill('e2e/guardian-conflict-resolution');
+    await interactivePage.getByLabel('Impressão digital SHA-256').fill('9'.repeat(64));
+    await interactivePage.getByLabel('Código de motivo').selectOption('APPROVED');
+    await interactivePage.getByLabel(/Confirmo que apliquei a política aprovada/).check();
+    await interactivePage.getByRole('button', { name: 'Registar decisão' }).click();
+
+	    const resolvedGuardianContext = await browser.newContext({ baseURL });
+	    const resolvedGuardianPage = await resolvedGuardianContext.newPage();
+	    await resolvedGuardianPage.goto('/login');
+	    await resolvedGuardianPage.getByLabel('Correio eletrónico').fill(guardianEmail);
+	    await resolvedGuardianPage.getByLabel('Palavra-passe').fill(password);
+	    await resolvedGuardianPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+	    await expect(resolvedGuardianPage).toHaveURL('/today');
+	    await resolvedGuardianPage.goto('/dashboard/guardian');
+	    await expect(resolvedGuardianPage.getByRole('link', { name: 'Menor de teste' })).toBeVisible();
+	    await expect(resolvedGuardianPage.getByRole('listitem').filter({ hasText: 'Menor rejeitado' })).toContainText('Pedido não aprovado');
+	    await resolvedGuardianContext.close();
+	    await context.close();
+  });
+
+  test('renders expired authority as status-only on mobile', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Correio eletrónico').fill('e2e-privacy-guardian@example.test');
+    await page.getByLabel('Palavra-passe').fill(password);
+    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await page.getByRole('link', { name: 'Menores a cargo' }).click();
+    const expired = page.getByRole('listitem').filter({ hasText: 'Menor com verificação expirada' });
+    await expect(expired).toContainText('Verificação expirada');
+    await expect(expired.getByRole('link')).toHaveCount(0);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expectNoHorizontalOverflow(page);
+    await expectNoSeriousAxeViolations(page);
   });
 
   test('administrator validates, schedules, and completes maintenance with keyboard and zoom coverage', async ({ page }) => {

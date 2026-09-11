@@ -12,13 +12,65 @@ INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES
   ('10000000-0000-0000-0000-000000000005', 'Beatriz Administradora do Clube', 'review-admin@example.test', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK', '1985-06-14'),
   ('10000000-0000-0000-0000-000000000006', 'Rui Atleta Tutor Treinador e Moderador', 'review-multi@example.test', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK', '1989-01-30');
 
-INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES
-  ('10000000-0000-0000-0000-000000000011', 'Leonor Rodrigues e Albuquerque', '10000000-0000-0000-0000-000000000002', true, '2013-05-19'),
-  ('10000000-0000-0000-0000-000000000012', 'Gonçalo Rodrigues e Albuquerque', '10000000-0000-0000-0000-000000000002', true, '2016-10-08'),
-  ('10000000-0000-0000-0000-000000000013', 'Sofia Ferreira', '10000000-0000-0000-0000-000000000006', true, '2015-03-21');
+INSERT INTO users (id, name, is_dependent, date_of_birth) VALUES
+  ('10000000-0000-0000-0000-000000000011', 'Leonor Rodrigues e Albuquerque', true, '2013-05-19'),
+  ('10000000-0000-0000-0000-000000000012', 'Gonçalo Rodrigues e Albuquerque', true, '2016-10-08'),
+  ('10000000-0000-0000-0000-000000000013', 'Sofia Ferreira', true, '2015-03-21');
 
 INSERT INTO user_platform_roles (user_id, role_id)
 SELECT '10000000-0000-0000-0000-000000000005', id FROM platform_roles WHERE code = 'ADMIN';
+
+-- Synthetic authority policy and evidence for this isolated visual-review
+-- database. Fresh application databases deliberately seed neither.
+SELECT guardian_authority_adopt_policy(
+  '10000000-0000-0000-0000-000000000005',
+  'ui-review-guardian-v1',
+  ARRAY['IN_PERSON_IDENTITY'],
+  ARRAY['APPROVED','INSUFFICIENT_EVIDENCE','CONFLICT','NO_AUTHORITY'],
+  3650,
+  1825
+);
+SELECT guardian_authority_set_policy_enabled(
+  '10000000-0000-0000-0000-000000000005',
+  'ui-review-guardian-v1',
+  true
+);
+SELECT guardian_authority_grant_verifier(
+  '10000000-0000-0000-0000-000000000005',
+  '10000000-0000-0000-0000-000000000004'
+);
+
+INSERT INTO guardian_authority_relationships
+  (id, public_ref, guardian_user_id, subject_user_id, submitted_label)
+VALUES
+  ('12000000-0000-0000-0000-000000000011', '12100000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000011', 'Leonor Rodrigues e Albuquerque'),
+  ('12000000-0000-0000-0000-000000000012', '12100000-0000-0000-0000-000000000012', '10000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000012', 'Gonçalo Rodrigues e Albuquerque'),
+  ('12000000-0000-0000-0000-000000000013', '12100000-0000-0000-0000-000000000013', '10000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000013', 'Sofia Ferreira');
+INSERT INTO guardian_authority_events
+  (relationship_id, relationship_version, actor_ref, actor_role, action, from_state, to_state)
+SELECT id, 1, guardian_user_id, 'GUARDIAN', 'DECLARED', NULL, 'PENDING'
+FROM guardian_authority_relationships
+WHERE id IN (
+  '12000000-0000-0000-0000-000000000011',
+  '12000000-0000-0000-0000-000000000012',
+  '12000000-0000-0000-0000-000000000013'
+);
+SELECT guardian_authority_transition(
+  '10000000-0000-0000-0000-000000000004',
+  public_ref,
+  1,
+  'VERIFIED',
+  'IN_PERSON_IDENTITY',
+  'ui-review/' || subject_user_id::text,
+  digest(convert_to('ui-review/' || subject_user_id::text, 'UTF8'), 'sha256'),
+  'APPROVED'
+)
+FROM guardian_authority_relationships
+WHERE id IN (
+  '12000000-0000-0000-0000-000000000011',
+  '12000000-0000-0000-0000-000000000012',
+  '12000000-0000-0000-0000-000000000013'
+);
 
 UPDATE feature_flags
 SET mode = 'ENABLED', updated_by_id = '10000000-0000-0000-0000-000000000005', updated_at = now()

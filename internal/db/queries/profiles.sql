@@ -89,6 +89,12 @@ LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
 WHERE u.id = sqlc.arg(user_id)
   AND u.erased_at IS NULL
   AND (u.is_active OR sqlc.arg(is_admin)::boolean)
+  AND (NOT u.is_dependent
+    OR u.id = sqlc.arg(actor_id)
+    OR (sqlc.arg(is_admin)::boolean AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+        WHERE relationship.subject_user_id=u.id
+          AND guardian_authority_current(relationship.guardian_user_id,u.id)))
+    OR guardian_authority_current(sqlc.arg(actor_id), u.id))
 ;
 
 -- name: ListDependentProfileCompleteness :many

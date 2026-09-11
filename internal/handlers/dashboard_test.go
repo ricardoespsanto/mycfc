@@ -22,7 +22,7 @@ import (
 
 func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	store := &dashboardStoreFake{}
-	dashboard := Dashboard{Store: store, Fleet: store, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
+	dashboard := Dashboard{Store: store, Fleet: store, GuardianAuthority: &guardianAuthorityStoreFake{policyAvailable: true}, PageMeta: components.PageMeta{StylesheetURL: "/assets/app.css", ScriptURL: "/assets/app.js"}}
 	for _, tc := range []struct {
 		name    string
 		present []string
@@ -94,7 +94,7 @@ func TestPrivacyReviewerNavigationIsCapabilityScoped(t *testing.T) {
 }
 
 func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
-	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
+	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, HasVerifiedGuardianAuthority: true, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
 	labels := strings.Join(dashboardCapabilities(user), ",")
 	for _, want := range []string{"Tutor", "Treinador", "Moderador", "Administrador"} {
 		if !strings.Contains(labels, want) {

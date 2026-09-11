@@ -56,7 +56,13 @@ VALUES (sqlc.arg(membership_id), sqlc.arg(modality_id));
 
 -- name: UpsertCurrentSeasonMembership :one
 INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-VALUES (sqlc.arg(user_id)::uuid, sqlc.arg(season_id), sqlc.arg(programme_id), sqlc.arg(starts_on))
+SELECT member.id,sqlc.arg(season_id),sqlc.arg(programme_id),sqlc.arg(starts_on)
+FROM users member
+WHERE member.id=sqlc.arg(user_id)::uuid AND member.is_active AND member.erased_at IS NULL
+ AND (NOT member.is_dependent OR EXISTS(
+  SELECT 1 FROM guardian_authority_relationships relationship
+  WHERE relationship.subject_user_id=member.id
+   AND guardian_authority_current(relationship.guardian_user_id,member.id)))
 ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
 SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
@@ -66,7 +72,12 @@ RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id
 UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
 WHERE user_id = sqlc.arg(user_id)::uuid AND season_id = sqlc.arg(season_id)
   AND programme_id = sqlc.arg(programme_id) AND starts_on <= CURRENT_DATE
-  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE);
+  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
+  AND EXISTS(SELECT 1 FROM users member WHERE member.id=user_memberships.user_id
+   AND (NOT member.is_dependent OR EXISTS(
+    SELECT 1 FROM guardian_authority_relationships relationship
+    WHERE relationship.subject_user_id=member.id
+     AND guardian_authority_current(relationship.guardian_user_id,member.id))));
 
 -- name: ListActiveMembershipsForUser :many
 SELECT

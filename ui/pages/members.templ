@@ -10,7 +10,7 @@ import (
 
 type MemberListItem struct { ID, Name, Email, LoginID string; Dependent, Active bool }
 type MemberGuardian struct { ID, Name, Email string }
-type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID, Conflict, ReturnURL string; Dependent bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
+type MemberCreateForm struct { CSRFField templ.Component; Name, Email, DateOfBirth, GuardianID, Conflict, ReturnURL string; Dependent, DependentAvailable bool; Guardians []MemberGuardian; Errors validation.FieldErrors }
 type MembersPage struct { Meta components.PageMeta; Search, PreviousURL, NextURL, ReturnURL, Success string; Members []MemberListItem; Form MemberCreateForm }
 type MemberDetail struct { ID, Name, Email, LoginID, Guardian string; Dependent, Active bool }
 type MemberProgramme struct { ID, Name string; Active bool }
@@ -96,11 +96,14 @@ templ memberCreateForm(form MemberCreateForm) {
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(form.Errors), []components.FieldErrorRef{{Key: "name", Field: "member-name"}, {Key: "date_of_birth", Field: "member-birth"}, {Key: "email", Field: "member-email"}, {Key: "guardian_id", Field: "member-guardian"}, {Key: "password", Field: "member-password"}, {Key: "password_confirmation", Field: "member-password-confirmation"}}))
 		@components.TaskConflict("Não foi possível concluir a tarefa", form.Conflict, "", form.ReturnURL, "Atualizar a lista")
 		<p>Para um menor, selecione o tutor. A credencial individual é emitida depois no detalhe do menor.</p>
+		if !form.DependentAvailable {
+			@components.StatusMessage("Os pedidos para menores são iniciados pela pessoa adulta responsável na área Família e ficam pendentes de verificação.", "info")
+		}
 		@components.RequiredNote()
 		@components.FormSection("Tipo de conta", "Escolha quem vai usar a conta.") {
 			<div class="task-account-type" data-account-type>
 				<label><input type="radio" name="account_type" value="adult" checked?={ !form.Dependent }/> Adulto</label>
-				<label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent }/> Menor a cargo</label>
+				<label><input type="radio" name="account_type" value="dependent" checked?={ form.Dependent } disabled?={ !form.DependentAvailable }/> Menor a cargo</label>
 			</div>
 		}
 		@components.FormSection("Identificação", "Dados usados para identificar a pessoa.") {

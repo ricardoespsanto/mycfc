@@ -32,7 +32,7 @@ type MemberStore interface {
 	ListActiveAdultsForAdmin(context.Context, int32) ([]dbgen.ListActiveAdultsForAdminRow, error)
 	CreateAdultUser(context.Context, dbgen.CreateAdultUserParams) (dbgen.CreateAdultUserRow, error)
 	CreateDependentUser(context.Context, dbgen.CreateDependentUserParams) (dbgen.CreateDependentUserRow, error)
-	DeactivateUser(context.Context, uuid.UUID) error
+	DeactivateMemberForAdmin(context.Context, uuid.UUID) (int64, error)
 	GetCurrentSeason(context.Context) (dbgen.Season, error)
 	CreateSeason(context.Context, dbgen.CreateSeasonParams) (dbgen.Season, error)
 	ListMembershipProgrammes(context.Context) ([]dbgen.Programme, error)
@@ -81,6 +81,7 @@ func (h Members) Index(w http.ResponseWriter, r *http.Request) {
 		returnURL = "/admin/membros"
 	}
 	page := pages.MembersPage{Search: search, ReturnURL: returnURL, Form: h.memberFormFromAdults(r, memberForm{Errors: validation.FieldErrors{}}, adults), Meta: h.meta(r, "Gestão de membros", "/admin/membros")}
+	page.Form.DependentAvailable = false
 	page.Form.ReturnURL = returnURL
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "members_flash")
@@ -126,6 +127,9 @@ func (h Members) Create(w http.ResponseWriter, r *http.Request) {
 	form := h.validateCreate(r)
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
+	if form.Dependent {
+		form.Errors.Add("guardian_id", "A pessoa adulta responsável deve iniciar o pedido na área Família.")
+	}
 	if form.Dependent && !form.Errors.Has("guardian_id") {
 		guardianID, _ := uuid.Parse(form.GuardianID)
 		guardian, err := h.Store.GetMemberForAdmin(ctx, guardianID)
@@ -214,7 +218,15 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 	if r.PostForm.Get("active") == "on" {
 		_, err = h.Store.UpsertCurrentSeasonMembership(ctx, dbgen.UpsertCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID, StartsOn: pgtype.Date{Time: h.today(), Valid: true}})
 	} else {
-		_, err = h.Store.EndCurrentSeasonMembership(ctx, dbgen.EndCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID})
+		var affected int64
+		affected, err = h.Store.EndCurrentSeasonMembership(ctx, dbgen.EndCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID})
+		if err == nil && affected == 0 {
+			err = pgx.ErrNoRows
+		}
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.System.NotFound(w, r)
+		return
 	}
 	if err != nil {
 		h.System.InternalError(w, r)
@@ -237,7 +249,12 @@ func (h Members) Deactivate(w http.ResponseWriter, r *http.Request) {
 		h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"deactivation": "Confirme que pretende desativar esta conta."}, "")
 		return
 	}
-	if err := h.Store.DeactivateUser(r.Context(), id); err != nil {
+	affected, err := h.Store.DeactivateMemberForAdmin(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && affected == 0) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if err != nil {
 		h.System.InternalError(w, r)
 		return
 	}
@@ -353,6 +370,7 @@ func (h Members) renderCreateTask(w http.ResponseWriter, r *http.Request, status
 	meta.PageLabel = "Criar conta"
 	meta.CurrentPath = r.URL.Path
 	viewForm := h.memberFormFromAdults(r, form, adults)
+	viewForm.DependentAvailable = false
 	viewForm.Conflict = conflict
 	viewForm.ReturnURL = memberCollectionReturn(r)
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: viewForm.ReturnURL}}
@@ -442,6 +460,7 @@ func (h Members) memberFormFromAdults(r *http.Request, form memberForm, adults [
 	}
 	return f
 }
+
 func (h Members) render(w http.ResponseWriter, r *http.Request, status int, page pages.MembersPage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

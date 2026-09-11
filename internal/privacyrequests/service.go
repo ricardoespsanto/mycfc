@@ -318,9 +318,13 @@ type View struct {
 	CanViewExecution, CanExecute      bool
 }
 
-func verification(r dbgen.DataErasureRequest, requester, subject dbgen.User, now time.Time) Verification {
-	identityCurrent := r.IdentityVerifiedAt.Valid && subject.UpdatedAt.Valid && !r.IdentityVerifiedAt.Time.Before(subject.UpdatedAt.Time)
-	return Verification{IdentityVerified: identityCurrent, CurrentRelationship: currentRelationship(requester, subject, now), RepresentationVerified: r.RepresentationVerifiedAt.Valid && r.RepresentationGuardianID != nil && subject.GuardianID != nil && *r.RepresentationGuardianID == *subject.GuardianID && r.RepresentationRelationshipUpdatedAt.Valid && r.RepresentationRelationshipUpdatedAt.Time.Equal(subject.UpdatedAt.Time), Conflict: r.RepresentationConflict}
+func verification(ctx context.Context, q *dbgen.Queries, r dbgen.DataErasureRequest, requester, subject dbgen.User, now time.Time) (Verification, error) {
+	identityUpdatedAt, err := q.GetPrivacyIdentityUpdatedAt(ctx, subject.ID)
+	if err != nil {
+		return Verification{}, err
+	}
+	identityCurrent := r.IdentityVerifiedAt.Valid && identityUpdatedAt.Valid && !r.IdentityVerifiedAt.Time.Before(identityUpdatedAt.Time)
+	return Verification{IdentityVerified: identityCurrent, CurrentRelationship: currentRelationship(requester, subject, now), RepresentationVerified: r.RepresentationVerifiedAt.Valid && r.RepresentationGuardianID != nil && subject.GuardianID != nil && *r.RepresentationGuardianID == *subject.GuardianID && r.RepresentationRelationshipUpdatedAt.Valid && r.RepresentationRelationshipUpdatedAt.Time.Equal(subject.UpdatedAt.Time), Conflict: r.RepresentationConflict}, nil
 }
 func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool) (View, error) {
 	var v View
@@ -360,7 +364,10 @@ func (s Service) View(ctx context.Context, actor, ref uuid.UUID, management bool
 		}
 	}
 	v.Record = r
-	checks := verification(r, requester, subject, now)
+	checks, e := verification(ctx, q, r, requester, subject, now)
+	if e != nil {
+		return View{}, e
+	}
 	v.SafeReceipt = !management && requester.ID != subject.ID && (!checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict || !checks.CurrentRelationship)
 	v.CanCancel = !management && (r.Status == "RECEIVED" || r.Status == "UNDER_REVIEW" || r.Status == "AWAITING_EXECUTION" || r.Status == "PARTIALLY_APPROVED") && !checks.Conflict && (!v.SafeReceipt || r.Status == "RECEIVED" || r.Status == "UNDER_REVIEW")
 	if v.SafeReceipt {
@@ -535,7 +542,10 @@ func (s Service) List(ctx context.Context, actor uuid.UUID, management bool, sta
 			if e != nil || (!currentRelationship(u, subject, s.now()) && !historicalReceipt) {
 				continue
 			}
-			checks := verification(r, u, subject, s.now())
+			checks, verificationErr := verification(ctx, q, r, u, subject, s.now())
+			if verificationErr != nil {
+				return nil, verificationErr
+			}
 			if !checks.IdentityVerified || !checks.RepresentationVerified || checks.Conflict || !checks.CurrentRelationship {
 				r.Status = "RECEIVED"
 				r.DueAt = pgtype.Timestamptz{}
@@ -603,7 +613,10 @@ func (s Service) Change(ctx context.Context, in ReviewInput) (dbgen.DataErasureR
 	}
 	a, requester, subject := us[in.ActorID], us[*r.RequesterUserID], us[*r.SubjectUserID]
 	now := s.now().UTC().Truncate(time.Microsecond)
-	checks := verification(r, requester, subject, now)
+	checks, e := verification(ctx, q, r, requester, subject, now)
+	if e != nil {
+		return zero, e
+	}
 	isReviewer := reviewer(ctx, q, a, now)
 	if in.Action == "cancel" {
 		if a.ID != requester.ID || !a.IsActive || !checks.CurrentRelationship {
