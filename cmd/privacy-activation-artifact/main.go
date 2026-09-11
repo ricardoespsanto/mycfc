@@ -84,9 +84,10 @@ type infrastructureObservation struct {
 }
 
 type providerSource struct {
-	Contract      string            `json:"contract"`
-	RegistryState string            `json:"registry_state"`
-	Providers     []json.RawMessage `json:"providers"`
+	Contract       string            `json:"contract"`
+	InventoryScope string            `json:"inventory_scope"`
+	InventoryState string            `json:"inventory_state"`
+	Providers      []json.RawMessage `json:"providers"`
 }
 
 type providerObservation struct {
@@ -95,6 +96,7 @@ type providerObservation struct {
 	RegistryState          string `json:"registry_state"`
 	RegistrationCount      int64  `json:"registration_count"`
 	ProviderRegistrySHA256 string `json:"provider_registry_sha256"`
+	InventoryContract      string `json:"inventory_contract"`
 }
 
 type schemaObservation struct {
@@ -163,9 +165,6 @@ func runProvider(command string, args []string, output io.Writer) error {
 	if command == "provider-observe" {
 		return writeCanonical(*common, observation, output)
 	}
-	// The shipped registry intentionally has no reviewed adapter. Signing its
-	// emptiness as SUCCEEDED would turn missing provider work into an activation
-	// shortcut, so the signed artifact remains ineligible for recording.
 	return signArtifact(*common, observation, providerArtifact(*common, observation), output)
 }
 
@@ -256,12 +255,13 @@ func observeProvider(path string) (providerObservation, error) {
 		return providerObservation{}, err
 	}
 	var source providerSource
-	if err = decodeExact(payload, &source); err != nil || source.Contract != "mycfc/privacy-provider-registry-source/v1" ||
-		source.RegistryState != "EMPTY" || len(source.Providers) != 0 {
+	if err = decodeExact(payload, &source); err != nil || source.Contract != "mycfc/privacy-provider-registry-source/v2" ||
+		source.InventoryScope != "SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS" || source.InventoryState != "COMPLETE" ||
+		source.Providers == nil || len(source.Providers) != 0 {
 		return providerObservation{}, errors.New("provider registry source rejected")
 	}
-	return providerObservation{Contract: "mycfc/privacy-provider-observation/v1", Result: "NOT_READY", RegistryState: "EMPTY",
-		RegistrationCount: 0, ProviderRegistrySHA256: digest(payload)}, nil
+	return providerObservation{Contract: "mycfc/privacy-provider-observation/v2", Result: "READY", RegistryState: "READY",
+		RegistrationCount: 0, ProviderRegistrySHA256: digest(payload), InventoryContract: source.Contract}, nil
 }
 
 func observeSchema(versionsPath string) (schemaObservation, error) {
@@ -277,7 +277,7 @@ func observeSchema(versionsPath string) (schemaObservation, error) {
 	if len(want) < 2 || strings.Join(versions, "\n") != strings.Join(want, "\n") || digest(payload) != db.EmbeddedMigrationDigest() {
 		return schemaObservation{}, errors.New("schema version inventory rejected")
 	}
-	const baselineThrough = "202609110001_privacy_upload_finalize_execution_fence"
+	const baselineThrough = "202609110002_privacy_empty_provider_registry_activation"
 	if !containsExact(versions, "reset-baseline-v1") || !containsExact(versions, baselineThrough) {
 		return schemaObservation{}, errors.New("schema version inventory mismatch")
 	}
@@ -345,10 +345,11 @@ func infrastructureArtifact(common commonOptions, observation infrastructureObse
 }
 
 func providerArtifact(common commonOptions, observation providerObservation) map[string]any {
-	artifact := envelope(common, "mycfc/privacy-provider-registry/v1", "NOT_READY")
+	artifact := envelope(common, "mycfc/privacy-provider-registry/v2", "SUCCEEDED")
 	artifact["registry_state"] = observation.RegistryState
 	artifact["registration_count"] = observation.RegistrationCount
 	artifact["provider_registry_sha256"] = observation.ProviderRegistrySHA256
+	artifact["inventory_contract"] = observation.InventoryContract
 	return artifact
 }
 

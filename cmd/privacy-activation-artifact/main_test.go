@@ -91,19 +91,21 @@ func TestInfrastructureArtifactDerivesPlanStateAndImmutableObjectBindings(t *tes
 	}
 }
 
-func TestProviderEvidenceStaysNotReadyForShippedEmptyRegistry(t *testing.T) {
+func TestProviderEvidenceIsReadyForCompleteClosedEmptyRegistry(t *testing.T) {
 	directory := t.TempDir()
-	registry := writeTestFile(t, directory, "registry.json", []byte(`{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"EMPTY","providers":[]}`), 0o600)
+	registry := writeTestFile(t, directory, "registry.json", []byte(`{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[]}`), 0o600)
 	observation, err := observeProvider(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observation.Result != "NOT_READY" || observation.RegistrationCount != 0 {
-		t.Fatalf("empty registry became eligible: %#v", observation)
+	if observation.Result != "READY" || observation.RegistryState != "READY" || observation.RegistrationCount != 0 ||
+		observation.InventoryContract != "mycfc/privacy-provider-registry-source/v2" {
+		t.Fatalf("complete empty registry was not eligible: %#v", observation)
 	}
 	artifact := providerArtifact(commonOptions{}, observation)
-	if artifact["result"] != "NOT_READY" || artifact["registry_state"] != "EMPTY" {
-		t.Fatalf("empty registry artifact became eligible: %#v", artifact)
+	if artifact["contract"] != "mycfc/privacy-provider-registry/v2" || artifact["result"] != "SUCCEEDED" ||
+		artifact["registry_state"] != "READY" || artifact["registration_count"] != int64(0) {
+		t.Fatalf("complete empty registry artifact was not ready: %#v", artifact)
 	}
 }
 
@@ -116,7 +118,7 @@ func TestSchemaObservationMatchesExactMigrationInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if observation.SchemaMigrationDigest != db.EmbeddedMigrationDigest() || observation.MigrationCount != len(db.EmbeddedMigrationInventory())-1 ||
-		observation.BaselineThrough != "202609110001_privacy_upload_finalize_execution_fence" {
+		observation.BaselineThrough != "202609110002_privacy_empty_provider_registry_activation" {
 		t.Fatalf("unexpected schema observation: %#v", observation)
 	}
 	if err := os.WriteFile(versionsPath, append(versions, '\n'), 0o600); err != nil {
@@ -139,7 +141,7 @@ func TestArtifactCommandDispatchObservesAndSignsEveryKind(t *testing.T) {
 	hetznerPlan := writeTestFile(t, directory, "dispatch-hetzner-plan.json", planJSON(t, map[string]any{
 		"privacy_restore_infrastructure_enabled": true, "privacy_restore_ledger_write_enabled": true,
 	}), 0o600)
-	registry := writeTestFile(t, directory, "dispatch-registry.json", []byte(`{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"EMPTY","providers":[]}`), 0o600)
+	registry := writeTestFile(t, directory, "dispatch-registry.json", []byte(`{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[]}`), 0o600)
 	versions := writeTestFile(t, directory, "dispatch-versions.txt", []byte(strings.Join(db.EmbeddedMigrationInventory(), "\n")), 0o600)
 	_, private, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -203,10 +205,14 @@ func TestArtifactCommandAndSourceBoundaries(t *testing.T) {
 	}
 	directory := t.TempDir()
 	for name, payload := range map[string]string{
-		"wrong-contract": `{"contract":"wrong","registry_state":"EMPTY","providers":[]}`,
-		"ready":          `{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"READY","providers":[]}`,
-		"nonempty":       `{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"EMPTY","providers":[{}]}`,
-		"trailing":       `{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"EMPTY","providers":[]} {}`,
+		"legacy-incomplete": `{"contract":"mycfc/privacy-provider-registry-source/v1","registry_state":"EMPTY","providers":[]}`,
+		"wrong-contract":    `{"contract":"wrong","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[]}`,
+		"wrong-scope":       `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"ALL_PROVIDERS","inventory_state":"COMPLETE","providers":[]}`,
+		"incomplete":        `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"INCOMPLETE","providers":[]}`,
+		"missing-providers": `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE"}`,
+		"nonempty":          `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[{}]}`,
+		"unknown-field":     `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[],"unknown":true}`,
+		"trailing":          `{"contract":"mycfc/privacy-provider-registry-source/v2","inventory_scope":"SUBJECT_SPECIFIC_EXTERNAL_INTEGRATIONS","inventory_state":"COMPLETE","providers":[]} {}`,
 	} {
 		if _, err := observeProvider(writeTestFile(t, directory, name+".json", []byte(payload), 0o600)); err == nil {
 			t.Fatalf("invalid provider source accepted: %s", name)

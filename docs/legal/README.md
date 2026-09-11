@@ -1,7 +1,7 @@
 # Pacote jurídico e de privacidade MyCFCoimbra
 
 Estado: **aprovado para publicação**
-Versão pública: `2026-09-06`
+Versão pública atual da política de privacidade: `2026-09-11`; os restantes documentos mantêm `2026-09-06`
 Responsável pelo tratamento: Clube Fluvial de Coimbra (CFC), NIPC 502 440 597
 Morada: Avenida Inês de Castro, Pavilhão A, 3040-255 Coimbra
 Contacto atual: `cfluvialcoimbra@gmail.com`
@@ -14,7 +14,7 @@ A pesquisa legal, exemplos comparados e correspondência com os issues estão re
 
 | Documento | Rota pública | Função |
 |---|---|---|
-| [Política de privacidade](versions/2026-09-06/politica-privacidade.md) | `/legal/privacidade` | Informação dos artigos 12.º–14.º do RGPD |
+| [Política de privacidade](versions/2026-09-11/politica-privacidade.md) | `/legal/privacidade` | Informação dos artigos 12.º–14.º do RGPD; substitui apenas a versão de `2026-09-06` |
 | [Termos gerais de utilização](versions/2026-09-06/termos-gerais.md) | `/legal/termos-gerais` | Regras de acesso e utilização do MyCFCoimbra |
 | [Política de cookies](versions/2026-09-06/politica-cookies.md) | `/legal/cookies` | Informação sobre armazenamento estritamente necessário |
 | [Autorização de utilização de imagem](versions/2026-09-06/autorizacao-imagem.md) | `/legal/uso-imagem` | Consentimento autónomo, específico e revogável |

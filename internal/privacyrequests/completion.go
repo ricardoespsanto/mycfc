@@ -389,8 +389,9 @@ type activationArtifactRecord struct {
 	RestoreInfrastructureEnabled                *bool  `json:"restore_infrastructure_enabled,omitempty"`
 	RestoreLedgerWriteEnabled                   *bool  `json:"restore_ledger_write_enabled,omitempty"`
 	ProviderRegistryState                       string `json:"provider_registry_state,omitempty"`
-	ProviderRegistrationCount                   int64  `json:"provider_registration_count,omitempty"`
+	ProviderRegistrationCount                   *int64 `json:"provider_registration_count,omitempty"`
 	ProviderRegistrySHA256                      []byte `json:"provider_registry_sha256,omitempty"`
+	ProviderInventoryContract                   string `json:"provider_inventory_contract,omitempty"`
 	RestoreInputSource                          string `json:"restore_input_source,omitempty"`
 	RestoreInputContract                        string `json:"restore_input_contract,omitempty"`
 	RestoreReplayContract                       string `json:"restore_replay_contract,omitempty"`
@@ -466,7 +467,7 @@ func (s Service) VerifyAndRecordRestoreActivationEvidence(ctx context.Context, a
 
 var activationArtifactContracts = map[string]string{
 	"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
-	"PROVIDER":       "mycfc/privacy-provider-registry/v1",
+	"PROVIDER":       "mycfc/privacy-provider-registry/v2",
 	"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 }
 
@@ -505,6 +506,7 @@ type providerActivationArtifact struct {
 	RegistryState          string `json:"registry_state"`
 	RegistrationCount      int64  `json:"registration_count"`
 	ProviderRegistrySHA256 string `json:"provider_registry_sha256"`
+	InventoryContract      string `json:"inventory_contract"`
 }
 
 type schemaActivationArtifact struct {
@@ -558,16 +560,18 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 		record.WorkerMonitoringEnabled, record.RestoreInfrastructureEnabled, record.RestoreLedgerWriteEnabled = &enabled, &enabled, &enabled
 	case "PROVIDER":
 		var artifact providerActivationArtifact
-		if !decodeExactJSON(payload, &artifact) || artifact.RegistryState != "READY" || artifact.RegistrationCount <= 0 || !validSHA256Hex(artifact.ProviderRegistrySHA256) {
+		if !decodeExactJSON(payload, &artifact) || artifact.RegistryState != "READY" || artifact.RegistrationCount != 0 ||
+			artifact.InventoryContract != "mycfc/privacy-provider-registry-source/v2" || !validSHA256Hex(artifact.ProviderRegistrySHA256) {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact
-		record.ProviderRegistryState, record.ProviderRegistrationCount = artifact.RegistryState, artifact.RegistrationCount
+		record.ProviderRegistryState, record.ProviderRegistrationCount = artifact.RegistryState, &artifact.RegistrationCount
 		record.ProviderRegistrySHA256, _ = hex.DecodeString(artifact.ProviderRegistrySHA256)
+		record.ProviderInventoryContract = artifact.InventoryContract
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609110001_privacy_upload_finalize_execution_fence" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609110002_privacy_empty_provider_registry_activation" {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact

@@ -101,13 +101,14 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 			common[field] = true
 		}
 	case "PROVIDER":
-		contract = "mycfc/privacy-provider-registry/v1"
+		contract = "mycfc/privacy-provider-registry/v2"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/provider?versionId=v1", "fixture-key"
-		common["provider_registry_state"], common["provider_registration_count"], common["provider_registry_sha256"] = "READY", 1, value
+		common["provider_registry_state"], common["provider_registration_count"], common["provider_registry_sha256"] = "READY", 0, value
+		common["provider_inventory_contract"] = "mycfc/privacy-provider-registry-source/v2"
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110001_privacy_upload_finalize_execution_fence"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110002_privacy_empty_provider_registry_activation"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -134,7 +135,7 @@ func activatePrivacyIntegrationFixture(t *testing.T, ctx context.Context, pool a
 	contracts := map[string]string{
 		"RESTORE":        "mycfc/privacy-restore-drill-attestation/v2",
 		"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
-		"PROVIDER":       "mycfc/privacy-provider-registry/v1",
+		"PROVIDER":       "mycfc/privacy-provider-registry/v2",
 		"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 	}
 	evidenceIDs := make([]uuid.UUID, 0, len(contracts))

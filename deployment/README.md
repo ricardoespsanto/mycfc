@@ -74,7 +74,7 @@ CONSENT_IMAGE_URL=https://mycfcoimbra.com/legal/uso-imagem/2026-09-06
 CONSENT_MINOR_VERSION=2026-09-06
 CONSENT_MINOR_SHA256=900c3a6a0b29cad578700db47ff3636708496be64b60ec9d1a81f89789102b61
 CONSENT_MINOR_URL=https://mycfcoimbra.com/legal/responsabilidade-menor/2026-09-06
-PRIVACY_NOTICE_URL=https://mycfcoimbra.com/legal/privacidade/2026-09-06
+PRIVACY_NOTICE_URL=https://mycfcoimbra.com/legal/privacidade/2026-09-11
 COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
 DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 ```

@@ -550,7 +550,7 @@ func TestApplyProductionRemoteConfigOverwritesEnvironmentValues(t *testing.T) {
 
 func TestProductionLegalConfigurationSupportsOlderDeploymentBundle(t *testing.T) {
 	defaults := map[string]string{
-		"PRIVACY_NOTICE_URL":  "https://mycfcoimbra.com/legal/privacidade/2026-09-06",
+		"PRIVACY_NOTICE_URL":  "https://mycfcoimbra.com/legal/privacidade/2026-09-11",
 		"COOKIE_NOTICE_URL":   "https://mycfcoimbra.com/legal/cookies/2026-09-06",
 		"DATA_RIGHTS_CONTACT": "cfluvialcoimbra@gmail.com",
 	}

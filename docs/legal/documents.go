@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 )
 
-const CurrentVersion = "2026-09-06"
 const HealthConsentStatement = "Consinto explicitamente o tratamento da informação médica nova ou alterada que introduzo, para segurança e adaptação da participação."
 
 //go:embed versions/*/*.md
@@ -19,20 +18,24 @@ type Document struct {
 	Markdown                               []byte
 }
 
-var definitions = []struct{ slug, filename, title, version string }{
-	{"privacidade", "politica-privacidade.md", "Política de privacidade", "2026-09-06"},
-	{"termos-gerais", "termos-gerais.md", "Termos gerais", "2026-09-06"},
-	{"cookies", "politica-cookies.md", "Política de cookies", "2026-09-06"},
-	{"uso-imagem", "autorizacao-imagem.md", "Autorização de imagem e voz", "2026-09-06"},
-	{"responsabilidade-menor", "responsabilidade-menor.md", "Responsabilidade por menor", "2026-09-06"},
-	{"direitos", "exercicio-direitos.md", "Exercer direitos", "2026-09-06"},
-	{"privacidade-menores", "privacidade-menores.md", "Privacidade para menores", "2026-09-06"},
+var definitions = []struct {
+	slug, filename, title, version string
+	current                        bool
+}{
+	{"privacidade", "politica-privacidade.md", "Política de privacidade", "2026-09-11", true},
+	{"privacidade", "politica-privacidade.md", "Política de privacidade", "2026-09-06", false},
+	{"termos-gerais", "termos-gerais.md", "Termos gerais", "2026-09-06", true},
+	{"cookies", "politica-cookies.md", "Política de cookies", "2026-09-06", true},
+	{"uso-imagem", "autorizacao-imagem.md", "Autorização de imagem e voz", "2026-09-06", true},
+	{"responsabilidade-menor", "responsabilidade-menor.md", "Responsabilidade por menor", "2026-09-06", true},
+	{"direitos", "exercicio-direitos.md", "Exercer direitos", "2026-09-06", true},
+	{"privacidade-menores", "privacidade-menores.md", "Privacidade para menores", "2026-09-06", true},
 }
 
 func Documents() map[string]Document {
 	documents := make(map[string]Document, len(definitions))
 	for _, definition := range definitions {
-		if definition.version != CurrentVersion {
+		if !definition.current {
 			continue
 		}
 		source, err := sources.ReadFile("versions/" + definition.version + "/" + definition.filename)

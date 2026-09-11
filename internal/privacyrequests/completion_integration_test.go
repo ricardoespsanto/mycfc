@@ -5,8 +5,10 @@ package privacyrequests
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"slices"
@@ -320,7 +322,7 @@ func TestCompletionRequeueAndActivationControls(t *testing.T) {
 		contracts := map[string]string{
 			"RESTORE":        "mycfc/privacy-restore-drill-attestation/v2",
 			"INFRASTRUCTURE": "mycfc/privacy-infrastructure-posture/v1",
-			"PROVIDER":       "mycfc/privacy-provider-registry/v1",
+			"PROVIDER":       "mycfc/privacy-provider-registry/v2",
 			"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 		}
 		ids := make([]uuid.UUID, 0, 4)
@@ -542,11 +544,40 @@ func TestCompletionControlPublicAPIs(t *testing.T) {
 			PolicyVersion: policy, ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion,
 			ImageDigest: "sha256:" + strings.Repeat("7", sha256.Size*2), EvidenceRef: "s3://fixture/public-schema?versionId=v1",
 			EvidenceSHA256: evidenceSHA[:], SigningKeyID: "fixture-key", SchemaMigrationDigest: bytes.Repeat([]byte{7}, sha256.Size),
-			BaselineIncludesThrough: "202609110001_privacy_upload_finalize_execution_fence",
+			BaselineIncludesThrough: "202609110002_privacy_empty_provider_registry_activation",
 		},
 	})
 	if err != nil || recorded.ID == uuid.Nil || recorded.Kind != "SCHEMA" || !bytes.Equal(recorded.Digest, evidenceDigest[:]) {
 		t.Fatalf("recorded activation evidence=%+v err=%v", recorded, err)
+	}
+	providerPublicKey, providerPrivateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerDocument := map[string]any{
+		"contract": "mycfc/privacy-provider-registry/v2", "result": "SUCCEEDED", "observed_at": now.Add(-30 * time.Minute).Format(time.RFC3339),
+		"policy_version": policy, "executor_version": SupportedExecutorVersion, "plan_schema_version": SupportedPlanSchemaVersion,
+		"image_digest": "sha256:" + strings.Repeat("7", sha256.Size*2), "evidence_ref": "s3://fixture/provider-v2.json?versionId=v1",
+		"evidence_sha256": strings.Repeat("8", sha256.Size*2), "signing_key_id": "provider-v2-key",
+		"registry_state": "READY", "registration_count": 0, "provider_registry_sha256": strings.Repeat("9", sha256.Size*2),
+		"inventory_contract": "mycfc/privacy-provider-registry-source/v2",
+	}
+	providerCanonical, err := json.Marshal(providerDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerDocument["signature_ed25519"] = base64.StdEncoding.EncodeToString(ed25519.Sign(providerPrivateKey, providerCanonical))
+	providerPayload, err := json.Marshal(providerDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerRecorded, err := (Service{Pool: brokerPool}).VerifyAndRecordActivationArtifact(ctx, adminA, providerPayload,
+		map[string]ed25519.PublicKey{"provider-v2-key": providerPublicKey}, ActivationReleaseBinding{
+			PolicyVersion: policy, ExecutorVersion: SupportedExecutorVersion, PlanSchemaVersion: SupportedPlanSchemaVersion,
+			ImageDigest: "sha256:" + strings.Repeat("7", sha256.Size*2), SchemaMigrationDigest: strings.Repeat("7", sha256.Size*2),
+		}, now)
+	if err != nil || providerRecorded.ID == uuid.Nil || providerRecorded.Kind != "PROVIDER" {
+		t.Fatalf("recorded empty provider evidence=%+v err=%v", providerRecorded, err)
 	}
 	snapshot, err := service.CompletionControlSnapshot(ctx, executor, requestRef)
 	if err != nil || snapshot.RequestReference != requestRef || len(snapshot.Jobs) != 1 || !snapshot.Jobs[0].CanProposeRequeue {

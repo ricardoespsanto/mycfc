@@ -50,8 +50,9 @@ const (
 )
 
 // ProviderExecutionRegistration is one factually evidenced entry in the
-// closed execution registry. Production deliberately constructs an empty
-// registry until #109 supplies these facts; provider names alone are not facts.
+// closed runtime execution registry. Production deliberately constructs an
+// empty registry while no subject-specific external integration is active;
+// provider names alone are not facts.
 type ProviderExecutionRegistration struct {
 	ServiceCode            string
 	Role                   ProviderRole
@@ -88,9 +89,10 @@ func validProviderRegistration(registration ProviderExecutionRegistration) bool 
 		len(registration.RegistryEvidenceDigest) == sha256.Size && registration.Adapter != nil
 }
 
-// Ready is false for the intentionally empty production registry. This makes
-// PROVIDER_RECIPIENT_NOTIFY a hard activation/start blocker until factual
-// provider records and adapters are installed together.
+// Ready is false for the intentionally empty runtime registry. This makes
+// PROVIDER_RECIPIENT_NOTIFY a hard start blocker until factual provider records
+// and adapters are installed together; it is distinct from signed v2 inventory
+// readiness, which may validly attest to zero integrations.
 func (r *ProviderExecutionRegistry) Ready() bool {
 	return r != nil && len(r.registrations) > 0
 }

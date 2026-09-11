@@ -2,6 +2,8 @@
 
 Estado: **levantamento factual incompleto e não aprovativo**. Este registo separa factos observados, termos públicos dos fornecedores e elementos que só o responsável pelo tratamento pode confirmar. Não autoriza a ativação do executor de privacidade.
 
+Correção do responsável em `2026-09-11`: o servidor MyCFCoimbra não envia nem copia perfis ou outros dados para a FPC. A plataforma apenas guarda um número de licença introduzido por um administrador e constrói ligações externas; ao abri-las, o navegador contacta a FPC através de um endereço que contém esse número. Esta confirmação substitui, para o inventário técnico MyCFCoimbra, a inferência anterior de que a atividade federativa externa do CFC constituía um fluxo da aplicação.
+
 Observação de produção: `2026-09-11T09:21:54Z`, versão Git `72d095c1e22de80f6d07a0cf2a890afb9924ded7` (`v1.19.0`), imagem `sha256:ad66674270d8148706f63a701b0a4d902b7bdfb3547ed2d174864aa4c466670e`. Referências duráveis: [#109](https://github.com/ricardoespsanto/mycfc/issues/109#issuecomment-5632337471), [#246](https://github.com/ricardoespsanto/mycfc/issues/246#issuecomment-5632337666), [#247](https://github.com/ricardoespsanto/mycfc/issues/247#issuecomment-5632337842) e [#248](https://github.com/ricardoespsanto/mycfc/issues/248#issuecomment-5632338048). Os resultados detalhados e identidades exatas pertencem à evidência operacional restrita; este documento conserva apenas resultados agregados e referências.
 
 ## Método e regra de prova
@@ -14,7 +16,7 @@ Foram comparados o código e a configuração declarativa da versão `v1.19.0`, 
 - A identidade AWS ordinária do servidor está impedida de enumerar versões dos três prefixos privados e de ler a postura global de CloudWatch/SES. Este bloqueio é um controlo de privilégio mínimo, não uma lacuna a remover. A identidade exata pertence à evidência operacional restrita, não a este documento público.
 - A aplicação é executada num servidor Hetzner e usa um túnel/reverse proxy Cloudflare. O proxy pode processar transitoriamente cabeçalhos, cookies, corpos de pedido e conteúdo de resposta, incluindo categorias especiais quando essas rotas são usadas; isto é distinto de logging ou conservação, que dependem da configuração real. O código limita a localização Hetzner prevista a `fsn1` ou `nbg1`, mas a localização efetiva da conta não foi autenticada nesta verificação.
 - O GitHub processa código, CI, análises e artefactos de entrega. Dados pessoais de produção são proibidos nesse fluxo; a retenção declarada pelo CFC é 14 dias para artefactos CI e 30 dias para ensaios/deployment, ainda por comparar com as definições da organização.
-- À hora da observação não existiam ligações por titular a wearables/prestadores na produção. A comunicação federativa à FPC é, porém, um fluxo operacional externo distinto e já consta da política publicada; por isso uma lista técnica vazia não prova que não existam destinatários.
+- À hora da observação não existiam ligações por titular a wearables/prestadores na produção. O responsável confirmou também que o servidor MyCFCoimbra não transmite dados à FPC; a navegação iniciada pelo utilizador para um endereço FPC que contém o número de licença não é uma integração servidor-a-servidor. A lista de integrações externas por titular é, portanto, completa e vazia.
 
 ## Fontes oficiais verificadas
 
@@ -48,17 +50,17 @@ Pendente: confirmar plano, DPA/termos aceites, produtos e funcionalidades ativos
 
 Pendente: confirmar o tipo de conta/organização, o DPA aplicável, a retenção configurada, acessos e a ausência de dados pessoais de produção em artefactos, logs, issues e suporte.
 
-### Federação Portuguesa de Canoagem
+### Federação Portuguesa de Canoagem — serviço externo, não integração MyCFCoimbra
 
 - [Portal oficial de filiações 2026](https://inscricoes.fpcanoagem.pt/login.php) — declara a filiação online obrigatória, identifica a FPC como responsável pelo tratamento, descreve o histórico consultável pelo clube e pede dados/documentos de agentes, incluindo identificação, contactos, fotografia, comprovativo de identificação e exame médico quando aplicável.
 
-Pendente: mapear o formulário realmente usado pelo CFC, os campos mínimos por tipo de agente, consentimentos/fundamentos e artigo 9.º, prazo federativo, canal de direitos/notificação e procedimento para resposta ao artigo 19.º.
+Este material descreve o serviço próprio da FPC, não uma divulgação observada pelo MyCFCoimbra. Qualquer operação federativa que o CFC realize fora da plataforma pertence ao respetivo processo externo e não ao inventário técnico ou ao executor MyCFCoimbra.
 
 Documento referenciado mas não verificado: [Política FPC RGPD 2025](https://www.fpcanoagem.pt/uploads/docs/nacional/FPC-RGPD2025.pdf). O portal oficial liga esta cópia, mas o servidor recusou leitura automatizada nesta verificação. O responsável deve obter, guardar com data e hash e rever a cópia antes de a usar como prova.
 
 ## Consequência para a ativação
 
-A evidência pública reduz a incerteza mas não satisfaz o gate de `READY`. A FPC é um destinatário operacional publicado, ainda que não exista uma ligação técnica por titular na base de dados. Se a revisão factual/jurídica confirmar o papel `AUTONOMOUS_RECIPIENT`, a solução candidata é registar a FPC com esse papel e só depois implementar captura transacional do alvo e uma ação de notificação com resultado estruturado. Se confirmar contitularidade ou outro papel, o contrato técnico e os resultados admitidos têm de ser revistos antes da implementação. Uma declaração genérica de “registo vazio” ocultaria este fluxo e não deve desbloquear a ativação.
+A confirmação do responsável permite uma lista vazia apenas para o inventário fechado de integrações externas por titular do MyCFCoimbra. Essa lista continua a exigir prova assinada de que o inventário é completo; ausência de prova, lista parcial, integração inesperada ou serviço futuro permanecem `NOT_READY` e bloqueiam a ativação.
 
 À hora da observação, o registo técnico estava fechado, a kill switch estava ativa e os timers de privacidade estavam desligados. Até existir a prova de conta/fluxo, estes controlos devem permanecer nesse estado e nenhum apagamento real pode ser concluído como se os destinatários externos estivessem tratados.
 
@@ -67,5 +69,5 @@ A evidência pública reduz a incerteza mas não satisfaz o gate de `READY`. A F
 1. Ata datada da Direção que aprove a matriz, os fundamentos/exceções e os responsáveis operacionais.
 2. Autoridade de casos de privacidade distinta do acesso administrativo e política de representação de menores.
 3. Evidência autenticada de Hetzner, AWS, Cloudflare e GitHub, com revisão e validade definidas.
-4. Mapa FPC por fluxo e, quando existirem, mapas equivalentes para seguradora, organizador ou autoridade concreta.
+4. Quando existirem fluxos MyCFCoimbra para seguradora, organizador ou autoridade concreta, mapas equivalentes por divulgação; operações externas do CFC não são inferidas como fluxos da aplicação.
 5. Revisão jurídica dos fundamentos, incluindo condições e salvaguardas do artigo 9.º e prazos externos.

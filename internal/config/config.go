@@ -414,7 +414,7 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	// explicit environment or SSM values still go through normal validation.
 	if c.IsProduction() {
 		if c.PrivacyNoticeURL == "" {
-			c.PrivacyNoticeURL = "https://mycfcoimbra.com/legal/privacidade/2026-09-06"
+			c.PrivacyNoticeURL = "https://mycfcoimbra.com/legal/privacidade/2026-09-11"
 		}
 		if c.CookieNoticeURL == "" {
 			c.CookieNoticeURL = "https://mycfcoimbra.com/legal/cookies/2026-09-06"

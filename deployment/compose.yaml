@@ -26,7 +26,7 @@ x-app: &app
     CONSENT_MINOR_VERSION: ${CONSENT_MINOR_VERSION:?set CONSENT_MINOR_VERSION in /etc/mycfc/mycfc.env}
     CONSENT_MINOR_SHA256: ${CONSENT_MINOR_SHA256:?set CONSENT_MINOR_SHA256 in /etc/mycfc/mycfc.env}
     CONSENT_MINOR_URL: ${CONSENT_MINOR_URL:?set CONSENT_MINOR_URL in /etc/mycfc/mycfc.env}
-    PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-https://mycfcoimbra.com/legal/privacidade/2026-09-06}
+    PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-https://mycfcoimbra.com/legal/privacidade/2026-09-11}
     COOKIE_NOTICE_URL: ${COOKIE_NOTICE_URL:-https://mycfcoimbra.com/legal/cookies/2026-09-06}
     DATA_RIGHTS_CONTACT: ${DATA_RIGHTS_CONTACT:-cfluvialcoimbra@gmail.com}
     PRIVACY_REQUESTS_ENABLED: ${PRIVACY_REQUESTS_ENABLED:-false}

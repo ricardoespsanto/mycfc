@@ -1,10 +1,10 @@
 # External provider and recipient erasure
 
-Status: source-only, disabled, and intentionally inert. No provider or autonomous recipient is registered in production. Issue #109 must supply factual contract, role, deletion/escalation route, region, subprocessor, transfer, retention, and evidence records before any entry can be added. This document does not identify a current provider or authorize activation.
+Status: source-only, disabled, and intentionally inert. No subject-specific external integration or autonomous recipient is registered in production. The responsible controller confirmed on 2026-09-11 that the MyCFCoimbra server sends no profiles or other data to FPC; opening an external FPC history link makes a browser request whose destination URL contains the licence number, which is navigation rather than a server integration. This document does not authorize activation.
 
 ## Closed registry and activation boundary
 
-`ProviderExecutionRegistry` is constructed once from a complete set of evidenced registrations. An entry binds a stable service code to exactly one role (`PROCESSOR` or `AUTONOMOUS_RECIPIENT`), an adapter contract version, a rotation-aware registry-evidence key and digest, and an installed adapter. Empty, duplicate, malformed, unevidenced, or adapter-less registries are not ready. The shipped runtime configuration is empty; no feature flag, worker, credential, or schedule is enabled by this change.
+The signed activation inventory and the runtime execution registry have different jobs. The v2 activation inventory may be `READY` and empty when signed evidence proves MyCFCoimbra has no active subject-specific external integration or recipient; missing, incomplete, stale or merely assumed emptiness remains not ready. `ProviderExecutionRegistry` is the runtime adapter registry, constructed once from factual registrations. Each entry binds a stable service code to exactly one role (`PROCESSOR` or `AUTONOMOUS_RECIPIENT`), an adapter contract version, a rotation-aware registry-evidence key and digest, and an installed adapter. Its empty state is intentionally not execution-ready because there is no provider operation to perform. Duplicate, malformed, unevidenced or adapter-less nonempty runtime registries are rejected. External navigation and CFC operations outside MyCFCoimbra are not entries in either registry.
 
 The provider operation is accepted only by executor/schema v2. Historical v1 plans remain readable and cannot gain provider work. A v2 plan that contains `PROVIDER_RECIPIENT_NOTIFY` cannot start unless both the closed registry and the seal-only provider target protector are installed. Every captured service/role/contract/evidence-key/digest tuple must match the closed registry. An unknown or stale tuple aborts and rolls back the entire execution-start transaction.
 
@@ -37,7 +37,7 @@ There is intentionally no generic terminal-failure credential purge. A future #2
 ## Rollout concerns
 
 - Keep migration `202609100009_privacy_provider_execution.sql` ordered after the authenticated replay `008` migration; both forward-migration and fresh-baseline checks must remain green as later migrations land.
-- Complete #109 and add factual registrations without naming or inferring services from infrastructure alone.
+- If a subject-specific integration is introduced, update #109 and the signed inventory, then add its factual registration and adapter before activation; never infer services from infrastructure alone.
 - Implement the source-specific write/fence integration for each approved active service; direct insertion is not an activation procedure.
 - Provision independent encryption, target-digest, credential-commitment, registry-evidence, and evidence-transcript key identifiers with documented rotation and custody.
 - Grant web and worker roles only the exact capture/materialisation or fenced worker functions they need; never grant protected-table access.
