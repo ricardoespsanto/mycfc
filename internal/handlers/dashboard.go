@@ -1134,19 +1134,6 @@ func (h Dashboard) formatAgendaRange(startsAt, endsAt time.Time) string {
 	return start.Format("02/01/2006 15:04") + " - " + end.Format("15:04")
 }
 
-func guardianDependentItems(dependents []dbgen.ListDependentsByGuardianRow, now time.Time, location *time.Location) []DashboardItemVM {
-	items := make([]DashboardItemVM, len(dependents))
-	for i, dependent := range dependents {
-		age := validation.AgeOn(dependent.DateOfBirth.Time, now, location)
-		credential := "Sem acesso individual"
-		if dependent.MinorLoginID != nil {
-			credential = "Acesso individual emitido: " + *dependent.MinorLoginID
-		}
-		items[i] = DashboardItemVM{Title: dependent.Name, Detail: fmt.Sprintf("%d anos · %s", age, credential)}
-	}
-	return items
-}
-
 // dashboardNavigation keeps everyday destinations first and clusters every
 // additional responsibility into labelled, simultaneously visible groups.
 func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
