@@ -495,6 +495,50 @@ func TestPostgresProfileStoreSelectsInjectedDatabaseAndFailsClosedForForeignActo
 	}
 }
 
+func TestPostgresProfileStoreResolvesCurrentGuardianAuthority(t *testing.T) {
+	subjectID, actorID := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name, query string
+		admin       bool
+		allowed     bool
+		wantErr     error
+	}{
+		{name: "administrator allowed", admin: true, allowed: true},
+		{name: "administrator denied", admin: true, allowed: false, wantErr: ErrProfileForbidden},
+		{name: "guardian allowed", allowed: true},
+		{name: "guardian query error", query: "IsGuardianAuthorityCurrent", wantErr: errors.New("authority unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := &profileTransactionFake{subjectID: subjectID, isDependent: true, guardianAuthority: tc.allowed, dateOfBirth: pgtype.Date{Time: time.Now().AddDate(-10, 0, 0), Valid: true}}
+			if tc.query != "" {
+				tx.queryErrs = map[string]error{tc.query: tc.wantErr}
+			}
+			_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).View(context.Background(), actorID, subjectID, tc.admin)
+			if tc.wantErr == nil && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+
+	authorityErr := errors.New("authority unavailable")
+	guardianProfile := func() *profileTransactionFake {
+		return &profileTransactionFake{
+			subjectID: subjectID, isDependent: true,
+			dateOfBirth: pgtype.Date{Time: time.Now().AddDate(-10, 0, 0), Valid: true},
+			queryErrs:   map[string]error{"IsGuardianAuthorityCurrent": authorityErr},
+		}
+	}
+	if err := (PostgresProfileStore{DB: profileDatabaseFake{tx: guardianProfile()}}).Update(context.Background(), ProfileUpdate{ActorID: actorID, SubjectID: subjectID}); !errors.Is(err, authorityErr) {
+		t.Fatalf("update authority error = %v, want %v", err, authorityErr)
+	}
+	if _, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: guardianProfile()}}).RemovePhoto(context.Background(), actorID, subjectID, false); !errors.Is(err, authorityErr) {
+		t.Fatalf("remove authority error = %v, want %v", err, authorityErr)
+	}
+}
+
 func TestProfileDeepLinkMetadataNamesOwningArea(t *testing.T) {
 	actorID, subjectID := uuid.New(), uuid.New()
 	record := dbgen.GetMemberProfileRow{ID: subjectID, Name: "Leonor Rodrigues", IsDependent: true, IsActive: true}
@@ -586,6 +630,7 @@ type profileTransactionFake struct {
 	email                *string
 	currentConsent       bool
 	healthConsent        bool
+	guardianAuthority    bool
 	guardianID           *uuid.UUID
 	isDependent          bool
 	dateOfBirth          pgtype.Date
@@ -604,7 +649,7 @@ type profileTransactionFake struct {
 
 func (tx *profileTransactionFake) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
 	tx.queryCalls = append(tx.queryCalls, profileSQLCall{query: query, args: args})
-	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, oldPhotoIntentID: tx.oldPhotoIntentID, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent, guardianID: tx.guardianID, isDependent: tx.isDependent, dateOfBirth: tx.dateOfBirth, medicalDeclaration: tx.medicalDeclaration, allergies: tx.allergies, medicalConditions: tx.medicalConditions, medication: tx.medication, activityRestrictions: tx.activityRestrictions, medicalNotes: tx.medicalNotes}
+	row := profileTransactionRow{query: query, subjectID: tx.subjectID, consentID: tx.consentID, oldPhotoKey: tx.oldPhotoKey, oldPhotoIntentID: tx.oldPhotoIntentID, email: tx.email, currentConsent: tx.currentConsent, healthConsent: tx.healthConsent, guardianAuthority: tx.guardianAuthority, guardianID: tx.guardianID, isDependent: tx.isDependent, dateOfBirth: tx.dateOfBirth, medicalDeclaration: tx.medicalDeclaration, allergies: tx.allergies, medicalConditions: tx.medicalConditions, medication: tx.medication, activityRestrictions: tx.activityRestrictions, medicalNotes: tx.medicalNotes}
 	for name, err := range tx.queryErrs {
 		if strings.Contains(query, name) {
 			row.err = err
@@ -642,6 +687,7 @@ type profileTransactionRow struct {
 	email                *string
 	currentConsent       bool
 	healthConsent        bool
+	guardianAuthority    bool
 	guardianID           *uuid.UUID
 	isDependent          bool
 	dateOfBirth          pgtype.Date
@@ -659,6 +705,8 @@ func (row profileTransactionRow) Scan(dest ...any) error {
 		return row.err
 	}
 	switch {
+	case strings.Contains(row.query, "HasCurrentGuardianAuthorityForSubject"), strings.Contains(row.query, "IsGuardianAuthorityCurrent"):
+		*dest[0].(*bool) = row.guardianAuthority
 	case strings.Contains(row.query, "HasConsentVersion"):
 		*dest[0].(*bool) = row.healthConsent
 	case strings.Contains(row.query, "GetCurrentImageConsent"):

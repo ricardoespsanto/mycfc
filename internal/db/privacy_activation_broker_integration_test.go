@@ -402,7 +402,7 @@ func brokerArtifactFixture(kind, policy, image string, digest []byte) map[string
 		artifact["provider_inventory_contract"] = "mycfc/privacy-provider-registry-source/v2"
 	case "SCHEMA":
 		artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110003_privacy_activation_emergency_fence"
+		artifact["schema_migration_digest"], artifact["baseline_includes_through"] = digest, "202609110005_guardian_authority_cutoff_reconciliation"
 	}
 	return artifact
 }

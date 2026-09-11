@@ -34,9 +34,7 @@ func TestPhotoAlbumIntegrationScopesLifecycleAndAudit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth) VALUES ($1, 'Dependente', $2, true, '2012-01-01')`, dependentID, guardianID); err != nil {
-		t.Fatal(err)
-	}
+	insertVerifiedDependentFixture(t, ctx, tx, guardianID, dependentID, "Dependente", "2012-01-01")
 
 	var programmeID uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM programmes WHERE code = 'Competition'`).Scan(&programmeID); err != nil {

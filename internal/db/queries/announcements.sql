@@ -55,11 +55,11 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
       LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
-        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR subject.guardian_id = sqlc.arg(user_id))
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
@@ -90,11 +90,11 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
       LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
-        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR subject.guardian_id = sqlc.arg(user_id))
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
@@ -122,11 +122,11 @@ WHERE a.id = sqlc.arg(id)
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+      JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
       LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
-        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR subject.guardian_id = sqlc.arg(user_id))
+        AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)

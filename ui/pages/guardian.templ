@@ -6,6 +6,8 @@ import "github.com/cfcoimbra/mycfc/ui/components"
 type GuardianPage struct {
 	Meta       components.PageMeta
 	Dependents []GuardianDependent
+	Requests   []GuardianAuthorityRequest
+	PolicyAvailable bool
 	ResponsibilityURL string
 	Name, DateOfBirth string
 	ResponsibilityAccepted bool
@@ -13,6 +15,7 @@ type GuardianPage struct {
 	Success    string
 }
 type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible, ProfileIncomplete bool }
+type GuardianAuthorityRequest struct { Reference, SubmittedLabel, Status, Detail string }
 
 templ Guardian(page GuardianPage) {
 	@components.Base(page.Meta, GuardianContent(page))
@@ -20,27 +23,49 @@ templ Guardian(page GuardianPage) {
 
 templ GuardianContent(page GuardianPage) {
 	<div id="guardian-content">
-		@components.PageHeader("Família", "Menores a cargo", "Consulte os menores a seu cargo e associe um novo dependente quando necessário.", []components.PageAction{{Label: "Adicionar menor", Href: "#adicionar-menor", Variant: "primary", TaskID: "adicionar-menor"}})
+		if page.PolicyAvailable {
+			@components.PageHeader("Família", "Menores a cargo", "Consulte representações verificadas e acompanhe pedidos de associação.", []components.PageAction{{Label: "Pedir associação", Href: "#pedir-associacao", Variant: "primary", TaskID: "pedir-associacao"}})
+		} else {
+			@components.PageHeader("Família", "Menores a cargo", "Consulte representações verificadas e acompanhe pedidos de associação.", nil)
+		}
 		if page.Success != "" {
 			@components.StatusMessage(page.Success, "success")
 		}
-		<section class="module">@components.SectionHeading("Família", "Dependentes associados", "Menores associados à sua conta e respetivo acesso.")
+		if page.Errors["form"] != "" && !page.PolicyAvailable {
+			@components.StatusMessage(page.Errors["form"], "error")
+		}
+		<section class="module">@components.SectionHeading("Família", "Menores com representação verificada", "O acesso só está disponível enquanto a verificação se mantiver atual.")
 			if len(page.Dependents) == 0 {
-				@components.EmptyState("Ainda sem menores associados", "Adicione o primeiro menor para gerir a responsabilidade a partir da sua conta.")
+				@components.EmptyState("Ainda sem representações verificadas", "Os dados de um menor só ficam disponíveis depois da verificação pelo clube.")
 			}
 				if len(page.Dependents) > 0 {
 					@components.RecordList("Dependentes associados") {
 						for _, dependent := range page.Dependents {
 							<li class="record-item"><div class="record-item__copy"><h3><a href={ "/perfil/dependentes/"+dependent.ID }>@components.PersonName(dependent.ID, dependent.Name)</a></h3><p class="record-meta">{ dependent.Detail }</p>
-								if dependent.ProfileIncomplete {
-									<p class="record-meta">Perfil incompleto: falta contacto de emergência.</p>
+				if dependent.ProfileIncomplete {
+									<p class="record-meta">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>
 								}
 							</div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
 						}
 				}
 			}
 		</section>
-		@components.TaskDialog(components.TaskSurfaceConfig{ID: "adicionar-menor", TitleID: "add-dependent-title", Eyebrow: "Família", Title: "Adicionar menor a cargo", Description: "Associe um novo dependente à sua conta.", Variant: "sheet", URL: "/dashboard/guardian", Open: len(page.Errors) > 0}) {
+		<section class="module">@components.SectionHeading("Família", "Pedidos e acessos indisponíveis", "Estes registos não permitem consultar dados do menor.")
+			if len(page.Requests) == 0 {
+				@components.EmptyState("Sem pedidos em acompanhamento", "Os pedidos de associação e os acessos indisponíveis aparecerão aqui.")
+			} else {
+				@components.RecordList("Pedidos de associação") {
+					for _, request := range page.Requests {
+						<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ request.SubmittedLabel }</h3><p class="record-meta">Referência { request.Reference }</p><p><strong>{ request.Status }</strong></p><p>{ request.Detail }</p></div></li>
+					}
+				}
+			}
+		</section>
+		if !page.PolicyAvailable {
+			<section class="module" aria-labelledby="association-unavailable-title"><h2 id="association-unavailable-title">Novos pedidos temporariamente indisponíveis</h2><p>O clube ainda não ativou a política de verificação necessária. Contacte o clube se precisar de ajuda.</p></section>
+		}
+		if page.PolicyAvailable {
+		@components.TaskDialog(components.TaskSurfaceConfig{ID: "pedir-associacao", TitleID: "request-association-title", Eyebrow: "Família", Title: "Pedir associação", Description: "O acesso aos dados só fica disponível depois de o clube verificar a representação.", Variant: "sheet", URL: "/dashboard/guardian", Open: len(page.Errors) > 0}) {
 			<div class="task-form">
 			@components.StatusMessage(page.Errors["form"], "error")
 			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"name", "date_of_birth", "accept_minor_responsibility"}))
@@ -51,9 +76,10 @@ templ GuardianContent(page GuardianPage) {
 				<div class="form-field">@components.FieldLabel("date_of_birth", "Data de nascimento", true)<input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required aria-invalid?={ page.Errors["date_of_birth"] != "" } aria-describedby="date-of-birth-help date_of_birth-error"/>@components.FieldHelp("date-of-birth-help", "A idade é validada à data de hoje.")@components.FieldErrorMessage("date_of_birth", page.Errors["date_of_birth"])</div>
 				<p class="field-hint">Explique ao menor, de forma adequada à idade, a <a href="/legal/privacidade-menores">informação de privacidade para menores</a>. Consulte também a <a href="/legal/privacidade">Política de privacidade</a>.</p>
 				<label for="accept_minor_responsibility"><input id="accept_minor_responsibility" name="accept_minor_responsibility" type="checkbox" required checked?={ page.ResponsibilityAccepted } aria-invalid?={ page.Errors["accept_minor_responsibility"] != "" } aria-describedby="accept_minor_responsibility-error"/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) }>responsabilidade pelo menor a cargo</a>. <span class="required-mark" aria-hidden="true">*</span></label>@components.FieldErrorMessage("accept_minor_responsibility", page.Errors["accept_minor_responsibility"])
-				@components.TaskActions("/dashboard/guardian") { <button class="action action--primary" type="submit" data-task-submit>Adicionar menor</button> }
+				@components.TaskActions("/dashboard/guardian") { <button class="action action--primary" type="submit" data-task-submit>Enviar pedido</button> }
 			</form>
 			</div>
+		}
 		}
 		@components.DiscardConfirmation()
 	</div>

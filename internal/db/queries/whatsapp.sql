@@ -10,7 +10,7 @@ FROM (
     OR EXISTS (
         SELECT 1
         FROM whatsapp_group_targets target
-        JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+        JOIN users subject ON subject.is_active AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         LEFT JOIN user_memberships membership ON membership.user_id = subject.id
             AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
         LEFT JOIN programmes programme ON programme.id = membership.programme_id
@@ -18,7 +18,7 @@ FROM (
         WHERE target.whatsapp_group_id = whatsapp_groups.id
           AND programme.code = sqlc.arg(programme_code)
           AND (
-              (target.target_type = 'GUARDIAN' AND subject.guardian_id = sqlc.arg(user_id))
+              (target.target_type = 'GUARDIAN' AND guardian_authority_current(sqlc.arg(user_id),subject.id))
               OR (target.target_type = 'PROGRAMME' AND target.target_id = membership.programme_id)
               OR (target.target_type = 'TEAM' AND target.target_id = membership.team_id)
               OR (target.target_type = 'CATEGORY' AND target.target_id = membership.competition_category_id)

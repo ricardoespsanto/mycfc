@@ -48,6 +48,9 @@ func TestPrivacyRelationalErasureForwardMigrationAppliesToExactPriorSchema(t *te
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_disable", disableSchemaName)
+	if guardianIndex := strings.LastIndex(isolatedBaseline, "-- Guardian authority is an explicit, reviewed capability."); guardianIndex >= 0 {
+		isolatedBaseline = isolatedBaseline[:guardianIndex]
+	}
 	if _, err = conn.PgConn().Exec(ctx, isolatedBaseline).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)
 	}

@@ -272,13 +272,13 @@ WHERE e.id = $2
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
-          WHERE a.event_id = e.id AND (subject.id = $1 OR subject.guardian_id = $1)
+          WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
-           WHERE a.event_id = e.id AND (subject.id = $1 OR subject.guardian_id = $1)
+           WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
   )
@@ -451,7 +451,7 @@ SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.res
 FROM events e
 JOIN users subject ON subject.id = $1 AND subject.is_active
 WHERE e.id = $2
-  AND (subject.id = $3 OR subject.guardian_id = $3)
+  AND (subject.id = $3 OR guardian_authority_current($3,subject.id))
   AND (
       (
           NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
@@ -743,14 +743,14 @@ WHERE e.starts_at >= now()
            SELECT 1 FROM user_memberships m
            JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
-          WHERE a.event_id = e.id AND (subject.id = $1 OR subject.guardian_id = $1)
+          WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m
            JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
-           WHERE a.event_id = e.id AND (subject.id = $1 OR subject.guardian_id = $1)
+           WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
   )
@@ -825,7 +825,7 @@ WHERE e.starts_at < $1
               JOIN event_audiences a ON a.programme_id = m.programme_id
               JOIN users subject ON subject.id = m.user_id
               WHERE a.event_id = e.id
-                AND (subject.id = $4 OR subject.guardian_id = $4)
+                AND (subject.id = $4 OR guardian_authority_current($4,subject.id))
                 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           )
           OR EXISTS (
@@ -834,7 +834,7 @@ WHERE e.starts_at < $1
               JOIN event_team_audiences a ON a.team_id = m.team_id
               JOIN users subject ON subject.id = m.user_id
               WHERE a.event_id = e.id
-                AND (subject.id = $4 OR subject.guardian_id = $4)
+                AND (subject.id = $4 OR guardian_authority_current($4,subject.id))
                 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           )
       )

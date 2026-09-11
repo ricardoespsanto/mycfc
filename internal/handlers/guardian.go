@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/google/uuid"
@@ -39,6 +38,19 @@ type guardianDependentForm struct {
 }
 
 func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
+	if h.GuardianAuthority == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	available, err := h.GuardianAuthority.PolicyAvailable(r.Context())
+	if err != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	if !available {
+		h.renderGuardianForm(w, r, http.StatusConflict, guardianDependentForm{Errors: validation.FieldErrors{"form": "Os pedidos estão temporariamente indisponíveis porque a política de verificação ainda não foi ativada."}})
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		h.renderGuardianForm(w, r, http.StatusBadRequest, guardianDependentForm{})
 		return
@@ -53,11 +65,16 @@ func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
 	if value, ok := httpx.RemoteIP(r.Context()); ok {
 		ip = &value
 	}
-	err := h.Dependents.CreateDependent(r.Context(), GuardianDependentInput{
+	err = h.Dependents.CreateDependent(r.Context(), GuardianDependentInput{
 		GuardianID: user.ID, Name: form.Name, DateOfBirth: mustParseDate(form.DateOfBirth),
 		ResponsibilityVersion: h.ResponsibilityVersion, ResponsibilitySHA256: h.ResponsibilitySHA256,
 		IP: ip, UserAgent: truncateRunes(r.UserAgent(), 512),
 	})
+	if errors.Is(err, ErrGuardianAuthorityPolicyUnavailable) {
+		form.Errors.Add("form", "Os pedidos estão temporariamente indisponíveis porque a política de verificação ainda não foi ativada.")
+		h.renderGuardianForm(w, r, http.StatusUnprocessableEntity, form)
+		return
+	}
 	if errors.Is(err, ErrMaximumDependents) {
 		form.Errors.Add("form", maximumDependentsMessage)
 		h.renderGuardianForm(w, r, http.StatusUnprocessableEntity, form)
@@ -68,11 +85,11 @@ func (h Dashboard) AddDependent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("HX-Request") == "true" {
-		h.renderGuardianForm(w, r, http.StatusOK, guardianDependentForm{Success: "Menor a cargo adicionado."})
+		h.renderGuardianForm(w, r, http.StatusOK, guardianDependentForm{Success: "Pedido recebido. Não é possível consultar dados do menor enquanto a representação não for verificada pelo clube."})
 		return
 	}
 	if h.Sessions != nil {
-		h.Sessions.Put(r.Context(), "guardian_flash", "Menor a cargo adicionado.")
+		h.Sessions.Put(r.Context(), "guardian_flash", "Pedido recebido. Não é possível consultar dados do menor enquanto a representação não for verificada pelo clube.")
 	}
 	httpx.Redirect(w, r, "/dashboard/guardian", http.StatusSeeOther)
 }
@@ -103,7 +120,11 @@ func (h Dashboard) renderGuardianForm(w http.ResponseWriter, r *http.Request, st
 	user, _ := CurrentUserFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
-	dependents, err := h.Store.ListDependentsByGuardian(ctx, dbgen.ListDependentsByGuardianParams{GuardianID: &user.ID, RowLimit: 10})
+	if h.GuardianAuthority == nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	dependents, err := h.GuardianAuthority.ListForGuardian(ctx, user.ID, 10)
 	if err != nil {
 		h.System.InternalError(w, r)
 		return

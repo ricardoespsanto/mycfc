@@ -178,7 +178,7 @@ func TestMemberCreateSuccessPreservesValidatedCollectionReturn(t *testing.T) {
 	}
 }
 
-func TestMemberCreateDependentUsesValidatedGuardianValue(t *testing.T) {
+func TestMemberCreateDependentRoutesAdultToGuardianRequestWorkflow(t *testing.T) {
 	guardianID := uuid.New()
 	store := &memberWorkflowStore{member: dbgen.GetMemberForAdminRow{ID: guardianID, IsActive: true}}
 	values := url.Values{"account_type": {"dependent"}, "name": {"Rita Segura"}, "date_of_birth": {"2014-01-02"}, "guardian_id": {guardianID.String()}}
@@ -186,7 +186,7 @@ func TestMemberCreateDependentUsesValidatedGuardianValue(t *testing.T) {
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
 	(Members{Store: store, Location: time.UTC}).Create(response, request)
-	if response.Code != http.StatusSeeOther || store.createDependent.GuardianID != guardianID || store.createDependent.Name != "Rita Segura" {
+	if response.Code != http.StatusUnprocessableEntity || store.createDependent.GuardianID != uuid.Nil || !strings.Contains(response.Body.String(), "área Família") {
 		t.Fatalf("response=%d dependent=%+v", response.Code, store.createDependent)
 	}
 }
@@ -401,6 +401,30 @@ func TestMemberMutationsRejectInvalidTargetsAndSelfDeactivation(t *testing.T) {
 		}
 	})
 
+	t.Run("crafted writes to an unavailable member remain not found", func(t *testing.T) {
+		programmeID := uuid.New()
+		store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New()}, programmes: []dbgen.Programme{{ID: programmeID}}, membershipErr: pgx.ErrNoRows, deactivateErr: pgx.ErrNoRows}
+		h := Members{Store: store, Location: time.UTC}
+		membership := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/inscricao", strings.NewReader("programme_id="+programmeID.String()+"&active=on"))
+		membership.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		membership.SetPathValue("id", memberID.String())
+		membershipResponse := httptest.NewRecorder()
+		h.Membership(membershipResponse, membership)
+		if membershipResponse.Code != http.StatusNotFound {
+			t.Fatalf("membership response=%d", membershipResponse.Code)
+		}
+
+		deactivate := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/desativar", strings.NewReader("confirm_deactivation=yes"))
+		deactivate.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		deactivate.SetPathValue("id", memberID.String())
+		deactivate = deactivate.WithContext(context.WithValue(deactivate.Context(), currentUserKey{}, actor))
+		deactivateResponse := httptest.NewRecorder()
+		h.Deactivate(deactivateResponse, deactivate)
+		if deactivateResponse.Code != http.StatusNotFound {
+			t.Fatalf("deactivation response=%d", deactivateResponse.Code)
+		}
+	})
+
 	t.Run("credentials are unavailable for adults and inactive dependants", func(t *testing.T) {
 		for _, member := range []dbgen.GetMemberForAdminRow{{ID: memberID, IsActive: true}, {ID: memberID, IsDependent: true, IsActive: false, GuardianID: ptr(uuid.New())}} {
 			h := Members{Store: &memberWorkflowStore{member: member}, Location: time.UTC}
@@ -443,6 +467,19 @@ func TestMemberMembershipMapsSeasonProgrammeAndWriteFailures(t *testing.T) {
 	}
 }
 
+func TestMemberMembershipEndingMissingRowIsNotFound(t *testing.T) {
+	memberID, programmeID := uuid.New(), uuid.New()
+	store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New()}, programmes: []dbgen.Programme{{ID: programmeID}}, endAffected: 0}
+	request := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/inscricao", strings.NewReader("programme_id="+programmeID.String()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetPathValue("id", memberID.String())
+	response := httptest.NewRecorder()
+	(Members{Store: store, Location: time.UTC}).Membership(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
 type memberStoreFake struct{}
 
 type memberWorkflowStore struct {
@@ -463,6 +500,8 @@ type memberWorkflowStore struct {
 	createdSeason      dbgen.CreateSeasonParams
 	programmesErr      error
 	membershipErr      error
+	endAffected        int64
+	endErr             error
 }
 
 func (s *memberWorkflowStore) GetCurrentSeason(context.Context) (dbgen.Season, error) {
@@ -486,9 +525,12 @@ func (s *memberWorkflowStore) UpsertCurrentSeasonMembership(_ context.Context, p
 	s.membership = params
 	return dbgen.UserMembership{}, s.membershipErr
 }
-func (s *memberWorkflowStore) DeactivateUser(_ context.Context, id uuid.UUID) error {
+func (s *memberWorkflowStore) EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error) {
+	return s.endAffected, s.endErr
+}
+func (s *memberWorkflowStore) DeactivateMemberForAdmin(_ context.Context, id uuid.UUID) (int64, error) {
 	s.deactivated = id
-	return s.deactivateErr
+	return 1, s.deactivateErr
 }
 func (s *memberWorkflowStore) GetMemberForAdmin(context.Context, uuid.UUID) (dbgen.GetMemberForAdminRow, error) {
 	return s.member, nil
@@ -528,7 +570,9 @@ func (memberStoreFake) CreateAdultUser(context.Context, dbgen.CreateAdultUserPar
 func (memberStoreFake) CreateDependentUser(context.Context, dbgen.CreateDependentUserParams) (dbgen.CreateDependentUserRow, error) {
 	return dbgen.CreateDependentUserRow{}, nil
 }
-func (memberStoreFake) DeactivateUser(context.Context, uuid.UUID) error { return nil }
+func (memberStoreFake) DeactivateMemberForAdmin(context.Context, uuid.UUID) (int64, error) {
+	return 1, nil
+}
 func (memberStoreFake) GetCurrentSeason(context.Context) (dbgen.Season, error) {
 	return dbgen.Season{}, nil
 }
@@ -545,7 +589,7 @@ func (memberStoreFake) UpsertCurrentSeasonMembership(context.Context, dbgen.Upse
 	return dbgen.UserMembership{}, nil
 }
 func (memberStoreFake) EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error) {
-	return 0, nil
+	return 1, nil
 }
 func (memberStoreFake) IssueMinorCredential(context.Context, dbgen.IssueMinorCredentialParams) (uuid.UUID, error) {
 	return uuid.Nil, nil

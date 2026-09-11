@@ -89,6 +89,12 @@ LEFT JOIN consent_forms c ON c.id = p.photo_consent_form_id
 WHERE u.id = sqlc.arg(user_id)
   AND u.erased_at IS NULL
   AND (u.is_active OR sqlc.arg(is_admin)::boolean)
+  AND (NOT u.is_dependent
+    OR u.id = sqlc.arg(actor_id)
+    OR (sqlc.arg(is_admin)::boolean AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+        WHERE relationship.subject_user_id=u.id
+          AND guardian_authority_current(relationship.guardian_user_id,u.id)))
+    OR guardian_authority_current(sqlc.arg(actor_id), u.id))
 ;
 
 -- name: ListDependentProfileCompleteness :many
@@ -96,6 +102,9 @@ SELECT u.id,
        (p.emergency_contact_name <> '' AND p.emergency_contact_relationship <> '' AND p.emergency_contact_phone <> '' AND p.medical_declaration <> 'UNKNOWN')::boolean AS is_complete,
        (p.photo_object_key IS NOT NULL)::boolean AS has_photo
 FROM users u
+JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
 LEFT JOIN member_profiles p ON p.user_id = u.id
-WHERE u.guardian_id = sqlc.arg(guardian_id) AND u.is_active AND u.is_dependent AND u.erased_at IS NULL
+WHERE relationship.guardian_user_id=sqlc.arg(guardian_id)
+ AND guardian_authority_current(relationship.guardian_user_id,u.id)
+ AND u.is_active AND u.is_dependent AND u.erased_at IS NULL
 ORDER BY lower(u.name), u.id;

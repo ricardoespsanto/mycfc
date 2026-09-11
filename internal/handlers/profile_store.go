@@ -87,6 +87,9 @@ func (s PostgresProfileStore) View(ctx context.Context, actorID, subjectID uuid.
 		if err != nil {
 			return err
 		}
+		if err := resolveGuardianProfileAuthority(ctx, q, &result, actorID, isAdmin); err != nil {
+			return err
+		}
 		if !canViewProfile(result, actorID, isAdmin) {
 			return pgx.ErrNoRows
 		}
@@ -104,6 +107,9 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 		}
 		current, err := q.GetMemberProfile(ctx, input.SubjectID)
 		if err != nil {
+			return err
+		}
+		if err := resolveGuardianProfileAuthority(ctx, q, &current, input.ActorID, input.IsAdmin); err != nil {
 			return err
 		}
 		if !canEditProfile(current, input.ActorID, input.IsAdmin) {
@@ -179,6 +185,30 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 		_, err = q.CreateMemberProfileAudit(ctx, dbgen.CreateMemberProfileAuditParams{ActorUserID: &input.ActorID, SubjectUserID: &input.SubjectID, Action: "PROFILE_UPDATED", ChangedFields: input.ChangedFields})
 		return err
 	})
+}
+
+func resolveGuardianProfileAuthority(ctx context.Context, q *dbgen.Queries, profile *dbgen.GetMemberProfileRow, actorID uuid.UUID, isAdmin bool) error {
+	if profile.ID == actorID || !profile.IsDependent {
+		return nil
+	}
+	if isAdmin {
+		allowed, err := q.HasCurrentGuardianAuthorityForSubject(ctx, profile.ID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrProfileForbidden
+		}
+		return nil
+	}
+	allowed, err := q.IsGuardianAuthorityCurrent(ctx, dbgen.IsGuardianAuthorityCurrentParams{GuardianID: actorID, SubjectID: profile.ID})
+	if err != nil {
+		return err
+	}
+	if allowed {
+		profile.GuardianID = &actorID
+	}
+	return nil
 }
 
 func profileHasHealthData(profile dbgen.UpdateMemberProfileParams) bool {
@@ -272,6 +302,9 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 		q := dbgen.New(tx)
 		current, err := q.GetMemberProfile(ctx, subjectID)
 		if err != nil {
+			return err
+		}
+		if err := resolveGuardianProfileAuthority(ctx, q, &current, actorID, isAdmin); err != nil {
 			return err
 		}
 		if !canEditProfile(current, actorID, isAdmin) {

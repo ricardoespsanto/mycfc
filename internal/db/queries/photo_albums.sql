@@ -22,7 +22,7 @@ WHERE (a.status = 'OPEN' OR sqlc.arg(privileged)::boolean)
     OR EXISTS (
       SELECT 1 FROM user_memberships m
       JOIN users subject ON subject.id = m.user_id AND subject.is_active
-      WHERE (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+      WHERE (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
         AND (
           EXISTS (SELECT 1 FROM photo_album_programme_audiences pa WHERE pa.album_id = a.id AND pa.programme_id = m.programme_id)
@@ -53,7 +53,7 @@ WHERE a.id = sqlc.arg(id)
     OR EXISTS (
       SELECT 1 FROM user_memberships m
       JOIN users subject ON subject.id = m.user_id AND subject.is_active
-      WHERE (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+      WHERE (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
         AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
         AND (
           EXISTS (SELECT 1 FROM photo_album_programme_audiences pa WHERE pa.album_id = a.id AND pa.programme_id = m.programme_id)

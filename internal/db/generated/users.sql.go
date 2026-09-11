@@ -14,10 +14,12 @@ import (
 
 const countDependentsByGuardian = `-- name: CountDependentsByGuardian :one
 SELECT count(*)::bigint
-FROM users
-WHERE guardian_id = $1
-  AND is_dependent = true
-  AND is_active = true
+FROM guardian_authority_relationships relationship
+JOIN users subject ON subject.id=relationship.subject_user_id
+WHERE relationship.guardian_user_id=$1::uuid
+  AND relationship.state NOT IN('EXPIRED','REJECTED')
+  AND subject.is_dependent AND subject.is_active AND subject.erased_at IS NULL
+  AND subject.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
 `
 
 func (q *Queries) CountDependentsByGuardian(ctx context.Context, guardianID *uuid.UUID) (int64, error) {
@@ -105,36 +107,10 @@ func (q *Queries) CreateAdultUser(ctx context.Context, arg CreateAdultUserParams
 }
 
 const createDependentUser = `-- name: CreateDependentUser :one
-WITH privacy_guard AS (
-    SELECT pg_advisory_xact_lock(110, 110)
-), eligible_guardian AS (
-    SELECT guardian.id
-    FROM users guardian, privacy_guard
-    WHERE guardian.id = $1
-      AND guardian.is_active
-      AND NOT guardian.is_dependent
-      AND (guardian.date_of_birth IS NULL OR guardian.date_of_birth <= ((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date - INTERVAL '18 years')::date)
-    FOR UPDATE OF guardian
-), account AS (
-INSERT INTO users (
-    name,
-    email,
-    password_hash,
-    guardian_id,
-    is_dependent,
-    date_of_birth
-) SELECT
-    $2,
-    NULL,
-    NULL,
-    eligible_guardian.id,
-    true,
-    $3
-FROM eligible_guardian
-RETURNING id, name, email, password_hash, guardian_id,
-          is_dependent, date_of_birth, is_active, created_at, updated_at
-)
-SELECT id, name, email, password_hash, guardian_id, is_dependent, date_of_birth, is_active, created_at, updated_at FROM account
+SELECT account.id,account.name,account.email,account.password_hash,
+       $1::uuid AS guardian_id,account.is_dependent,
+       account.date_of_birth,account.is_active,account.created_at,account.updated_at
+FROM guardian_authority_create_dependent($2,$3,$1) account
 `
 
 type CreateDependentUserParams struct {
@@ -148,7 +124,7 @@ type CreateDependentUserRow struct {
 	Name         string             `json:"name"`
 	Email        *string            `json:"email"`
 	PasswordHash *string            `json:"password_hash"`
-	GuardianID   *uuid.UUID         `json:"guardian_id"`
+	GuardianID   uuid.UUID          `json:"guardian_id"`
 	IsDependent  bool               `json:"is_dependent"`
 	DateOfBirth  pgtype.Date        `json:"date_of_birth"`
 	IsActive     bool               `json:"is_active"`
@@ -172,6 +148,25 @@ func (q *Queries) CreateDependentUser(ctx context.Context, arg CreateDependentUs
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deactivateMemberForAdmin = `-- name: DeactivateMemberForAdmin :execrows
+UPDATE users AS target
+SET is_active = false,
+    updated_at = now()
+WHERE target.id = $1
+  AND (NOT target.is_dependent OR EXISTS(
+    SELECT 1 FROM guardian_authority_relationships relationship
+    WHERE relationship.subject_user_id=target.id
+      AND guardian_authority_current(relationship.guardian_user_id,target.id)))
+`
+
+func (q *Queries) DeactivateMemberForAdmin(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deactivateMemberForAdmin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deactivateUser = `-- name: DeactivateUser :exec
@@ -233,6 +228,11 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
 FROM users u
 LEFT JOIN member_profiles p ON p.user_id = u.id
 WHERE u.id = $1
+  AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))))
 `
 
 type GetActiveAccountByIDRow struct {
@@ -277,6 +277,11 @@ SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible
        ) AS is_admin
 FROM users u
 WHERE u.id = $1
+  AND (NOT u.is_dependent OR (u.is_active AND u.erased_at IS NULL
+       AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+       AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+           WHERE relationship.subject_user_id=u.id
+             AND guardian_authority_current(relationship.guardian_user_id,u.id))))
 `
 
 type GetActiveAccountByIDWithoutProfileRow struct {
@@ -312,10 +317,14 @@ const getActiveDependentByLoginID = `-- name: GetActiveDependentByLoginID :one
 SELECT u.id, u.name, u.email, u.password_hash, u.guardian_id,
        u.is_dependent, u.date_of_birth, u.is_active, u.created_at, u.updated_at, u.credential_version
 FROM users u
-JOIN users guardian ON guardian.id = u.guardian_id AND guardian.is_active = true AND guardian.is_dependent = false
 WHERE u.minor_login_id = $1
   AND u.is_active = true
+  AND u.erased_at IS NULL
   AND u.is_dependent = true
+  AND u.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+  AND EXISTS (SELECT 1 FROM guardian_authority_relationships relationship
+      WHERE relationship.subject_user_id=u.id
+        AND guardian_authority_current(relationship.guardian_user_id,u.id))
 `
 
 type GetActiveDependentByLoginIDRow struct {
@@ -394,11 +403,13 @@ func (q *Queries) GetActiveUserByEmail(ctx context.Context, email *string) (GetA
 }
 
 const getMemberForAdmin = `-- name: GetMemberForAdmin :one
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS guardian_id, guardian.name AS guardian_name,
        u.is_dependent, u.date_of_birth, u.is_active
 FROM users u
-LEFT JOIN users guardian ON guardian.id = u.guardian_id
+LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
 WHERE u.id = $1
+ AND (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id))
 `
 
 type GetMemberForAdminRow struct {
@@ -534,12 +545,15 @@ WITH issued AS (
     UPDATE users minor
     SET minor_login_id = $1, password_hash = $2,
         credential_version = minor.credential_version + 1, updated_at = now()
-    FROM users guardian
+    FROM guardian_authority_relationships relationship
+    JOIN users guardian ON guardian.id=relationship.guardian_user_id
     WHERE minor.id = $3
       AND minor.is_dependent = true
       AND minor.is_active = true
-      AND minor.guardian_id = guardian.id
+      AND minor.erased_at IS NULL
+      AND relationship.subject_user_id=minor.id
       AND guardian.id = $4
+      AND guardian_authority_current(guardian.id,minor.id)
       AND guardian.is_active = true
       AND guardian.is_dependent = false
       AND EXISTS (
@@ -620,7 +634,9 @@ SELECT u.id, u.name, u.guardian_id, u.is_dependent,
        true::boolean AS profile_complete,
        false::boolean AS has_profile_photo
 FROM users u
-WHERE u.guardian_id = $1
+JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+WHERE relationship.guardian_user_id = $1::uuid
+  AND guardian_authority_current(relationship.guardian_user_id,u.id)
   AND u.is_dependent = true
   AND u.is_active = true
 ORDER BY lower(u.name), u.id
@@ -681,14 +697,16 @@ func (q *Queries) ListDependentsByGuardian(ctx context.Context, arg ListDependen
 }
 
 const listMembersForAdmin = `-- name: ListMembersForAdmin :many
-SELECT u.id, u.name, u.email, u.minor_login_id, u.guardian_id, guardian.name AS guardian_name,
+SELECT u.id, u.name, u.email, u.minor_login_id, relationship.guardian_user_id AS guardian_id, guardian.name AS guardian_name,
        u.is_dependent, u.date_of_birth, u.is_active
 FROM users u
-LEFT JOIN users guardian ON guardian.id = u.guardian_id
-WHERE $1::text IS NULL
+LEFT JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=u.id
+LEFT JOIN users guardian ON guardian.id = relationship.guardian_user_id
+WHERE (NOT u.is_dependent OR guardian_authority_current(relationship.guardian_user_id,u.id))
+ AND ($1::text IS NULL
    OR u.name ILIKE '%' || $1::text || '%'
    OR u.email::text ILIKE '%' || $1::text || '%'
-   OR u.minor_login_id::text ILIKE '%' || $1::text || '%'
+   OR u.minor_login_id::text ILIKE '%' || $1::text || '%')
 ORDER BY u.is_active DESC, lower(u.name), u.id
 LIMIT $3
 OFFSET $2
@@ -781,7 +799,7 @@ const updateDependentLeaderboardVisibility = `-- name: UpdateDependentLeaderboar
 UPDATE users
 SET leaderboard_visible = $1, updated_at = now()
 WHERE id = $2
-  AND guardian_id = $3
+  AND guardian_authority_current($3::uuid,id)
   AND is_dependent = true
   AND is_active = true
 `

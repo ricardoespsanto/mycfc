@@ -33,6 +33,19 @@ type privacyReviewLookup struct {
 	err     error
 }
 
+type guardianVerifierLookup struct {
+	allowed, verified bool
+	err               error
+}
+
+func (l guardianVerifierLookup) HasVerifiedGuardianAuthority(context.Context, uuid.UUID) (bool, error) {
+	return l.verified, l.err
+}
+
+func (l guardianVerifierLookup) CanVerifyGuardianAuthority(context.Context, uuid.UUID) (bool, error) {
+	return l.allowed, l.err
+}
+
 func (l privacyReviewLookup) CanReview(context.Context, uuid.UUID) (bool, error) {
 	return l.allowed, l.err
 }
@@ -220,6 +233,59 @@ func TestAuthLoadsPrivacyExecutorCapabilityAndFailsClosed(t *testing.T) {
 			response := authenticatedRequest(t, auth.Sessions, id.String(), handler)
 			if response.Code != tc.want {
 				t.Fatalf("status=%d want=%d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthLoadsGuardianVerifierCapabilityAndFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lookup  guardianVerifierLookup
+		want    int
+		allowed bool
+	}{
+		{name: "verifier", lookup: guardianVerifierLookup{allowed: true}, want: http.StatusNoContent, allowed: true},
+		{name: "ordinary member", lookup: guardianVerifierLookup{}, want: http.StatusNoContent},
+		{name: "lookup unavailable", lookup: guardianVerifierLookup{err: errors.New("guardian verifier grants unavailable")}, want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := uuid.New()
+			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true}}, GuardianAuthority: tc.lookup, Sessions: scs.New()}
+			handler := auth.Load(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				user, ok := CurrentUserFromContext(r.Context())
+				if !ok || user.CanVerifyGuardianAuthority != tc.allowed {
+					t.Fatalf("guardian verifier capability=%v user=%+v", ok, user)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			response := authenticatedRequest(t, auth.Sessions, id.String(), handler)
+			if response.Code != tc.want {
+				t.Fatalf("status=%d want=%d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequireGuardianVerifierDoesNotImplyAdministratorAccess(t *testing.T) {
+	auth := Auth{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		name string
+		user CurrentUser
+		want int
+	}{
+		{name: "explicit verifier", user: CurrentUser{ID: uuid.New(), CanVerifyGuardianAuthority: true}, want: http.StatusNoContent},
+		{name: "administrator without grant", user: CurrentUser{ID: uuid.New(), IsAdmin: true}, want: http.StatusForbidden},
+		{name: "ordinary member", user: CurrentUser{ID: uuid.New()}, want: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/admin/representacoes", nil)
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, tc.user))
+			w := httptest.NewRecorder()
+			auth.RequireGuardianVerifier(next).ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("response=%d want=%d", w.Code, tc.want)
 			}
 		})
 	}

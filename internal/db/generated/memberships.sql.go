@@ -196,6 +196,11 @@ UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
 WHERE user_id = $1::uuid AND season_id = $2
   AND programme_id = $3 AND starts_on <= CURRENT_DATE
   AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
+  AND EXISTS(SELECT 1 FROM users member WHERE member.id=user_memberships.user_id
+   AND (NOT member.is_dependent OR EXISTS(
+    SELECT 1 FROM guardian_authority_relationships relationship
+    WHERE relationship.subject_user_id=member.id
+     AND guardian_authority_current(relationship.guardian_user_id,member.id))))
 `
 
 type EndCurrentSeasonMembershipParams struct {
@@ -461,7 +466,13 @@ func (q *Queries) ListModalitiesForMembership(ctx context.Context, membershipID 
 
 const upsertCurrentSeasonMembership = `-- name: UpsertCurrentSeasonMembership :one
 INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-VALUES ($1::uuid, $2, $3, $4)
+SELECT member.id,$1,$2,$3
+FROM users member
+WHERE member.id=$4::uuid AND member.is_active AND member.erased_at IS NULL
+ AND (NOT member.is_dependent OR EXISTS(
+  SELECT 1 FROM guardian_authority_relationships relationship
+  WHERE relationship.subject_user_id=member.id
+   AND guardian_authority_current(relationship.guardian_user_id,member.id)))
 ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
 SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
@@ -469,18 +480,18 @@ RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id
 `
 
 type UpsertCurrentSeasonMembershipParams struct {
-	UserID      uuid.UUID   `json:"user_id"`
 	SeasonID    uuid.UUID   `json:"season_id"`
 	ProgrammeID uuid.UUID   `json:"programme_id"`
 	StartsOn    pgtype.Date `json:"starts_on"`
+	UserID      uuid.UUID   `json:"user_id"`
 }
 
 func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error) {
 	row := q.db.QueryRow(ctx, upsertCurrentSeasonMembership,
-		arg.UserID,
 		arg.SeasonID,
 		arg.ProgrammeID,
 		arg.StartsOn,
+		arg.UserID,
 	)
 	var i UserMembership
 	err := row.Scan(

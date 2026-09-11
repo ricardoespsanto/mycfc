@@ -13,9 +13,106 @@ INSERT INTO users (id, name, email, password_hash, date_of_birth, email_verified
   ('11000000-0000-0000-0000-000000000004', 'Revisor alternativo de privacidade de teste', 'e2e-privacy-alternate@example.test', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK', '1990-01-01', now()),
   ('11000000-0000-0000-0000-000000000002', 'Tutor de privacidade de teste', 'e2e-privacy-guardian@example.test', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK', '1990-01-01', now())
 ON CONFLICT (id) DO NOTHING;
-INSERT INTO users (id, name, guardian_id, is_dependent, date_of_birth, minor_login_id, password_hash)
-VALUES ('11000000-0000-0000-0000-000000000003', 'Menor de privacidade de teste', '11000000-0000-0000-0000-000000000002', true, '2015-01-01', 'CFC-EE110003', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK')
+INSERT INTO users (id, name, is_dependent, date_of_birth, minor_login_id, password_hash)
+VALUES ('11000000-0000-0000-0000-000000000003', 'Menor de privacidade de teste', true, '2015-01-01', 'CFC-EE110003', '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK')
 ON CONFLICT (id) DO NOTHING;
+INSERT INTO users (id, name, is_dependent, date_of_birth)
+VALUES ('11000000-0000-0000-0000-000000000005', 'Menor com verificação expirada', true, '2014-03-03')
+ON CONFLICT (id) DO NOTHING;
+
+-- Synthetic guardian-authority policy for browser tests only. Production and
+-- fresh databases remain closed until an administrator adopts policy and
+-- separately grants a verifier.
+SELECT guardian_authority_adopt_policy(
+  actor.id,
+  'e2e-guardian-v1',
+  ARRAY['IN_PERSON_IDENTITY'],
+  ARRAY['APPROVED','INSUFFICIENT_EVIDENCE','CONFLICT','NO_AUTHORITY'],
+  365,
+  180
+)
+FROM users actor
+WHERE actor.email = 'e2e-admin@example.test';
+SELECT guardian_authority_set_policy_enabled(actor.id, 'e2e-guardian-v1', true)
+FROM users actor
+WHERE actor.email = 'e2e-admin@example.test';
+SELECT guardian_authority_grant_verifier(actor.id, verifier.id)
+FROM users actor
+CROSS JOIN users verifier
+WHERE actor.email = 'e2e-admin@example.test'
+  AND verifier.email IN ('e2e-privacy-reviewer@example.test', 'e2e-privacy-alternate@example.test');
+
+INSERT INTO guardian_authority_relationships
+  (id, public_ref, guardian_user_id, subject_user_id, submitted_label)
+VALUES (
+  '11200000-0000-0000-0000-000000000003',
+  '11300000-0000-0000-0000-000000000003',
+  '11000000-0000-0000-0000-000000000002',
+  '11000000-0000-0000-0000-000000000003',
+  'Menor de privacidade de teste'
+);
+INSERT INTO guardian_authority_events
+  (relationship_id, relationship_version, actor_ref, actor_role, action, from_state, to_state)
+VALUES (
+  '11200000-0000-0000-0000-000000000003',
+  1,
+  '11000000-0000-0000-0000-000000000002',
+  'GUARDIAN',
+  'DECLARED',
+  NULL,
+  'PENDING'
+);
+SELECT guardian_authority_transition(
+  verifier.id,
+  '11300000-0000-0000-0000-000000000003',
+  1,
+  'VERIFIED',
+  'IN_PERSON_IDENTITY',
+  'e2e/privacy-minor',
+  digest(convert_to('e2e/privacy-minor', 'UTF8'), 'sha256'),
+  'APPROVED'
+)
+FROM users verifier
+WHERE verifier.email = 'e2e-privacy-reviewer@example.test';
+
+-- Issue the synthetic minor credential only after authority is current, matching
+-- the application workflow and recording the same append-only audit evidence.
+WITH issued AS (
+  UPDATE users minor
+  SET minor_login_id='CFC-EE110003',
+      password_hash='$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK',
+      credential_version=minor.credential_version+1,
+      updated_at=clock_timestamp()
+  WHERE minor.id='11000000-0000-0000-0000-000000000003'
+    AND guardian_authority_current('11000000-0000-0000-0000-000000000002',minor.id)
+  RETURNING minor.id
+)
+INSERT INTO minor_credential_audit(minor_user_id,guardian_user_id,actor_user_id,action,issued_login_id)
+SELECT issued.id,'11000000-0000-0000-0000-000000000002',admin.id,'ISSUED','CFC-EE110003'
+FROM issued CROSS JOIN users admin WHERE admin.email='e2e-admin@example.test';
+
+INSERT INTO guardian_authority_relationships
+  (id, public_ref, guardian_user_id, subject_user_id, submitted_label, state, version, policy_version,
+   verified_at, verified_by, verified_until, review_due_at)
+VALUES (
+  '11200000-0000-0000-0000-000000000005',
+  '11300000-0000-0000-0000-000000000005',
+  '11000000-0000-0000-0000-000000000002',
+  '11000000-0000-0000-0000-000000000005',
+  'Menor com verificação expirada',
+  'VERIFIED', 2, 'e2e-guardian-v1',
+  clock_timestamp()-interval '200 days',
+  '11000000-0000-0000-0000-000000000001',
+  clock_timestamp()+interval '165 days',
+  clock_timestamp()-interval '20 days'
+);
+INSERT INTO guardian_authority_events
+  (relationship_id, relationship_version, actor_ref, actor_role, action, from_state, to_state,
+   policy_version, evidence_type, evidence_reference, evidence_sha256, reason_code, occurred_at, verified_until, review_due_at)
+SELECT id,2,'11000000-0000-0000-0000-000000000001','VERIFIER','VERIFIED','PENDING','VERIFIED',
+ 'e2e-guardian-v1','IN_PERSON_IDENTITY','e2e/expired-minor',digest(convert_to('e2e/expired-minor','UTF8'),'sha256'),
+ 'APPROVED',verified_at,verified_until,review_due_at
+FROM guardian_authority_relationships WHERE id='11200000-0000-0000-0000-000000000005';
 
 -- The normal administrator is the audited grant actor, never a privacy reviewer.
 WITH grant_row AS (
@@ -121,7 +218,7 @@ BEGIN
           'provider_inventory_contract','mycfc/privacy-provider-registry-source/v2')
         WHEN 'SCHEMA' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/schema?versionId=e2e','signing_key_id','fixture-key','schema_migration_digest',encode(fixture_digest,'base64'),
-          'baseline_includes_through','202609110003_privacy_activation_emergency_fence')
+          'baseline_includes_through','202609110005_guardian_authority_cutoff_reconciliation')
       END
     ) AS id
     FROM (VALUES

@@ -30,8 +30,9 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 	}
 	const marker = "-- Serialize activation and emergency disable"
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("privacy activation emergency fence migration is not the exact final baseline segment")
+	next := strings.LastIndex(baselineSchema, "-- Guardian authority is an explicit, reviewed capability.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index:next]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy activation emergency fence migration is not the exact baseline segment")
 	}
 
 	previous, err := migrationFiles.ReadFile("migrations/202609110002_privacy_empty_provider_registry_activation.sql")
@@ -41,7 +42,12 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 	v5 := migrationFunctionSegment(t, string(previous),
 		"ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v5_check",
 		"ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v5_check;")
-	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v6_check`); err != nil {
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+		DELETE FROM privacy_activation_authenticated_artifacts;
+		ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v8_check`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, v5); err != nil {
@@ -63,9 +69,9 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 	if _, err = tx.Exec(ctx, `DO $$DECLARE definition text;
 BEGIN
  SELECT pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110003_privacy_activation_emergency_fence','202609110002_privacy_empty_provider_registry_activation');
+ EXECUTE replace(definition,'202609110005_guardian_authority_cutoff_reconciliation','202609110002_privacy_empty_provider_registry_activation');
  SELECT pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110003_privacy_activation_emergency_fence','202609110002_privacy_empty_provider_registry_activation');
+ EXECUTE replace(definition,'202609110005_guardian_authority_cutoff_reconciliation','202609110002_privacy_empty_provider_registry_activation');
 END$$`); err != nil {
 		t.Fatal(err)
 	}

@@ -493,7 +493,7 @@ for (const persona of personas) {
 		  await page.setViewportSize({ width: viewport.width, height: viewport.height });
         }
 		if (route === '/dashboard/guardian') {
-		  await expect(page.getByRole('heading', { level: 2, name: 'Dependentes associados' })).toBeVisible();
+		  await expect(page.getByRole('heading', { level: 2, name: 'Menores com representação verificada' })).toBeVisible();
 		  await expect(page.getByRole('heading', { level: 2, name: 'Menores a cargo' })).toHaveCount(0);
 		}
 		await expectAccessibilityContract(page, route);

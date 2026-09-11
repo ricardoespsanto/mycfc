@@ -119,7 +119,7 @@ WHERE a.id = $1
     OR EXISTS (
       SELECT 1 FROM user_memberships m
       JOIN users subject ON subject.id = m.user_id AND subject.is_active
-      WHERE (subject.id = $3 OR subject.guardian_id = $3)
+      WHERE (subject.id = $3 OR guardian_authority_current($3,subject.id))
         AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
         AND (
           EXISTS (SELECT 1 FROM photo_album_programme_audiences pa WHERE pa.album_id = a.id AND pa.programme_id = m.programme_id)
@@ -227,7 +227,7 @@ WHERE (a.status = 'OPEN' OR $1::boolean)
     OR EXISTS (
       SELECT 1 FROM user_memberships m
       JOIN users subject ON subject.id = m.user_id AND subject.is_active
-      WHERE (subject.id = $2 OR subject.guardian_id = $2)
+      WHERE (subject.id = $2 OR guardian_authority_current($2,subject.id))
         AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
         AND (
           EXISTS (SELECT 1 FROM photo_album_programme_audiences pa WHERE pa.album_id = a.id AND pa.programme_id = m.programme_id)

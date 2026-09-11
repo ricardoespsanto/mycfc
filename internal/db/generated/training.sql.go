@@ -275,7 +275,7 @@ LEFT JOIN modalities mo ON mo.id = d.modality_id
 WHERE (
     d.event_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id
-        WHERE (subject.id = $1 OR subject.guardian_id = $1) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        WHERE (subject.id = $1 OR guardian_authority_current($1,subject.id)) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND ((NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id)
                 AND NOT EXISTS (SELECT 1 FROM event_team_audiences a WHERE a.event_id = d.event_id))
                OR EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = d.event_id AND a.programme_id = m.programme_id)
@@ -284,7 +284,7 @@ WHERE (
 ) OR (
     d.modality_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM user_memberships m JOIN users subject ON subject.id = m.user_id JOIN membership_modalities mm ON mm.membership_id = m.id
-        WHERE (subject.id = $1 OR subject.guardian_id = $1) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+        WHERE (subject.id = $1 OR guardian_authority_current($1,subject.id)) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           AND mm.modality_id = d.modality_id AND (d.programme_id IS NULL OR d.programme_id = m.programme_id) AND (d.team_id IS NULL OR d.team_id = m.team_id)
     )
 )
@@ -654,7 +654,7 @@ SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt A
          JOIN training_plan_publications publication ON publication.id = prescription.publication_id
          JOIN users prescribed_athlete ON prescribed_athlete.id = prescription.athlete_user_id
          WHERE prescription.session_id = s.id
-           AND (prescribed_athlete.id = $1 OR (prescribed_athlete.guardian_id = $1 AND prescribed_athlete.date_of_birth > CURRENT_DATE - INTERVAL '18 years'))
+           AND (prescribed_athlete.id = $1 OR guardian_authority_current($1,prescribed_athlete.id))
            AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
        ) AS prescription_available
 FROM training_sessions s
@@ -664,7 +664,7 @@ WHERE s.ends_at >= $2
   AND EXISTS (
       SELECT 1 FROM user_memberships membership
       JOIN users subject ON subject.id = membership.user_id
-      WHERE (subject.id = $1 OR subject.guardian_id = $1)
+      WHERE (subject.id = $1 OR guardian_authority_current($1,subject.id))
         AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
         AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
         AND (p.team_id IS NULL OR p.team_id = membership.team_id)

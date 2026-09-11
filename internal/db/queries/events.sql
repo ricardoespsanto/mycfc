@@ -75,14 +75,14 @@ WHERE e.starts_at >= now()
            SELECT 1 FROM user_memberships m
            JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
-          WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+          WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m
            JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
-           WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+           WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
   )
@@ -107,7 +107,7 @@ WHERE e.starts_at < sqlc.arg(day_ends_at)
               JOIN event_audiences a ON a.programme_id = m.programme_id
               JOIN users subject ON subject.id = m.user_id
               WHERE a.event_id = e.id
-                AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+                AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
                 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           )
           OR EXISTS (
@@ -116,7 +116,7 @@ WHERE e.starts_at < sqlc.arg(day_ends_at)
               JOIN event_team_audiences a ON a.team_id = m.team_id
               JOIN users subject ON subject.id = m.user_id
               WHERE a.event_id = e.id
-                AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+                AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
                 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           )
       )
@@ -180,7 +180,7 @@ SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.res
 FROM events e
 JOIN users subject ON subject.id = sqlc.arg(subject_user_id) AND subject.is_active
 WHERE e.id = sqlc.arg(event_id)
-  AND (subject.id = sqlc.arg(actor_user_id) OR subject.guardian_id = sqlc.arg(actor_user_id))
+  AND (subject.id = sqlc.arg(actor_user_id) OR guardian_authority_current(sqlc.arg(actor_user_id),subject.id))
   AND (
       (
           NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
@@ -226,13 +226,13 @@ WHERE e.id = sqlc.arg(event_id)
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
-          WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+          WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
-           WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR subject.guardian_id = sqlc.arg(user_id))
+           WHERE a.event_id = e.id AND (subject.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),subject.id))
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
   );
