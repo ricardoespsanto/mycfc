@@ -108,7 +108,7 @@ func AuthenticateReplayTombstone(privateKey []byte, listed ListedTombstoneObject
 		return zero, ErrTombstoneReplayInvalid
 	}
 	var record RestoreTombstone
-	effectiveAt := time.Time{}
+	var effectiveAt time.Time
 	closureVersion := ""
 	if kind == "intent" {
 		if err = decodeStrictJSON(plaintext, &record); err != nil || !validReplayableRestoreTombstone(record) || record.Replay.MembershipHistoryPostcondition != nil {
@@ -245,13 +245,6 @@ func (w TombstoneReplayWorker) verifiedResult(ctx context.Context, q *dbgen.Quer
 	}
 	return TombstoneReplayResult{RunID: runID, AlreadyApplied: alreadyApplied, Synthetic: authenticated.IsSynthetic(),
 		ClosureVersion: authenticated.closureVersion, MembershipHistoryPostcondition: *expected}, nil
-}
-
-func nullableString(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
 }
 
 func validAuthenticatedReplayTombstone(authenticated AuthenticatedReplayTombstone) bool {

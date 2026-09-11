@@ -18,6 +18,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func TestAuthenticatedTombstoneReplayIsExactIdempotentAndSubjectScoped(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
