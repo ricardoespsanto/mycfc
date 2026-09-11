@@ -6,7 +6,7 @@ package privacyrequests
 // FK column that currently targets users(id). Integration coverage compares
 // this closed manifest with information_schema so a new relationship cannot
 // silently inherit an erasure treatment. The issue's older count was 65; the
-// current baseline has 85 constraints (69 textual REFERENCES occurrences).
+// current baseline has 93 constraints.
 var relationalUserReferenceInventory = map[string]string{
 	"activity_connections.user_id":                               "DELETE_ACTIVITY",
 	"announcement_audit_events.actor_user_id":                    "ANONYMIZE_AUDIT_PRINCIPAL",
@@ -35,6 +35,14 @@ var relationalUserReferenceInventory = map[string]string{
 	"events.created_by_id":                                       "KEEP_OPAQUE_ACTOR",
 	"feature_flag_events.actor_user_id":                          "ANONYMIZE_AUDIT_PRINCIPAL",
 	"feature_flags.updated_by_id":                                "KEEP_OPAQUE_ACTOR",
+	"guardian_authority_policies.adopted_by":                     "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",
+	"guardian_authority_policies.enabled_by":                     "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",
+	"guardian_authority_relationships.guardian_user_id":          "RESTRICT_GUARDIAN_AUTHORITY_RELATIONSHIP",
+	"guardian_authority_relationships.subject_user_id":           "RESTRICT_GUARDIAN_AUTHORITY_RELATIONSHIP",
+	"guardian_authority_relationships.verified_by":               "RESTRICT_GUARDIAN_AUTHORITY_RELATIONSHIP",
+	"guardian_verifier_grants.granted_by":                        "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",
+	"guardian_verifier_grants.revoked_by":                        "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",
+	"guardian_verifier_grants.user_id":                           "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",
 	"maintenance_tasks.created_by_id":                            "KEEP_OPAQUE_ACTOR",
 	"member_profile_audit_events.actor_user_id":                  "ANONYMIZE_AUDIT_PRINCIPAL",
 	"member_profile_audit_events.subject_user_id":                "ANONYMIZE_AUDIT_PRINCIPAL",

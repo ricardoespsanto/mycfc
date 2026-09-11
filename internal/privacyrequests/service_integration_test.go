@@ -108,7 +108,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110003_privacy_activation_emergency_fence"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110004_guardian_authority_verification"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -226,6 +226,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("privacy-test-password"), bcrypt.MinCost)
+	guardianPolicy := ""
 	user := func(guardian *uuid.UUID) uuid.UUID {
 		id := uuid.New()
 		var email, ph *string
@@ -237,15 +238,48 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			ph = &passwordHash
 			dob = "1990-01-01"
 		}
-		_, e := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth,is_dependent,guardian_id)VALUES($1,'Pessoa teste',$2,$3,$4,$5,$6)`, id, email, ph, dob, guardian != nil, guardian)
+		_, e := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth,is_dependent,guardian_id)VALUES($1,'Pessoa teste',$2,$3,$4,$5,NULL)`, id, email, ph, dob, guardian != nil)
 		if e != nil {
 			t.Fatal(e)
 		}
+		if guardian != nil {
+			if guardianPolicy == "" {
+				t.Fatal("guardian authority policy fixture is unavailable")
+			}
+			_, e = pool.Exec(ctx, `WITH relationship AS (
+				INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,version,policy_version,
+				 verified_at,verified_by,verified_until,review_due_at,created_at,updated_at)
+				VALUES($1,$2,'Pessoa teste','VERIFIED',2,$3,clock_timestamp(),$1,clock_timestamp()+interval '365 days',
+				 clock_timestamp()+interval '180 days',clock_timestamp(),clock_timestamp()) RETURNING id,created_at)
+				INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
+				 policy_version,evidence_type,evidence_reference,evidence_sha256,occurred_at,verified_until,review_due_at)
+				SELECT id,2,$1,'SYSTEM','VERIFIED','PENDING','VERIFIED',$3,'CIVIL_REGISTRY','fixture/'||id::text,
+				 digest(id::text,'sha256'),created_at,created_at+interval '365 days',created_at+interval '180 days' FROM relationship`,
+				*guardian, id, guardianPolicy)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
 		return id
+	}
+	keepGuardianFixtureCurrent := func(subjectID uuid.UUID) {
+		t.Helper()
+		// StartExecution correctly cuts off the dependent account. These cases
+		// exercise the separate guardian-resolution contract, so keep only the
+		// isolated fixture account active while its relationship is inspected.
+		if _, updateErr := pool.Exec(ctx, `UPDATE users SET is_active=true WHERE id=$1`, subjectID); updateErr != nil {
+			t.Fatal(updateErr)
+		}
 	}
 	owner, reviewerA, reviewerB := user(nil), user(nil), user(nil)
 	_, e = pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id)SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, owner)
 	if e != nil {
+		t.Fatal(e)
+	}
+	guardianPolicy = "privacy-guardian-fixture-" + uuid.NewString()
+	if _, e = pool.Exec(ctx, `INSERT INTO guardian_authority_policies
+		(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
+		VALUES($1,'{CIVIL_REGISTRY}','{CONFLICT,LOSS,CHANGE}',365,180,clock_timestamp(),$2,true,clock_timestamp(),$2)`, guardianPolicy, owner); e != nil {
 		t.Fatal(e)
 	}
 	capabilities := map[string]bool{}
@@ -924,7 +958,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = pool.Exec(ctx, `UPDATE users SET guardian_id=$2,updated_at=updated_at+interval '1 second' WHERE id=$1`, dependant, replacementGuardian); err != nil {
+		if _, err = pool.Exec(ctx, `UPDATE guardian_authority_relationships
+			SET guardian_user_id=$2,updated_at=updated_at+interval '1 second' WHERE subject_user_id=$1`, dependant, replacementGuardian); err != nil {
 			t.Fatal(err)
 		}
 		view, err = s.View(ctx, reviewerB, represented.PublicRef, true)
@@ -1088,7 +1123,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatalf("verified requester list=%+v err=%v", rows, err)
 		}
 		newGuardian := user(nil)
-		if _, err = pool.Exec(ctx, `UPDATE users SET guardian_id=$2,updated_at=now()+interval '1 second' WHERE id=$1`, minor, newGuardian); err != nil {
+		if _, err = pool.Exec(ctx, `UPDATE guardian_authority_relationships
+			SET guardian_user_id=$2,updated_at=clock_timestamp()+interval '1 second' WHERE subject_user_id=$1`, minor, newGuardian); err != nil {
 			t.Fatal(err)
 		}
 		rows, err = s.List(ctx, guardian, false, "", "", "")
@@ -1207,6 +1243,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: childRequest.PublicRef, Version: childRequest.Version, Confirmed: true}); err != nil {
 			t.Fatalf("start child closure: %v", err)
 		}
+		keepGuardianFixtureCurrent(minor)
 		parentRequest, err = s.Change(ctx, valid)
 		if err != nil {
 			t.Fatal(err)
@@ -1970,7 +2007,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Fatal(e)
 		}
 		other := user(nil)
-		_, e = pool.Exec(ctx, "UPDATE users SET guardian_id=$2,updated_at=now()+interval '1 second' WHERE id=$1", minor, other)
+		_, e = pool.Exec(ctx, "UPDATE guardian_authority_relationships SET guardian_user_id=$2,updated_at=clock_timestamp()+interval '1 second' WHERE subject_user_id=$1", minor, other)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -1997,6 +2034,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if e != nil {
 			t.Fatalf("start child closure: %v", e)
 		}
+		keepGuardianFixtureCurrent(minor)
 		r, e := submit(guardian, guardian, AccountClosure)
 		if e != nil {
 			t.Fatal(e)
@@ -2201,6 +2239,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: child.PublicRef, Version: child.Version, Confirmed: true}); err != nil {
 			t.Fatal(err)
 		}
+		keepGuardianFixtureCurrent(minor)
 		request, err := submit(guardian, guardian, AccountClosure)
 		if err != nil {
 			t.Fatal(err)
@@ -2214,7 +2253,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = pool.Exec(ctx, `UPDATE users SET guardian_id=$2,updated_at=clock_timestamp() WHERE id=$1`, newMinor, guardian); err != nil {
+		if _, err = pool.Exec(ctx, `UPDATE guardian_authority_relationships
+			SET guardian_user_id=$2,updated_at=clock_timestamp() WHERE subject_user_id=$1`, newMinor, guardian); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrClosureSafeguards) {
