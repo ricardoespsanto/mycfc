@@ -1,0 +1,20 @@
+name: Operations - feature activation
+description: Activate one already-deployed feature behind a fail-closed gate
+title: "[Operations/activation]: "
+body:
+  - type: textarea
+    id: feature
+    attributes: {label: Feature and audience, description: Name the exact feature, environment, and affected users.}
+    validations: {required: true}
+  - type: textarea
+    id: prerequisites
+    attributes: {label: Approval and readiness evidence, description: List canonical approval, configuration, health, and observation requirements.}
+    validations: {required: true}
+  - type: textarea
+    id: rollback
+    attributes: {label: Disable and rollback criteria, description: State the immediate disable action and triggers.}
+    validations: {required: true}
+  - type: textarea
+    id: exclusions
+    attributes: {label: Exclusions, description: Confirm unrelated release, purge, or policy decisions are not approved.}
+    validations: {required: true}

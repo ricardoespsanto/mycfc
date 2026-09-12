@@ -6,6 +6,8 @@ operator_env_file=${MYCFC_GUARDIAN_ACTIVATION_ENV_FILE:-/etc/mycfc/guardian-acti
 approval_dir=${MYCFC_GUARDIAN_ACTIVATION_APPROVAL_DIR:-/etc/mycfc/guardian-activation}
 state_dir=${MYCFC_STATE_DIR:-/etc/mycfc/deployment}
 deployment_dir=${MYCFC_DEPLOYMENT_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)}
+runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+release_lock_file="$runtime_dir/mycfc-pull-release.lock"
 mode=${1:-status}
 
 fail() {
@@ -30,6 +32,12 @@ while IFS= read -r line || [ -n "$line" ]; do
 		*) fail ;;
 	esac
 done <"$operator_env_file"
+
+exec 9>"$release_lock_file" || fail
+if ! flock -n 9; then
+	printf '%s\n' 'event=guardian_activation_runtime_failed error_class=release_in_progress' >&2
+	exit 1
+fi
 
 if [ "$mode" = preflight ] || [ "$mode" = enable ]; then
 	approval_file=$approval_dir/approval.json

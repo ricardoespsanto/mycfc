@@ -148,6 +148,19 @@ jobs:
       - run: cp .env.example .env
       - run: CI=true make test-integration
 
+  release-upgrade:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The gate builds both the exact predecessor and the candidate.
+          fetch-depth: 0
+      - name: Exercise the production release sequence from predecessor to candidate
+        env:
+          PREDECESSOR_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: make test-release-upgrade
+
   coverage:
     needs: classify
     if: always() && !cancelled() && (needs.classify.result != 'success' || needs.classify.outputs.mode != 'docs')
@@ -199,7 +212,7 @@ jobs:
 
   summary:
     if: always()
-    needs: [classify, documentation, generated-and-format, foundation, quality, integration, coverage, e2e]
+    needs: [classify, documentation, generated-and-format, foundation, quality, integration, release-upgrade, coverage, e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: Require all CI gates
@@ -211,6 +224,7 @@ jobs:
           FOUNDATION_RESULT: ${{ needs.foundation.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          RELEASE_UPGRADE_RESULT: ${{ needs.release-upgrade.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
@@ -221,6 +235,7 @@ jobs:
             test "$FOUNDATION_RESULT" = skipped
             test "$QUALITY_RESULT" = skipped
             test "$INTEGRATION_RESULT" = skipped
+            test "$RELEASE_UPGRADE_RESULT" = success
             test "$COVERAGE_RESULT" = skipped
             test "$E2E_RESULT" = skipped
           else
@@ -229,6 +244,7 @@ jobs:
             test "$FOUNDATION_RESULT" = success
             test "$QUALITY_RESULT" = success
             test "$INTEGRATION_RESULT" = success
+            test "$RELEASE_UPGRADE_RESULT" = success
             test "$COVERAGE_RESULT" = success
             test "$E2E_RESULT" = success
           fi

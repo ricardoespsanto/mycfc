@@ -19,6 +19,27 @@ func rewindGuardianSchemaReadyOwnerMigration(t *testing.T, ctx context.Context, 
 	t.Helper()
 	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN
 		IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+			AND conname='privacy_activation_authenticated_artifacts_v15_check') THEN
+			ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			DELETE FROM privacy_activation_authenticated_artifacts;
+			ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+			WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v15_check';
+			IF definition IS NULL OR length(definition)-length(replace(definition,'202609120007_guardian_release_status',''))
+				<>length('202609120007_guardian_release_status') THEN RAISE EXCEPTION 'guardian release status rewind mismatch'; END IF;
+			rewritten:=replace(definition,', ''202609120007_guardian_release_status''','');
+			ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v15_check;
+			EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v14_check '||rewritten;
+			SELECT pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+			EXECUTE replace(definition,'202609120007_guardian_release_status','202609120006_guardian_schema_ready_owner');
+			SELECT pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+			EXECUTE replace(definition,'202609120007_guardian_release_status','202609120006_guardian_schema_ready_owner');
+		END IF;
+	END$$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN
+		IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
 			AND conname='privacy_activation_authenticated_artifacts_v14_check') THEN
 			ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
 			DELETE FROM privacy_activation_authenticated_artifacts;

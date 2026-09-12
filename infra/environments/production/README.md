@@ -8,6 +8,8 @@ The legacy-media purge identity is a temporary, independently gated exception do
 
 The optional privacy-worker source is disabled by default and creates no credentials, secret value, service, timer, alarm, or activation. Its three separate infrastructure, version-deletion, and metadata-rewrite gates and rollback procedure are documented in [`../../../docs/privacy-worker-infrastructure.md`](../../../docs/privacy-worker-infrastructure.md). Source delivery does not authorize a Terraform apply or live erasure.
 
+The optional operations observer is also disabled by default. It creates no access key or IAM user. When separately reviewed and applied, `operations_observer_enabled` creates a one-hour role trusted only by exact IAM Identity Center permission-set role ARNs (with MFA enforced in Identity Center) and/or the exact protected GitHub production-environment OIDC subject. A matching permissions boundary and inline policy allow deployment-log, ECR inventory, and alarm reads while denying secret, Parameter Store, state-bucket, ECR/log mutation, and role-chaining access. Configure the resulting role ARN as the protected `AWS_OPERATIONS_OBSERVER_ROLE_ARN` repository environment variable; never install it on the Hetzner host.
+
 ## Amazon SES provisioning
 
 SES is provisioned in `eu-west-1` for the production `domain_name`. Terraform creates:

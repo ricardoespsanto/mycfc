@@ -280,7 +280,7 @@ case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
 		;;
 esac
 
-for command in aws awk base64 cmp curl date docker flock hostname jq logger od openssl python3 sed sha256sum; do
+for command in aws awk base64 cmp curl date docker flock gh hostname jq logger od openssl python3 sed sha256sum; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf '%s\n' "Missing required command: $command" >&2
 		exit 1

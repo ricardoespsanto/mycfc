@@ -1,0 +1,16 @@
+name: Operations - approval evidence or preflight
+description: Collect the evidence required before a later human gate
+title: "[Operations/evidence]: "
+body:
+  - type: textarea
+    id: decision
+    attributes: {label: Future decision, description: Name the one gate this evidence will support without granting it.}
+    validations: {required: true}
+  - type: textarea
+    id: checks
+    attributes: {label: Required checks, description: List immutable identities, tests, logs, health, and missing evidence.}
+    validations: {required: true}
+  - type: textarea
+    id: boundary
+    attributes: {label: Explicit boundary, description: State what collection must not change or activate.}
+    validations: {required: true}

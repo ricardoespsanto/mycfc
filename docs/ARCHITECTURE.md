@@ -22,15 +22,16 @@ It intentionally excludes GitHub Actions, Terraform state, image builds and migr
 
 `architecture_delivery_pipeline.svg` defines:
 
-- Pull-request and main-branch verification.
-- Protected GitHub production environment and exact-subject OIDC.
-- Terraform plan/apply roles and remote state.
-- Immutable ECR image production.
-- Separate `mycfc-app` and `mycfc-migrate` task-definition families.
-- Migration success as a hard gate before ECS service update.
-- Deployment health verification and circuit-breaker rollback.
+- Required source checks plus the predecessor-to-candidate production release gate.
+- Separate human gates for merge, infrastructure, publication/deployment, and activation.
+- Signed semantic-tag and protected manual-dispatch release initiation.
+- Immutable ECR image, provenance, schema digest, and canonical publication evidence.
+- Pull-based Hetzner blue-green promotion with ordered database/guardian phases.
+- Direct candidate checks, atomic Caddy switching, no-switch failure, rollback, and quarantine.
+- A sanitized atomic host receipt verified through a keyless, read-only AWS observer role.
+- GitHub release and explicit issue updates only after exact production evidence is verified.
 
-The full running topology is deliberately represented by one referenced runtime node.
+The host has no GitHub credential, and the observer cannot read secrets/state or mutate AWS resources.
 
 ## Editing and regeneration
 

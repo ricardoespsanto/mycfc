@@ -1,0 +1,20 @@
+name: Operations - infrastructure or identity
+description: Plan one independently approvable infrastructure, credential, or access-boundary change
+title: "[Operations/infrastructure]: "
+body:
+  - type: textarea
+    id: outcome
+    attributes: {label: Outcome, description: State the exact infrastructure or identity result.}
+    validations: {required: true}
+  - type: textarea
+    id: scope
+    attributes: {label: Scope and exclusions, description: Name exact resources and excluded live actions.}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Acceptance evidence, description: Include plan, policy tests, expiry, and denied capabilities.}
+    validations: {required: true}
+  - type: textarea
+    id: rollback
+    attributes: {label: Rollback and disable criteria, description: State how access or infrastructure is safely withdrawn.}
+    validations: {required: true}

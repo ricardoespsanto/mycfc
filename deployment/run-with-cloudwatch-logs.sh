@@ -4,12 +4,23 @@ set -eu
 env_file=/etc/mycfc/mycfc.env
 log_group=${CLOUDWATCH_LOG_GROUP:-/mycfc/production/deployment}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
+forwarding_status_file="$state_dir/cloudwatch-forwarding-status"
 release_credentials_file=${MYCFC_RELEASE_AWS_CREDENTIALS_FILE:-/etc/mycfc/release-aws/credentials}
 release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
 log_file=$(mktemp "$runtime_dir/mycfc-cloudwatch.XXXXXX")
 upload_file=$(mktemp "$runtime_dir/mycfc-cloudwatch-upload.XXXXXX")
 payload_file=$(mktemp "$runtime_dir/mycfc-cloudwatch-payload.XXXXXX")
 trap 'rm -f "$log_file" "$upload_file" "$payload_file"' EXIT HUP INT TERM
+
+record_forwarding_status() {
+	result=$1
+	mkdir -p "$state_dir"
+	temporary=$(mktemp "$state_dir/.cloudwatch-forwarding.XXXXXX")
+	printf '%s\t%s\n' "$result" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$temporary"
+	chmod 0644 "$temporary"
+	mv "$temporary" "$forwarding_status_file"
+}
 
 if [ "$#" -eq 0 ]; then
 	printf '%s\n' 'Missing command to run.' >&2
@@ -74,7 +85,10 @@ if ! aws logs put-log-events \
 	--log-stream-name "$stream" \
 	--cli-input-json "file://$payload_file" \
 	>/dev/null; then
+	record_forwarding_status failed
 	printf '%s\n' 'CloudWatch upload failed; local journal output remains available.' >&2
+else
+	record_forwarding_status succeeded
 fi
 
 exit "$status"

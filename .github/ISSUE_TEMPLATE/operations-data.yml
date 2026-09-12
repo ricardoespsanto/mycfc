@@ -1,0 +1,20 @@
+name: Operations - data preparation or purge
+description: Prepare or perform one explicitly authorized data operation
+title: "[Operations/data]: "
+body:
+  - type: textarea
+    id: outcome
+    attributes: {label: Outcome, description: State the exact dataset and intended result.}
+    validations: {required: true}
+  - type: textarea
+    id: authority
+    attributes: {label: Authority and irreversible effects, description: Record the explicit approval boundary and what cannot be recovered.}
+    validations: {required: true}
+  - type: textarea
+    id: preflight
+    attributes: {label: Preflight evidence, description: Record inventory, dry-run, exclusions, and stop conditions.}
+    validations: {required: true}
+  - type: textarea
+    id: closeout
+    attributes: {label: Closeout evidence, description: State required absence checks, receipts, and compensating actions.}
+    validations: {required: true}

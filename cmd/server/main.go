@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 type databaseCommandConnection interface {
 	Close(context.Context) error
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 	Begin(context.Context) (pgx.Tx, error)
 }
 
@@ -57,6 +59,16 @@ func main() {
 }
 
 func runServerCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "schema-digest" {
+		_, err := fmt.Fprintln(os.Stdout, db.EmbeddedMigrationDigest())
+		return err
+	}
+	if len(args) == 1 && args[0] == "schema-inventory" {
+		return json.NewEncoder(os.Stdout).Encode(db.EmbeddedMigrationInventory())
+	}
+	if len(args) == 1 && args[0] == "guardian-release-status" {
+		return guardianReleaseStatus(ctx)
+	}
 	if args[0] == "privacy" {
 		if err := executePrivacyCommand(ctx, args[1:]); err != nil {
 			return errors.New("privacy operator command failed")
@@ -216,6 +228,27 @@ func bindGuardianRelease(ctx context.Context) error {
 	defer conn.Close(ctx)
 	logDatabaseCommandConfiguration("bind-guardian-release", "dedicated_release_bind_file", config.Host, expectedDatabase, config.User, db.RoleCredentials{})
 	return db.BindGuardianRuntimeRelease(ctx, conn, expectedDatabase, strings.TrimSpace(os.Getenv("GUARDIAN_RUNTIME_IMAGE_DIGEST")))
+}
+
+func guardianReleaseStatus(ctx context.Context) error {
+	releaseURL := strings.TrimSpace(os.Getenv("GUARDIAN_RELEASE_BIND_DATABASE_URL"))
+	expectedDatabase := strings.TrimSpace(os.Getenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE"))
+	imageDigest := strings.TrimSpace(os.Getenv("GUARDIAN_RUNTIME_IMAGE_DIGEST"))
+	config, err := pgx.ParseConfig(releaseURL)
+	if err != nil || config.Database != expectedDatabase || config.User != "mycfc_guardian_release_bind" || strings.TrimSpace(config.Password) == "" {
+		return errors.New("guardian release status credential rejected")
+	}
+	conn, err := connectDatabaseCommand(ctx, releaseURL)
+	if err != nil {
+		return errors.New("connect guardian release status database")
+	}
+	defer conn.Close(ctx)
+	enabled, err := db.GuardianReleaseIntakeEnabled(ctx, conn, expectedDatabase, imageDigest)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(os.Stdout, "guardian_intake_active=%t\n", enabled)
+	return err
 }
 
 func databaseRoleCredentialsFromConfig(cfg config.Config) db.RoleCredentials {

@@ -208,6 +208,51 @@ variable "release_agent_cutover_complete" {
   default     = false
   description = "Set true only after the dedicated release profile and updated scripts have been verified on the production host."
 }
+
+variable "operations_observer_enabled" {
+  type        = bool
+  default     = false
+  description = "Create a credential-free, one-hour read-only role for explicit human principals and the protected release workflow."
+
+  validation {
+    condition = !var.operations_observer_enabled || (
+      length(var.operations_observer_principal_arns) > 0 ||
+      var.operations_observer_github_oidc_provider_arn != null
+    )
+    error_message = "operations_observer_enabled requires at least one exact human principal or the GitHub OIDC provider."
+  }
+}
+
+variable "operations_observer_principal_arns" {
+  type        = list(string)
+  default     = []
+  description = "Exact IAM Identity Center permission-set role ARNs allowed to assume the observer role; Identity Center must enforce MFA and no user or access key is created."
+
+  validation {
+    condition = alltrue([
+      for arn in var.operations_observer_principal_arns : can(regex(
+        "^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/aws-reserved/sso\\.amazonaws\\.com/[A-Za-z0-9+=,.@_/-]*AWSReservedSSO_[A-Za-z0-9+=,.@_-]+_[0-9a-f]{16}$",
+        arn,
+      ))
+    ])
+    error_message = "Every human observer principal must be an exact IAM Identity Center AWSReservedSSO role ARN; enforce MFA in Identity Center."
+  }
+}
+
+variable "operations_observer_github_oidc_provider_arn" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Existing GitHub Actions OIDC provider ARN. Supplying it grants only the protected production-environment subject."
+
+  validation {
+    condition = var.operations_observer_github_oidc_provider_arn == null || can(regex(
+      "^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$",
+      var.operations_observer_github_oidc_provider_arn,
+    ))
+    error_message = "operations_observer_github_oidc_provider_arn must be the exact GitHub Actions OIDC provider ARN."
+  }
+}
 variable "alb_log_retention_days" {
   type    = number
   default = 90
