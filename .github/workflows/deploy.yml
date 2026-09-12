@@ -81,10 +81,12 @@ jobs:
           test -n "$tagged_at"
           release_stamp=$(date -u -d "$tagged_at" +%Y%m%d%H%M%S)
           published_at=$(date -u -d "$tagged_at" +%Y-%m-%dT%H:%M:%SZ)
-          echo "ci_run_id=$ci_run" >> "$GITHUB_OUTPUT"
-          echo "release_tag=release-$release_stamp-$SHA" >> "$GITHUB_OUTPUT"
-          echo "published_at=$published_at" >> "$GITHUB_OUTPUT"
-          echo "tree_sha=$(git rev-parse "$SHA^{tree}")" >> "$GITHUB_OUTPUT"
+          {
+            echo "ci_run_id=$ci_run"
+            echo "release_tag=release-$release_stamp-$SHA"
+            echo "published_at=$published_at"
+            echo "tree_sha=$(git rev-parse "$SHA^{tree}")"
+          } >> "$GITHUB_OUTPUT"
       # actions/setup-go v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -99,9 +101,11 @@ jobs:
           inventory_digest=$(printf '%s' "$(jq -r 'join("\n")' <<<"$migrations")" | sha256sum | awk '{print $1}')
           test "$inventory_digest" = "$digest"
           gates=$(jq -cS . deployment/release-gates.json)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "migrations=$migrations" >> "$GITHUB_OUTPUT"
-          echo "gates=$gates" >> "$GITHUB_OUTPUT"
+          {
+            echo "digest=$digest"
+            echo "migrations=$migrations"
+            echo "gates=$gates"
+          } >> "$GITHUB_OUTPUT"
       # aws-actions/configure-aws-credentials v6.2.4
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:

@@ -24,6 +24,7 @@ type databaseCommandConnectionFake struct {
 	sql        []string
 	tx         pgx.Tx
 	commitErr  error
+	row        pgx.Row
 }
 
 func (c *databaseCommandConnectionFake) Close(context.Context) error { return nil }
@@ -39,6 +40,9 @@ func (c *databaseCommandConnectionFake) Begin(context.Context) (pgx.Tx, error) {
 	return c, nil
 }
 func (c *databaseCommandConnectionFake) QueryRow(context.Context, string, ...any) pgx.Row {
+	if c.row != nil {
+		return c.row
+	}
 	return databaseMigrationRowFake{}
 }
 func (c *databaseCommandConnectionFake) Commit(context.Context) error   { return c.commitErr }
@@ -65,6 +69,10 @@ func (databaseMigrationRowFake) Scan(dest ...any) error {
 	}
 	return nil
 }
+
+type databaseErrorRowFake struct{ err error }
+
+func (r databaseErrorRowFake) Scan(...any) error { return r.err }
 
 func TestConfigDatabaseURLEscapesCredentials(t *testing.T) {
 	cfg := config.Config{
@@ -320,6 +328,49 @@ func TestGuardianReleaseStatusUsesNarrowReleaseIdentity(t *testing.T) {
 	}
 	if string(output) != "guardian_intake_active=true\n" {
 		t.Fatalf("guardian status output=%q", output)
+	}
+}
+
+func TestGuardianReleaseStatusRejectsInvalidCredential(t *testing.T) {
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_migrate:forbidden@postgres:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
+
+	err := guardianReleaseStatus(t.Context())
+	if err == nil || err.Error() != "guardian release status credential rejected" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGuardianReleaseStatusRedactsConnectionFailure(t *testing.T) {
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) {
+		return nil, errors.New("private connection detail")
+	}
+
+	err := guardianReleaseStatus(t.Context())
+	if err == nil || err.Error() != "connect guardian release status database" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGuardianReleaseStatusReturnsStatusQueryFailure(t *testing.T) {
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) {
+		return &databaseCommandConnectionFake{row: databaseErrorRowFake{err: errors.New("private query detail")}}, nil
+	}
+
+	err := guardianReleaseStatus(t.Context())
+	if err == nil || err.Error() != "guardian release status failed" {
+		t.Fatalf("error=%v", err)
 	}
 }
 
