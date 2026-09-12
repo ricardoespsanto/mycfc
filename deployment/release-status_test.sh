@@ -33,6 +33,8 @@ cat >"$fake_bin/docker" <<'EOF'
 case "$*" in
 	*Config.Image*) printf 'registry.example/mycfc@%s\n' "$TEST_RUNNING_DIGEST" ;;
 	*org.opencontainers.image.revision*) printf '%s\n' "$TEST_RUNNING_SHA" ;;
+	*org.opencontainers.image.version*) printf 'v1.25.0\n' ;;
+	*org.mycfc.schema-migration-digest*) printf 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n' ;;
 	*) exit 1 ;;
 esac
 EOF
@@ -72,6 +74,11 @@ EOF
 chmod 0600 "$case_dir/mycfc.env"
 : >"$case_dir/release-aws/credentials"
 chmod 0600 "$case_dir/release-aws/credentials"
+cat >"$case_dir/state/release-publication.json" <<'EOF'
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"2026-08-11T09:00:00Z","release_tag":"release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":{"migration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ordered_migrations":["001_initial.sql"]},"version":"v1.25.0"}
+EOF
+manifest_sha=$(sha256sum "$case_dir/state/release-publication.json" | awk '{print $1}')
+jq -cn --arg manifest "$manifest_sha" '{actual_gates:{guardian_intake:false,privacy_worker:true},contract:"mycfc/deployment-receipt/v1",failure_phase:null,finished_at:"2026-08-11T09:01:05Z",git_sha:("b"*40),image:{digest:("sha256:"+("b"*64)),repository:"registry.example/mycfc"},privacy_worker_activation_required:false,publication_manifest_sha256:$manifest,release_tag:("release-20260811090000-"+("b"*40)),result:"succeeded",rollback_performed:false,schema_migration_digest:("c"*64),slot:"blue",started_at:"2026-08-11T09:00:30Z",traffic_switched:true,version:"v1.25.0"}' >"$case_dir/state/deployment-receipt.json"
 printf 'blue\n' >"$case_dir/state/active-slot"
 printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-digest"
 printf 'release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
@@ -82,6 +89,7 @@ printf '2026-08-11T09:00:50Z\n' >"$case_dir/state/release-migration-completed-at
 printf '2026-08-11T09:00:55Z\n' >"$case_dir/state/release-candidate-ready-at"
 printf '2026-08-11T09:01:00Z\n' >"$case_dir/state/release-traffic-switched-at"
 printf '2026-08-11T09:01:05Z\n' >"$case_dir/state/release-deployment-completed-at"
+printf 'succeeded\t2026-08-11T09:01:06Z\n' >"$case_dir/state/cloudwatch-forwarding-status"
 : >"$case_dir/aws.log"
 
 run_status() {
@@ -96,7 +104,7 @@ run_status() {
 		TEST_AGENT_RESULT="${TEST_AGENT_RESULT:-success}" \
 		TEST_AGENT_EXIT_STATUS="${TEST_AGENT_EXIT_STATUS:-0}" \
 		TEST_NOW_EPOCH="${TEST_NOW_EPOCH:-1100}" \
-		sh "$deployment_dir/release-status.sh"
+		sh "$deployment_dir/release-status.sh" "$@"
 }
 
 current_output=$(TEST_RUNNING_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status)
@@ -108,6 +116,27 @@ printf '%s\n' "$current_output" | grep -q '^publication_to_agent_start_seconds=3
 printf '%s\n' "$current_output" | grep -q '^publication_to_detection_seconds=35$'
 printf '%s\n' "$current_output" | grep -q '^publication_to_traffic_switch_seconds=60$'
 printf '%s\n' "$current_output" | grep -q '^publication_to_deployment_seconds=65$'
+printf '%s\n' "$current_output" | grep -q '^receipt_version=v1.25.0$'
+printf '%s\n' "$current_output" | grep -q '^identity_match=true$'
+printf '%s\n' "$current_output" | grep -q '^cloudwatch_forwarding_result=succeeded$'
+if TEST_RUNNING_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status >/dev/null 2>&1; then
+	printf '%s\n' 'current release identity mismatch did not return nonzero' >&2
+	exit 1
+fi
+if TEST_RUNNING_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status --json >/dev/null 2>&1; then
+	printf '%s\n' 'JSON release identity mismatch did not return nonzero' >&2
+	exit 1
+fi
+json_output=$(TEST_RUNNING_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status --json)
+printf '%s\n' "$json_output" | jq -e '.state == "current" and .receipt_contract == "mycfc/deployment-receipt/v1" and .receipt_result == "succeeded"' >/dev/null
+
+cp "$case_dir/state/deployment-receipt.json" "$case_dir/state/deployment-receipt.saved.json"
+jq '.actual_gates.privacy_worker = false' "$case_dir/state/deployment-receipt.saved.json" >"$case_dir/state/deployment-receipt.json"
+if TEST_RUNNING_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status >/dev/null 2>&1; then
+	printf '%s\n' 'current release gate-state mismatch did not return nonzero' >&2
+	exit 1
+fi
+mv "$case_dir/state/deployment-receipt.saved.json" "$case_dir/state/deployment-receipt.json"
 
 pending_output=$(TEST_NOW_EPOCH=1100 run_status)
 printf '%s\n' "$pending_output" | grep -q '^state=pending$'

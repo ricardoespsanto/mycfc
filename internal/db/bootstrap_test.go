@@ -24,21 +24,29 @@ func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
 	}
 }
 
-func TestGuardianSchemaReadyOwnerRepairIsRepresentedByFreshBaseline(t *testing.T) {
-	migration, err := migrationFiles.ReadFile("migrations/202609120006_guardian_schema_ready_owner.sql")
+func TestGuardianReleaseIntakeStatusUsesExactReleaseIdentity(t *testing.T) {
+	connection := &bootstrapTransactionFake{installed: true}
+	enabled, err := GuardianReleaseIntakeEnabled(t.Context(), connection, "mycfc", "sha256:"+strings.Repeat("a", 64))
+	if err != nil || !enabled {
+		t.Fatalf("enabled=%t error=%v", enabled, err)
+	}
+}
+
+func TestGuardianReleaseStatusIsRepresentedByFreshBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609120007_guardian_release_status.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const marker = "-- #280 guardian control-plane owner dependency repair."
+	const marker = "-- Give the release-only identity one non-identifying observation:"
 	index := strings.LastIndex(baselineSchema, marker)
 	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("guardian schema-ready owner repair is not the exact final baseline segment")
 	}
 	for _, required := range []string{
-		"guardian_ops.schema_ready(text)",
-		"guardian_ops.release_disable_and_bind(text,text,text)",
-		"guardian_schema_ready_owner_mismatch",
-		"GRANT EXECUTE ON FUNCTION guardian_ops.schema_ready(text)",
+		"guardian_ops.schema_ready(",
+		"guardian_ops.release_intake_enabled(text,text,text)",
+		"guardian_release_status_privacy_constraint_predecessor_mismatch",
+		"GRANT EXECUTE ON FUNCTION guardian_ops.release_intake_enabled(text,text,text)",
 	} {
 		if !strings.Contains(string(migration), required) || !strings.Contains(baselineSchema, required) {
 			t.Fatalf("guardian schema-ready repair migration or baseline missing %q", required)
@@ -327,6 +335,7 @@ func TestProvisionGuardianReleaseBindRoleIsExplicitAndRestricted(t *testing.T) {
 		`ARRAY['privacy_disable','privacy_protected']`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind`,
 		`GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind`,
+		`GRANT EXECUTE ON FUNCTION guardian_ops.release_intake_enabled(text,text,text) TO mycfc_guardian_release_bind`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("provision statements missing %q", expected)

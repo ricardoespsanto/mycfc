@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609120006_guardian_schema_ready_owner"
+	baselineIncludesThrough      = "202609120007_guardian_release_status"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
@@ -263,6 +263,9 @@ func ProvisionGuardianReleaseBindRole(ctx context.Context, conn interface {
 				IF to_regprocedure('guardian_ops.release_disable_and_bind(text,text,text)') IS NOT NULL THEN
 					GRANT USAGE ON SCHEMA guardian_ops TO mycfc_guardian_release_bind;
 					GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind;
+					IF to_regprocedure('guardian_ops.release_intake_enabled(text,text,text)') IS NOT NULL THEN
+						GRANT EXECUTE ON FUNCTION guardian_ops.release_intake_enabled(text,text,text) TO mycfc_guardian_release_bind;
+					END IF;
 				END IF;
 			END IF;
 		END$$`},
@@ -289,6 +292,22 @@ func BindGuardianRuntimeRelease(ctx context.Context, conn bootstrapConnection, d
 		return errors.New("guardian runtime release binding failed")
 	}
 	return nil
+}
+
+// GuardianReleaseIntakeEnabled exposes only the live gate boolean to the
+// release identity. The database function returns NULL for stale identity
+// inputs, which Scan reports as an error and keeps receipt generation closed.
+func GuardianReleaseIntakeEnabled(ctx context.Context, conn interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, databaseName, imageDigest string) (bool, error) {
+	if !postgresIdentifier.MatchString(databaseName) || !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(imageDigest) {
+		return false, errors.New("guardian release status rejected")
+	}
+	var enabled bool
+	if err := conn.QueryRow(ctx, "SELECT guardian_ops.release_intake_enabled($1,$2,$3)", databaseName, imageDigest, EmbeddedMigrationDigest()).Scan(&enabled); err != nil {
+		return false, errors.New("guardian release status failed")
+	}
+	return enabled, nil
 }
 
 // HardenPrivacyExecutionRoles reapplies the #244 table boundary after migrations
@@ -481,6 +500,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 				REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
 				GRANT USAGE ON SCHEMA guardian_ops TO mycfc_guardian_release_bind;
 				GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind;
+				IF to_regprocedure('guardian_ops.release_intake_enabled(text,text,text)') IS NOT NULL THEN
+					GRANT EXECUTE ON FUNCTION guardian_ops.release_intake_enabled(text,text,text) TO mycfc_guardian_release_bind;
+				END IF;
 			END IF;
 		END$$`},
 		namedStatement{"harden separately provisioned privacy disable role", `DO $$BEGIN

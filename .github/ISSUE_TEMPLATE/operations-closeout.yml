@@ -1,0 +1,16 @@
+name: Operations - observation and closeout
+description: Verify one completed production operation and retain sanitized evidence
+title: "[Operations/closeout]: "
+body:
+  - type: textarea
+    id: identity
+    attributes: {label: Exact identity, description: Record version, commit, image, manifest, or operation receipt identifiers.}
+    validations: {required: true}
+  - type: textarea
+    id: observation
+    attributes: {label: Observation evidence, description: Record health, alarms, logs, timers, and terminal outcome without sensitive data.}
+    validations: {required: true}
+  - type: textarea
+    id: residual
+    attributes: {label: Residual risks or follow-ups, description: List unresolved evidence and separately approvable next work.}
+    validations: {required: true}

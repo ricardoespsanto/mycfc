@@ -53,9 +53,21 @@ printf '%s\n' "$*" >>"$TEST_DOCKER_LOG"
 case "$1" in
 	login) cat >/dev/null ;;
 	pull) ;;
+	create) printf 'manifest-container\n' ;;
+	cp)
+		destination=$3
+		manifest_release_tag=${TEST_MANIFEST_RELEASE_TAG:-release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}
+		case "$manifest_release_tag" in release-20260810190000-*) manifest_published_at=2026-08-10T19:00:00Z ;; *) manifest_published_at=2026-08-10T18:37:43Z ;; esac
+		cat >"$destination" <<JSON
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884","ordered_migrations":["001_initial","reset-baseline-v1"]},"version":"v1.25.0"}
+JSON
+		;;
+	rm) ;;
 	image)
 		case "$*" in
 			*org.opencontainers.image.revision*) printf '3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\n' ;;
+			*org.opencontainers.image.version*) printf 'v1.25.0\n' ;;
+			*org.mycfc.schema-migration-digest*) printf 'f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884\n' ;;
 			*) printf 'registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 		esac
 		;;
@@ -70,6 +82,9 @@ case "$1" in
 		esac
 		;;
 	compose)
+		if printf '%s\n' "$*" | grep -q 'guardian-release-bind guardian-release-status'; then
+			printf 'guardian_intake_active=%s\n' "${TEST_GUARDIAN_INTAKE_ACTIVE:-false}"
+		fi
 		if printf '%s\n' "$*" | grep -q -- '--profile privacy-worker create --no-build --no-deps --force-recreate privacy-worker'; then
 			printf '%s\n' 'registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' >"$TEST_WORKER_IMAGE_FILE"
 		fi
@@ -80,6 +95,12 @@ case "$1" in
 	logs) ;;
 	*) printf 'unexpected docker invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
+EOF
+cat >"$fake_bin/gh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$TEST_GH_LOG"
+[ "${TEST_PROVENANCE_FAILURE:-false}" != true ] || exit 1
+case "$*" in attestation\ verify\ oci://registry.example/mycfc@sha256:*) exit 0 ;; *) exit 1 ;; esac
 EOF
 cat >"$fake_bin/curl" <<'EOF'
 #!/bin/sh
@@ -166,6 +187,7 @@ EOF
 	: >"$case_dir/docker.log"
 	: >"$case_dir/aws.log"
 	: >"$case_dir/events.log"
+	: >"$case_dir/gh.log"
 	printf '%s\n' active >"$case_dir/worker.state"
 	printf '%s\n' 'registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"$case_dir/worker.image"
 }
@@ -178,6 +200,7 @@ run_release() {
 		TEST_DOCKER_LOG="$case_dir/docker.log" \
 		TEST_AWS_LOG="$case_dir/aws.log" \
 		TEST_EVENT_LOG="$case_dir/events.log" \
+		TEST_GH_LOG="$case_dir/gh.log" \
 		TEST_WORKER_STATE_FILE="$case_dir/worker.state" \
 		TEST_WORKER_IMAGE_FILE="$case_dir/worker.image" \
 		MYCFC_ENV_FILE="$case_dir/mycfc.env" \
@@ -232,6 +255,35 @@ for phase in postgres_ready database_bootstrap database_migrate database_harden 
 done
 grep -q 'event=release_selected .*active_slot=legacy' "$success_case/events.log"
 grep -q 'event=deployment_succeeded .*slot=blue' "$success_case/events.log"
+jq -e '.contract == "mycfc/deployment-receipt/v1" and .version == "v1.25.0" and .result == "succeeded" and .slot == "blue" and .failure_phase == null and .traffic_switched == true and .rollback_performed == false and .actual_gates == {guardian_intake:false,privacy_worker:false} and .privacy_worker_activation_required == false and (.publication_manifest_sha256 | test("^[0-9a-f]{64}$"))' "$success_case/state/deployment-receipt.json" >/dev/null
+
+test "$(wc -l <"$success_case/gh.log")" -eq 2
+
+guardian_noop_case="$work_dir/guardian-noop"
+setup_case "$guardian_noop_case"
+sed 's/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' "$guardian_noop_case/mycfc.env" >"$guardian_noop_case/mycfc.env.current"
+mv "$guardian_noop_case/mycfc.env.current" "$guardian_noop_case/mycfc.env"
+chmod 0600 "$guardian_noop_case/mycfc.env"
+printf 'blue\n' >"$guardian_noop_case/state/active-slot"
+if run_release "$guardian_noop_case" \
+	TEST_ACTIVE_IMAGE=registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+	TEST_GUARDIAN_INTAKE_ACTIVE=true; then
+	printf '%s\n' 'An already-current release accepted guardian intake contrary to its signed policy.' >&2
+	exit 1
+fi
+grep -q 'event=guardian_release_status_rejected reason=policy_mismatch expected=false actual=true' "$guardian_noop_case/events.log"
+jq -e '.result == "failed" and .failure_phase == "guardian_release_status" and .actual_gates.guardian_intake == true' "$guardian_noop_case/state/deployment-receipt.json" >/dev/null
+
+provenance_failure_case="$work_dir/provenance-failure"
+setup_case "$provenance_failure_case"
+if run_release "$provenance_failure_case" TEST_PROVENANCE_FAILURE=true; then
+	printf '%s\n' 'release with invalid provenance unexpectedly reached deployment' >&2
+	exit 1
+fi
+if grep -q 'compose .*db-bootstrap\|compose .*migrate' "$provenance_failure_case/docker.log"; then
+	printf '%s\n' 'invalid provenance reached a candidate database command' >&2
+	exit 1
+fi
 
 purge_tag_case="$work_dir/purge-tag-filter"
 setup_case "$purge_tag_case"
@@ -294,6 +346,7 @@ PRIVACY_WORKER_ENABLED=true
 PRIVACY_REQUESTS_ENABLED=true
 EOF
 run_release "$privacy_worker_case" MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker
+jq -e '.actual_gates == {guardian_intake:false,privacy_worker:true} and .privacy_worker_activation_required == false' "$privacy_worker_case/state/deployment-receipt.json" >/dev/null
 for phase in privacy_worker_stop privacy_worker_readiness privacy_worker_restart privacy_worker_verify; do
 	grep -q "event=deployment_phase_started phase=$phase" "$privacy_worker_case/events.log"
 	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_worker_case/events.log"
@@ -315,6 +368,7 @@ EOF
 run_release "$privacy_worker_inactive_case" \
 	MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker \
 	TEST_PRIVACY_WORKER_READINESS_RESULT=inactive
+jq -e '.actual_gates == {guardian_intake:false,privacy_worker:false} and .privacy_worker_activation_required == true' "$privacy_worker_inactive_case/state/deployment-receipt.json" >/dev/null
 test "$(cat "$privacy_worker_inactive_case/state/active-slot")" = blue
 test "$(cat "$privacy_worker_inactive_case/state/last-attempt-result")" = succeeded
 grep -q 'event=deployment_phase_started phase=privacy_worker_readiness' "$privacy_worker_inactive_case/events.log"
@@ -416,6 +470,7 @@ test -s "$failure_case/state/release-migration-completed-at"
 test ! -f "$failure_case/state/release-candidate-ready-at"
 grep -q -- '--profile blue stop app-blue' "$failure_case/docker.log"
 grep -q 'event=deployment_failed phase=candidate_validation exit_status=1 .*candidate_started=true route_switched=false' "$failure_case/events.log"
+jq -e '.result == "failed" and .failure_phase == "candidate_validation" and .slot == "blue" and .traffic_switched == false and .rollback_performed == false' "$failure_case/state/deployment-receipt.json" >/dev/null
 
 post_switch_case="$work_dir/post-switch-failure"
 setup_case "$post_switch_case"
@@ -433,20 +488,21 @@ test ! -f "$post_switch_case/state/release-deployment-completed-at"
 grep -q -- '--profile blue stop app-blue' "$post_switch_case/docker.log"
 test "$(grep -c 'exec -T caddy caddy reload' "$post_switch_case/docker.log")" -ge 2
 grep -q 'event=deployment_failed phase=post_switch_validation exit_status=1 .*candidate_started=true route_switched=true' "$post_switch_case/events.log"
+jq -e '.traffic_switched == true and .rollback_performed == true and .failure_phase == "post_switch_validation"' "$post_switch_case/state/deployment-receipt.json" >/dev/null
 
 : >"$failure_case/docker.log"
 detected_before=$(cat "$failure_case/state/release-detected-at")
 run_release "$failure_case"
 test "$(cat "$failure_case/state/last-attempt-result")" = quarantined
 test "$(cat "$failure_case/state/release-detected-at")" = "$detected_before"
-if grep -Eq 'pull registry|up -d|run --rm|force-recreate' "$failure_case/docker.log"; then
+if grep -Eq 'up -d|run --rm|force-recreate' "$failure_case/docker.log"; then
 	printf '%s\n' 'quarantined digest was retried' >&2
 	exit 1
 fi
 
 # A new release tag for the same digest is a distinct publication timeline.
 old_timeline_tag=$(cat "$failure_case/state/release-timeline-tag")
-run_release "$failure_case" TEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4
+run_release "$failure_case" TEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4 TEST_MANIFEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4
 test "$(cat "$failure_case/state/release-timeline-tag")" != "$old_timeline_tag"
 test "$(cat "$failure_case/state/release-published-at")" = '2026-08-10T19:00:00Z'
 test -s "$failure_case/state/release-agent-started-at"

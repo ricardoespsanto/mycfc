@@ -16,7 +16,7 @@ TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c
 TERRAFORM_PLUGIN_CACHE_DIR ?= $(CURDIR)/.cache/terraform/plugin-cache
 INTEGRATION_TEST_FLAGS ?= -count=1
 
-.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-privacy-ledger-broker legacy-media-purge-dry-run-artifact legacy-media-purge-execution-artifact legacy-media-purge-gates legacy-media-purge-image-test dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-release-tooling test-release-upgrade test-privacy-ledger-broker legacy-media-purge-dry-run-artifact legacy-media-purge-execution-artifact legacy-media-purge-gates legacy-media-purge-image-test release approval-packet dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -78,6 +78,23 @@ test-ci-classifier: ## Test conservative documentation-only CI routing
 test-e2e-worker-harness: ## Test worker-trial validation and evidence parsing
 	./scripts/e2e-worker-trial_test.sh
 	node --test scripts/summarize-playwright-json.test.mjs
+
+test-release-tooling: ## Test release manifests, CloudWatch verification, resumability, and approval packets
+	sh scripts/release-evidence_test.sh
+	sh scripts/verify-release-evidence_test.sh
+	sh scripts/release_test.sh
+	sh scripts/approval-packet_test.sh
+	sh scripts/release-upgrade_test.sh
+
+test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
+	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"
+
+release: ## Resume a gated signed release (set VERSION and optional ISSUES)
+	@test -n "$(VERSION)" || { echo 'set VERSION, for example VERSION=v1.25.0'; exit 2; }
+	VERSION="$(VERSION)" ISSUES="$(ISSUES)" sh scripts/release.sh
+
+approval-packet: ## Generate a short human approval packet (set APPROVAL_KIND and OUTPUT)
+	sh scripts/approval-packet.sh "$(APPROVAL_KIND)" "$(OUTPUT)"
 
 test-privacy-ledger-broker: ## Test the one-shot encrypted ledger append broker
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest infra/environments/hetzner/privacy_ledger_broker/test_handler.py
@@ -147,6 +164,7 @@ test-coverage: ## Run unit tests and write text/HTML reports with a regression f
 	./scripts/go-coverage.sh
 
 test-deployment: ## Run production release orchestration tests
+	$(MAKE) test-release-tooling
 	sh deployment/mycfc-pull-release-timer_test.sh
 	sh deployment/pull-release_test.sh
 	sh deployment/release-status_test.sh

@@ -1,21 +1,24 @@
 name: Deploy production
+run-name: deploy ${{ inputs.version }} ${{ inputs.sha }} issues=${{ inputs.issues }}
 
 on:
-  workflow_run:
-    workflows: [CI]
-    branches: [main]
-    types: [completed]
   workflow_dispatch:
     inputs:
       sha:
         description: Tested main-branch commit to deploy.
         required: true
         type: string
+      version:
+        description: Signed annotated semantic release tag (for example v1.25.0).
+        required: true
+        type: string
+      issues:
+        description: Comma-separated issue numbers allowed to receive the verified delivery record.
+        required: false
+        default: ''
+        type: string
 
-permissions:
-  actions: read
-  contents: read
-  id-token: write
+permissions: {}
 
 concurrency:
   group: mycfc-production-deploy
@@ -23,32 +26,86 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     environment: production
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      issues: read
+      packages: read
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       DOCKER_BUILD_RECORD_RETENTION_DAYS: 14
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      manifest_sha256: ${{ steps.publication.outputs.manifest_sha256 }}
+      published_at: ${{ steps.release.outputs.published_at }}
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+          ref: ${{ inputs.sha }}
           fetch-depth: 0
-      - name: Verify a tested main commit
+      - name: Verify release identity, canonical CI, and issue allowlist
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+          ISSUES: ${{ inputs.issues }}
         run: |
           set -Eeuo pipefail
-          SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
+          [[ -z "$ISSUES" || "$ISSUES" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]
           git merge-base --is-ancestor "$SHA" origin/main
           test "$(git rev-parse HEAD)" = "$SHA"
-          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
-            test -n "$(gh api "/repos/${{ github.repository }}/actions/runs?head_sha=$SHA&status=completed&per_page=100" \
-              --jq '.workflow_runs[] | select(.name == "CI" and .conclusion == "success") | .id')"
-          fi
+          gh api "/repos/${{ github.repository }}/commits/$SHA" \
+            --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' | grep -Fx "$SHA"
+          git fetch --force origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          test "$(git cat-file -t "refs/tags/$VERSION")" = tag
+          test "$(git rev-list -n 1 "refs/tags/$VERSION")" = "$SHA"
+          tag_object=$(gh api "/repos/${{ github.repository }}/git/ref/tags/$VERSION" --jq '.object.sha')
+          verified_tag=$(gh api "/repos/${{ github.repository }}/git/tags/$tag_object" \
+            --jq 'select(.object.type == "commit" and .verification.verified == true and .verification.reason == "valid") | [.tag,.object.sha] | @tsv')
+          test "$verified_tag" = "$(printf '%s\t%s' "$VERSION" "$SHA")"
+          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" \
+            --jq ".workflow_runs[] | select(.head_sha == \"$SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\") | .id" | head -n 1)
+          test -n "$ci_run"
+          printf '%s\n' "$ISSUES" | tr ',' '\n' | awk '/^[1-9][0-9]*$/ && !seen[$0]++ { print $0 }' | while read -r issue; do
+            gh api "/repos/${{ github.repository }}/issues/$issue" --jq 'select(has("pull_request") | not) | .number' | grep -Fx "$issue"
+          done
+          tagged_at=$(git for-each-ref --format='%(taggerdate:iso8601-strict)' "refs/tags/$VERSION")
+          test -n "$tagged_at"
+          release_stamp=$(date -u -d "$tagged_at" +%Y%m%d%H%M%S)
+          published_at=$(date -u -d "$tagged_at" +%Y-%m-%dT%H:%M:%SZ)
+          {
+            echo "ci_run_id=$ci_run"
+            echo "release_tag=release-$release_stamp-$SHA"
+            echo "published_at=$published_at"
+            echo "tree_sha=$(git rev-parse "$SHA^{tree}")"
+          } >> "$GITHUB_OUTPUT"
+      # actions/setup-go v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.26.5
+      - name: Resolve schema and release policy inventory
+        id: schema
+        run: |
+          set -Eeuo pipefail
+          digest=$(go run ./cmd/server schema-digest)
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          migrations=$(go run ./cmd/server schema-inventory | jq -c .)
+          inventory_digest=$(printf '%s' "$(jq -r 'join("\n")' <<<"$migrations")" | sha256sum | awk '{print $1}')
+          test "$inventory_digest" = "$digest"
+          gates=$(jq -cS . deployment/release-gates.json)
+          {
+            echo "digest=$digest"
+            echo "migrations=$migrations"
+            echo "gates=$gates"
+          } >> "$GITHUB_OUTPUT"
       # aws-actions/configure-aws-credentials v6.2.4
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
@@ -62,11 +119,11 @@ jobs:
         env:
           ECR_REPOSITORY: ${{ steps.ecr-login.outputs.registry }}/mycfc-production
           ECR_REPOSITORY_NAME: mycfc-production
-          GIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+          GIT_SHA: ${{ inputs.sha }}
         run: sh deployment/publish-release-image.sh prepare
       # docker/setup-buildx-action v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
-      - name: Build and publish immutable image tags
+      - name: Build immutable application image
         id: build
         if: steps.image-refs.outputs.build_required == 'true'
         # docker/build-push-action v7.3.0
@@ -74,46 +131,244 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.git_tag }}
+          tags: ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.git_tag }}
           labels: |
             org.opencontainers.image.revision=${{ steps.image-refs.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.mycfc.schema-migration-digest=${{ steps.schema.outputs.digest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-      - name: Prepare release promotion
-        id: release-ref
+      - name: Attest application image provenance
+        if: steps.image-refs.outputs.build_required == 'true'
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.image-refs.outputs.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify application image before it becomes host-visible
         env:
-          GIT_SHA: ${{ steps.image-refs.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image-refs.outputs.repository }}@${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+          SCHEMA_DIGEST: ${{ steps.schema.outputs.digest }}
         run: |
           set -Eeuo pipefail
-          test "${#GIT_SHA}" -eq 40
-          echo "release_tag=release-$(date -u +%Y%m%d%H%M%S)-$GIT_SHA" >> "$GITHUB_OUTPUT"
-      - name: Verify and promote the immutable image
+          test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$SHA"
+          test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.version"}}' "$IMAGE")" = "$VERSION"
+          test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.mycfc.schema-migration-digest"}}' "$IMAGE")" = "$SCHEMA_DIGEST"
+          gh attestation verify "oci://$IMAGE" --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/deploy.yml" \
+            --source-digest "$SHA" --deny-self-hosted-runners >/dev/null
+      - name: Create canonical publication manifest
+        id: publication
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          GIT_SHA: ${{ inputs.sha }}
+          GIT_TREE_SHA: ${{ steps.release.outputs.tree_sha }}
+          IMAGE_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SCHEMA_MIGRATION_DIGEST: ${{ steps.schema.outputs.digest }}
+          MIGRATION_INVENTORY_JSON: ${{ steps.schema.outputs.migrations }}
+          EXPECTED_GATES_JSON: ${{ steps.schema.outputs.gates }}
+          PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          CI_RUN_ID: ${{ steps.release.outputs.ci_run_id }}
+          RELEASE_ISSUES: ${{ inputs.issues }}
+          RELEASE_EVIDENCE_OUTPUT: release-publication.json
+        run: |
+          set -Eeuo pipefail
+          sh scripts/release-evidence.sh publication
+          echo "manifest_sha256=$(sha256sum release-publication.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Prepare immutable manifest image
+        id: manifest
+        env:
+          REPOSITORY: ${{ steps.image-refs.outputs.repository }}
+          REPOSITORY_NAME: mycfc-production
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          manifest_tag="manifest-$RELEASE_TAG"
+          if digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY_NAME" --image-ids imageTag="$manifest_tag" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null); then
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            echo "build_required=false" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_required=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$manifest_tag" >> "$GITHUB_OUTPUT"
+          echo "image=$REPOSITORY:$manifest_tag" >> "$GITHUB_OUTPUT"
+      - name: Build immutable manifest image
+        id: manifest-build
+        if: steps.manifest.outputs.build_required == 'true'
+        env:
+          MANIFEST_IMAGE: ${{ steps.manifest.outputs.image }}
+        run: |
+          set -Eeuo pipefail
+          mkdir manifest-image
+          cp release-publication.json manifest-image/
+          printf 'FROM scratch\nCOPY release-publication.json /release-publication.json\nCMD ["/release-publication.json"]\n' > manifest-image/Dockerfile
+          docker buildx build --push --provenance=false --tag "$MANIFEST_IMAGE" \
+            --metadata-file manifest-metadata.json manifest-image
+          digest=$(jq -r '.["containerimage.digest"]' manifest-metadata.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest manifest provenance
+        if: steps.manifest.outputs.build_required == 'true'
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.image-refs.outputs.repository }}
+          subject-digest: ${{ steps.manifest-build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify immutable manifest before production publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_IMAGE: ${{ steps.image-refs.outputs.repository }}@${{ steps.manifest-build.outputs.digest || steps.manifest.outputs.digest }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          gh attestation verify "oci://$MANIFEST_IMAGE" --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/deploy.yml" \
+            --source-digest "$SHA" --deny-self-hosted-runners >/dev/null
+          docker pull "$MANIFEST_IMAGE"
+          manifest_container=$(docker create "$MANIFEST_IMAGE")
+          trap 'docker rm "$manifest_container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$manifest_container:/release-publication.json" existing-release-publication.json
+          cmp existing-release-publication.json release-publication.json
+      - name: Publish verified application for production pickup
         id: image
         env:
           ECR_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
           ECR_REPOSITORY_NAME: mycfc-production
           GIT_SHA: ${{ steps.image-refs.outputs.sha }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
-          RELEASE_TAG: ${{ steps.release-ref.outputs.release_tag }}
-        run: sh deployment/publish-release-image.sh
-      - name: Promote the tested image for production pickup
-        id: publication
-        env:
-          RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          test -n "$RELEASE_TAG"
-          echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "receipt_not_before_ms=$(($(date +%s) * 1000))" >> "$GITHUB_OUTPUT"
+          sh deployment/publish-release-image.sh
+      # actions/upload-artifact v7.0.1
+      - name: Retain immutable publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-publication-${{ inputs.version }}
+          path: release-publication.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove publisher registry credentials
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          set -Eeuo pipefail
+          docker logout "$REGISTRY" >/dev/null 2>&1 || true
+          rm -f "$HOME/.docker/config.json"
+      - name: Assume the read-only production observer
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_OPERATIONS_OBSERVER_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Verify fresh exact production receipt
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CLOUDWATCH_LOG_GROUP: /mycfc/production/deployment
+          RELEASE_VERSION: ${{ inputs.version }}
+          GIT_SHA: ${{ inputs.sha }}
+          IMAGE_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SCHEMA_MIGRATION_DIGEST: ${{ steps.schema.outputs.digest }}
+          PUBLICATION_MANIFEST_SHA256: ${{ steps.publication.outputs.manifest_sha256 }}
+          EXPECTED_GATES_JSON: ${{ steps.schema.outputs.gates }}
+          RELEASE_EVIDENCE_START_TIME_MS: ${{ steps.image.outputs.receipt_not_before_ms }}
+          RELEASE_EVIDENCE_OUTPUT: deployment-receipt.json
+        run: sh scripts/verify-release-evidence.sh
+      - name: Verify the public production route
+        env:
+          BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BASE_URL" == https://* ]]
+          curl --fail --silent --show-error --location --max-time 15 "$BASE_URL/health/ready" | grep -Fx 'ok'
+          curl --fail --silent --show-error --location --max-time 15 --output /dev/null "$BASE_URL/login"
+      - name: Retain verified delivery evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-delivery-${{ inputs.version }}
+          path: |
+            release-publication.json
+            deployment-receipt.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Write deployment summary
         run: |
           {
-            echo "## Production release published"
+            echo "## Production identity verified"
             echo
-            echo "- SHA: \`${{ steps.image.outputs.sha }}\`"
+            echo "- Version: \`${{ inputs.version }}\`"
+            echo "- Commit: \`${{ inputs.sha }}\`"
             echo "- Image: \`${{ steps.image.outputs.image }}\`"
-            echo "- Release tag: \`${{ steps.image.outputs.release_tag }}\`"
-            echo "- Publication completed: \`${{ steps.publication.outputs.published_at }}\`"
-            echo "- The Hetzner pull-release timer will deploy this immutable release."
+            echo "- Manifest SHA-256: \`${{ steps.publication.outputs.manifest_sha256 }}\`"
+            echo "- Host receipt, public health, and CloudWatch freshness were verified."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  record:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+    steps:
+      - name: Download verified delivery evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-delivery-${{ inputs.version }}
+      - name: Publish GitHub release and explicit issue records
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.sha }}
+          ISSUES: ${{ inputs.issues }}
+          IMAGE: ${{ needs.deploy.outputs.image }}
+        run: |
+          set -Eeuo pipefail
+          receipt_sha=$(sha256sum deployment-receipt.json | awk '{print $1}')
+          receipt_finished=$(jq -r '.finished_at | gsub("[-:TZ]"; "")' deployment-receipt.json)
+          [[ "$receipt_finished" =~ ^[0-9]{14}$ ]]
+          receipt_asset="deployment-receipt-$receipt_finished-$receipt_sha.json"
+          cp deployment-receipt.json "$receipt_asset"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            mkdir existing-release
+            gh release download "$VERSION" --pattern release-publication.json --dir existing-release
+            cmp existing-release/release-publication.json release-publication.json
+            if gh release view "$VERSION" --json assets --jq '.assets[].name' | grep -Fxq "$receipt_asset"; then
+              gh release download "$VERSION" --pattern "$receipt_asset" --dir existing-release
+              cmp "existing-release/$receipt_asset" "$receipt_asset"
+            else
+              gh release upload "$VERSION" "$receipt_asset"
+            fi
+          else
+            gh release create "$VERSION" release-publication.json "$receipt_asset" --verify-tag --generate-notes \
+              --title "MyCFC $VERSION" --target "$SHA"
+          fi
+          marker="<!-- mycfc-release:$VERSION:receipt:$receipt_sha -->"
+          body=$(mktemp)
+          trap 'rm -f "$body"' EXIT
+          {
+            echo "$marker"
+            echo "Delivered in **$VERSION** after production verified the exact signed manifest and image."
+            echo
+            echo "- Commit: \`$SHA\`"
+            echo "- Image: \`$IMAGE\`"
+            jq -r '"- Slot: `\(.slot)`\n- Result: `\(.result)`\n- Traffic switched: `\(.traffic_switched)`\n- Rollback performed: `\(.rollback_performed)`\n- Finished: `\(.finished_at)`"' deployment-receipt.json
+            echo "- Evidence: \`release-publication.json\` and \`$receipt_asset\` on the GitHub release"
+          } > "$body"
+          printf '%s\n' "$ISSUES" | tr ',' '\n' | awk '/^[1-9][0-9]*$/ && !seen[$0]++ { print $0 }' | while read -r issue; do
+            comment=$(gh api "/repos/${{ github.repository }}/issues/$issue/comments?per_page=100" --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n 1)
+            if [ -z "$comment" ]; then
+              gh issue comment "$issue" --body-file "$body" >/dev/null
+            fi
+          done

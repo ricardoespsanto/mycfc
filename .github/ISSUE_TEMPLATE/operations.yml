@@ -1,0 +1,67 @@
+name: Operational delivery slice
+description: Track one independently approvable release, infrastructure, observability, backup, or activation outcome
+title: "[Operations]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Keep this slice small enough to verify and roll back independently. Approval here never implies approval at another gate.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Operational outcome
+      description: State the observable production or delivery-system result.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Exact scope and exclusions
+      description: Name the resources, environment, data boundary, and actions that are explicitly excluded.
+    validations:
+      required: true
+  - type: dropdown
+    id: gate
+    attributes:
+      label: Human approval gate
+      options:
+        - Source only
+        - GitHub write
+        - Merge
+        - Infrastructure plan/apply
+        - Release/deployment
+        - Live feature activation
+        - Irreversible data operation
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Acceptance evidence
+      description: List the exact tests, manifest fields, logs, health checks, alarms, or drill results required.
+      placeholder: |
+        - [ ] Exact commit and image digest match
+        - [ ] Rollback evidence retained
+    validations:
+      required: true
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout and stop conditions
+      description: Give ordered steps, the last safe stopping point, and conditions that prevent traffic or activation.
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback or compensating action
+      description: Explain what is recoverable, what is irreversible, and the exact evidence to preserve.
+    validations:
+      required: true
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Human decisions still needed
+      description: Use plain language and include a recommended small-club default where one is safe.
+    validations:
+      required: false

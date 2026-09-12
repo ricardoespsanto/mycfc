@@ -4,7 +4,7 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
-mkdir -p "$test_dir/bin" "$test_dir/state" "$test_dir/approval"
+mkdir -p "$test_dir/bin" "$test_dir/state" "$test_dir/approval" "$test_dir/run"
 touch "$test_dir/main.env" "$test_dir/operator.env" "$test_dir/approval/approval.json"
 printf '%s\n' 'MYCFC_IMAGE=registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"$test_dir/main.env"
 cat >"$test_dir/operator.env" <<'EOF'
@@ -47,6 +47,7 @@ export TEST_DOCKER_CALLS="$test_dir/docker.calls"
 run_operator() {
 	PATH="$test_dir/bin:$PATH" MYCFC_ENV_FILE="$test_dir/main.env" MYCFC_GUARDIAN_ACTIVATION_ENV_FILE="$test_dir/operator.env" \
 	 MYCFC_GUARDIAN_ACTIVATION_APPROVAL_DIR="$test_dir/approval" MYCFC_STATE_DIR="$test_dir/state" MYCFC_DEPLOYMENT_DIR="$script_dir" \
+	 MYCFC_RUNTIME_DIR="$test_dir/run" \
 	 sh "$script_dir/guardian-activation.sh" "$@"
 }
 
@@ -62,6 +63,15 @@ printf '%s\n' "$disable_output" | grep -q 'relationships_revoked=2 credentials_r
 grep -q -- '--profile guardian-activation run --rm --no-deps guardian-activation disable' "$TEST_DOCKER_CALLS"
 run_operator provision >/dev/null
 grep -q -- '--profile guardian-activation-bootstrap run --rm guardian-activation-bootstrap' "$TEST_DOCKER_CALLS"
+
+exec 8>"$test_dir/run/mycfc-pull-release.lock"
+flock -n 8
+if lock_output=$(run_operator enable 2>&1); then
+	echo 'guardian activation raced a running release' >&2
+	exit 1
+fi
+printf '%s\n' "$lock_output" | grep -q 'event=guardian_activation_runtime_failed error_class=release_in_progress'
+flock -u 8
 
 if TEST_UID=1000 run_operator status >/dev/null 2>&1; then echo 'non-root operator accepted' >&2; exit 1; fi
 if TEST_RUNNING_IMAGE=registry.example/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_operator status >/dev/null 2>&1; then
