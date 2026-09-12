@@ -184,7 +184,7 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndActivatesAfter005(t *testi
 		t.Fatal(err)
 	}
 	for _, version := range EmbeddedMigrationInventory() {
-		if version == "202609120005_guardian_authority_activation" {
+		if version == "202609120005_guardian_authority_activation" || version == "202609120006_guardian_schema_ready_owner" {
 			continue
 		}
 		if _, err = rewind.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
@@ -257,6 +257,19 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndActivatesAfter005(t *testi
 		_ = upgrade.Rollback(ctx)
 		t.Fatal(err)
 	}
+	repair, err := migrationFiles.ReadFile("migrations/202609120006_guardian_schema_ready_owner.sql")
+	if err != nil {
+		_ = upgrade.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err = upgrade.Exec(ctx, string(repair)); err != nil {
+		_ = upgrade.Rollback(ctx)
+		t.Fatalf("apply exact 005 -> 006 repair migration: %v", err)
+	}
+	if _, err = upgrade.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES('202609120006_guardian_schema_ready_owner')`); err != nil {
+		_ = upgrade.Rollback(ctx)
+		t.Fatal(err)
+	}
 	if err = upgrade.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +297,7 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndActivatesAfter005(t *testi
 		AppUsername: appRole, AppPassword: "unused",
 		MigrationUsername: migrationRole, MigrationPassword: "unused",
 	}); err != nil {
-		t.Fatalf("harden after staged 005: %v", err)
+		t.Fatalf("harden after staged 005 and 006: %v", err)
 	}
 
 	var bind, status, preflight, enable, disable, runtimeRead, approvalRead, opsCreate bool

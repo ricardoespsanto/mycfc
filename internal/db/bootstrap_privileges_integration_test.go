@@ -133,18 +133,19 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	if webGuardianOps || webGuardianApprovalRead || webGuardianEnable {
 		t.Fatalf("web guardian control plane ops=%v approval_read=%v enable=%v", webGuardianOps, webGuardianApprovalRead, webGuardianEnable)
 	}
-	var releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead bool
+	var releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead, schemaReady bool
 	if err = tx.QueryRow(ctx, `SELECT
 		has_function_privilege($1,'guardian_ops.release_disable_and_bind(text,text,text)','EXECUTE'),
 		has_function_privilege($1,'guardian_ops.enable(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
 		has_function_privilege($1,'guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
 		has_function_privilege($1,'guardian_ops.disable(uuid,text)','EXECUTE'),
-		has_table_privilege($1,'guardian_ops.runtime_release_binding','SELECT')`, migrationRole).
-		Scan(&releaseBind, &releaseEnable, &releasePreflight, &releaseDisable, &releaseTableRead); err != nil {
+		has_table_privilege($1,'guardian_ops.runtime_release_binding','SELECT'),
+		has_function_privilege($1,'guardian_ops.schema_ready(text)','EXECUTE')`, migrationRole).
+		Scan(&releaseBind, &releaseEnable, &releasePreflight, &releaseDisable, &releaseTableRead, &schemaReady); err != nil {
 		t.Fatal(err)
 	}
-	if releaseBind || releaseEnable || releasePreflight || releaseDisable || releaseTableRead {
-		t.Fatalf("release boundary bind=%t enable=%t preflight=%t disable=%t table=%t", releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead)
+	if releaseBind || releaseEnable || releasePreflight || releaseDisable || releaseTableRead || !schemaReady {
+		t.Fatalf("release boundary bind=%t enable=%t preflight=%t disable=%t table=%t schema_ready=%t", releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead, schemaReady)
 	}
 
 	for _, check := range []struct {

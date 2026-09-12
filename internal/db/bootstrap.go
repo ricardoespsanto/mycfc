@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609120005_guardian_authority_activation"
+	baselineIncludesThrough      = "202609120006_guardian_schema_ready_owner"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
@@ -382,6 +382,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke public guardian authority table access", "REVOKE ALL PRIVILEGES ON TABLE " + guardianAuthorityTables + " FROM PUBLIC"},
 		{"revoke web guardian operator schema access", "REVOKE ALL ON SCHEMA guardian_ops FROM " + app},
 		{"revoke migration guardian operator functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM " + migration},
+		{"grant migration guardian schema helper", "GRANT EXECUTE ON FUNCTION guardian_ops.schema_ready(text) TO " + migration},
 		{"revoke public guardian age handoff sequence access", "REVOKE ALL PRIVILEGES ON SEQUENCE " + guardianAgeHandoffPrivateSequences + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},

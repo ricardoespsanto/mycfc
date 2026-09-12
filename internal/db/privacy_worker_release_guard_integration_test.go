@@ -72,7 +72,7 @@ func activatePrivacyDatabaseIntegrationFixture(t *testing.T, ctx context.Context
 		case "SCHEMA":
 			contract = "mycfc/schema-migration-inventory/v1"
 			artifact["evidence_ref"], artifact["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-			artifact["schema_migration_digest"], artifact["baseline_includes_through"] = value, "202609120005_guardian_authority_activation"
+			artifact["schema_migration_digest"], artifact["baseline_includes_through"] = value, baselineIncludesThrough
 		}
 		encoded, err := json.Marshal(artifact)
 		if err != nil {
