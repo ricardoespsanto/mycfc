@@ -261,6 +261,13 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndActivatesAfter005(t *testi
 		t.Fatal(err)
 	}
 
+	// The production release sequence runs db-bootstrap before migrations and
+	// hardening. Recreate its fixed retention capability role here because this
+	// test deliberately reconstructed schema 004 without invoking BootstrapRoles.
+	if _, err = admin.Exec(ctx, noLoginRoleStatement(privacyRetentionRole)); err != nil {
+		t.Fatalf("recreate pre-migration bootstrap role: %v", err)
+	}
+
 	appRole := "guardian_first_rollout_web_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 	if _, err = admin.Exec(ctx, `CREATE ROLE `+quoteIdentifier(appRole)+` NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`); err != nil {
 		t.Fatal(err)

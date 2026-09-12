@@ -1185,8 +1185,9 @@ func TestGuardianRenewalReminderRevalidatesRecipientAndAuthority(t *testing.T) {
 	})
 	t.Run("expiry", func(t *testing.T) {
 		fixture := setup("expirado")
-		if _, err = conn.Exec(ctx, `UPDATE guardian_authority_relationships SET verified_at=clock_timestamp()-interval '2 seconds',
-			verified_until=clock_timestamp()-interval '1 second',review_due_at=clock_timestamp()-interval '1 second' WHERE public_ref=$1`, fixture.relationshipRef); err != nil {
+		if _, err = conn.Exec(ctx, `UPDATE guardian_authority_relationships SET verified_at=cutoff.value-interval '1 second',
+			verified_until=cutoff.value,review_due_at=cutoff.value
+			FROM (SELECT clock_timestamp()-interval '1 second' AS value) cutoff WHERE public_ref=$1`, fixture.relationshipRef); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = q.ReconcileGuardianAuthorityCutoffs(ctx); err != nil {
