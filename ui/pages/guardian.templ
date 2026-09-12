@@ -1,5 +1,6 @@
 package pages
 
+import "fmt"
 import "github.com/cfcoimbra/mycfc/internal/validation"
 import "github.com/cfcoimbra/mycfc/ui/components"
 
@@ -8,14 +9,21 @@ type GuardianPage struct {
 	Dependents []GuardianDependent
 	Requests   []GuardianAuthorityRequest
 	PolicyAvailable bool
+	CanApply bool
+	EmailVerified bool
 	ResponsibilityURL string
+	InfographicURL string
 	Name, DateOfBirth string
 	ResponsibilityAccepted bool
+	InvitationToken string
+	RequirePassword bool
 	Errors     validation.FieldErrors
 	Success    string
 }
-type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible, ProfileIncomplete bool }
-type GuardianAuthorityRequest struct { Reference, SubmittedLabel, Status, Detail string }
+type GuardianRenewal struct { Reference, Status, Detail, ExpiresAt string; Version int64; CanSubmit bool }
+type GuardianAgeHandoffStatus struct { Status, Detail, Birthday string }
+type GuardianDependent struct { ID, Name, Detail string; LeaderboardVisible, ProfileIncomplete bool; Renewal GuardianRenewal; AgeHandoff GuardianAgeHandoffStatus }
+type GuardianAuthorityRequest struct { Reference, SubmittedLabel, Status, Detail string; Renewal GuardianRenewal; AgeHandoff GuardianAgeHandoffStatus }
 
 templ Guardian(page GuardianPage) {
 	@components.Base(page.Meta, GuardianContent(page))
@@ -23,7 +31,7 @@ templ Guardian(page GuardianPage) {
 
 templ GuardianContent(page GuardianPage) {
 	<div id="guardian-content">
-		if page.PolicyAvailable {
+		if page.CanApply {
 			@components.PageHeader("Família", "Menores a cargo", "Consulte representações verificadas e acompanhe pedidos de associação.", []components.PageAction{{Label: "Pedir associação", Href: "#pedir-associacao", Variant: "primary", TaskID: "pedir-associacao"}})
 		} else {
 			@components.PageHeader("Família", "Menores a cargo", "Consulte representações verificadas e acompanhe pedidos de associação.", nil)
@@ -31,10 +39,30 @@ templ GuardianContent(page GuardianPage) {
 		if page.Success != "" {
 			@components.StatusMessage(page.Success, "success")
 		}
+		<details class="module">
+			<summary>Como funciona a representação de um menor</summary>
+			if page.InfographicURL != "" {
+				<img class="guardian-process-image" src={ page.InfographicURL } alt="Resumo visual das etapas para pedir, verificar e manter uma representação de menor" width="1024" height="1536" loading="lazy" decoding="async"/>
+			}
+			<div aria-labelledby="guardian-process-steps-title">
+				<h2 id="guardian-process-steps-title">Etapas e garantias</h2>
+				<ol>
+					<li><strong>O adulto envia o pedido.</strong> A conta tem email confirmado e inscrição ativa, ou utiliza um convite válido do clube.</li>
+					<li><strong>Uma pessoa administradora verifica.</strong> Confirma presencialmente uma das categorias autorizadas sem guardar cópias, números ou referências de documentos.</li>
+					<li><strong>O acesso só começa depois da aprovação.</strong> Até lá, o pedido não revela dados do menor.</li>
+					<li><strong>O clube acompanha alterações.</strong> Um conflito ou incerteza suspende o acesso; o fim da autoridade, da elegibilidade ou da validade termina-o.</li>
+					<li><strong>Revisão anual.</strong> A representação é confirmada de forma simples a cada 12 meses.</li>
+					<li><strong>Aos 18 anos.</strong> O acesso do responsável termina e o jovem assume a própria conta.</li>
+				</ol>
+				<p><strong>Separação de funções:</strong> uma pessoa administradora não decide pedidos próprios ou familiares. Quem regista um conflito não o pode limpar nem aprovar.</p>
+				<p><strong>Minimização:</strong> o sistema guarda a categoria, decisão, motivo, pessoa decisora, data e versão da política — nunca o conteúdo do comprovativo.</p>
+			</div>
+		</details>
 		if page.Errors["form"] != "" && !page.PolicyAvailable {
 			@components.StatusMessage(page.Errors["form"], "error")
 		}
 		<section class="module">@components.SectionHeading("Família", "Menores com representação verificada", "O acesso só está disponível enquanto a verificação se mantiver atual.")
+			@components.StatusMessage(page.Errors["renewal"], "error")
 			if len(page.Dependents) == 0 {
 				@components.EmptyState("Ainda sem representações verificadas", "Os dados de um menor só ficam disponíveis depois da verificação pelo clube.")
 			}
@@ -45,6 +73,8 @@ templ GuardianContent(page GuardianPage) {
 				if dependent.ProfileIncomplete {
 									<p class="record-meta">Perfil incompleto: falta contacto de emergência ou declaração médica.</p>
 								}
+								@guardianRenewalPanel(page, dependent.Renewal)
+								@guardianAgeHandoffPanel(dependent.AgeHandoff)
 							</div><form class="privacy-form" method="post" action={ templ.SafeURL("/dashboard/guardian/dependents/"+dependent.ID+"/leaderboard-privacy") }>@page.Meta.CSRFField<label><input name="leaderboard_visible" type="checkbox" checked?={ dependent.LeaderboardVisible }/> Mostrar quilómetros na classificação</label><button type="submit">Guardar</button></form></li>
 						}
 				}
@@ -56,7 +86,7 @@ templ GuardianContent(page GuardianPage) {
 			} else {
 				@components.RecordList("Pedidos de associação") {
 					for _, request := range page.Requests {
-						<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ request.SubmittedLabel }</h3><p class="record-meta">Referência { request.Reference }</p><p><strong>{ request.Status }</strong></p><p>{ request.Detail }</p></div></li>
+						<li class="record-item record-item--stacked"><div class="record-item__copy"><h3>{ request.SubmittedLabel }</h3><p class="record-meta">Referência { request.Reference }</p><p><strong>{ request.Status }</strong></p><p>{ request.Detail }</p>@guardianRenewalPanel(page, request.Renewal)@guardianAgeHandoffPanel(request.AgeHandoff)</div></li>
 					}
 				}
 			}
@@ -64,16 +94,23 @@ templ GuardianContent(page GuardianPage) {
 		if !page.PolicyAvailable {
 			<section class="module" aria-labelledby="association-unavailable-title"><h2 id="association-unavailable-title">Novos pedidos temporariamente indisponíveis</h2><p>O clube ainda não ativou a política de verificação necessária. Contacte o clube se precisar de ajuda.</p></section>
 		}
-		if page.PolicyAvailable {
+		if page.PolicyAvailable && !page.EmailVerified {
+			<section class="module" aria-labelledby="association-email-title"><h2 id="association-email-title">Confirme o seu email para pedir uma associação</h2><p>Os convites do clube e os pedidos de associação só podem ser usados pela conta adulta com email confirmado.</p><form method="post" action="/perfil/email-verificacao/reenviar">@page.Meta.CSRFField<button type="submit">Reenviar email de confirmação</button></form></section>
+		}
+		if page.CanApply {
 		@components.TaskDialog(components.TaskSurfaceConfig{ID: "pedir-associacao", TitleID: "request-association-title", Eyebrow: "Família", Title: "Pedir associação", Description: "O acesso aos dados só fica disponível depois de o clube verificar a representação.", Variant: "sheet", URL: "/dashboard/guardian", Open: len(page.Errors) > 0}) {
 			<div class="task-form">
 			@components.StatusMessage(page.Errors["form"], "error")
-			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"name", "date_of_birth", "accept_minor_responsibility"}))
+			@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"name", "date_of_birth", "invitation_token", "password", "accept_minor_responsibility"}))
 			<form class="form-layout" method="post" action="/guardian/add-dependent" data-task-form>
 				@page.Meta.CSRFField
 				@components.RequiredNote()
 				<div class="form-field">@components.FieldLabel("name", "Nome", true)<input id="name" name="name" autocomplete="name" value={ page.Name } required aria-invalid?={ page.Errors["name"] != "" } aria-describedby="name-help name-error"/>@components.FieldHelp("name-help", "Use o nome completo do menor.")@components.FieldErrorMessage("name", page.Errors["name"])</div>
 				<div class="form-field">@components.FieldLabel("date_of_birth", "Data de nascimento", true)<input id="date_of_birth" name="date_of_birth" type="date" value={ page.DateOfBirth } required aria-invalid?={ page.Errors["date_of_birth"] != "" } aria-describedby="date-of-birth-help date_of_birth-error"/>@components.FieldHelp("date-of-birth-help", "A idade é validada à data de hoje.")@components.FieldErrorMessage("date_of_birth", page.Errors["date_of_birth"])</div>
+				<div class="form-field">@components.FieldLabel("invitation_token", "Código de convite do clube", false)<input id="invitation_token" name="invitation_token" autocomplete="off" aria-invalid?={ page.Errors["invitation_token"] != "" } aria-describedby="invitation-token-help invitation_token-error"/>@components.FieldHelp("invitation-token-help", "Deixe em branco se tem uma inscrição ativa. Por segurança, o código não é novamente apresentado após o envio.")@components.FieldErrorMessage("invitation_token", page.Errors["invitation_token"])</div>
+				if page.RequirePassword {
+					<div class="form-field">@components.FieldLabel("password", "Palavra-passe atual", true)<input id="password" name="password" type="password" autocomplete="current-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-help password-error"/>@components.FieldHelp("password-help", "A sua sessão tem mais de uma hora. Confirme a palavra-passe para continuar.")@components.FieldErrorMessage("password", page.Errors["password"])</div>
+				}
 				<p class="field-hint">Explique ao menor, de forma adequada à idade, a <a href="/legal/privacidade-menores">informação de privacidade para menores</a>. Consulte também a <a href="/legal/privacidade">Política de privacidade</a>.</p>
 				<label for="accept_minor_responsibility"><input id="accept_minor_responsibility" name="accept_minor_responsibility" type="checkbox" required checked?={ page.ResponsibilityAccepted } aria-invalid?={ page.Errors["accept_minor_responsibility"] != "" } aria-describedby="accept_minor_responsibility-error"/> Aceito a <a href={ templ.SafeURL(page.ResponsibilityURL) }>responsabilidade pelo menor a cargo</a>. <span class="required-mark" aria-hidden="true">*</span></label>@components.FieldErrorMessage("accept_minor_responsibility", page.Errors["accept_minor_responsibility"])
 				@components.TaskActions("/dashboard/guardian") { <button class="action action--primary" type="submit" data-task-submit>Enviar pedido</button> }
@@ -83,4 +120,37 @@ templ GuardianContent(page GuardianPage) {
 		}
 		@components.DiscardConfirmation()
 	</div>
+}
+
+templ guardianAgeHandoffPanel(handoff GuardianAgeHandoffStatus) {
+	if handoff.Birthday != "" {
+		<div class="guardian-renewal">
+			<p><strong>Transição aos 18 anos:</strong> { handoff.Birthday }</p>
+			<p><strong>{ handoff.Status }</strong></p>
+			<p>{ handoff.Detail }</p>
+		</div>
+	}
+}
+
+templ guardianRenewalPanel(page GuardianPage, renewal GuardianRenewal) {
+	if renewal.ExpiresAt != "" {
+		<div class="guardian-renewal">
+			<p><strong>Validade atual:</strong> { renewal.ExpiresAt }</p>
+			if renewal.Status != "" {
+				<p><strong>{ renewal.Status }</strong></p><p>{ renewal.Detail }</p>
+			}
+			if renewal.CanSubmit {
+				<form method="post" action={ templ.SafeURL("/dashboard/guardian/representacoes/"+renewal.Reference+"/renovar") } class="form-layout">
+					@page.Meta.CSRFField
+					<input type="hidden" name="version" value={ fmt.Sprint(renewal.Version) }/>
+					<fieldset><legend>O que mudou desde a última verificação?</legend>
+						<label><input type="radio" name="response_code" value="NADA_MUDOU" required/> Nada mudou</label>
+						<label><input type="radio" name="response_code" value="DADOS_MUDARAM" required/> Os dados mudaram</label>
+					</fieldset>
+					<p class="field-hint">Se indicar que os dados mudaram, o acesso é suspenso imediatamente até à revisão do clube.</p>
+					<button class="action action--primary" type="submit">Enviar para revisão</button>
+				</form>
+			}
+		</div>
+	}
 }

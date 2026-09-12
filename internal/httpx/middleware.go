@@ -172,6 +172,10 @@ func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middlewa
 					w.Header().Set("Cache-Control", "no-store")
 					w.Header().Set("Referrer-Policy", "no-referrer")
 				}
+				if r.URL.Path == "/transicao-18/verificar" {
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Referrer-Policy", "no-referrer")
+				}
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
@@ -209,6 +213,18 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 					break
 				}
 			}
+			guardian := false
+			for _, prefix := range []string{"/dashboard/guardian", "/guardian", "/admin/representacoes", "/transicao-18", "/admin/transicoes-18"} {
+				if path == prefix || strings.HasPrefix(path, prefix+"/") {
+					guardian = true
+					if route != "" {
+						path = route
+					} else {
+						path, route = prefix+"/*", prefix+"/*"
+					}
+					break
+				}
+			}
 			attributes := []any{
 				"method", r.Method,
 				"path", path,
@@ -220,7 +236,7 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 			}
 			// Privacy case references and actor/network identifiers belong neither
 			// in access logs nor in unmatched-route diagnostics.
-			if !privacy {
+			if !privacy && !guardian {
 				remoteIP := ""
 				if address, ok := RemoteIP(r.Context()); ok {
 					remoteIP = address.String()

@@ -198,13 +198,16 @@ func TestGuardianAuthorityForwardMigrationFailsLegacyAuthorityClosed(t *testing.
 	if len(dependents) != 0 {
 		t.Fatalf("pending relationship exposed private dependent rows: %+v", dependents)
 	}
-	disclosures, err := queries.ListGuardianRelationshipsForGuardian(ctx, dbgen.ListGuardianRelationshipsForGuardianParams{GuardianID: guardianID, RowLimit: 20})
-	if err != nil {
+	var hasSingleDisclosure, disclosureRedacted bool
+	if err = conn.QueryRow(ctx, `SELECT count(*)=1,
+		COALESCE(bool_and(state='PENDING' AND subject_name IS NULL AND date_of_birth IS NULL
+			AND minor_login_id IS NULL AND leaderboard_visible IS NULL AND profile_complete IS NULL),false)
+		FROM guardian_authority_guardian_disclosures WHERE guardian_user_id=$1`, guardianID).
+		Scan(&hasSingleDisclosure, &disclosureRedacted); err != nil {
 		t.Fatal(err)
 	}
-	if len(disclosures) != 1 || disclosures[0].State != "PENDING" || disclosures[0].SubjectName != "" ||
-		disclosures[0].DateOfBirth.Valid || disclosures[0].MinorLoginID != "" || disclosures[0].LeaderboardVisible || disclosures[0].ProfileComplete {
-		t.Fatalf("pending guardian disclosure was not redacted: %+v", disclosures)
+	if !hasSingleDisclosure || !disclosureRedacted {
+		t.Fatalf("pending guardian disclosure was not redacted: single=%t redacted=%t", hasSingleDisclosure, disclosureRedacted)
 	}
 
 	var activationEnabled, fulfilmentReady, killSwitchEngaged, workerReady bool

@@ -100,6 +100,48 @@ services:
     networks: [mycfc]
     profiles: [release]
 
+  guardian-release-bind:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["bind-guardian-release"]
+    env_file:
+      - path: ${GUARDIAN_RELEASE_BIND_ENV_FILE:-/etc/mycfc/guardian-release-bind.env}
+        required: false
+    environment:
+      GUARDIAN_RUNTIME_IMAGE_DIGEST: ${GUARDIAN_RUNTIME_IMAGE_DIGEST:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [release]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  guardian-release-bind-bootstrap:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["provision-guardian-release-bind"]
+    environment:
+      <<: *production-config
+    env_file:
+      - path: ${GUARDIAN_RELEASE_BIND_ENV_FILE:-/etc/mycfc/guardian-release-bind.env}
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [guardian-release-bind-bootstrap]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
   privacy-activation-disable-bootstrap:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     command: ["provision-privacy-activation-disable"]
@@ -113,6 +155,27 @@ services:
         condition: service_healthy
     networks: [mycfc]
     profiles: [privacy-activation-disable-bootstrap]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  guardian-activation-bootstrap:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    command: ["provision-guardian-activation"]
+    environment:
+      <<: *production-config
+    env_file:
+      - path: /etc/mycfc/guardian-activation.env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [guardian-activation-bootstrap]
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=8m
@@ -194,6 +257,28 @@ services:
     networks: [mycfc]
     user: "0:0"
     profiles: [privacy-activation-disable]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  guardian-activation:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/guardian-activation"]
+    env_file:
+      - path: /etc/mycfc/guardian-activation.env
+        required: false
+    environment:
+      GUARDIAN_ACTIVATION_CURRENT_IMAGE_DIGEST: ${GUARDIAN_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
+      GUARDIAN_ACTIVATION_APPROVAL_FILE: /run/guardian-activation/approval.json
+    volumes:
+      - /etc/mycfc/guardian-activation:/run/guardian-activation:ro
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [guardian-activation]
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=8m

@@ -1,0 +1,142 @@
+package pages
+
+import "fmt"
+import "github.com/cfcoimbra/mycfc/internal/validation"
+import "github.com/cfcoimbra/mycfc/ui/components"
+
+type GuardianAgeHandoffPage struct {
+	Meta components.PageMeta
+	Status, Birthday, ProposedEmail, Success string
+	Version int64
+	Notices []GuardianAgeHandoffNoticeItem
+	Errors validation.FieldErrors
+}
+
+type GuardianAgeHandoffNoticeItem struct { Kind, Message string }
+
+type GuardianAgeHandoffQueuePage struct {
+	Meta components.PageMeta
+	Items []GuardianAgeHandoffQueueItem
+}
+
+type GuardianAgeHandoffQueueItem struct { Reference, SubjectName, Status, Birthday, URL string }
+
+type GuardianAgeHandoffDetailPage struct {
+	Meta components.PageMeta
+	Reference, SubjectName, Status, Birthday, ProposedEmail, Success string
+	Version int64
+	EmailVerified, IdentityConfirmed, Ready, RecoveryRequired, Completed, PersonalInvolvement, RequirePassword bool
+	Errors validation.FieldErrors
+}
+
+type GuardianAgeHandoffVerificationPage struct { Meta components.PageMeta; Success bool }
+
+templ GuardianAgeHandoff(page GuardianAgeHandoffPage) {
+	@components.Base(page.Meta, guardianAgeHandoffContent(page))
+}
+
+templ guardianAgeHandoffContent(page GuardianAgeHandoffPage) {
+	@components.PageHeader("A minha conta", "Transição aos 18 anos", "Prepare o acesso adulto na mesma conta, sem perder o histórico permitido.", nil)
+	@components.StatusMessage(page.Success, "success")
+	<section class="module" aria-labelledby="handoff-status-title">
+		<h2 id="handoff-status-title">Estado da transição</h2>
+		<dl><dt>Data da transição</dt><dd>{ page.Birthday }</dd><dt>Estado</dt><dd>{ guardianAgeHandoffStatus(page.Status) }</dd>
+		if page.ProposedEmail != "" {
+			<dt>Email pessoal proposto</dt><dd>{ page.ProposedEmail }</dd>
+		}
+		</dl>
+		<ol>
+			<li><strong>Propor e confirmar um email pessoal único.</strong></li>
+			<li><strong>Uma pessoa administradora sem envolvimento confirma a identidade presencialmente nos registos do clube.</strong></li>
+			<li><strong>Na data indicada, esta mesma conta passa a adulta.</strong> Se faltar algum passo, o acesso fica bloqueado até recuperação presencial.</li>
+		</ol>
+	</section>
+	if page.Status != "COMPLETED" {
+		<section class="module" aria-labelledby="handoff-email-title">
+			<h2 id="handoff-email-title">Confirmar email pessoal</h2>
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "email", Field: "email"}}))
+			<form method="post" action="/transicao-18/email" class="form-layout">
+				@page.Meta.CSRFField
+				<input type="hidden" name="version" value={ fmt.Sprint(page.Version) }/>
+				<div class="form-field">@components.FieldLabel("email", "Email pessoal", true)<input id="email" name="email" type="email" autocomplete="email" required value={ page.ProposedEmail } aria-invalid?={ page.Errors["email"] != "" } aria-describedby="handoff-email-help email-error"/>@components.FieldHelp("handoff-email-help", "Tem de ser um endereço só seu e ainda não utilizado noutra conta. Enviaremos um link válido durante 24 horas.")@components.FieldErrorMessage("email", page.Errors["email"])</div>
+				<button class="action action--primary" type="submit">Enviar link de confirmação</button>
+			</form>
+		</section>
+	}
+	if len(page.Notices) > 0 {
+		<section class="module" aria-labelledby="handoff-notices-title"><h2 id="handoff-notices-title">Avisos</h2><ul>
+			for _, notice := range page.Notices {
+				<li><strong>{ notice.Kind }</strong> — { notice.Message }</li>
+			}
+		</ul></section>
+	}
+}
+
+templ GuardianAgeHandoffVerification(page GuardianAgeHandoffVerificationPage) {
+	@components.AuthBase(page.Meta, guardianAgeHandoffVerificationContent(page))
+}
+
+templ guardianAgeHandoffVerificationContent(page GuardianAgeHandoffVerificationPage) {
+	<section class="auth-panel"><h1>Confirmar email da transição</h1>
+	if page.Success {
+		<p>O email foi confirmado. Pode fechar esta página e acompanhar a transição na sua conta.</p>
+	} else {
+		<p>Este link não é válido, já foi utilizado ou expirou. Peça um novo link na sua conta ou contacte o clube.</p>
+	}
+	</section>
+}
+
+templ GuardianAgeHandoffQueue(page GuardianAgeHandoffQueuePage) {
+	@components.Base(page.Meta, guardianAgeHandoffQueueContent(page))
+}
+
+templ guardianAgeHandoffQueueContent(page GuardianAgeHandoffQueuePage) {
+	@components.PageHeader("Administração", "Transições aos 18 anos", "Confirme apenas a identidade contra o registo existente do clube e acompanhe recuperações presenciais.", nil)
+	<section class="module" aria-labelledby="handoff-queue-title"><h2 id="handoff-queue-title">Transições a acompanhar</h2>
+	if len(page.Items) == 0 {
+		@components.EmptyState("Sem transições pendentes", "As tarefas aparecem 30 dias antes da maioridade.")
+	} else {
+		@components.RecordList("Transições aos 18 anos") {
+			for _, item := range page.Items {
+				<li class="record-item"><div class="record-item__copy"><h3><a href={ templ.SafeURL(item.URL) }>{ item.SubjectName }</a></h3><p><strong>{ item.Status }</strong> · transição em { item.Birthday }</p></div></li>
+			}
+		}
+	}
+	</section>
+}
+
+templ GuardianAgeHandoffDetail(page GuardianAgeHandoffDetailPage) {
+	@components.Base(page.Meta, guardianAgeHandoffDetailContent(page))
+}
+
+templ guardianAgeHandoffDetailContent(page GuardianAgeHandoffDetailPage) {
+	<div class="task-route-page">@components.TaskRoute(components.TaskSurfaceConfig{ID: "guardian-age-handoff-review", TitleID: "guardian-age-handoff-title", Eyebrow: "Administração", Title: "Transição aos 18 anos", Description: "Não carregue documentos nem registe números ou texto livre. Confirme apenas contra o registo existente do clube.", ReturnURL: "/admin/transicoes-18"}) {
+		@components.StatusMessage(page.Success, "success")
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "confirmation", Field: "confirmation"}, {Key: "email", Field: "email"}, {Key: "password", Field: "password"}}))
+		<section class="module" aria-labelledby="handoff-detail-summary"><h2 id="handoff-detail-summary">Resumo</h2><dl><dt>Referência</dt><dd>{ page.Reference }</dd><dt>Pessoa jovem</dt><dd>{ page.SubjectName }</dd><dt>Data da transição</dt><dd>{ page.Birthday }</dd><dt>Estado</dt><dd>{ guardianAgeHandoffStatus(page.Status) }</dd><dt>Email confirmado</dt><dd>{ yesNo(page.EmailVerified) }</dd><dt>Identidade confirmada</dt><dd>{ yesNo(page.IdentityConfirmed) }</dd></dl></section>
+		if page.PersonalInvolvement {
+			@components.StatusMessage("Não pode confirmar nem recuperar esta transição por existir envolvimento pessoal ou familiar. Outra pessoa administradora tem de atuar.", "error")
+		} else if !page.Completed {
+			if !page.IdentityConfirmed {
+				<section class="module" aria-labelledby="handoff-confirm-title"><h2 id="handoff-confirm-title">Confirmar identidade</h2><form method="post" action={ templ.SafeURL("/admin/transicoes-18/"+page.Reference+"/confirmar") } class="form-layout">@page.Meta.CSRFField<input type="hidden" name="version" value={ fmt.Sprint(page.Version) }/><label for="confirmation"><input id="confirmation" type="checkbox" name="confirmation" value="yes" required aria-invalid?={ page.Errors["confirmation"] != "" } aria-describedby="confirmation-error"/> Confirmo presencialmente a identidade contra o registo existente do clube.</label>@components.FieldErrorMessage("confirmation", page.Errors["confirmation"])
+				if page.RequirePassword {
+					<div class="form-field">@components.FieldLabel("password", "Palavra-passe atual", true)<input id="password" name="password" type="password" autocomplete="current-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-error"/>@components.FieldErrorMessage("password", page.Errors["password"])</div>
+				}
+				<button class="action action--primary" type="submit">Registar confirmação</button></form></section>
+			}
+			if page.RecoveryRequired && page.IdentityConfirmed {
+				<section class="module" aria-labelledby="handoff-recovery-title"><h2 id="handoff-recovery-title">Recuperação presencial</h2><p>Depois de confirmar a identidade, envie um novo link para um email pessoal único. Não crie, junte nem transfira contas.</p><form method="post" action={ templ.SafeURL("/admin/transicoes-18/"+page.Reference+"/recuperar-email") } class="form-layout">@page.Meta.CSRFField<input type="hidden" name="version" value={ fmt.Sprint(page.Version) }/><div class="form-field">@components.FieldLabel("email", "Novo email pessoal", true)<input id="email" name="email" type="email" autocomplete="email" required aria-invalid?={ page.Errors["email"] != "" } aria-describedby="email-error"/>@components.FieldErrorMessage("email", page.Errors["email"])</div>
+				if page.RequirePassword {
+					<div class="form-field">@components.FieldLabel("password", "Palavra-passe atual", true)<input id="password" name="password" type="password" autocomplete="current-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-error"/>@components.FieldErrorMessage("password", page.Errors["password"])</div>
+				}
+				<button class="action action--primary" type="submit">Enviar link de recuperação</button></form></section>
+			}
+		}
+	}</div>
+}
+
+func guardianAgeHandoffStatus(status string) string {
+	switch status { case "PENDING": return "A preparar"; case "EMAIL_PENDING": return "Email por confirmar"; case "EMAIL_VERIFIED": return "Email confirmado"; case "IDENTITY_CONFIRMED": return "Identidade confirmada"; case "READY": return "Pronta para a data de transição"; case "RECOVERY_REQUIRED": return "Recuperação presencial necessária"; case "EMAIL_COLLISION": return "Email em conflito — resolução administrativa"; case "COMPLETED": return "Concluída"; default: return "Estado indisponível" }
+}
+
+func yesNo(value bool) string { if value { return "Sim" }; return "Não" }

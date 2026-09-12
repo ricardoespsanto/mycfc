@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
@@ -31,6 +33,14 @@ type PrivacySender interface {
 	SendPrivacyNotification(context.Context, string, string, string) error
 }
 
+type GuardianRenewalSender interface {
+	SendGuardianRenewalReminder(context.Context, string, string, string, time.Time) error
+}
+
+type GuardianHandoffSender interface {
+	SendGuardianAgeHandoff(context.Context, string, string, string, time.Time) error
+}
+
 type DeliveryStore interface {
 	ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error)
 	CompleteEmailOutbox(context.Context, dbgen.CompleteEmailOutboxParams) (int64, error)
@@ -45,6 +55,7 @@ type Worker struct {
 	Service       Service
 	PasswordReset passwordreset.Service
 	PrivacyKey    []byte
+	GuardianKey   []byte
 	Logger        *slog.Logger
 	Now           func() time.Time
 }
@@ -110,6 +121,32 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 			// The encrypted recipient is intentionally independent of a current
 			// account or token, which may disappear during later erasure execution.
 			err = sender.SendPrivacyNotification(ctx, payload.Recipient, payload.ContactURL, item.MessageType)
+		}
+	case "GUARDIAN_RENEWAL_30_DAY", "GUARDIAN_RENEWAL_7_DAY":
+		payload, openErr := guardianauthority.OpenRenewalDelivery(w.GuardianKey, item.SealedPayload)
+		sender, supported := w.Sender.(GuardianRenewalSender)
+		identityMatches := item.UserID != uuid.Nil && item.Email != "" && item.ExpiresAt.Valid &&
+			strings.EqualFold(payload.Recipient, item.Email) && payload.ExpiresAt.Equal(item.ExpiresAt.Time)
+		if openErr != nil || !supported || !identityMatches {
+			err = errors.New("invalid guardian renewal delivery configuration or payload")
+			invalidPayload = true
+		} else {
+			// The claim query revalidates the current guardian identity and verified
+			// email binding. Never address mail from the sealed discovery snapshot.
+			err = sender.SendGuardianRenewalReminder(ctx, item.Email, payload.DashboardURL, item.MessageType, item.ExpiresAt.Time)
+		}
+	case "GUARDIAN_AGE_18_30_DAY", "GUARDIAN_AGE_18_7_DAY", "GUARDIAN_AGE_18_EMAIL_VERIFY":
+		payload, openErr := guardianauthority.OpenHandoffDelivery(w.GuardianKey, item.SealedPayload)
+		sender, supported := w.Sender.(GuardianHandoffSender)
+		identityMatches := item.UserID != uuid.Nil && item.Email != "" && item.ExpiresAt.Valid &&
+			strings.EqualFold(payload.Recipient, item.Email) && payload.EffectiveAt.Equal(item.ExpiresAt.Time)
+		if openErr != nil || !supported || !identityMatches {
+			err = errors.New("invalid guardian age handoff delivery configuration or payload")
+			invalidPayload = true
+		} else {
+			// The claim projection atomically rechecks the current recipient and
+			// authority state. Never address mail from a stale discovery snapshot.
+			err = sender.SendGuardianAgeHandoff(ctx, item.Email, payload.ActionURL, item.MessageType, item.ExpiresAt.Time)
 		}
 	default:
 		err = errors.New("unsupported email outbox message type")

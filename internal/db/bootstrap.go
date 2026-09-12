@@ -26,10 +26,12 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609110005_guardian_authority_cutoff_reconciliation"
+	baselineIncludesThrough      = "202609120005_guardian_authority_activation"
 	privacyRetentionRole         = "mycfc_privacy_retention"
 	privacyActivationBrokerRole  = "mycfc_privacy_activation_broker"
 	privacyActivationDisableRole = "mycfc_privacy_activation_disable"
+	guardianActivationRole       = "mycfc_guardian_activation_operator"
+	guardianReleaseBindRole      = "mycfc_guardian_release_bind"
 )
 
 type RoleCredentials struct {
@@ -172,6 +174,123 @@ func ProvisionPrivacyActivationDisableRole(ctx context.Context, conn bootstrapCo
 	return nil
 }
 
+// ProvisionGuardianActivationRole installs only the isolated guardian_ops API.
+// The secret is supplied by an explicit root-only operation, never routine
+// bootstrap, migration, or the web application.
+func ProvisionGuardianActivationRole(ctx context.Context, conn bootstrapConnection, databaseName, username, password string) error {
+	if !postgresIdentifier.MatchString(databaseName) {
+		return fmt.Errorf("database name %q must be a PostgreSQL identifier", databaseName)
+	}
+	if strings.TrimSpace(username) != guardianActivationRole || strings.TrimSpace(password) == "" {
+		return errors.New("guardian activation credential rejected")
+	}
+	database := quoteIdentifier(databaseName)
+	operator := quoteIdentifier(guardianActivationRole)
+	statements := []namedStatement{
+		{"configure guardian activation role", roleStatement(guardianActivationRole, password)},
+		{"grant guardian activation database access", "GRANT CONNECT ON DATABASE " + database + " TO " + operator},
+		{"revoke guardian activation public schema access", "REVOKE ALL ON SCHEMA public FROM " + operator},
+		{"revoke guardian activation metadata schema access", "REVOKE ALL ON SCHEMA mycfc_meta FROM " + operator},
+		{"grant guardian activation schema usage", "GRANT USAGE ON SCHEMA guardian_ops TO " + operator},
+		{"revoke guardian activation public tables", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + operator},
+		{"revoke guardian activation public sequences", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + operator},
+		{"revoke guardian activation public functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + operator},
+		{"revoke guardian activation operator functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM " + operator},
+		{"revoke guardian activation operator tables", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM " + operator},
+		{"revoke guardian activation operator sequences", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA guardian_ops FROM " + operator},
+		{"grant guardian activation fixed API", "GRANT EXECUTE ON FUNCTION guardian_ops.status(text,text,text), guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text), guardian_ops.enable(uuid,text,bytea,bytea,text,text,text), guardian_ops.disable(uuid,text) TO " + operator},
+	}
+	for _, statement := range statements {
+		if _, err := conn.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("provision guardian activation role (%s): %w", statement.name, err)
+		}
+	}
+	return nil
+}
+
+// ProvisionGuardianReleaseBindRole is the explicit setup step for the
+// release-only cutoff identity. Routine bootstrap and migration never receive
+// or rotate this password, and the identity has no activation or table access.
+func ProvisionGuardianReleaseBindRole(ctx context.Context, conn interface {
+	Begin(context.Context) (pgx.Tx, error)
+}, databaseName, username, password string) error {
+	if !postgresIdentifier.MatchString(databaseName) {
+		return fmt.Errorf("database name %q must be a PostgreSQL identifier", databaseName)
+	}
+	if strings.TrimSpace(username) != guardianReleaseBindRole || strings.TrimSpace(password) == "" {
+		return errors.New("guardian release bind credential rejected")
+	}
+	database := quoteIdentifier(databaseName)
+	release := quoteIdentifier(guardianReleaseBindRole)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin guardian release bind role provisioning: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	statements := []namedStatement{
+		{"configure guardian release bind role", roleStatement(guardianReleaseBindRole, password)},
+		{"revoke guardian release bind memberships", `DO $$DECLARE inherited_role record; BEGIN
+			FOR inherited_role IN SELECT parent.rolname FROM pg_auth_members membership JOIN pg_roles member ON member.oid=membership.member JOIN pg_roles parent ON parent.oid=membership.roleid WHERE member.rolname='mycfc_guardian_release_bind'
+			LOOP EXECUTE format('REVOKE %I FROM mycfc_guardian_release_bind',inherited_role.rolname); END LOOP;
+		END$$`},
+		{"revoke public temporary database access", "REVOKE TEMPORARY ON DATABASE " + database + " FROM PUBLIC"},
+		{"revoke guardian release bind database access", "REVOKE ALL PRIVILEGES ON DATABASE " + database + " FROM " + release},
+		{"grant guardian release bind database access", "GRANT CONNECT ON DATABASE " + database + " TO " + release},
+		{"revoke guardian release bind public schema access", "REVOKE ALL ON SCHEMA public FROM " + release},
+		{"revoke guardian release bind metadata schema access", `DO $$BEGIN IF to_regnamespace('mycfc_meta') IS NOT NULL THEN EXECUTE 'REVOKE ALL ON SCHEMA mycfc_meta FROM ` + release + `'; END IF; END$$`},
+		{"revoke guardian release bind public tables", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + release},
+		{"revoke guardian release bind public sequences", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + release},
+		{"revoke guardian release bind public functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + release},
+		{"stage or harden guardian release bind API", `DO $$DECLARE protected_schema text; BEGIN
+			FOREACH protected_schema IN ARRAY ARRAY['privacy_disable','privacy_protected'] LOOP
+				IF to_regnamespace(protected_schema) IS NOT NULL THEN
+					EXECUTE format('REVOKE ALL ON SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+					EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+					EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+					EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+				END IF;
+			END LOOP;
+			IF to_regnamespace('guardian_ops') IS NOT NULL THEN
+				REVOKE ALL ON SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				IF to_regprocedure('guardian_ops.release_disable_and_bind(text,text,text)') IS NOT NULL THEN
+					GRANT USAGE ON SCHEMA guardian_ops TO mycfc_guardian_release_bind;
+					GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind;
+				END IF;
+			END IF;
+		END$$`},
+	}
+	for _, statement := range statements {
+		if _, err := tx.Exec(ctx, statement.sql); err != nil {
+			return fmt.Errorf("provision guardian release bind role (%s): %w", statement.name, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit guardian release bind role provisioning: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// BindGuardianRuntimeRelease invokes the release path's disable-only guardian
+// boundary. It cannot create approval evidence or enable guardian authority.
+func BindGuardianRuntimeRelease(ctx context.Context, conn bootstrapConnection, databaseName, imageDigest string) error {
+	if !postgresIdentifier.MatchString(databaseName) || !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(imageDigest) {
+		return errors.New("guardian runtime release binding rejected")
+	}
+	if _, err := conn.Exec(ctx, "SELECT * FROM guardian_ops.release_disable_and_bind($1,$2,$3)", imageDigest, EmbeddedMigrationDigest(), databaseName); err != nil {
+		return errors.New("guardian runtime release binding failed")
+	}
+	return nil
+}
+
 // HardenPrivacyExecutionRoles reapplies the #244 table boundary after migrations
 // have created the execution tables. The web role may materialize the immutable
 // handoff graph, but only the optional executor role may mutate worker state.
@@ -182,6 +301,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		return err
 	}
 	app := quoteIdentifier(credentials.AppUsername)
+	migration := quoteIdentifier(credentials.MigrationUsername)
 	retention := quoteIdentifier(privacyRetentionRole)
 	executionTables := strings.Join([]string{
 		"privacy_pseudonymous_principals",
@@ -218,27 +338,64 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 	}, ", ")
 	guardianAuthorityTables := strings.Join([]string{
 		"guardian_authority_policies",
+		"guardian_authority_policy_approvals",
 		"guardian_authority_policy_events",
 		"guardian_verifier_grants",
 		"guardian_verifier_grant_events",
 		"guardian_authority_relationships",
 		"guardian_authority_events",
+		"guardian_authority_review_access_events",
+		"guardian_application_intake_release",
+		"guardian_application_intake_release_events",
+		"guardian_authority_invitations",
+		"guardian_application_rate_events",
+		"guardian_authority_renewal_requests",
+		"guardian_authority_renewal_events",
+		"guardian_authority_renewal_reminders",
+		"guardian_age_handoffs",
+		"guardian_age_handoff_events",
+		"guardian_age_handoff_email_tokens",
+		"guardian_age_handoff_notices",
+		"guardian_age_handoff_access_events",
 	}, ", ")
+	guardianApplicationPrivateTables := strings.Join([]string{
+		"guardian_authority_policy_approvals",
+		"guardian_authority_invitations",
+		"guardian_application_rate_events",
+		"guardian_application_intake_release",
+		"guardian_application_intake_release_events",
+		"guardian_authority_review_access_events",
+		"guardian_authority_renewal_requests",
+		"guardian_authority_renewal_events",
+		"guardian_authority_renewal_reminders",
+		"guardian_age_handoffs",
+		"guardian_age_handoff_events",
+		"guardian_age_handoff_email_tokens",
+		"guardian_age_handoff_notices",
+		"guardian_age_handoff_access_events",
+	}, ", ")
+	guardianAgeHandoffPrivateSequences := "guardian_age_handoff_events_id_seq, guardian_age_handoff_access_events_id_seq"
 	statements := []namedStatement{
 		{"revoke public execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM PUBLIC"},
 		{"revoke public retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM PUBLIC"},
 		{"revoke public completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM PUBLIC"},
 		{"revoke public guardian authority table access", "REVOKE ALL PRIVILEGES ON TABLE " + guardianAuthorityTables + " FROM PUBLIC"},
+		{"revoke web guardian operator schema access", "REVOKE ALL ON SCHEMA guardian_ops FROM " + app},
+		{"revoke migration guardian operator functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM " + migration},
+		{"revoke public guardian age handoff sequence access", "REVOKE ALL PRIVILEGES ON SEQUENCE " + guardianAgeHandoffPrivateSequences + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
 		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
 		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},
+		{"revoke web guardian application private table access", "REVOKE ALL PRIVILEGES ON TABLE " + guardianApplicationPrivateTables + " FROM " + app},
+		{"revoke web guardian age handoff sequence access", "REVOKE ALL PRIVILEGES ON SEQUENCE " + guardianAgeHandoffPrivateSequences + " FROM " + app},
 		{"revoke web guardian authority mutations", "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE " + guardianAuthorityTables + " FROM " + app},
 		{"grant web guardian authority metadata reads", "GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO " + app},
-		{"revoke web guardian authority routines", "REVOKE EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) FROM " + app},
-		{"grant web guardian authority routines", "GRANT EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_current(uuid,uuid), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid) TO " + app},
+		{"grant web guardian renewal projection", "GRANT SELECT ON TABLE guardian_authority_latest_renewals TO " + app},
+		{"revoke web guardian authority routines", "REVOKE EXECUTE ON FUNCTION guardian_authority_can_verify(uuid), guardian_authority_personally_involved(uuid,uuid), guardian_authority_record_review_view(uuid,uuid), guardian_authority_current(uuid,uuid), guardian_authority_policy_operational(text), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid,bytea), guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text), guardian_authority_admin_transition_inner_004(uuid,uuid,bigint,text,text,text), guardian_authority_issue_invitation(uuid,citext,bytea), guardian_authority_revoke_invitation(uuid,uuid), guardian_authority_list_invitations(uuid,integer), guardian_application_reserve(bytea,bytea,text), guardian_application_prune(), guardian_authority_submit_renewal(uuid,uuid,bigint,text), guardian_authority_due_renewal_reminders(integer), guardian_authority_enqueue_renewal_reminder(uuid,uuid,citext,timestamptz,timestamptz,text,bytea), guardian_age_handoff_reconcile(), guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea), guardian_age_handoff_verify_email(bytea), guardian_age_handoff_admin_confirm(uuid,uuid,bigint), guardian_age_handoff_admin_recovery_email(uuid,uuid,bigint,citext,bytea,timestamptz,bytea), guardian_age_handoff_for_subject(uuid), guardian_age_handoff_available_for_subject(uuid), guardian_age_handoff_notices_for_subject(uuid), guardian_age_handoff_for_guardian(uuid,uuid), guardian_age_handoff_list_for_admin(uuid,integer,integer), guardian_age_handoff_get_for_admin(uuid,uuid), guardian_age_handoff_due_guardian_notices(integer), guardian_age_handoff_enqueue_guardian_notice(uuid,uuid,uuid,citext,timestamptz,date,text,bytea), guardian_age_handoff_outbox_delivery(uuid,timestamptz), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid), guardian_authority_is_administrator(uuid), guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer), guardian_authority_set_policy_enabled(uuid,text,boolean), guardian_authority_grant_verifier(uuid,uuid), guardian_authority_revoke_verifier(uuid,uuid) FROM " + app},
+		{"grant web guardian authority routines", "GRANT EXECUTE ON FUNCTION guardian_authority_personally_involved(uuid,uuid), guardian_authority_record_review_view(uuid,uuid), guardian_authority_current(uuid,uuid), guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid,bytea), guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text), guardian_authority_issue_invitation(uuid,citext,bytea), guardian_authority_revoke_invitation(uuid,uuid), guardian_authority_list_invitations(uuid,integer), guardian_application_reserve(bytea,bytea,text), guardian_application_prune(), guardian_authority_submit_renewal(uuid,uuid,bigint,text), guardian_authority_due_renewal_reminders(integer), guardian_authority_enqueue_renewal_reminder(uuid,uuid,citext,timestamptz,timestamptz,text,bytea), guardian_age_handoff_reconcile(), guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea), guardian_age_handoff_verify_email(bytea), guardian_age_handoff_admin_confirm(uuid,uuid,bigint), guardian_age_handoff_admin_recovery_email(uuid,uuid,bigint,citext,bytea,timestamptz,bytea), guardian_age_handoff_for_subject(uuid), guardian_age_handoff_available_for_subject(uuid), guardian_age_handoff_notices_for_subject(uuid), guardian_age_handoff_for_guardian(uuid,uuid), guardian_age_handoff_list_for_admin(uuid,integer,integer), guardian_age_handoff_get_for_admin(uuid,uuid), guardian_age_handoff_due_guardian_notices(integer), guardian_age_handoff_enqueue_guardian_notice(uuid,uuid,uuid,citext,timestamptz,date,text,bytea), guardian_age_handoff_outbox_delivery(uuid,timestamptz), guardian_authority_privacy_account_for_update(uuid), guardian_authority_privacy_dependants_for_update(uuid) TO " + app},
 		{"restrict web consent evidence writes", "REVOKE UPDATE, DELETE ON TABLE consent_forms FROM " + app},
 		{"revoke web protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM " + app},
 		{"revoke web protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM " + app},
@@ -311,6 +468,20 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		)
 	}
 	statements = append(statements,
+		namedStatement{"harden separately provisioned guardian release bind role", `DO $$BEGIN
+			IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_guardian_release_bind') THEN
+				REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM mycfc_guardian_release_bind;
+				REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM mycfc_guardian_release_bind;
+				REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM mycfc_guardian_release_bind;
+				REVOKE ALL ON SCHEMA public FROM mycfc_guardian_release_bind;
+				IF to_regnamespace('mycfc_meta') IS NOT NULL THEN REVOKE ALL ON SCHEMA mycfc_meta FROM mycfc_guardian_release_bind; END IF;
+				REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind;
+				GRANT USAGE ON SCHEMA guardian_ops TO mycfc_guardian_release_bind;
+				GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind;
+			END IF;
+		END$$`},
 		namedStatement{"harden separately provisioned privacy disable role", `DO $$BEGIN
 			IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_activation_disable') THEN
 				REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM mycfc_privacy_activation_disable;

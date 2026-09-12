@@ -183,6 +183,13 @@ func TestPrivacyDecisionOutboxSurvivesAccountDisableAndDetachment(t *testing.T) 
 func TestInactivePrivacySubjectRejectsNewAccessAttachments(t *testing.T) {
 	pool, ctx := privacyDB(t)
 	userID, _ := insertPasswordResetUser(t, ctx, pool)
+	policy := "privacy-inactive-subject-" + uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO guardian_authority_policies
+		(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
+		VALUES($1,'{CIVIL_REGISTRY}','{CONFLICT,LOSS,CHANGE}',365,180,clock_timestamp(),$2,false,NULL,NULL)`, policy, userID); err != nil {
+		t.Fatal(err)
+	}
+	activateGuardianPolicyFixture(t, ctx, pool, userID, policy)
 	if _, err := pool.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1`, userID); err != nil {
 		t.Fatal(err)
 	}

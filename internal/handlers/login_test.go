@@ -182,6 +182,9 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 	if sessions.GetString(ctx, "last_seen_at") == "" {
 		t.Fatal("session last_seen_at is empty")
 	}
+	if sessions.GetString(ctx, "authenticated_at") == "" {
+		t.Fatal("session authenticated_at is empty")
+	}
 }
 
 func TestLoginPostReturnsHTMXRedirect(t *testing.T) {

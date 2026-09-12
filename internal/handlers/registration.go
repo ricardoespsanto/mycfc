@@ -118,7 +118,9 @@ func (h Registration) Post(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Sessions.Put(r.Context(), "user_id", result.UserID.String())
 	h.Sessions.Put(r.Context(), "credential_version", result.CredentialVersion)
-	h.Sessions.Put(r.Context(), "last_seen_at", h.now().UTC().Format(time.RFC3339Nano))
+	authenticatedAt := h.now().UTC().Format(time.RFC3339Nano)
+	h.Sessions.Put(r.Context(), "last_seen_at", authenticatedAt)
+	h.Sessions.Put(r.Context(), "authenticated_at", authenticatedAt)
 	httpx.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 

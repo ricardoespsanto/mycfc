@@ -32,6 +32,7 @@ type CurrentUser struct {
 	CanExecutePrivacy            bool
 	CanVerifyGuardianAuthority   bool
 	HasVerifiedGuardianAuthority bool
+	HasAgeHandoff                bool
 	ID                           uuid.UUID
 	Name                         string
 	Email                        string
@@ -99,6 +100,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 					IsActive: fallback.IsActive, LeaderboardVisible: fallback.LeaderboardVisible,
 					EmailVerified: fallback.EmailVerified, IsAdmin: fallback.IsAdmin, ProfileComplete: true,
 					CredentialVersion: fallback.CredentialVersion,
+					HasAgeHandoff:     fallback.HasAgeHandoff,
 				}
 			}
 			err = fallbackErr
@@ -122,7 +124,7 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			a.System.InternalError(w, r)
 			return
 		}
-		current := CurrentUser{ID: user.ID, Name: user.Name, Email: stringValue(user.Email), EmailVerified: user.EmailVerified, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}, FeatureModes: map[featureflags.Key]featureflags.Mode{}}
+		current := CurrentUser{ID: user.ID, Name: user.Name, Email: stringValue(user.Email), EmailVerified: user.EmailVerified, IsDependent: user.IsDependent, IsAdmin: user.IsAdmin && !user.IsDependent, HasAgeHandoff: user.HasAgeHandoff, LeaderboardVisible: user.LeaderboardVisible, ProfileComplete: user.ProfileComplete, Programmes: make(map[string]bool, len(programmes)), CoachProgrammeIDs: map[uuid.UUID]bool{}, CoachTeamIDs: map[uuid.UUID]bool{}, FeatureModes: map[featureflags.Key]featureflags.Mode{}}
 		for _, programme := range programmes {
 			current.Programmes[programme] = true
 		}
@@ -178,12 +180,9 @@ func (a Auth) Load(next http.Handler) http.Handler {
 			current.CanExecutePrivacy = allowed
 		}
 		if a.GuardianAuthority != nil {
-			allowed, err := a.GuardianAuthority.CanVerifyGuardianAuthority(r.Context(), current.ID)
-			if err != nil {
-				a.System.InternalError(w, r)
-				return
-			}
-			current.CanVerifyGuardianAuthority = allowed
+			// Guardian reviews are an administrator responsibility; legacy
+			// verifier grants must not create a separate UI or capability.
+			current.CanVerifyGuardianAuthority = current.IsAdmin
 			verified, err := a.GuardianAuthority.HasVerifiedGuardianAuthority(r.Context(), current.ID)
 			if err != nil {
 				a.System.InternalError(w, r)

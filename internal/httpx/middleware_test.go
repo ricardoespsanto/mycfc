@@ -136,6 +136,7 @@ func TestSecurityHeadersProtectPasswordRecoveryResponses(t *testing.T) {
 		{path: "/recuperar-palavra-passe", referrer: "strict-origin-when-cross-origin"},
 		{path: "/recuperar-palavra-passe/repor?token=secret", referrer: "no-referrer"},
 		{path: "/privacidade/conclusao/never-log-this", referrer: "no-referrer"},
+		{path: "/transicao-18/verificar?token=never-log-this", referrer: "no-referrer"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
@@ -161,6 +162,37 @@ func TestAccessLogDoesNotRecordPasswordRecoveryToken(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "never-log-this") || strings.Contains(logs.String(), "token=") {
 		t.Fatalf("recovery token leaked into access log: %s", logs.String())
+	}
+}
+
+func TestAccessLogNormalizesGuardianRoutesAndOmitsActorAndNetwork(t *testing.T) {
+	memberID := "11111111-2222-3333-4444-555555555555"
+	for _, tc := range []struct{ path, pattern, safePath string }{
+		{path: "/admin/representacoes/" + memberID, pattern: "GET /admin/representacoes/{ref}", safePath: "GET /admin/representacoes/{ref}"},
+		{path: "/transicao-18", pattern: "GET /transicao-18", safePath: "GET /transicao-18"},
+		{path: "/transicao-18/verificar?token=" + memberID, safePath: "/transicao-18/*"},
+		{path: "/admin/transicoes-18/" + memberID, pattern: "GET /admin/transicoes-18/{ref}", safePath: "GET /admin/transicoes-18/{ref}"},
+		{path: "/admin/transicoes-18/" + memberID + "/recuperar-email", safePath: "/admin/transicoes-18/*"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			handler := AccessLogMiddleware(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r.Pattern = tc.pattern
+				w.WriteHeader(http.StatusOK)
+			}))
+			request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			request = request.WithContext(WithUserID(WithRemoteIP(request.Context(), netip.MustParseAddr("192.0.2.88")), memberID))
+			handler.ServeHTTP(httptest.NewRecorder(), request)
+			if !strings.Contains(logs.String(), `"path":"`+tc.safePath+`"`) {
+				t.Fatalf("normalized route missing: %s", logs.String())
+			}
+			for _, forbidden := range []string{memberID, "192.0.2.88", `"user_id"`, `"remote_ip"`, "token="} {
+				if strings.Contains(logs.String(), forbidden) {
+					t.Fatalf("guardian access log leaked %q: %s", forbidden, logs.String())
+				}
+			}
+		})
 	}
 }
 

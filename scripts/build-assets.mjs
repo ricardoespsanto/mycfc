@@ -19,7 +19,7 @@ for (const entry of await readdir(outputDir)) {
 }
 
 const manifest = {};
-for (const sourceName of ["app.css", "app.js", "images/cfc-logo.png", "images/cfc-hero.png"]) {
+for (const sourceName of ["app.css", "app.js", "images/cfc-logo.png", "images/cfc-hero.png", "images/guardian-access-infographic-pt.png"]) {
 	const source = await readFile(path.join(sourceDir, sourceName));
 	const hash = createHash("sha256").update(source).digest("hex").slice(0, 12);
 	const extension = path.extname(sourceName);

@@ -101,7 +101,9 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Sessions.Put(r.Context(), "user_id", userID.String())
 	h.Sessions.Put(r.Context(), "credential_version", credentialVersion)
-	h.Sessions.Put(r.Context(), "last_seen_at", time.Now().UTC().Format(time.RFC3339Nano))
+	authenticatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	h.Sessions.Put(r.Context(), "last_seen_at", authenticatedAt)
+	h.Sessions.Put(r.Context(), "authenticated_at", authenticatedAt)
 	if next == "" {
 		next = "/dashboard"
 	}

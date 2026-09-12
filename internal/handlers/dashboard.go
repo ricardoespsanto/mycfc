@@ -72,25 +72,32 @@ type ReleaseChecker interface {
 }
 
 type Dashboard struct {
-	Store                 DashboardStore
-	Fleet                 FleetStore
-	Equipment             EquipmentStore
-	Releases              ReleaseChecker
-	Features              FeatureFlagStore
-	System                System
-	PageMeta              components.PageMeta
-	Location              *time.Location
-	Dependents            GuardianDependentStore
-	GuardianAuthority     GuardianAuthorityStore
-	Now                   func() time.Time
-	ResponsibilityVersion string
-	ResponsibilitySHA256  string
-	ResponsibilityURL     string
-	Sessions              *scs.SessionManager
-	Objects               storage.ObjectStore
-	Uploads               UploadService
-	MaxRequestBytes       int64
-	MaxPhotoBytes         int64
+	Store                  DashboardStore
+	Fleet                  FleetStore
+	Equipment              EquipmentStore
+	Releases               ReleaseChecker
+	Features               FeatureFlagStore
+	System                 System
+	Logger                 *slog.Logger
+	PageMeta               components.PageMeta
+	Location               *time.Location
+	Dependents             GuardianDependentStore
+	GuardianAuthority      GuardianAuthorityStore
+	GuardianHandoffs       GuardianAgeHandoffStore
+	Now                    func() time.Time
+	ResponsibilityVersion  string
+	ResponsibilitySHA256   string
+	ResponsibilityURL      string
+	GuardianInvitationKey  []byte
+	GuardianHandoffKey     []byte
+	GuardianHandoffBaseURL string
+	GuardianAuthFreshness  time.Duration
+	GuardianInfographicURL string
+	Sessions               *scs.SessionManager
+	Objects                storage.ObjectStore
+	Uploads                UploadService
+	MaxRequestBytes        int64
+	MaxPhotoBytes          int64
 }
 
 func (h Dashboard) Competitor(w http.ResponseWriter, r *http.Request) {
@@ -907,6 +914,9 @@ func (h Dashboard) render(w http.ResponseWriter, r *http.Request, heading, intro
 }
 
 func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status int, relationships []GuardianAuthorityRelationship, form guardianDependentForm) {
+	if !h.authenticationFresh(r.Context()) {
+		form.RequirePassword = true
+	}
 	user, _ := CurrentUserFromContext(r.Context())
 	meta := h.PageMeta
 	meta.Title = "Menores a cargo | MyCFCoimbra"
@@ -925,10 +935,11 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 			if relationship.VerifiedUntil != nil {
 				detail += " até " + relationship.VerifiedUntil.In(h.location()).Format("02/01/2006")
 			}
-			pageItems = append(pageItems, pages.GuardianDependent{ID: relationship.SubjectID.String(), Name: relationship.SubjectName, Detail: detail, LeaderboardVisible: relationship.LeaderboardVisible, ProfileIncomplete: !relationship.ProfileComplete})
+			pageItems = append(pageItems, pages.GuardianDependent{ID: relationship.SubjectID.String(), Name: relationship.SubjectName, Detail: detail, LeaderboardVisible: relationship.LeaderboardVisible, ProfileIncomplete: !relationship.ProfileComplete,
+				Renewal: guardianRenewalView(relationship, h.now(), h.location()), AgeHandoff: guardianAgeHandoffView(relationship, h.location())})
 			continue
 		}
-		requests = append(requests, pages.GuardianAuthorityRequest{Reference: relationship.Reference.String(), SubmittedLabel: relationship.SubmittedLabel, Status: guardianAuthorityStatus(relationship.State, relationship.Conflict), Detail: guardianAuthorityGuardianDetail(relationship)})
+		requests = append(requests, pages.GuardianAuthorityRequest{Reference: relationship.Reference.String(), SubmittedLabel: relationship.SubmittedLabel, Status: guardianAuthorityStatus(relationship.State, relationship.Conflict), Detail: guardianAuthorityGuardianDetail(relationship), Renewal: guardianRenewalView(relationship, h.now(), h.location()), AgeHandoff: guardianAgeHandoffView(relationship, h.location())})
 	}
 	policyAvailable, err := h.GuardianAuthority.PolicyAvailable(r.Context())
 	if err != nil {
@@ -941,7 +952,8 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 	}
 	page := pages.GuardianPage{
 		Meta: meta, Dependents: pageItems, Requests: requests, PolicyAvailable: policyAvailable,
-		ResponsibilityURL: h.ResponsibilityURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, Errors: form.Errors, Success: success,
+		CanApply: policyAvailable && user.EmailVerified, EmailVerified: user.EmailVerified,
+		ResponsibilityURL: h.ResponsibilityURL, InfographicURL: h.GuardianInfographicURL, Name: form.Name, DateOfBirth: form.DateOfBirth, ResponsibilityAccepted: form.ResponsibilityAccepted, InvitationToken: form.InvitationToken, RequirePassword: form.RequirePassword, Errors: form.Errors, Success: success,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, no-store")
@@ -951,6 +963,66 @@ func (h Dashboard) renderGuardian(w http.ResponseWriter, r *http.Request, status
 		return
 	}
 	_ = pages.Guardian(page).Render(r.Context(), w)
+}
+
+func guardianAgeHandoffView(relationship GuardianAuthorityRelationship, location *time.Location) pages.GuardianAgeHandoffStatus {
+	view := pages.GuardianAgeHandoffStatus{}
+	if relationship.AgeHandoffStatus == "" || relationship.AgeHandoffBirthday == nil {
+		return view
+	}
+	view.Birthday = relationship.AgeHandoffBirthday.In(location).Format("02/01/2006")
+	switch relationship.AgeHandoffStatus {
+	case "READY":
+		view.Status = "Preparação concluída"
+		view.Detail = "A conta passa para a pessoa jovem nesta data. O seu acesso como responsável termina nesse dia."
+	case "EMAIL_VERIFIED":
+		view.Status = "Confirmação do clube em falta"
+		view.Detail = "O email pessoal já foi confirmado. Falta a confirmação de identidade por uma pessoa administradora sem relação pessoal."
+	case "IDENTITY_CONFIRMED":
+		view.Status = "Confirmação de email em falta"
+		view.Detail = "O clube confirmou a identidade. A pessoa jovem ainda tem de confirmar o email pessoal."
+	case "RECOVERY_REQUIRED", "EMAIL_COLLISION":
+		view.Status = "Recuperação presencial necessária"
+		view.Detail = "O acesso do responsável terminou. A pessoa jovem deve contactar o clube para concluir o acesso à mesma conta."
+	case "COMPLETED":
+		view.Status = "Transição concluída"
+		view.Detail = "O acesso do responsável terminou e a mesma conta passou para a pessoa adulta."
+	default:
+		view.Status = "Preparação em curso"
+		view.Detail = "A pessoa jovem deve iniciar sessão para propor e confirmar um email pessoal; o clube também confirmará a identidade."
+	}
+	return view
+}
+
+func guardianRenewalView(relationship GuardianAuthorityRelationship, now time.Time, location *time.Location) pages.GuardianRenewal {
+	view := pages.GuardianRenewal{Reference: relationship.Reference.String(), Version: relationship.Version}
+	if relationship.VerifiedUntil == nil {
+		return view
+	}
+	view.ExpiresAt = relationship.VerifiedUntil.In(location).Format("02/01/2006")
+	if !relationship.VerifiedUntil.After(now) || relationship.State == "EXPIRED" {
+		view.Status = "Renovação expirada"
+		view.Detail = "O acesso está pausado até existir uma renovação aprovada pelo clube."
+		if relationship.RenewalStatus == "SUBMITTED" {
+			view.Detail = "A renovação enviada continua em revisão pelo clube, mas o acesso está pausado até ser aprovada."
+		}
+		return view
+	}
+	if relationship.RenewalStatus == "SUBMITTED" {
+		view.Status = "Renovação enviada"
+		if relationship.RenewalResponse == "DADOS_MUDARAM" {
+			view.Detail = "Indicou que os dados mudaram. O acesso foi suspenso e o clube está a rever a representação."
+		} else {
+			view.Detail = "Indicou que nada mudou. O clube tem de aprovar a renovação; o prazo não foi prolongado automaticamente."
+		}
+		return view
+	}
+	if relationship.State == "VERIFIED" && !now.Before(relationship.VerifiedUntil.Add(-30*24*time.Hour)) {
+		view.Status = "Renovação disponível"
+		view.Detail = "Responda até à data indicada. A resposta será sempre revista pelo clube."
+		view.CanSubmit = true
+	}
+	return view
 }
 
 func guardianAuthorityGuardianDetail(relationship GuardianAuthorityRelationship) string {
@@ -1147,7 +1219,9 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	}
 
 	var family []components.NavigationItem
-	if !user.IsDependent {
+	if user.IsDependent && user.HasAgeHandoff {
+		family = append(family, components.NavigationItem{Label: "Transição aos 18 anos", Path: "/transicao-18"})
+	} else if !user.IsDependent {
 		family = append(family, components.NavigationItem{Label: "Menores a cargo", Path: "/dashboard/guardian"})
 	}
 	var memberships []components.NavigationItem
@@ -1176,8 +1250,11 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		}
 	}
 	var verification []components.NavigationItem
-	if user.CanVerifyGuardianAuthority {
-		verification = append(verification, components.NavigationItem{Label: "Verificar representações", Path: "/admin/representacoes"})
+	if user.IsAdmin {
+		verification = append(verification,
+			components.NavigationItem{Label: "Verificar representações", Path: "/admin/representacoes"},
+			components.NavigationItem{Label: "Transições aos 18 anos", Path: "/admin/transicoes-18"},
+		)
 	}
 	var admin []components.NavigationItem
 	if user.CanReviewPrivacy || user.CanExecutePrivacy {
@@ -1190,7 +1267,13 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 		)
 	}
 	if user.IsAdmin {
-		admin = append(admin, components.NavigationItem{Label: "Membros", Path: "/admin/membros"}, components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"}, components.NavigationItem{Label: "Gerir frota", Path: "/admin/fleet"}, components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"})
+		admin = append(admin,
+			components.NavigationItem{Label: "Convites de representação", Path: "/admin/representacoes/convites"},
+			components.NavigationItem{Label: "Membros", Path: "/admin/membros"},
+			components.NavigationItem{Label: "Notícias", Path: "/admin/noticias"},
+			components.NavigationItem{Label: "Gerir frota", Path: "/admin/fleet"},
+			components.NavigationItem{Label: "Sistema", Path: "/admin/sistema"},
+		)
 	}
 
 	groups := []components.NavigationGroup{{Items: today, Capabilities: dashboardCapabilities(user), Memberships: dashboardMemberships(user)}, {Label: "Atividade", Items: activity}}

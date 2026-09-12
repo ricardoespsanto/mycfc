@@ -571,7 +571,7 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609110005_guardian_authority_cutoff_reconciliation" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609120005_guardian_authority_activation" {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact

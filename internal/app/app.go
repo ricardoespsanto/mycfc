@@ -224,14 +224,20 @@ func New(ctx context.Context) (*Application, error) {
 	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
 	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter(), Logger: logger}
-	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, Logger: logger}
-	guardianAuthorityWorker := &guardianauthority.Worker{Store: dbgen.New(pool), Logger: logger}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, GuardianKey: verificationKey, Logger: logger}
+	guardianAuthorityWorker := &guardianauthority.Worker{Store: dbgen.New(pool), Logger: logger, Key: verificationKey, BaseURL: cfg.BaseURL}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
 		appReleasedAt, _ = time.Parse(time.RFC3339, cfg.AppReleasedAt)
 	}
 	releaseChecker := release.NewChecker(&http.Client{Timeout: cfg.ReleaseCheckTimeout}, cfg.ReleaseRepository, cfg.AppVersion, cfg.GITSHA, appReleasedAt, cfg.ReleaseCheckCacheTTL, time.Now)
 	guardianAuthority := handlers.PostgresGuardianAuthorityStore{DB: pool}
+	guardianAuthFreshness := time.Hour
+	if cfg.AppEnv == "test" {
+		// Browser tests exercise the stale-authentication branch without waiting
+		// an hour. Production and local application behavior remains exactly 60m.
+		guardianAuthFreshness = time.Nanosecond
+	}
 	dashboard := handlers.Dashboard{
 		Store:                 dbgen.New(pool),
 		Fleet:                 dbgen.New(pool),
@@ -242,14 +248,21 @@ func New(ctx context.Context) (*Application, error) {
 		Uploads:               uploadCoordinator,
 		MaxRequestBytes:       cfg.MaxRequestBytes,
 		MaxPhotoBytes:         cfg.MaxPhotoBytes,
-		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool},
+		Dependents:            handlers.PostgresGuardianDependentStore{Pool: pool, Key: verificationKey},
 		GuardianAuthority:     guardianAuthority,
+		GuardianHandoffs:      handlers.PostgresGuardianAgeHandoffStore{DB: pool},
 		PageMeta:              pageMeta,
 		System:                system,
+		Logger:                logger,
 		Location:              location,
 		Sessions:              sessions,
 		ResponsibilityVersion: minorDocument.Version, ResponsibilitySHA256: minorDocument.SHA256,
-		ResponsibilityURL: versionedLegalURL(minorDocument),
+		ResponsibilityURL:      versionedLegalURL(minorDocument),
+		GuardianInvitationKey:  verificationKey,
+		GuardianHandoffKey:     verificationKey,
+		GuardianHandoffBaseURL: cfg.BaseURL,
+		GuardianAuthFreshness:  guardianAuthFreshness,
+		GuardianInfographicURL: assets["images/guardian-access-infographic-pt.png"],
 	}
 	auth := handlers.Auth{Users: dbgen.New(pool), Features: dbgen.New(pool), GuardianAuthority: dbgen.New(pool), Sessions: sessions, System: system}
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Uploads: uploadCoordinator, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}

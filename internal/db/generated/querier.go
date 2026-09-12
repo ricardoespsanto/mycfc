@@ -21,6 +21,7 @@ type Querier interface {
 	AddStructuredTrainingGroupMember(ctx context.Context, arg AddStructuredTrainingGroupMemberParams) (int64, error)
 	AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCycleTargetParams) (int64, error)
 	AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error)
+	AdminTransitionGuardianAuthority(ctx context.Context, arg AdminTransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	AdoptGuardianAuthorityPolicy(ctx context.Context, arg AdoptGuardianAuthorityPolicyParams) (GuardianAuthorityPolicy, error)
 	AppendPrivacyActivationEvent(ctx context.Context, arg AppendPrivacyActivationEventParams) error
 	AppendPrivacyExecutorGrantEvent(ctx context.Context, arg AppendPrivacyExecutorGrantEventParams) error
@@ -62,6 +63,7 @@ type Querier interface {
 	CompletePrivacyUploadCleanup(ctx context.Context, arg CompletePrivacyUploadCleanupParams) error
 	CompletePrivacyWorkerObjectCheckpoint(ctx context.Context, arg CompletePrivacyWorkerObjectCheckpointParams) (uuid.UUID, error)
 	CompletePrivacyWorkerProviderCheckpoint(ctx context.Context, arg CompletePrivacyWorkerProviderCheckpointParams) (uuid.UUID, error)
+	ConfirmGuardianAgeHandoffIdentity(ctx context.Context, arg ConfirmGuardianAgeHandoffIdentityParams) (GuardianAgeHandoff, error)
 	ConfirmPrivacyRestoreTombstone(ctx context.Context, arg ConfirmPrivacyRestoreTombstoneParams) (uuid.UUID, error)
 	ConfirmPrivacyTombstoneClosure(ctx context.Context, arg ConfirmPrivacyTombstoneClosureParams) (uuid.UUID, error)
 	ConfirmPrivacyTombstoneClosureV3(ctx context.Context, arg ConfirmPrivacyTombstoneClosureV3Params) (uuid.UUID, error)
@@ -133,6 +135,8 @@ type Querier interface {
 	DisablePrivacyAccountForExecution(ctx context.Context, arg DisablePrivacyAccountForExecutionParams) (User, error)
 	DisconnectActivityConnection(ctx context.Context, arg DisconnectActivityConnectionParams) (DisconnectActivityConnectionRow, error)
 	EndCurrentSeasonMembership(ctx context.Context, arg EndCurrentSeasonMembershipParams) (int64, error)
+	EnqueueGuardianAgeHandoffNotice(ctx context.Context, arg EnqueueGuardianAgeHandoffNoticeParams) (bool, error)
+	EnqueueGuardianRenewalReminder(ctx context.Context, arg EnqueueGuardianRenewalReminderParams) (bool, error)
 	EnqueuePrivacyRequestEmail(ctx context.Context, arg EnqueuePrivacyRequestEmailParams) (uuid.UUID, error)
 	EnsureMemberProfile(ctx context.Context, userID uuid.UUID) error
 	ExecutePrivacyRestoreReplayCheckpoint(ctx context.Context, arg ExecutePrivacyRestoreReplayCheckpointParams) (uuid.UUID, error)
@@ -163,6 +167,8 @@ type Querier interface {
 	GetEventForEdit(ctx context.Context, id uuid.UUID) (GetEventForEditRow, error)
 	GetEventForResponse(ctx context.Context, id uuid.UUID) (Event, error)
 	GetEventResponse(ctx context.Context, arg GetEventResponseParams) (GetEventResponseRow, error)
+	GetGuardianAgeHandoffForAdmin(ctx context.Context, arg GetGuardianAgeHandoffForAdminParams) (GetGuardianAgeHandoffForAdminRow, error)
+	GetGuardianAgeHandoffForSubject(ctx context.Context, actorID uuid.UUID) (GetGuardianAgeHandoffForSubjectRow, error)
 	GetGuardianAuthorityRequestForVerifier(ctx context.Context, arg GetGuardianAuthorityRequestForVerifierParams) (GetGuardianAuthorityRequestForVerifierRow, error)
 	GetGymExercisePlanID(ctx context.Context, exerciseID uuid.UUID) (uuid.UUID, error)
 	GetMaintenanceForAdmin(ctx context.Context, id uuid.UUID) (GetMaintenanceForAdminRow, error)
@@ -229,6 +235,7 @@ type Querier interface {
 	InvalidatePrivacyAccountTokens(ctx context.Context, arg InvalidatePrivacyAccountTokensParams) (InvalidatePrivacyAccountTokensRow, error)
 	IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error)
 	IsPrivacyAdministrator(ctx context.Context, userID uuid.UUID) (bool, error)
+	IssueGuardianAuthorityInvitation(ctx context.Context, arg IssueGuardianAuthorityInvitationParams) (IssueGuardianAuthorityInvitationRow, error)
 	IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error)
 	ListActiveAdultsForAdmin(ctx context.Context, rowLimit int32) ([]ListActiveAdultsForAdminRow, error)
 	ListActiveGuardianAuthorityEvidenceTypes(ctx context.Context) ([]string, error)
@@ -249,6 +256,8 @@ type Querier interface {
 	ListDependentProfileCompleteness(ctx context.Context, guardianID uuid.UUID) ([]ListDependentProfileCompletenessRow, error)
 	ListDependentsByGuardian(ctx context.Context, arg ListDependentsByGuardianParams) ([]ListDependentsByGuardianRow, error)
 	ListDistanceLeaderboard(ctx context.Context, arg ListDistanceLeaderboardParams) ([]ListDistanceLeaderboardRow, error)
+	ListDueGuardianAgeHandoffNotices(ctx context.Context, rowLimit int32) ([]ListDueGuardianAgeHandoffNoticesRow, error)
+	ListDueGuardianRenewalReminders(ctx context.Context, rowLimit int32) ([]ListDueGuardianRenewalRemindersRow, error)
 	ListEligibleTrainingGroupMemberships(ctx context.Context, arg ListEligibleTrainingGroupMembershipsParams) ([]ListEligibleTrainingGroupMembershipsRow, error)
 	ListEquipmentAuditEvents(ctx context.Context, arg ListEquipmentAuditEventsParams) ([]ListEquipmentAuditEventsRow, error)
 	ListEquipmentForAdmin(ctx context.Context, arg ListEquipmentForAdminParams) ([]Equipment, error)
@@ -261,6 +270,9 @@ type Querier interface {
 	ListEventsForToday(ctx context.Context, arg ListEventsForTodayParams) ([]ListEventsForTodayRow, error)
 	ListFeatureFlagEvents(ctx context.Context, rowLimit int32) ([]ListFeatureFlagEventsRow, error)
 	ListFeatureFlags(ctx context.Context) ([]ListFeatureFlagsRow, error)
+	ListGuardianAgeHandoffNoticesForSubject(ctx context.Context, actorID uuid.UUID) ([]ListGuardianAgeHandoffNoticesForSubjectRow, error)
+	ListGuardianAgeHandoffsForAdmin(ctx context.Context, arg ListGuardianAgeHandoffsForAdminParams) ([]ListGuardianAgeHandoffsForAdminRow, error)
+	ListGuardianAuthorityInvitations(ctx context.Context, arg ListGuardianAuthorityInvitationsParams) ([]ListGuardianAuthorityInvitationsRow, error)
 	ListGuardianRelationshipsForGuardian(ctx context.Context, arg ListGuardianRelationshipsForGuardianParams) ([]ListGuardianRelationshipsForGuardianRow, error)
 	ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error)
 	ListManagedStructuredCompetitionEvents(ctx context.Context, arg ListManagedStructuredCompetitionEventsParams) ([]ListManagedStructuredCompetitionEventsRow, error)
@@ -335,9 +347,12 @@ type Querier interface {
 	PreparePrivacyTombstoneClosureV4(ctx context.Context, arg PreparePrivacyTombstoneClosureV4Params) (PreparePrivacyTombstoneClosureV4Row, error)
 	PrivacyActivationReady(ctx context.Context, policyVersion string) (bool, error)
 	PrivacyRestoreReplayAlreadyApplied(ctx context.Context, arg PrivacyRestoreReplayAlreadyAppliedParams) (bool, error)
+	ProposeGuardianAgeHandoffEmail(ctx context.Context, arg ProposeGuardianAgeHandoffEmailParams) (GuardianAgeHandoff, error)
+	PruneGuardianApplicationRateEvents(ctx context.Context) (int64, error)
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
 	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)
+	ReconcileGuardianAgeHandoffs(ctx context.Context) (int64, error)
 	ReconcileGuardianAuthorityCutoffs(ctx context.Context) (int64, error)
 	RecordActivityConnectionError(ctx context.Context, arg RecordActivityConnectionErrorParams) (ActivityConnection, error)
 	RecordActivityConnectionSyncSuccess(ctx context.Context, arg RecordActivityConnectionSyncSuccessParams) (ActivityConnection, error)
@@ -346,7 +361,9 @@ type Querier interface {
 	RecordPrivacyRestoreReplayInventoryAttestationV4(ctx context.Context, arg RecordPrivacyRestoreReplayInventoryAttestationV4Params) ([]byte, error)
 	RecordPrivacyWorkerObjectEvidence(ctx context.Context, arg RecordPrivacyWorkerObjectEvidenceParams) (uuid.UUID, error)
 	RecordPrivacyWorkerProviderEvidence(ctx context.Context, arg RecordPrivacyWorkerProviderEvidenceParams) (uuid.UUID, error)
+	RecoverGuardianAgeHandoffEmail(ctx context.Context, arg RecoverGuardianAgeHandoffEmailParams) (GuardianAgeHandoff, error)
 	RemovePrivacyUploadIntent(ctx context.Context, arg RemovePrivacyUploadIntentParams) error
+	ReserveGuardianApplicationRate(ctx context.Context, arg ReserveGuardianApplicationRateParams) error
 	ResolvePasswordResetToken(ctx context.Context, arg ResolvePasswordResetTokenParams) (ResolvePasswordResetTokenRow, error)
 	RestoreTrainingBlock(ctx context.Context, arg RestoreTrainingBlockParams) (uuid.UUID, error)
 	RestoreTrainingSegment(ctx context.Context, arg RestoreTrainingSegmentParams) (uuid.UUID, error)
@@ -354,6 +371,7 @@ type Querier interface {
 	RetireEquipmentWithAudit(ctx context.Context, arg RetireEquipmentWithAuditParams) (RetireEquipmentWithAuditRow, error)
 	RetireTrainingVariation(ctx context.Context, arg RetireTrainingVariationParams) (int64, error)
 	RetryEmailOutbox(ctx context.Context, arg RetryEmailOutboxParams) (int64, error)
+	RevokeGuardianAuthorityInvitation(ctx context.Context, arg RevokeGuardianAuthorityInvitationParams) (int64, error)
 	RevokeGuardianVerifier(ctx context.Context, arg RevokeGuardianVerifierParams) (GuardianVerifierGrant, error)
 	RevokePrivacyExecutor(ctx context.Context, arg RevokePrivacyExecutorParams) (PrivacyExecutorGrant, error)
 	RevokePrivacyExecutorGrantsForExecution(ctx context.Context, arg RevokePrivacyExecutorGrantsForExecutionParams) ([]PrivacyExecutorGrant, error)
@@ -369,6 +387,7 @@ type Querier interface {
 	SetGuardianAuthorityPolicyEnabled(ctx context.Context, arg SetGuardianAuthorityPolicyEnabledParams) (GuardianAuthorityPolicy, error)
 	SetPrivacyActivation(ctx context.Context, arg SetPrivacyActivationParams) (PrivacyRequestActivation, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
+	SubmitGuardianAuthorityRenewal(ctx context.Context, arg SubmitGuardianAuthorityRenewalParams) (string, error)
 	TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, error)
 	TransitionGuardianAuthority(ctx context.Context, arg TransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	TransitionPrivacyRequestExecutionStatus(ctx context.Context, arg TransitionPrivacyRequestExecutionStatusParams) (DataErasureRequest, error)
@@ -393,6 +412,7 @@ type Querier interface {
 	UpsertPrivacyDependantResolution(ctx context.Context, arg UpsertPrivacyDependantResolutionParams) (PrivacyRequestDependantResolution, error)
 	UpsertSuggestedActivityMatch(ctx context.Context, arg UpsertSuggestedActivityMatchParams) (TrainingSessionActivityMatch, error)
 	UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActivityParams) (SyncedActivity, error)
+	VerifyGuardianAgeHandoffEmail(ctx context.Context, tokenDigest []byte) (uuid.UUID, error)
 }
 
 var _ Querier = (*Queries)(nil)

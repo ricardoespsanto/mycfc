@@ -21,14 +21,15 @@ func TestPrivacyRetentionCompletionForwardMigrationPreservesPriorRows(t *testing
 	defer conn.Close(ctx)
 
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
-	schemaName, protectedName, disableName := "retention_migration_"+suffix, "retention_protected_"+suffix, "retention_disable_"+suffix
-	schema, protected, disable := pgx.Identifier{schemaName}.Sanitize(), pgx.Identifier{protectedName}.Sanitize(), pgx.Identifier{disableName}.Sanitize()
+	schemaName, protectedName, disableName, guardianOpsName := "retention_migration_"+suffix, "retention_protected_"+suffix, "retention_disable_"+suffix, "retention_guardian_ops_"+suffix
+	schema, protected, disable, guardianOps := pgx.Identifier{schemaName}.Sanitize(), pgx.Identifier{protectedName}.Sanitize(), pgx.Identifier{disableName}.Sanitize(), pgx.Identifier{guardianOpsName}.Sanitize()
 	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 	defer conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+protected+" CASCADE")
 	defer conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+disable+" CASCADE")
+	defer conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+guardianOps+" CASCADE")
 	if _, err = conn.Exec(ctx, "SET search_path TO "+schema+",public"); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,8 @@ func TestPrivacyRetentionCompletionForwardMigrationPreservesPriorRows(t *testing
 		sql = strings.ReplaceAll(sql, "pg_catalog, public", "pg_catalog, "+schemaName+", public")
 		sql = strings.ReplaceAll(sql, "pg_catalog,public", "pg_catalog,"+schemaName+",public")
 		sql = strings.ReplaceAll(sql, "privacy_protected", protectedName)
-		return strings.ReplaceAll(sql, "privacy_disable", disableName)
+		sql = strings.ReplaceAll(sql, "privacy_disable", disableName)
+		return strings.ReplaceAll(sql, "guardian_ops", guardianOpsName)
 	}
 	if _, err = conn.PgConn().Exec(ctx, isolate(baselineSchema)).ReadAll(); err != nil {
 		t.Fatalf("create isolated baseline: %v", err)

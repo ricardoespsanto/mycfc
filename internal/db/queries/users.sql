@@ -33,7 +33,7 @@ FROM account;
 SELECT account.id,account.name,account.email,account.password_hash,
        sqlc.arg(guardian_id)::uuid AS guardian_id,account.is_dependent,
        account.date_of_birth,account.is_active,account.created_at,account.updated_at
-FROM guardian_authority_create_dependent(sqlc.arg(name),sqlc.arg(date_of_birth),sqlc.arg(guardian_id)) account;
+FROM guardian_authority_create_dependent(sqlc.arg(name),sqlc.arg(date_of_birth),sqlc.arg(guardian_id),sqlc.narg(invitation_digest)) account;
 
 -- name: GetUserByID :one
 SELECT id, name, email, password_hash, guardian_id,
@@ -141,7 +141,7 @@ WHERE EXISTS (SELECT 1 FROM audited);
 
 -- name: GetActiveAccountByID :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
-       u.credential_version,
+       u.credential_version, guardian_age_handoff_available_for_subject(u.id) AS has_age_handoff,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment
@@ -160,7 +160,7 @@ WHERE u.id = sqlc.arg(id)
 
 -- name: GetActiveAccountByIDWithoutProfile :one
 SELECT u.id, u.name, u.email, u.is_dependent, u.is_active, u.leaderboard_visible, (u.email_verified_at IS NOT NULL)::boolean AS email_verified,
-       u.credential_version,
+       u.credential_version, guardian_age_handoff_available_for_subject(u.id) AS has_age_handoff,
        EXISTS (
            SELECT 1
            FROM user_platform_roles assignment

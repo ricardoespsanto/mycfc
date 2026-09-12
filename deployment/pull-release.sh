@@ -7,6 +7,7 @@ compose_file="$deployment_dir/compose.yaml"
 state_dir=${MYCFC_DEPLOYMENT_STATE_DIR:-/etc/mycfc/deployment}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
 release_credentials_file=${MYCFC_RELEASE_AWS_CREDENTIALS_FILE:-/etc/mycfc/release-aws/credentials}
+guardian_release_bind_env_file=${MYCFC_GUARDIAN_RELEASE_BIND_ENV_FILE:-/etc/mycfc/guardian-release-bind.env}
 release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
 active_slot_file="$state_dir/active-slot"
 failed_digest_file="$state_dir/failed-release-digest"
@@ -212,6 +213,23 @@ if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_creden
 	exit 1
 fi
 
+if [ ! -f "$guardian_release_bind_env_file" ] || [ -L "$guardian_release_bind_env_file" ] ||
+	[ "$(stat -c '%u:%a' "$guardian_release_bind_env_file" 2>/dev/null || true)" != '0:600' ] ||
+	[ "$(grep -c '^GUARDIAN_RELEASE_BIND_DATABASE_URL=' "$guardian_release_bind_env_file" 2>/dev/null || true)" -ne 1 ] ||
+	[ "$(grep -c '^GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE=' "$guardian_release_bind_env_file" 2>/dev/null || true)" -ne 1 ]; then
+	log 'event=guardian_release_bind_configuration_rejected'
+	exit 1
+fi
+while IFS= read -r guardian_release_line || [ -n "$guardian_release_line" ]; do
+	case "$guardian_release_line" in
+		''|\#*) ;;
+		GUARDIAN_RELEASE_BIND_DATABASE_URL=*|GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE=*) ;;
+		*) log 'event=guardian_release_bind_configuration_rejected'; exit 1 ;;
+	esac
+done <"$guardian_release_bind_env_file"
+GUARDIAN_RELEASE_BIND_ENV_FILE=$guardian_release_bind_env_file
+export GUARDIAN_RELEASE_BIND_ENV_FILE
+
 mkdir -p "$state_dir"
 chmod 0755 "$state_dir"
 
@@ -359,6 +377,7 @@ chmod 600 "$next_file"
 chown root:root "$next_file"
 mv "$next_file" "$env_file"
 export MYCFC_IMAGE="$image"
+export GUARDIAN_RUNTIME_IMAGE_DIGEST="$release_digest"
 export APP_VERSION="$release_tag"
 export APP_RELEASED_AT="$released_at"
 export GIT_SHA="$sha"
@@ -381,6 +400,7 @@ run_phase database_migrate docker compose --env-file "$env_file" -f "$compose_fi
 # Idempotent defence in depth; migrate already applies this boundary atomically
 # before committing any newly created privacy execution tables.
 run_phase database_harden docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap harden-db
+run_phase guardian_release_bind docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm guardian-release-bind
 record_timeline_milestone migration-completed
 run_phase candidate_start docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 	up -d --no-deps --force-recreate "$candidate_service"

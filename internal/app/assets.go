@@ -18,7 +18,7 @@ func loadAssetManifest() (AssetManifest, error) {
 	if err := json.Unmarshal(body, &manifest); err != nil {
 		return nil, fmt.Errorf("decode asset manifest: %w", err)
 	}
-	for _, required := range []string{"app.css", "app.js", "images/cfc-logo.png", "images/cfc-hero.png"} {
+	for _, required := range []string{"app.css", "app.js", "images/cfc-logo.png", "images/cfc-hero.png", "images/guardian-access-infographic-pt.png"} {
 		if manifest[required] == "" {
 			return nil, fmt.Errorf("asset manifest missing %s", required)
 		}

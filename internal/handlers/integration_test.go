@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/alexedwards/scs/v2"
+	mycfcdb "github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
@@ -621,13 +622,14 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	makeGuardianApplicantEligible(t, ctx, pool, guardian.ID)
 	enableGuardianAuthorityTestPolicy(t, ctx, pool, guardian.ID)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE guardian_id = $1`, guardian.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, guardian.ID)
 	})
 
-	store := PostgresGuardianDependentStore{Pool: pool}
+	store := PostgresGuardianDependentStore{Pool: pool, Key: []byte("0123456789abcdef0123456789abcdef")}
 	input := GuardianDependentInput{
 		GuardianID: guardian.ID, Name: "Menor de integração",
 		DateOfBirth:           time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -671,7 +673,288 @@ func TestPostgresGuardianDependentStorePersistsResponsibilityAndEnforcesLimit(t 
 	}
 }
 
-func TestPostgresGuardianAuthorityStoreCoversVerifierLifecycle(t *testing.T) {
+func TestGuardianInvitationIsEmailBoundSingleUseAndAtomic(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	createAdult := func(name, email string) dbgen.CreateAdultUserRow {
+		account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: name, Email: &email, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE users SET email_verified_at=clock_timestamp() WHERE id=$1`, account.ID); err != nil {
+			t.Fatal(err)
+		}
+		return account
+	}
+	administrator := createAdult("Invitation administrator", "invite-admin-"+uuid.NewString()+"@example.test")
+	guardian := createAdult("Invited guardian", "invite-guardian-"+uuid.NewString()+"@example.test")
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: administrator.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	enableGuardianAuthorityTestPolicy(t, ctx, pool, administrator.ID)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	token := "random-high-entropy-invitation-token-value"
+	authority := PostgresGuardianAuthorityStore{DB: pool}
+	issued, err := authority.IssueInvitation(ctx, administrator.ID, *guardian.Email, guardianInvitationDigest(key, token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifetime := issued.ExpiresAt.Sub(issued.IssuedAt); lifetime < 30*24*time.Hour-time.Second || lifetime > 30*24*time.Hour+time.Second {
+		t.Fatalf("invitation lifetime = %s", lifetime)
+	}
+	store := PostgresGuardianDependentStore{Pool: pool, Key: key}
+	input := GuardianDependentInput{GuardianID: guardian.ID, Name: "Invited minor", DateOfBirth: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("a", 64), InvitationToken: token}
+	if err := store.CreateDependent(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	input.Name = "Duplicate invitation minor"
+	if err := store.CreateDependent(ctx, input); !errors.Is(err, ErrGuardianInvitationInvalid) {
+		t.Fatalf("reused invitation error = %v", err)
+	}
+	var consumed int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM guardian_authority_invitations WHERE public_ref=$1 AND consumed_by=$2 AND consumed_at IS NOT NULL AND invited_email IS NULL`, issued.Reference, guardian.ID).Scan(&consumed); err != nil || consumed != 1 {
+		t.Fatalf("consumed invitation count=%d err=%v", consumed, err)
+	}
+	var duplicateRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE name='Duplicate invitation minor'`).Scan(&duplicateRows); err != nil || duplicateRows != 0 {
+		t.Fatalf("reused invitation left partial users=%d err=%v", duplicateRows, err)
+	}
+	concurrentToken := "second-random-high-entropy-invitation-token"
+	if _, err := authority.IssueInvitation(ctx, administrator.ID, *guardian.Email, guardianInvitationDigest(key, concurrentToken)); err != nil {
+		t.Fatal(err)
+	}
+	concurrentResults := make(chan error, 2)
+	var group sync.WaitGroup
+	for _, name := range []string{"Concurrent invited minor A", "Concurrent invited minor B"} {
+		group.Add(1)
+		go func(name string) {
+			defer group.Done()
+			concurrentResults <- store.CreateDependent(ctx, GuardianDependentInput{GuardianID: guardian.ID, Name: name, DateOfBirth: time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("b", 64), InvitationToken: concurrentToken})
+		}(name)
+	}
+	group.Wait()
+	close(concurrentResults)
+	var concurrentAccepted, concurrentRejected int
+	for err := range concurrentResults {
+		if err == nil {
+			concurrentAccepted++
+		} else if errors.Is(err, ErrGuardianInvitationInvalid) {
+			concurrentRejected++
+		} else {
+			t.Fatalf("concurrent invitation error: %v", err)
+		}
+	}
+	if concurrentAccepted != 1 || concurrentRejected != 1 {
+		t.Fatalf("concurrent accepted=%d rejected=%d", concurrentAccepted, concurrentRejected)
+	}
+	unverifiedEmail := "unverified-invite-" + uuid.NewString() + "@example.test"
+	unverified, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: "Unverified invited guardian", Email: &unverifiedEmail, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unverifiedToken := "unverified-account-invitation-token-value"
+	if _, err := authority.IssueInvitation(ctx, administrator.ID, unverifiedEmail, guardianInvitationDigest(key, unverifiedToken)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateDependent(ctx, GuardianDependentInput{GuardianID: unverified.ID, Name: "Must not be created", DateOfBirth: time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("c", 64), InvitationToken: unverifiedToken}); !errors.Is(err, ErrGuardianApplicantIneligible) {
+		t.Fatalf("unverified applicant error = %v", err)
+	}
+	wrongEmailToken := "wrong-email-invitation-token-value"
+	if _, err := authority.IssueInvitation(ctx, administrator.ID, "someone-else-"+uuid.NewString()+"@example.test", guardianInvitationDigest(key, wrongEmailToken)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateDependent(ctx, GuardianDependentInput{GuardianID: guardian.ID, Name: "Wrong email must not be created", DateOfBirth: time.Date(2016, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("d", 64), InvitationToken: wrongEmailToken}); !errors.Is(err, ErrGuardianInvitationInvalid) {
+		t.Fatalf("wrong-email invitation error = %v", err)
+	}
+	var forbiddenRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE name IN('Must not be created','Wrong email must not be created')`).Scan(&forbiddenRows); err != nil || forbiddenRows != 0 {
+		t.Fatalf("denied applicants left partial users=%d err=%v", forbiddenRows, err)
+	}
+}
+
+func TestGuardianApplicantEligibilityAndInvitationStateFailClosedWithoutPartialRows(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	queries := dbgen.New(pool)
+	createAdult := func(label string, birth time.Time, active bool) dbgen.CreateAdultUserRow {
+		email := strings.ToLower(strings.ReplaceAll(label, " ", "-")) + "-" + uuid.NewString() + "@example.test"
+		account, err := queries.CreateAdultUser(ctx, dbgen.CreateAdultUserParams{Name: label, Email: &email, PasswordHash: integrationStringPtr("hash"), DateOfBirth: pgtype.Date{Time: birth, Valid: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE users SET email_verified_at=clock_timestamp(),is_active=$2 WHERE id=$1`, account.ID, active); err != nil {
+			t.Fatal(err)
+		}
+		return account
+	}
+	administrator := createAdult("Eligibility administrator", time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), true)
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: administrator.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	enableGuardianAuthorityTestPolicy(t, ctx, pool, administrator.ID)
+
+	key := []byte("eligibility-guardian-key-32-bytes!")
+	store := PostgresGuardianDependentStore{Pool: pool, Key: key}
+	authority := PostgresGuardianAuthorityStore{DB: pool}
+	baseInput := GuardianDependentInput{DateOfBirth: time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("e", 64)}
+
+	inactive := createAdult("Inactive guardian", time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), false)
+	underage := createAdult("Underage applicant", time.Now().UTC().AddDate(-16, 0, 0), true)
+	for _, applicant := range []dbgen.CreateAdultUserRow{inactive, underage} {
+		token := "applicant-invitation-" + uuid.NewString()
+		if _, err := authority.IssueInvitation(ctx, administrator.ID, *applicant.Email, guardianInvitationDigest(key, token)); err != nil {
+			t.Fatal(err)
+		}
+		input := baseInput
+		input.GuardianID, input.Name, input.InvitationToken = applicant.ID, "Rejected applicant "+uuid.NewString(), token
+		if err := store.CreateDependent(ctx, input); !errors.Is(err, ErrGuardianApplicantIneligible) {
+			t.Fatalf("applicant %s error=%v", applicant.ID, err)
+		}
+	}
+
+	seasonID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Eligibility boundary season',CURRENT_DATE-365,CURRENT_DATE+365)`, seasonID, "eligibility-"+seasonID.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	for _, membership := range []struct {
+		label    string
+		startsOn string
+		endsOn   string
+	}{
+		{label: "Future membership guardian", startsOn: "CURRENT_DATE+1", endsOn: "NULL"},
+		{label: "Expired membership guardian", startsOn: "CURRENT_DATE-10", endsOn: "CURRENT_DATE-1"},
+	} {
+		applicant := createAdult(membership.label, time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), true)
+		statement := `INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on,ends_on) SELECT $1,$2,id,` + membership.startsOn + `,` + membership.endsOn + ` FROM programmes WHERE code='Leisure'`
+		if _, err := pool.Exec(ctx, statement, applicant.ID, seasonID); err != nil {
+			t.Fatal(err)
+		}
+		input := baseInput
+		input.GuardianID, input.Name = applicant.ID, "Rejected membership "+uuid.NewString()
+		if err := store.CreateDependent(ctx, input); !errors.Is(err, ErrGuardianApplicantIneligible) {
+			t.Fatalf("%s error=%v", membership.label, err)
+		}
+	}
+
+	withoutMembership := createAdult("No membership guardian", time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), true)
+	input := baseInput
+	input.GuardianID, input.Name = withoutMembership.ID, "Rejected no membership "+uuid.NewString()
+	if err := store.CreateDependent(ctx, input); !errors.Is(err, ErrGuardianApplicantIneligible) {
+		t.Fatalf("no membership or invitation error=%v", err)
+	}
+
+	for _, invitationState := range []string{"expired", "revoked"} {
+		applicant := createAdult(strings.Title(invitationState)+" invitation guardian", time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC), true)
+		token := invitationState + "-invitation-" + uuid.NewString()
+		issued, err := authority.IssueInvitation(ctx, administrator.ID, *applicant.Email, guardianInvitationDigest(key, token))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if invitationState == "expired" {
+			if _, err := pool.Exec(ctx, `UPDATE guardian_authority_invitations SET issued_at=clock_timestamp()-interval '31 days',expires_at=clock_timestamp()-interval '1 day' WHERE public_ref=$1`, issued.Reference); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := authority.RevokeInvitation(ctx, administrator.ID, issued.Reference); err != nil {
+			t.Fatal(err)
+		}
+		input := baseInput
+		input.GuardianID, input.Name, input.InvitationToken = applicant.ID, "Rejected "+invitationState+" invitation "+uuid.NewString(), token
+		if err := store.CreateDependent(ctx, input); !errors.Is(err, ErrGuardianInvitationInvalid) {
+			t.Fatalf("%s invitation error=%v", invitationState, err)
+		}
+	}
+	if _, err := queries.PruneGuardianApplicationRateEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var retainedTerminalEmails int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM guardian_authority_invitations
+		WHERE invited_email IS NOT NULL AND (consumed_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at<=clock_timestamp())`).Scan(&retainedTerminalEmails); err != nil || retainedTerminalEmails != 0 {
+		t.Fatalf("terminal invitations retained emails=%d err=%v", retainedTerminalEmails, err)
+	}
+
+	var partialRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE name LIKE 'Rejected %'`).Scan(&partialRows); err != nil || partialRows != 0 {
+		t.Fatalf("rejected cases left partial users=%d err=%v", partialRows, err)
+	}
+}
+
+func TestGuardianSubmissionRateLimitSerializesConcurrentAttempts(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	key := []byte("fedcba9876543210fedcba9876543210")
+	store := PostgresGuardianDependentStore{Pool: pool, Key: key}
+	actor := uuid.New()
+	ip := ptrAddr(netip.MustParseAddr("198.51.100.44"))
+	results := make(chan error, 20)
+	var group sync.WaitGroup
+	for range 20 {
+		group.Add(1)
+		go func() { defer group.Done(); results <- store.ReserveAttempt(ctx, actor, ip, "SUBMISSION") }()
+	}
+	group.Wait()
+	close(results)
+	var accepted, limited int
+	for err := range results {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrGuardianApplicationLimited):
+			limited++
+		default:
+			t.Fatalf("unexpected rate error: %v", err)
+		}
+	}
+	if accepted != 10 || limited != 10 {
+		t.Fatalf("accepted=%d limited=%d", accepted, limited)
+	}
+	accountDigest := guardianApplicationDigest(key, "account", actor.String())
+	networkDigest := guardianApplicationDigest(key, "network", guardianApplicationNetworkBucket(ip))
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM guardian_application_rate_events WHERE bucket_digest IN($1,$2)`, accountDigest, networkDigest).Scan(&count); err != nil || count != 20 {
+		t.Fatalf("pseudonymous evidence count=%d err=%v", count, err)
+	}
+}
+
+func TestGuardianSubmissionSharedNetworkBoundarySerializesOneHundredAndOneAccounts(t *testing.T) {
+	ctx, pool := integrationPool(t)
+	key := []byte("shared-network-guardian-key-32byte")
+	store := PostgresGuardianDependentStore{Pool: pool, Key: key}
+	ip := ptrAddr(netip.MustParseAddr("203.0.113.101"))
+	results := make(chan error, 101)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for range 101 {
+		actor := uuid.New()
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			results <- store.ReserveAttempt(context.Background(), actor, ip, "SUBMISSION")
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	var accepted, limited int
+	for err := range results {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrGuardianApplicationLimited):
+			limited++
+		default:
+			t.Fatalf("unexpected shared-network rate error: %v", err)
+		}
+	}
+	if accepted != 100 || limited != 1 {
+		t.Fatalf("accepted=%d limited=%d", accepted, limited)
+	}
+	networkDigest := guardianApplicationDigest(key, "network", guardianApplicationNetworkBucket(ip))
+	var networkEvents int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM guardian_application_rate_events WHERE bucket_kind='SUBMISSION_NETWORK' AND bucket_digest=$1`, networkDigest).Scan(&networkEvents); err != nil || networkEvents != 100 {
+		t.Fatalf("network evidence count=%d err=%v", networkEvents, err)
+	}
+}
+
+func TestPostgresGuardianAuthorityStoreCoversAdministratorReviewLifecycle(t *testing.T) {
 	ctx, pool := integrationPool(t)
 	queries := dbgen.New(pool)
 	createAdult := func(name string) dbgen.CreateAdultUserRow {
@@ -685,14 +968,18 @@ func TestPostgresGuardianAuthorityStoreCoversVerifierLifecycle(t *testing.T) {
 	administrator := createAdult("Authority admin")
 	verifier := createAdult("Authority verifier")
 	guardian := createAdult("Authority guardian")
+	makeGuardianApplicantEligible(t, ctx, pool, guardian.ID)
 	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: administrator.ID, RoleCode: "ADMIN"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: verifier.ID, RoleCode: "ADMIN"}); err != nil {
 		t.Fatal(err)
 	}
 	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, administrator.ID)
 	if _, err := pool.Exec(ctx, `SELECT guardian_authority_grant_verifier($1,$2)`, administrator.ID, verifier.ID); err != nil {
 		t.Fatal(err)
 	}
-	dependentStore := PostgresGuardianDependentStore{Pool: pool}
+	dependentStore := PostgresGuardianDependentStore{Pool: pool, Key: []byte("0123456789abcdef0123456789abcdef")}
 	if err := dependentStore.CreateDependent(ctx, GuardianDependentInput{GuardianID: guardian.ID, Name: "Authority subject", DateOfBirth: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), ResponsibilityVersion: "test-v1", ResponsibilitySHA256: strings.Repeat("d", 64)}); err != nil {
 		t.Fatal(err)
 	}
@@ -727,14 +1014,14 @@ func TestPostgresGuardianAuthorityStoreCoversVerifierLifecycle(t *testing.T) {
 	if err != nil || detail.StoredState != "PENDING" || detail.GuardianName == "" {
 		t.Fatalf("detail=%#v err=%v", detail, err)
 	}
-	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: detail.Version, Action: "VERIFY", EvidenceType: "TEST_EVIDENCE", EvidenceReference: "integration/" + detail.Reference.String(), EvidenceDigest: make([]byte, 32), ReasonCode: "EVIDENCE_CONFIRMED"}); err != nil {
+	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: detail.Version, Action: "APPROVE", EvidenceCategory: "COURT_OR_LEGAL_AUTHORITY", ReasonCode: "RELATIONSHIP_CONFIRMED"}); err != nil {
 		t.Fatal(err)
 	}
 	relationships, err := store.ListForGuardian(ctx, guardian.ID, 10)
 	if err != nil || len(relationships) != 1 || relationships[0].State != "VERIFIED" || relationships[0].VerifiedUntil == nil || relationships[0].ReviewDueAt == nil {
 		t.Fatalf("relationships=%#v err=%v policy=%s", relationships, err, policy)
 	}
-	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: 2, Action: "SUSPEND", ReasonCode: "CONFLICT"}); err != nil {
+	if err := store.Transition(ctx, GuardianAuthorityTransitionInput{Reference: detail.Reference, ActorID: verifier.ID, ExpectedVersion: 2, Action: "SUSPEND", EvidenceCategory: "CLUB_REGISTRATION_RECORD", ReasonCode: "CONFLICT"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -760,6 +1047,7 @@ func TestMinorCredentialRequiresCurrentGuardianAndWritesAudit(t *testing.T) {
 	if err := queries.GrantPlatformRoleByCode(ctx, dbgen.GrantPlatformRoleByCodeParams{UserID: actor.ID, RoleCode: "ADMIN"}); err != nil {
 		t.Fatal(err)
 	}
+	makeGuardianApplicantEligible(t, ctx, pool, guardian.ID)
 	policy := enableGuardianAuthorityTestPolicy(t, ctx, pool, actor.ID)
 	minor, err := queries.CreateDependentUser(ctx, dbgen.CreateDependentUserParams{Name: "Menor com credencial", GuardianID: guardian.ID, DateOfBirth: pgtype.Date{Time: time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}})
 	if err != nil {
@@ -1203,16 +1491,71 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 
 func enableGuardianAuthorityTestPolicy(t *testing.T, ctx context.Context, pool *pgxpool.Pool, actorID uuid.UUID) string {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled`); err != nil {
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS mycfc_meta;
+		CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range mycfcdb.EmbeddedMigrationInventory() {
+		if _, err := pool.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1) ON CONFLICT DO NOTHING`, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id)
+		SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,
+		approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+		UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled`); err != nil {
 		t.Fatal(err)
 	}
 	version := "handler-test-" + uuid.NewString()
 	if _, err := pool.Exec(ctx, `INSERT INTO guardian_authority_policies
 		(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
-		VALUES($1,'{TEST_EVIDENCE}','{EVIDENCE_CONFIRMED,EVIDENCE_INSUFFICIENT,AUTHORITY_CHANGED,CONFLICT,VALIDITY_ENDED}',365,180,clock_timestamp(),$2,true,clock_timestamp(),$2)`, version, actorID); err != nil {
+		VALUES($1,'{TEST_EVIDENCE}','{EVIDENCE_CONFIRMED,EVIDENCE_INSUFFICIENT,AUTHORITY_CHANGED,CONFLICT,VALIDITY_ENDED}',365,180,clock_timestamp(),$2,false,NULL,NULL)`, version, actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO guardian_authority_policy_approvals(policy_version,policy_sha256,approval_sha256,approval_contract,approval_canonical,
+		expected_database,authorized_operator_actor_ref,controller_role,controller_approval_reference,controller_approved_on,effective_on,review_due_on,
+		legal_reviewer_reference,legal_review_reference,legal_reviewed_on,legal_review_conclusion,bound_image_digest,bound_schema_migration_digest,bound_by)
+		VALUES($1::text,digest(convert_to($1::text,'UTF8'),'sha256'),digest(convert_to('approval/'||$1::text,'UTF8'),'sha256'),'mycfc/guardian-authority-policy-approval/v1',convert_to('{}','UTF8'),
+		current_database(),$2,'CLUB_DIRECTION','integration/controller',CURRENT_DATE,CURRENT_DATE,CURRENT_DATE+365,
+		'integration/legal-reviewer','integration/legal-review',CURRENT_DATE,'APPROVED','sha256:'||repeat('a',64),$3,$2)`,
+		version, actorID, mycfcdb.EmbeddedMigrationDigest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE guardian_ops.runtime_release_binding SET database_name=current_database(),
+		image_digest='sha256:'||repeat('a',64),schema_migration_digest=$1,generation=generation+1,bound_at=clock_timestamp()
+		WHERE singleton`, mycfcdb.EmbeddedMigrationDigest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE guardian_authority_policies SET enabled=true,enabled_at=clock_timestamp(),enabled_by=$2 WHERE version=$1`, version, actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE guardian_application_intake_release gate SET enabled=true,policy_version=$1,policy_sha256=approval.policy_sha256,
+		approval_sha256=approval.approval_sha256,image_digest=approval.bound_image_digest,
+		schema_migration_digest=approval.bound_schema_migration_digest,enabled_by=$2,enabled_at=clock_timestamp()
+		FROM guardian_authority_policy_approvals approval WHERE gate.singleton AND approval.policy_version=$1`, version, actorID); err != nil {
 		t.Fatal(err)
 	}
 	return version
+}
+
+func makeGuardianApplicantEligible(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) {
+	t.Helper()
+	seasonID := uuid.New()
+	if _, err := pool.Exec(ctx, `UPDATE users SET email_verified_at=clock_timestamp() WHERE id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Guardian application test',CURRENT_DATE-1,CURRENT_DATE+1)`, seasonID, "guardian-"+seasonID.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) SELECT $1,$2,id,CURRENT_DATE FROM programmes WHERE code='Leisure'`, userID, seasonID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id=$1;DELETE FROM seasons WHERE id=$1`, seasonID)
+	})
 }
 
 func verifyGuardianAuthorityTestRelationship(t *testing.T, ctx context.Context, pool *pgxpool.Pool, guardianID, subjectID, verifierID uuid.UUID, policy string) {
