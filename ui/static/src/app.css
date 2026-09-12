@@ -247,6 +247,7 @@ button:hover {
 .content-list > li > span { color: #4d5964; }
 .content-list form { margin-block-start: 0.65rem; }
 .content-list img { display: block; max-inline-size: min(100%, 24rem); block-size: auto; margin-block-start: 0.75rem; border-radius: 0.35rem; }
+.guardian-process-image { display: block; inline-size: min(100%, 42rem); block-size: auto; margin: var(--space-4) auto; border-radius: var(--radius-sm); }
 .empty-state { margin: 1rem 0 0; padding: 1rem; border-radius: 0.35rem; color: #4d5964; background: #f1f4f5; }
 .status-message { margin-block: 0.75rem; padding: 0.75rem 1rem; border-inline-start: 0.35rem solid #17653c; background: #edfff3; }
 .status-message[role="alert"] { border-color: #a61b1b; background: #fff1f1; }

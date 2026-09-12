@@ -8,26 +8,39 @@ type GuardianAuthorityQueuePage struct {
 	Meta components.PageMeta
 	Items []GuardianAuthorityQueueItem
 	Success, Conflict string
+	CanManageInvitations bool
 }
 
 type GuardianAuthorityQueueItem struct {
 	Reference, SubmittedLabel, Status, ReceivedAt, URL string
 }
 
+type GuardianAuthorityInvitationsPage struct {
+	Meta components.PageMeta
+	Items []GuardianAuthorityInvitationItem
+	Token string
+	Errors validation.FieldErrors
+	RequirePassword bool
+}
+
+type GuardianAuthorityInvitationItem struct {
+	Reference, Email, ExpiresAt, State string
+	CanRevoke bool
+}
+
 type GuardianAuthorityDetailPage struct {
 	Meta components.PageMeta
 	Reference, GuardianName, SubjectName, SubjectLabel, DateOfBirth, Status string
+	Expiry, RenewalStatus, RenewalResponse string
 	ReadOnlyMessage string
 	Version int64
 	CanDecide, SelfConflict, ConflictRecorder bool
-	CanVerify, CanReject, CanSuspend, CanExpire bool
-	EvidenceTypes []GuardianAuthorityEvidenceType
-	ReasonCodes []GuardianAuthorityReasonCode
+	CanApprove, CanRenew, CanReject, CanSuspend, CanEnd bool
+	RequirePassword bool
 	Errors validation.FieldErrors
-	Action, EvidenceType, EvidenceReference, EvidenceDigest, ReasonCode string
+	Action, EvidenceCategory, ReasonCode string
 }
 
-type GuardianAuthorityEvidenceType struct { Code, Label string }
 type GuardianAuthorityReasonCode struct { Code, Label string }
 
 templ GuardianAuthorityQueue(page GuardianAuthorityQueuePage) {
@@ -35,7 +48,11 @@ templ GuardianAuthorityQueue(page GuardianAuthorityQueuePage) {
 }
 
 templ guardianAuthorityQueueContent(page GuardianAuthorityQueuePage) {
-	@components.PageHeader("Família", "Verificação de representação", "Acompanhe as representações abrangidas pela política aprovada.", nil)
+	if page.CanManageInvitations {
+		@components.PageHeader("Família", "Verificação de representação", "Acompanhe as representações abrangidas pela política aprovada.", []components.PageAction{{Label: "Gerir convites", Href: "/admin/representacoes/convites", Variant: "secondary"}})
+	} else {
+		@components.PageHeader("Família", "Verificação de representação", "Acompanhe as representações abrangidas pela política aprovada.", nil)
+	}
 	@components.StatusMessage(page.Success, "success")
 	@components.StatusMessage(page.Conflict, "error")
 	<section class="module" aria-labelledby="guardian-authority-queue-title">
@@ -52,6 +69,51 @@ templ guardianAuthorityQueueContent(page GuardianAuthorityQueuePage) {
 	</section>
 }
 
+templ GuardianAuthorityInvitations(page GuardianAuthorityInvitationsPage) {
+	@components.Base(page.Meta, guardianAuthorityInvitationsContent(page))
+}
+
+templ guardianAuthorityInvitationsContent(page GuardianAuthorityInvitationsPage) {
+	@components.PageHeader("Família", "Convites para associação", "Emita um código de utilização única, válido durante 30 dias, para um email específico.", []components.PageAction{{Label: "Voltar às representações", Href: "/admin/representacoes", Variant: "secondary"}})
+	if page.Token != "" {
+		@components.StatusMessage("Convite criado. Copie o código agora; não voltará a ser apresentado.", "success")
+		<div class="module"><p><strong>Código do convite</strong></p><p><code>{ page.Token }</code></p></div>
+	}
+	<section class="module" aria-labelledby="guardian-invitation-create-title">
+		<h2 id="guardian-invitation-create-title">Emitir convite</h2>
+		@components.ErrorSummary(components.FieldErrorsFromMap(map[string]string(page.Errors), []string{"email", "password"}))
+		<form method="post" action="/admin/representacoes/convites" class="form-layout">
+			@page.Meta.CSRFField
+			<div class="form-field">@components.FieldLabel("email", "Email do adulto", true)<input id="email" name="email" type="email" autocomplete="email" required aria-invalid?={ page.Errors["email"] != "" } aria-describedby="email-help email-error"/>@components.FieldHelp("email-help", "A conta tem de ter este email confirmado quando utilizar o convite.")@components.FieldErrorMessage("email", page.Errors["email"])</div>
+			if page.RequirePassword {
+				<div class="form-field">@components.FieldLabel("password", "Palavra-passe atual", true)<input id="password" name="password" type="password" autocomplete="current-password" required aria-invalid?={ page.Errors["password"] != "" } aria-describedby="password-help password-error"/>@components.FieldHelp("password-help", "Confirme novamente a sua identidade para emitir um convite de acesso.")@components.FieldErrorMessage("password", page.Errors["password"])</div>
+			}
+			<button class="action action--primary" type="submit">Criar convite</button>
+		</form>
+	</section>
+	<section class="module" aria-labelledby="guardian-invitations-title">
+		<h2 id="guardian-invitations-title">Convites recentes</h2>
+		if len(page.Items) == 0 {
+			@components.EmptyState("Sem convites", "Os convites emitidos aparecerão aqui sem revelar o respetivo código.")
+		} else {
+			@components.RecordList("Convites") {
+				for _, item := range page.Items {
+					<li class="record-item"><div class="record-item__copy"><h3>{ item.Email }</h3><p><strong>{ item.State }</strong> · válido até { item.ExpiresAt }</p></div>
+					if item.CanRevoke {
+						<form method="post" action={ templ.SafeURL("/admin/representacoes/convites/"+item.Reference+"/revogar") }>@page.Meta.CSRFField
+							if page.RequirePassword {
+								<label>Palavra-passe atual para revogar <input name="password" type="password" autocomplete="current-password" required/></label>
+							}
+							<button type="submit">Revogar</button>
+						</form>
+					}
+					</li>
+				}
+			}
+		}
+	</section>
+}
+
 templ GuardianAuthorityDetail(page GuardianAuthorityDetailPage) {
 	@components.Base(page.Meta, guardianAuthorityDetailContent(page))
 }
@@ -61,52 +123,77 @@ templ guardianAuthorityDetailContent(page GuardianAuthorityDetailPage) {
 	@components.TaskRoute(components.TaskSurfaceConfig{ID: "guardian-authority-review", TitleID: "guardian-authority-review-title", Eyebrow: "Família", Title: "Verificar representação", Description: "Registe apenas metadados previstos na política. Não carregue documentos nem escreva dados pessoais em campos livres.", ReturnURL: "/admin/representacoes"}) {
 		<section class="module" aria-labelledby="guardian-authority-summary-title">
 			<h2 id="guardian-authority-summary-title">Resumo do pedido</h2>
-			<dl><dt>Referência</dt><dd>{ page.Reference }</dd><dt>Adulto requerente</dt><dd>{ page.GuardianName }</dd><dt>{ page.SubjectLabel }</dt><dd>{ page.SubjectName }</dd><dt>Data de nascimento indicada</dt><dd>{ page.DateOfBirth }</dd><dt>Estado</dt><dd>{ page.Status }</dd></dl>
+			<dl><dt>Referência</dt><dd>{ page.Reference }</dd><dt>Adulto requerente</dt><dd>{ page.GuardianName }</dd><dt>{ page.SubjectLabel }</dt><dd>{ page.SubjectName }</dd><dt>Data de nascimento indicada</dt><dd>{ page.DateOfBirth }</dd><dt>Estado</dt><dd>{ page.Status }</dd>
+			if page.Expiry != "" {
+				<dt>Validade atual</dt><dd>{ page.Expiry }</dd>
+			}
+			if page.RenewalStatus == "SUBMITTED" {
+				<dt>Renovação</dt><dd>Enviada para revisão · { guardianRenewalResponseLabel(page.RenewalResponse) }</dd>
+			}
+			</dl>
 		</section>
 		if page.SelfConflict {
-			@components.StatusMessage("Não pode decidir uma representação em que é parte. Encaminhe-a para outra pessoa verificadora autorizada.", "error")
+			@components.StatusMessage("Não pode decidir uma representação em que exista envolvimento pessoal ou familiar. Encaminhe-a para outra pessoa administradora.", "error")
 		}
 		if page.ConflictRecorder {
-			@components.StatusMessage("Registou o conflito desta representação. Outra pessoa verificadora autorizada tem de decidir.", "error")
+			@components.StatusMessage("Registou o conflito desta representação. Outra pessoa administradora tem de decidir; não pode limpar nem aprovar este conflito.", "error")
 		}
 		if page.ReadOnlyMessage != "" {
 			@components.StatusMessage(page.ReadOnlyMessage, "info")
 		}
 		if page.CanDecide {
-			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "form", Field: "guardian-authority-decision"}, {Key: "action", Field: "action"}, {Key: "evidence_type", Field: "evidence_type"}, {Key: "evidence_reference", Field: "evidence_reference"}, {Key: "evidence_digest", Field: "evidence_digest"}, {Key: "reason_code", Field: "reason_code"}}))
-			<form id="guardian-authority-decision" method="post" action={ templ.SafeURL("/admin/representacoes/" + page.Reference) } class="form-layout" data-task-form>
-				@page.Meta.CSRFField
-				<input type="hidden" name="version" value={ fmt.Sprint(page.Version) }/>
-				<div class="form-field">@components.FieldLabel("action", "Decisão", true)<select id="action" name="action" required aria-invalid?={ page.Errors["action"] != "" } aria-describedby="action-help action-error"><option value="">Selecione</option>
-					if page.CanVerify {
-						<option value="VERIFY" selected?={ page.Action == "VERIFY" }>Verificar ou renovar</option>
-					}
-					if page.CanReject {
-						<option value="REJECT" selected?={ page.Action == "REJECT" }>Rejeitar definitivamente</option>
-					}
-					if page.CanSuspend {
-						<option value="SUSPEND" selected?={ page.Action == "SUSPEND" }>Suspender acesso imediatamente</option>
-					}
-					if page.CanExpire {
-						<option value="EXPIRE" selected?={ page.Action == "EXPIRE" }>Registar expiração prevista</option>
-					}
-				</select>@components.FieldHelp("action-help", "Suspender remove imediatamente o acesso. Rejeitar termina este pedido; uma nova associação exige um novo pedido.")@components.FieldErrorMessage("action", page.Errors["action"])</div>
-				<div class="form-field">@components.FieldLabel("evidence_type", "Tipo de comprovativo", false)<select id="evidence_type" name="evidence_type" aria-invalid?={ page.Errors["evidence_type"] != "" } aria-describedby="evidence-type-help evidence_type-error"><option value="">Selecione um tipo aprovado</option>
-					for _, evidence := range page.EvidenceTypes {
-						<option value={ evidence.Code } selected?={ page.EvidenceType == evidence.Code }>{ evidence.Label }</option>
-					}
-				</select>@components.FieldHelp("evidence-type-help", "A lista é definida pela política aprovada.")@components.FieldErrorMessage("evidence_type", page.Errors["evidence_type"])</div>
-			<div class="form-field">@components.FieldLabel("evidence_reference", "Referência opaca do comprovativo", false)<input id="evidence_reference" name="evidence_reference" value={ page.EvidenceReference } autocomplete="off" aria-invalid?={ page.Errors["evidence_reference"] != "" } aria-describedby="evidence-reference-help evidence_reference-error"/>@components.FieldHelp("evidence-reference-help", "Obrigatória para verificar ou rejeitar. Use apenas a referência do arquivo restrito; não introduza nomes nem conteúdo do documento.")@components.FieldErrorMessage("evidence_reference", page.Errors["evidence_reference"])</div>
-			<div class="form-field">@components.FieldLabel("evidence_digest", "Impressão digital SHA-256", false)<input id="evidence_digest" name="evidence_digest" value={ page.EvidenceDigest } minlength="64" maxlength="64" pattern="[0-9A-Fa-f]{64}" autocomplete="off" aria-invalid?={ page.Errors["evidence_digest"] != "" } aria-describedby="evidence-digest-help evidence_digest-error"/>@components.FieldHelp("evidence-digest-help", "Obrigatória para verificar ou rejeitar. Introduza 64 caracteres hexadecimais; não cole o conteúdo do comprovativo.")@components.FieldErrorMessage("evidence_digest", page.Errors["evidence_digest"])</div>
-			<div class="form-field">@components.FieldLabel("reason_code", "Código de motivo", true)<select id="reason_code" name="reason_code" required aria-invalid?={ page.Errors["reason_code"] != "" } aria-describedby="reason-code-help reason_code-error"><option value="">Selecione</option>
-				for _, reason := range page.ReasonCodes {
-					<option value={ reason.Code } selected?={ page.ReasonCode == reason.Code }>{ reason.Label }</option>
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "form", Field: "guardian-authority-decisions"}, {Key: "evidence_category", Field: "guardian-authority-decisions"}, {Key: "reason_code", Field: "guardian-authority-decisions"}, {Key: "password", Field: "guardian-authority-decisions"}, {Key: "confirmation", Field: "guardian-authority-decisions"}}))
+			<section id="guardian-authority-decisions" class="module" aria-labelledby="guardian-authority-decisions-title">
+				<h2 id="guardian-authority-decisions-title">Decisão administrativa</h2>
+				<p>Escolha uma ação. Cada formulário apresenta apenas os motivos permitidos para essa ação e nunca pede cópias, referências ou números de documentos.</p>
+				if page.CanApprove {
+					@guardianAuthorityDecisionForm(page, "APPROVE", "Aprovar representação", []GuardianAuthorityReasonCode{{Code: "RELATIONSHIP_CONFIRMED", Label: "Relação confirmada"}}, false)
 				}
-			</select>@components.FieldHelp("reason-code-help", "Obrigatório para todas as decisões e limitado aos motivos da política aprovada.")@components.FieldErrorMessage("reason_code", page.Errors["reason_code"])</div>
-			<label><input type="checkbox" name="confirmed" value="yes" required/>Confirmo que apliquei a política aprovada e que não registei conteúdo do comprovativo.</label>
-			<button class="action action--primary" type="submit">Registar decisão</button>
-			</form>
+				if page.CanRenew {
+					@guardianAuthorityDecisionForm(page, "RENEW", "Renovar representação", []GuardianAuthorityReasonCode{{Code: "RELATIONSHIP_CONFIRMED", Label: "Relação confirmada"}}, false)
+				}
+				if page.CanReject {
+					@guardianAuthorityDecisionForm(page, "REJECT", "Rejeitar pedido", []GuardianAuthorityReasonCode{{Code: "EVIDENCE_INSUFFICIENT", Label: "Elementos insuficientes"}, {Code: "AUTHORITY_NOT_ESTABLISHED", Label: "Autoridade não estabelecida"}}, false)
+				}
+				if page.CanSuspend {
+					@guardianAuthorityDecisionForm(page, "SUSPEND", "Suspender acesso", []GuardianAuthorityReasonCode{{Code: "CONFLICT", Label: "Conflito ou disputa"}, {Code: "AUTHORITY_CHANGED", Label: "Autoridade alterada"}, {Code: "UNCERTAINTY", Label: "Incerteza que exige revisão"}}, true)
+				}
+				if page.CanEnd {
+					@guardianAuthorityDecisionForm(page, "END", "Terminar representação", []GuardianAuthorityReasonCode{{Code: "AUTHORITY_ENDED", Label: "Autoridade terminada"}}, true)
+				}
+			</section>
 		}
 	}
 	</div>
+}
+
+func guardianRenewalResponseLabel(value string) string {
+	if value == "DADOS_MUDARAM" { return "Os dados mudaram" }
+	if value == "NADA_MUDOU" { return "Nada mudou" }
+	return "Estado indisponível"
+}
+
+templ guardianAuthorityDecisionForm(page GuardianAuthorityDetailPage, action, label string, reasons []GuardianAuthorityReasonCode, destructive bool) {
+	<details open?={ page.Action == action }>
+		<summary>{ label }</summary>
+		<form method="post" action={ templ.SafeURL("/admin/representacoes/" + page.Reference) } class="form-layout" data-task-form>
+			@page.Meta.CSRFField
+			<input type="hidden" name="version" value={ fmt.Sprint(page.Version) }/>
+			<input type="hidden" name="action" value={ action }/>
+			<div class="form-field">@components.FieldLabel(action+"-evidence-category", "Categoria de verificação", true)<select id={ action+"-evidence-category" } name="evidence_category" required><option value="">Selecione</option><option value="CLUB_REGISTRATION_RECORD" selected?={ page.Action == action && page.EvidenceCategory == "CLUB_REGISTRATION_RECORD" }>Registo de inscrição do clube</option><option value="IN_PERSON_ID_AND_CIVIL_RECORD" selected?={ page.Action == action && page.EvidenceCategory == "IN_PERSON_ID_AND_CIVIL_RECORD" }>Identificação presencial e registo civil</option><option value="COURT_OR_LEGAL_AUTHORITY" selected?={ page.Action == action && page.EvidenceCategory == "COURT_OR_LEGAL_AUTHORITY" }>Tribunal ou autoridade legal</option></select>@components.FieldHelp(action+"-evidence-category-help", "Registe apenas a categoria observada; não introduza referências, números ou cópias.")</div>
+			<div class="form-field">@components.FieldLabel(action+"-reason-code", "Motivo", true)<select id={ action+"-reason-code" } name="reason_code" required><option value="">Selecione</option>
+				for _, reason := range reasons {
+					<option value={ reason.Code } selected?={ page.Action == action && page.ReasonCode == reason.Code }>{ reason.Label }</option>
+				}
+			</select></div>
+			if page.RequirePassword {
+				<div class="form-field">@components.FieldLabel(action+"-password", "Palavra-passe atual", true)<input id={ action+"-password" } name="password" type="password" autocomplete="current-password" required/>@components.FieldHelp(action+"-password-help", "A sessão tem mais de uma hora. Confirme a identidade para decidir.")</div>
+			}
+			<label><input type="checkbox" name="attested" value="yes" required/> Confirmo que observei a categoria indicada e apliquei a política, sem guardar conteúdo do comprovativo.</label>
+			if destructive {
+				<label><input id={ action+"-access-end-confirmed" } type="checkbox" name="access_end_confirmed" value="yes" required/> Confirmo que esta ação termina imediatamente o acesso.</label>
+			}
+			<button class="action action--primary" type="submit">{ label }</button>
+		</form>
+	</details>
 }

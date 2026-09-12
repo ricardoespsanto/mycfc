@@ -238,20 +238,22 @@ func TestAuthLoadsPrivacyExecutorCapabilityAndFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAuthLoadsGuardianVerifierCapabilityAndFailsClosed(t *testing.T) {
+func TestAuthDerivesGuardianReviewCapabilityFromAdministratorAndFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		lookup  guardianVerifierLookup
+		admin   bool
 		want    int
 		allowed bool
 	}{
-		{name: "verifier", lookup: guardianVerifierLookup{allowed: true}, want: http.StatusNoContent, allowed: true},
+		{name: "legacy verifier is not enough", lookup: guardianVerifierLookup{allowed: true}, want: http.StatusNoContent},
+		{name: "administrator", lookup: guardianVerifierLookup{}, admin: true, want: http.StatusNoContent, allowed: true},
 		{name: "ordinary member", lookup: guardianVerifierLookup{}, want: http.StatusNoContent},
 		{name: "lookup unavailable", lookup: guardianVerifierLookup{err: errors.New("guardian verifier grants unavailable")}, want: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := uuid.New()
-			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true}}, GuardianAuthority: tc.lookup, Sessions: scs.New()}
+			auth := Auth{Users: currentUserLookup{account: dbgen.GetActiveAccountByIDRow{ID: id, IsActive: true, IsAdmin: tc.admin}}, GuardianAuthority: tc.lookup, Sessions: scs.New()}
 			handler := auth.Load(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				user, ok := CurrentUserFromContext(r.Context())
 				if !ok || user.CanVerifyGuardianAuthority != tc.allowed {

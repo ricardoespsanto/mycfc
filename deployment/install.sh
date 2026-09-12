@@ -5,6 +5,7 @@ env_file=/etc/mycfc/mycfc.env
 deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 state_dir=/etc/mycfc/deployment
 release_credentials_file=/etc/mycfc/release-aws/credentials
+guardian_release_bind_env_file=/etc/mycfc/guardian-release-bind.env
 
 if [ "$(id -u)" -ne 0 ]; then
 	printf '%s\n' 'Run this script as root so it can verify the protected environment file.' >&2
@@ -25,6 +26,28 @@ if [ ! -f "$release_credentials_file" ] || [ "$(stat -c '%u:%a' "$release_creden
 	printf '%s\n' "$release_credentials_file must exist, be owned by root, and have mode 0600." >&2
 	exit 1
 fi
+
+# The first rollout must stage this restricted login against the pre-005
+# database before installation starts the ordinary release service. The
+# installer validates custody but deliberately never provisions or rotates it.
+if [ ! -f "$guardian_release_bind_env_file" ] || [ -L "$guardian_release_bind_env_file" ] ||
+	[ "$(stat -c '%u:%g:%a' "$guardian_release_bind_env_file" 2>/dev/null || true)" != '0:0:600' ]; then
+	printf '%s\n' "$guardian_release_bind_env_file must exist, be a root-owned regular file, and have mode 0600; stage the release-bind login before running install.sh." >&2
+	exit 1
+fi
+for required in GUARDIAN_RELEASE_BIND_DATABASE_URL GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE; do
+	if [ "$(grep -c "^$required=" "$guardian_release_bind_env_file" 2>/dev/null || true)" -ne 1 ]; then
+		printf '%s\n' "$guardian_release_bind_env_file is missing the exact release-bind credential contract." >&2
+		exit 1
+	fi
+done
+while IFS= read -r line || [ -n "$line" ]; do
+	case "$line" in
+		''|\#*) ;;
+		GUARDIAN_RELEASE_BIND_DATABASE_URL=*|GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE=*) ;;
+		*) printf '%s\n' "$guardian_release_bind_env_file contains an unsupported key." >&2; exit 1 ;;
+	esac
+done <"$guardian_release_bind_env_file"
 
 if ! command -v aws >/dev/null 2>&1; then
 	printf '%s\n' 'Missing required command: aws' >&2
@@ -275,6 +298,8 @@ chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
 chmod 0755 "$deployment_dir/privacy-retention.sh"
 chmod 0755 "$deployment_dir/privacy-worker.sh"
 chmod 0755 "$deployment_dir/privacy-activation.sh"
+chmod 0755 "$deployment_dir/guardian-activation.sh"
+chmod 0755 "$deployment_dir/guardian-release-bind.sh"
 chmod 0755 "$deployment_dir/legacy-media-purge.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer

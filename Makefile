@@ -160,11 +160,13 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/privacy-retention_test.sh
 	sh deployment/privacy-worker_test.sh
 	sh deployment/privacy-activation_test.sh
+	sh deployment/guardian-activation_test.sh
+	sh deployment/guardian-release-bind_test.sh
 	sh deployment/legacy-media-purge_test.sh
 	$(MAKE) test-privacy-ledger-broker
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/... ./cmd/privacy-restore-replay/... ./cmd/privacy-retention/... ./cmd/privacy-worker/... ./cmd/privacy-activation/...
+	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/... ./cmd/privacy-restore-replay/... ./cmd/privacy-retention/... ./cmd/privacy-worker/... ./cmd/privacy-activation/... ./cmd/guardian-activation/...
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e

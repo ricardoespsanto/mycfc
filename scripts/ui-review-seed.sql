@@ -30,11 +30,32 @@ SELECT guardian_authority_adopt_policy(
   3650,
   1825
 );
-SELECT guardian_authority_set_policy_enabled(
-  '10000000-0000-0000-0000-000000000005',
-  'ui-review-guardian-v1',
-  true
-);
+INSERT INTO guardian_authority_policy_approvals(
+  policy_version,policy_sha256,approval_sha256,approval_contract,approval_canonical,expected_database,authorized_operator_actor_ref,
+  controller_role,controller_approval_reference,controller_approved_on,effective_on,review_due_on,
+  legal_reviewer_reference,legal_review_reference,legal_reviewed_on,legal_review_conclusion,
+  bound_image_digest,bound_schema_migration_digest,bound_by)
+VALUES ('ui-review-guardian-v1',digest(convert_to('ui-review-guardian-v1','UTF8'),'sha256'),digest(convert_to('ui-review/approval','UTF8'),'sha256'),
+  'mycfc/guardian-authority-policy-approval/v1',convert_to('{}','UTF8'),current_database(),'10000000-0000-0000-0000-000000000005',
+  'CLUB_DIRECTION','ui-review/controller',CURRENT_DATE,CURRENT_DATE,CURRENT_DATE+3650,'ui-review/legal-reviewer','ui-review/legal-review',
+  CURRENT_DATE,'APPROVED','sha256:'||repeat('a',64),
+  (SELECT encode(digest(convert_to(string_agg(version,E'\n' ORDER BY version),'UTF8'),'sha256'),'hex') FROM mycfc_meta.schema_migrations),
+  '10000000-0000-0000-0000-000000000005');
+WITH enabled AS (
+  UPDATE guardian_authority_policies
+  SET enabled=true,enabled_at=clock_timestamp(),enabled_by='10000000-0000-0000-0000-000000000005'
+  WHERE version='ui-review-guardian-v1'
+  RETURNING id,version,enabled_at
+)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action,occurred_at)
+SELECT id,version,'10000000-0000-0000-0000-000000000005','ENABLED',enabled_at FROM enabled;
+UPDATE guardian_ops.runtime_release_binding SET database_name=current_database(),image_digest='sha256:'||repeat('a',64),
+  schema_migration_digest=(SELECT encode(digest(convert_to(string_agg(version,E'\n' ORDER BY version),'UTF8'),'sha256'),'hex') FROM mycfc_meta.schema_migrations),
+  generation=generation+1,bound_at=clock_timestamp() WHERE singleton;
+UPDATE guardian_application_intake_release gate SET enabled=true,policy_version=approval.policy_version,
+  policy_sha256=approval.policy_sha256,approval_sha256=approval.approval_sha256,image_digest=approval.bound_image_digest,
+  schema_migration_digest=approval.bound_schema_migration_digest,enabled_by=approval.authorized_operator_actor_ref,enabled_at=clock_timestamp()
+FROM guardian_authority_policy_approvals approval WHERE gate.singleton AND approval.policy_version='ui-review-guardian-v1';
 SELECT guardian_authority_grant_verifier(
   '10000000-0000-0000-0000-000000000005',
   '10000000-0000-0000-0000-000000000004'

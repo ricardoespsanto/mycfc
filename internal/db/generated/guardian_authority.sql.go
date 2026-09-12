@@ -12,6 +12,51 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adminTransitionGuardianAuthority = `-- name: AdminTransitionGuardianAuthority :one
+SELECT id, public_ref, guardian_user_id, subject_user_id, submitted_label, state, version, policy_version, verified_at, verified_by, verified_until, review_due_at, conflict, conflict_actor_ref, created_at, updated_at FROM guardian_authority_admin_transition($1,$2,$3,
+ $4,$5,$6)
+`
+
+type AdminTransitionGuardianAuthorityParams struct {
+	ActorID          uuid.UUID `json:"actor_id"`
+	RelationshipRef  uuid.UUID `json:"relationship_ref"`
+	ExpectedVersion  int64     `json:"expected_version"`
+	Action           string    `json:"action"`
+	EvidenceCategory string    `json:"evidence_category"`
+	ReasonCode       string    `json:"reason_code"`
+}
+
+func (q *Queries) AdminTransitionGuardianAuthority(ctx context.Context, arg AdminTransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error) {
+	row := q.db.QueryRow(ctx, adminTransitionGuardianAuthority,
+		arg.ActorID,
+		arg.RelationshipRef,
+		arg.ExpectedVersion,
+		arg.Action,
+		arg.EvidenceCategory,
+		arg.ReasonCode,
+	)
+	var i GuardianAuthorityRelationship
+	err := row.Scan(
+		&i.ID,
+		&i.PublicRef,
+		&i.GuardianUserID,
+		&i.SubjectUserID,
+		&i.SubmittedLabel,
+		&i.State,
+		&i.Version,
+		&i.PolicyVersion,
+		&i.VerifiedAt,
+		&i.VerifiedBy,
+		&i.VerifiedUntil,
+		&i.ReviewDueAt,
+		&i.Conflict,
+		&i.ConflictActorRef,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const adoptGuardianAuthorityPolicy = `-- name: AdoptGuardianAuthorityPolicy :one
 SELECT id, version, evidence_types, reason_codes, validity_days, review_days, adopted_at, adopted_by, enabled, enabled_at, enabled_by, created_at FROM guardian_authority_adopt_policy($1,$2,$3,
  $4,$5,$6)
@@ -64,61 +109,98 @@ func (q *Queries) CanVerifyGuardianAuthority(ctx context.Context, actorID uuid.U
 	return guardian_authority_can_verify, err
 }
 
+const enqueueGuardianRenewalReminder = `-- name: EnqueueGuardianRenewalReminder :one
+SELECT guardian_authority_enqueue_renewal_reminder($1,$2,$3,
+ $4,$5,$6,$7)
+`
+
+type EnqueueGuardianRenewalReminderParams struct {
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	Recipient           string             `json:"recipient"`
+	RecipientVerifiedAt pgtype.Timestamptz `json:"recipient_verified_at"`
+	ExpiryAnchor        pgtype.Timestamptz `json:"expiry_anchor"`
+	ReminderKind        string             `json:"reminder_kind"`
+	SealedPayload       []byte             `json:"sealed_payload"`
+}
+
+func (q *Queries) EnqueueGuardianRenewalReminder(ctx context.Context, arg EnqueueGuardianRenewalReminderParams) (bool, error) {
+	row := q.db.QueryRow(ctx, enqueueGuardianRenewalReminder,
+		arg.RelationshipRef,
+		arg.GuardianUserID,
+		arg.Recipient,
+		arg.RecipientVerifiedAt,
+		arg.ExpiryAnchor,
+		arg.ReminderKind,
+		arg.SealedPayload,
+	)
+	var guardian_authority_enqueue_renewal_reminder bool
+	err := row.Scan(&guardian_authority_enqueue_renewal_reminder)
+	return guardian_authority_enqueue_renewal_reminder, err
+}
+
 const getGuardianAuthorityRequestForVerifier = `-- name: GetGuardianAuthorityRequestForVerifier :one
+WITH access AS (SELECT guardian_authority_record_review_view($1,$2) AS allowed)
 SELECT relationship.id AS relationship_id,relationship.public_ref AS relationship_ref,
  relationship.guardian_user_id,guardian.name AS guardian_name,
  relationship.subject_user_id,subject.name AS subject_name,subject.date_of_birth,
  relationship.submitted_label,relationship.state AS stored_state,disclosure.state,relationship.version,relationship.created_at,
- COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
- latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
+ COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS deciding_admin_user_id,
+ latest.evidence_type AS evidence_category,
  latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
- relationship.conflict,relationship.conflict_actor_ref
+ relationship.conflict,relationship.conflict_actor_ref,
+ renewal.renewal_ref,renewal.response_code AS renewal_response,renewal.renewal_status,renewal.expiry_anchor AS renewal_expiry_anchor,
+ guardian_authority_personally_involved($1,relationship.public_ref) AS personal_involvement
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id
 JOIN guardian_authority_guardian_disclosures disclosure ON disclosure.relationship_id=relationship.id
 LEFT JOIN LATERAL (
- SELECT event.actor_ref,event.evidence_type,event.evidence_reference,event.evidence_sha256,event.reason_code,event.occurred_at
+ SELECT event.actor_ref,event.evidence_type,event.reason_code,event.occurred_at
  FROM guardian_authority_events event
- WHERE event.relationship_id=relationship.id AND event.actor_role='VERIFIER'
+ WHERE event.relationship_id=relationship.id AND event.actor_role='ADMIN'
  ORDER BY event.relationship_version DESC LIMIT 1
 ) latest ON true
-WHERE relationship.public_ref=$1
- AND guardian_authority_can_verify($2)
+LEFT JOIN guardian_authority_latest_renewals renewal ON renewal.relationship_id=relationship.id
+WHERE relationship.public_ref=$2
+ AND (SELECT allowed FROM access)
 `
 
 type GetGuardianAuthorityRequestForVerifierParams struct {
-	RelationshipRef uuid.UUID `json:"relationship_ref"`
 	ActorID         uuid.UUID `json:"actor_id"`
+	RelationshipRef uuid.UUID `json:"relationship_ref"`
 }
 
 type GetGuardianAuthorityRequestForVerifierRow struct {
-	RelationshipID    uuid.UUID          `json:"relationship_id"`
-	RelationshipRef   uuid.UUID          `json:"relationship_ref"`
-	GuardianUserID    uuid.UUID          `json:"guardian_user_id"`
-	GuardianName      string             `json:"guardian_name"`
-	SubjectUserID     uuid.UUID          `json:"subject_user_id"`
-	SubjectName       string             `json:"subject_name"`
-	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
-	SubmittedLabel    string             `json:"submitted_label"`
-	StoredState       string             `json:"stored_state"`
-	State             string             `json:"state"`
-	Version           int64              `json:"version"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	VerifierUserID    *uuid.UUID         `json:"verifier_user_id"`
-	EvidenceType      *string            `json:"evidence_type"`
-	EvidenceReference *string            `json:"evidence_reference"`
-	EvidenceSha256    []byte             `json:"evidence_sha256"`
-	ReasonCode        *string            `json:"reason_code"`
-	DecisionAt        pgtype.Timestamptz `json:"decision_at"`
-	VerifiedUntil     pgtype.Timestamptz `json:"verified_until"`
-	ReviewDueAt       pgtype.Timestamptz `json:"review_due_at"`
-	Conflict          bool               `json:"conflict"`
-	ConflictActorRef  *uuid.UUID         `json:"conflict_actor_ref"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	GuardianName        string             `json:"guardian_name"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	SubjectName         string             `json:"subject_name"`
+	DateOfBirth         pgtype.Date        `json:"date_of_birth"`
+	SubmittedLabel      string             `json:"submitted_label"`
+	StoredState         string             `json:"stored_state"`
+	State               string             `json:"state"`
+	Version             int64              `json:"version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	DecidingAdminUserID *uuid.UUID         `json:"deciding_admin_user_id"`
+	EvidenceCategory    *string            `json:"evidence_category"`
+	ReasonCode          *string            `json:"reason_code"`
+	DecisionAt          pgtype.Timestamptz `json:"decision_at"`
+	VerifiedUntil       pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt         pgtype.Timestamptz `json:"review_due_at"`
+	Conflict            bool               `json:"conflict"`
+	ConflictActorRef    *uuid.UUID         `json:"conflict_actor_ref"`
+	RenewalRef          *uuid.UUID         `json:"renewal_ref"`
+	RenewalResponse     *string            `json:"renewal_response"`
+	RenewalStatus       *string            `json:"renewal_status"`
+	RenewalExpiryAnchor pgtype.Timestamptz `json:"renewal_expiry_anchor"`
+	PersonalInvolvement bool               `json:"personal_involvement"`
 }
 
 func (q *Queries) GetGuardianAuthorityRequestForVerifier(ctx context.Context, arg GetGuardianAuthorityRequestForVerifierParams) (GetGuardianAuthorityRequestForVerifierRow, error) {
-	row := q.db.QueryRow(ctx, getGuardianAuthorityRequestForVerifier, arg.RelationshipRef, arg.ActorID)
+	row := q.db.QueryRow(ctx, getGuardianAuthorityRequestForVerifier, arg.ActorID, arg.RelationshipRef)
 	var i GetGuardianAuthorityRequestForVerifierRow
 	err := row.Scan(
 		&i.RelationshipID,
@@ -133,16 +215,19 @@ func (q *Queries) GetGuardianAuthorityRequestForVerifier(ctx context.Context, ar
 		&i.State,
 		&i.Version,
 		&i.CreatedAt,
-		&i.VerifierUserID,
-		&i.EvidenceType,
-		&i.EvidenceReference,
-		&i.EvidenceSha256,
+		&i.DecidingAdminUserID,
+		&i.EvidenceCategory,
 		&i.ReasonCode,
 		&i.DecisionAt,
 		&i.VerifiedUntil,
 		&i.ReviewDueAt,
 		&i.Conflict,
 		&i.ConflictActorRef,
+		&i.RenewalRef,
+		&i.RenewalResponse,
+		&i.RenewalStatus,
+		&i.RenewalExpiryAnchor,
+		&i.PersonalInvolvement,
 	)
 	return i, err
 }
@@ -214,6 +299,40 @@ func (q *Queries) IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardian
 	return guardian_authority_current, err
 }
 
+const issueGuardianAuthorityInvitation = `-- name: IssueGuardianAuthorityInvitation :one
+SELECT public_ref,invited_email,issued_at,expires_at,revoked_at,consumed_at
+FROM guardian_authority_issue_invitation($1,$2,$3)
+`
+
+type IssueGuardianAuthorityInvitationParams struct {
+	ActorID      uuid.UUID `json:"actor_id"`
+	InvitedEmail string    `json:"invited_email"`
+	TokenDigest  []byte    `json:"token_digest"`
+}
+
+type IssueGuardianAuthorityInvitationRow struct {
+	PublicRef    uuid.UUID          `json:"public_ref"`
+	InvitedEmail *string            `json:"invited_email"`
+	IssuedAt     pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
+	ConsumedAt   pgtype.Timestamptz `json:"consumed_at"`
+}
+
+func (q *Queries) IssueGuardianAuthorityInvitation(ctx context.Context, arg IssueGuardianAuthorityInvitationParams) (IssueGuardianAuthorityInvitationRow, error) {
+	row := q.db.QueryRow(ctx, issueGuardianAuthorityInvitation, arg.ActorID, arg.InvitedEmail, arg.TokenDigest)
+	var i IssueGuardianAuthorityInvitationRow
+	err := row.Scan(
+		&i.PublicRef,
+		&i.InvitedEmail,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.ConsumedAt,
+	)
+	return i, err
+}
+
 const listActiveGuardianAuthorityEvidenceTypes = `-- name: ListActiveGuardianAuthorityEvidenceTypes :many
 SELECT unnest(policy.evidence_types)::text AS evidence_type
 FROM guardian_authority_policies policy
@@ -268,14 +387,109 @@ func (q *Queries) ListActiveGuardianAuthorityReasonCodes(ctx context.Context) ([
 	return items, nil
 }
 
+const listDueGuardianRenewalReminders = `-- name: ListDueGuardianRenewalReminders :many
+SELECT reminder.relationship_ref::uuid AS relationship_ref,reminder.guardian_user_id::uuid AS guardian_user_id,
+ reminder.recipient::text AS recipient,reminder.recipient_verified_at::timestamptz AS recipient_verified_at,
+ reminder.expiry_anchor::timestamptz AS expiry_anchor,reminder.reminder_kind::text AS reminder_kind
+FROM guardian_authority_due_renewal_reminders($1)
+ AS reminder(relationship_ref,guardian_user_id,recipient,recipient_verified_at,expiry_anchor,reminder_kind)
+`
+
+type ListDueGuardianRenewalRemindersRow struct {
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	Recipient           string             `json:"recipient"`
+	RecipientVerifiedAt pgtype.Timestamptz `json:"recipient_verified_at"`
+	ExpiryAnchor        pgtype.Timestamptz `json:"expiry_anchor"`
+	ReminderKind        string             `json:"reminder_kind"`
+}
+
+func (q *Queries) ListDueGuardianRenewalReminders(ctx context.Context, rowLimit int32) ([]ListDueGuardianRenewalRemindersRow, error) {
+	rows, err := q.db.Query(ctx, listDueGuardianRenewalReminders, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDueGuardianRenewalRemindersRow{}
+	for rows.Next() {
+		var i ListDueGuardianRenewalRemindersRow
+		if err := rows.Scan(
+			&i.RelationshipRef,
+			&i.GuardianUserID,
+			&i.Recipient,
+			&i.RecipientVerifiedAt,
+			&i.ExpiryAnchor,
+			&i.ReminderKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGuardianAuthorityInvitations = `-- name: ListGuardianAuthorityInvitations :many
+SELECT invitation.public_ref,invitation.invited_email,invitation.issued_at,invitation.expires_at,
+ invitation.revoked_at,invitation.consumed_at
+FROM guardian_authority_list_invitations($1,$2) invitation
+`
+
+type ListGuardianAuthorityInvitationsParams struct {
+	ActorID  uuid.UUID `json:"actor_id"`
+	RowLimit int32     `json:"row_limit"`
+}
+
+type ListGuardianAuthorityInvitationsRow struct {
+	PublicRef    uuid.UUID          `json:"public_ref"`
+	InvitedEmail *string            `json:"invited_email"`
+	IssuedAt     pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
+	ConsumedAt   pgtype.Timestamptz `json:"consumed_at"`
+}
+
+func (q *Queries) ListGuardianAuthorityInvitations(ctx context.Context, arg ListGuardianAuthorityInvitationsParams) ([]ListGuardianAuthorityInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listGuardianAuthorityInvitations, arg.ActorID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGuardianAuthorityInvitationsRow{}
+	for rows.Next() {
+		var i ListGuardianAuthorityInvitationsRow
+		if err := rows.Scan(
+			&i.PublicRef,
+			&i.InvitedEmail,
+			&i.IssuedAt,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.ConsumedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGuardianRelationshipsForGuardian = `-- name: ListGuardianRelationshipsForGuardian :many
 SELECT relationship_id,relationship_ref,subject_user_id,submitted_label,state,version,created_at,
  verified_until,review_due_at,conflict,COALESCE(subject_name,'')::text AS subject_name,date_of_birth,
  COALESCE(minor_login_id,'')::text AS minor_login_id,
  COALESCE(leaderboard_visible,false)::boolean AS leaderboard_visible,
- COALESCE(profile_complete,false)::boolean AS profile_complete
-FROM guardian_authority_guardian_disclosures
-WHERE guardian_user_id=$1
+ COALESCE(profile_complete,false)::boolean AS profile_complete,
+ renewal_ref,response_code AS renewal_response,renewal_status,renewal_expiry_anchor,
+ COALESCE(handoff.status::text,'') AS age_handoff_status,handoff.birthday::date AS age_handoff_birthday
+FROM guardian_authority_guardian_disclosures disclosure
+LEFT JOIN LATERAL guardian_age_handoff_for_guardian($1,disclosure.subject_user_id)
+ AS handoff(status,birthday) ON true
+WHERE disclosure.guardian_user_id=$1
 ORDER BY CASE WHEN state IN('PENDING','VERIFIED','SUSPENDED') THEN 0 ELSE 1 END,
  created_at DESC,relationship_id DESC
 LIMIT $2
@@ -287,21 +501,27 @@ type ListGuardianRelationshipsForGuardianParams struct {
 }
 
 type ListGuardianRelationshipsForGuardianRow struct {
-	RelationshipID     uuid.UUID          `json:"relationship_id"`
-	RelationshipRef    uuid.UUID          `json:"relationship_ref"`
-	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
-	SubmittedLabel     string             `json:"submitted_label"`
-	State              string             `json:"state"`
-	Version            int64              `json:"version"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	VerifiedUntil      pgtype.Timestamptz `json:"verified_until"`
-	ReviewDueAt        pgtype.Timestamptz `json:"review_due_at"`
-	Conflict           bool               `json:"conflict"`
-	SubjectName        string             `json:"subject_name"`
-	DateOfBirth        pgtype.Date        `json:"date_of_birth"`
-	MinorLoginID       string             `json:"minor_login_id"`
-	LeaderboardVisible bool               `json:"leaderboard_visible"`
-	ProfileComplete    bool               `json:"profile_complete"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	SubmittedLabel      string             `json:"submitted_label"`
+	State               string             `json:"state"`
+	Version             int64              `json:"version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	VerifiedUntil       pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt         pgtype.Timestamptz `json:"review_due_at"`
+	Conflict            bool               `json:"conflict"`
+	SubjectName         string             `json:"subject_name"`
+	DateOfBirth         pgtype.Date        `json:"date_of_birth"`
+	MinorLoginID        string             `json:"minor_login_id"`
+	LeaderboardVisible  bool               `json:"leaderboard_visible"`
+	ProfileComplete     bool               `json:"profile_complete"`
+	RenewalRef          *uuid.UUID         `json:"renewal_ref"`
+	RenewalResponse     *string            `json:"renewal_response"`
+	RenewalStatus       *string            `json:"renewal_status"`
+	RenewalExpiryAnchor pgtype.Timestamptz `json:"renewal_expiry_anchor"`
+	AgeHandoffStatus    interface{}        `json:"age_handoff_status"`
+	AgeHandoffBirthday  pgtype.Date        `json:"age_handoff_birthday"`
 }
 
 func (q *Queries) ListGuardianRelationshipsForGuardian(ctx context.Context, arg ListGuardianRelationshipsForGuardianParams) ([]ListGuardianRelationshipsForGuardianRow, error) {
@@ -329,6 +549,12 @@ func (q *Queries) ListGuardianRelationshipsForGuardian(ctx context.Context, arg 
 			&i.MinorLoginID,
 			&i.LeaderboardVisible,
 			&i.ProfileComplete,
+			&i.RenewalRef,
+			&i.RenewalResponse,
+			&i.RenewalStatus,
+			&i.RenewalExpiryAnchor,
+			&i.AgeHandoffStatus,
+			&i.AgeHandoffBirthday,
 		); err != nil {
 			return nil, err
 		}
@@ -341,24 +567,28 @@ func (q *Queries) ListGuardianRelationshipsForGuardian(ctx context.Context, arg 
 }
 
 const listPendingGuardianAuthorityRequests = `-- name: ListPendingGuardianAuthorityRequests :many
+WITH access AS (SELECT guardian_authority_record_review_view($1,NULL::uuid) AS allowed)
 SELECT relationship.public_ref AS relationship_ref,relationship.guardian_user_id,guardian.name AS guardian_name,
  relationship.subject_user_id,subject.name AS subject_name,subject.date_of_birth,
  disclosure.state,relationship.version,relationship.created_at,
- COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS verifier_user_id,
- latest.evidence_type,latest.evidence_reference,latest.evidence_sha256,
+ COALESCE(latest.actor_ref,'00000000-0000-0000-0000-000000000000'::uuid) AS deciding_admin_user_id,
+ latest.evidence_type AS evidence_category,
  latest.reason_code,latest.occurred_at AS decision_at,relationship.verified_until,relationship.review_due_at,
- relationship.conflict,relationship.conflict_actor_ref
+ relationship.conflict,relationship.conflict_actor_ref,
+ renewal.renewal_ref,renewal.response_code AS renewal_response,renewal.renewal_status,renewal.expiry_anchor AS renewal_expiry_anchor,
+ guardian_authority_personally_involved($1,relationship.public_ref) AS personal_involvement
 FROM guardian_authority_relationships relationship
 JOIN users guardian ON guardian.id=relationship.guardian_user_id
 JOIN users subject ON subject.id=relationship.subject_user_id
 JOIN guardian_authority_guardian_disclosures disclosure ON disclosure.relationship_id=relationship.id
 LEFT JOIN LATERAL (
- SELECT event.actor_ref,event.evidence_type,event.evidence_reference,event.evidence_sha256,event.reason_code,event.occurred_at
+ SELECT event.actor_ref,event.evidence_type,event.reason_code,event.occurred_at
  FROM guardian_authority_events event
- WHERE event.relationship_id=relationship.id AND event.actor_role='VERIFIER'
+ WHERE event.relationship_id=relationship.id AND event.actor_role='ADMIN'
  ORDER BY event.relationship_version DESC LIMIT 1
 ) latest ON true
-WHERE guardian_authority_can_verify($1)
+LEFT JOIN guardian_authority_latest_renewals renewal ON renewal.relationship_id=relationship.id
+WHERE (SELECT allowed FROM access)
  AND disclosure.state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED')
 ORDER BY relationship.created_at,relationship.id
 LIMIT $3 OFFSET $2
@@ -371,25 +601,28 @@ type ListPendingGuardianAuthorityRequestsParams struct {
 }
 
 type ListPendingGuardianAuthorityRequestsRow struct {
-	RelationshipRef   uuid.UUID          `json:"relationship_ref"`
-	GuardianUserID    uuid.UUID          `json:"guardian_user_id"`
-	GuardianName      string             `json:"guardian_name"`
-	SubjectUserID     uuid.UUID          `json:"subject_user_id"`
-	SubjectName       string             `json:"subject_name"`
-	DateOfBirth       pgtype.Date        `json:"date_of_birth"`
-	State             string             `json:"state"`
-	Version           int64              `json:"version"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	VerifierUserID    *uuid.UUID         `json:"verifier_user_id"`
-	EvidenceType      *string            `json:"evidence_type"`
-	EvidenceReference *string            `json:"evidence_reference"`
-	EvidenceSha256    []byte             `json:"evidence_sha256"`
-	ReasonCode        *string            `json:"reason_code"`
-	DecisionAt        pgtype.Timestamptz `json:"decision_at"`
-	VerifiedUntil     pgtype.Timestamptz `json:"verified_until"`
-	ReviewDueAt       pgtype.Timestamptz `json:"review_due_at"`
-	Conflict          bool               `json:"conflict"`
-	ConflictActorRef  *uuid.UUID         `json:"conflict_actor_ref"`
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	GuardianName        string             `json:"guardian_name"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	SubjectName         string             `json:"subject_name"`
+	DateOfBirth         pgtype.Date        `json:"date_of_birth"`
+	State               string             `json:"state"`
+	Version             int64              `json:"version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	DecidingAdminUserID *uuid.UUID         `json:"deciding_admin_user_id"`
+	EvidenceCategory    *string            `json:"evidence_category"`
+	ReasonCode          *string            `json:"reason_code"`
+	DecisionAt          pgtype.Timestamptz `json:"decision_at"`
+	VerifiedUntil       pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt         pgtype.Timestamptz `json:"review_due_at"`
+	Conflict            bool               `json:"conflict"`
+	ConflictActorRef    *uuid.UUID         `json:"conflict_actor_ref"`
+	RenewalRef          *uuid.UUID         `json:"renewal_ref"`
+	RenewalResponse     *string            `json:"renewal_response"`
+	RenewalStatus       *string            `json:"renewal_status"`
+	RenewalExpiryAnchor pgtype.Timestamptz `json:"renewal_expiry_anchor"`
+	PersonalInvolvement bool               `json:"personal_involvement"`
 }
 
 func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg ListPendingGuardianAuthorityRequestsParams) ([]ListPendingGuardianAuthorityRequestsRow, error) {
@@ -411,16 +644,19 @@ func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg 
 			&i.State,
 			&i.Version,
 			&i.CreatedAt,
-			&i.VerifierUserID,
-			&i.EvidenceType,
-			&i.EvidenceReference,
-			&i.EvidenceSha256,
+			&i.DecidingAdminUserID,
+			&i.EvidenceCategory,
 			&i.ReasonCode,
 			&i.DecisionAt,
 			&i.VerifiedUntil,
 			&i.ReviewDueAt,
 			&i.Conflict,
 			&i.ConflictActorRef,
+			&i.RenewalRef,
+			&i.RenewalResponse,
+			&i.RenewalStatus,
+			&i.RenewalExpiryAnchor,
+			&i.PersonalInvolvement,
 		); err != nil {
 			return nil, err
 		}
@@ -432,6 +668,17 @@ func (q *Queries) ListPendingGuardianAuthorityRequests(ctx context.Context, arg 
 	return items, nil
 }
 
+const pruneGuardianApplicationRateEvents = `-- name: PruneGuardianApplicationRateEvents :one
+SELECT guardian_application_prune()
+`
+
+func (q *Queries) PruneGuardianApplicationRateEvents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, pruneGuardianApplicationRateEvents)
+	var guardian_application_prune int64
+	err := row.Scan(&guardian_application_prune)
+	return guardian_application_prune, err
+}
+
 const reconcileGuardianAuthorityCutoffs = `-- name: ReconcileGuardianAuthorityCutoffs :one
 SELECT guardian_authority_reconcile_cutoffs()
 `
@@ -441,6 +688,37 @@ func (q *Queries) ReconcileGuardianAuthorityCutoffs(ctx context.Context) (int64,
 	var guardian_authority_reconcile_cutoffs int64
 	err := row.Scan(&guardian_authority_reconcile_cutoffs)
 	return guardian_authority_reconcile_cutoffs, err
+}
+
+const reserveGuardianApplicationRate = `-- name: ReserveGuardianApplicationRate :exec
+SELECT guardian_application_reserve($1,$2,$3)
+`
+
+type ReserveGuardianApplicationRateParams struct {
+	AccountDigest []byte `json:"account_digest"`
+	NetworkDigest []byte `json:"network_digest"`
+	Kind          string `json:"kind"`
+}
+
+func (q *Queries) ReserveGuardianApplicationRate(ctx context.Context, arg ReserveGuardianApplicationRateParams) error {
+	_, err := q.db.Exec(ctx, reserveGuardianApplicationRate, arg.AccountDigest, arg.NetworkDigest, arg.Kind)
+	return err
+}
+
+const revokeGuardianAuthorityInvitation = `-- name: RevokeGuardianAuthorityInvitation :one
+SELECT guardian_authority_revoke_invitation($1,$2)
+`
+
+type RevokeGuardianAuthorityInvitationParams struct {
+	ActorID   uuid.UUID `json:"actor_id"`
+	PublicRef uuid.UUID `json:"public_ref"`
+}
+
+func (q *Queries) RevokeGuardianAuthorityInvitation(ctx context.Context, arg RevokeGuardianAuthorityInvitationParams) (int64, error) {
+	row := q.db.QueryRow(ctx, revokeGuardianAuthorityInvitation, arg.ActorID, arg.PublicRef)
+	var guardian_authority_revoke_invitation int64
+	err := row.Scan(&guardian_authority_revoke_invitation)
+	return guardian_authority_revoke_invitation, err
 }
 
 const revokeGuardianVerifier = `-- name: RevokeGuardianVerifier :one
@@ -494,6 +772,29 @@ func (q *Queries) SetGuardianAuthorityPolicyEnabled(ctx context.Context, arg Set
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const submitGuardianAuthorityRenewal = `-- name: SubmitGuardianAuthorityRenewal :one
+SELECT guardian_authority_submit_renewal($1,$2,$3,$4)::text AS result
+`
+
+type SubmitGuardianAuthorityRenewalParams struct {
+	ActorID         uuid.UUID `json:"actor_id"`
+	RelationshipRef uuid.UUID `json:"relationship_ref"`
+	ExpectedVersion int64     `json:"expected_version"`
+	ResponseCode    string    `json:"response_code"`
+}
+
+func (q *Queries) SubmitGuardianAuthorityRenewal(ctx context.Context, arg SubmitGuardianAuthorityRenewalParams) (string, error) {
+	row := q.db.QueryRow(ctx, submitGuardianAuthorityRenewal,
+		arg.ActorID,
+		arg.RelationshipRef,
+		arg.ExpectedVersion,
+		arg.ResponseCode,
+	)
+	var result string
+	err := row.Scan(&result)
+	return result, err
 }
 
 const transitionGuardianAuthority = `-- name: TransitionGuardianAuthority :one

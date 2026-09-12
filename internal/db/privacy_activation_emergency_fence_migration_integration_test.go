@@ -23,6 +23,7 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
+	rewindGuardianAgeHandoffMigration(t, ctx, tx)
 
 	migration, err := migrationFiles.ReadFile("migrations/202609110003_privacy_activation_emergency_fence.sql")
 	if err != nil {
@@ -47,7 +48,7 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 		ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v8_check`); err != nil {
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v11_check`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, v5); err != nil {
@@ -69,9 +70,9 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 	if _, err = tx.Exec(ctx, `DO $$DECLARE definition text;
 BEGIN
  SELECT pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110005_guardian_authority_cutoff_reconciliation','202609110002_privacy_empty_provider_registry_activation');
+ EXECUTE replace(definition,'202609120003_guardian_authority_renewal','202609110002_privacy_empty_provider_registry_activation');
  SELECT pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
- EXECUTE replace(definition,'202609110005_guardian_authority_cutoff_reconciliation','202609110002_privacy_empty_provider_registry_activation');
+ EXECUTE replace(definition,'202609120003_guardian_authority_renewal','202609110002_privacy_empty_provider_registry_activation');
 END$$`); err != nil {
 		t.Fatal(err)
 	}

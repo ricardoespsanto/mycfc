@@ -142,13 +142,39 @@ type bootstrapConnectionFake struct {
 func (c bootstrapConnectionFake) Begin(context.Context) (pgx.Tx, error) { return c.tx, c.err }
 
 type bootstrapRoleConnectionFake struct {
+	pgx.Tx
 	err        error
+	beginErr   error
+	commitErr  error
+	failAt     int
 	statements []string
+	begun      bool
+	committed  bool
+	rolledBack bool
 }
 
 func (c *bootstrapRoleConnectionFake) Exec(_ context.Context, statement string, _ ...any) (pgconn.CommandTag, error) {
 	c.statements = append(c.statements, statement)
+	if c.failAt > 0 && len(c.statements) == c.failAt {
+		return pgconn.CommandTag{}, c.err
+	}
+	if c.failAt > 0 {
+		return pgconn.NewCommandTag("OK"), nil
+	}
 	return pgconn.NewCommandTag("OK"), c.err
+}
+
+func (c *bootstrapRoleConnectionFake) Begin(context.Context) (pgx.Tx, error) {
+	c.begun = true
+	return c, c.beginErr
+}
+func (c *bootstrapRoleConnectionFake) Commit(context.Context) error {
+	c.committed = c.commitErr == nil
+	return c.commitErr
+}
+func (c *bootstrapRoleConnectionFake) Rollback(context.Context) error {
+	c.rolledBack = true
+	return nil
 }
 
 func TestMigrationHelpersPropagateDatabaseFailures(t *testing.T) {
@@ -238,6 +264,74 @@ func TestProvisionPrivacyActivationDisableRoleIsExplicitAndRestricted(t *testing
 	}
 }
 
+func TestProvisionGuardianActivationRoleIsExplicitAndRestricted(t *testing.T) {
+	conn := &bootstrapRoleConnectionFake{}
+	if err := ProvisionGuardianActivationRole(t.Context(), conn, "mycfc", guardianActivationRole, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_guardian_activation_operator" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_guardian_activation_operator"`,
+		`REVOKE ALL ON SCHEMA public FROM "mycfc_guardian_activation_operator"`,
+		`REVOKE ALL ON SCHEMA mycfc_meta FROM "mycfc_guardian_activation_operator"`,
+		`GRANT USAGE ON SCHEMA guardian_ops TO "mycfc_guardian_activation_operator"`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_guardian_activation_operator"`,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM "mycfc_guardian_activation_operator"`,
+		`GRANT EXECUTE ON FUNCTION guardian_ops.status(text,text,text), guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text), guardian_ops.enable(uuid,text,bytea,bytea,text,text,text), guardian_ops.disable(uuid,text)`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("provision statements missing %q", expected)
+		}
+	}
+	if err := ProvisionGuardianActivationRole(t.Context(), conn, "mycfc", "mycfc_app", "operator-password"); err == nil {
+		t.Fatal("web role accepted as guardian activation operator")
+	}
+}
+
+func TestProvisionGuardianReleaseBindRoleIsExplicitAndRestricted(t *testing.T) {
+	conn := &bootstrapRoleConnectionFake{}
+	if err := ProvisionGuardianReleaseBindRole(t.Context(), conn, "mycfc", guardianReleaseBindRole, "release-password"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(conn.statements, "\n")
+	for _, expected := range []string{
+		`CREATE ROLE "mycfc_guardian_release_bind" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+		`REVOKE ALL PRIVILEGES ON DATABASE "mycfc" FROM "mycfc_guardian_release_bind"`,
+		`GRANT CONNECT ON DATABASE "mycfc" TO "mycfc_guardian_release_bind"`,
+		`REVOKE ALL ON SCHEMA public FROM "mycfc_guardian_release_bind"`,
+		`REVOKE ALL ON SCHEMA mycfc_meta FROM "mycfc_guardian_release_bind"`,
+		`REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind`,
+		`ARRAY['privacy_disable','privacy_protected']`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind`,
+		`GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("provision statements missing %q", expected)
+		}
+	}
+	if !conn.begun || !conn.committed || conn.rolledBack {
+		t.Fatalf("provision transaction begun=%v committed=%v rolled_back=%v", conn.begun, conn.committed, conn.rolledBack)
+	}
+	for _, prohibited := range []string{"guardian_ops.enable", "guardian_ops.preflight", "guardian_ops.status", "guardian_ops.disable(uuid", "GRANT CREATE", "GRANT ALL"} {
+		if strings.Contains(joined, prohibited) {
+			t.Errorf("provision statements contain prohibited capability %q", prohibited)
+		}
+	}
+	if err := ProvisionGuardianReleaseBindRole(t.Context(), conn, "mycfc", "mycfc_migrate", "release-password"); err == nil {
+		t.Fatal("migration role accepted as guardian release bind identity")
+	}
+}
+
+func TestProvisionGuardianReleaseBindRoleRollsBackAtomically(t *testing.T) {
+	databaseErr := errors.New("permission denied")
+	conn := &bootstrapRoleConnectionFake{err: databaseErr, failAt: 4}
+	err := ProvisionGuardianReleaseBindRole(t.Context(), conn, "mycfc", guardianReleaseBindRole, "release-password")
+	if !errors.Is(err, databaseErr) || conn.committed || !conn.rolledBack {
+		t.Fatalf("error=%v committed=%v rolled_back=%v", err, conn.committed, conn.rolledBack)
+	}
+}
+
 func TestBootstrapRolesProvisionOptionalDistinctPrivacyRestoreObserver(t *testing.T) {
 	credentials := RoleCredentials{
 		AppUsername: "mycfc_app", AppPassword: "app-password",
@@ -275,11 +369,17 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_erasure_job_checkpoints, privacy_erasure_failures, privacy_erasure_retention_anchors, privacy_erasure_restricted_records, privacy_erasure_completion_manifests FROM PUBLIC`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`,
 		`REVOKE ALL PRIVILEGES ON TABLE privacy_completion_access_links, privacy_terminal_requeue_proposals`,
-		`REVOKE ALL PRIVILEGES ON TABLE guardian_authority_policies, guardian_authority_policy_events, guardian_verifier_grants, guardian_verifier_grant_events, guardian_authority_relationships, guardian_authority_events FROM PUBLIC`,
+		`guardian_authority_renewal_requests, guardian_authority_renewal_events, guardian_authority_renewal_reminders, guardian_age_handoffs, guardian_age_handoff_events, guardian_age_handoff_email_tokens, guardian_age_handoff_notices, guardian_age_handoff_access_events FROM PUBLIC`,
+		`guardian_application_intake_release_events, guardian_authority_review_access_events, guardian_authority_renewal_requests, guardian_authority_renewal_events, guardian_authority_renewal_reminders, guardian_age_handoffs, guardian_age_handoff_events, guardian_age_handoff_email_tokens, guardian_age_handoff_notices, guardian_age_handoff_access_events FROM "mycfc_app"`,
+		`REVOKE ALL PRIVILEGES ON SEQUENCE guardian_age_handoff_events_id_seq, guardian_age_handoff_access_events_id_seq FROM PUBLIC`,
+		`REVOKE ALL PRIVILEGES ON SEQUENCE guardian_age_handoff_events_id_seq, guardian_age_handoff_access_events_id_seq FROM "mycfc_app"`,
+		`guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea)`,
 		`REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE guardian_authority_policies`,
 		`GRANT SELECT ON TABLE guardian_authority_relationships, guardian_authority_events TO "mycfc_app"`,
-		`guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid)`,
-		`guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text), guardian_authority_privacy_account_for_update(uuid)`,
+		`guardian_authority_reconcile_cutoffs(), guardian_authority_create_dependent(text,date,uuid,bytea)`,
+		`guardian_application_reserve(bytea,bytea,text), guardian_application_prune(), guardian_authority_submit_renewal(uuid,uuid,bigint,text)`,
+		`GRANT SELECT ON TABLE guardian_authority_latest_renewals TO "mycfc_app"`,
+		`guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text)`,
 		`GRANT INSERT (request_id, plan_sha256, executor_version`,
 		`GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea)`,
 		`REVOKE EXECUTE ON FUNCTION privacy_upload_source_lock(text,uuid)`,
@@ -889,6 +989,44 @@ func TestResetBaselineIncludesEveryBundledMigration(t *testing.T) {
 	latest := migrationVersion(entries[len(entries)-1])
 	if baselineIncludesThrough != latest {
 		t.Fatalf("baseline cutoff = %q, latest migration = %q; update the complete reset baseline and cutoff together", baselineIncludesThrough, latest)
+	}
+}
+
+func TestGuardianAuthorityActivationMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609120005_guardian_authority_activation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Source-only guardian-authority V2 activation boundary."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("guardian activation migration is not the exact final baseline segment")
+	}
+	for _, expected := range []string{
+		"CREATE SCHEMA guardian_ops",
+		"CREATE TABLE guardian_authority_policy_approvals",
+		"CREATE FUNCTION guardian_authority_policy_operational",
+		"CREATE FUNCTION guardian_ops.schema_ready",
+		"CREATE FUNCTION guardian_ops.status",
+		"CREATE FUNCTION guardian_ops.preflight",
+		"CREATE FUNCTION guardian_ops.enable",
+		"CREATE FUNCTION guardian_ops.disable",
+		"to_regrole('mycfc_guardian_release_bind')",
+		"GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind",
+		"UPDATE privacy_request_activation SET enabled=false",
+		"UPDATE guardian_application_intake_release SET enabled=false",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Fatalf("guardian activation migration missing %q", expected)
+		}
+	}
+	if strings.Contains(string(migration), "guardian-v2-integration-") {
+		t.Fatal("guardian activation migration contains a test policy seed")
+	}
+	for _, prohibited := range []string{"CREATE ROLE", "ALTER ROLE", "GRANT USAGE ON SCHEMA guardian_ops TO mycfc_app"} {
+		if strings.Contains(strings.ToUpper(string(migration)), strings.ToUpper(prohibited)) {
+			t.Fatalf("guardian activation migration contains prohibited automatic capability %q", prohibited)
+		}
 	}
 }
 

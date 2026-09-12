@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	mycfcdb "github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
@@ -121,7 +122,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609110005_guardian_authority_cutoff_reconciliation"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609120005_guardian_authority_activation"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -191,6 +192,8 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	protectedSchema := pgx.Identifier{protectedSchemaName}.Sanitize()
 	disableSchemaName := schemaName + "_disable"
 	disableSchema := pgx.Identifier{disableSchemaName}.Sanitize()
+	guardianOpsSchemaName := schemaName + "_guardian_ops"
+	guardianOpsSchema := pgx.Identifier{guardianOpsSchemaName}.Sanitize()
 	if _, e = admin.Exec(ctx, "CREATE SCHEMA "+schema); e != nil {
 		t.Fatal(e)
 	}
@@ -202,6 +205,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 			t.Error(err)
 		}
 		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+disableSchema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+		if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+guardianOpsSchema+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -224,6 +230,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "SET search_path=pg_catalog,public", "SET search_path=pg_catalog,"+schemaName+",public")
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_protected", protectedSchemaName)
 	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "privacy_disable", disableSchemaName)
+	isolatedBaseline = strings.ReplaceAll(isolatedBaseline, "guardian_ops", guardianOpsSchemaName)
 	if _, e = pool.Exec(ctx, isolatedBaseline); e != nil {
 		t.Fatal(e)
 	}
@@ -292,7 +299,39 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 	guardianPolicy = "privacy-guardian-fixture-" + uuid.NewString()
 	if _, e = pool.Exec(ctx, `INSERT INTO guardian_authority_policies
 		(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
-		VALUES($1,'{CIVIL_REGISTRY}','{CONFLICT,LOSS,CHANGE}',365,180,clock_timestamp(),$2,true,clock_timestamp(),$2)`, guardianPolicy, owner); e != nil {
+		VALUES($1,'{CIVIL_REGISTRY}','{CONFLICT,LOSS,CHANGE}',365,180,clock_timestamp(),$2,false,NULL,NULL)`, guardianPolicy, owner); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS mycfc_meta;
+		CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`); e != nil {
+		t.Fatal(e)
+	}
+	for _, migration := range mycfcdb.EmbeddedMigrationInventory() {
+		if _, e = pool.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1) ON CONFLICT DO NOTHING`, migration); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = pool.Exec(ctx, `INSERT INTO guardian_authority_policy_approvals(policy_version,policy_sha256,approval_sha256,approval_contract,approval_canonical,
+		expected_database,authorized_operator_actor_ref,controller_role,controller_approval_reference,controller_approved_on,effective_on,review_due_on,
+		legal_reviewer_reference,legal_review_reference,legal_reviewed_on,legal_review_conclusion,bound_image_digest,bound_schema_migration_digest,bound_by)
+		VALUES($1::text,digest(convert_to($1::text,'UTF8'),'sha256'),digest(convert_to('approval/'||$1::text,'UTF8'),'sha256'),'mycfc/guardian-authority-policy-approval/v1',convert_to('{}','UTF8'),
+		current_database(),$2,'CLUB_DIRECTION','integration/controller',CURRENT_DATE,CURRENT_DATE,CURRENT_DATE+365,
+		'integration/legal-reviewer','integration/legal-review',CURRENT_DATE,'APPROVED','sha256:'||repeat('a',64),$3,$2)`,
+		guardianPolicy, owner, mycfcdb.EmbeddedMigrationDigest()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE `+guardianOpsSchema+`.runtime_release_binding SET database_name=current_database(),
+		image_digest='sha256:'||repeat('a',64),schema_migration_digest=$1,generation=generation+1,bound_at=clock_timestamp()
+		WHERE singleton`, mycfcdb.EmbeddedMigrationDigest()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE guardian_authority_policies SET enabled=true,enabled_at=clock_timestamp(),enabled_by=$2 WHERE version=$1`, guardianPolicy, owner); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE guardian_application_intake_release gate SET enabled=true,policy_version=$1,policy_sha256=approval.policy_sha256,
+		approval_sha256=approval.approval_sha256,image_digest=approval.bound_image_digest,
+		schema_migration_digest=approval.bound_schema_migration_digest,enabled_by=$2,enabled_at=clock_timestamp()
+		FROM guardian_authority_policy_approvals approval WHERE gate.singleton AND approval.policy_version=$1`, guardianPolicy, owner); e != nil {
 		t.Fatal(e)
 	}
 	capabilities := map[string]bool{}

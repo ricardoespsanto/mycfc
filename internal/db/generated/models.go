@@ -1594,22 +1594,25 @@ type DataErasureRequestEvent struct {
 }
 
 type EmailOutbox struct {
-	ID                   uuid.UUID          `json:"id"`
-	MessageType          string             `json:"message_type"`
-	VerificationTokenID  *uuid.UUID         `json:"verification_token_id"`
-	PasswordResetTokenID *uuid.UUID         `json:"password_reset_token_id"`
-	SealedPayload        []byte             `json:"sealed_payload"`
-	Status               string             `json:"status"`
-	Attempts             int32              `json:"attempts"`
-	NextAttemptAt        pgtype.Timestamptz `json:"next_attempt_at"`
-	ClaimedAt            pgtype.Timestamptz `json:"claimed_at"`
-	SentAt               pgtype.Timestamptz `json:"sent_at"`
-	LastError            *string            `json:"last_error"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	PrivacyRequestID     *uuid.UUID         `json:"privacy_request_id"`
-	PrivacyRequesterID   *uuid.UUID         `json:"privacy_requester_id"`
-	PrivacyEventKey      *uuid.UUID         `json:"privacy_event_key"`
+	ID                          uuid.UUID          `json:"id"`
+	MessageType                 string             `json:"message_type"`
+	VerificationTokenID         *uuid.UUID         `json:"verification_token_id"`
+	PasswordResetTokenID        *uuid.UUID         `json:"password_reset_token_id"`
+	SealedPayload               []byte             `json:"sealed_payload"`
+	Status                      string             `json:"status"`
+	Attempts                    int32              `json:"attempts"`
+	NextAttemptAt               pgtype.Timestamptz `json:"next_attempt_at"`
+	ClaimedAt                   pgtype.Timestamptz `json:"claimed_at"`
+	SentAt                      pgtype.Timestamptz `json:"sent_at"`
+	LastError                   *string            `json:"last_error"`
+	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                   pgtype.Timestamptz `json:"updated_at"`
+	PrivacyRequestID            *uuid.UUID         `json:"privacy_request_id"`
+	PrivacyRequesterID          *uuid.UUID         `json:"privacy_requester_id"`
+	PrivacyEventKey             *uuid.UUID         `json:"privacy_event_key"`
+	GuardianReminderID          *uuid.UUID         `json:"guardian_reminder_id"`
+	GuardianHandoffNoticeID     *uuid.UUID         `json:"guardian_handoff_notice_id"`
+	GuardianHandoffEmailTokenID *uuid.UUID         `json:"guardian_handoff_email_token_id"`
 }
 
 type EmailVerificationToken struct {
@@ -1703,6 +1706,102 @@ type FeatureFlagEvent struct {
 	ActorPrincipalID *uuid.UUID              `json:"actor_principal_id"`
 }
 
+type GuardianAgeHandoff struct {
+	ID                  uuid.UUID          `json:"id"`
+	PublicRef           uuid.UUID          `json:"public_ref"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	Status              string             `json:"status"`
+	Version             int64              `json:"version"`
+	ProposedEmail       *string            `json:"proposed_email"`
+	EmailVerifiedAt     pgtype.Timestamptz `json:"email_verified_at"`
+	IdentityMethod      *string            `json:"identity_method"`
+	IdentityConfirmedBy *uuid.UUID         `json:"identity_confirmed_by"`
+	IdentityConfirmedAt pgtype.Timestamptz `json:"identity_confirmed_at"`
+	ReadyAt             pgtype.Timestamptz `json:"ready_at"`
+	RecoveryRequiredAt  pgtype.Timestamptz `json:"recovery_required_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GuardianAgeHandoffAccessEvent struct {
+	ID         int64              `json:"id"`
+	HandoffID  *uuid.UUID         `json:"handoff_id"`
+	ActorRef   uuid.UUID          `json:"actor_ref"`
+	ViewKind   string             `json:"view_kind"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type GuardianAgeHandoffEmailToken struct {
+	ID            uuid.UUID          `json:"id"`
+	HandoffID     uuid.UUID          `json:"handoff_id"`
+	TokenDigest   []byte             `json:"token_digest"`
+	ProposedEmail string             `json:"proposed_email"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt    pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type GuardianAgeHandoffEvent struct {
+	ID             int64              `json:"id"`
+	HandoffID      uuid.UUID          `json:"handoff_id"`
+	HandoffVersion int64              `json:"handoff_version"`
+	ActorRef       *uuid.UUID         `json:"actor_ref"`
+	ActorRole      string             `json:"actor_role"`
+	Action         string             `json:"action"`
+	Method         *string            `json:"method"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type GuardianAgeHandoffNotice struct {
+	ID                  uuid.UUID          `json:"id"`
+	HandoffID           uuid.UUID          `json:"handoff_id"`
+	RelationshipID      *uuid.UUID         `json:"relationship_id"`
+	GuardianUserID      *uuid.UUID         `json:"guardian_user_id"`
+	RecipientVerifiedAt pgtype.Timestamptz `json:"recipient_verified_at"`
+	Audience            string             `json:"audience"`
+	NoticeKind          string             `json:"notice_kind"`
+	Birthday            pgtype.Date        `json:"birthday"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type GuardianApplicationIntakeRelease struct {
+	Singleton             bool               `json:"singleton"`
+	GateVersion           string             `json:"gate_version"`
+	Enabled               bool               `json:"enabled"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	PolicyVersion         *string            `json:"policy_version"`
+	PolicySha256          []byte             `json:"policy_sha256"`
+	ApprovalSha256        []byte             `json:"approval_sha256"`
+	ImageDigest           *string            `json:"image_digest"`
+	SchemaMigrationDigest *string            `json:"schema_migration_digest"`
+	EnabledBy             *uuid.UUID         `json:"enabled_by"`
+	EnabledAt             pgtype.Timestamptz `json:"enabled_at"`
+}
+
+type GuardianApplicationIntakeReleaseEvent struct {
+	ID                    int64              `json:"id"`
+	GateVersion           string             `json:"gate_version"`
+	Action                string             `json:"action"`
+	ActorRef              *uuid.UUID         `json:"actor_ref"`
+	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
+	PolicyVersion         *string            `json:"policy_version"`
+	PolicySha256          []byte             `json:"policy_sha256"`
+	ApprovalSha256        []byte             `json:"approval_sha256"`
+	ImageDigest           *string            `json:"image_digest"`
+	SchemaMigrationDigest *string            `json:"schema_migration_digest"`
+	RelationshipCount     int64              `json:"relationship_count"`
+	CredentialCount       int64              `json:"credential_count"`
+	SessionCount          int64              `json:"session_count"`
+}
+
+type GuardianApplicationRateEvent struct {
+	ID           int64              `json:"id"`
+	BucketKind   string             `json:"bucket_kind"`
+	BucketDigest []byte             `json:"bucket_digest"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+}
+
 type GuardianAuthorityEvent struct {
 	ID                  int64              `json:"id"`
 	RelationshipID      uuid.UUID          `json:"relationship_id"`
@@ -1723,22 +1822,49 @@ type GuardianAuthorityEvent struct {
 }
 
 type GuardianAuthorityGuardianDisclosure struct {
-	RelationshipID     uuid.UUID          `json:"relationship_id"`
-	RelationshipRef    uuid.UUID          `json:"relationship_ref"`
-	GuardianUserID     uuid.UUID          `json:"guardian_user_id"`
-	SubjectUserID      uuid.UUID          `json:"subject_user_id"`
-	SubmittedLabel     string             `json:"submitted_label"`
-	State              string             `json:"state"`
-	Version            int64              `json:"version"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	VerifiedUntil      pgtype.Timestamptz `json:"verified_until"`
-	ReviewDueAt        pgtype.Timestamptz `json:"review_due_at"`
-	Conflict           bool               `json:"conflict"`
-	SubjectName        string             `json:"subject_name"`
-	DateOfBirth        pgtype.Date        `json:"date_of_birth"`
-	MinorLoginID       string             `json:"minor_login_id"`
-	LeaderboardVisible bool               `json:"leaderboard_visible"`
-	ProfileComplete    bool               `json:"profile_complete"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	RelationshipRef     uuid.UUID          `json:"relationship_ref"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	SubjectUserID       uuid.UUID          `json:"subject_user_id"`
+	SubmittedLabel      string             `json:"submitted_label"`
+	State               string             `json:"state"`
+	Version             int64              `json:"version"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	VerifiedUntil       pgtype.Timestamptz `json:"verified_until"`
+	ReviewDueAt         pgtype.Timestamptz `json:"review_due_at"`
+	Conflict            bool               `json:"conflict"`
+	SubjectName         string             `json:"subject_name"`
+	DateOfBirth         pgtype.Date        `json:"date_of_birth"`
+	MinorLoginID        string             `json:"minor_login_id"`
+	LeaderboardVisible  bool               `json:"leaderboard_visible"`
+	ProfileComplete     bool               `json:"profile_complete"`
+	RenewalRef          *uuid.UUID         `json:"renewal_ref"`
+	ResponseCode        *string            `json:"response_code"`
+	RenewalStatus       *string            `json:"renewal_status"`
+	RenewalExpiryAnchor pgtype.Timestamptz `json:"renewal_expiry_anchor"`
+}
+
+type GuardianAuthorityInvitation struct {
+	ID                     uuid.UUID          `json:"id"`
+	PublicRef              uuid.UUID          `json:"public_ref"`
+	InvitedEmail           *string            `json:"invited_email"`
+	TokenDigest            []byte             `json:"token_digest"`
+	IssuedBy               uuid.UUID          `json:"issued_by"`
+	IssuedAt               pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
+	RevokedBy              *uuid.UUID         `json:"revoked_by"`
+	RevokedAt              pgtype.Timestamptz `json:"revoked_at"`
+	ConsumedBy             *uuid.UUID         `json:"consumed_by"`
+	ConsumedRelationshipID *uuid.UUID         `json:"consumed_relationship_id"`
+	ConsumedAt             pgtype.Timestamptz `json:"consumed_at"`
+}
+
+type GuardianAuthorityLatestRenewal struct {
+	RelationshipID uuid.UUID          `json:"relationship_id"`
+	RenewalRef     uuid.UUID          `json:"renewal_ref"`
+	ResponseCode   string             `json:"response_code"`
+	RenewalStatus  string             `json:"renewal_status"`
+	ExpiryAnchor   pgtype.Timestamptz `json:"expiry_anchor"`
 }
 
 type GuardianAuthorityPolicy struct {
@@ -1756,11 +1882,34 @@ type GuardianAuthorityPolicy struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type GuardianAuthorityPolicyApproval struct {
+	PolicyVersion               string             `json:"policy_version"`
+	PolicySha256                []byte             `json:"policy_sha256"`
+	ApprovalSha256              []byte             `json:"approval_sha256"`
+	ApprovalContract            string             `json:"approval_contract"`
+	ApprovalCanonical           []byte             `json:"approval_canonical"`
+	ExpectedDatabase            string             `json:"expected_database"`
+	AuthorizedOperatorActorRef  uuid.UUID          `json:"authorized_operator_actor_ref"`
+	ControllerRole              string             `json:"controller_role"`
+	ControllerApprovalReference string             `json:"controller_approval_reference"`
+	ControllerApprovedOn        pgtype.Date        `json:"controller_approved_on"`
+	EffectiveOn                 pgtype.Date        `json:"effective_on"`
+	ReviewDueOn                 pgtype.Date        `json:"review_due_on"`
+	LegalReviewerReference      string             `json:"legal_reviewer_reference"`
+	LegalReviewReference        string             `json:"legal_review_reference"`
+	LegalReviewedOn             pgtype.Date        `json:"legal_reviewed_on"`
+	LegalReviewConclusion       string             `json:"legal_review_conclusion"`
+	BoundImageDigest            string             `json:"bound_image_digest"`
+	BoundSchemaMigrationDigest  string             `json:"bound_schema_migration_digest"`
+	BoundBy                     uuid.UUID          `json:"bound_by"`
+	BoundAt                     pgtype.Timestamptz `json:"bound_at"`
+}
+
 type GuardianAuthorityPolicyEvent struct {
 	ID            int64              `json:"id"`
 	PolicyID      uuid.UUID          `json:"policy_id"`
 	PolicyVersion string             `json:"policy_version"`
-	ActorRef      uuid.UUID          `json:"actor_ref"`
+	ActorRef      *uuid.UUID         `json:"actor_ref"`
 	Action        string             `json:"action"`
 	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
 }
@@ -1782,6 +1931,65 @@ type GuardianAuthorityRelationship struct {
 	ConflictActorRef *uuid.UUID         `json:"conflict_actor_ref"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GuardianAuthorityRenewalEvent struct {
+	ID                  int64              `json:"id"`
+	RenewalID           uuid.UUID          `json:"renewal_id"`
+	ActorRef            *uuid.UUID         `json:"actor_ref"`
+	ActorRole           string             `json:"actor_role"`
+	Action              string             `json:"action"`
+	RelationshipVersion int64              `json:"relationship_version"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type GuardianAuthorityRenewalReminder struct {
+	ID                  uuid.UUID          `json:"id"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	GuardianUserID      uuid.UUID          `json:"guardian_user_id"`
+	RecipientVerifiedAt pgtype.Timestamptz `json:"recipient_verified_at"`
+	ExpiryAnchor        pgtype.Timestamptz `json:"expiry_anchor"`
+	ReminderKind        string             `json:"reminder_kind"`
+	QueuedAt            pgtype.Timestamptz `json:"queued_at"`
+}
+
+type GuardianAuthorityRenewalRequest struct {
+	ID                  uuid.UUID          `json:"id"`
+	PublicRef           uuid.UUID          `json:"public_ref"`
+	RelationshipID      uuid.UUID          `json:"relationship_id"`
+	RelationshipVersion int64              `json:"relationship_version"`
+	ExpiryAnchor        pgtype.Timestamptz `json:"expiry_anchor"`
+	ResponseCode        string             `json:"response_code"`
+	SubmittedAt         pgtype.Timestamptz `json:"submitted_at"`
+}
+
+type GuardianAuthorityReviewAccessEvent struct {
+	ID             int64              `json:"id"`
+	RelationshipID *uuid.UUID         `json:"relationship_id"`
+	ActorRef       uuid.UUID          `json:"actor_ref"`
+	ViewKind       string             `json:"view_kind"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type GuardianOpsRuntimeReleaseBinding struct {
+	Singleton             bool               `json:"singleton"`
+	DatabaseName          *string            `json:"database_name"`
+	ImageDigest           *string            `json:"image_digest"`
+	SchemaMigrationDigest *string            `json:"schema_migration_digest"`
+	Generation            int64              `json:"generation"`
+	BoundAt               pgtype.Timestamptz `json:"bound_at"`
+}
+
+type GuardianOpsRuntimeReleaseBindingEvent struct {
+	ID                    int64              `json:"id"`
+	Generation            int64              `json:"generation"`
+	DatabaseName          string             `json:"database_name"`
+	ImageDigest           string             `json:"image_digest"`
+	SchemaMigrationDigest string             `json:"schema_migration_digest"`
+	RelationshipCount     int64              `json:"relationship_count"`
+	CredentialCount       int64              `json:"credential_count"`
+	SessionCount          int64              `json:"session_count"`
+	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
 }
 
 type GuardianVerifierGrant struct {

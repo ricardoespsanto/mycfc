@@ -14,6 +14,54 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+func TestProvisionGuardianActivationRoleHasOnlyFixedOperatorAPI(t *testing.T) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	installGuardianActivationInventory(t, ctx, tx)
+	if err = ProvisionGuardianActivationRole(ctx, tx, conn.Config().Database, guardianActivationRole, "integration-only-password"); err != nil {
+		t.Fatal(err)
+	}
+
+	var connect, operatorUsage, publicUsage, metadataUsage, tableRead, runtimeRead, status, preflight, enable, disable, helper, releaseBind bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_database_privilege($1,current_database(),'CONNECT'),
+		has_schema_privilege($1,'guardian_ops','USAGE'),
+		has_schema_privilege($1,'public','USAGE'),
+		has_schema_privilege($1,'mycfc_meta','USAGE'),
+		has_table_privilege($1,'guardian_authority_policy_approvals','SELECT'),
+		has_table_privilege($1,'guardian_ops.runtime_release_binding','SELECT'),
+		has_function_privilege($1,'guardian_ops.status(text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.enable(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.disable(uuid,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.schema_ready(text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.release_disable_and_bind(text,text,text)','EXECUTE')`, guardianActivationRole).
+		Scan(&connect, &operatorUsage, &publicUsage, &metadataUsage, &tableRead, &runtimeRead, &status, &preflight, &enable, &disable, &helper, &releaseBind); err != nil {
+		t.Fatal(err)
+	}
+	if !connect || !operatorUsage || publicUsage || metadataUsage || tableRead || runtimeRead || !status || !preflight || !enable || !disable || helper || releaseBind {
+		t.Fatalf("operator boundary connect=%v ops=%v public=%v metadata=%v table=%v runtime=%v status=%v preflight=%v enable=%v disable=%v helper=%v release=%v",
+			connect, operatorUsage, publicUsage, metadataUsage, tableRead, runtimeRead, status, preflight, enable, disable, helper, releaseBind)
+	}
+	var superuser, createDB, createRole, inherit, replication, bypassRLS bool
+	if err = tx.QueryRow(ctx, `SELECT rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=$1`, guardianActivationRole).
+		Scan(&superuser, &createDB, &createRole, &inherit, &replication, &bypassRLS); err != nil {
+		t.Fatal(err)
+	}
+	if superuser || createDB || createRole || inherit || replication || bypassRLS {
+		t.Fatalf("operator role attributes super=%v createdb=%v createrole=%v inherit=%v replication=%v bypassrls=%v", superuser, createDB, createRole, inherit, replication, bypassRLS)
+	}
+}
+
 func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
@@ -32,10 +80,14 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	appRole := "privacy_web_" + suffix
 	executorRole := "privacy_worker_" + suffix
 	observerRole := "privacy_observer_" + suffix
-	for _, role := range []string{appRole, executorRole, observerRole} {
+	migrationRole := "migration_release_" + suffix
+	for _, role := range []string{appRole, executorRole, observerRole, migrationRole} {
 		if _, err = tx.Exec(ctx, `CREATE ROLE `+quoteIdentifier(role)+` NOLOGIN`); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err = tx.Exec(ctx, `GRANT USAGE ON SCHEMA public TO `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_retention') THEN CREATE ROLE mycfc_privacy_retention NOLOGIN; END IF; END $$`); err != nil {
 		t.Fatal(err)
@@ -46,9 +98,22 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	if _, err = tx.Exec(ctx, `GRANT EXECUTE ON FUNCTION privacy_upload_begin(uuid,uuid,uuid,text,uuid,text,text,bigint,bytea) TO `+quoteIdentifier(executorRole)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = tx.Exec(ctx, `GRANT ALL PRIVILEGES ON TABLE guardian_authority_invitations, guardian_application_rate_events, guardian_application_intake_release, guardian_application_intake_release_events, guardian_authority_review_access_events, guardian_authority_renewal_requests, guardian_authority_renewal_events, guardian_authority_renewal_reminders, guardian_age_handoffs, guardian_age_handoff_events, guardian_age_handoff_email_tokens, guardian_age_handoff_notices, guardian_age_handoff_access_events TO `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `GRANT ALL PRIVILEGES ON SEQUENCE guardian_age_handoff_events_id_seq,guardian_age_handoff_access_events_id_seq TO PUBLIC, `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	guardianAdminID := uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth,email_verified_at) VALUES($1,'Guardian privilege administrator',$2,'unused','1990-01-01',clock_timestamp())`, guardianAdminID, "guardian-privilege-"+suffix+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, guardianAdminID); err != nil {
+		t.Fatal(err)
+	}
 	credentials := RoleCredentials{
 		AppUsername: appRole, AppPassword: "unused-app-password",
-		MigrationUsername: "unused_migrator", MigrationPassword: "unused-migration-password",
+		MigrationUsername: migrationRole, MigrationPassword: "unused-migration-password",
 		PrivacyExecutorUsername: executorRole, PrivacyExecutorPassword: "unused-executor-password",
 		PrivacyRestoreObserverUsername: observerRole, PrivacyRestoreObserverPassword: "unused-observer-password",
 	}
@@ -56,6 +121,30 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		if err = HardenPrivacyExecutionRoles(ctx, tx, conn.Config().Database, credentials); err != nil {
 			t.Fatal(err)
 		}
+	}
+	var webGuardianOps, webGuardianApprovalRead, webGuardianEnable bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_schema_privilege($1,'guardian_ops','USAGE'),
+		has_table_privilege($1,'guardian_authority_policy_approvals','SELECT'),
+		has_function_privilege($1,'guardian_ops.enable(uuid,text,bytea,bytea,text,text,text)','EXECUTE')`, appRole).
+		Scan(&webGuardianOps, &webGuardianApprovalRead, &webGuardianEnable); err != nil {
+		t.Fatal(err)
+	}
+	if webGuardianOps || webGuardianApprovalRead || webGuardianEnable {
+		t.Fatalf("web guardian control plane ops=%v approval_read=%v enable=%v", webGuardianOps, webGuardianApprovalRead, webGuardianEnable)
+	}
+	var releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'guardian_ops.release_disable_and_bind(text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.enable(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_ops.disable(uuid,text)','EXECUTE'),
+		has_table_privilege($1,'guardian_ops.runtime_release_binding','SELECT')`, migrationRole).
+		Scan(&releaseBind, &releaseEnable, &releasePreflight, &releaseDisable, &releaseTableRead); err != nil {
+		t.Fatal(err)
+	}
+	if releaseBind || releaseEnable || releasePreflight || releaseDisable || releaseTableRead {
+		t.Fatalf("release boundary bind=%t enable=%t preflight=%t disable=%t table=%t", releaseBind, releaseEnable, releasePreflight, releaseDisable, releaseTableRead)
 	}
 
 	for _, check := range []struct {
@@ -86,6 +175,42 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		{"web cannot append protected upload events", appRole, "privacy_protected.object_upload_intent_events", "INSERT", false},
 		{"worker cannot read protected upload intents directly", executorRole, "privacy_protected.object_upload_intents", "SELECT", false},
 		{"worker cannot append protected upload events directly", executorRole, "privacy_protected.object_upload_intent_events", "INSERT", false},
+		{"web cannot read guardian invitations", appRole, "guardian_authority_invitations", "SELECT", false},
+		{"web cannot insert guardian invitations", appRole, "guardian_authority_invitations", "INSERT", false},
+		{"web cannot update guardian invitations", appRole, "guardian_authority_invitations", "UPDATE", false},
+		{"web cannot delete guardian invitations", appRole, "guardian_authority_invitations", "DELETE", false},
+		{"web cannot read guardian rate events", appRole, "guardian_application_rate_events", "SELECT", false},
+		{"web cannot insert guardian rate events", appRole, "guardian_application_rate_events", "INSERT", false},
+		{"web cannot update guardian rate events", appRole, "guardian_application_rate_events", "UPDATE", false},
+		{"web cannot delete guardian rate events", appRole, "guardian_application_rate_events", "DELETE", false},
+		{"web cannot read guardian intake release gate", appRole, "guardian_application_intake_release", "SELECT", false},
+		{"web cannot insert guardian intake release gate", appRole, "guardian_application_intake_release", "INSERT", false},
+		{"web cannot update guardian intake release gate", appRole, "guardian_application_intake_release", "UPDATE", false},
+		{"web cannot delete guardian intake release gate", appRole, "guardian_application_intake_release", "DELETE", false},
+		{"web cannot read guardian intake release audit", appRole, "guardian_application_intake_release_events", "SELECT", false},
+		{"web cannot insert guardian intake release audit", appRole, "guardian_application_intake_release_events", "INSERT", false},
+		{"web cannot update guardian intake release audit", appRole, "guardian_application_intake_release_events", "UPDATE", false},
+		{"web cannot delete guardian intake release audit", appRole, "guardian_application_intake_release_events", "DELETE", false},
+		{"web cannot read guardian review access audit", appRole, "guardian_authority_review_access_events", "SELECT", false},
+		{"web cannot insert guardian review access audit", appRole, "guardian_authority_review_access_events", "INSERT", false},
+		{"web cannot update guardian review access audit", appRole, "guardian_authority_review_access_events", "UPDATE", false},
+		{"web cannot delete guardian review access audit", appRole, "guardian_authority_review_access_events", "DELETE", false},
+		{"web cannot read guardian renewal requests", appRole, "guardian_authority_renewal_requests", "SELECT", false},
+		{"web cannot insert guardian renewal requests", appRole, "guardian_authority_renewal_requests", "INSERT", false},
+		{"web cannot update guardian renewal events", appRole, "guardian_authority_renewal_events", "UPDATE", false},
+		{"web cannot delete guardian renewal events", appRole, "guardian_authority_renewal_events", "DELETE", false},
+		{"web cannot read guardian reminder evidence", appRole, "guardian_authority_renewal_reminders", "SELECT", false},
+		{"web cannot insert guardian reminder evidence", appRole, "guardian_authority_renewal_reminders", "INSERT", false},
+		{"web cannot read guardian handoffs", appRole, "guardian_age_handoffs", "SELECT", false},
+		{"web cannot update guardian handoffs", appRole, "guardian_age_handoffs", "UPDATE", false},
+		{"web cannot read guardian handoff events", appRole, "guardian_age_handoff_events", "SELECT", false},
+		{"web cannot insert guardian handoff events", appRole, "guardian_age_handoff_events", "INSERT", false},
+		{"web cannot read guardian handoff tokens", appRole, "guardian_age_handoff_email_tokens", "SELECT", false},
+		{"web cannot delete guardian handoff tokens", appRole, "guardian_age_handoff_email_tokens", "DELETE", false},
+		{"web cannot read guardian handoff notices", appRole, "guardian_age_handoff_notices", "SELECT", false},
+		{"web cannot insert guardian handoff notices", appRole, "guardian_age_handoff_notices", "INSERT", false},
+		{"web cannot read guardian handoff access audit", appRole, "guardian_age_handoff_access_events", "SELECT", false},
+		{"web cannot mutate guardian handoff access audit", appRole, "guardian_age_handoff_access_events", "UPDATE", false},
 	} {
 		t.Run(check.name, func(t *testing.T) {
 			var got bool
@@ -96,6 +221,37 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 				t.Fatalf("has_table_privilege(%q, %q, %q)=%t want %t", check.role, check.table, check.privilege, got, check.want)
 			}
 		})
+	}
+	var appCanReadHandoff, appCanReadGuardianHandoff, appCanProposeHandoff, appCanConfirmHandoff bool
+	if err := tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'guardian_age_handoff_for_subject(uuid)','EXECUTE'),
+		has_function_privilege($1,'guardian_age_handoff_for_guardian(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea)','EXECUTE'),
+		has_function_privilege($1,'guardian_age_handoff_admin_confirm(uuid,uuid,bigint)','EXECUTE')`, appRole).Scan(&appCanReadHandoff, &appCanReadGuardianHandoff, &appCanProposeHandoff, &appCanConfirmHandoff); err != nil {
+		t.Fatal(err)
+	}
+	if !appCanReadHandoff || !appCanReadGuardianHandoff || !appCanProposeHandoff || !appCanConfirmHandoff {
+		t.Fatalf("handoff routine boundary subject_read=%v guardian_read=%v propose=%v confirm=%v", appCanReadHandoff, appCanReadGuardianHandoff, appCanProposeHandoff, appCanConfirmHandoff)
+	}
+	for _, sequence := range []string{"guardian_age_handoff_events_id_seq", "guardian_age_handoff_access_events_id_seq"} {
+		var appUsage, publicUsage bool
+		if err := tx.QueryRow(ctx, `SELECT has_sequence_privilege($1,$2,'USAGE'),EXISTS(
+			SELECT 1 FROM pg_class sequence JOIN LATERAL aclexplode(COALESCE(sequence.relacl,acldefault('S',sequence.relowner))) acl ON true
+			WHERE sequence.oid=$2::regclass AND acl.grantee=0 AND acl.privilege_type IN('USAGE','SELECT','UPDATE'))`, appRole, sequence).Scan(&appUsage, &publicUsage); err != nil {
+			t.Fatal(err)
+		}
+		if appUsage || publicUsage {
+			t.Fatalf("sequence %q remained available app=%v public=%v", sequence, appUsage, publicUsage)
+		}
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT * FROM guardian_age_handoff_list_for_admin($1,1,0)`, guardianAdminID); err != nil {
+		t.Fatalf("security-definer handoff audit append failed: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
 	}
 	for _, role := range []string{appRole, executorRole} {
 		var usage bool
@@ -186,6 +342,57 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		t.Fatalf("web function boundary upload=%v cleanup=%v capture=%v materialize=%v complete_capture=%v object_list=%v provider_capture=%v provider_materialize=%v provider_complete=%v provider_list=%v",
 			appCanUpload, appCanCleanup, appCanCapture, appCanMaterialize, appCanCompleteCapture, appCanListObjects,
 			appCanCaptureProviders, appCanMaterializeProvider, appCanCompleteProviderCapture, appCanListProviders)
+	}
+	var appCanIssueInvitation, appCanListInvitations, appCanRevokeInvitation, appCanReserveGuardianRate, appCanAuditReview, appCanReviewDecision bool
+	var appCanSubmitRenewal, appCanListRenewalReminders, appCanEnqueueRenewalReminder bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'guardian_authority_issue_invitation(uuid,citext,bytea)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_list_invitations(uuid,integer)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_revoke_invitation(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'guardian_application_reserve(bytea,bytea,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_record_review_view(uuid,uuid)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_submit_renewal(uuid,uuid,bigint,text)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_due_renewal_reminders(integer)','EXECUTE'),
+		has_function_privilege($1,'guardian_authority_enqueue_renewal_reminder(uuid,uuid,citext,timestamptz,timestamptz,text,bytea)','EXECUTE')`, appRole).
+		Scan(&appCanIssueInvitation, &appCanListInvitations, &appCanRevokeInvitation, &appCanReserveGuardianRate, &appCanAuditReview, &appCanReviewDecision,
+			&appCanSubmitRenewal, &appCanListRenewalReminders, &appCanEnqueueRenewalReminder); err != nil {
+		t.Fatal(err)
+	}
+	if !appCanIssueInvitation || !appCanListInvitations || !appCanRevokeInvitation || !appCanReserveGuardianRate || !appCanAuditReview || !appCanReviewDecision || !appCanSubmitRenewal || !appCanListRenewalReminders || !appCanEnqueueRenewalReminder {
+		t.Fatalf("web guardian routine boundary issue=%t list=%t revoke=%t reserve=%t audit_review=%t decide=%t submit_renewal=%t list_reminders=%t enqueue_reminder=%t",
+			appCanIssueInvitation, appCanListInvitations, appCanRevokeInvitation, appCanReserveGuardianRate, appCanAuditReview, appCanReviewDecision, appCanSubmitRenewal, appCanListRenewalReminders, appCanEnqueueRenewalReminder)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	digest := make([]byte, 32)
+	for index := range digest {
+		digest[index] = byte(index + 1)
+	}
+	var invitationRef uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT public_ref FROM guardian_authority_issue_invitation($1::uuid,$2::citext,$3::bytea)`, guardianAdminID, "invited-"+suffix+"@example.test", digest).Scan(&invitationRef); err != nil {
+		t.Fatalf("web role could not issue invitation through intended routine: %v", err)
+	}
+	var invitationCount int
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM guardian_authority_list_invitations($1::uuid,10)`, guardianAdminID).Scan(&invitationCount); err != nil || invitationCount != 1 {
+		t.Fatalf("web role could not project invitations through intended routine: count=%d err=%v", invitationCount, err)
+	}
+	var revoked int64
+	if err = tx.QueryRow(ctx, `SELECT guardian_authority_revoke_invitation($1::uuid,$2::uuid)`, guardianAdminID, invitationRef).Scan(&revoked); err != nil || revoked != 1 {
+		t.Fatalf("web role could not revoke invitation through intended routine: changed=%d err=%v", revoked, err)
+	}
+	networkDigest := make([]byte, 32)
+	copy(networkDigest, digest)
+	networkDigest[0] = 255
+	if _, err = tx.Exec(ctx, `SELECT guardian_application_reserve($1::bytea,$2::bytea,'SUBMISSION')`, digest, networkDigest); err != nil {
+		t.Fatalf("web role could not reserve guardian rate through intended routine: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT guardian_authority_record_review_view($1::uuid,NULL::uuid)`, guardianAdminID); err != nil {
+		t.Fatalf("web role could not append review access through intended routine: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
 	}
 	var retentionLogin, retentionReadsUsers, retentionReadsRuns, retentionProtectedUsage bool
 	var retentionRuns, retentionStatus, retentionInternal, retentionCleanup bool

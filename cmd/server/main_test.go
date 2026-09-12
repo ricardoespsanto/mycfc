@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -18,6 +20,7 @@ type databaseCommandConnectionFake struct {
 	statements int
 	sql        []string
 	tx         pgx.Tx
+	commitErr  error
 }
 
 func (c *databaseCommandConnectionFake) Close(context.Context) error { return nil }
@@ -26,7 +29,14 @@ func (c *databaseCommandConnectionFake) Exec(_ context.Context, statement string
 	c.sql = append(c.sql, statement)
 	return pgconn.NewCommandTag("OK"), nil
 }
-func (c *databaseCommandConnectionFake) Begin(context.Context) (pgx.Tx, error) { return c.tx, nil }
+func (c *databaseCommandConnectionFake) Begin(context.Context) (pgx.Tx, error) {
+	if c.tx != nil {
+		return c.tx, nil
+	}
+	return c, nil
+}
+func (c *databaseCommandConnectionFake) Commit(context.Context) error   { return c.commitErr }
+func (c *databaseCommandConnectionFake) Rollback(context.Context) error { return nil }
 
 type databaseMigrationTransactionFake struct{ pgx.Tx }
 
@@ -249,6 +259,126 @@ func TestRunDatabaseCommandExplicitlyProvisionsBreakGlassDisableRole(t *testing.
 	t.Setenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL", "postgres://wrong:independent@postgres:5432/mycfc?sslmode=disable")
 	if err := runDatabaseCommand(t.Context(), "provision-privacy-activation-disable"); err == nil {
 		t.Fatal("wrong break-glass role was accepted")
+	}
+}
+
+func TestRunDatabaseCommandExplicitlyProvisionsGuardianActivationRole(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_ACTIVATION_DATABASE_URL", "postgres://mycfc_guardian_activation_operator:independent@postgres:5432/mycfc?sslmode=disable")
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connection := &databaseCommandConnectionFake{}
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
+	if err := runDatabaseCommand(t.Context(), "provision-guardian-activation"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(connection.sql, "\n")
+	if !strings.Contains(joined, `CREATE ROLE "mycfc_guardian_activation_operator" LOGIN`) ||
+		!strings.Contains(joined, `GRANT EXECUTE ON FUNCTION guardian_ops.status(text,text,text)`) {
+		t.Fatalf("provisioning statements=%#v", connection.sql)
+	}
+
+	t.Setenv("GUARDIAN_ACTIVATION_DATABASE_URL", "postgres://mycfc_app:independent@postgres:5432/mycfc?sslmode=disable")
+	if err := runDatabaseCommand(t.Context(), "provision-guardian-activation"); err == nil {
+		t.Fatal("web role was accepted as guardian activation operator")
+	}
+}
+
+func TestRunDatabaseCommandBindsGuardianReleaseThroughDisableOnlyAPI(t *testing.T) {
+	releaseURL := "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable"
+	t.Setenv("DATABASE_URL", "postgres://mycfc_migrator:forbidden@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", releaseURL)
+	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connection := &databaseCommandConnectionFake{}
+	connectedURL := ""
+	connectDatabaseCommand = func(_ context.Context, url string) (databaseCommandConnection, error) {
+		connectedURL = url
+		return connection, nil
+	}
+	if err := runDatabaseCommand(t.Context(), "bind-guardian-release"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(connection.sql, "\n")
+	if connectedURL != releaseURL || !strings.Contains(joined, "guardian_ops.release_disable_and_bind") || strings.Contains(joined, "guardian_ops.enable") {
+		t.Fatalf("connected=%q release binding statements=%#v", connectedURL, connection.sql)
+	}
+
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:invalid")
+	if err := runDatabaseCommand(t.Context(), "bind-guardian-release"); err == nil {
+		t.Fatal("invalid release image digest accepted")
+	}
+}
+
+func TestRunDatabaseCommandExplicitlyProvisionsGuardianReleaseBindRole(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
+	original := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = original })
+	connection := &databaseCommandConnectionFake{}
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
+	if err := runDatabaseCommand(t.Context(), "provision-guardian-release-bind"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(connection.sql, "\n")
+	if !strings.Contains(joined, `CREATE ROLE "mycfc_guardian_release_bind" LOGIN`) ||
+		!strings.Contains(joined, `GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text)`) ||
+		strings.Contains(joined, `guardian_ops.enable`) {
+		t.Fatalf("provisioning statements=%#v", connection.sql)
+	}
+
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_migrate:forbidden@postgres:5432/mycfc?sslmode=disable")
+	if err := runDatabaseCommand(t.Context(), "provision-guardian-release-bind"); err == nil {
+		t.Fatal("migration role was accepted as guardian release bind identity")
+	}
+}
+
+func TestProvisionGuardianReleaseBindEmitsSuccessOnlyAfterCommit(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://postgres:bootstrap-secret@localhost:5432/mycfc?sslmode=disable")
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent-secret@postgres:5432/mycfc?sslmode=disable")
+	originalConnect := connectDatabaseCommand
+	t.Cleanup(func() { connectDatabaseCommand = originalConnect })
+	var output bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{ReplaceAttr: func(_ []string, attribute slog.Attr) slog.Attr {
+		if attribute.Key == slog.TimeKey {
+			return slog.Attr{}
+		}
+		return attribute
+	}})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	connection := &databaseCommandConnectionFake{}
+	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
+	for range 2 {
+		if err := runDatabaseCommand(t.Context(), "provision-guardian-release-bind"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const success = "event=guardian_release_bind_role_provisioned"
+	if count := strings.Count(output.String(), success); count != 2 {
+		t.Fatalf("success event count=%d output=%q", count, output.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+		if !strings.Contains(line, success) {
+			continue
+		}
+		for _, forbidden := range []string{"bootstrap-secret", "independent-secret", "postgres://", "mycfc_guardian_release_bind", "database_name=", "database_host=", "connection_role="} {
+			if strings.Contains(line, forbidden) {
+				t.Fatalf("success event contains forbidden identity or credential %q: %q", forbidden, line)
+			}
+		}
+	}
+
+	output.Reset()
+	connection.commitErr = errors.New("commit failed")
+	if err := runDatabaseCommand(t.Context(), "provision-guardian-release-bind"); err == nil {
+		t.Fatal("commit failure was accepted")
+	}
+	if strings.Contains(output.String(), success) {
+		t.Fatalf("success emitted before commit: %q", output.String())
 	}
 }
 

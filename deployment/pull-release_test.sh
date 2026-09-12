@@ -150,6 +150,11 @@ APP_RELEASED_AT=2026-08-09T00:00:00Z
 GIT_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 EOF
 	chmod 0600 "$case_dir/mycfc.env"
+	cat >"$case_dir/guardian-release-bind.env" <<'EOF'
+GUARDIAN_RELEASE_BIND_DATABASE_URL=postgres://mycfc_guardian_release_bind:test@postgres:5432/mycfc?sslmode=disable
+GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE=mycfc
+EOF
+	chmod 0600 "$case_dir/guardian-release-bind.env"
 	: >"$case_dir/release-aws/credentials"
 	chmod 0600 "$case_dir/release-aws/credentials"
 	printf 'legacy\n' >"$case_dir/state/active-slot"
@@ -179,9 +184,23 @@ run_release() {
 		MYCFC_DEPLOYMENT_STATE_DIR="$case_dir/state" \
 		MYCFC_RUNTIME_DIR="$case_dir/runtime" \
 		MYCFC_RELEASE_AWS_CREDENTIALS_FILE="$case_dir/release-aws/credentials" \
+		MYCFC_GUARDIAN_RELEASE_BIND_ENV_FILE="$case_dir/guardian-release-bind.env" \
 		"$@" \
 		sh "$deployment_dir/pull-release.sh"
 }
+
+invalid_release_bind_case="$work_dir/invalid-release-bind"
+setup_case "$invalid_release_bind_case"
+printf '%s\n' 'MIGRATION_DATABASE_URL=postgres://forbidden' >>"$invalid_release_bind_case/guardian-release-bind.env"
+if run_release "$invalid_release_bind_case"; then
+	printf '%s\n' 'release accepted migration credentials in the release-bind file' >&2
+	exit 1
+fi
+grep -q 'event=guardian_release_bind_configuration_rejected' "$invalid_release_bind_case/events.log"
+if [ -s "$invalid_release_bind_case/aws.log" ]; then
+	printf '%s\n' 'release contacted AWS before rejecting release-bind configuration' >&2
+	exit 1
+fi
 
 success_case="$work_dir/success"
 setup_case "$success_case"
@@ -207,7 +226,7 @@ awk '
 	/release_deployment-completed/ { completed = NR }
 	END { exit !(agent < detected && detected < pulled && pulled < migrated && migrated < ready && ready < switched && switched < completed) }
 ' "$success_case/events.log"
-for phase in postgres_ready database_bootstrap database_migrate database_harden candidate_start candidate_validation traffic_switch post_switch_validation; do
+for phase in postgres_ready database_bootstrap database_migrate database_harden guardian_release_bind candidate_start candidate_validation traffic_switch post_switch_validation; do
 	grep -q "event=deployment_phase_started phase=$phase" "$success_case/events.log"
 	grep -q "event=deployment_phase_completed phase=$phase" "$success_case/events.log"
 done
@@ -230,8 +249,9 @@ awk '
 	/run --rm db-bootstrap$/ { bootstrap = NR }
 	/run --rm migrate$/ { migrated = NR }
 	/run --rm db-bootstrap harden-db$/ { hardened = NR }
+	/run --rm guardian-release-bind$/ { bound = NR }
 	/--profile blue up -d --no-deps --force-recreate app-blue$/ { candidate = NR }
-	END { exit !(bootstrap < migrated && migrated < hardened && hardened < candidate) }
+	END { exit !(bootstrap < migrated && migrated < hardened && hardened < bound && bound < candidate) }
 ' "$success_case/docker.log"
 grep -q 'exec -T caddy caddy reload' "$success_case/docker.log"
 grep -q "^mycfc-release|$success_case/release-aws/credentials$" "$success_case/aws.log"
@@ -444,7 +464,7 @@ if printf '%s\n' "$database_service_config" | grep -Eq 'APP_DB_|MIGRATION_DB_|^[
 	printf '%s\n' 'production database jobs must not consume duplicated host database settings' >&2
 	exit 1
 fi
-test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 3
+test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 5
 production_config=$(sed -n '/^x-production-config:/,/^x-app:/p' "$compose_file")
 for field in APP_ENV APP_VERSION GIT_SHA AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
 	printf '%s\n' "$production_config" | grep -q "^[[:space:]]*$field:"

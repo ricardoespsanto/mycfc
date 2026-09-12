@@ -7040,7 +7040,7 @@ INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at)
 -- fails closed during a rolling deployment.
 
 ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v6_check;
-ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v8_check CHECK(
+ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v10_check CHECK(
  ((kind='RESTORE' AND provider_inventory_contract IS NULL AND signing_key_id IS NULL AND immutable_evidence_ref IS NOT NULL AND schema_migration_digest IS NOT NULL
    AND baseline_includes_through IS NULL AND restore_input_source IN('LIVE_LEDGER','SYNTHETIC_BOOTSTRAP')
    AND restore_input_contract='mycfc/privacy-restore-ledger-input/v2' AND restore_replay_contract='relational-erasure-replay/v1'
@@ -7069,21 +7069,21 @@ ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_ac
    AND baseline_includes_through IN('202609100014_privacy_activation_broker','202609100015_privacy_membership_postcondition',
     '202609110001_privacy_upload_finalize_execution_fence','202609110002_privacy_empty_provider_registry_activation',
     '202609110003_privacy_activation_emergency_fence','202609110004_guardian_authority_verification',
-    '202609110005_guardian_authority_cutoff_reconciliation'))) IS TRUE) NOT VALID;
-ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v8_check;
+    '202609110005_guardian_authority_cutoff_reconciliation','202609120001_guardian_application_eligibility','202609120002_guardian_authority_admin_review'))) IS TRUE) NOT VALID;
+ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v10_check;
 
 DO $$DECLARE definition text;old_clause text;new_clause text;
 BEGIN
  SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
  old_clause:='p_artifact->>''baseline_includes_through''<>''202609110003_privacy_activation_emergency_fence''';
- new_clause:='p_artifact->>''baseline_includes_through''<>''202609110005_guardian_authority_cutoff_reconciliation''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609120002_guardian_authority_admin_review''';
  IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_activation_evidence_predecessor_mismatch'; END IF;
  EXECUTE replace(definition,old_clause,new_clause);
 
  SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
  old_clause:='schema_row.baseline_includes_through=''202609110003_privacy_activation_emergency_fence''';
- new_clause:='schema_row.baseline_includes_through=''202609110005_guardian_authority_cutoff_reconciliation''';
+ new_clause:='schema_row.baseline_includes_through=''202609120002_guardian_authority_admin_review''';
  IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_activation_digest_predecessor_mismatch'; END IF;
  EXECUTE replace(definition,old_clause,new_clause);
@@ -7122,8 +7122,24 @@ CREATE TABLE guardian_authority_policy_events (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  policy_id uuid NOT NULL REFERENCES guardian_authority_policies(id) ON DELETE RESTRICT,
  policy_version varchar(80) NOT NULL,
- actor_ref uuid NOT NULL,
- action varchar(20) NOT NULL CHECK(action IN('ADOPTED','ENABLED','DISABLED')),
+ actor_ref uuid NULL,
+ action varchar(20) NOT NULL CHECK(action IN('ADOPTED','ENABLED','DISABLED','MIGRATION_DISABLED')),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((action='MIGRATION_DISABLED' AND actor_ref IS NULL) OR (action<>'MIGRATION_DISABLED' AND actor_ref IS NOT NULL))
+);
+
+CREATE TABLE guardian_application_intake_release (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+ gate_version text NOT NULL CHECK(gate_version='guardian-intake-v2'),
+ enabled boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CONSTRAINT guardian_application_intake_release_disabled_check CHECK(NOT enabled)
+);
+CREATE TABLE guardian_application_intake_release_events (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ gate_version text NOT NULL,
+ action text NOT NULL CHECK(action='CREATED_DISABLED'),
+ actor_ref uuid NULL CHECK(actor_ref IS NULL),
  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
@@ -7191,7 +7207,7 @@ CREATE TABLE guardian_authority_events (
  relationship_id uuid NOT NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,
  relationship_version bigint NOT NULL CHECK(relationship_version>0),
  actor_ref uuid NULL,
- actor_role varchar(20) NOT NULL CHECK(actor_role IN('GUARDIAN','VERIFIER','SYSTEM')),
+ actor_role varchar(20) NOT NULL CHECK(actor_role IN('GUARDIAN','VERIFIER','ADMIN','SYSTEM')),
  action varchar(24) NOT NULL CHECK(action IN('DECLARED','VERIFIED','SUSPENDED','EXPIRED','REJECTED')),
  from_state varchar(20) NULL CHECK(from_state IS NULL OR from_state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED','REJECTED')),
  to_state varchar(20) NOT NULL CHECK(to_state IN('PENDING','VERIFIED','SUSPENDED','EXPIRED','REJECTED')),
@@ -7205,12 +7221,20 @@ CREATE TABLE guardian_authority_events (
  review_due_at timestamptz NULL,
  UNIQUE(relationship_id,relationship_version),
  CHECK((actor_role='SYSTEM' AND actor_ref IS NULL) OR (actor_role<>'SYSTEM' AND actor_ref IS NOT NULL)),
- CHECK((evidence_type IS NULL AND evidence_reference IS NULL AND evidence_sha256 IS NULL) OR
-       (evidence_type IS NOT NULL AND evidence_reference IS NOT NULL AND octet_length(evidence_sha256)=32)),
+ CHECK((actor_role='ADMIN' AND evidence_type IS NOT NULL AND evidence_reference IS NULL AND evidence_sha256 IS NULL) OR
+       (actor_role<>'ADMIN' AND ((evidence_type IS NULL AND evidence_reference IS NULL AND evidence_sha256 IS NULL) OR
+       (evidence_type IS NOT NULL AND evidence_reference IS NOT NULL AND octet_length(evidence_sha256)=32)))),
  CHECK(evidence_type IS NULL OR (evidence_type=btrim(evidence_type) AND evidence_type~'^[A-Z][A-Z0-9_]{1,39}$')),
  CHECK(evidence_reference IS NULL OR (evidence_reference=btrim(evidence_reference) AND char_length(evidence_reference) BETWEEN 1 AND 200
        AND evidence_reference~'^[A-Za-z0-9][A-Za-z0-9._:/-]*$')),
- CHECK(reason_code IS NULL OR (reason_code=btrim(reason_code) AND reason_code~'^[A-Z][A-Z0-9_]{1,39}$'))
+ CHECK(reason_code IS NULL OR (reason_code=btrim(reason_code) AND reason_code~'^[A-Z][A-Z0-9_]{1,39}$')),
+ CHECK(actor_role<>'ADMIN' OR (
+  evidence_type IN('CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY') AND
+  ((action='VERIFIED' AND reason_code='RELATIONSHIP_CONFIRMED') OR
+   (action='REJECTED' AND reason_code IN('EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED')) OR
+   (action='SUSPENDED' AND reason_code IN('CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY')) OR
+   (action='EXPIRED' AND reason_code='AUTHORITY_ENDED')))),
+ CHECK(actor_role<>'SYSTEM' OR reason_code IS NULL OR reason_code IN('ELIGIBILITY_ENDED','REVIEW_EXPIRED','MAJORITY_REACHED'))
 );
 CREATE INDEX guardian_authority_events_relationship_idx
  ON guardian_authority_events(relationship_id,relationship_version);
@@ -7223,10 +7247,28 @@ END;
 $$;
 CREATE TRIGGER guardian_authority_events_immutable BEFORE UPDATE OR DELETE ON guardian_authority_events
  FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+
+CREATE TABLE guardian_authority_review_access_events (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ relationship_id uuid NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,
+ actor_ref uuid NOT NULL,
+ view_kind varchar(12) NOT NULL CHECK(view_kind IN('QUEUE','DETAIL')),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((view_kind='QUEUE' AND relationship_id IS NULL) OR (view_kind='DETAIL' AND relationship_id IS NOT NULL))
+);
+CREATE INDEX guardian_authority_review_access_events_actor_idx
+ ON guardian_authority_review_access_events(actor_ref,occurred_at);
+CREATE TRIGGER guardian_authority_review_access_events_immutable BEFORE UPDATE OR DELETE ON guardian_authority_review_access_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
 CREATE TRIGGER guardian_verifier_grant_events_immutable BEFORE UPDATE OR DELETE ON guardian_verifier_grant_events
  FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
 CREATE TRIGGER guardian_authority_policy_events_immutable BEFORE UPDATE OR DELETE ON guardian_authority_policy_events
  FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+CREATE TRIGGER guardian_application_intake_release_events_immutable BEFORE UPDATE OR DELETE ON guardian_application_intake_release_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+
+INSERT INTO guardian_application_intake_release(singleton,gate_version,enabled) VALUES(true,'guardian-intake-v2',false);
+INSERT INTO guardian_application_intake_release_events(gate_version,action,actor_ref) VALUES('guardian-intake-v2','CREATED_DISABLED',NULL);
 
 CREATE FUNCTION enforce_guardian_authority_policy_immutability() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -7289,12 +7331,12 @@ DECLARE policy guardian_authority_policies%ROWTYPE;now_at timestamptz:=clock_tim
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority-policy',0));
  IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_policy_administrator_required'; END IF;
- UPDATE guardian_authority_policies SET enabled=p_enabled,enabled_at=CASE WHEN p_enabled THEN now_at ELSE NULL END,
-  enabled_by=CASE WHEN p_enabled THEN p_actor_id ELSE NULL END
- WHERE version=p_version AND enabled IS DISTINCT FROM p_enabled RETURNING * INTO policy;
+	IF p_enabled THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_replacement_required'; END IF;
+	UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL
+	WHERE version=p_version AND enabled RETURNING * INTO policy;
  IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_transition_rejected'; END IF;
  INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action,occurred_at)
- VALUES(policy.id,policy.version,p_actor_id,CASE WHEN p_enabled THEN 'ENABLED' ELSE 'DISABLED' END,now_at);
+	VALUES(policy.id,policy.version,p_actor_id,'DISABLED',now_at);
  RETURN NEXT policy;
 END;
 $$;
@@ -7346,6 +7388,40 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
  ),false);
 $$;
 
+-- Review access is granted to every active adult platform administrator.  A
+-- verifier grant and invitation issuance are deliberately not inputs to this
+-- authorization or involvement decision.
+CREATE FUNCTION guardian_authority_personally_involved(p_actor_id uuid,p_relationship_ref uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT COALESCE(EXISTS(
+  SELECT 1 FROM guardian_authority_relationships target
+  WHERE target.public_ref=p_relationship_ref
+   AND (p_actor_id IN(target.guardian_user_id,target.subject_user_id)
+    OR EXISTS(SELECT 1 FROM guardian_authority_relationships family
+      WHERE family.state<>'REJECTED'
+       AND ((family.guardian_user_id=p_actor_id AND family.subject_user_id IN(target.guardian_user_id,target.subject_user_id))
+        OR (family.subject_user_id=p_actor_id AND family.guardian_user_id IN(target.guardian_user_id,target.subject_user_id)))))
+ ),false);
+$$;
+
+CREATE FUNCTION guardian_authority_record_review_view(p_actor_id uuid,p_relationship_ref uuid) RETURNS boolean
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship_id uuid;
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ IF p_relationship_ref IS NULL THEN
+  INSERT INTO guardian_authority_review_access_events(actor_ref,view_kind) VALUES(p_actor_id,'QUEUE');
+  RETURN true;
+ END IF;
+ SELECT id INTO relationship_id FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref;
+ IF NOT FOUND THEN RETURN false; END IF;
+ INSERT INTO guardian_authority_review_access_events(relationship_id,actor_ref,view_kind)
+ VALUES(relationship_id,p_actor_id,'DETAIL');
+ RETURN true;
+END;
+$$;
+
 CREATE FUNCTION guardian_authority_current(p_guardian_user_id uuid,p_subject_user_id uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
  SELECT COALESCE(EXISTS(
@@ -7369,7 +7445,7 @@ $$;
 
 CREATE FUNCTION guardian_authority_reconcile_cutoffs() RETURNS bigint
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-DECLARE relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();reconciled bigint:=0;
+DECLARE relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();reconciled bigint:=0;end_reason text;
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
  FOR relationship IN
@@ -7386,35 +7462,135 @@ BEGIN
     OR subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
   FOR UPDATE OF authority
  LOOP
+  end_reason:=CASE
+   WHEN EXISTS(SELECT 1 FROM users subject WHERE subject.id=relationship.subject_user_id
+    AND subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) THEN 'MAJORITY_REACHED'
+   WHEN relationship.review_due_at<=now_at OR relationship.verified_until<=now_at THEN 'REVIEW_EXPIRED'
+   ELSE 'ELIGIBILITY_ENDED' END;
   UPDATE guardian_authority_relationships SET state='EXPIRED',version=relationship.version+1,
    conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
   DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id;
   UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at
    WHERE id=relationship.subject_user_id;
   INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
-   policy_version,occurred_at,verified_until,review_due_at)
+   policy_version,reason_code,occurred_at,verified_until,review_due_at)
   VALUES(relationship.id,relationship.version+1,NULL,'SYSTEM','EXPIRED',relationship.state,'EXPIRED',
-   relationship.policy_version,now_at,relationship.verified_until,relationship.review_due_at);
+   relationship.policy_version,end_reason,now_at,relationship.verified_until,relationship.review_due_at);
   reconciled:=reconciled+1;
  END LOOP;
  RETURN reconciled;
 END;
 $$;
 
-CREATE FUNCTION guardian_authority_create_dependent(p_name text,p_date_of_birth date,p_guardian_user_id uuid)
+-- Guardian application eligibility, invitation, and privacy-safe abuse controls.
+-- Invalid credential and invitation probes are limited to 10 attempts per
+-- pseudonymous account and network bucket in 15 minutes.
+CREATE TABLE guardian_authority_invitations (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),public_ref uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+ invited_email citext NULL,token_digest bytea NOT NULL UNIQUE CHECK(octet_length(token_digest)=32),
+ issued_by uuid NOT NULL,issued_at timestamptz NOT NULL DEFAULT clock_timestamp(),expires_at timestamptz NOT NULL,
+ revoked_by uuid NULL,revoked_at timestamptz NULL,
+ consumed_by uuid NULL,consumed_relationship_id uuid NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,consumed_at timestamptz NULL,
+ CHECK(invited_email IS NULL OR (invited_email=btrim(invited_email::text)::citext AND char_length(invited_email::text) BETWEEN 3 AND 254)),CHECK(expires_at>issued_at),
+ CHECK((revoked_at IS NULL AND revoked_by IS NULL) OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL)),
+ CHECK((consumed_at IS NULL AND consumed_by IS NULL AND consumed_relationship_id IS NULL) OR (consumed_at IS NOT NULL AND consumed_by IS NOT NULL AND consumed_relationship_id IS NOT NULL)),
+ CHECK(NOT (revoked_at IS NOT NULL AND consumed_at IS NOT NULL)),
+ CHECK((revoked_at IS NULL AND consumed_at IS NULL) OR invited_email IS NULL)
+);
+CREATE INDEX guardian_authority_invitations_email_idx ON guardian_authority_invitations(invited_email,expires_at) WHERE revoked_at IS NULL AND consumed_at IS NULL;
+
+CREATE TABLE guardian_application_rate_events (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ bucket_kind varchar(40) NOT NULL CHECK(bucket_kind IN('SUBMISSION_ACCOUNT','SUBMISSION_NETWORK','AUTH_ACCOUNT','AUTH_NETWORK','INVITATION_ACCOUNT','INVITATION_NETWORK')),
+ bucket_digest bytea NOT NULL CHECK(octet_length(bucket_digest)=32),occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX guardian_application_rate_events_bucket_idx ON guardian_application_rate_events(bucket_kind,bucket_digest,occurred_at);
+CREATE INDEX guardian_application_rate_events_expiry_idx ON guardian_application_rate_events(occurred_at);
+
+CREATE FUNCTION guardian_authority_issue_invitation(p_actor_id uuid,p_email citext,p_token_digest bytea)
+RETURNS SETOF guardian_authority_invitations LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE result guardian_authority_invitations%ROWTYPE;now_at timestamptz:=clock_timestamp();
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ IF p_email IS NULL OR p_email::text<>lower(btrim(p_email::text)) OR char_length(p_email::text) NOT BETWEEN 3 AND 254 OR octet_length(p_token_digest)<>32 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_invitation_rejected'; END IF;
+ INSERT INTO guardian_authority_invitations(invited_email,token_digest,issued_by,issued_at,expires_at)
+ VALUES(p_email,p_token_digest,p_actor_id,now_at,now_at+interval '30 days') RETURNING * INTO result;RETURN NEXT result;
+END;$$;
+
+CREATE FUNCTION guardian_authority_revoke_invitation(p_actor_id uuid,p_public_ref uuid)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE changed bigint;
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ UPDATE guardian_authority_invitations SET invited_email=NULL,revoked_by=p_actor_id,revoked_at=clock_timestamp()
+ WHERE public_ref=p_public_ref AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at>clock_timestamp();
+ GET DIAGNOSTICS changed=ROW_COUNT;RETURN changed;
+END;$$;
+
+CREATE FUNCTION guardian_authority_list_invitations(p_actor_id uuid,p_row_limit integer)
+RETURNS SETOF guardian_authority_invitations LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) OR p_row_limit NOT BETWEEN 1 AND 100 THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required';END IF;
+ UPDATE guardian_authority_invitations SET invited_email=NULL
+ WHERE invited_email IS NOT NULL AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at<=clock_timestamp();
+ RETURN QUERY SELECT invitation.* FROM guardian_authority_invitations invitation ORDER BY invitation.issued_at DESC,invitation.id DESC LIMIT p_row_limit;
+END;$$;
+
+CREATE FUNCTION guardian_application_reserve(p_account_digest bytea,p_network_digest bytea,p_kind text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE now_at timestamptz:=clock_timestamp();window_size interval;account_kind text;network_kind text;account_limit integer;network_limit integer;
+BEGIN
+ IF octet_length(p_account_digest)<>32 OR octet_length(p_network_digest)<>32 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_application_bucket_rejected'; END IF;
+ CASE p_kind
+  WHEN 'SUBMISSION' THEN window_size:=interval '24 hours';account_kind:='SUBMISSION_ACCOUNT';network_kind:='SUBMISSION_NETWORK';account_limit:=10;network_limit:=100;
+  WHEN 'AUTH_INVALID' THEN window_size:=interval '15 minutes';account_kind:='AUTH_ACCOUNT';network_kind:='AUTH_NETWORK';account_limit:=10;network_limit:=10;
+  WHEN 'INVITATION_INVALID' THEN window_size:=interval '15 minutes';account_kind:='INVITATION_ACCOUNT';network_kind:='INVITATION_NETWORK';account_limit:=10;network_limit:=10;
+  ELSE RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_application_kind_rejected';END CASE;
+ PERFORM pg_advisory_xact_lock(hashtextextended(account_kind||encode(p_account_digest,'hex'),0));
+ PERFORM pg_advisory_xact_lock(hashtextextended(network_kind||encode(p_network_digest,'hex'),0));
+ DELETE FROM guardian_application_rate_events WHERE occurred_at<=now_at-interval '24 hours';
+ IF (SELECT count(*) FROM guardian_application_rate_events WHERE bucket_kind=account_kind AND bucket_digest=p_account_digest AND occurred_at>now_at-window_size)>=account_limit
+  OR (SELECT count(*) FROM guardian_application_rate_events WHERE bucket_kind=network_kind AND bucket_digest=p_network_digest AND occurred_at>now_at-window_size)>=network_limit THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_application_rate_limited';END IF;
+ INSERT INTO guardian_application_rate_events(bucket_kind,bucket_digest,occurred_at) VALUES(account_kind,p_account_digest,now_at),(network_kind,p_network_digest,now_at);
+END;$$;
+
+CREATE FUNCTION guardian_application_prune() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE changed bigint;
+BEGIN
+ UPDATE guardian_authority_invitations SET invited_email=NULL
+ WHERE invited_email IS NOT NULL AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at<=clock_timestamp();
+ DELETE FROM guardian_application_rate_events WHERE occurred_at<=clock_timestamp()-interval '24 hours';
+ GET DIAGNOSTICS changed=ROW_COUNT;RETURN changed;
+END;$$;
+
+CREATE FUNCTION guardian_authority_create_dependent(p_name text,p_date_of_birth date,p_guardian_user_id uuid,p_invitation_digest bytea)
 RETURNS SETOF users LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-DECLARE guardian_row users%ROWTYPE;subject_row users%ROWTYPE;relationship_ref uuid;now_at timestamptz;
+DECLARE guardian_row users%ROWTYPE;subject_row users%ROWTYPE;relationship_ref uuid;now_at timestamptz:=clock_timestamp();invitation guardian_authority_invitations%ROWTYPE;has_membership boolean;
 BEGIN
  PERFORM pg_advisory_xact_lock(110,110);
- now_at:=clock_timestamp();
+ IF NOT EXISTS(SELECT 1 FROM guardian_application_intake_release WHERE singleton AND enabled AND gate_version='guardian-intake-v2') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_application_intake_unreleased'; END IF;
  IF (SELECT count(*) FROM guardian_authority_policies WHERE enabled AND adopted_at<=now_at)<>1 THEN
   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_unavailable';
  END IF;
  SELECT * INTO guardian_row FROM users WHERE id=p_guardian_user_id FOR UPDATE;
  IF NOT FOUND OR NOT guardian_row.is_active OR guardian_row.erased_at IS NOT NULL OR guardian_row.is_dependent
+  OR guardian_row.email IS NULL OR guardian_row.email_verified_at IS NULL
   OR guardian_row.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date THEN
   RETURN;
  END IF;
+ SELECT EXISTS(SELECT 1 FROM user_memberships membership WHERE membership.user_id=guardian_row.id
+  AND membership.starts_on<=CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on>=CURRENT_DATE)) INTO has_membership;
+ IF p_invitation_digest IS NOT NULL THEN
+  IF octet_length(p_invitation_digest)<>32 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_invitation_invalid';END IF;
+  SELECT * INTO invitation FROM guardian_authority_invitations WHERE token_digest=p_invitation_digest FOR UPDATE;
+  IF NOT FOUND OR invitation.invited_email IS NULL OR invitation.invited_email<>guardian_row.email OR invitation.revoked_at IS NOT NULL OR invitation.consumed_at IS NOT NULL OR invitation.expires_at<=now_at THEN
+   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_invitation_invalid';END IF;
+ ELSIF NOT has_membership THEN RETURN;END IF;
  IF p_name IS NULL OR p_name<>btrim(p_name) OR char_length(p_name) NOT BETWEEN 2 AND 120
   OR p_date_of_birth IS NULL OR p_date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date)
   OR p_date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date THEN
@@ -7431,6 +7607,9 @@ BEGIN
  VALUES(p_guardian_user_id,subject_row.id,p_name,'PENDING',now_at,now_at) RETURNING id INTO relationship_ref;
  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,occurred_at)
  VALUES(relationship_ref,1,p_guardian_user_id,'GUARDIAN','DECLARED',NULL,'PENDING',now_at);
+ IF invitation.id IS NOT NULL THEN
+  UPDATE guardian_authority_invitations SET invited_email=NULL,consumed_by=p_guardian_user_id,consumed_relationship_id=relationship_ref,consumed_at=now_at WHERE id=invitation.id;
+ END IF;
  RETURN NEXT subject_row;
 END;
 $$;
@@ -7532,6 +7711,79 @@ BEGIN
  policy_version,evidence_type,evidence_reference,evidence_sha256,reason_code,occurred_at,verified_until,review_due_at)
  VALUES(current_row.id,new_version,p_actor_id,'VERIFIER',p_target_state,old_state,p_target_state,
   policy_row.version,p_evidence_type,p_evidence_reference,p_evidence_sha256,p_reason_code,now_at,new_verified_until,new_review_due_at);
+ RETURN NEXT current_row;
+END;
+$$;
+
+CREATE FUNCTION guardian_authority_admin_transition(
+ p_actor_id uuid,p_relationship_ref uuid,p_expected_version bigint,p_action text,
+ p_evidence_category text,p_reason_code text)
+RETURNS SETOF guardian_authority_relationships
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE current_row guardian_authority_relationships%ROWTYPE;policy_row guardian_authority_policies%ROWTYPE;
+ now_at timestamptz:=clock_timestamp();new_version bigint;target_state text;old_state text;
+ new_verified_until timestamptz;new_review_due_at timestamptz;new_conflict boolean;new_conflict_actor uuid;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ SELECT * INTO current_row FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref FOR UPDATE;
+ IF NOT FOUND OR current_row.version<>p_expected_version THEN
+  RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_stale'; END IF;
+ IF guardian_authority_personally_involved(p_actor_id,p_relationship_ref)
+  OR current_row.conflict_actor_ref=p_actor_id THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_separation_required'; END IF;
+ SELECT * INTO policy_row FROM guardian_authority_policies WHERE enabled AND adopted_at<=now_at FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_unavailable'; END IF;
+ IF p_evidence_category NOT IN('CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_evidence_rejected'; END IF;
+ target_state:=CASE p_action WHEN 'APPROVE' THEN 'VERIFIED' WHEN 'RENEW' THEN 'VERIFIED'
+  WHEN 'REJECT' THEN 'REJECTED' WHEN 'SUSPEND' THEN 'SUSPENDED' WHEN 'END' THEN 'EXPIRED' ELSE NULL END;
+ IF target_state IS NULL
+  OR (p_action='APPROVE' AND current_row.state NOT IN('PENDING','SUSPENDED'))
+  OR (p_action='RENEW' AND current_row.state NOT IN('VERIFIED','EXPIRED'))
+  OR (p_action='REJECT' AND current_row.state NOT IN('PENDING','SUSPENDED'))
+  OR (p_action='SUSPEND' AND current_row.state NOT IN('PENDING','VERIFIED'))
+  OR (p_action='END' AND current_row.state NOT IN('VERIFIED','SUSPENDED')) THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_transition_rejected'; END IF;
+ IF (p_action IN('APPROVE','RENEW') AND p_reason_code<>'RELATIONSHIP_CONFIRMED')
+  OR (p_action='REJECT' AND p_reason_code NOT IN('EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED'))
+  OR (p_action='SUSPEND' AND p_reason_code NOT IN('CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY'))
+  OR (p_action='END' AND p_reason_code<>'AUTHORITY_ENDED') THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_reason_rejected'; END IF;
+ IF target_state='VERIFIED' AND NOT EXISTS(
+  SELECT 1 FROM users guardian JOIN users subject ON subject.id=current_row.subject_user_id
+  WHERE guardian.id=current_row.guardian_user_id AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent
+   AND guardian.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+   AND subject.is_active AND subject.erased_at IS NULL AND subject.is_dependent
+   AND subject.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+ ) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_relationship_ineligible'; END IF;
+ new_version:=current_row.version+1;old_state:=current_row.state;
+ IF target_state='VERIFIED' THEN
+  new_review_due_at:=now_at+make_interval(days=>policy_row.review_days);
+  new_verified_until:=now_at+make_interval(days=>policy_row.validity_days);
+  new_conflict:=false;new_conflict_actor:=NULL;
+ ELSE
+  new_review_due_at:=current_row.review_due_at;new_verified_until:=current_row.verified_until;
+  new_conflict:=(target_state='SUSPENDED' AND p_reason_code='CONFLICT');
+  new_conflict_actor:=CASE WHEN new_conflict THEN p_actor_id ELSE NULL END;
+ END IF;
+ UPDATE guardian_authority_relationships SET state=target_state,version=new_version,policy_version=policy_row.version,
+  verified_at=CASE WHEN target_state='VERIFIED' THEN now_at ELSE verified_at END,
+  verified_by=CASE WHEN target_state='VERIFIED' THEN p_actor_id ELSE verified_by END,
+  verified_until=new_verified_until,review_due_at=new_review_due_at,
+  conflict=new_conflict,conflict_actor_ref=new_conflict_actor,updated_at=now_at
+ WHERE id=current_row.id AND version=p_expected_version RETURNING * INTO current_row;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_stale'; END IF;
+ IF target_state IN('SUSPENDED','EXPIRED','REJECTED') THEN
+  DELETE FROM sessions WHERE subject_indexed AND user_id=current_row.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at
+   WHERE id=current_row.subject_user_id;
+ END IF;
+ INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
+  policy_version,evidence_type,reason_code,occurred_at,verified_until,review_due_at)
+ VALUES(current_row.id,new_version,p_actor_id,'ADMIN',target_state,old_state,target_state,
+  policy_row.version,p_evidence_category,p_reason_code,now_at,new_verified_until,new_review_due_at);
  RETURN NEXT current_row;
 END;
 $$;
@@ -7660,9 +7912,16 @@ CREATE TRIGGER users_legacy_guardian_pointer_guard BEFORE INSERT OR UPDATE OF gu
  FOR EACH ROW EXECUTE FUNCTION reject_legacy_guardian_pointer();
 
 REVOKE ALL ON TABLE guardian_authority_policies,guardian_authority_policy_events,guardian_verifier_grants,guardian_verifier_grant_events,
- guardian_authority_relationships,guardian_authority_events FROM PUBLIC;
-REVOKE ALL ON FUNCTION guardian_authority_can_verify(uuid),guardian_authority_current(uuid,uuid),guardian_authority_reconcile_cutoffs(),
- guardian_authority_create_dependent(text,date,uuid),guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text),
+ guardian_authority_relationships,guardian_authority_events,guardian_authority_review_access_events,guardian_application_intake_release,guardian_application_intake_release_events,
+ guardian_authority_invitations,guardian_application_rate_events FROM PUBLIC;
+DO $$BEGIN
+ IF to_regrole('mycfc_app') IS NOT NULL THEN
+  EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE guardian_authority_invitations,guardian_application_rate_events,guardian_application_intake_release,guardian_application_intake_release_events FROM mycfc_app';
+ END IF;
+END$$;
+REVOKE ALL ON FUNCTION guardian_authority_can_verify(uuid),guardian_authority_personally_involved(uuid,uuid),guardian_authority_record_review_view(uuid,uuid),guardian_authority_current(uuid,uuid),guardian_authority_reconcile_cutoffs(),
+ guardian_authority_create_dependent(text,date,uuid,bytea),guardian_authority_transition(uuid,uuid,bigint,text,text,text,bytea,text),guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text),
+ guardian_authority_issue_invitation(uuid,citext,bytea),guardian_authority_revoke_invitation(uuid,uuid),guardian_authority_list_invitations(uuid,integer),guardian_application_reserve(bytea,bytea,text),guardian_application_prune(),
  guardian_authority_privacy_account_for_update(uuid),guardian_authority_privacy_dependants_for_update(uuid),
  guardian_authority_is_administrator(uuid),guardian_authority_adopt_policy(uuid,text,text[],text[],integer,integer),
  guardian_authority_set_policy_enabled(uuid,text,boolean),guardian_authority_grant_verifier(uuid,uuid),guardian_authority_revoke_verifier(uuid,uuid)
@@ -7673,3 +7932,1308 @@ UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,appro
 UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
 INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at)
  SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+-- Annual guardian-authority renewal, exactly-once reminders, and fail-closed expiry.
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v10_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609120002_guardian_authority_admin_review',''))<>length('202609120002_guardian_authority_admin_review') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_renewal_activation_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609120002_guardian_authority_admin_review''',
+  '''202609120002_guardian_authority_admin_review'', ''202609120003_guardian_authority_renewal''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v10_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v11_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v11_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609120002_guardian_authority_admin_review''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609120003_guardian_authority_renewal''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_renewal_activation_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609120002_guardian_authority_admin_review''';
+ new_clause:='schema_row.baseline_includes_through=''202609120003_guardian_authority_renewal''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_renewal_activation_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+CREATE TABLE guardian_authority_renewal_requests (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ public_ref uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+ relationship_id uuid NOT NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,
+ relationship_version bigint NOT NULL CHECK(relationship_version>0),
+ expiry_anchor timestamptz NOT NULL,
+ response_code text NOT NULL CHECK(response_code IN('NADA_MUDOU','DADOS_MUDARAM')),
+ submitted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(relationship_id,expiry_anchor)
+);
+ALTER TABLE guardian_authority_events DROP CONSTRAINT guardian_authority_events_action_check;
+ALTER TABLE guardian_authority_events ADD CONSTRAINT guardian_authority_events_action_v4_check
+ CHECK(action IN('DECLARED','VERIFIED','SUSPENDED','EXPIRED','REJECTED','RENEWAL_SUBMITTED')) NOT VALID;
+ALTER TABLE guardian_authority_events VALIDATE CONSTRAINT guardian_authority_events_action_v4_check;
+CREATE INDEX guardian_authority_renewal_requests_relationship_idx
+ ON guardian_authority_renewal_requests(relationship_id,submitted_at DESC);
+
+CREATE TABLE guardian_authority_renewal_events (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ renewal_id uuid NOT NULL REFERENCES guardian_authority_renewal_requests(id) ON DELETE RESTRICT,
+ actor_ref uuid NULL,
+ actor_role text NOT NULL CHECK(actor_role IN('GUARDIAN','ADMIN','SYSTEM')),
+ action text NOT NULL CHECK(action IN('SUBMITTED','APPROVED','REJECTED','SUSPENDED','ENDED','EXPIRED')),
+ relationship_version bigint NOT NULL CHECK(relationship_version>0),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((actor_role='SYSTEM' AND actor_ref IS NULL) OR (actor_role<>'SYSTEM' AND actor_ref IS NOT NULL)),
+ UNIQUE(renewal_id,action,relationship_version)
+);
+CREATE INDEX guardian_authority_renewal_events_latest_idx
+ ON guardian_authority_renewal_events(renewal_id,id DESC);
+
+CREATE TABLE guardian_authority_renewal_reminders (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ relationship_id uuid NOT NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,
+ guardian_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ recipient_verified_at timestamptz NOT NULL,
+ expiry_anchor timestamptz NOT NULL,
+ reminder_kind text NOT NULL CHECK(reminder_kind IN('GUARDIAN_RENEWAL_30_DAY','GUARDIAN_RENEWAL_7_DAY')),
+ queued_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(relationship_id,expiry_anchor,reminder_kind)
+);
+
+ALTER TABLE email_outbox ADD COLUMN guardian_reminder_id uuid NULL
+ REFERENCES guardian_authority_renewal_reminders(id) ON DELETE RESTRICT;
+CREATE UNIQUE INDEX email_outbox_guardian_reminder_uidx ON email_outbox(guardian_reminder_id)
+ WHERE guardian_reminder_id IS NOT NULL;
+ALTER TABLE email_outbox DROP CONSTRAINT email_outbox_message_valid;
+ALTER TABLE email_outbox ADD CONSTRAINT email_outbox_message_valid CHECK (
+ (message_type='EMAIL_VERIFICATION' AND verification_token_id IS NOT NULL AND password_reset_token_id IS NULL AND sealed_payload IS NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL)
+ OR (message_type='PASSWORD_RESET' AND verification_token_id IS NULL AND password_reset_token_id IS NOT NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL)
+ OR (message_type IN('PRIVACY_ACKNOWLEDGEMENT','PRIVACY_DECISION','PRIVACY_PROCESSING_STARTED','PRIVACY_COMPLETED') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NOT NULL AND privacy_event_key IS NOT NULL AND guardian_reminder_id IS NULL)
+ OR (message_type IN('GUARDIAN_RENEWAL_30_DAY','GUARDIAN_RENEWAL_7_DAY') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NOT NULL)
+);
+
+CREATE TRIGGER guardian_authority_renewal_requests_immutable BEFORE UPDATE OR DELETE ON guardian_authority_renewal_requests
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+CREATE TRIGGER guardian_authority_renewal_events_immutable BEFORE UPDATE OR DELETE ON guardian_authority_renewal_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+CREATE TRIGGER guardian_authority_renewal_reminders_immutable BEFORE UPDATE OR DELETE ON guardian_authority_renewal_reminders
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+
+CREATE VIEW guardian_authority_latest_renewals AS
+SELECT DISTINCT ON(request.relationship_id) request.relationship_id,request.public_ref AS renewal_ref,
+ request.response_code,event.action AS renewal_status,request.expiry_anchor
+FROM guardian_authority_renewal_requests request
+JOIN LATERAL(SELECT candidate.action FROM guardian_authority_renewal_events candidate
+ WHERE candidate.renewal_id=request.id ORDER BY candidate.id DESC LIMIT 1) event ON true
+ORDER BY request.relationship_id,request.submitted_at DESC,request.id DESC;
+
+CREATE OR REPLACE VIEW guardian_authority_guardian_disclosures AS
+SELECT relationship.id AS relationship_id,relationship.public_ref AS relationship_ref,
+ relationship.guardian_user_id,relationship.subject_user_id,relationship.submitted_label,
+ CASE
+  WHEN relationship.state='VERIFIED' AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN 'VERIFIED'
+  WHEN relationship.state='VERIFIED' AND EXISTS(SELECT 1 FROM users age_subject WHERE age_subject.id=relationship.subject_user_id
+    AND age_subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) THEN 'EXPIRED'
+  WHEN relationship.state='VERIFIED' AND (relationship.review_due_at<=clock_timestamp() OR relationship.verified_until<=clock_timestamp()) THEN 'EXPIRED'
+  WHEN relationship.state='VERIFIED' THEN 'SUSPENDED'
+  ELSE relationship.state
+ END::text AS state,
+ relationship.version,relationship.created_at,relationship.verified_until,relationship.review_due_at,relationship.conflict,
+ CASE WHEN guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN subject.name::text ELSE NULL::text END AS subject_name,
+ CASE WHEN guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN subject.date_of_birth ELSE NULL::date END AS date_of_birth,
+ CASE WHEN guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN subject.minor_login_id::text ELSE NULL::text END AS minor_login_id,
+ CASE WHEN guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN subject.leaderboard_visible ELSE NULL::boolean END AS leaderboard_visible,
+ CASE WHEN guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN
+  COALESCE(profile.emergency_contact_name<>'' AND profile.emergency_contact_relationship<>'' AND profile.emergency_contact_phone<>'' AND profile.medical_declaration<>'UNKNOWN',false)
+  ELSE NULL::boolean END AS profile_complete,
+ renewal.renewal_ref,renewal.response_code,renewal.renewal_status,renewal.expiry_anchor AS renewal_expiry_anchor
+FROM guardian_authority_relationships relationship
+JOIN users subject ON subject.id=relationship.subject_user_id
+LEFT JOIN member_profiles profile ON profile.user_id=subject.id
+LEFT JOIN guardian_authority_latest_renewals renewal ON renewal.relationship_id=relationship.id;
+
+CREATE FUNCTION guardian_authority_submit_renewal(p_actor_id uuid,p_relationship_ref uuid,p_expected_version bigint,p_response_code text)
+RETURNS SETOF guardian_authority_relationships
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship guardian_authority_relationships%ROWTYPE;renewal guardian_authority_renewal_requests%ROWTYPE;
+ now_at timestamptz:=clock_timestamp();new_version bigint;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ SELECT * INTO relationship FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref FOR UPDATE;
+ IF NOT FOUND OR relationship.version<>p_expected_version THEN
+  RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_stale'; END IF;
+ IF relationship.guardian_user_id<>p_actor_id THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_guardian_required'; END IF;
+ IF p_response_code NOT IN('NADA_MUDOU','DADOS_MUDARAM') OR relationship.state<>'VERIFIED'
+  OR relationship.verified_until IS NULL OR relationship.verified_until<=now_at
+  OR now_at<relationship.verified_until-interval '30 days' THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_renewal_not_due'; END IF;
+ IF NOT guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id) THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_renewal_not_due'; END IF;
+ INSERT INTO guardian_authority_renewal_requests(relationship_id,relationship_version,expiry_anchor,response_code,submitted_at)
+ VALUES(relationship.id,relationship.version,relationship.verified_until,p_response_code,now_at)
+ ON CONFLICT(relationship_id,expiry_anchor) DO NOTHING RETURNING * INTO renewal;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_renewal_already_submitted'; END IF;
+ new_version:=relationship.version+1;
+	 IF p_response_code='DADOS_MUDARAM' THEN
+  UPDATE guardian_authority_relationships SET state='SUSPENDED',version=new_version,
+   conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at
+   WHERE id=relationship.subject_user_id;
+  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
+   policy_version,reason_code,occurred_at,verified_until,review_due_at)
+  VALUES(relationship.id,new_version,p_actor_id,'GUARDIAN','SUSPENDED','VERIFIED','SUSPENDED',
+   relationship.policy_version,'AUTHORITY_CHANGED',now_at,relationship.verified_until,relationship.review_due_at);
+	  relationship.state:='SUSPENDED';relationship.version:=new_version;relationship.updated_at:=now_at;
+	 ELSE
+	  UPDATE guardian_authority_relationships SET version=new_version,updated_at=now_at WHERE id=relationship.id;
+	  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,
+	   policy_version,occurred_at,verified_until,review_due_at)
+	  VALUES(relationship.id,new_version,p_actor_id,'GUARDIAN','RENEWAL_SUBMITTED','VERIFIED','VERIFIED',
+	   relationship.policy_version,now_at,relationship.verified_until,relationship.review_due_at);
+	  relationship.version:=new_version;relationship.updated_at:=now_at;
+	 END IF;
+ INSERT INTO guardian_authority_renewal_events(renewal_id,actor_ref,actor_role,action,relationship_version,occurred_at)
+ VALUES(renewal.id,p_actor_id,'GUARDIAN','SUBMITTED',new_version,now_at);
+ RETURN NEXT relationship;
+END;
+$$;
+
+CREATE FUNCTION guardian_authority_due_renewal_reminders(p_limit integer)
+RETURNS TABLE(relationship_ref uuid,guardian_user_id uuid,recipient text,recipient_verified_at timestamptz,expiry_anchor timestamptz,reminder_kind text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ WITH now_value AS(SELECT clock_timestamp() AS value),candidate AS(
+  SELECT relationship.id,relationship.public_ref,relationship.guardian_user_id,guardian.email::text recipient,
+   guardian.email_verified_at,relationship.verified_until,
+   CASE WHEN relationship.verified_until<=(SELECT value FROM now_value)+interval '7 days'
+    THEN 'GUARDIAN_RENEWAL_7_DAY' ELSE 'GUARDIAN_RENEWAL_30_DAY' END kind
+  FROM guardian_authority_relationships relationship
+  JOIN users guardian ON guardian.id=relationship.guardian_user_id
+  WHERE relationship.state='VERIFIED' AND guardian.is_active AND guardian.erased_at IS NULL
+   AND guardian.email IS NOT NULL AND guardian.email_verified_at IS NOT NULL
+   AND relationship.verified_until>(SELECT value FROM now_value)
+   AND relationship.verified_until<=(SELECT value FROM now_value)+interval '30 days'
+   AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id)
+   AND NOT EXISTS(SELECT 1 FROM guardian_authority_renewal_requests request
+    WHERE request.relationship_id=relationship.id AND request.expiry_anchor=relationship.verified_until)
+ )
+ SELECT candidate.public_ref AS relationship_ref,candidate.guardian_user_id,candidate.recipient,
+  candidate.email_verified_at AS recipient_verified_at,candidate.verified_until AS expiry_anchor,candidate.kind AS reminder_kind
+ FROM candidate WHERE NOT EXISTS(SELECT 1 FROM guardian_authority_renewal_reminders reminder
+  WHERE reminder.relationship_id=candidate.id AND reminder.expiry_anchor=candidate.verified_until AND reminder.reminder_kind=candidate.kind)
+ ORDER BY candidate.verified_until,candidate.id LIMIT LEAST(GREATEST(p_limit,1),100)
+$$;
+
+CREATE FUNCTION guardian_authority_enqueue_renewal_reminder(p_relationship_ref uuid,p_guardian_user_id uuid,p_recipient citext,
+ p_recipient_verified_at timestamptz,p_expiry_anchor timestamptz,p_reminder_kind text,p_sealed_payload bytea)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship guardian_authority_relationships%ROWTYPE;guardian users%ROWTYPE;reminder_id uuid;now_at timestamptz:=clock_timestamp();expected_kind text;
+BEGIN
+ IF p_reminder_kind NOT IN('GUARDIAN_RENEWAL_30_DAY','GUARDIAN_RENEWAL_7_DAY') OR octet_length(p_sealed_payload)<32 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_reminder_rejected'; END IF;
+ SELECT * INTO relationship FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref FOR UPDATE;
+ SELECT * INTO guardian FROM users WHERE id=p_guardian_user_id FOR SHARE;
+ expected_kind:=CASE WHEN relationship.verified_until<=now_at+interval '7 days' THEN 'GUARDIAN_RENEWAL_7_DAY' ELSE 'GUARDIAN_RENEWAL_30_DAY' END;
+ IF relationship.id IS NULL OR relationship.guardian_user_id<>p_guardian_user_id OR guardian.id IS NULL
+  OR NOT guardian.is_active OR guardian.erased_at IS NOT NULL OR guardian.is_dependent
+  OR guardian.email IS NULL OR guardian.email<>p_recipient OR guardian.email_verified_at IS DISTINCT FROM p_recipient_verified_at
+  OR relationship.state<>'VERIFIED' OR relationship.verified_until<>p_expiry_anchor
+  OR relationship.verified_until<=now_at OR relationship.verified_until>now_at+interval '30 days'
+  OR p_reminder_kind<>expected_kind
+  OR NOT guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id)
+  OR EXISTS(SELECT 1 FROM guardian_authority_renewal_requests request WHERE request.relationship_id=relationship.id AND request.expiry_anchor=p_expiry_anchor) THEN
+  RETURN false; END IF;
+ INSERT INTO guardian_authority_renewal_reminders(relationship_id,guardian_user_id,recipient_verified_at,expiry_anchor,reminder_kind,queued_at)
+ VALUES(relationship.id,p_guardian_user_id,p_recipient_verified_at,p_expiry_anchor,p_reminder_kind,now_at)
+ ON CONFLICT(relationship_id,expiry_anchor,reminder_kind) DO NOTHING RETURNING id INTO reminder_id;
+ IF reminder_id IS NULL THEN RETURN false; END IF;
+ INSERT INTO email_outbox(message_type,sealed_payload,guardian_reminder_id,next_attempt_at,created_at,updated_at)
+ VALUES(p_reminder_kind,p_sealed_payload,reminder_id,now_at,now_at,now_at);
+ RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();reconciled bigint:=0;end_reason text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ FOR relationship IN SELECT authority.* FROM guardian_authority_relationships authority
+  JOIN users guardian ON guardian.id=authority.guardian_user_id JOIN users subject ON subject.id=authority.subject_user_id
+  LEFT JOIN guardian_authority_policies policy ON policy.version=authority.policy_version
+  WHERE authority.state IN('VERIFIED','SUSPENDED') AND (policy.id IS NULL OR NOT policy.enabled OR policy.adopted_at>now_at
+   OR authority.review_due_at<=now_at OR authority.verified_until<=now_at OR NOT guardian.is_active OR guardian.erased_at IS NOT NULL OR guardian.is_dependent
+   OR guardian.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+   OR NOT subject.is_active OR subject.erased_at IS NOT NULL OR NOT subject.is_dependent
+   OR subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
+  FOR UPDATE OF authority
+ LOOP
+  end_reason:=CASE WHEN EXISTS(SELECT 1 FROM users subject WHERE subject.id=relationship.subject_user_id
+    AND subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) THEN 'MAJORITY_REACHED'
+   WHEN relationship.review_due_at<=now_at OR relationship.verified_until<=now_at THEN 'REVIEW_EXPIRED' ELSE 'ELIGIBILITY_ENDED' END;
+  UPDATE guardian_authority_relationships SET state='EXPIRED',version=relationship.version+1,conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at WHERE id=relationship.subject_user_id;
+  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,reason_code,occurred_at,verified_until,review_due_at)
+  VALUES(relationship.id,relationship.version+1,NULL,'SYSTEM','EXPIRED',relationship.state,'EXPIRED',relationship.policy_version,end_reason,now_at,relationship.verified_until,relationship.review_due_at);
+  reconciled:=reconciled+1;
+ END LOOP;
+ RETURN reconciled;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION guardian_authority_admin_transition(p_actor_id uuid,p_relationship_ref uuid,p_expected_version bigint,p_action text,p_evidence_category text,p_reason_code text)
+RETURNS SETOF guardian_authority_relationships LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE current_row guardian_authority_relationships%ROWTYPE;policy_row guardian_authority_policies%ROWTYPE;renewal guardian_authority_renewal_requests%ROWTYPE;
+ now_at timestamptz:=clock_timestamp();new_version bigint;target_state text;old_state text;new_verified_until timestamptz;new_review_due_at timestamptz;new_conflict boolean;new_conflict_actor uuid;renewal_action text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ SELECT * INTO current_row FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref FOR UPDATE;
+ IF NOT FOUND OR current_row.version<>p_expected_version THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_stale'; END IF;
+ IF guardian_authority_personally_involved(p_actor_id,p_relationship_ref) OR current_row.conflict_actor_ref=p_actor_id THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_separation_required'; END IF;
+ SELECT * INTO policy_row FROM guardian_authority_policies WHERE enabled AND adopted_at<=now_at FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_unavailable'; END IF;
+ SELECT request.* INTO renewal FROM guardian_authority_renewal_requests request
+  JOIN LATERAL(SELECT event.action FROM guardian_authority_renewal_events event WHERE event.renewal_id=request.id ORDER BY event.id DESC LIMIT 1) latest ON true
+  WHERE request.relationship_id=current_row.id AND latest.action='SUBMITTED' ORDER BY request.submitted_at DESC LIMIT 1 FOR UPDATE OF request;
+ IF p_evidence_category NOT IN('CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_evidence_rejected'; END IF;
+ target_state:=CASE p_action WHEN 'APPROVE' THEN 'VERIFIED' WHEN 'RENEW' THEN 'VERIFIED' WHEN 'REJECT' THEN 'REJECTED' WHEN 'SUSPEND' THEN 'SUSPENDED' WHEN 'END' THEN 'EXPIRED' ELSE NULL END;
+ IF target_state IS NULL OR (p_action='APPROVE' AND (current_row.state NOT IN('PENDING','SUSPENDED') OR renewal.id IS NOT NULL))
+  OR (p_action='RENEW' AND (renewal.id IS NULL OR current_row.state NOT IN('VERIFIED','SUSPENDED','EXPIRED')))
+  OR (p_action='REJECT' AND current_row.state NOT IN('PENDING','SUSPENDED')) OR (p_action='SUSPEND' AND current_row.state NOT IN('PENDING','VERIFIED'))
+  OR (p_action='END' AND current_row.state NOT IN('VERIFIED','SUSPENDED')) THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_transition_rejected'; END IF;
+ IF (p_action IN('APPROVE','RENEW') AND p_reason_code<>'RELATIONSHIP_CONFIRMED') OR (p_action='REJECT' AND p_reason_code NOT IN('EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED'))
+  OR (p_action='SUSPEND' AND p_reason_code NOT IN('CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY')) OR (p_action='END' AND p_reason_code<>'AUTHORITY_ENDED') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_reason_rejected'; END IF;
+ IF target_state='VERIFIED' AND NOT EXISTS(SELECT 1 FROM users guardian JOIN users subject ON subject.id=current_row.subject_user_id WHERE guardian.id=current_row.guardian_user_id
+  AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent AND guardian.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+  AND subject.is_active AND subject.erased_at IS NULL AND subject.is_dependent AND subject.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
+  THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_relationship_ineligible'; END IF;
+ new_version:=current_row.version+1;old_state:=current_row.state;
+ IF target_state='VERIFIED' THEN
+  IF p_action='RENEW' THEN new_verified_until:=renewal.expiry_anchor+interval '12 months';new_review_due_at:=new_verified_until;
+  ELSE new_review_due_at:=now_at+make_interval(days=>policy_row.review_days);new_verified_until:=now_at+make_interval(days=>policy_row.validity_days); END IF;
+  new_conflict:=false;new_conflict_actor:=NULL;
+ ELSE new_review_due_at:=current_row.review_due_at;new_verified_until:=current_row.verified_until;new_conflict:=(target_state='SUSPENDED' AND p_reason_code='CONFLICT');new_conflict_actor:=CASE WHEN new_conflict THEN p_actor_id ELSE NULL END; END IF;
+ UPDATE guardian_authority_relationships SET state=target_state,version=new_version,policy_version=policy_row.version,verified_at=CASE WHEN target_state='VERIFIED' THEN now_at ELSE verified_at END,
+  verified_by=CASE WHEN target_state='VERIFIED' THEN p_actor_id ELSE verified_by END,verified_until=new_verified_until,review_due_at=new_review_due_at,conflict=new_conflict,conflict_actor_ref=new_conflict_actor,updated_at=now_at
+ WHERE id=current_row.id AND version=p_expected_version RETURNING * INTO current_row;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_authority_stale'; END IF;
+ IF target_state IN('SUSPENDED','EXPIRED','REJECTED') OR (target_state='VERIFIED' AND old_state<>'VERIFIED') THEN
+  DELETE FROM sessions WHERE subject_indexed AND user_id=current_row.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at WHERE id=current_row.subject_user_id;
+ END IF;
+ INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,evidence_type,reason_code,occurred_at,verified_until,review_due_at)
+ VALUES(current_row.id,new_version,p_actor_id,'ADMIN',target_state,old_state,target_state,policy_row.version,p_evidence_category,p_reason_code,now_at,new_verified_until,new_review_due_at);
+ IF renewal.id IS NOT NULL THEN renewal_action:=CASE p_action WHEN 'RENEW' THEN 'APPROVED' WHEN 'REJECT' THEN 'REJECTED' WHEN 'SUSPEND' THEN 'SUSPENDED' WHEN 'END' THEN 'ENDED' ELSE NULL END;
+  IF renewal_action IS NOT NULL THEN INSERT INTO guardian_authority_renewal_events(renewal_id,actor_ref,actor_role,action,relationship_version,occurred_at)
+   VALUES(renewal.id,p_actor_id,'ADMIN',renewal_action,new_version,now_at); END IF;
+ END IF;
+ RETURN NEXT current_row;
+END;
+$$;
+
+REVOKE ALL ON TABLE guardian_authority_renewal_requests,guardian_authority_renewal_events,guardian_authority_renewal_reminders,guardian_authority_latest_renewals FROM PUBLIC;
+DO $$BEGIN IF to_regrole('mycfc_app') IS NOT NULL THEN
+ EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE guardian_authority_renewal_requests,guardian_authority_renewal_events,guardian_authority_renewal_reminders FROM mycfc_app';
+ EXECUTE 'GRANT SELECT ON TABLE guardian_authority_latest_renewals TO mycfc_app';
+END IF; END$$;
+REVOKE ALL ON FUNCTION guardian_authority_submit_renewal(uuid,uuid,bigint,text),guardian_authority_due_renewal_reminders(integer),guardian_authority_enqueue_renewal_reminder(uuid,uuid,citext,timestamptz,timestamptz,text,bytea) FROM PUBLIC;
+
+-- This schema revision invalidates every prior privacy activation artifact.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+
+-- Age-18 handoff for the existing dependent identity. No release gate is opened.
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v11_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609120003_guardian_authority_renewal',''))<>length('202609120003_guardian_authority_renewal') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_age_handoff_activation_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609120003_guardian_authority_renewal''',
+  '''202609120003_guardian_authority_renewal'', ''202609120004_guardian_age_handoff''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v11_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v12_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v12_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609120003_guardian_authority_renewal''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609120004_guardian_age_handoff''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_age_handoff_activation_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609120003_guardian_authority_renewal''';
+ new_clause:='schema_row.baseline_includes_through=''202609120004_guardian_age_handoff''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_age_handoff_activation_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+CREATE TABLE guardian_age_handoffs(
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ public_ref uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+ subject_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT UNIQUE,
+ status text NOT NULL DEFAULT 'PENDING' CHECK(status IN('PENDING','EMAIL_PENDING','EMAIL_VERIFIED','IDENTITY_CONFIRMED','READY','RECOVERY_REQUIRED','EMAIL_COLLISION','COMPLETED')),
+ version bigint NOT NULL DEFAULT 1 CHECK(version>0),
+ proposed_email citext NULL,
+ email_verified_at timestamptz NULL,
+ identity_method text NULL CHECK(identity_method IS NULL OR identity_method='CLUB_REGISTRATION_RECORD'),
+ identity_confirmed_by uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ identity_confirmed_at timestamptz NULL,
+ ready_at timestamptz NULL,
+ recovery_required_at timestamptz NULL,
+ completed_at timestamptz NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((identity_confirmed_by IS NULL)=(identity_confirmed_at IS NULL)),
+ CHECK((identity_method IS NULL)=(identity_confirmed_at IS NULL)),
+ CHECK(email_verified_at IS NULL OR proposed_email IS NOT NULL),
+ CHECK(ready_at IS NULL OR (email_verified_at IS NOT NULL AND identity_confirmed_at IS NOT NULL)),
+ CHECK(completed_at IS NULL OR status='COMPLETED')
+);
+CREATE UNIQUE INDEX guardian_age_handoffs_active_email_uidx ON guardian_age_handoffs(proposed_email)
+ WHERE proposed_email IS NOT NULL AND completed_at IS NULL;
+CREATE INDEX guardian_age_handoffs_status_idx ON guardian_age_handoffs(status,updated_at,id);
+
+CREATE TABLE guardian_age_handoff_events(
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ handoff_id uuid NOT NULL REFERENCES guardian_age_handoffs(id) ON DELETE RESTRICT,
+ handoff_version bigint NOT NULL CHECK(handoff_version>0),
+ actor_ref uuid NULL,
+ actor_role text NOT NULL CHECK(actor_role IN('YOUNG_PERSON','ADMIN','SYSTEM')),
+ action text NOT NULL CHECK(action IN('STARTED','EMAIL_PROPOSED','EMAIL_VERIFIED','IDENTITY_CONFIRMED','READY','RECOVERY_REQUIRED','EMAIL_COLLISION','COMPLETED')),
+ method text NULL CHECK(method IS NULL OR method='CLUB_REGISTRATION_RECORD'),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((actor_role='SYSTEM' AND actor_ref IS NULL) OR (actor_role<>'SYSTEM' AND actor_ref IS NOT NULL)),
+ UNIQUE(handoff_id,handoff_version)
+);
+CREATE INDEX guardian_age_handoff_events_latest_idx ON guardian_age_handoff_events(handoff_id,id DESC);
+
+CREATE TABLE guardian_age_handoff_email_tokens(
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ handoff_id uuid NOT NULL REFERENCES guardian_age_handoffs(id) ON DELETE RESTRICT,
+ token_digest bytea NOT NULL UNIQUE CHECK(octet_length(token_digest)=32),
+ proposed_email citext NOT NULL,
+ expires_at timestamptz NOT NULL,
+ consumed_at timestamptz NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(expires_at>created_at),CHECK(consumed_at IS NULL OR consumed_at>=created_at)
+);
+CREATE UNIQUE INDEX guardian_age_handoff_email_tokens_active_uidx ON guardian_age_handoff_email_tokens(handoff_id)
+ WHERE consumed_at IS NULL;
+
+CREATE TABLE guardian_age_handoff_notices(
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ handoff_id uuid NOT NULL REFERENCES guardian_age_handoffs(id) ON DELETE RESTRICT,
+ relationship_id uuid NULL REFERENCES guardian_authority_relationships(id) ON DELETE RESTRICT,
+ guardian_user_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ recipient_verified_at timestamptz NULL,
+ audience text NOT NULL CHECK(audience IN('GUARDIAN_EMAIL','YOUNG_PERSON_IN_APP')),
+ notice_kind text NOT NULL CHECK(notice_kind IN('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY')),
+ birthday date NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK((audience='GUARDIAN_EMAIL' AND relationship_id IS NOT NULL AND guardian_user_id IS NOT NULL AND recipient_verified_at IS NOT NULL)
+   OR (audience='YOUNG_PERSON_IN_APP' AND relationship_id IS NULL AND guardian_user_id IS NULL AND recipient_verified_at IS NULL))
+);
+CREATE UNIQUE INDEX guardian_age_handoff_young_notice_uidx ON guardian_age_handoff_notices(handoff_id,birthday,notice_kind)
+ WHERE audience='YOUNG_PERSON_IN_APP';
+CREATE UNIQUE INDEX guardian_age_handoff_guardian_notice_uidx ON guardian_age_handoff_notices(relationship_id,birthday,notice_kind)
+ WHERE audience='GUARDIAN_EMAIL';
+
+CREATE TABLE guardian_age_handoff_access_events(
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ handoff_id uuid NULL REFERENCES guardian_age_handoffs(id) ON DELETE RESTRICT,
+ actor_ref uuid NOT NULL,
+ view_kind text NOT NULL CHECK(view_kind IN('QUEUE','DETAIL')),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TRIGGER guardian_age_handoff_events_immutable BEFORE UPDATE OR DELETE ON guardian_age_handoff_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+CREATE TRIGGER guardian_age_handoff_notices_immutable BEFORE UPDATE OR DELETE ON guardian_age_handoff_notices
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+CREATE TRIGGER guardian_age_handoff_access_events_immutable BEFORE UPDATE OR DELETE ON guardian_age_handoff_access_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+
+ALTER TABLE email_outbox ADD COLUMN guardian_handoff_notice_id uuid NULL REFERENCES guardian_age_handoff_notices(id) ON DELETE RESTRICT;
+ALTER TABLE email_outbox ADD COLUMN guardian_handoff_email_token_id uuid NULL REFERENCES guardian_age_handoff_email_tokens(id) ON DELETE RESTRICT;
+CREATE UNIQUE INDEX email_outbox_guardian_handoff_notice_uidx ON email_outbox(guardian_handoff_notice_id) WHERE guardian_handoff_notice_id IS NOT NULL;
+CREATE UNIQUE INDEX email_outbox_guardian_handoff_token_uidx ON email_outbox(guardian_handoff_email_token_id) WHERE guardian_handoff_email_token_id IS NOT NULL;
+ALTER TABLE email_outbox DROP CONSTRAINT email_outbox_message_valid;
+ALTER TABLE email_outbox ADD CONSTRAINT email_outbox_message_valid CHECK(
+ (message_type='EMAIL_VERIFICATION' AND verification_token_id IS NOT NULL AND password_reset_token_id IS NULL AND sealed_payload IS NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL AND guardian_handoff_notice_id IS NULL AND guardian_handoff_email_token_id IS NULL)
+ OR (message_type='PASSWORD_RESET' AND verification_token_id IS NULL AND password_reset_token_id IS NOT NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL AND guardian_handoff_notice_id IS NULL AND guardian_handoff_email_token_id IS NULL)
+ OR (message_type IN('PRIVACY_ACKNOWLEDGEMENT','PRIVACY_DECISION','PRIVACY_PROCESSING_STARTED','PRIVACY_COMPLETED') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NOT NULL AND privacy_event_key IS NOT NULL AND guardian_reminder_id IS NULL AND guardian_handoff_notice_id IS NULL AND guardian_handoff_email_token_id IS NULL)
+ OR (message_type IN('GUARDIAN_RENEWAL_30_DAY','GUARDIAN_RENEWAL_7_DAY') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NOT NULL AND guardian_handoff_notice_id IS NULL AND guardian_handoff_email_token_id IS NULL)
+ OR (message_type IN('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY') AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL AND guardian_handoff_notice_id IS NOT NULL AND guardian_handoff_email_token_id IS NULL)
+ OR (message_type='GUARDIAN_AGE_18_EMAIL_VERIFY' AND verification_token_id IS NULL AND password_reset_token_id IS NULL AND sealed_payload IS NOT NULL AND privacy_request_id IS NULL AND privacy_requester_id IS NULL AND privacy_event_key IS NULL AND guardian_reminder_id IS NULL AND guardian_handoff_notice_id IS NULL AND guardian_handoff_email_token_id IS NOT NULL)
+);
+
+CREATE FUNCTION guardian_age_handoff_reconcile() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE item record;relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();today date:=(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date;changed bigint:=0;next_status text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-age-handoff/v1',0));
+ WITH inserted AS(
+ INSERT INTO guardian_age_handoffs(subject_user_id,status,created_at,updated_at)
+  SELECT subject.id,'PENDING',now_at,now_at FROM users subject
+  WHERE subject.is_active AND subject.erased_at IS NULL AND subject.is_dependent
+   AND subject.minor_login_id IS NOT NULL AND subject.password_hash IS NOT NULL
+   AND (subject.date_of_birth+interval '18 years')::date<=today+30
+   AND EXISTS(SELECT 1 FROM guardian_authority_relationships authority
+    JOIN users guardian ON guardian.id=authority.guardian_user_id
+    JOIN guardian_authority_policies policy ON policy.version=authority.policy_version
+    WHERE authority.subject_user_id=subject.id AND authority.state='VERIFIED' AND NOT authority.conflict
+     AND policy.enabled AND policy.adopted_at<=now_at AND authority.verified_at<=now_at
+     AND authority.review_due_at>now_at AND authority.verified_until>now_at
+     AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent
+     AND guardian.date_of_birth<=(today-interval '18 years')::date)
+  ON CONFLICT(subject_user_id) DO NOTHING RETURNING id,subject_user_id,version,created_at)
+ INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_role,action,occurred_at)
+ SELECT id,version,'SYSTEM','STARTED',created_at FROM inserted;
+
+ INSERT INTO guardian_age_handoff_notices(handoff_id,audience,notice_kind,birthday,created_at)
+ SELECT handoff.id,'YOUNG_PERSON_IN_APP',
+  CASE WHEN (subject.date_of_birth+interval '18 years')::date<=today+7 THEN 'GUARDIAN_AGE_18_7_DAY' ELSE 'GUARDIAN_AGE_18_30_DAY' END,
+  (subject.date_of_birth+interval '18 years')::date,now_at
+ FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+ WHERE handoff.status<>'COMPLETED' AND subject.is_active AND subject.is_dependent
+  AND (subject.date_of_birth+interval '18 years')::date>today AND (subject.date_of_birth+interval '18 years')::date<=today+30
+  AND EXISTS(SELECT 1 FROM guardian_authority_relationships authority WHERE authority.subject_user_id=subject.id AND guardian_authority_current(authority.guardian_user_id,subject.id))
+ ON CONFLICT DO NOTHING;
+
+ FOR item IN SELECT handoff.*,subject.date_of_birth FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+  WHERE handoff.status<>'COMPLETED' AND subject.is_dependent AND (subject.date_of_birth+interval '18 years')::date<=today FOR UPDATE OF handoff,subject
+ LOOP
+  next_status:=CASE WHEN item.proposed_email IS NOT NULL AND EXISTS(SELECT 1 FROM users collision WHERE collision.email=item.proposed_email AND collision.id<>item.subject_user_id)
+    THEN 'EMAIL_COLLISION' WHEN item.email_verified_at IS NOT NULL AND item.identity_confirmed_at IS NOT NULL THEN 'COMPLETED' ELSE 'RECOVERY_REQUIRED' END;
+  FOR relationship IN SELECT * FROM guardian_authority_relationships WHERE subject_user_id=item.subject_user_id AND state IN('PENDING','VERIFIED','SUSPENDED') FOR UPDATE
+  LOOP
+   UPDATE guardian_authority_relationships SET state='EXPIRED',version=relationship.version+1,conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
+   INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,reason_code,occurred_at,verified_until,review_due_at)
+   VALUES(relationship.id,relationship.version+1,NULL,'SYSTEM','EXPIRED',relationship.state,'EXPIRED',relationship.policy_version,'MAJORITY_REACHED',now_at,relationship.verified_until,relationship.review_due_at);
+  END LOOP;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=item.subject_user_id;
+  IF next_status='COMPLETED' THEN
+   BEGIN
+    UPDATE users SET email=item.proposed_email,email_verified_at=item.email_verified_at,is_dependent=false,guardian_id=NULL,minor_login_id=NULL,
+     credential_version=credential_version+1,updated_at=now_at WHERE id=item.subject_user_id;
+   EXCEPTION WHEN unique_violation THEN next_status:='EMAIL_COLLISION'; END;
+  ELSIF item.status NOT IN('RECOVERY_REQUIRED','EMAIL_COLLISION') THEN
+   UPDATE users SET credential_version=credential_version+1,updated_at=now_at WHERE id=item.subject_user_id;
+  END IF;
+  IF next_status<>item.status THEN
+   UPDATE guardian_age_handoffs SET status=next_status,version=version+1,recovery_required_at=CASE WHEN next_status IN('RECOVERY_REQUIRED','EMAIL_COLLISION') THEN COALESCE(recovery_required_at,now_at) ELSE recovery_required_at END,
+    completed_at=CASE WHEN next_status='COMPLETED' THEN now_at ELSE completed_at END,updated_at=now_at WHERE id=item.id;
+   INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_role,action,occurred_at)
+   VALUES(item.id,item.version+1,'SYSTEM',next_status,now_at);
+   changed:=changed+1;
+  END IF;
+ END LOOP;
+ RETURN changed;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_propose_email(p_actor_id uuid,p_expected_version bigint,p_email citext,p_token_digest bytea,p_expires_at timestamptz,p_sealed_payload bytea)
+RETURNS SETOF guardian_age_handoffs LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE handoff guardian_age_handoffs%ROWTYPE;subject users%ROWTYPE;token_id uuid;now_at timestamptz:=clock_timestamp();today date:=(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-age-handoff/v1',0));
+ SELECT * INTO handoff FROM guardian_age_handoffs WHERE subject_user_id=p_actor_id FOR UPDATE;
+ SELECT * INTO subject FROM users WHERE id=p_actor_id FOR UPDATE;
+ IF handoff.id IS NULL OR handoff.version<>p_expected_version THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_age_handoff_stale'; END IF;
+ IF NOT subject.is_active OR NOT subject.is_dependent OR subject.erased_at IS NOT NULL OR subject.minor_login_id IS NULL OR subject.password_hash IS NULL
+  OR (subject.date_of_birth+interval '18 years')::date<=today OR (subject.date_of_birth+interval '18 years')::date>today+30
+  OR octet_length(p_token_digest)<>32 OR p_expires_at<=now_at+interval '23 hours' OR p_expires_at>now_at+interval '24 hours 5 minutes'
+  OR octet_length(p_sealed_payload)<32 THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_age_handoff_not_available'; END IF;
+ IF EXISTS(SELECT 1 FROM users account WHERE account.email=p_email AND account.id<>subject.id)
+  OR EXISTS(SELECT 1 FROM guardian_age_handoffs other WHERE other.proposed_email=p_email AND other.id<>handoff.id AND other.completed_at IS NULL)
+  THEN RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='guardian_age_handoff_email_collision'; END IF;
+ UPDATE email_outbox SET status='CANCELLED',claimed_at=NULL,updated_at=now_at WHERE guardian_handoff_email_token_id IN
+  (SELECT id FROM guardian_age_handoff_email_tokens WHERE handoff_id=handoff.id AND consumed_at IS NULL) AND status IN('PENDING','SENDING');
+ UPDATE guardian_age_handoff_email_tokens SET consumed_at=GREATEST(now_at,created_at) WHERE handoff_id=handoff.id AND consumed_at IS NULL;
+ INSERT INTO guardian_age_handoff_email_tokens(handoff_id,token_digest,proposed_email,expires_at,created_at)
+ VALUES(handoff.id,p_token_digest,p_email,p_expires_at,now_at) RETURNING id INTO token_id;
+ UPDATE guardian_age_handoffs SET proposed_email=p_email,email_verified_at=NULL,ready_at=NULL,status='EMAIL_PENDING',version=version+1,updated_at=now_at WHERE id=handoff.id RETURNING * INTO handoff;
+ INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_ref,actor_role,action,occurred_at)
+ VALUES(handoff.id,handoff.version,p_actor_id,'YOUNG_PERSON','EMAIL_PROPOSED',now_at);
+ INSERT INTO email_outbox(message_type,sealed_payload,guardian_handoff_email_token_id,next_attempt_at,created_at,updated_at)
+ VALUES('GUARDIAN_AGE_18_EMAIL_VERIFY',p_sealed_payload,token_id,now_at,now_at,now_at);
+ RETURN NEXT handoff;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_verify_email(p_token_digest bytea) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE token guardian_age_handoff_email_tokens%ROWTYPE;handoff guardian_age_handoffs%ROWTYPE;now_at timestamptz:=clock_timestamp();next_status text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-age-handoff/v1',0));
+ SELECT * INTO token FROM guardian_age_handoff_email_tokens WHERE token_digest=p_token_digest FOR UPDATE;
+ IF NOT FOUND OR token.consumed_at IS NOT NULL OR token.expires_at<=now_at THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_age_handoff_token_invalid'; END IF;
+ SELECT * INTO handoff FROM guardian_age_handoffs WHERE id=token.handoff_id FOR UPDATE;
+ IF handoff.status='COMPLETED' OR handoff.proposed_email IS DISTINCT FROM token.proposed_email
+  OR EXISTS(SELECT 1 FROM users account WHERE account.email=token.proposed_email AND account.id<>handoff.subject_user_id)
+  THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_age_handoff_token_invalid'; END IF;
+ UPDATE guardian_age_handoff_email_tokens SET consumed_at=now_at WHERE id=token.id;
+ next_status:=CASE WHEN handoff.identity_confirmed_at IS NOT NULL THEN 'READY' ELSE 'EMAIL_VERIFIED' END;
+ UPDATE guardian_age_handoffs SET email_verified_at=now_at,ready_at=CASE WHEN next_status='READY' THEN now_at ELSE NULL END,
+  status=next_status,version=version+1,updated_at=now_at WHERE id=handoff.id RETURNING * INTO handoff;
+ INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_ref,actor_role,action,occurred_at)
+ VALUES(handoff.id,handoff.version,handoff.subject_user_id,'YOUNG_PERSON','EMAIL_VERIFIED',now_at);
+ RETURN handoff.subject_user_id;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_admin_confirm(p_actor_id uuid,p_public_ref uuid,p_expected_version bigint)
+RETURNS SETOF guardian_age_handoffs LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE handoff guardian_age_handoffs%ROWTYPE;relationship_ref uuid;now_at timestamptz:=clock_timestamp();next_status text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-age-handoff/v1',0));
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_administrator_required'; END IF;
+ SELECT * INTO handoff FROM guardian_age_handoffs WHERE public_ref=p_public_ref FOR UPDATE;
+ IF NOT FOUND OR handoff.version<>p_expected_version THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_age_handoff_stale'; END IF;
+ SELECT public_ref INTO relationship_ref FROM guardian_authority_relationships WHERE subject_user_id=handoff.subject_user_id ORDER BY created_at LIMIT 1;
+ IF p_actor_id=handoff.subject_user_id OR relationship_ref IS NULL OR guardian_authority_personally_involved(p_actor_id,relationship_ref)
+  THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_separation_required'; END IF;
+ IF handoff.status='COMPLETED' OR handoff.identity_confirmed_at IS NOT NULL
+  THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_age_handoff_transition_rejected'; END IF;
+ next_status:=CASE WHEN handoff.status IN('RECOVERY_REQUIRED','EMAIL_COLLISION') THEN handoff.status WHEN handoff.email_verified_at IS NOT NULL THEN 'READY' ELSE 'IDENTITY_CONFIRMED' END;
+ UPDATE guardian_age_handoffs SET identity_method='CLUB_REGISTRATION_RECORD',identity_confirmed_by=p_actor_id,identity_confirmed_at=now_at,
+  ready_at=CASE WHEN next_status='READY' THEN now_at ELSE NULL END,status=next_status,version=version+1,updated_at=now_at WHERE id=handoff.id RETURNING * INTO handoff;
+ INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_ref,actor_role,action,method,occurred_at)
+ VALUES(handoff.id,handoff.version,p_actor_id,'ADMIN','IDENTITY_CONFIRMED','CLUB_REGISTRATION_RECORD',now_at);
+ RETURN NEXT handoff;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_admin_recovery_email(p_actor_id uuid,p_public_ref uuid,p_expected_version bigint,p_email citext,p_token_digest bytea,p_expires_at timestamptz,p_sealed_payload bytea)
+RETURNS SETOF guardian_age_handoffs LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE handoff guardian_age_handoffs%ROWTYPE;token_id uuid;relationship_ref uuid;now_at timestamptz:=clock_timestamp();
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-age-handoff/v1',0));
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_administrator_required'; END IF;
+ SELECT * INTO handoff FROM guardian_age_handoffs WHERE public_ref=p_public_ref FOR UPDATE;
+ IF NOT FOUND OR handoff.version<>p_expected_version THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='guardian_age_handoff_stale'; END IF;
+ SELECT public_ref INTO relationship_ref FROM guardian_authority_relationships WHERE subject_user_id=handoff.subject_user_id ORDER BY created_at LIMIT 1;
+ IF relationship_ref IS NULL OR guardian_authority_personally_involved(p_actor_id,relationship_ref) OR handoff.status NOT IN('RECOVERY_REQUIRED','EMAIL_COLLISION')
+  OR handoff.identity_confirmed_at IS NULL OR octet_length(p_token_digest)<>32 OR p_expires_at<=now_at+interval '23 hours'
+  OR p_expires_at>now_at+interval '24 hours 5 minutes' OR octet_length(p_sealed_payload)<32
+  THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_recovery_rejected'; END IF;
+ IF EXISTS(SELECT 1 FROM users account WHERE account.email=p_email AND account.id<>handoff.subject_user_id)
+  OR EXISTS(SELECT 1 FROM guardian_age_handoffs other WHERE other.proposed_email=p_email AND other.id<>handoff.id AND other.completed_at IS NULL)
+  THEN RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='guardian_age_handoff_email_collision'; END IF;
+ UPDATE email_outbox SET status='CANCELLED',claimed_at=NULL,updated_at=now_at WHERE guardian_handoff_email_token_id IN
+  (SELECT id FROM guardian_age_handoff_email_tokens WHERE handoff_id=handoff.id AND consumed_at IS NULL) AND status IN('PENDING','SENDING');
+ UPDATE guardian_age_handoff_email_tokens SET consumed_at=GREATEST(now_at,created_at) WHERE handoff_id=handoff.id AND consumed_at IS NULL;
+ INSERT INTO guardian_age_handoff_email_tokens(handoff_id,token_digest,proposed_email,expires_at,created_at)
+ VALUES(handoff.id,p_token_digest,p_email,p_expires_at,now_at) RETURNING id INTO token_id;
+ UPDATE guardian_age_handoffs SET proposed_email=p_email,email_verified_at=NULL,ready_at=NULL,status='EMAIL_PENDING',version=version+1,updated_at=now_at WHERE id=handoff.id RETURNING * INTO handoff;
+ INSERT INTO guardian_age_handoff_events(handoff_id,handoff_version,actor_ref,actor_role,action,method,occurred_at)
+ VALUES(handoff.id,handoff.version,p_actor_id,'ADMIN','EMAIL_PROPOSED','CLUB_REGISTRATION_RECORD',now_at);
+ INSERT INTO email_outbox(message_type,sealed_payload,guardian_handoff_email_token_id,next_attempt_at,created_at,updated_at)
+ VALUES('GUARDIAN_AGE_18_EMAIL_VERIFY',p_sealed_payload,token_id,now_at,now_at,now_at);
+ RETURN NEXT handoff;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_for_subject(p_actor_id uuid)
+RETURNS TABLE(public_ref uuid,status text,version bigint,birthday date,proposed_email text,email_verified_at timestamptz,identity_confirmed_at timestamptz,ready_at timestamptz,recovery_required_at timestamptz,completed_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT handoff.public_ref,handoff.status,handoff.version,(subject.date_of_birth+interval '18 years')::date,handoff.proposed_email::text,
+  handoff.email_verified_at,handoff.identity_confirmed_at,handoff.ready_at,handoff.recovery_required_at,handoff.completed_at
+ FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+ WHERE handoff.subject_user_id=p_actor_id
+$$;
+
+CREATE FUNCTION guardian_age_handoff_available_for_subject(p_subject_id uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT EXISTS(SELECT 1 FROM guardian_age_handoffs handoff WHERE handoff.subject_user_id=p_subject_id AND handoff.status<>'COMPLETED')
+$$;
+
+CREATE FUNCTION guardian_age_handoff_notices_for_subject(p_actor_id uuid)
+RETURNS TABLE(notice_kind text,birthday date,created_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT notice.notice_kind,notice.birthday,notice.created_at FROM guardian_age_handoff_notices notice
+ JOIN guardian_age_handoffs handoff ON handoff.id=notice.handoff_id
+ WHERE handoff.subject_user_id=p_actor_id AND notice.audience='YOUNG_PERSON_IN_APP' ORDER BY notice.birthday,notice.notice_kind
+$$;
+
+CREATE FUNCTION guardian_age_handoff_for_guardian(p_actor_id uuid,p_subject_id uuid)
+RETURNS TABLE(status text,birthday date)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT handoff.status,(subject.date_of_birth+interval '18 years')::date
+ FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+ WHERE handoff.subject_user_id=p_subject_id
+  AND EXISTS(SELECT 1 FROM guardian_authority_relationships relationship
+   WHERE relationship.guardian_user_id=p_actor_id AND relationship.subject_user_id=p_subject_id)
+$$;
+
+CREATE FUNCTION guardian_age_handoff_list_for_admin(p_actor_id uuid,p_limit integer,p_offset integer)
+RETURNS TABLE(public_ref uuid,subject_name text,status text,version bigint,birthday date,updated_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_administrator_required'; END IF;
+ INSERT INTO guardian_age_handoff_access_events(actor_ref,view_kind) VALUES(p_actor_id,'QUEUE');
+ RETURN QUERY SELECT handoff.public_ref,subject.name::text,handoff.status,handoff.version,(subject.date_of_birth+interval '18 years')::date,handoff.updated_at
+  FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+  WHERE handoff.status<>'COMPLETED' ORDER BY handoff.updated_at,handoff.id LIMIT LEAST(GREATEST(p_limit,1),100) OFFSET GREATEST(p_offset,0);
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_get_for_admin(p_actor_id uuid,p_public_ref uuid)
+RETURNS TABLE(public_ref uuid,subject_name text,status text,version bigint,birthday date,proposed_email text,email_verified_at timestamptz,identity_confirmed_at timestamptz,ready_at timestamptz,recovery_required_at timestamptz,completed_at timestamptz,personal_involvement boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE handoff_id uuid;relationship_ref uuid;
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_age_handoff_administrator_required'; END IF;
+ SELECT handoff.id INTO handoff_id FROM guardian_age_handoffs handoff WHERE handoff.public_ref=p_public_ref;
+ IF handoff_id IS NULL THEN RETURN; END IF;
+ INSERT INTO guardian_age_handoff_access_events(handoff_id,actor_ref,view_kind) VALUES(handoff_id,p_actor_id,'DETAIL');
+ SELECT relationship.public_ref INTO relationship_ref FROM guardian_authority_relationships relationship JOIN guardian_age_handoffs handoff ON handoff.subject_user_id=relationship.subject_user_id WHERE handoff.id=handoff_id ORDER BY relationship.created_at LIMIT 1;
+ RETURN QUERY SELECT handoff.public_ref,subject.name::text,handoff.status,handoff.version,(subject.date_of_birth+interval '18 years')::date,handoff.proposed_email::text,
+  handoff.email_verified_at,handoff.identity_confirmed_at,handoff.ready_at,handoff.recovery_required_at,handoff.completed_at,
+  COALESCE(guardian_authority_personally_involved(p_actor_id,relationship_ref),true)
+ FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id WHERE handoff.id=handoff_id;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_due_guardian_notices(p_limit integer)
+RETURNS TABLE(handoff_ref uuid,relationship_ref uuid,guardian_user_id uuid,recipient text,recipient_verified_at timestamptz,birthday date,notice_kind text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ WITH today_value AS(SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date AS value),candidate AS(
+  SELECT handoff.id handoff_id,handoff.public_ref,relationship.id relationship_id,relationship.public_ref relationship_ref,
+   guardian.id guardian_user_id,guardian.email::text recipient,guardian.email_verified_at,(subject.date_of_birth+interval '18 years')::date birthday,
+   CASE WHEN (subject.date_of_birth+interval '18 years')::date<=(SELECT value FROM today_value)+7 THEN 'GUARDIAN_AGE_18_7_DAY' ELSE 'GUARDIAN_AGE_18_30_DAY' END notice_kind
+  FROM guardian_age_handoffs handoff JOIN users subject ON subject.id=handoff.subject_user_id
+  JOIN guardian_authority_relationships relationship ON relationship.subject_user_id=subject.id
+  JOIN users guardian ON guardian.id=relationship.guardian_user_id
+  WHERE handoff.status<>'COMPLETED' AND subject.is_active AND subject.is_dependent
+   AND (subject.date_of_birth+interval '18 years')::date>(SELECT value FROM today_value)
+   AND (subject.date_of_birth+interval '18 years')::date<=(SELECT value FROM today_value)+30
+   AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent AND guardian.email IS NOT NULL AND guardian.email_verified_at IS NOT NULL
+   AND guardian_authority_current(guardian.id,subject.id))
+ SELECT candidate.public_ref,candidate.relationship_ref,candidate.guardian_user_id,candidate.recipient,candidate.email_verified_at,candidate.birthday,candidate.notice_kind
+ FROM candidate WHERE NOT EXISTS(SELECT 1 FROM guardian_age_handoff_notices notice WHERE notice.relationship_id=candidate.relationship_id AND notice.birthday=candidate.birthday AND notice.notice_kind=candidate.notice_kind)
+ ORDER BY candidate.birthday,candidate.relationship_id LIMIT LEAST(GREATEST(p_limit,1),100)
+$$;
+
+CREATE FUNCTION guardian_age_handoff_enqueue_guardian_notice(p_handoff_ref uuid,p_relationship_ref uuid,p_guardian_user_id uuid,p_recipient citext,p_recipient_verified_at timestamptz,p_birthday date,p_notice_kind text,p_sealed_payload bytea)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE handoff guardian_age_handoffs%ROWTYPE;relationship guardian_authority_relationships%ROWTYPE;guardian users%ROWTYPE;subject users%ROWTYPE;notice_id uuid;today date:=(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date;expected_kind text;
+BEGIN
+ IF p_notice_kind NOT IN('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY') OR octet_length(p_sealed_payload)<32 THEN RETURN false; END IF;
+ SELECT * INTO handoff FROM guardian_age_handoffs WHERE public_ref=p_handoff_ref FOR UPDATE;
+ SELECT * INTO relationship FROM guardian_authority_relationships WHERE public_ref=p_relationship_ref FOR UPDATE;
+ SELECT * INTO guardian FROM users WHERE id=p_guardian_user_id FOR SHARE;
+ SELECT * INTO subject FROM users WHERE id=handoff.subject_user_id FOR SHARE;
+ expected_kind:=CASE WHEN p_birthday<=today+7 THEN 'GUARDIAN_AGE_18_7_DAY' ELSE 'GUARDIAN_AGE_18_30_DAY' END;
+ IF handoff.id IS NULL OR relationship.id IS NULL OR guardian.id IS NULL OR subject.id IS NULL OR handoff.status='COMPLETED'
+  OR relationship.subject_user_id<>handoff.subject_user_id OR relationship.guardian_user_id<>p_guardian_user_id
+  OR NOT guardian.is_active OR guardian.erased_at IS NOT NULL OR guardian.is_dependent OR guardian.email IS NULL OR guardian.email<>p_recipient OR guardian.email_verified_at IS DISTINCT FROM p_recipient_verified_at
+  OR NOT subject.is_active OR NOT subject.is_dependent OR (subject.date_of_birth+interval '18 years')::date<>p_birthday
+  OR p_birthday<=today OR p_birthday>today+30 OR p_notice_kind<>expected_kind OR NOT guardian_authority_current(guardian.id,subject.id) THEN RETURN false; END IF;
+ INSERT INTO guardian_age_handoff_notices(handoff_id,relationship_id,guardian_user_id,recipient_verified_at,audience,notice_kind,birthday)
+ VALUES(handoff.id,relationship.id,p_guardian_user_id,p_recipient_verified_at,'GUARDIAN_EMAIL',p_notice_kind,p_birthday)
+ ON CONFLICT DO NOTHING RETURNING id INTO notice_id;
+ IF notice_id IS NULL THEN RETURN false; END IF;
+ INSERT INTO email_outbox(message_type,sealed_payload,guardian_handoff_notice_id) VALUES(p_notice_kind,p_sealed_payload,notice_id);
+ RETURN true;
+END;$$;
+
+CREATE FUNCTION guardian_age_handoff_outbox_delivery(p_outbox_id uuid,p_as_of timestamptz)
+RETURNS TABLE(deliverable boolean,user_id uuid,email text,expires_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT CASE
+  WHEN outbox.message_type IN('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY') THEN COALESCE(
+   relationship.guardian_user_id=notice.guardian_user_id AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent
+   AND guardian.email IS NOT NULL AND guardian.email_verified_at IS NOT DISTINCT FROM notice.recipient_verified_at
+   AND subject.is_active AND subject.is_dependent AND handoff.status<>'COMPLETED'
+   AND (subject.date_of_birth+interval '18 years')::date=notice.birthday
+   AND notice.birthday>(p_as_of AT TIME ZONE 'Europe/Lisbon')::date
+   AND guardian_authority_current(guardian.id,subject.id)
+   AND ((outbox.message_type='GUARDIAN_AGE_18_30_DAY' AND notice.notice_kind='GUARDIAN_AGE_18_30_DAY' AND notice.birthday>(p_as_of AT TIME ZONE 'Europe/Lisbon')::date+7)
+    OR (outbox.message_type='GUARDIAN_AGE_18_7_DAY' AND notice.notice_kind='GUARDIAN_AGE_18_7_DAY' AND notice.birthday<=(p_as_of AT TIME ZONE 'Europe/Lisbon')::date+7)),false)
+  WHEN outbox.message_type='GUARDIAN_AGE_18_EMAIL_VERIFY' THEN COALESCE(token.consumed_at IS NULL AND token.expires_at>p_as_of
+   AND handoff.proposed_email=token.proposed_email AND handoff.status NOT IN('COMPLETED','EMAIL_COLLISION')
+   AND subject.is_active AND subject.is_dependent
+   AND NOT EXISTS(SELECT 1 FROM users collision WHERE collision.email=token.proposed_email AND collision.id<>subject.id),false)
+  ELSE false END,
+ CASE WHEN outbox.message_type='GUARDIAN_AGE_18_EMAIL_VERIFY' THEN subject.id ELSE guardian.id END,
+ CASE WHEN outbox.message_type='GUARDIAN_AGE_18_EMAIL_VERIFY' THEN token.proposed_email::text ELSE guardian.email::text END,
+ CASE WHEN outbox.message_type='GUARDIAN_AGE_18_EMAIL_VERIFY' THEN token.expires_at ELSE ((notice.birthday::timestamp AT TIME ZONE 'Europe/Lisbon')) END
+ FROM email_outbox outbox
+ LEFT JOIN guardian_age_handoff_notices notice ON notice.id=outbox.guardian_handoff_notice_id
+ LEFT JOIN guardian_age_handoff_email_tokens token ON token.id=outbox.guardian_handoff_email_token_id
+ LEFT JOIN guardian_age_handoffs handoff ON handoff.id=COALESCE(notice.handoff_id,token.handoff_id)
+ LEFT JOIN guardian_authority_relationships relationship ON relationship.id=notice.relationship_id
+ LEFT JOIN users guardian ON guardian.id=notice.guardian_user_id
+ LEFT JOIN users subject ON subject.id=handoff.subject_user_id
+ WHERE outbox.id=p_outbox_id
+$$;
+
+-- Route majority through the handoff first so incomplete identities are locked,
+-- not erased, and ready identities convert before generic authority cutoff.
+CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();reconciled bigint:=0;end_reason text;
+BEGIN
+ PERFORM guardian_age_handoff_reconcile();
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ FOR relationship IN SELECT authority.* FROM guardian_authority_relationships authority
+  JOIN users guardian ON guardian.id=authority.guardian_user_id JOIN users subject ON subject.id=authority.subject_user_id
+  LEFT JOIN guardian_authority_policies policy ON policy.version=authority.policy_version
+  WHERE authority.state IN('VERIFIED','SUSPENDED') AND (policy.id IS NULL OR NOT policy.enabled OR policy.adopted_at>now_at
+   OR authority.review_due_at<=now_at OR authority.verified_until<=now_at OR NOT guardian.is_active OR guardian.erased_at IS NOT NULL OR guardian.is_dependent
+   OR guardian.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+   OR NOT subject.is_active OR subject.erased_at IS NOT NULL OR NOT subject.is_dependent
+   OR subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date)
+  FOR UPDATE OF authority
+ LOOP
+  end_reason:=CASE WHEN EXISTS(SELECT 1 FROM users subject WHERE subject.id=relationship.subject_user_id AND subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) THEN 'MAJORITY_REACHED'
+   WHEN relationship.review_due_at<=now_at OR relationship.verified_until<=now_at THEN 'REVIEW_EXPIRED' ELSE 'ELIGIBILITY_ENDED' END;
+  UPDATE guardian_authority_relationships SET state='EXPIRED',version=relationship.version+1,conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at WHERE id=relationship.subject_user_id;
+  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,reason_code,occurred_at,verified_until,review_due_at)
+  VALUES(relationship.id,relationship.version+1,NULL,'SYSTEM','EXPIRED',relationship.state,'EXPIRED',relationship.policy_version,end_reason,now_at,relationship.verified_until,relationship.review_due_at);
+  reconciled:=reconciled+1;
+ END LOOP;
+ RETURN reconciled;
+END;$$;
+
+REVOKE ALL ON TABLE guardian_age_handoffs,guardian_age_handoff_events,guardian_age_handoff_email_tokens,guardian_age_handoff_notices,guardian_age_handoff_access_events FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON SEQUENCE guardian_age_handoff_events_id_seq,guardian_age_handoff_access_events_id_seq FROM PUBLIC;
+REVOKE ALL ON FUNCTION guardian_age_handoff_reconcile(),guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea),guardian_age_handoff_verify_email(bytea),guardian_age_handoff_admin_confirm(uuid,uuid,bigint),guardian_age_handoff_admin_recovery_email(uuid,uuid,bigint,citext,bytea,timestamptz,bytea),guardian_age_handoff_for_subject(uuid),guardian_age_handoff_available_for_subject(uuid),guardian_age_handoff_notices_for_subject(uuid),guardian_age_handoff_for_guardian(uuid,uuid),guardian_age_handoff_list_for_admin(uuid,integer,integer),guardian_age_handoff_get_for_admin(uuid,uuid),guardian_age_handoff_due_guardian_notices(integer),guardian_age_handoff_enqueue_guardian_notice(uuid,uuid,uuid,citext,timestamptz,date,text,bytea),guardian_age_handoff_outbox_delivery(uuid,timestamptz) FROM PUBLIC;
+
+DO $$BEGIN IF to_regrole('mycfc_app') IS NOT NULL THEN
+ EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE guardian_age_handoffs,guardian_age_handoff_events,guardian_age_handoff_email_tokens,guardian_age_handoff_notices,guardian_age_handoff_access_events FROM mycfc_app';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON SEQUENCE guardian_age_handoff_events_id_seq,guardian_age_handoff_access_events_id_seq FROM mycfc_app';
+ EXECUTE 'GRANT EXECUTE ON FUNCTION guardian_age_handoff_reconcile(),guardian_age_handoff_propose_email(uuid,bigint,citext,bytea,timestamptz,bytea),guardian_age_handoff_verify_email(bytea),guardian_age_handoff_admin_confirm(uuid,uuid,bigint),guardian_age_handoff_admin_recovery_email(uuid,uuid,bigint,citext,bytea,timestamptz,bytea),guardian_age_handoff_for_subject(uuid),guardian_age_handoff_available_for_subject(uuid),guardian_age_handoff_notices_for_subject(uuid),guardian_age_handoff_for_guardian(uuid,uuid),guardian_age_handoff_list_for_admin(uuid,integer,integer),guardian_age_handoff_get_for_admin(uuid,uuid),guardian_age_handoff_due_guardian_notices(integer),guardian_age_handoff_enqueue_guardian_notice(uuid,uuid,uuid,citext,timestamptz,date,text,bytea),guardian_age_handoff_outbox_delivery(uuid,timestamptz) TO mycfc_app';
+END IF;END$$;
+
+-- Every schema revision invalidates previously signed privacy activation evidence.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false WHERE singleton;
+UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled;
+-- Source-only guardian-authority V2 activation boundary. The migration remains
+-- fail closed: it creates no login and leaves intake and every policy disabled.
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v12_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609120004_guardian_age_handoff',''))<>length('202609120004_guardian_age_handoff') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_activation_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609120004_guardian_age_handoff''',
+  '''202609120004_guardian_age_handoff'', ''202609120005_guardian_authority_activation''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v12_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v13_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v13_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609120004_guardian_age_handoff''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609120005_guardian_authority_activation''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_activation_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609120004_guardian_age_handoff''';
+ new_clause:='schema_row.baseline_includes_through=''202609120005_guardian_authority_activation''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_activation_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+CREATE SCHEMA guardian_ops;
+REVOKE ALL ON SCHEMA guardian_ops FROM PUBLIC;
+
+CREATE TABLE guardian_ops.runtime_release_binding(
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+ database_name text NULL,
+ image_digest text NULL CHECK(image_digest IS NULL OR image_digest~'^sha256:[0-9a-f]{64}$'),
+ schema_migration_digest text NULL CHECK(schema_migration_digest IS NULL OR schema_migration_digest~'^[0-9a-f]{64}$'),
+ generation bigint NOT NULL DEFAULT 0 CHECK(generation>=0),
+ bound_at timestamptz NULL,
+ CHECK((database_name IS NULL AND image_digest IS NULL AND schema_migration_digest IS NULL AND bound_at IS NULL)
+  OR (database_name IS NOT NULL AND image_digest IS NOT NULL AND schema_migration_digest IS NOT NULL AND bound_at IS NOT NULL))
+);
+CREATE TABLE guardian_ops.runtime_release_binding_events(
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ generation bigint NOT NULL CHECK(generation>0),
+ database_name text NOT NULL,
+ image_digest text NOT NULL CHECK(image_digest~'^sha256:[0-9a-f]{64}$'),
+ schema_migration_digest text NOT NULL CHECK(schema_migration_digest~'^[0-9a-f]{64}$'),
+ relationship_count bigint NOT NULL CHECK(relationship_count>=0),
+ credential_count bigint NOT NULL CHECK(credential_count>=0),
+ session_count bigint NOT NULL CHECK(session_count>=0),
+ occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER guardian_runtime_release_binding_events_immutable BEFORE UPDATE OR DELETE ON guardian_ops.runtime_release_binding_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+INSERT INTO guardian_ops.runtime_release_binding(singleton) VALUES(true);
+
+CREATE FUNCTION guardian_ops.schema_ready(p_embedded_schema_digest text)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE ready boolean:=false;
+BEGIN
+ IF p_embedded_schema_digest!~'^[0-9a-f]{64}$' OR to_regclass('mycfc_meta.schema_migrations') IS NULL THEN RETURN false; END IF;
+ EXECUTE 'SELECT encode(digest(convert_to(string_agg(version,E''\n'' ORDER BY version),''UTF8''),''sha256''),''hex'')=$1
+   AND bool_or(version=''202609120005_guardian_authority_activation'') FROM mycfc_meta.schema_migrations'
+ INTO ready USING p_embedded_schema_digest;
+ RETURN COALESCE(ready,false);
+END;$$;
+REVOKE ALL ON FUNCTION guardian_ops.schema_ready(text) FROM PUBLIC;
+
+CREATE TABLE guardian_authority_policy_approvals(
+ policy_version varchar(80) PRIMARY KEY REFERENCES guardian_authority_policies(version) ON DELETE RESTRICT,
+ policy_sha256 bytea NOT NULL CHECK(octet_length(policy_sha256)=32),
+ approval_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(approval_sha256)=32),
+ approval_contract text NOT NULL CHECK(approval_contract='mycfc/guardian-authority-policy-approval/v1'),
+ approval_canonical bytea NOT NULL CHECK(octet_length(approval_canonical) BETWEEN 2 AND 1048576),
+ expected_database text NOT NULL CHECK(expected_database=btrim(expected_database) AND expected_database~'^[A-Za-z][A-Za-z0-9_]{0,62}$'),
+ authorized_operator_actor_ref uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ controller_role text NOT NULL CHECK(controller_role='CLUB_DIRECTION'),
+ controller_approval_reference text NOT NULL CHECK(controller_approval_reference=btrim(controller_approval_reference) AND char_length(controller_approval_reference) BETWEEN 1 AND 200),
+ controller_approved_on date NOT NULL,
+ effective_on date NOT NULL,
+ review_due_on date NOT NULL,
+ legal_reviewer_reference text NOT NULL CHECK(legal_reviewer_reference=btrim(legal_reviewer_reference) AND char_length(legal_reviewer_reference) BETWEEN 1 AND 200),
+ legal_review_reference text NOT NULL CHECK(legal_review_reference=btrim(legal_review_reference) AND char_length(legal_review_reference) BETWEEN 1 AND 200),
+ legal_reviewed_on date NOT NULL,
+ legal_review_conclusion text NOT NULL CHECK(legal_review_conclusion='APPROVED'),
+ bound_image_digest text NOT NULL CHECK(bound_image_digest~'^sha256:[0-9a-f]{64}$'),
+ bound_schema_migration_digest text NOT NULL CHECK(bound_schema_migration_digest~'^[0-9a-f]{64}$'),
+ bound_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ bound_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(controller_approved_on<=effective_on AND legal_reviewed_on<=effective_on AND review_due_on>effective_on),
+ CHECK(bound_by=authorized_operator_actor_ref)
+);
+CREATE TRIGGER guardian_authority_policy_approvals_immutable BEFORE UPDATE OR DELETE ON guardian_authority_policy_approvals
+ FOR EACH ROW EXECUTE FUNCTION prevent_guardian_authority_event_mutation();
+
+ALTER TABLE guardian_application_intake_release DROP CONSTRAINT guardian_application_intake_release_disabled_check;
+ALTER TABLE guardian_application_intake_release
+ ADD COLUMN policy_version varchar(80) NULL REFERENCES guardian_authority_policies(version) ON DELETE RESTRICT,
+ ADD COLUMN policy_sha256 bytea NULL CHECK(policy_sha256 IS NULL OR octet_length(policy_sha256)=32),
+ ADD COLUMN approval_sha256 bytea NULL CHECK(approval_sha256 IS NULL OR octet_length(approval_sha256)=32),
+ ADD COLUMN image_digest text NULL CHECK(image_digest IS NULL OR image_digest~'^sha256:[0-9a-f]{64}$'),
+ ADD COLUMN schema_migration_digest text NULL CHECK(schema_migration_digest IS NULL OR schema_migration_digest~'^[0-9a-f]{64}$'),
+ ADD COLUMN enabled_by uuid NULL REFERENCES users(id) ON DELETE RESTRICT,
+ ADD COLUMN enabled_at timestamptz NULL,
+ ADD CONSTRAINT guardian_application_intake_release_binding_check CHECK(
+  (enabled AND policy_version IS NOT NULL AND policy_sha256 IS NOT NULL AND approval_sha256 IS NOT NULL
+   AND image_digest IS NOT NULL AND schema_migration_digest IS NOT NULL AND enabled_by IS NOT NULL AND enabled_at IS NOT NULL)
+  OR (NOT enabled AND policy_version IS NULL AND policy_sha256 IS NULL AND approval_sha256 IS NULL
+   AND image_digest IS NULL AND schema_migration_digest IS NULL AND enabled_by IS NULL AND enabled_at IS NULL));
+
+ALTER TABLE guardian_application_intake_release_events DROP CONSTRAINT guardian_application_intake_release_events_action_check;
+ALTER TABLE guardian_application_intake_release_events DROP CONSTRAINT guardian_application_intake_release_events_actor_ref_check;
+ALTER TABLE guardian_application_intake_release_events
+ ADD COLUMN policy_version varchar(80) NULL,
+ ADD COLUMN policy_sha256 bytea NULL CHECK(policy_sha256 IS NULL OR octet_length(policy_sha256)=32),
+ ADD COLUMN approval_sha256 bytea NULL CHECK(approval_sha256 IS NULL OR octet_length(approval_sha256)=32),
+ ADD COLUMN image_digest text NULL,
+ ADD COLUMN schema_migration_digest text NULL,
+ ADD COLUMN relationship_count bigint NOT NULL DEFAULT 0 CHECK(relationship_count>=0),
+ ADD COLUMN credential_count bigint NOT NULL DEFAULT 0 CHECK(credential_count>=0),
+ ADD COLUMN session_count bigint NOT NULL DEFAULT 0 CHECK(session_count>=0),
+ ADD CONSTRAINT guardian_application_intake_release_events_action_v2_check CHECK(action IN('CREATED_DISABLED','ENABLED','DISABLED')),
+ ADD CONSTRAINT guardian_application_intake_release_events_actor_v2_check CHECK((action='CREATED_DISABLED' AND actor_ref IS NULL) OR (action<>'CREATED_DISABLED' AND actor_ref IS NOT NULL));
+
+CREATE FUNCTION guardian_authority_policy_operational(p_version text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT COALESCE(EXISTS(
+  SELECT 1 FROM guardian_authority_policies policy
+  JOIN guardian_authority_policy_approvals approval ON approval.policy_version=policy.version
+  JOIN guardian_application_intake_release gate ON gate.singleton AND gate.enabled AND gate.gate_version='guardian-intake-v2'
+  JOIN guardian_ops.runtime_release_binding runtime ON runtime.singleton
+  WHERE policy.version=p_version AND policy.enabled AND policy.adopted_at<=clock_timestamp()
+   AND gate.policy_version=policy.version AND gate.policy_sha256=approval.policy_sha256 AND gate.approval_sha256=approval.approval_sha256
+   AND gate.image_digest=approval.bound_image_digest AND gate.schema_migration_digest=approval.bound_schema_migration_digest
+   AND runtime.database_name=current_database() AND approval.expected_database=current_database()
+   AND runtime.image_digest=gate.image_digest AND runtime.schema_migration_digest=gate.schema_migration_digest
+   AND guardian_ops.schema_ready(gate.schema_migration_digest)
+   AND approval.effective_on<=(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date
+   AND approval.review_due_on>(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date
+ ),false);
+$$;
+
+CREATE OR REPLACE FUNCTION guardian_authority_current(p_guardian_user_id uuid,p_subject_user_id uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT COALESCE(EXISTS(
+  SELECT 1 FROM guardian_authority_relationships relationship
+  JOIN users guardian ON guardian.id=relationship.guardian_user_id
+  JOIN users subject ON subject.id=relationship.subject_user_id
+  JOIN guardian_authority_policies policy ON policy.version=relationship.policy_version
+  WHERE relationship.guardian_user_id=p_guardian_user_id AND relationship.subject_user_id=p_subject_user_id
+   AND relationship.state='VERIFIED' AND NOT relationship.conflict AND guardian_authority_policy_operational(policy.version)
+   AND relationship.verified_at<=clock_timestamp() AND relationship.review_due_at>clock_timestamp() AND relationship.verified_until>clock_timestamp()
+   AND guardian.is_active AND guardian.erased_at IS NULL AND NOT guardian.is_dependent
+   AND guardian.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+   AND subject.is_active AND subject.erased_at IS NULL AND subject.is_dependent
+   AND subject.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+ ),false);
+$$;
+
+CREATE OR REPLACE FUNCTION guardian_authority_create_dependent(p_name text,p_date_of_birth date,p_guardian_user_id uuid,p_invitation_digest bytea)
+RETURNS SETOF users LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE guardian_row users%ROWTYPE;subject_row users%ROWTYPE;relationship_id uuid;now_at timestamptz:=clock_timestamp();invitation guardian_authority_invitations%ROWTYPE;has_membership boolean;
+BEGIN
+ PERFORM pg_advisory_xact_lock(110,110);
+ IF (SELECT count(*) FROM guardian_authority_policies policy WHERE guardian_authority_policy_operational(policy.version))<>1 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_application_intake_unreleased'; END IF;
+ SELECT * INTO guardian_row FROM users WHERE id=p_guardian_user_id FOR UPDATE;
+ IF NOT FOUND OR NOT guardian_row.is_active OR guardian_row.erased_at IS NOT NULL OR guardian_row.is_dependent
+  OR guardian_row.email IS NULL OR guardian_row.email_verified_at IS NULL
+  OR guardian_row.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date THEN RETURN; END IF;
+ SELECT EXISTS(SELECT 1 FROM user_memberships membership WHERE membership.user_id=guardian_row.id
+  AND membership.starts_on<=CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on>=CURRENT_DATE)) INTO has_membership;
+ IF p_invitation_digest IS NOT NULL THEN
+  IF octet_length(p_invitation_digest)<>32 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_invitation_invalid'; END IF;
+  SELECT * INTO invitation FROM guardian_authority_invitations WHERE token_digest=p_invitation_digest FOR UPDATE;
+  IF NOT FOUND OR invitation.invited_email IS NULL OR invitation.invited_email<>guardian_row.email OR invitation.revoked_at IS NOT NULL
+   OR invitation.consumed_at IS NOT NULL OR invitation.expires_at<=now_at THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_invitation_invalid'; END IF;
+ ELSIF NOT has_membership THEN RETURN; END IF;
+ IF p_name IS NULL OR p_name<>btrim(p_name) OR char_length(p_name) NOT BETWEEN 2 AND 120 OR p_date_of_birth IS NULL
+  OR p_date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date)
+  OR p_date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_subject_rejected'; END IF;
+ IF (SELECT count(*) FROM guardian_authority_relationships r JOIN users u ON u.id=r.subject_user_id
+  WHERE r.guardian_user_id=p_guardian_user_id AND r.state NOT IN('EXPIRED','REJECTED') AND u.is_active AND u.erased_at IS NULL)>=10 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_limit_reached'; END IF;
+ INSERT INTO users(name,email,password_hash,guardian_id,is_dependent,date_of_birth) VALUES(p_name,NULL,NULL,NULL,true,p_date_of_birth) RETURNING * INTO subject_row;
+ INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,created_at,updated_at)
+ VALUES(p_guardian_user_id,subject_row.id,p_name,'PENDING',now_at,now_at) RETURNING id INTO relationship_id;
+ INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,occurred_at)
+ VALUES(relationship_id,1,p_guardian_user_id,'GUARDIAN','DECLARED',NULL,'PENDING',now_at);
+ IF invitation.id IS NOT NULL THEN UPDATE guardian_authority_invitations SET invited_email=NULL,consumed_by=p_guardian_user_id,
+  consumed_relationship_id=relationship_id,consumed_at=now_at WHERE id=invitation.id; END IF;
+ RETURN NEXT subject_row;
+END;$$;
+
+CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE relationship guardian_authority_relationships%ROWTYPE;now_at timestamptz:=clock_timestamp();reconciled bigint:=0;end_reason text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority',0));
+ PERFORM guardian_age_handoff_reconcile();
+ FOR relationship IN SELECT authority.* FROM guardian_authority_relationships authority
+  JOIN users guardian ON guardian.id=authority.guardian_user_id JOIN users subject ON subject.id=authority.subject_user_id
+  LEFT JOIN guardian_authority_policies policy ON policy.version=authority.policy_version
+  WHERE authority.state IN('VERIFIED','SUSPENDED') AND (policy.id IS NULL OR NOT guardian_authority_policy_operational(policy.version)
+   OR authority.review_due_at<=now_at OR authority.verified_until<=now_at OR NOT guardian.is_active OR guardian.erased_at IS NOT NULL OR guardian.is_dependent
+   OR guardian.date_of_birth>((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date
+   OR NOT subject.is_active OR subject.erased_at IS NOT NULL OR NOT subject.is_dependent
+   OR subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) FOR UPDATE OF authority
+ LOOP
+  end_reason:=CASE WHEN EXISTS(SELECT 1 FROM users subject WHERE subject.id=relationship.subject_user_id
+   AND subject.date_of_birth<=((CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Lisbon')::date-INTERVAL '18 years')::date) THEN 'MAJORITY_REACHED'
+   WHEN relationship.review_due_at<=now_at OR relationship.verified_until<=now_at THEN 'REVIEW_EXPIRED' ELSE 'ELIGIBILITY_ENDED' END;
+  UPDATE guardian_authority_relationships SET state='EXPIRED',version=relationship.version+1,conflict=false,conflict_actor_ref=NULL,updated_at=now_at WHERE id=relationship.id;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=relationship.subject_user_id;
+  UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=now_at WHERE id=relationship.subject_user_id;
+  INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,reason_code,occurred_at,verified_until,review_due_at)
+  VALUES(relationship.id,relationship.version+1,NULL,'SYSTEM','EXPIRED',relationship.state,'EXPIRED',relationship.policy_version,end_reason,now_at,relationship.verified_until,relationship.review_due_at);
+  reconciled:=reconciled+1;
+ END LOOP;
+ RETURN reconciled;
+END;$$;
+
+ALTER FUNCTION guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text)
+ RENAME TO guardian_authority_admin_transition_inner_004;
+CREATE OR REPLACE FUNCTION guardian_authority_admin_transition(p_actor_id uuid,p_relationship_ref uuid,p_expected_version bigint,p_action text,p_evidence_category text,p_reason_code text)
+RETURNS SETOF guardian_authority_relationships LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE active_policy_count integer;
+BEGIN
+ SELECT count(*) INTO active_policy_count FROM guardian_authority_policies policy WHERE guardian_authority_policy_operational(policy.version);
+ IF active_policy_count<>1 THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_authority_policy_unavailable'; END IF;
+ RETURN QUERY SELECT * FROM guardian_authority_admin_transition_inner_004(p_actor_id,p_relationship_ref,p_expected_version,p_action,p_evidence_category,p_reason_code);
+END;$$;
+REVOKE ALL ON FUNCTION guardian_authority_admin_transition_inner_004(uuid,uuid,bigint,text,text,text) FROM PUBLIC;
+DO $$BEGIN IF to_regrole('mycfc_app') IS NOT NULL THEN
+ EXECUTE 'REVOKE EXECUTE ON FUNCTION guardian_authority_admin_transition_inner_004(uuid,uuid,bigint,text,text,text) FROM mycfc_app';
+ EXECUTE 'GRANT EXECUTE ON FUNCTION guardian_authority_admin_transition(uuid,uuid,bigint,text,text,text) TO mycfc_app';
+END IF;END$$;
+
+-- Canonical v1 uses UTF-8, no insignificant whitespace, the exact field order
+-- below, Go-compatible JSON string escaping, and the fixed compact policy.
+-- Keeping the raw text argument prevents jsonb from erasing caller whitespace
+-- or member order before this boundary validates and hashes it.
+CREATE FUNCTION guardian_ops.canonical_policy() RETURNS bytea
+LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path=pg_catalog AS $$
+ SELECT convert_to('{"contract":"guardian-authority-v2","evidence_categories":["CLUB_REGISTRATION_RECORD","IN_PERSON_ID_AND_CIVIL_RECORD","COURT_OR_LEGAL_AUTHORITY"],"reason_codes":["RELATIONSHIP_CONFIRMED","EVIDENCE_INSUFFICIENT","AUTHORITY_NOT_ESTABLISHED","CONFLICT","AUTHORITY_CHANGED","UNCERTAINTY","AUTHORITY_ENDED","ELIGIBILITY_ENDED","REVIEW_EXPIRED","MAJORITY_REACHED"],"validity_days":365,"review_days":365,"fresh_authentication_minutes":60,"invitation_validity_days":30,"submission_account_limit_24h":10,"submission_network_limit_24h":100,"renewal_period_months":12,"adult_age_years":18,"guardians_per_minor":1}','UTF8');
+$$;
+CREATE FUNCTION guardian_ops.canonical_approval(p_approval jsonb) RETURNS bytea
+LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path=pg_catalog,guardian_ops AS $$
+ SELECT convert_to('{"contract":'||to_jsonb(p_approval->>'contract')::text||
+  ',"authorized_operator_actor_ref":'||to_jsonb(p_approval->>'authorized_operator_actor_ref')::text||
+  ',"expected_database":'||to_jsonb(p_approval->>'expected_database')::text||
+  ',"controller_role":'||to_jsonb(p_approval->>'controller_role')::text||
+  ',"controller_approval_reference":'||to_jsonb(p_approval->>'controller_approval_reference')::text||
+  ',"controller_approved_on":'||to_jsonb(p_approval->>'controller_approved_on')::text||
+  ',"effective_on":'||to_jsonb(p_approval->>'effective_on')::text||
+  ',"review_due_on":'||to_jsonb(p_approval->>'review_due_on')::text||
+  ',"legal_reviewer_reference":'||to_jsonb(p_approval->>'legal_reviewer_reference')::text||
+  ',"legal_review_reference":'||to_jsonb(p_approval->>'legal_review_reference')::text||
+  ',"legal_reviewed_on":'||to_jsonb(p_approval->>'legal_reviewed_on')::text||
+  ',"legal_review_conclusion":'||to_jsonb(p_approval->>'legal_review_conclusion')::text||
+  ',"policy":'||convert_from(guardian_ops.canonical_policy(),'UTF8')||
+  ',"policy_sha256":'||to_jsonb(p_approval->>'policy_sha256')::text||
+  ',"policy_version":'||to_jsonb(p_approval->>'policy_version')::text||'}','UTF8');
+$$;
+
+CREATE FUNCTION guardian_ops.status(p_expected_database text,p_current_image_digest text,p_embedded_schema_digest text)
+RETURNS TABLE(state text,database_current boolean,migrations_current boolean,image_current boolean,contract_current boolean,
+ policy_version text,policy_sha256 bytea,approval_sha256 bytea,pending_count bigint,current_relationship_count bigint,
+ stale_relationship_count bigint,credential_count bigint,session_count bigint,active_invitation_count bigint)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ WITH active AS (
+  SELECT gate.*,approval.review_due_on FROM guardian_application_intake_release gate
+  LEFT JOIN guardian_authority_policy_approvals approval ON approval.policy_version=gate.policy_version WHERE gate.singleton
+ ), counts AS (
+  SELECT count(*) FILTER(WHERE relationship.state='PENDING') pending_count,
+   count(*) FILTER(WHERE relationship.state='VERIFIED' AND guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id)) current_count,
+   count(*) FILTER(WHERE relationship.state IN('VERIFIED','SUSPENDED') AND NOT guardian_authority_current(relationship.guardian_user_id,relationship.subject_user_id)) stale_count
+  FROM guardian_authority_relationships relationship
+ )
+ SELECT CASE WHEN current_database()<>p_expected_database OR NOT guardian_ops.schema_ready(p_embedded_schema_digest)
+	OR active.gate_version<>'guardian-intake-v2' OR (active.enabled AND (runtime.database_name<>current_database()
+	 OR runtime.image_digest IS DISTINCT FROM active.image_digest OR runtime.schema_migration_digest IS DISTINCT FROM active.schema_migration_digest
+	 OR active.image_digest IS DISTINCT FROM p_current_image_digest)) THEN 'BLOCKED'
+	WHEN active.enabled AND guardian_authority_policy_operational(active.policy_version) THEN 'ENABLED'
+	WHEN active.enabled THEN 'BLOCKED' ELSE 'DISABLED' END,
+  current_database()=p_expected_database,guardian_ops.schema_ready(p_embedded_schema_digest),
+  NOT active.enabled OR (active.image_digest=p_current_image_digest AND runtime.image_digest=active.image_digest),active.gate_version='guardian-intake-v2',
+  active.policy_version,active.policy_sha256,active.approval_sha256,counts.pending_count,counts.current_count,counts.stale_count,
+  (SELECT count(*) FROM users subject WHERE subject.is_dependent AND (subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL)),
+  (SELECT count(*) FROM sessions session JOIN users subject ON subject.id=session.user_id WHERE session.subject_indexed AND subject.is_dependent),
+  (SELECT count(*) FROM guardian_authority_invitations invitation WHERE invitation.revoked_at IS NULL AND invitation.consumed_at IS NULL AND invitation.expires_at>clock_timestamp())
+ FROM active,counts,guardian_ops.runtime_release_binding runtime WHERE runtime.singleton;
+$$;
+
+CREATE FUNCTION guardian_ops.preflight(p_actor uuid,p_approval_text text,p_approval_canonical bytea,p_policy_canonical bytea,
+ p_current_image_digest text,p_embedded_schema_digest text,p_expected_database text)
+RETURNS TABLE(ready boolean,already_enabled boolean,policy_version text,policy_sha256 bytea,approval_sha256 bytea,
+ stale_relationship_count bigint,credential_count bigint,session_count bigint)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE p_approval jsonb;expected_policy jsonb;actual_policy_sha bytea;actual_approval_sha bytea;inventory_sha text;requested_version text;today date:=(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date;
+ gate guardian_application_intake_release%ROWTYPE;existing guardian_authority_policies%ROWTYPE;expected_keys text[];
+BEGIN
+ BEGIN p_approval:=p_approval_text::jsonb; EXCEPTION WHEN OTHERS THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_activation_approval_json_rejected'; END;
+ expected_policy:='{"contract":"guardian-authority-v2","evidence_categories":["CLUB_REGISTRATION_RECORD","IN_PERSON_ID_AND_CIVIL_RECORD","COURT_OR_LEGAL_AUTHORITY"],"reason_codes":["RELATIONSHIP_CONFIRMED","EVIDENCE_INSUFFICIENT","AUTHORITY_NOT_ESTABLISHED","CONFLICT","AUTHORITY_CHANGED","UNCERTAINTY","AUTHORITY_ENDED","ELIGIBILITY_ENDED","REVIEW_EXPIRED","MAJORITY_REACHED"],"validity_days":365,"review_days":365,"fresh_authentication_minutes":60,"invitation_validity_days":30,"submission_account_limit_24h":10,"submission_network_limit_24h":100,"renewal_period_months":12,"adult_age_years":18,"guardians_per_minor":1}'::jsonb;
+ expected_keys:=ARRAY['contract','authorized_operator_actor_ref','expected_database','controller_role','controller_approval_reference','controller_approved_on','effective_on','review_due_on','legal_reviewer_reference','legal_review_reference','legal_reviewed_on','legal_review_conclusion','policy','policy_sha256','policy_version'];
+ IF current_database()<>p_expected_database OR p_actor IS NULL OR p_current_image_digest!~'^sha256:[0-9a-f]{64}$' OR p_embedded_schema_digest!~'^[0-9a-f]{64}$'
+  OR octet_length(p_approval_canonical) NOT BETWEEN 2 AND 1048576 OR octet_length(p_policy_canonical) NOT BETWEEN 2 AND 1048576
+  OR convert_to(p_approval_text,'UTF8')<>p_approval_canonical OR p_approval_canonical<>guardian_ops.canonical_approval(p_approval)
+  OR p_policy_canonical<>guardian_ops.canonical_policy() OR convert_from(p_policy_canonical,'UTF8')::jsonb<>p_approval->'policy'
+  OR ARRAY(SELECT jsonb_object_keys(p_approval) ORDER BY 1)<>ARRAY(SELECT unnest(expected_keys) ORDER BY 1)
+  OR p_approval->>'contract'<>'mycfc/guardian-authority-policy-approval/v1' OR p_approval->>'controller_role'<>'CLUB_DIRECTION'
+  OR p_approval->>'legal_review_conclusion'<>'APPROVED' OR p_approval->'policy'<>expected_policy
+  OR p_approval->>'authorized_operator_actor_ref'<>p_actor::text
+  OR p_approval->>'expected_database'<>p_expected_database
+  OR p_approval->>'policy_version' IS NULL OR p_approval->>'policy_version'!~'^[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$'
+  OR btrim(COALESCE(p_approval->>'controller_approval_reference',''))='' OR char_length(p_approval->>'controller_approval_reference')>200
+  OR btrim(COALESCE(p_approval->>'legal_reviewer_reference',''))='' OR char_length(p_approval->>'legal_reviewer_reference')>200
+  OR btrim(COALESCE(p_approval->>'legal_review_reference',''))='' OR char_length(p_approval->>'legal_review_reference')>200 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_activation_approval_rejected'; END IF;
+ actual_policy_sha:=digest(p_policy_canonical,'sha256');actual_approval_sha:=digest(p_approval_canonical,'sha256');
+ IF p_approval->>'policy_sha256'<>encode(actual_policy_sha,'hex') THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_activation_policy_digest_rejected'; END IF;
+ IF (p_approval->>'controller_approved_on')::date>(p_approval->>'effective_on')::date
+  OR (p_approval->>'legal_reviewed_on')::date>(p_approval->>'effective_on')::date
+  OR (p_approval->>'effective_on')::date>today OR (p_approval->>'review_due_on')::date<=today
+  OR (p_approval->>'review_due_on')::date<=(p_approval->>'effective_on')::date THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_activation_approval_date_rejected'; END IF;
+ IF NOT guardian_authority_is_administrator(p_actor) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_activation_administrator_required'; END IF;
+ inventory_sha:=CASE WHEN guardian_ops.schema_ready(p_embedded_schema_digest) THEN p_embedded_schema_digest ELSE NULL END;
+ requested_version:=p_approval->>'policy_version';
+ SELECT * INTO gate FROM guardian_application_intake_release WHERE singleton;
+ SELECT * INTO existing FROM guardian_authority_policies WHERE version=requested_version;
+ policy_version:=requested_version;policy_sha256:=actual_policy_sha;approval_sha256:=actual_approval_sha;
+ SELECT count(*) INTO stale_relationship_count FROM guardian_authority_relationships WHERE state IN('VERIFIED','SUSPENDED');
+ SELECT count(*) INTO credential_count FROM users subject WHERE subject.is_dependent AND (subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL);
+ SELECT count(*) INTO session_count FROM sessions session JOIN users subject ON subject.id=session.user_id WHERE session.subject_indexed AND subject.is_dependent;
+ already_enabled:=gate.enabled AND gate.policy_version=requested_version AND gate.policy_sha256=actual_policy_sha AND gate.approval_sha256=actual_approval_sha
+  AND gate.image_digest=p_current_image_digest AND gate.schema_migration_digest=p_embedded_schema_digest AND guardian_authority_policy_operational(requested_version);
+ ready:=COALESCE(inventory_sha=p_embedded_schema_digest,false)
+  AND gate.gate_version='guardian-intake-v2' AND (already_enabled OR (stale_relationship_count=0 AND credential_count=0 AND session_count=0))
+  AND EXISTS(SELECT 1 FROM guardian_ops.runtime_release_binding runtime WHERE runtime.singleton AND runtime.database_name=current_database()
+   AND runtime.image_digest=p_current_image_digest AND runtime.schema_migration_digest=p_embedded_schema_digest)
+  AND NOT EXISTS(SELECT 1 FROM guardian_authority_policies policy WHERE policy.enabled AND policy.version<>requested_version)
+  AND (existing.id IS NULL OR (existing.evidence_types=ARRAY['CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY']::text[]
+   AND existing.reason_codes=ARRAY['RELATIONSHIP_CONFIRMED','EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED','CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY','AUTHORITY_ENDED','ELIGIBILITY_ENDED','REVIEW_EXPIRED','MAJORITY_REACHED']::text[]
+   AND existing.validity_days=365 AND existing.review_days=365))
+  AND (NOT gate.enabled OR already_enabled);
+ RETURN NEXT;
+END;$$;
+
+CREATE FUNCTION guardian_ops.enable(p_actor uuid,p_approval_text text,p_approval_canonical bytea,p_policy_canonical bytea,
+ p_current_image_digest text,p_embedded_schema_digest text,p_expected_database text)
+RETURNS TABLE(changed boolean,policy_version text,policy_sha256 bytea,approval_sha256 bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE check_row record;policy guardian_authority_policies%ROWTYPE;requested_version text;requested_policy_sha bytea;requested_approval_sha bytea;now_at timestamptz:=clock_timestamp();
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority-policy',0));
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc-active-admin-set/v1',0));
+ SELECT * INTO check_row FROM guardian_ops.preflight(p_actor,p_approval_text,p_approval_canonical,p_policy_canonical,p_current_image_digest,p_embedded_schema_digest,p_expected_database);
+ IF NOT check_row.ready THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_activation_preflight_blocked'; END IF;
+ requested_version:=check_row.policy_version;requested_policy_sha:=check_row.policy_sha256;requested_approval_sha:=check_row.approval_sha256;
+ policy_version:=requested_version;policy_sha256:=requested_policy_sha;approval_sha256:=requested_approval_sha;
+ IF check_row.already_enabled THEN changed:=false;RETURN NEXT;RETURN;END IF;
+ INSERT INTO guardian_authority_policies(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled)
+ VALUES(requested_version,ARRAY['CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY'],
+  ARRAY['RELATIONSHIP_CONFIRMED','EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED','CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY','AUTHORITY_ENDED','ELIGIBILITY_ENDED','REVIEW_EXPIRED','MAJORITY_REACHED'],365,365,now_at,p_actor,false)
+ ON CONFLICT(version) DO NOTHING;
+ SELECT * INTO policy FROM guardian_authority_policies WHERE version=requested_version FOR UPDATE;
+ IF NOT EXISTS(SELECT 1 FROM guardian_authority_policy_events event WHERE event.policy_id=policy.id AND event.action='ADOPTED') THEN
+  INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action,occurred_at) VALUES(policy.id,policy.version,p_actor,'ADOPTED',now_at); END IF;
+ INSERT INTO guardian_authority_policy_approvals(policy_version,policy_sha256,approval_sha256,approval_contract,approval_canonical,expected_database,
+  authorized_operator_actor_ref,controller_role,controller_approval_reference,controller_approved_on,effective_on,review_due_on,
+  legal_reviewer_reference,legal_review_reference,legal_reviewed_on,legal_review_conclusion,bound_image_digest,bound_schema_migration_digest,bound_by,bound_at)
+ VALUES(requested_version,requested_policy_sha,requested_approval_sha,(p_approval_text::jsonb)->>'contract',p_approval_canonical,p_expected_database,p_actor,(p_approval_text::jsonb)->>'controller_role',
+  (p_approval_text::jsonb)->>'controller_approval_reference',((p_approval_text::jsonb)->>'controller_approved_on')::date,((p_approval_text::jsonb)->>'effective_on')::date,((p_approval_text::jsonb)->>'review_due_on')::date,
+  (p_approval_text::jsonb)->>'legal_reviewer_reference',(p_approval_text::jsonb)->>'legal_review_reference',((p_approval_text::jsonb)->>'legal_reviewed_on')::date,(p_approval_text::jsonb)->>'legal_review_conclusion',
+  p_current_image_digest,p_embedded_schema_digest,p_actor,now_at) ON CONFLICT ON CONSTRAINT guardian_authority_policy_approvals_pkey DO NOTHING;
+ IF NOT EXISTS(SELECT 1 FROM guardian_authority_policy_approvals approval WHERE approval.policy_version=requested_version
+  AND approval.policy_sha256=requested_policy_sha AND approval.approval_sha256=requested_approval_sha AND approval.bound_image_digest=p_current_image_digest
+  AND approval.bound_schema_migration_digest=p_embedded_schema_digest) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='guardian_activation_binding_conflict'; END IF;
+ UPDATE guardian_authority_policies SET enabled=true,enabled_at=now_at,enabled_by=p_actor WHERE version=requested_version AND NOT enabled;
+ INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action,occurred_at) VALUES(policy.id,policy.version,p_actor,'ENABLED',now_at);
+ UPDATE guardian_application_intake_release SET enabled=true,policy_version=requested_version,policy_sha256=requested_policy_sha,approval_sha256=requested_approval_sha,
+  image_digest=p_current_image_digest,schema_migration_digest=p_embedded_schema_digest,enabled_by=p_actor,enabled_at=now_at WHERE singleton AND NOT enabled;
+ INSERT INTO guardian_application_intake_release_events(gate_version,action,actor_ref,policy_version,policy_sha256,approval_sha256,image_digest,schema_migration_digest)
+ VALUES('guardian-intake-v2','ENABLED',p_actor,requested_version,requested_policy_sha,requested_approval_sha,p_current_image_digest,p_embedded_schema_digest);
+ changed:=true;RETURN NEXT;
+END;$$;
+
+-- The supported release path can only remove authority and bind the database
+-- to the next immutable image/schema. It cannot create approval evidence or
+-- enable either the policy or intake gate.
+CREATE FUNCTION guardian_ops.release_disable_and_bind(p_image_digest text,p_schema_migration_digest text,p_expected_database text)
+RETURNS TABLE(generation bigint,relationship_count bigint,credential_count bigint,session_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE gate guardian_application_intake_release%ROWTYPE;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority-policy',0));
+ IF current_database()<>p_expected_database OR p_image_digest!~'^sha256:[0-9a-f]{64}$'
+  OR NOT guardian_ops.schema_ready(p_schema_migration_digest) THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_release_binding_rejected'; END IF;
+ SELECT * INTO gate FROM guardian_application_intake_release WHERE singleton FOR UPDATE;
+ SELECT count(*) INTO relationship_count FROM guardian_authority_relationships WHERE state IN('VERIFIED','SUSPENDED');
+ SELECT count(*) INTO credential_count FROM users subject WHERE subject.is_dependent AND (subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL);
+ SELECT count(*) INTO session_count FROM sessions session JOIN users subject ON subject.id=session.user_id WHERE session.subject_indexed AND subject.is_dependent;
+ UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,
+  image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+ WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+ INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+ PERFORM guardian_authority_reconcile_cutoffs();
+ DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+ UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+  WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+ UPDATE guardian_ops.runtime_release_binding SET database_name=p_expected_database,image_digest=p_image_digest,
+  schema_migration_digest=p_schema_migration_digest,generation=guardian_ops.runtime_release_binding.generation+1,bound_at=clock_timestamp()
+  WHERE singleton RETURNING guardian_ops.runtime_release_binding.generation INTO generation;
+ INSERT INTO guardian_ops.runtime_release_binding_events(generation,database_name,image_digest,schema_migration_digest,
+  relationship_count,credential_count,session_count)
+ VALUES(generation,p_expected_database,p_image_digest,p_schema_migration_digest,relationship_count,credential_count,session_count);
+ RETURN NEXT;
+END;$$;
+
+CREATE FUNCTION guardian_ops.disable(p_actor uuid,p_expected_database text)
+RETURNS TABLE(policy_version text,relationship_count bigint,credential_count bigint,session_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE gate guardian_application_intake_release%ROWTYPE;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/guardian-authority-policy',0));
+ IF p_actor IS NULL OR current_database()<>p_expected_database THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_activation_disable_rejected'; END IF;
+ SELECT * INTO gate FROM guardian_application_intake_release WHERE singleton FOR UPDATE;
+ IF (gate.enabled AND gate.enabled_by IS DISTINCT FROM p_actor) OR (NOT gate.enabled AND NOT EXISTS(
+  SELECT 1 FROM guardian_authority_policy_approvals approval WHERE approval.authorized_operator_actor_ref=p_actor)) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_activation_disable_actor_rejected'; END IF;
+ policy_version:=gate.policy_version;
+ SELECT count(*) INTO relationship_count FROM guardian_authority_relationships WHERE state IN('VERIFIED','SUSPENDED');
+ SELECT count(*) INTO credential_count FROM users subject WHERE subject.is_dependent AND (subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL);
+ SELECT count(*) INTO session_count FROM sessions session JOIN users subject ON subject.id=session.user_id WHERE session.subject_indexed AND subject.is_dependent;
+ UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+ WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+ INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,p_actor,'DISABLED' FROM disabled;
+ PERFORM guardian_authority_reconcile_cutoffs();
+ DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+ UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+  WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+ INSERT INTO guardian_application_intake_release_events(gate_version,action,actor_ref,policy_version,policy_sha256,approval_sha256,image_digest,schema_migration_digest,relationship_count,credential_count,session_count)
+ VALUES('guardian-intake-v2','DISABLED',p_actor,gate.policy_version,gate.policy_sha256,gate.approval_sha256,gate.image_digest,gate.schema_migration_digest,relationship_count,credential_count,session_count);
+ RETURN NEXT;
+END;$$;
+
+REVOKE ALL ON TABLE guardian_authority_policy_approvals FROM PUBLIC;
+REVOKE ALL ON FUNCTION guardian_authority_policy_operational(text) FROM PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA guardian_ops FROM PUBLIC;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA guardian_ops FROM PUBLIC;
+
+-- The web role can use the application routines but can neither inspect nor
+-- invoke the operational control plane.
+DO $$BEGIN IF to_regrole('mycfc_app') IS NOT NULL THEN
+ EXECUTE 'REVOKE ALL ON SCHEMA guardian_ops FROM mycfc_app';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE guardian_authority_policy_approvals FROM mycfc_app';
+END IF;END$$;
+
+-- Provisioning the fixed release login is a separate root-only operation. If
+-- it already exists, migration can only reassert its narrow cutoff API; no
+-- password is created or rotated here.
+DO $$DECLARE protected_schema text; BEGIN IF to_regrole('mycfc_guardian_release_bind') IS NOT NULL THEN
+ EXECUTE 'REVOKE ALL ON SCHEMA public FROM mycfc_guardian_release_bind';
+ IF to_regnamespace('mycfc_meta') IS NOT NULL THEN EXECUTE 'REVOKE ALL ON SCHEMA mycfc_meta FROM mycfc_guardian_release_bind'; END IF;
+ EXECUTE 'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM mycfc_guardian_release_bind';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM mycfc_guardian_release_bind';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM mycfc_guardian_release_bind';
+ FOREACH protected_schema IN ARRAY ARRAY['privacy_disable','privacy_protected'] LOOP
+  IF to_regnamespace(protected_schema) IS NOT NULL THEN
+   EXECUTE format('REVOKE ALL ON SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+   EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+   EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+   EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM mycfc_guardian_release_bind',protected_schema);
+  END IF;
+ END LOOP;
+ EXECUTE 'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind';
+ EXECUTE 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA guardian_ops FROM mycfc_guardian_release_bind';
+ EXECUTE 'GRANT USAGE ON SCHEMA guardian_ops TO mycfc_guardian_release_bind';
+ EXECUTE 'GRANT EXECUTE ON FUNCTION guardian_ops.release_disable_and_bind(text,text,text) TO mycfc_guardian_release_bind';
+END IF;END$$;
+
+-- Every schema revision invalidates privacy evidence and both guardian gates.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);

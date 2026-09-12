@@ -67,8 +67,11 @@ func runServerCommand(ctx context.Context, args []string) error {
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
-	if command != "bootstrap-db" && command != "migrate" && command != "harden-db" && command != "provision-privacy-activation-disable" {
+	if command != "bootstrap-db" && command != "migrate" && command != "harden-db" && command != "bind-guardian-release" && command != "provision-privacy-activation-disable" && command != "provision-guardian-activation" && command != "provision-guardian-release-bind" {
 		return fmt.Errorf("unknown command %q", command)
+	}
+	if command == "bind-guardian-release" {
+		return bindGuardianRelease(ctx)
 	}
 	if databaseURL, ok, err := databaseURLFromEnvironment(); err != nil {
 		return err
@@ -85,6 +88,12 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		databaseName := connectionConfig.Database
 		if command == "provision-privacy-activation-disable" {
 			return provisionPrivacyActivationDisable(ctx, conn, databaseName)
+		}
+		if command == "provision-guardian-activation" {
+			return provisionGuardianActivation(ctx, conn, databaseName)
+		}
+		if command == "provision-guardian-release-bind" {
+			return provisionGuardianReleaseBind(ctx, conn, databaseName)
 		}
 		credentials := databaseRoleCredentialsFromEnvironment()
 		configSource := "environment"
@@ -121,7 +130,7 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	var databaseURL string
 	switch command {
-	case "bootstrap-db", "harden-db", "provision-privacy-activation-disable":
+	case "bootstrap-db", "harden-db", "provision-privacy-activation-disable", "provision-guardian-activation", "provision-guardian-release-bind":
 		databaseURL, err = cfg.BootstrapDatabaseURL()
 	case "migrate":
 		databaseURL, err = cfg.MigrationDatabaseURL()
@@ -136,6 +145,12 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	defer conn.Close(ctx)
 	if command == "provision-privacy-activation-disable" {
 		return provisionPrivacyActivationDisable(ctx, conn, cfg.DBName)
+	}
+	if command == "provision-guardian-activation" {
+		return provisionGuardianActivation(ctx, conn, cfg.DBName)
+	}
+	if command == "provision-guardian-release-bind" {
+		return provisionGuardianReleaseBind(ctx, conn, cfg.DBName)
 	}
 
 	credentials := databaseRoleCredentialsFromConfig(cfg)
@@ -161,6 +176,46 @@ func provisionPrivacyActivationDisable(ctx context.Context, conn databaseCommand
 	}
 	logDatabaseCommandConfiguration("provision-privacy-activation-disable", "dedicated_break_glass_file", config.Host, databaseName, "bootstrap administrator", db.RoleCredentials{})
 	return db.ProvisionPrivacyActivationDisableRole(ctx, conn, databaseName, config.User, config.Password)
+}
+
+func provisionGuardianActivation(ctx context.Context, conn databaseCommandConnection, databaseName string) error {
+	operatorURL := strings.TrimSpace(os.Getenv("GUARDIAN_ACTIVATION_DATABASE_URL"))
+	config, err := pgx.ParseConfig(operatorURL)
+	if err != nil || config.Database != databaseName || config.User != "mycfc_guardian_activation_operator" || strings.TrimSpace(config.Password) == "" {
+		return errors.New("guardian activation provisioning credential rejected")
+	}
+	logDatabaseCommandConfiguration("provision-guardian-activation", "dedicated_root_file", config.Host, databaseName, "bootstrap administrator", db.RoleCredentials{})
+	return db.ProvisionGuardianActivationRole(ctx, conn, databaseName, config.User, config.Password)
+}
+
+func provisionGuardianReleaseBind(ctx context.Context, conn databaseCommandConnection, databaseName string) error {
+	releaseURL := strings.TrimSpace(os.Getenv("GUARDIAN_RELEASE_BIND_DATABASE_URL"))
+	config, err := pgx.ParseConfig(releaseURL)
+	if err != nil || config.Database != databaseName || config.User != "mycfc_guardian_release_bind" || strings.TrimSpace(config.Password) == "" {
+		return errors.New("guardian release bind provisioning credential rejected")
+	}
+	logDatabaseCommandConfiguration("provision-guardian-release-bind", "dedicated_root_file", config.Host, databaseName, "bootstrap administrator", db.RoleCredentials{})
+	if err := db.ProvisionGuardianReleaseBindRole(ctx, conn, databaseName, config.User, config.Password); err != nil {
+		return err
+	}
+	slog.Info("guardian release bind role provisioned", "event", "guardian_release_bind_role_provisioned")
+	return nil
+}
+
+func bindGuardianRelease(ctx context.Context) error {
+	releaseURL := strings.TrimSpace(os.Getenv("GUARDIAN_RELEASE_BIND_DATABASE_URL"))
+	expectedDatabase := strings.TrimSpace(os.Getenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE"))
+	config, err := pgx.ParseConfig(releaseURL)
+	if err != nil || config.Database != expectedDatabase || config.User != "mycfc_guardian_release_bind" || strings.TrimSpace(config.Password) == "" {
+		return errors.New("guardian release bind credential rejected")
+	}
+	conn, err := connectDatabaseCommand(ctx, releaseURL)
+	if err != nil {
+		return errors.New("connect guardian release bind database")
+	}
+	defer conn.Close(ctx)
+	logDatabaseCommandConfiguration("bind-guardian-release", "dedicated_release_bind_file", config.Host, expectedDatabase, config.User, db.RoleCredentials{})
+	return db.BindGuardianRuntimeRelease(ctx, conn, expectedDatabase, strings.TrimSpace(os.Getenv("GUARDIAN_RUNTIME_IMAGE_DIGEST")))
 }
 
 func databaseRoleCredentialsFromConfig(cfg config.Config) db.RoleCredentials {
