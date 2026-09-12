@@ -104,6 +104,7 @@ func TestGuardianActivationForwardMigrationFromExact004DisablesEveryGate(t *test
 
 func reconstructExactGuardian004(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
+	rewindGuardianSchemaReadyOwnerMigration(t, ctx, tx)
 	verification, err := migrationFiles.ReadFile("migrations/202609110004_guardian_authority_verification.sql")
 	if err != nil {
 		t.Fatal(err)

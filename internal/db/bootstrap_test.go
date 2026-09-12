@@ -24,6 +24,28 @@ func TestEmbeddedMigrationDigestMatchesOrderedDatabaseInventory(t *testing.T) {
 	}
 }
 
+func TestGuardianSchemaReadyOwnerRepairIsRepresentedByFreshBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609120006_guardian_schema_ready_owner.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- #280 guardian control-plane owner dependency repair."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("guardian schema-ready owner repair is not the exact final baseline segment")
+	}
+	for _, required := range []string{
+		"guardian_ops.schema_ready(text)",
+		"guardian_ops.release_disable_and_bind(text,text,text)",
+		"guardian_schema_ready_owner_mismatch",
+		"GRANT EXECUTE ON FUNCTION guardian_ops.schema_ready(text)",
+	} {
+		if !strings.Contains(string(migration), required) || !strings.Contains(baselineSchema, required) {
+			t.Fatalf("guardian schema-ready repair migration or baseline missing %q", required)
+		}
+	}
+}
+
 func TestActivationBrokerMigrationIsExactBaselineSegmentAndPurgesInheritedACLs(t *testing.T) {
 	migration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
 	if err != nil {
@@ -998,9 +1020,11 @@ func TestGuardianAuthorityActivationMigrationMatchesBaselineAndFailsClosed(t *te
 		t.Fatal(err)
 	}
 	const marker = "-- Source-only guardian-authority V2 activation boundary."
+	const nextMarker = "-- #280 guardian control-plane owner dependency repair."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("guardian activation migration is not the exact final baseline segment")
+	nextIndex := strings.LastIndex(baselineSchema, nextMarker)
+	if index < 0 || nextIndex <= index || strings.TrimSpace(baselineSchema[index:nextIndex]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("guardian activation migration is not an exact baseline segment")
 	}
 	for _, expected := range []string{
 		"CREATE SCHEMA guardian_ops",

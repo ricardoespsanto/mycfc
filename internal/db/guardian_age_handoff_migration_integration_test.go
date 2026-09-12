@@ -12,11 +12,40 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// rewindGuardianSchemaReadyOwnerMigration reconstructs the exact 005 privacy
+// inventory boundary from the current baseline before older migration tests
+// rewind their own predecessor.
+func rewindGuardianSchemaReadyOwnerMigration(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN
+		IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+			AND conname='privacy_activation_authenticated_artifacts_v14_check') THEN
+			ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			DELETE FROM privacy_activation_authenticated_artifacts;
+			ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+			WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v14_check';
+			IF definition IS NULL OR length(definition)-length(replace(definition,'202609120006_guardian_schema_ready_owner',''))
+				<>length('202609120006_guardian_schema_ready_owner') THEN RAISE EXCEPTION 'guardian schema-ready rewind mismatch'; END IF;
+			rewritten:=replace(definition,', ''202609120006_guardian_schema_ready_owner''','');
+			ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v14_check;
+			EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v13_check '||rewritten;
+			SELECT pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+			EXECUTE replace(definition,'202609120006_guardian_schema_ready_owner','202609120005_guardian_authority_activation');
+			SELECT pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+			EXECUTE replace(definition,'202609120006_guardian_schema_ready_owner','202609120005_guardian_authority_activation');
+		END IF;
+	END$$`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // rewindGuardianAgeHandoffMigration reconstructs the exact 003 boundary from
 // the current baseline. Older forward-migration tests call it before rewinding
 // their own predecessor so adding 004 does not silently weaken those proofs.
 func rewindGuardianAgeHandoffMigration(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
+	rewindGuardianSchemaReadyOwnerMigration(t, ctx, tx)
 	// The current baseline is one release boundary newer than the handoff
 	// migration. Reconstruct its privacy-evidence predecessor before applying
 	// the existing 004 -> 003 rewind below. The 005 operational objects may
