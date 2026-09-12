@@ -28,6 +28,8 @@ go.work.sum
 /tmp
 /.cache
 /node_modules
+**/__pycache__/
+**/*.py[cod]
 **/.terraform/
 **/*.tfstate
 **/*.tfstate.*

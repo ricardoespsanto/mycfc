@@ -6,12 +6,24 @@ on:
       - infra/**
       - Makefile
       - .github/workflows/infra.yml
+      - .github/workflows/terraform-production-plan.yml
+      - .github/workflows/terraform-production-apply.yml
+      - scripts/terraform-plan-policy.jq
+      - scripts/terraform-plan-policy_test.sh
+      - scripts/terraform-plan-hmac.py
+      - scripts/terraform-plan-hmac_test.sh
   push:
     branches: [main]
     paths:
       - infra/**
       - Makefile
       - .github/workflows/infra.yml
+      - .github/workflows/terraform-production-plan.yml
+      - .github/workflows/terraform-production-apply.yml
+      - scripts/terraform-plan-policy.jq
+      - scripts/terraform-plan-policy_test.sh
+      - scripts/terraform-plan-hmac.py
+      - scripts/terraform-plan-hmac_test.sh
   workflow_dispatch:
 
 permissions:

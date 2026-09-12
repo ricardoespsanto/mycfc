@@ -1360,7 +1360,7 @@ Create GitHub OIDC provider once per account when not already managed. Trust pol
 
 Separate roles:
 
-1. `github-infra-plan`: read-only plus state read/lock for pull-request plans; no apply.
+1. `github-infra-plan`: read-only plus exact state read/lock for protected post-merge plans; no apply and no pull-request trust.
 2. `github-infra-apply`: scoped permissions necessary for Terraform production stack and state.
 3. `github-deploy`: ECR push, task-definition register/pass only approved roles, ECS run migration task, describe/wait/update only the named cluster/service, read needed Terraform outputs/state if chosen.
 
@@ -1384,10 +1384,10 @@ Mandatory:
 
 - `terraform fmt -check -recursive`.
 - `terraform validate`.
-- `tflint` with AWS plugin.
-- `checkov` or `tfsec` pinned in CI with documented narrow suppressions only.
-- `terraform plan -detailed-exitcode` for PR.
-- No secrets in plan artifacts uploaded to untrusted contexts.
+- Pinned `tflint` and Terraform policy tests.
+- Pull requests run only credential-free source checks and never receive production state, secrets, or cloud identity.
+- Protected manual plans use `terraform plan -detailed-exitcode` only for the exact current signed and CI-green `main` commit.
+- No plan, JSON, state, or variable artifact is uploaded.
 - Resource names/tags include project/environment/managed-by/repository.
 - Critical resources have `prevent_destroy` where operationally appropriate.
 
@@ -1473,15 +1473,16 @@ Jobs:
 
 Triggers:
 
-- Pull requests touching `infra/**`: format, validate, lint, security scan and production plan using `github-infra-plan` OIDC role. The plan summary is added to GitHub job summary; do not upload a plan containing secrets from forks.
-- Push to `main` touching `infra/**`: protected `production` environment, use `github-infra-apply`, repeat validation, create fresh plan, then apply exactly that saved plan.
-- Manual dispatch supports plan-only; destructive apply is not a free-form flag.
+- Pull requests touching `infra/**`: run credential-free format, validation, Terraform tests, and linting across every root. Pull-request code never receives a production environment, state, secrets, or AWS identity.
+- Push to `main` touching `infra/**`: repeat credential-free source checks only; a push never applies Terraform.
+- Manual plan dispatch uses `github-infra-plan` and the protected `production-plan` environment for an informational preview of the exact current signed and CI-green `main` SHA. It emits a sanitized summary and redacted-plan fingerprint but never uploads the sensitive plan, JSON, state, or variables.
+- A separate two-stage apply dispatch first runs the complete credential-free Terraform gate, creates the protected plan, and records the redacted plan, human-review fingerprint, and keyed HMAC over deterministic unredacted plan semantics. Its dependent `github-infra-apply` job requests `production` environment approval only after that evidence exists, regenerates the plan, requires both commitments to match, rechecks `main` immediately before mutation, applies that exact saved binary, and verifies the post-apply plan is empty. It rejects delete, replacement, forget, import, action, deferred, unknown, and provisioner operations. Human review remains responsible for the semantics of allowed creates and in-place updates.
 
-Permissions: `id-token: write`, `contents: read`, and only the GitHub permissions required to report checks.
+Permissions: credential-free checks use `contents: read`; protected plan and apply jobs additionally use `id-token: write`, and apply receives read-only Actions access for the exact CI evidence check.
 
 Use concurrency group `mycfc-production-infra` with `cancel-in-progress: false` for apply.
 
-Bootstrap stack is not automatically applied by normal workflow; document one-time secure bootstrap. Production stack is fully GitOps after bootstrap.
+Bootstrap identities are not automatically applied by the normal workflow. Keep plan and apply roles in a separate manually controlled boundary so the production root cannot alter its own authority. Production changes are GitHub-operated after bootstrap but remain manually approval-gated rather than push-triggered.
 
 ## 5. `deploy.yml`
 
