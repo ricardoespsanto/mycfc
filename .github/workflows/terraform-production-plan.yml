@@ -1,0 +1,138 @@
+name: Terraform production plan
+run-name: terraform production plan ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current main-branch commit to plan.
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  TERRAFORM_IMAGE: hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
+  TF_BACKEND_KEY: mycfc/production/terraform.tfstate
+  TF_IN_AUTOMATION: 'true'
+  TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    environment: production-plan
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    concurrency:
+      group: mycfc-production-infra-plan
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_INFRA_PLAN_ROLE_ARN: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate exact approved main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$DISPATCH_REF" = refs/heads/main
+          test "$REQUESTED_SHA" = "$DISPATCH_SHA"
+          test -n "$AWS_REGION"
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN"
+          test -n "$TF_BACKEND_BUCKET"
+          main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          test "$REQUESTED_SHA" = "$main_sha"
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
+          verified_commit=$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" \
+            --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha')
+          test "$verified_commit" = "$REQUESTED_SHA"
+          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" \
+            --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty")
+          test -n "$ci_run"
+      - name: Run credential-free Terraform checks
+        run: make terraform-check
+      # aws-actions/configure-aws-credentials v6.2.4
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Create the retained production plan
+        env:
+          TF_VARS: ${{ secrets.TF_VARS }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$TF_VARS"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          mkdir -p .cache/terraform/plugin-cache
+          umask 077
+          printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
+          cleanup() {
+            rm -f infra/environments/production/ci.auto.tfvars \
+              infra/environments/production/production.tfplan \
+              infra/environments/production/production.tfplan.json \
+              infra/environments/production/production.tfplan.review.txt
+          }
+          trap cleanup EXIT
+          tf() {
+            docker run --rm --user "$(id -u):$(id -g)" \
+              -v "$PWD:/workspace" -v "$PWD/.cache/terraform/plugin-cache:/terraform-plugin-cache" \
+              -w /workspace -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+              -e AWS_REGION -e CLOUDFLARE_API_TOKEN -e TF_IN_AUTOMATION -e TF_PLUGIN_CACHE_DIR \
+              "$TERRAFORM_IMAGE" -chdir=infra/environments/production "$@"
+          }
+          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" \
+            -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
+          set +e
+          tf plan -input=false -lock-timeout=5m -detailed-exitcode -out=production.tfplan
+          plan_exit=$?
+          set -e
+          [[ "$plan_exit" == 0 || "$plan_exit" == 2 ]]
+          tf show -json production.tfplan > infra/environments/production/production.tfplan.json
+          tf show -no-color production.tfplan | tee infra/environments/production/production.tfplan.review.txt
+          review_sha=$(sha256sum infra/environments/production/production.tfplan.review.txt | awk '{print $1}')
+          change_count=$(jq '[.resource_changes[]? | select(.change.actions != ["no-op"])] | length' \
+            infra/environments/production/production.tfplan.json)
+          policy_allowed=true
+          if ! jq -e -f scripts/terraform-plan-policy.jq \
+            infra/environments/production/production.tfplan.json >/dev/null; then
+            policy_allowed=false
+          fi
+          blocked_count=$(jq '[.resource_changes[]? | select(
+              (.change.importing? != null) or
+              ((.change.actions == ["no-op"] or .change.actions == ["create"] or
+                .change.actions == ["read"] or .change.actions == ["update"]) | not)
+            )] | length' \
+            infra/environments/production/production.tfplan.json)
+          main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          test "$REQUESTED_SHA" = "$main_sha"
+          {
+            echo '## Retained production Terraform plan'
+            echo
+            echo "- Commit: \`${{ inputs.sha }}\`"
+            echo "- Changed resources: **$change_count**"
+            echo "- Blocked resource actions or imports: **$blocked_count**"
+            echo "- Eligible for the normal apply policy: **$policy_allowed**"
+            echo "- Redacted review fingerprint: \`$review_sha\`"
+            echo
+            echo '### Resource actions'
+            jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "- `\(.address)`: `\(.change.actions | join(" → "))`"' \
+              infra/environments/production/production.tfplan.json
+            echo
+            echo 'The plan, plan JSON, and Terraform variables were not uploaded and were deleted on this runner.'
+          } >> "$GITHUB_STEP_SUMMARY"
