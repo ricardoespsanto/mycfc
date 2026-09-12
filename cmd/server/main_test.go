@@ -310,6 +310,11 @@ func TestRunDatabaseCommandBindsGuardianReleaseThroughDisableOnlyAPI(t *testing.
 	if err := runDatabaseCommand(t.Context(), "bind-guardian-release"); err == nil {
 		t.Fatal("invalid release image digest accepted")
 	}
+	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
+	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_migrate:forbidden@postgres:5432/mycfc?sslmode=disable")
+	if err := runDatabaseCommand(t.Context(), "bind-guardian-release"); err == nil {
+		t.Fatal("migration credential was accepted for release binding")
+	}
 }
 
 func TestRunDatabaseCommandExplicitlyProvisionsGuardianReleaseBindRole(t *testing.T) {

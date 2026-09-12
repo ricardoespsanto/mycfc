@@ -14,16 +14,19 @@ import (
 )
 
 type workerStore struct {
-	calls           int
-	pruneCalls      int
-	reconcileErr    error
-	pruneErr        error
-	reminderErr     error
-	reminderCalls   int
-	reminders       []dbgen.ListDueGuardianRenewalRemindersRow
-	enqueued        []dbgen.EnqueueGuardianRenewalReminderParams
-	handoffNotices  []dbgen.ListDueGuardianAgeHandoffNoticesRow
-	handoffEnqueued []dbgen.EnqueueGuardianAgeHandoffNoticeParams
+	calls            int
+	pruneCalls       int
+	reconcileErr     error
+	pruneErr         error
+	reminderErr      error
+	handoffErr       error
+	reminderQueueErr error
+	handoffQueueErr  error
+	reminderCalls    int
+	reminders        []dbgen.ListDueGuardianRenewalRemindersRow
+	enqueued         []dbgen.EnqueueGuardianRenewalReminderParams
+	handoffNotices   []dbgen.ListDueGuardianAgeHandoffNoticesRow
+	handoffEnqueued  []dbgen.EnqueueGuardianAgeHandoffNoticeParams
 }
 
 func (s *workerStore) ReconcileGuardianAuthorityCutoffs(context.Context) (int64, error) {
@@ -40,14 +43,14 @@ func (s *workerStore) ListDueGuardianRenewalReminders(context.Context, int32) ([
 }
 func (s *workerStore) EnqueueGuardianRenewalReminder(_ context.Context, input dbgen.EnqueueGuardianRenewalReminderParams) (bool, error) {
 	s.enqueued = append(s.enqueued, input)
-	return true, nil
+	return true, s.reminderQueueErr
 }
 func (s *workerStore) ListDueGuardianAgeHandoffNotices(context.Context, int32) ([]dbgen.ListDueGuardianAgeHandoffNoticesRow, error) {
-	return s.handoffNotices, nil
+	return s.handoffNotices, s.handoffErr
 }
 func (s *workerStore) EnqueueGuardianAgeHandoffNotice(_ context.Context, input dbgen.EnqueueGuardianAgeHandoffNoticeParams) (bool, error) {
 	s.handoffEnqueued = append(s.handoffEnqueued, input)
-	return true, nil
+	return true, s.handoffQueueErr
 }
 
 func TestWorkerReconcilesImmediatelyAndStops(t *testing.T) {
@@ -114,5 +117,38 @@ func TestWorkerQueuesTypedSealedRenewalReminder(t *testing.T) {
 	payload, err := OpenRenewalDelivery(key, store.enqueued[0].SealedPayload)
 	if err != nil || payload.Recipient != "guardian@example.test" || payload.DashboardURL != "https://mycfc.example/dashboard/guardian" || !payload.ExpiresAt.Equal(expiry) {
 		t.Fatalf("payload=%+v err=%v", payload, err)
+	}
+}
+
+func TestWorkerContinuesAcrossDiscoveryPruningAndQueueFailures(t *testing.T) {
+	want := errors.New("database unavailable")
+	store := &workerStore{pruneErr: want, reminderErr: want, handoffErr: want}
+	(Worker{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).reconcile(t.Context())
+	if store.pruneCalls != 1 || store.reminderCalls != 1 {
+		t.Fatalf("prune=%d reminder=%d", store.pruneCalls, store.reminderCalls)
+	}
+
+	expiry := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	queueStore := &workerStore{
+		reminders:        []dbgen.ListDueGuardianRenewalRemindersRow{{RelationshipRef: uuid.New(), GuardianUserID: uuid.New(), Recipient: "guardian@example.test", ExpiryAnchor: pgtype.Timestamptz{Time: expiry, Valid: true}, ReminderKind: "GUARDIAN_RENEWAL_7_DAY"}},
+		handoffNotices:   []dbgen.ListDueGuardianAgeHandoffNoticesRow{{HandoffRef: uuid.New(), RelationshipRef: uuid.New(), GuardianUserID: uuid.New(), Recipient: "guardian@example.test", Birthday: pgtype.Date{Time: expiry, Valid: true}, NoticeKind: "GUARDIAN_AGE_18_7_DAY"}},
+		reminderQueueErr: want,
+		handoffQueueErr:  want,
+	}
+	(Worker{Store: queueStore, Key: []byte("0123456789abcdef0123456789abcdef"), BaseURL: "https://mycfc.example", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).reconcile(t.Context())
+	if len(queueStore.enqueued) != 1 || len(queueStore.handoffEnqueued) != 1 {
+		t.Fatalf("renewal queue=%d handoff queue=%d", len(queueStore.enqueued), len(queueStore.handoffEnqueued))
+	}
+}
+
+func TestWorkerRejectsUnsealableReminderAndHandoffPayloads(t *testing.T) {
+	expiry := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	store := &workerStore{
+		reminders:      []dbgen.ListDueGuardianRenewalRemindersRow{{RelationshipRef: uuid.New(), GuardianUserID: uuid.New(), Recipient: "guardian@example.test", ExpiryAnchor: pgtype.Timestamptz{Time: expiry, Valid: true}, ReminderKind: "GUARDIAN_RENEWAL_30_DAY"}},
+		handoffNotices: []dbgen.ListDueGuardianAgeHandoffNoticesRow{{HandoffRef: uuid.New(), RelationshipRef: uuid.New(), GuardianUserID: uuid.New(), Recipient: "guardian@example.test", Birthday: pgtype.Date{Time: expiry, Valid: true}, NoticeKind: "GUARDIAN_AGE_18_30_DAY"}},
+	}
+	(Worker{Store: store, Key: []byte("short"), BaseURL: "https://mycfc.example", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).reconcile(t.Context())
+	if len(store.enqueued) != 0 || len(store.handoffEnqueued) != 0 {
+		t.Fatalf("invalid payloads enqueued: renewal=%d handoff=%d", len(store.enqueued), len(store.handoffEnqueued))
 	}
 }

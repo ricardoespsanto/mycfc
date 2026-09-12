@@ -88,6 +88,72 @@ func TestAddDependentCreatesFromCurrentGuardianAndRedirects(t *testing.T) {
 	}
 }
 
+func TestAddDependentMapsEligibilityAndInvitationFailuresWithoutLeakingState(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		createErr  error
+		reserveErr error
+		wantStatus int
+		wantRetry  string
+	}{
+		{name: "ineligible applicant", createErr: ErrGuardianApplicantIneligible, wantStatus: http.StatusUnprocessableEntity},
+		{name: "invalid invitation", createErr: ErrGuardianInvitationInvalid, wantStatus: http.StatusUnprocessableEntity},
+		{name: "invalid invitation limited", createErr: ErrGuardianInvitationInvalid, reserveErr: ErrGuardianApplicationLimited, wantStatus: http.StatusTooManyRequests, wantRetry: "900"},
+		{name: "invalid invitation limiter failure", createErr: ErrGuardianInvitationInvalid, reserveErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &guardianDependentStoreFake{err: tc.createErr, reserveErr: map[string]error{"INVITATION_INVALID": tc.reserveErr}}
+			response := guardianResponse(t, guardianDashboard(&guardianDashboardStore{}, store).AddDependent, uuid.New(), validDependentForm())
+			if response.Code != tc.wantStatus || response.Header().Get("Retry-After") != tc.wantRetry {
+				t.Fatalf("status=%d retry=%q body=%q", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+			}
+			if tc.wantStatus == http.StatusUnprocessableEntity && !strings.Contains(response.Body.String(), "Não foi possível enviar o pedido") {
+				t.Fatalf("generic rejection missing: %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAddDependentFailsClosedWhenRateOrAuthenticationStorageIsUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		reserveErr error
+		wantStatus int
+		retry      string
+	}{
+		{name: "submission limited", reserveErr: ErrGuardianApplicationLimited, wantStatus: http.StatusTooManyRequests, retry: "86400"},
+		{name: "submission database failure", reserveErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &guardianDependentStoreFake{reserveErr: map[string]error{"SUBMISSION": tc.reserveErr}}
+			response := guardianResponse(t, guardianDashboard(&guardianDashboardStore{}, store).AddDependent, uuid.New(), validDependentForm())
+			if response.Code != tc.wantStatus || response.Header().Get("Retry-After") != tc.retry || store.called {
+				t.Fatalf("status=%d retry=%q called=%v", response.Code, response.Header().Get("Retry-After"), store.called)
+			}
+		})
+	}
+
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		reauthErr  error
+		limiterErr error
+	}{
+		{name: "reauthentication database failure", reauthErr: errors.New("database unavailable")},
+		{name: "authentication limiter database failure", reauthErr: ErrGuardianAuthentication, limiterErr: errors.New("database unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &guardianDependentStoreFake{reauthErr: tc.reauthErr, reserveErr: map[string]error{"AUTH_INVALID": tc.limiterErr}}
+			form := validDependentForm()
+			form.Set("password", "current password")
+			response, _, _, _ := guardianAuthenticatedResponse(t, guardianDashboard(&guardianDashboardStore{}, store), uuid.New(), form, now.Add(-2*time.Hour), now)
+			if response.Code != http.StatusInternalServerError || store.called {
+				t.Fatalf("status=%d called=%v", response.Code, store.called)
+			}
+		})
+	}
+}
+
 func TestGuardianAuthenticationFreshUsesExplicitOneHourTimestamp(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	sessions := scs.New()
@@ -762,6 +828,34 @@ func TestGuardianDashboardShowsRenewalWindowAndSubmittedStates(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body does not contain %q", want)
 		}
+	}
+}
+
+func TestGuardianDashboardViewModelsCoverEveryHandoffAndRenewalOutcome(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	birthday := now.Add(30 * 24 * time.Hour)
+	for status, want := range map[string]string{
+		"EMAIL_VERIFIED":     "Confirmação do clube em falta",
+		"IDENTITY_CONFIRMED": "Confirmação de email em falta",
+		"RECOVERY_REQUIRED":  "Recuperação presencial necessária",
+		"EMAIL_COLLISION":    "Recuperação presencial necessária",
+		"COMPLETED":          "Transição concluída",
+		"PENDING":            "Preparação em curso",
+	} {
+		view := guardianAgeHandoffView(GuardianAuthorityRelationship{AgeHandoffStatus: status, AgeHandoffBirthday: &birthday}, time.UTC)
+		if view.Status != want || view.Birthday != "12/10/2026" {
+			t.Errorf("status=%s view=%+v", status, view)
+		}
+	}
+	expired := now.Add(-time.Hour)
+	view := guardianRenewalView(GuardianAuthorityRelationship{Reference: uuid.New(), State: "EXPIRED", VerifiedUntil: &expired, RenewalStatus: "SUBMITTED"}, now, time.UTC)
+	if view.Status != "Renovação expirada" || !strings.Contains(view.Detail, "continua em revisão") {
+		t.Fatalf("expired submitted view=%+v", view)
+	}
+	future := now.Add(20 * 24 * time.Hour)
+	view = guardianRenewalView(GuardianAuthorityRelationship{Reference: uuid.New(), State: "VERIFIED", VerifiedUntil: &future, RenewalStatus: "SUBMITTED", RenewalResponse: "DADOS_MUDARAM"}, now, time.UTC)
+	if view.Status != "Renovação enviada" || !strings.Contains(view.Detail, "acesso foi suspenso") {
+		t.Fatalf("changed renewal view=%+v", view)
 	}
 }
 

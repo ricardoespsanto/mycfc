@@ -83,6 +83,22 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 			headers: []string{"To: <member@example.test>", "Subject:"},
 			body:    []string{"https://mycfc.example/legal/direitos?source=email", "não confirma que os dados foram apagados"},
 		},
+		{
+			name: "guardian renewal reminder",
+			send: func(sender *SMTPSender) error {
+				return sender.SendGuardianRenewalReminder(context.Background(), "guardian@example.test", "https://mycfc.example/dashboard/guardian", "GUARDIAN_RENEWAL_30_DAY", time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC))
+			},
+			headers: []string{"To: <guardian@example.test>", "Subject:"},
+			body:    []string{"https://mycfc.example/dashboard/guardian", "30 dias", "não prolonga o acesso automaticamente"},
+		},
+		{
+			name: "guardian age handoff",
+			send: func(sender *SMTPSender) error {
+				return sender.SendGuardianAgeHandoff(context.Background(), "young@example.test", "https://mycfc.example/transicao-18/verificar?token=opaque", "GUARDIAN_AGE_18_EMAIL_VERIFY", time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC))
+			},
+			headers: []string{"To: <young@example.test>", "Confirme o email da sua conta MyCFCoimbra"},
+			body:    []string{"https://mycfc.example/transicao-18/verificar?token=opaque", "só pode ser utilizado uma vez"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, message := smtpCapture(t)
@@ -106,6 +122,24 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGuardianSMTPRejectsUnsupportedKindsBeforeDelivery(t *testing.T) {
+	sender, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: 1, Timeout: time.Millisecond, TLSMode: "none", FromAddress: "no-reply@example.test", FromName: "MyCFCoimbra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SendGuardianRenewalReminder(t.Context(), "guardian@example.test", "https://mycfc.example/dashboard/guardian", "UNKNOWN", time.Now()); err == nil {
+		t.Fatal("unsupported renewal reminder was accepted")
+	}
+	if err := sender.SendGuardianAgeHandoff(t.Context(), "young@example.test", "https://mycfc.example/transicao-18", "UNKNOWN", time.Now()); err == nil {
+		t.Fatal("unsupported age handoff was accepted")
+	}
+	invalidFrom := *sender
+	invalidFrom.FromAddress = "invalid\nfrom@example.test"
+	if err := invalidFrom.SendGuardianRenewalReminder(t.Context(), "guardian@example.test", "https://mycfc.example/dashboard/guardian", "GUARDIAN_RENEWAL_7_DAY", time.Now()); err == nil {
+		t.Fatal("invalid sender was accepted for guardian reminder")
 	}
 }
 

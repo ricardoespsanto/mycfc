@@ -269,3 +269,119 @@ func TestOfflineGeneratorProducesAcceptedCanonicalApproval(t *testing.T) {
 		t.Fatalf("generated approval rejected: %v", err)
 	}
 }
+
+func TestGeneratorRejectsMalformedEvidenceAndWriteFailures(t *testing.T) {
+	actor := uuid.New()
+	today := time.Now()
+	effective := today.AddDate(0, 0, -1).Format(time.DateOnly)
+	review := today.AddDate(1, 0, 0).Format(time.DateOnly)
+	valid := []string{"generate", "--actor-ref", actor.String(), "--expected-database", "mycfc", "--policy-version", "guardian-v2-approved",
+		"--controller-approval-reference", "direction/minute/reference", "--controller-approved-on", effective, "--effective-on", effective,
+		"--review-due-on", review, "--legal-reviewer-reference", "legal/reviewer", "--legal-review-reference", "legal/evidence", "--legal-reviewed-on", effective}
+	invalidEvidence := append([]string{}, valid...)
+	invalidEvidence[8] = ""
+	for name, args := range map[string][]string{
+		"invalid arguments": {"generate", "--expected-database", "not-valid!"},
+		"invalid actor":     append(append([]string{}, valid[:2]...), append([]string{"not-a-uuid"}, valid[3:]...)...),
+		"invalid evidence":  invalidEvidence,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := execute(args, nil, io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "error_class=configuration") {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+		})
+	}
+	var stderr bytes.Buffer
+	if code := execute(valid, nil, activationErrorWriter{}, &stderr); code != 2 {
+		t.Fatalf("write failure exit=%d stderr=%q", code, stderr.String())
+	}
+	if code := execute([]string{"status", "extra"}, nil, io.Discard, &stderr); code != 2 {
+		t.Fatalf("usage exit=%d", code)
+	}
+}
+
+func TestRunAndConfigurationFailureBranchesRemainClosed(t *testing.T) {
+	if err := run(t.Context(), "unknown", nil, io.Discard); err == nil {
+		t.Fatal("unsupported mode accepted")
+	}
+
+	t.Run("non-root", func(t *testing.T) {
+		oldUID := effectiveUserID
+		effectiveUserID = func() int { return 1000 }
+		t.Cleanup(func() { effectiveUserID = oldUID })
+		if _, err := loadConfig("status", func(string) string { return "" }); err == nil {
+			t.Fatal("non-root activation accepted")
+		}
+	})
+
+	t.Run("actor and approval", func(t *testing.T) {
+		oldUID, oldReader := effectiveUserID, approvalReader
+		effectiveUserID = func() int { return 0 }
+		approvalReader = func(string, uuid.UUID, string) ([]byte, []byte, error) {
+			return nil, nil, errors.New("approval unavailable")
+		}
+		t.Cleanup(func() { effectiveUserID, approvalReader = oldUID, oldReader })
+		env := activationExecutableEnvironment(t, uuid.New())
+		env["GUARDIAN_ACTIVATION_ACTOR_REF"] = "not-a-uuid"
+		if _, err := loadConfig("enable", func(name string) string { return env[name] }); err == nil {
+			t.Fatal("invalid actor accepted")
+		}
+		env["GUARDIAN_ACTIVATION_ACTOR_REF"] = uuid.New().String()
+		if _, err := loadConfig("enable", func(name string) string { return env[name] }); err == nil {
+			t.Fatal("approval read failure accepted")
+		}
+	})
+
+	t.Run("database open", func(t *testing.T) {
+		oldUID, oldOpen := effectiveUserID, openDatabase
+		effectiveUserID = func() int { return 0 }
+		openDatabase = func(context.Context, string) (activationDatabase, error) {
+			return nil, errors.New("database unavailable")
+		}
+		t.Cleanup(func() { effectiveUserID, openDatabase = oldUID, oldOpen })
+		env := activationExecutableEnvironment(t, uuid.New())
+		if err := run(t.Context(), "status", func(name string) string { return env[name] }, io.Discard); err == nil {
+			t.Fatal("database open failure accepted")
+		}
+	})
+
+	if _, _, err := readApproval("/definitely/missing/guardian-approval.json", uuid.New(), "mycfc"); err == nil {
+		t.Fatal("missing approval file accepted")
+	}
+}
+
+func TestDatabaseMutationErrorsAndValidationBoundaries(t *testing.T) {
+	actor := uuid.New()
+	approval := validApproval(t, actor)
+	env := activationExecutableEnvironment(t, actor)
+	for _, mode := range []string{"preflight", "enable", "disable"} {
+		t.Run(mode, func(t *testing.T) {
+			database := &activationDatabaseFake{rows: []activationRowFake{{err: errors.New("database unavailable")}}}
+			installExecutableFakes(t, database, approval, actor)
+			var stderr bytes.Buffer
+			if code := execute([]string{mode}, func(name string) string { return env[name] }, io.Discard, &stderr); code != 1 {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+		})
+	}
+
+	for value, valid := range map[string]bool{"": false, "1invalid": false, "valid_name": true, "invalid-name": false} {
+		if validIdentifier(value) != valid {
+			t.Errorf("identifier %q validity changed", value)
+		}
+	}
+	for value, valid := range map[string]bool{"": false, "valid/v1": true, "-invalid": false, "invalid value": false} {
+		if validPolicyVersion(value) != valid {
+			t.Errorf("policy version %q validity changed", value)
+		}
+	}
+	for value, valid := range map[string]bool{"sha256:" + strings.Repeat("a", 64): true, "sha256:" + strings.Repeat("A", 64): false, "sha256:short": false} {
+		if validImageDigest(value) != valid {
+			t.Errorf("image digest %q validity changed", value)
+		}
+	}
+	if safeMode("forged\nmode") != "usage" {
+		t.Fatal("unsafe mode was not normalized")
+	}
+}
