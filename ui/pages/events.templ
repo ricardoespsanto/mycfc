@@ -48,7 +48,7 @@ type EventDetailPage struct {
     CollectionPage string
     ID, Title, Type, Description, When, Deadline, Capacity, Status, Success string
 	CancellationReason, CancelledAt, CancelledBy string
-	Cancelled, Editable bool
+	Cancelled, Editable, Past bool
     Documents []EventDocument
     Responses []EventResponse
     ResponsesPreviousURL, ResponsesNextURL string
@@ -259,10 +259,16 @@ templ eventDetailContent(page EventDetailPage) {
     }
     if !page.CanManageEvents && !page.Cancelled {
         <section class="module">
-            @components.SectionHeading("Participação", "A sua resposta", "Confirme a participação da pessoa certa.") {
+            @components.SectionHeading("Participação", "A sua resposta", eventParticipationDescription(page.Past)) {
                 <span class="record-item__actions"><span class="record-meta">Estado: { page.Status }</span>@components.Badge(page.Status, eventStatusTone(page.Status))</span>
             }
-            <p class="callout"><strong>A responder por</strong><br/>{ eventSubjectLabel(page.SelectedSubject) }</p>
+            <p class="callout"><strong>
+                if page.Past {
+                    Participação de
+                } else {
+                    A responder por
+                }
+            </strong><br/>{ eventSubjectLabel(page.SelectedSubject) }</p>
             if len(page.Subjects) > 1 {
                 <form class="form-layout" method="get" action={ "/events/" + page.ID }>
                     if page.CollectionURL != "" {
@@ -278,7 +284,9 @@ templ eventDetailContent(page EventDetailPage) {
                     @components.FormActions("") { <button class="action action--secondary" type="submit">Ver participação</button> }
                 </form>
             }
-            if page.Status != "Fora do prazo" {
+            if page.Past {
+                <p class="callout">Este evento terminou. Já não é possível alterar a resposta.</p>
+            } else if page.Status != "Fora do prazo" {
                 <form class="form-layout" method="post" action={ "/events/" + page.ID + "/responses" }>
                     @page.CSRFField<input type="hidden" name="subject_user_id" value={ page.SelectedSubject.ID }/>
                     @components.FormActions("/events") {
@@ -383,3 +391,8 @@ func eventStatusTone(status string) string {
 }
 
 func eventTypeTone(eventType string) string { if eventType == "Competição" { return "selected" }; return "neutral" }
+
+func eventParticipationDescription(past bool) string {
+    if past { return "Consulte a resposta registada para este evento." }
+    return "Confirme a participação da pessoa certa."
+}
