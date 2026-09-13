@@ -108,12 +108,19 @@ def normalize_cloudflare_zones_record(record: object) -> None:
         return
 
     candidates = []
-    values = record.get("values")
-    if isinstance(values, dict):
-        candidates.append(values)
+    for value_key in ("values", "sensitive_values"):
+        values = record.get(value_key)
+        if isinstance(values, dict):
+            candidates.append(values)
     change = record.get("change")
     if isinstance(change, dict):
-        for phase in ("before", "after"):
+        for phase in (
+            "before",
+            "after",
+            "before_sensitive",
+            "after_sensitive",
+            "after_unknown",
+        ):
             phase_values = change.get(phase)
             if isinstance(phase_values, dict):
                 candidates.append(phase_values)
