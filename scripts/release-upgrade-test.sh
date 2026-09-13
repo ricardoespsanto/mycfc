@@ -71,7 +71,8 @@ postgres_started=true
 
 ready=false
 for _ in $(seq 1 30); do
-	if docker exec "$postgres_container" pg_isready -U postgres -d mycfc >/dev/null 2>&1; then
+	if docker run --rm --network "$network" postgres:16.9-alpine3.21 \
+		pg_isready -h "$postgres_container" -U postgres -d mycfc >/dev/null 2>&1; then
 		ready=true
 		break
 	fi
