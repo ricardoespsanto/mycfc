@@ -52,6 +52,15 @@ printf '%s\n' '{"timestamp":"ignored","variables":{"secret":{"value":"first"}},"
 file_components=$(python3 scripts/terraform-plan-hmac.py --components "$component_file")
 test "$components" = "$file_components"
 
+prior_components=$(printf '%s\n' '{"prior_state":{"format_version":"1.0","values":{"outputs":{"example":{"value":"secret"}},"root_module":{"resources":[{"address":"aws_s3_bucket.example","values":{"id":"bucket"}}]}}}}' | python3 scripts/terraform-plan-hmac.py --components -)
+echo "$prior_components" | jq -e '
+  has("prior_state") and
+  has("prior_state.format_version") and
+  has("prior_state.output[example]") and
+  has("prior_state.resource[aws_s3_bucket.example]") and
+  all(.[]; test("^[0-9a-f]{64}$"))
+' >/dev/null
+
 TF_BACKEND_BUCKET=wrong-state
 export TF_BACKEND_BUCKET
 different_backend=$(hmac_for '{"format_version":"1.2","timestamp":"2026-09-12T10:00:00Z","variables":{"secret":{"value":"first"}}}')
