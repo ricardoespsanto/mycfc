@@ -196,6 +196,9 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *test
 		t.Fatal(err)
 	}
 	reconstructExactGuardian004(t, ctx, rewind)
+	if _, err = rewind.Exec(ctx, `ALTER TABLE events DROP COLUMN official_results_url,DROP COLUMN results_updated_by_id,DROP COLUMN results_updated_at,DROP COLUMN results_version`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = rewind.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS mycfc_meta;
 		CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now());
 		DELETE FROM mycfc_meta.schema_migrations`); err != nil {
@@ -203,7 +206,7 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *test
 		t.Fatal(err)
 	}
 	for _, version := range EmbeddedMigrationInventory() {
-		if version == "202609120005_guardian_authority_activation" || version == "202609120006_guardian_schema_ready_owner" || version == "202609120007_guardian_release_status" {
+		if version != baselineVersion && version > "202609120004_guardian_age_handoff" {
 			continue
 		}
 		if _, err = rewind.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
@@ -301,6 +304,23 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *test
 	if _, err = upgrade.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES('202609120007_guardian_release_status')`); err != nil {
 		_ = upgrade.Rollback(ctx)
 		t.Fatal(err)
+	}
+	// Restore every later release before testing the current binary's binding.
+	// Leaving shared test storage at 007 would poison subsequent evidence tests.
+	for _, version := range EmbeddedMigrationInventory() {
+		if version == baselineVersion || version <= "202609120007_guardian_release_status" {
+			continue
+		}
+		migration, readErr := migrationFiles.ReadFile("migrations/" + version + ".sql")
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, err = upgrade.Exec(ctx, string(migration)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = upgrade.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = upgrade.Commit(ctx); err != nil {
 		t.Fatal(err)
