@@ -489,7 +489,7 @@ func TestEventResponseLocksEligibilityThenSavesGoingStatus(t *testing.T) {
 	eventID, memberID := uuid.New(), uuid.New()
 	starts := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	tx := &eventTransactionFake{eventID: eventID, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour)}, eventResponseErr: pgx.ErrNoRows}
-	store := &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}
+	store := &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE", EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}}}
 	h := Events{Store: store, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}
 	r := httptest.NewRequest(http.MethodPost, "/events/"+eventID.String()+"/responder", strings.NewReader("status=Going"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -521,7 +521,7 @@ func TestEventResponseRejectsExpiredDeadlineAndWaitlistsWhenFull(t *testing.T) {
 	t.Run("expired deadline", func(t *testing.T) {
 		tx := &eventTransactionFake{eventID: eventID, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour), deadline: starts.Add(-time.Minute), deadlineValid: true}}
 		w := httptest.NewRecorder()
-		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts }}).Respond(w, request())
+		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE", EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts }}).Respond(w, request())
 		if w.Code != http.StatusConflict || tx.committed || len(tx.execCalls) != 0 || !strings.Contains(w.Body.String(), "prazo") {
 			t.Fatalf("response=%d committed=%t exec=%#v body=%q", w.Code, tx.committed, tx.execCalls, w.Body.String())
 		}
@@ -531,7 +531,7 @@ func TestEventResponseRejectsExpiredDeadlineAndWaitlistsWhenFull(t *testing.T) {
 		capacity := int32(1)
 		tx := &eventTransactionFake{eventID: eventID, goingCount: 1, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour), capacity: &capacity}, eventResponseErr: pgx.ErrNoRows}
 		w := httptest.NewRecorder()
-		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).Respond(w, request())
+		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE", EndsAt: pgtype.Timestamptz{Time: starts.Add(time.Hour), Valid: true}}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).Respond(w, request())
 		if w.Code != http.StatusSeeOther || !tx.committed || len(tx.execCalls) != 1 || tx.execCalls[0].args[2] != dbgen.EventResponseStatusWaitlisted {
 			t.Fatalf("response=%d committed=%t exec=%#v", w.Code, tx.committed, tx.execCalls)
 		}

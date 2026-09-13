@@ -58,6 +58,9 @@ test('administrator curates completed competition results with accessible valida
   if (process.env.E2E_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/past-events-mobile.png`, fullPage: true });
   await page.getByRole('link', { name: title, exact: true }).click();
   await expect(page.getByRole('link', { name: 'Resultados oficiais na FPC', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Vou', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Não vou', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Este evento terminou. Já não é possível alterar a resposta.', { exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Voltar aos eventos', exact: true }).click();
   // A first-page return may canonicalize the optional page number.
   expect(new URL(page.url()).searchParams.get('view')).toBe('past');

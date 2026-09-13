@@ -1408,11 +1408,12 @@ test.describe('authentication', () => {
     const futureTitle = `Evento com lotação E2E ${Date.now()}`;
     const editedDescription = 'Evento editado antes das respostas, mantendo o documento oficial.';
     const cancellationReason = 'Cancelado pelo teste de ciclo de vida E2E.';
-    const pastTitle = `Evento com presença E2E ${Date.now()}`;
+    const ongoingTitle = `Evento com presença E2E ${Date.now()}`;
     const futureStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const futureEnd = new Date(futureStart.getTime() + 2 * 60 * 60 * 1000);
-    const pastStart = new Date(Date.now() - 48 * 60 * 60 * 1000);
-    const pastEnd = new Date(pastStart.getTime() + 2 * 60 * 60 * 1000);
+    const ongoingStart = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    // Attendance is recorded after the start, while responses are still open.
+    const ongoingEnd = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const asDateTimeLocal = (value) => value.toISOString().slice(0, 16);
 
     await page.goto('/login');
@@ -1521,17 +1522,17 @@ test.describe('authentication', () => {
 
     await page.goto('/admin/eventos');
     await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
-    await page.locator('#event-title').fill(pastTitle);
+    await page.locator('#event-title').fill(ongoingTitle);
     await page.locator('#event-description').fill('Evento de teste para registar uma presença após o início.');
-    await page.locator('#event-starts-at').fill(asDateTimeLocal(pastStart));
-    await page.locator('#event-ends-at').fill(asDateTimeLocal(pastEnd));
+    await page.locator('#event-starts-at').fill(asDateTimeLocal(ongoingStart));
+    await page.locator('#event-ends-at').fill(asDateTimeLocal(ongoingEnd));
     await page.getByRole('button', { name: 'Criar evento' }).click();
-    while (await page.getByRole('link', { name: pastTitle, exact: true }).count() === 0) {
+    while (await page.getByRole('link', { name: ongoingTitle, exact: true }).count() === 0) {
       await page.getByRole('link', { name: 'Seguinte' }).click();
     }
-    const pastAdminEventURL = await page.getByRole('link', { name: pastTitle, exact: true }).getAttribute('href');
-    expect(pastAdminEventURL).not.toBeNull();
-    const pastMemberEventURL = pastAdminEventURL?.replace('/admin/eventos/', '/events/');
+    const ongoingAdminEventURL = await page.getByRole('link', { name: ongoingTitle, exact: true }).getAttribute('href');
+    expect(ongoingAdminEventURL).not.toBeNull();
+    const ongoingMemberEventURL = ongoingAdminEventURL?.replace('/admin/eventos/', '/events/');
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(waitlistedEmail);
@@ -1541,14 +1542,14 @@ test.describe('authentication', () => {
     await expect(page.getByText('Cancelado', { exact: true })).toBeVisible();
     await expect(page.getByText(cancellationReason)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Vou', exact: true })).toHaveCount(0);
-    await page.goto(pastMemberEventURL ?? '/events');
+    await page.goto(ongoingMemberEventURL ?? '/events');
     await page.getByRole('button', { name: 'Vou', exact: true }).click();
 
     await page.getByRole('button', { name: 'Terminar sessão' }).click();
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await page.goto(pastAdminEventURL);
+    await page.goto(ongoingAdminEventURL);
     await page.locator('li', { hasText: waitlistedName }).getByText('Ações', { exact: true }).click();
     await page.getByRole('button', { name: 'Registar presença' }).click();
     await expect(page.locator('li', { hasText: waitlistedName })).toContainText('Presença:');

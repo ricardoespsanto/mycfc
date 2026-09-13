@@ -513,6 +513,10 @@ func (h Events) Respond(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "O evento foi cancelado e já não aceita respostas.", http.StatusConflict)
 		return
 	}
+	if !respondable.EndsAt.Time.After(h.now()) {
+		http.Error(w, "O evento terminou e já não aceita respostas.", http.StatusConflict)
+		return
+	}
 	err = db.WithinTx(ctx, h.DB, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		queries := dbgen.New(tx)
 		event, err := queries.GetEventForResponse(ctx, eventID) // serializes capacity decisions for this event.
@@ -525,7 +529,11 @@ func (h Events) Respond(w http.ResponseWriter, r *http.Request) {
 			}
 			return err
 		}
-		if event.ResponseDeadline.Valid && h.now().After(event.ResponseDeadline.Time) {
+		now := h.now()
+		if !event.EndsAt.Time.After(now) {
+			return errEventEnded
+		}
+		if event.ResponseDeadline.Valid && now.After(event.ResponseDeadline.Time) {
 			return errResponseDeadline
 		}
 		status := dbgen.EventResponseStatusNotGoing
@@ -548,6 +556,10 @@ func (h Events) Respond(w http.ResponseWriter, r *http.Request) {
 		}
 		return queries.SaveEventResponse(ctx, dbgen.SaveEventResponseParams{EventID: eventID, UserID: subjectID, Status: status, RespondedByID: user.ID})
 	})
+	if errors.Is(err, errEventEnded) {
+		http.Error(w, "O evento terminou e já não aceita respostas.", http.StatusConflict)
+		return
+	}
 	if errors.Is(err, errResponseDeadline) {
 		http.Error(w, "O prazo de resposta terminou.", http.StatusConflict)
 		return
@@ -673,6 +685,7 @@ func (h Events) staffAction(w http.ResponseWriter, r *http.Request, confirm bool
 }
 
 var (
+	errEventEnded           = errors.New("event ended")
 	errResponseDeadline     = errors.New("event response deadline")
 	errEventFull            = errors.New("event full")
 	errInvalidEventState    = errors.New("invalid event state")
@@ -1158,7 +1171,9 @@ func (h Events) memberDetailPage(event dbgen.GetEventDetailForMemberRow, selecte
 	if page.Cancelled {
 		page.Status = "Cancelado"
 	}
-	if event.ResponseDeadline.Valid && h.now().After(event.ResponseDeadline.Time) {
+	now := h.now()
+	page.Past = !event.EndsAt.Time.After(now)
+	if !page.Past && event.ResponseDeadline.Valid && now.After(event.ResponseDeadline.Time) {
 		page.Status = "Fora do prazo"
 	}
 	for _, subject := range subjects {
