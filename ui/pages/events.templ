@@ -31,6 +31,8 @@ type EventCreatePage struct { Meta components.PageMeta; Form EventForm }
 type EventsPage struct {
     Meta components.PageMeta
     Management, CanManageEvents bool
+    Past bool
+    DetailQuery string
     PreviousURL, NextURL, Success string
     Events []EventItem
     Calendar BasicCalendarMonth
@@ -40,6 +42,10 @@ type EventsPage struct {
 type EventDetailPage struct {
     Meta components.PageMeta
     CanManageEvents bool
+    CanManageResults bool
+    ResultsURL string
+    CollectionURL string
+    CollectionPage string
     ID, Title, Type, Description, When, Deadline, Capacity, Status, Success string
 	CancellationReason, CancelledAt, CancelledBy string
 	Cancelled, Editable bool
@@ -60,22 +66,41 @@ templ eventsContent(page EventsPage) {
         @components.PageHeader("Atividade", "Eventos", "Consulte a agenda e responda às atividades relevantes para si.", nil)
     }
     @components.StatusMessage(page.Success, "success")
-    @BasicCalendar(page.Calendar, "Calendário de eventos", "Vista mensal dos eventos carregados nesta página.")
+    if !page.Management {
+        <nav class="collection-tabs" aria-label="Período dos eventos">
+            <a href="/events" aria-current={ eventPeriodCurrent(!page.Past) }>Próximos</a>
+            <a href="/events?view=past" aria-current={ eventPeriodCurrent(page.Past) }>Eventos passados</a>
+        </nav>
+    }
+    if !page.Past {
+        @BasicCalendar(page.Calendar, "Calendário de eventos", "Vista mensal dos eventos carregados nesta página.")
+    }
     <section class="collection-view">
-        @components.SectionHeading("Agenda", "Próximos eventos", "Datas, estado da sua resposta e disponibilidade num só lugar.") {
-            <span class="collection-count">{ len(page.Events) } eventos</span>
+        @components.SectionHeading("Agenda", eventCollectionTitle(page.Past), eventCollectionDescription(page.Past)) {
+            <span class="collection-count">{ len(page.Events) }{ eventCountSuffix(len(page.Events)) }</span>
         }
         if len(page.Events) == 0 {
-            @components.EmptyState("Sem eventos próximos", "Quando o clube marcar uma atividade relevante, ela aparece aqui.")
+            if page.Past {
+                @components.EmptyState("Sem eventos passados", "Os eventos terminados a que tem acesso aparecem aqui.")
+            } else {
+                @components.EmptyState("Sem eventos próximos", "Quando o clube marcar uma atividade relevante, ela aparece aqui.")
+            }
         }
         if len(page.Events) > 0 {
-            <ul class="record-list collection-list" aria-label="Próximos eventos">
+            <ul class="record-list collection-list" aria-label={ eventCollectionTitle(page.Past) }>
                 for _, event := range page.Events {
                     <li class="record-item"><div class="record-item__copy"><h3><a href={ eventPageURL(page, event.ID) }>{ event.Title }</a></h3><p class="record-meta">{ event.Type } · { event.When }{ event.Capacity }</p>
 					if event.Cancelled && event.CancellationReason != "" {
 						<p>{ event.CancellationReason }</p>
 					}
-					</div>@components.Badge(event.Status, eventStatusTone(event.Status))<a class="action action--quiet collection-open" href={ eventPageURL(page, event.ID) }>Abrir</a></li>
+					if page.Past {
+<p class="record-meta">{ event.Status }</p>
+}
+					</div>
+if !page.Past {
+@components.Badge(event.Status, eventStatusTone(event.Status))
+}
+<a class="action action--quiet collection-open" href={ eventPageURL(page, event.ID) }>Abrir</a></li>
                 }
             </ul>
         }
@@ -95,6 +120,12 @@ templ eventsContent(page EventsPage) {
     }
     </div>
 }
+
+func eventCountSuffix(count int) string { if count == 1 { return " evento" }; return " eventos" }
+
+func eventCollectionTitle(past bool) string { if past { return "Eventos passados" }; return "Próximos eventos" }
+func eventCollectionDescription(past bool) string { if past { return "Consulte os eventos anteriores e os resultados oficiais disponíveis." }; return "Eventos em curso e próximos eventos." }
+func eventPeriodCurrent(current bool) string { if current { return "page" }; return "false" }
 
 templ EventCreate(page EventCreatePage) { @components.Base(page.Meta, eventCreateContent(page)) }
 templ eventCreateContent(page EventCreatePage) {
@@ -214,6 +245,18 @@ templ eventDetailContent(page EventDetailPage) {
 		</div>
 	}
     @eventDocumentsSection(page.Documents)
+    if page.ResultsURL != "" || page.CanManageResults {
+        <section class="module" aria-labelledby="event-results-title">
+            <h2 id="event-results-title">Resultados da competição</h2>
+            if page.ResultsURL != "" {
+                <p><a href={ templ.SafeURL(page.ResultsURL) } rel="noreferrer" referrerpolicy="no-referrer">Resultados oficiais na FPC</a></p>
+                <p class="record-meta">Ligação externa para a FPC.</p>
+            }
+            if page.CanManageResults {
+                <a class="action action--secondary" href={ templ.SafeURL("/admin/eventos/" + page.ID + "/resultados") }>Gerir ligação de resultados</a>
+            }
+        </section>
+    }
     if !page.CanManageEvents && !page.Cancelled {
         <section class="module">
             @components.SectionHeading("Participação", "A sua resposta", "Confirme a participação da pessoa certa.") {
@@ -222,6 +265,10 @@ templ eventDetailContent(page EventDetailPage) {
             <p class="callout"><strong>A responder por</strong><br/>{ eventSubjectLabel(page.SelectedSubject) }</p>
             if len(page.Subjects) > 1 {
                 <form class="form-layout" method="get" action={ "/events/" + page.ID }>
+                    if page.CollectionURL != "" {
+                        <input type="hidden" name="view" value="past"/>
+                        <input type="hidden" name="page" value={ page.CollectionPage }/>
+                    }
                     @components.FieldLabel("event-subject-switcher", "Participação de", false)
                     <select id="event-subject-switcher" name="subject_user_id">
                         for _, subject := range page.Subjects {
@@ -313,9 +360,9 @@ func eventPageActions(page EventsPage) []components.PageAction {
     return nil
 }
 
-func eventPageURL(page EventsPage, id string) string { if page.Management { return "/admin/eventos/" + id }; return "/events/" + id }
+func eventPageURL(page EventsPage, id string) string { if page.Management { return "/admin/eventos/" + id }; return "/events/" + id + page.DetailQuery }
 func eventDetailArea(page EventDetailPage) string { if page.CanManageEvents { return "Coordenação · Eventos" }; return "Evento" }
-func eventDetailBackURL(page EventDetailPage) string { if page.CanManageEvents { return "/admin/eventos" }; return "/events" }
+func eventDetailBackURL(page EventDetailPage) string { if page.CanManageEvents { return "/admin/eventos" }; if page.CollectionURL != "" { return page.CollectionURL }; return "/events" }
 func eventDetailActions(page EventDetailPage) []components.PageAction {
 	actions := []components.PageAction{{Label: "Voltar aos eventos", Href: eventDetailBackURL(page), Variant: "quiet"}}
 	if page.CanManageEvents && page.Editable { actions = append([]components.PageAction{{Label: "Editar evento", Href: "/admin/eventos/" + page.ID + "/editar", Variant: "primary"}}, actions...) }

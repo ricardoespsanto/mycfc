@@ -238,6 +238,9 @@ func (h Events) Update(w http.ResponseWriter, r *http.Request) {
 	if current.HasDocument && form.EventType != "COMPETITION" {
 		form.Errors.Add("event_type", "Um evento com documento oficial tem de continuar a ser uma competição.")
 	}
+	if current.HasResultsLink && form.EventType != "COMPETITION" {
+		form.Errors.Add("event_type", "Remova a ligação de resultados antes de alterar o tipo de evento.")
+	}
 	if capacity, ok := eventCapacity(form.Capacity); ok && capacity != nil && int64(*capacity) < current.GoingCount {
 		form.Errors.Add("capacity", "A lotação não pode ser inferior ao número de participantes confirmados.")
 	}
@@ -413,6 +416,8 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		page = h.adminDetailPage(event, responses, responsePage)
+		page.CanManageResults = user.IsAdmin && event.EventType == "COMPETITION"
+		page.ResultsURL = validatedEventResultsURL(stringValue(event.OfficialResultsUrl))
 	} else {
 		selected, subjects, err := h.resolveEventSubject(ctx, user, eventID, r.URL.Query().Get("subject_user_id"))
 		if errors.Is(err, errEventSubjectNotFound) {
@@ -433,6 +438,7 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		page = h.memberDetailPage(event, selected, subjects, user.ID)
+		page.ResultsURL = validatedEventResultsURL(stringValue(event.OfficialResultsUrl))
 		if selected.ID != user.ID {
 			page.Meta.SubjectContext = selected.Name
 		}
@@ -457,6 +463,10 @@ func (h Events) Detail(w http.ResponseWriter, r *http.Request) {
 	page.Meta.Title = page.Title + " | MyCFCoimbra"
 	page.Meta.Breadcrumbs = []components.NavigationItem{{Label: breadcrumbLabel, Path: basePath}}
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	if !management && r.URL.Query().Get("view") == "past" {
+		page.CollectionURL = memberEventsPageURL(eventsPageNumber(r.URL.Query().Get("page")), true)
+		page.CollectionPage = strconv.Itoa(eventsPageNumber(r.URL.Query().Get("page")))
+	}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "events_flash")
 	}
@@ -1059,14 +1069,29 @@ func (h Events) renderIndex(w http.ResponseWriter, r *http.Request, status int, 
 			}
 		}
 	} else {
-		items, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: user.ID, RowLimit: 100})
+		page.Past = r.URL.Query().Get("view") == "past"
+		pageNumber := eventsPageNumber(r.URL.Query().Get("page"))
+		items, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: user.ID, Past: page.Past, AsOf: pgtype.Timestamptz{Time: h.now(), Valid: true}, RowLimit: eventsPageSize + 1, RowOffset: int32((pageNumber - 1) * eventsPageSize)})
 		if err != nil {
 			h.System.InternalError(w, r)
 			return
 		}
+		if page.Past {
+			page.DetailQuery = "?view=past&page=" + strconv.Itoa(pageNumber)
+		}
+		if pageNumber > 1 {
+			page.PreviousURL = memberEventsPageURL(pageNumber-1, page.Past)
+		}
+		if len(items) > eventsPageSize {
+			page.NextURL = memberEventsPageURL(pageNumber+1, page.Past)
+			items = items[:eventsPageSize]
+		}
 		calendarEntries := make([]calendarEntry, 0, len(items))
 		for _, item := range items {
 			status := eventStatus(item.ResponseStatus)
+			if page.Past && item.ResponseStatus == "Pending" {
+				status = "Sem resposta registada"
+			}
 			if item.Status == "CANCELLED" {
 				status = "Cancelado"
 			}
@@ -1112,6 +1137,13 @@ func eventsPageNumber(value string) int {
 }
 
 func managedEventsPageURL(page int) string { return "/admin/eventos?page=" + strconv.Itoa(page) }
+
+func memberEventsPageURL(page int, past bool) string {
+	if past {
+		return "/events?view=past&page=" + strconv.Itoa(page)
+	}
+	return "/events?page=" + strconv.Itoa(page)
+}
 
 func eventResponsesPageURL(eventID uuid.UUID, page int) string {
 	return "/events/" + eventID.String() + "?response_page=" + strconv.Itoa(page)

@@ -1667,6 +1667,10 @@ type Event struct {
 	CreatedByID        uuid.UUID          `json:"created_by_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	OfficialResultsUrl *string            `json:"official_results_url"`
+	ResultsUpdatedByID *uuid.UUID         `json:"results_updated_by_id"`
+	ResultsUpdatedAt   pgtype.Timestamptz `json:"results_updated_at"`
+	ResultsVersion     int64              `json:"results_version"`
 }
 
 type EventAudience struct {

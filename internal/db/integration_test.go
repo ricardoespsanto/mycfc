@@ -424,7 +424,7 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 	if _, err := queries.GrantStaffCapability(ctx, dbgen.GrantStaffCapabilityParams{UserID: coachID, Capability: dbgen.StaffCapabilityCOACH, ProgrammeID: &competition.ID, GrantedByID: authorID}); err != nil {
 		t.Fatal(err)
 	}
-	create := func(title string, hour time.Duration) dbgen.Event {
+	create := func(title string, hour time.Duration) dbgen.CreateEventRow {
 		event, err := queries.CreateEvent(ctx, dbgen.CreateEventParams{Title: title, EventType: "GENERAL", StartsAt: pgtype.Timestamptz{Time: today.Add(hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: today.Add(hour + time.Hour), Valid: true}, CreatedByID: authorID})
 		if err != nil {
 			t.Fatal(err)
@@ -551,7 +551,7 @@ func TestTeamScopedEventVisibilityAndResponseAuthorization(t *testing.T) {
 
 	assertMemberList := func(userID uuid.UUID, want bool) {
 		t.Helper()
-		items, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 100})
+		items, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 100, AsOf: pgtype.Timestamptz{Time: time.Now(), Valid: true}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1270,7 +1270,7 @@ func TestEventEditAndCancellationPreserveResponsesAndRejectStaleWrites(t *testin
 	if err != nil || response.Status != "Going" {
 		t.Fatalf("preserved response = %#v, err = %v", response, err)
 	}
-	visible, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: memberID, RowLimit: 20})
+	visible, err := queries.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: memberID, RowLimit: 20, AsOf: pgtype.Timestamptz{Time: time.Now(), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

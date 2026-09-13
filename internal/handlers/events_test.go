@@ -489,7 +489,7 @@ func TestEventResponseLocksEligibilityThenSavesGoingStatus(t *testing.T) {
 	eventID, memberID := uuid.New(), uuid.New()
 	starts := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	tx := &eventTransactionFake{eventID: eventID, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour)}, eventResponseErr: pgx.ErrNoRows}
-	store := &eventIndexStore{respondable: dbgen.Event{ID: eventID, Status: "ACTIVE"}}
+	store := &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}
 	h := Events{Store: store, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}
 	r := httptest.NewRequest(http.MethodPost, "/events/"+eventID.String()+"/responder", strings.NewReader("status=Going"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -521,7 +521,7 @@ func TestEventResponseRejectsExpiredDeadlineAndWaitlistsWhenFull(t *testing.T) {
 	t.Run("expired deadline", func(t *testing.T) {
 		tx := &eventTransactionFake{eventID: eventID, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour), deadline: starts.Add(-time.Minute), deadlineValid: true}}
 		w := httptest.NewRecorder()
-		(Events{Store: &eventIndexStore{respondable: dbgen.Event{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts }}).Respond(w, request())
+		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts }}).Respond(w, request())
 		if w.Code != http.StatusConflict || tx.committed || len(tx.execCalls) != 0 || !strings.Contains(w.Body.String(), "prazo") {
 			t.Fatalf("response=%d committed=%t exec=%#v body=%q", w.Code, tx.committed, tx.execCalls, w.Body.String())
 		}
@@ -531,7 +531,7 @@ func TestEventResponseRejectsExpiredDeadlineAndWaitlistsWhenFull(t *testing.T) {
 		capacity := int32(1)
 		tx := &eventTransactionFake{eventID: eventID, goingCount: 1, responseEvent: eventTransactionEvent{status: "ACTIVE", startsAt: starts, endsAt: starts.Add(time.Hour), capacity: &capacity}, eventResponseErr: pgx.ErrNoRows}
 		w := httptest.NewRecorder()
-		(Events{Store: &eventIndexStore{respondable: dbgen.Event{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).Respond(w, request())
+		(Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "ACTIVE"}}, DB: eventMutationDB{tx: tx}, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).Respond(w, request())
 		if w.Code != http.StatusSeeOther || !tx.committed || len(tx.execCalls) != 1 || tx.execCalls[0].args[2] != dbgen.EventResponseStatusWaitlisted {
 			t.Fatalf("response=%d committed=%t exec=%#v", w.Code, tx.committed, tx.execCalls)
 		}
@@ -553,7 +553,7 @@ func TestEventResponseAndStaffAuthorizationMapLookupFailures(t *testing.T) {
 	}{
 		{name: "subject no longer eligible", store: eventIndexStore{respondableErr: pgx.ErrNoRows}, want: http.StatusForbidden},
 		{name: "eligibility lookup failure", store: eventIndexStore{respondableErr: errors.New("database unavailable")}, want: http.StatusInternalServerError},
-		{name: "event cancelled", store: eventIndexStore{respondable: dbgen.Event{ID: eventID, Status: "CANCELLED"}}, want: http.StatusConflict},
+		{name: "event cancelled", store: eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "CANCELLED"}}, want: http.StatusConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -845,7 +845,7 @@ func TestEventParticipationRejectsInvalidCancelledAndUnmanagedActionsBeforeMutat
 	})
 
 	t.Run("cancelled event cannot accept response", func(t *testing.T) {
-		h := Events{Store: &eventIndexStore{respondable: dbgen.Event{ID: eventID, Status: "CANCELLED"}}, Location: time.UTC}
+		h := Events{Store: &eventIndexStore{respondable: dbgen.GetRespondableEventRow{ID: eventID, Status: "CANCELLED"}}, Location: time.UTC}
 		r := httptest.NewRequest(http.MethodPost, "/events/"+eventID.String()+"/responder", strings.NewReader("status=Going"))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.SetPathValue("id", eventID.String())
@@ -951,6 +951,7 @@ type eventIndexStore struct {
 	coachItems        []dbgen.ListEventsForCoachRow
 	coachItemsErr     error
 	memberItems       []dbgen.ListEventsForMemberRow
+	memberParams      dbgen.ListEventsForMemberParams
 	memberItemsErr    error
 	documents         []dbgen.ListCompetitionDocumentsForAthleteRow
 	programmes        []dbgen.Programme
@@ -960,7 +961,7 @@ type eventIndexStore struct {
 	edit              dbgen.GetEventForEditRow
 	adminDetail       dbgen.GetEventDetailForAdminRow
 	responses         []dbgen.ListEventResponsesForAdminRow
-	respondable       dbgen.Event
+	respondable       dbgen.GetRespondableEventRow
 	respondableErr    error
 	coachAllowed      bool
 	coachErr          error
@@ -1092,9 +1093,9 @@ func (db eventMutationDB) QueryRow(ctx context.Context, query string, args ...an
 func (s *eventIndexStore) GetEventForEdit(context.Context, uuid.UUID) (dbgen.GetEventForEditRow, error) {
 	return s.edit, s.editErr
 }
-func (s *eventIndexStore) CancelEvent(_ context.Context, params dbgen.CancelEventParams) (dbgen.Event, error) {
+func (s *eventIndexStore) CancelEvent(_ context.Context, params dbgen.CancelEventParams) (dbgen.CancelEventRow, error) {
 	s.cancelled = params
-	return dbgen.Event{ID: params.ID}, s.cancelErr
+	return dbgen.CancelEventRow{ID: params.ID}, s.cancelErr
 }
 func (s *eventIndexStore) ListEventProgrammeAudienceIDs(context.Context, uuid.UUID) ([]uuid.UUID, error) {
 	return s.programmeAudience, nil
@@ -1111,7 +1112,7 @@ func (s *eventIndexStore) ListEventResponsesForAdmin(context.Context, dbgen.List
 func (s *eventIndexStore) ListCompetitionDocumentsForEvent(context.Context, *uuid.UUID) ([]dbgen.ListCompetitionDocumentsForEventRow, error) {
 	return nil, s.documentsErr
 }
-func (s *eventIndexStore) GetRespondableEvent(context.Context, dbgen.GetRespondableEventParams) (dbgen.Event, error) {
+func (s *eventIndexStore) GetRespondableEvent(context.Context, dbgen.GetRespondableEventParams) (dbgen.GetRespondableEventRow, error) {
 	return s.respondable, s.respondableErr
 }
 func (s *eventIndexStore) CanCoachManageEvent(context.Context, dbgen.CanCoachManageEventParams) (bool, error) {
@@ -1126,7 +1127,8 @@ func (s *eventIndexStore) ListEventsForCoach(context.Context, dbgen.ListEventsFo
 	return s.coachItems, s.coachItemsErr
 }
 
-func (s *eventIndexStore) ListEventsForMember(context.Context, dbgen.ListEventsForMemberParams) ([]dbgen.ListEventsForMemberRow, error) {
+func (s *eventIndexStore) ListEventsForMember(_ context.Context, params dbgen.ListEventsForMemberParams) ([]dbgen.ListEventsForMemberRow, error) {
+	s.memberParams = params
 	return s.memberItems, s.memberItemsErr
 }
 
@@ -1146,11 +1148,11 @@ func (s *eventSubjectStore) ListDependentsByGuardian(context.Context, dbgen.List
 	return s.dependents, nil
 }
 
-func (s *eventSubjectStore) GetRespondableEvent(_ context.Context, params dbgen.GetRespondableEventParams) (dbgen.Event, error) {
+func (s *eventSubjectStore) GetRespondableEvent(_ context.Context, params dbgen.GetRespondableEventParams) (dbgen.GetRespondableEventRow, error) {
 	if !s.authorized[params.SubjectUserID] {
-		return dbgen.Event{}, pgx.ErrNoRows
+		return dbgen.GetRespondableEventRow{}, pgx.ErrNoRows
 	}
-	return dbgen.Event{ID: params.EventID, Status: "ACTIVE"}, nil
+	return dbgen.GetRespondableEventRow{ID: params.EventID, Status: "ACTIVE"}, nil
 }
 
 func (s *eventSubjectStore) GetEventDetailForMember(_ context.Context, params dbgen.GetEventDetailForMemberParams) (dbgen.GetEventDetailForMemberRow, error) {
