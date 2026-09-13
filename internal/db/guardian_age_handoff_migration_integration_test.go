@@ -17,6 +17,27 @@ import (
 // rewind their own predecessor.
 func rewindGuardianSchemaReadyOwnerMigration(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
+	// Reconstruct the prior privacy boundary before older guardian migrations.
+	// This rollback state is only a test fixture, never a production downgrade.
+	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN
+		IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+			AND conname='privacy_activation_authenticated_artifacts_v16_check') THEN
+			ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			DELETE FROM privacy_activation_authenticated_artifacts;
+			ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+			SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+			WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v16_check';
+			IF definition IS NULL OR length(definition)-length(replace(definition,'202609130001_event_results_links',''))
+				<>length('202609130001_event_results_links') THEN RAISE EXCEPTION 'event results rewind mismatch'; END IF;
+			rewritten:=replace(definition,', ''202609130001_event_results_links''','');
+			ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v16_check;
+			EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v15_check '||rewritten;
+			EXECUTE replace(pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure),'202609130001_event_results_links','202609120007_guardian_release_status');
+			EXECUTE replace(pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure),'202609130001_event_results_links','202609120007_guardian_release_status');
+		END IF;
+	END$$`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN
 		IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
 			AND conname='privacy_activation_authenticated_artifacts_v15_check') THEN

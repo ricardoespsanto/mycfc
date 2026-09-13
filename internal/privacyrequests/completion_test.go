@@ -310,7 +310,7 @@ func TestActivationArtifactSupportsInfrastructureAndSchemaContracts(t *testing.T
 
 	schema := signedPayload(map[string]any{
 		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
-		"baseline_includes_through": "202609120007_guardian_release_status",
+		"baseline_includes_through": "202609130001_event_results_links",
 	})
 	evidence, err = VerifyActivationArtifact(schema, map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now)
 	if err != nil || evidence.kind != "SCHEMA" || evidence.artifact.BaselineIncludesThrough == "" {
@@ -326,7 +326,7 @@ func TestActivationArtifactSupportsInfrastructureAndSchemaContracts(t *testing.T
 	}
 	if _, err = VerifyActivationArtifact(signedPayload(map[string]any{
 		"contract": "mycfc/schema-migration-inventory/v1", "schema_migration_digest": hexDigest,
-		"baseline_includes_through": "202609100014_privacy_activation_broker",
+		"baseline_includes_through": "202609120007_guardian_release_status",
 	}), map[string]ed25519.PublicKey{"activation-key-1": publicKey}, release, now); !errors.Is(err, ErrActivationUnavailable) {
 		t.Fatalf("stale schema artifact error=%v", err)
 	}

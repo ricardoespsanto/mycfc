@@ -33,6 +33,7 @@ var relationalUserReferenceInventory = map[string]string{
 	"event_responses.user_id":                                           "DELETE_PARTICIPATION",
 	"events.cancelled_by_id":                                            "KEEP_OPAQUE_ACTOR",
 	"events.created_by_id":                                              "KEEP_OPAQUE_ACTOR",
+	"events.results_updated_by_id":                                      "KEEP_OPAQUE_ACTOR",
 	"feature_flag_events.actor_user_id":                                 "ANONYMIZE_AUDIT_PRINCIPAL",
 	"feature_flags.updated_by_id":                                       "KEEP_OPAQUE_ACTOR",
 	"guardian_application_intake_release.enabled_by":                    "RESTRICT_GUARDIAN_AUTHORITY_CONTROL",

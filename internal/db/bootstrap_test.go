@@ -39,8 +39,9 @@ func TestGuardianReleaseStatusIsRepresentedByFreshBaseline(t *testing.T) {
 	}
 	const marker = "-- Give the release-only identity one non-identifying observation:"
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
-		t.Fatal("guardian schema-ready owner repair is not the exact final baseline segment")
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609130001_event_results_links.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index:next]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("guardian release status migration is not the exact predecessor baseline segment")
 	}
 	for _, required := range []string{
 		"guardian_ops.schema_ready(",
@@ -51,6 +52,18 @@ func TestGuardianReleaseStatusIsRepresentedByFreshBaseline(t *testing.T) {
 		if !strings.Contains(string(migration), required) || !strings.Contains(baselineSchema, required) {
 			t.Fatalf("guardian schema-ready repair migration or baseline missing %q", required)
 		}
+	}
+}
+
+func TestEventResultsMigrationIsExactFinalBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609130001_event_results_links.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609130001_event_results_links."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("event results migration is not the exact final baseline segment")
 	}
 }
 

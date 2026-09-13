@@ -145,6 +145,8 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /admin/eventos/criar", auth.RequireEventStaff(http.HandlerFunc(events.CreatePage)))
 	mux.Handle("GET /admin/eventos/{id}", auth.RequireEventStaff(http.HandlerFunc(events.Detail)))
 	mux.Handle("GET /admin/eventos/{id}/editar", auth.RequireEventStaff(http.HandlerFunc(events.Edit)))
+	mux.Handle("GET /admin/eventos/{id}/resultados", auth.RequireAdmin(http.HandlerFunc(events.ResultsLink)))
+	mux.Handle("POST /admin/events/{id}/results", auth.RequireAdmin(http.HandlerFunc(events.UpdateResultsLink)))
 	mux.Handle("POST /admin/events", auth.RequireEventStaff(http.HandlerFunc(events.Create)))
 	mux.Handle("POST /admin/events/{id}", auth.RequireEventStaff(http.HandlerFunc(events.Update)))
 	mux.Handle("POST /admin/events/{id}/cancel", auth.RequireEventStaff(http.HandlerFunc(events.Cancel)))

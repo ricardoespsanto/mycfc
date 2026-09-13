@@ -29,6 +29,7 @@ SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.res
        e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, e.created_by_id, e.created_at, e.updated_at,
        EXISTS (SELECT 1 FROM event_responses r WHERE r.event_id = e.id) AS has_responses,
        EXISTS (SELECT 1 FROM competition_documents d WHERE d.event_id = e.id) AS has_document,
+       (e.official_results_url IS NOT NULL)::boolean AS has_results_link,
        (SELECT count(*)::bigint FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going') AS going_count
 FROM events e
 WHERE e.id = sqlc.arg(id);
@@ -44,6 +45,7 @@ WHERE e.id = sqlc.arg(id)
   AND e.updated_at = sqlc.arg(expected_updated_at)
   AND (sqlc.narg(capacity)::integer IS NULL OR sqlc.narg(capacity)::integer >= (SELECT count(*) FROM event_responses r WHERE r.event_id = e.id AND r.status = 'Going'))
   AND (sqlc.arg(event_type)::text = 'COMPETITION' OR NOT EXISTS (SELECT 1 FROM competition_documents d WHERE d.event_id = e.id))
+  AND (sqlc.arg(event_type)::text = 'COMPETITION' OR e.official_results_url IS NULL)
   AND (NOT sqlc.arg(audience_changed)::boolean OR NOT EXISTS (SELECT 1 FROM event_responses r WHERE r.event_id = e.id))
 RETURNING id, title, description, event_type, starts_at, ends_at, response_deadline, capacity, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
 
@@ -65,7 +67,8 @@ SELECT e.id, e.title, e.event_type, e.starts_at, e.ends_at, e.response_deadline,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
-WHERE e.starts_at >= now()
+WHERE ((sqlc.arg(past)::boolean AND e.ends_at <= sqlc.arg(as_of))
+       OR (NOT sqlc.arg(past)::boolean AND e.ends_at > sqlc.arg(as_of)))
   AND (
       (
           NOT EXISTS (SELECT 1 FROM event_audiences a WHERE a.event_id = e.id)
@@ -86,8 +89,9 @@ WHERE e.starts_at >= now()
              AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
        )
   )
-ORDER BY e.starts_at, e.id
-LIMIT sqlc.arg(row_limit);
+ORDER BY CASE WHEN sqlc.arg(past)::boolean THEN e.starts_at END DESC,
+         CASE WHEN NOT sqlc.arg(past)::boolean THEN e.starts_at END ASC, e.id
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: ListEventsForToday :many
 SELECT e.id, e.title, e.starts_at, e.ends_at, e.status, e.cancellation_reason
@@ -213,7 +217,7 @@ ON CONFLICT (event_id, user_id) DO UPDATE SET
     checked_in_at = NULL, checked_in_by_id = NULL;
 
 -- name: GetEventDetailForMember :one
-SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason,
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, e.official_results_url,
        COALESCE(r.status::text, 'Pending') AS response_status
 FROM events e
 LEFT JOIN event_responses r ON r.event_id = e.id AND r.user_id = sqlc.arg(user_id)
@@ -238,12 +242,28 @@ WHERE e.id = sqlc.arg(event_id)
   );
 
 -- name: GetEventDetailForAdmin :one
-SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity,
+SELECT e.id, e.title, e.description, e.event_type, e.starts_at, e.ends_at, e.response_deadline, e.capacity, e.official_results_url,
        e.status, e.cancelled_at, e.cancelled_by_id, e.cancellation_reason, canceller.name AS cancelled_by_name,
        e.created_by_id, e.created_at, e.updated_at
 FROM events e
 LEFT JOIN users canceller ON canceller.id = e.cancelled_by_id
 WHERE e.id = sqlc.arg(id);
+
+-- name: GetEventResultsLink :one
+SELECT id, title, event_type, official_results_url, results_version
+FROM events WHERE id = sqlc.arg(id);
+
+-- name: UpdateEventResultsLink :execrows
+UPDATE events e
+SET official_results_url = sqlc.narg(official_results_url),
+    results_updated_by_id = sqlc.arg(actor_user_id), results_updated_at = clock_timestamp(),
+    results_version = results_version + 1
+WHERE e.id = sqlc.arg(id) AND e.event_type = 'COMPETITION'
+  AND e.results_version = sqlc.arg(expected_version)
+  AND EXISTS (SELECT 1 FROM users u JOIN user_platform_roles r ON r.user_id = u.id
+    JOIN platform_roles role ON role.id = r.role_id
+    WHERE u.id = sqlc.arg(actor_user_id) AND u.is_active AND NOT u.is_dependent
+      AND u.date_of_birth <= (CURRENT_DATE - interval '18 years')::date AND role.code = 'ADMIN');
 
 -- name: ListEventResponsesForAdmin :many
 SELECT r.event_id, r.user_id, u.name AS user_name, r.status::text AS status, r.responded_at, r.checked_in_at

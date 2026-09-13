@@ -1138,7 +1138,7 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 		vm       DashboardAgendaItemVM
 		startsAt time.Time
 	}
-	events, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 6})
+	events, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 6, AsOf: pgtype.Timestamptz{Time: h.now(), Valid: true}})
 	if err != nil {
 		return nil, err
 	}

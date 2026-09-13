@@ -1,0 +1,40 @@
+package pages
+
+import (
+    "strconv"
+    "github.com/cfcoimbra/mycfc/internal/validation"
+    "github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type EventResultsPage struct {
+    Meta components.PageMeta
+    ID, Title, URL, Version, Conflict string
+    CSRFField templ.Component
+    Errors validation.FieldErrors
+}
+
+templ EventResults(page EventResultsPage) {
+    @components.Base(page.Meta, eventResultsContent(page))
+}
+
+templ eventResultsContent(page EventResultsPage) {
+    @components.PageHeader("Coordenação · Eventos", "Gerir ligação de resultados", page.Title, []components.PageAction{{Label: "Voltar ao evento", Href: "/admin/eventos/" + page.ID, Variant: "quiet"}})
+    <section class="module" aria-labelledby="event-results-form-title">
+        <h2 id="event-results-form-title">Resultados oficiais</h2>
+        @components.StatusMessage(page.Conflict, "error")
+        if page.Conflict != "" {
+            <p><a href={ templ.SafeURL("/admin/eventos/" + page.ID + "/resultados") }>Carregar a ligação atual</a>. Guarde uma cópia da sua proposta antes de continuar.</p>
+        }
+        @components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "results_url", Field: "event-results-url"}, {Key: "state", Field: "event-results-url"}}))
+        <form class="form-layout" method="post" action={ templ.SafeURL("/admin/events/" + page.ID + "/results") }>
+            @page.CSRFField
+            <input type="hidden" name="expected_version" value={ page.Version }/>
+            @components.FieldLabel("event-results-url", "Ligação para os resultados oficiais (opcional)", false)
+            <input id="event-results-url" name="results_url" type="url" maxlength="2048" value={ page.URL } aria-invalid={ strconv.FormatBool(page.Errors["results_url"] != "") } aria-describedby="event-results-help results_url-error"/>
+            @components.FieldHelp("event-results-help", "Introduza uma ligação HTTPS de fpcanoagem.pt ou www.fpcanoagem.pt, sem parâmetros (?) nem fragmentos (#). Confirme que corresponde aos resultados desta competição. Deixe em branco para remover a ligação.")
+            @components.FieldErrorMessage("results_url", page.Errors["results_url"])
+            <p>A ligação abre o site da FPC. O MyCFCoimbra não verifica automaticamente a sua disponibilidade nem copia os resultados.</p>
+            @components.FormActions("/admin/eventos/" + page.ID) { <button type="submit">Guardar ligação</button> }
+        </form>
+    </section>
+}
