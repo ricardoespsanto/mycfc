@@ -26,6 +26,9 @@ sensitive_plan_role_value=$(hmac_for '{"planned_values":{"root_module":{"resourc
 sensitive_apply_role_value=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","sensitive_values":{"value":true},"values":{"value":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions"}}]}}}')
 nested_caller_shape_plan=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","sensitive_values":{"value":true},"values":{"value":{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"arn":"arn:aws:sts::123456789012:assumed-role/github-infra-plan/GitHubActions","user_id":"PLAN:GitHubActions"}}}}]}}}')
 nested_caller_shape_apply=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","sensitive_values":{"value":true},"values":{"value":{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"arn":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions","user_id":"APPLY:GitHubActions"}}}}]}}}')
+unordered_metadata_first=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_s3_bucket.second","values":{"id":"second"}},{"address":"aws_s3_bucket.first","values":{"id":"first"}}],"child_modules":[{"address":"module.second","resources":[]},{"address":"module.first","resources":[]}]}}},"relevant_attributes":[{"resource":"aws_s3_bucket.second","attribute":["id"]},{"resource":"aws_s3_bucket.first","attribute":["id"]}]}')
+unordered_metadata_second=$(hmac_for '{"prior_state":{"values":{"root_module":{"child_modules":[{"resources":[],"address":"module.first"},{"resources":[],"address":"module.second"}],"resources":[{"values":{"id":"first"},"address":"aws_s3_bucket.first"},{"values":{"id":"second"},"address":"aws_s3_bucket.second"}]}}},"relevant_attributes":[{"attribute":["id"],"resource":"aws_s3_bucket.first"},{"attribute":["id"],"resource":"aws_s3_bucket.second"}]}')
+changed_prior_state=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_s3_bucket.second","values":{"id":"changed"}},{"address":"aws_s3_bucket.first","values":{"id":"first"}}]}}},"relevant_attributes":[{"resource":"aws_s3_bucket.second","attribute":["id"]},{"resource":"aws_s3_bucket.first","attribute":["id"]}]}')
 
 test "$first" = "$same_semantics"
 test "$first" != "$different_secret"
@@ -37,6 +40,8 @@ test "$plan_role" != "$different_session"
 test "$plan_role" != "$unrelated_role"
 test "$sensitive_plan_role_value" != "$sensitive_apply_role_value"
 test "$nested_caller_shape_plan" != "$nested_caller_shape_apply"
+test "$unordered_metadata_first" = "$unordered_metadata_second"
+test "$unordered_metadata_first" != "$changed_prior_state"
 echo "$first" | grep -Eq '^[0-9a-f]{64}$'
 
 components=$(printf '%s\n' '{"timestamp":"ignored","variables":{"secret":{"value":"first"}},"planned_values":{}}' | python3 scripts/terraform-plan-hmac.py --components -)

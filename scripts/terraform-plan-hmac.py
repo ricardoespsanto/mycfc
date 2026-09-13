@@ -103,10 +103,14 @@ def normalize_module(module: object) -> None:
     if isinstance(resources, list):
         for resource in resources:
             normalize_caller_identity_record(resource)
+        # Resource instances are identified by address. Their emitted JSON
+        # order can vary between otherwise-equivalent refreshes.
+        resources.sort(key=canonical_json)
     child_modules = module.get("child_modules")
     if isinstance(child_modules, list):
         for child_module in child_modules:
             normalize_module(child_module)
+        child_modules.sort(key=canonical_json)
 
 
 def normalize_expected_identity_variation(plan: dict[str, object]) -> dict[str, object]:
@@ -132,6 +136,12 @@ def normalize_expected_identity_variation(plan: dict[str, object]) -> dict[str, 
         for deferred in deferred_changes:
             if isinstance(deferred, dict):
                 normalize_caller_identity_record(deferred.get("resource_change"))
+
+    # Terraform documents these as value sources, without assigning semantic
+    # meaning to their emitted array order.
+    relevant_attributes = plan.get("relevant_attributes")
+    if isinstance(relevant_attributes, list):
+        relevant_attributes.sort(key=canonical_json)
     return plan
 
 
