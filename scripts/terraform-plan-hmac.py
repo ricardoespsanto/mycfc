@@ -149,6 +149,51 @@ def keyed_digest(key: bytes, value: object) -> str:
     return hmac.new(key, canonical_json(value).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def add_prior_state_components(
+    components: dict[str, str], key: bytes, prior_state: object
+) -> None:
+    """Add value-safe diagnostics for the exact prior-state object that differs."""
+    if not isinstance(prior_state, dict):
+        return
+
+    def add(label: str, value: object) -> None:
+        components[label] = keyed_digest(
+            key, {"component": label, "value": value}
+        )
+
+    for name, value in prior_state.items():
+        if name != "values":
+            add(f"prior_state.{name}", value)
+    values = prior_state.get("values")
+    if not isinstance(values, dict):
+        return
+    outputs = values.get("outputs")
+    if isinstance(outputs, dict):
+        for name, value in outputs.items():
+            add(f"prior_state.output[{name}]", value)
+
+    def visit_module(module: object, fallback: str) -> None:
+        if not isinstance(module, dict):
+            return
+        module_address = module.get("address")
+        prefix = module_address if isinstance(module_address, str) else fallback
+        for name, value in module.items():
+            if name not in ("resources", "child_modules"):
+                add(f"prior_state.module[{prefix}].{name}", value)
+        resources = module.get("resources")
+        if isinstance(resources, list):
+            for index, resource in enumerate(resources):
+                address = resource.get("address") if isinstance(resource, dict) else None
+                identity = address if isinstance(address, str) else str(index)
+                add(f"prior_state.resource[{identity}]", resource)
+        child_modules = module.get("child_modules")
+        if isinstance(child_modules, list):
+            for index, child_module in enumerate(child_modules):
+                visit_module(child_module, f"{prefix}.child[{index}]")
+
+    visit_module(values.get("root_module"), "root")
+
+
 def main() -> int:
     components = len(sys.argv) == 3 and sys.argv[1] == "--components"
     if len(sys.argv) != 2 and not components:
@@ -185,13 +230,15 @@ def main() -> int:
     plan = normalize_expected_identity_variation(plan)
     key = bytes.fromhex(key_text)
     if components:
-        print(json.dumps({
+        component_digests = {
             name: keyed_digest(
                 key,
                 {"backend": backend, "component": name, "value": plan[name]},
             )
             for name in sorted(plan)
-        }, sort_keys=True, separators=(",", ":")))
+        }
+        add_prior_state_components(component_digests, key, plan.get("prior_state"))
+        print(json.dumps(component_digests, sort_keys=True, separators=(",", ":")))
         return 0
     print(keyed_digest(key, {"backend": backend, "plan": plan}))
     return 0
