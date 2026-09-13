@@ -32,6 +32,7 @@ jobs:
     outputs:
       review_sha: ${{ steps.plan.outputs.review_sha }}
       semantic_hmac: ${{ steps.plan.outputs.semantic_hmac }}
+      semantic_components: ${{ steps.plan.outputs.semantic_components }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_INFRA_PLAN_ROLE_ARN: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
@@ -113,6 +114,8 @@ jobs:
           review_sha=$(sha256sum infra/environments/production/production.tfplan.review.txt | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py \
             infra/environments/production/production.tfplan.json)
+          semantic_components=$(python3 scripts/terraform-plan-hmac.py --components \
+            infra/environments/production/production.tfplan.json)
           change_count=$(jq '[.resource_changes[]? | select(.change.actions != ["no-op"])] | length' \
             infra/environments/production/production.tfplan.json)
           main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
@@ -120,6 +123,7 @@ jobs:
           {
             echo "review_sha=$review_sha"
             echo "semantic_hmac=$semantic_hmac"
+            echo "semantic_components=$semantic_components"
             echo "change_count=$change_count"
           } >> "$GITHUB_OUTPUT"
           {
@@ -183,6 +187,7 @@ jobs:
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
           EXPECTED_REVIEW_SHA: ${{ needs.plan.outputs.review_sha }}
           EXPECTED_SEMANTIC_HMAC: ${{ needs.plan.outputs.semantic_hmac }}
+          EXPECTED_SEMANTIC_COMPONENTS: ${{ needs.plan.outputs.semantic_components }}
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.sha }}
         run: |
@@ -192,6 +197,8 @@ jobs:
           [[ "$TF_PLAN_HMAC_KEY" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_REVIEW_SHA" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_SEMANTIC_HMAC" =~ ^[0-9a-f]{64}$ ]]
+          jq -e 'type == "object" and length > 0 and all(.[]; test("^[0-9a-f]{64}$"))' \
+            <<< "$EXPECTED_SEMANTIC_COMPONENTS" >/dev/null
           mkdir -p .cache/terraform/plugin-cache
           umask 077
           printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
@@ -219,8 +226,20 @@ jobs:
           review_sha=$(sha256sum infra/environments/production/production.tfplan.review.txt | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py \
             infra/environments/production/production.tfplan.json)
-          test "$review_sha" = "$EXPECTED_REVIEW_SHA"
-          test "$semantic_hmac" = "$EXPECTED_SEMANTIC_HMAC"
+          semantic_components=$(python3 scripts/terraform-plan-hmac.py --components \
+            infra/environments/production/production.tfplan.json)
+          if test "$review_sha" != "$EXPECTED_REVIEW_SHA"; then
+            echo '::error::The recreated redacted plan does not match the human-reviewed plan.'
+            exit 1
+          fi
+          if test "$semantic_hmac" != "$EXPECTED_SEMANTIC_HMAC"; then
+            differing_components=$(jq -nr \
+              --argjson expected "$EXPECTED_SEMANTIC_COMPONENTS" \
+              --argjson actual "$semantic_components" \
+              '((($expected | keys) + ($actual | keys)) | unique | map(select($expected[.] != $actual[.]))) | join(", ")')
+            echo "::error::The recreated plan differs in protected semantic content after expected plan/apply role normalization. Differing top-level components: $differing_components"
+            exit 1
+          fi
           change_count=$(jq '[.resource_changes[]? | select(.change.actions != ["no-op"])] | length' \
             infra/environments/production/production.tfplan.json)
           main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')

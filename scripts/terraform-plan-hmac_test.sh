@@ -16,16 +16,36 @@ same_semantics=$(hmac_for '{"variables":{"secret":{"value":"first"}},"timestamp"
 different_secret=$(hmac_for '{"format_version":"1.2","timestamp":"2026-09-12T10:00:00Z","variables":{"secret":{"value":"second"}}}')
 precise_number=$(hmac_for '{"format_version":"1.2","planned_values":{"outputs":{"value":{"value":0.123456789012345671}}}}')
 different_precise_number=$(hmac_for '{"format_version":"1.2","planned_values":{"outputs":{"value":{"value":0.123456789012345672}}}}')
-plan_role=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","values":{"account_id":"123456789012","id":"123456789012","arn":"arn:aws:sts::123456789012:assumed-role/github-infra-plan/GitHubActions","user_id":"PLAN:GitHubActions"}}]}}}')
-apply_role=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","values":{"user_id":"APPLY:GitHubActions","arn":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions","id":"123456789012","account_id":"123456789012"}}]}}}')
-different_account=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","values":{"account_id":"999999999999","id":"999999999999","arn":"arn:aws:sts::999999999999:assumed-role/github-infra-apply/GitHubActions","user_id":"APPLY:GitHubActions"}}]}}}')
+plan_role=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"account_id":"123456789012","id":"123456789012","arn":"arn:aws:sts::123456789012:assumed-role/github-infra-plan/GitHubActions","user_id":"PLAN:GitHubActions"}}]}}}')
+apply_role=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"user_id":"APPLY:GitHubActions","arn":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions","id":"123456789012","account_id":"123456789012"}}]}}}')
+different_account=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"account_id":"999999999999","id":"999999999999","arn":"arn:aws:sts::999999999999:assumed-role/github-infra-apply/GitHubActions","user_id":"APPLY:GitHubActions"}}]}}}')
+different_partition=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"account_id":"123456789012","id":"123456789012","arn":"arn:aws-us-gov:sts::123456789012:assumed-role/github-infra-apply/GitHubActions","user_id":"APPLY:GitHubActions"}}]}}}')
+different_session=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"account_id":"123456789012","id":"123456789012","arn":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/OtherSession","user_id":"APPLY:OtherSession"}}]}}}')
+unrelated_role=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"account_id":"123456789012","id":"123456789012","arn":"arn:aws:sts::123456789012:assumed-role/unrelated/GitHubActions","user_id":"OTHER:GitHubActions"}}]}}}')
+sensitive_plan_role_value=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","sensitive_values":{"value":true},"values":{"value":"arn:aws:sts::123456789012:assumed-role/github-infra-plan/GitHubActions"}}]}}}')
+sensitive_apply_role_value=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","sensitive_values":{"value":true},"values":{"value":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions"}}]}}}')
+nested_caller_shape_plan=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","sensitive_values":{"value":true},"values":{"value":{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"arn":"arn:aws:sts::123456789012:assumed-role/github-infra-plan/GitHubActions","user_id":"PLAN:GitHubActions"}}}}]}}}')
+nested_caller_shape_apply=$(hmac_for '{"planned_values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","sensitive_values":{"value":true},"values":{"value":{"address":"data.aws_caller_identity.current","mode":"data","type":"aws_caller_identity","name":"current","values":{"arn":"arn:aws:sts::123456789012:assumed-role/github-infra-apply/GitHubActions","user_id":"APPLY:GitHubActions"}}}}]}}}')
 
 test "$first" = "$same_semantics"
 test "$first" != "$different_secret"
 test "$precise_number" != "$different_precise_number"
 test "$plan_role" = "$apply_role"
 test "$plan_role" != "$different_account"
+test "$plan_role" != "$different_partition"
+test "$plan_role" != "$different_session"
+test "$plan_role" != "$unrelated_role"
+test "$sensitive_plan_role_value" != "$sensitive_apply_role_value"
+test "$nested_caller_shape_plan" != "$nested_caller_shape_apply"
 echo "$first" | grep -Eq '^[0-9a-f]{64}$'
+
+components=$(printf '%s\n' '{"timestamp":"ignored","variables":{"secret":{"value":"first"}},"planned_values":{}}' | python3 scripts/terraform-plan-hmac.py --components -)
+echo "$components" | jq -e 'keys == ["planned_values", "variables"] and all(.[]; test("^[0-9a-f]{64}$"))' >/dev/null
+component_file=$(mktemp)
+trap 'rm -f "$component_file"' EXIT
+printf '%s\n' '{"timestamp":"ignored","variables":{"secret":{"value":"first"}},"planned_values":{}}' > "$component_file"
+file_components=$(python3 scripts/terraform-plan-hmac.py --components "$component_file")
+test "$components" = "$file_components"
 
 TF_BACKEND_BUCKET=wrong-state
 export TF_BACKEND_BUCKET
