@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 CALLER_IDENTITY_ADDRESS = "data.aws_caller_identity.current"
+CLOUDFLARE_ZONES_ADDRESS = "data.cloudflare_zones.application"
 GITHUB_INFRA_ROLE_ARN = re.compile(
     r"^arn:(aws[a-zA-Z-]*):sts::([0-9]{12}):assumed-role/"
     r"github-infra-(?:plan|apply)/([^/]+)$"
@@ -96,6 +97,36 @@ def normalize_caller_identity_record(record: object) -> None:
                 )
 
 
+def normalize_cloudflare_zones_record(record: object) -> None:
+    """Remove token-scoped legacy permissions from the exact zone lookup."""
+    if not isinstance(record, dict) or not (
+        record.get("address") == CLOUDFLARE_ZONES_ADDRESS
+        and record.get("mode") == "data"
+        and record.get("type") == "cloudflare_zones"
+        and record.get("name") == "application"
+    ):
+        return
+
+    candidates = []
+    values = record.get("values")
+    if isinstance(values, dict):
+        candidates.append(values)
+    change = record.get("change")
+    if isinstance(change, dict):
+        for phase in ("before", "after"):
+            phase_values = change.get(phase)
+            if isinstance(phase_values, dict):
+                candidates.append(phase_values)
+    for zone_lookup in candidates:
+        result = zone_lookup.get("result")
+        if isinstance(result, list):
+            for zone in result:
+                if isinstance(zone, dict):
+                    # Cloudflare documents this deprecated field as legacy
+                    # permissions derived from the authenticating principal.
+                    zone.pop("permissions", None)
+
+
 def normalize_module(module: object) -> None:
     if not isinstance(module, dict):
         return
@@ -103,6 +134,7 @@ def normalize_module(module: object) -> None:
     if isinstance(resources, list):
         for resource in resources:
             normalize_caller_identity_record(resource)
+            normalize_cloudflare_zones_record(resource)
         # Resource instances are identified by address. Their emitted JSON
         # order can vary between otherwise-equivalent refreshes.
         resources.sort(key=canonical_json)
@@ -130,12 +162,14 @@ def normalize_expected_identity_variation(plan: dict[str, object]) -> dict[str, 
         if isinstance(collection, list):
             for resource in collection:
                 normalize_caller_identity_record(resource)
+                normalize_cloudflare_zones_record(resource)
 
     deferred_changes = plan.get("deferred_changes")
     if isinstance(deferred_changes, list):
         for deferred in deferred_changes:
             if isinstance(deferred, dict):
                 normalize_caller_identity_record(deferred.get("resource_change"))
+                normalize_cloudflare_zones_record(deferred.get("resource_change"))
 
     # Terraform documents these as value sources, without assigning semantic
     # meaning to their emitted array order.

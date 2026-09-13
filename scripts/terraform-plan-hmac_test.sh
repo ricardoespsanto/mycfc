@@ -29,6 +29,11 @@ nested_caller_shape_apply=$(hmac_for '{"planned_values":{"root_module":{"resourc
 unordered_metadata_first=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_s3_bucket.second","values":{"id":"second"}},{"address":"aws_s3_bucket.first","values":{"id":"first"}}],"child_modules":[{"address":"module.second","resources":[]},{"address":"module.first","resources":[]}]}}},"relevant_attributes":[{"resource":"aws_s3_bucket.second","attribute":["id"]},{"resource":"aws_s3_bucket.first","attribute":["id"]}]}')
 unordered_metadata_second=$(hmac_for '{"prior_state":{"values":{"root_module":{"child_modules":[{"resources":[],"address":"module.first"},{"resources":[],"address":"module.second"}],"resources":[{"values":{"id":"first"},"address":"aws_s3_bucket.first"},{"values":{"id":"second"},"address":"aws_s3_bucket.second"}]}}},"relevant_attributes":[{"attribute":["id"],"resource":"aws_s3_bucket.first"},{"attribute":["id"],"resource":"aws_s3_bucket.second"}]}')
 changed_prior_state=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_s3_bucket.second","values":{"id":"changed"}},{"address":"aws_s3_bucket.first","values":{"id":"first"}}]}}},"relevant_attributes":[{"resource":"aws_s3_bucket.second","attribute":["id"]},{"resource":"aws_s3_bucket.first","attribute":["id"]}]}')
+cloudflare_plan_permissions=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"data.cloudflare_zones.application","mode":"data","type":"cloudflare_zones","name":"application","values":{"result":[{"id":"zone-id","name":"example.org","permissions":["#zone:read"]}]}}]}}}}')
+cloudflare_apply_permissions=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"data.cloudflare_zones.application","mode":"data","type":"cloudflare_zones","name":"application","values":{"result":[{"permissions":["#dns_records:edit","#zone:read"],"name":"example.org","id":"zone-id"}]}}]}}}}')
+cloudflare_different_zone=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"data.cloudflare_zones.application","mode":"data","type":"cloudflare_zones","name":"application","values":{"result":[{"id":"different-zone-id","name":"example.org","permissions":["#zone:read"]}]}}]}}}}')
+cloudflare_nested_permissions=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","values":{"value":{"address":"data.cloudflare_zones.application","mode":"data","type":"cloudflare_zones","name":"application","values":{"result":[{"permissions":["#zone:read"]}]}}}}]}}}}')
+cloudflare_nested_permissions_changed=$(hmac_for '{"prior_state":{"values":{"root_module":{"resources":[{"address":"aws_ssm_parameter.secret","mode":"managed","type":"aws_ssm_parameter","name":"secret","values":{"value":{"address":"data.cloudflare_zones.application","mode":"data","type":"cloudflare_zones","name":"application","values":{"result":[{"permissions":["#dns_records:edit"]}]}}}}]}}}}')
 
 test "$first" = "$same_semantics"
 test "$first" != "$different_secret"
@@ -42,6 +47,9 @@ test "$sensitive_plan_role_value" != "$sensitive_apply_role_value"
 test "$nested_caller_shape_plan" != "$nested_caller_shape_apply"
 test "$unordered_metadata_first" = "$unordered_metadata_second"
 test "$unordered_metadata_first" != "$changed_prior_state"
+test "$cloudflare_plan_permissions" = "$cloudflare_apply_permissions"
+test "$cloudflare_plan_permissions" != "$cloudflare_different_zone"
+test "$cloudflare_nested_permissions" != "$cloudflare_nested_permissions_changed"
 echo "$first" | grep -Eq '^[0-9a-f]{64}$'
 
 components=$(printf '%s\n' '{"timestamp":"ignored","variables":{"secret":{"value":"first"}},"planned_values":{}}' | python3 scripts/terraform-plan-hmac.py --components -)
