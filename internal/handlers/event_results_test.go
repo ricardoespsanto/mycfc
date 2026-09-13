@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestEventResultsURLValidation(t *testing.T) {
@@ -32,20 +34,21 @@ func TestEventResultsURLValidation(t *testing.T) {
 
 type eventResultsStore struct {
 	dbgen.Querier
-	event         dbgen.GetEventResultsLinkRow
-	reads, writes int
-	count         int64
-	saved         dbgen.UpdateEventResultsLinkParams
+	event             dbgen.GetEventResultsLinkRow
+	reads, writes     int
+	readErr, writeErr error
+	count             int64
+	saved             dbgen.UpdateEventResultsLinkParams
 }
 
 func (s *eventResultsStore) GetEventResultsLink(context.Context, uuid.UUID) (dbgen.GetEventResultsLinkRow, error) {
 	s.reads++
-	return s.event, nil
+	return s.event, s.readErr
 }
 func (s *eventResultsStore) UpdateEventResultsLink(_ context.Context, p dbgen.UpdateEventResultsLinkParams) (int64, error) {
 	s.writes++
 	s.saved = p
-	return s.count, nil
+	return s.count, s.writeErr
 }
 
 func TestEventResultsActionAuthorizationValidationAndConflict(t *testing.T) {
@@ -87,6 +90,54 @@ func TestEventResultsActionAuthorizationValidationAndConflict(t *testing.T) {
 			}
 			if tc.name == "remove" && store.saved.OfficialResultsUrl != nil {
 				t.Fatal("removal did not clear URL")
+			}
+		})
+	}
+}
+
+func TestEventResultsUnavailableResourcesAndStoreFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, body string
+		invalidID          bool
+		readErr, writeErr  error
+		want, writes       int
+	}{
+		{name: "display current", method: http.MethodGet, want: 200},
+		{name: "invalid identity", method: http.MethodGet, invalidID: true, want: 404},
+		{name: "deleted competition", method: http.MethodGet, readErr: pgx.ErrNoRows, want: 404},
+		{name: "read failure", method: http.MethodGet, readErr: errors.New("private-store-error"), want: 500},
+		{name: "write failure", method: http.MethodPost, body: "expected_version=0&results_url=https%3A%2F%2Ffpcanoagem.pt%2Fa", writeErr: errors.New("private-store-error"), want: 500, writes: 1},
+		{name: "malformed submission", method: http.MethodPost, body: "results_url=%zz", want: 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := uuid.New()
+			link := "https://fpcanoagem.pt/resultados/final.pdf"
+			store := &eventResultsStore{event: dbgen.GetEventResultsLinkRow{ID: id, Title: "Competition", EventType: "COMPETITION", OfficialResultsUrl: &link}, readErr: tc.readErr, writeErr: tc.writeErr}
+			r := httptest.NewRequest(tc.method, "/admin/events/"+id.String()+"/results", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("id", id.String())
+			if tc.invalidID {
+				r.SetPathValue("id", "invalid")
+			}
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New(), IsAdmin: true}))
+			w := httptest.NewRecorder()
+			h := Events{Store: store}
+			if tc.method == http.MethodGet {
+				h.ResultsLink(w, r)
+			} else {
+				h.UpdateResultsLink(w, r)
+			}
+			if w.Code != tc.want || store.writes != tc.writes {
+				t.Fatalf("status=%d writes=%d", w.Code, store.writes)
+			}
+			if strings.Contains(w.Body.String(), "private-store-error") {
+				t.Fatal("private storage failure exposed")
+			}
+			if tc.invalidID && store.reads != 0 {
+				t.Fatal("invalid identifier reached storage")
+			}
+			if tc.name == "display current" && !strings.Contains(w.Body.String(), link) {
+				t.Fatal("current link missing from edit form")
 			}
 		})
 	}
