@@ -23,7 +23,7 @@ if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -
 fi
 printf '%s|%s\n' "${AWS_PROFILE:-}" "${AWS_SHARED_CREDENTIALS_FILE:-}" >>"$TEST_AWS_LOG"
 case "$*" in
-	*imageDetails*imageTags*) printf 'release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+	*imageDetails*imageTags*) printf 'release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 	*imageDigest*) printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 	*) printf 'unexpected aws invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
@@ -75,13 +75,13 @@ chmod 0600 "$case_dir/mycfc.env"
 : >"$case_dir/release-aws/credentials"
 chmod 0600 "$case_dir/release-aws/credentials"
 cat >"$case_dir/state/release-publication.json" <<'EOF'
-{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"2026-08-11T09:00:00Z","release_tag":"release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":{"migration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ordered_migrations":["001_initial.sql"]},"version":"v1.25.0"}
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"2026-08-11T09:00:00Z","release_tag":"release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":{"migration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ordered_migrations":["001_initial.sql"]},"version":"v1.25.0"}
 EOF
 manifest_sha=$(sha256sum "$case_dir/state/release-publication.json" | awk '{print $1}')
-jq -cn --arg manifest "$manifest_sha" '{actual_gates:{guardian_intake:false,privacy_worker:true},contract:"mycfc/deployment-receipt/v1",failure_phase:null,finished_at:"2026-08-11T09:01:05Z",git_sha:("b"*40),image:{digest:("sha256:"+("b"*64)),repository:"registry.example/mycfc"},privacy_worker_activation_required:false,publication_manifest_sha256:$manifest,release_tag:("release-20260811090000-"+("b"*40)),result:"succeeded",rollback_performed:false,schema_migration_digest:("c"*64),slot:"blue",started_at:"2026-08-11T09:00:30Z",traffic_switched:true,version:"v1.25.0"}' >"$case_dir/state/deployment-receipt.json"
+jq -cn --arg manifest "$manifest_sha" '{actual_gates:{guardian_intake:false,privacy_worker:true},contract:"mycfc/deployment-receipt/v1",failure_phase:null,finished_at:"2026-08-11T09:01:05Z",git_sha:("b"*40),image:{digest:("sha256:"+("b"*64)),repository:"registry.example/mycfc"},privacy_worker_activation_required:false,publication_manifest_sha256:$manifest,release_tag:("release-v1.25.0-20260811090000-"+("b"*40)),result:"succeeded",rollback_performed:false,schema_migration_digest:("c"*64),slot:"blue",started_at:"2026-08-11T09:00:30Z",traffic_switched:true,version:"v1.25.0"}' >"$case_dir/state/deployment-receipt.json"
 printf 'blue\n' >"$case_dir/state/active-slot"
 printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-digest"
-printf 'release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
+printf 'release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
 printf '2026-08-11T09:00:30Z\n' >"$case_dir/state/release-agent-started-at"
 printf '2026-08-11T09:00:35Z\n' >"$case_dir/state/release-detected-at"
 printf '2026-08-11T09:00:40Z\n' >"$case_dir/state/release-image-pulled-at"
@@ -141,10 +141,10 @@ mv "$case_dir/state/deployment-receipt.saved.json" "$case_dir/state/deployment-r
 pending_output=$(TEST_NOW_EPOCH=1100 run_status)
 printf '%s\n' "$pending_output" | grep -q '^state=pending$'
 
-printf 'release-20260810090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
+printf 'release-v1.25.0-20260810090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
 delayed_output=$(TEST_NOW_EPOCH=1100 run_status)
 printf '%s\n' "$delayed_output" | grep -q '^state=delayed$'
-printf 'release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
+printf 'release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
 
 printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/failed-release-digest"
 quarantined_output=$(TEST_NOW_EPOCH=1400 run_status)
@@ -160,7 +160,7 @@ printf '%s\n' "$checking_failure_output" | grep -q '^state=failed$'
 
 printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tfailed\t2026-08-10T09:00:35Z\n' >"$case_dir/state/last-attempt"
 printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >"$case_dir/state/release-timeline-digest"
-printf 'release-20260810090000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >"$case_dir/state/release-timeline-tag"
+printf 'release-v1.25.0-20260810090000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >"$case_dir/state/release-timeline-tag"
 stale_failure_output=$(TEST_AGENT_RESULT=failed TEST_AGENT_EXIT_STATUS=1 TEST_NOW_EPOCH=1100 run_status)
 printf '%s\n' "$stale_failure_output" | grep -q '^state=delayed$'
 printf '%s\n' "$stale_failure_output" | grep -q '^agent_started_at=unknown$'
@@ -173,7 +173,7 @@ printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\
 printf 'failed\n' >"$case_dir/state/last-attempt-result"
 printf '2026-08-10T09:00:35Z\n' >"$case_dir/state/last-attempt-at"
 printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-digest"
-printf 'release-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
+printf 'release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
 rollover_output=$(TEST_AGENT_RESULT=success TEST_AGENT_EXIT_STATUS=0 TEST_NOW_EPOCH=1100 run_status)
 printf '%s\n' "$rollover_output" | grep -q '^state=pending$'
 printf '%s\n' "$rollover_output" | grep -q '^last_attempt_result=checking$'

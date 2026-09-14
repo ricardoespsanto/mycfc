@@ -42,7 +42,7 @@ fi
 printf '%s|%s\n' "${AWS_PROFILE:-}" "${AWS_SHARED_CREDENTIALS_FILE:-}" >>"$TEST_AWS_LOG"
 case "$*" in
 	*get-login-password*) printf 'password\n' ;;
-	*imageDetails*imageTags*) printf '%s\n' "${TEST_RELEASE_TAG:-release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}" ;;
+	*imageDetails*imageTags*) printf '%s\n' "${TEST_RELEASE_TAG:-release-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}" ;;
 	*imageDigest*) printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 	*) printf 'unexpected aws invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
@@ -56,8 +56,8 @@ case "$1" in
 	create) printf 'manifest-container\n' ;;
 	cp)
 		destination=$3
-		manifest_release_tag=${TEST_MANIFEST_RELEASE_TAG:-release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}
-		case "$manifest_release_tag" in release-20260810190000-*) manifest_published_at=2026-08-10T19:00:00Z ;; *) manifest_published_at=2026-08-10T18:37:43Z ;; esac
+		manifest_release_tag=${TEST_MANIFEST_RELEASE_TAG:-release-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}
+		case "$manifest_release_tag" in release-v1.25.0-20260810190000-*) manifest_published_at=2026-08-10T19:00:00Z ;; *) manifest_published_at=2026-08-10T18:37:43Z ;; esac
 		cat >"$destination" <<JSON
 {"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884","ordered_migrations":["001_initial","reset-baseline-v1"]},"version":"v1.25.0"}
 JSON
@@ -287,9 +287,9 @@ fi
 
 purge_tag_case="$work_dir/purge-tag-filter"
 setup_case "$purge_tag_case"
-mixed_tags=$(printf 'purge-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\trelease-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4')
+mixed_tags=$(printf 'purge-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\trelease-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4')
 run_release "$purge_tag_case" TEST_RELEASE_TAG="$mixed_tags"
-grep -q 'pull registry.example/mycfc:release-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4' "$purge_tag_case/docker.log"
+grep -q 'pull registry.example/mycfc:release-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4' "$purge_tag_case/docker.log"
 if grep -q 'pull .*:purge-' "$purge_tag_case/docker.log"; then
 	printf '%s\n' 'production release agent selected a purge-only image' >&2
 	exit 1
@@ -502,7 +502,7 @@ fi
 
 # A new release tag for the same digest is a distinct publication timeline.
 old_timeline_tag=$(cat "$failure_case/state/release-timeline-tag")
-run_release "$failure_case" TEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4 TEST_MANIFEST_RELEASE_TAG=release-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4
+run_release "$failure_case" TEST_RELEASE_TAG=release-v1.25.0-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4 TEST_MANIFEST_RELEASE_TAG=release-v1.25.0-20260810190000-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4
 test "$(cat "$failure_case/state/release-timeline-tag")" != "$old_timeline_tag"
 test "$(cat "$failure_case/state/release-published-at")" = '2026-08-10T19:00:00Z'
 test -s "$failure_case/state/release-agent-started-at"

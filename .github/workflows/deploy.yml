@@ -83,7 +83,7 @@ jobs:
           published_at=$(date -u -d "$tagged_at" +%Y-%m-%dT%H:%M:%SZ)
           {
             echo "ci_run_id=$ci_run"
-            echo "release_tag=release-$release_stamp-$SHA"
+            echo "release_tag=release-$VERSION-$release_stamp-$SHA"
             echo "published_at=$published_at"
             echo "tree_sha=$(git rev-parse "$SHA^{tree}")"
           } >> "$GITHUB_OUTPUT"
@@ -120,6 +120,7 @@ jobs:
           ECR_REPOSITORY: ${{ steps.ecr-login.outputs.registry }}/mycfc-production
           ECR_REPOSITORY_NAME: mycfc-production
           GIT_SHA: ${{ inputs.sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: sh deployment/publish-release-image.sh prepare
       # docker/setup-buildx-action v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
@@ -170,7 +171,9 @@ jobs:
           GIT_TREE_SHA: ${{ steps.release.outputs.tree_sha }}
           IMAGE_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
+          RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_PUBLICATION_MANIFEST: release-publication.json
           SCHEMA_MIGRATION_DIGEST: ${{ steps.schema.outputs.digest }}
           MIGRATION_INVENTORY_JSON: ${{ steps.schema.outputs.migrations }}
           EXPECTED_GATES_JSON: ${{ steps.schema.outputs.gates }}
