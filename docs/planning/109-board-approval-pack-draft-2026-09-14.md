@@ -33,9 +33,9 @@ A Direção é responsável pela aplicação e revisão anual deste conjunto. Um
 7. A primeira versão permite um responsável por menor. Transferências, conflitos familiares e vários responsáveis são resolvidos presencialmente pela Direção antes de alteração na plataforma.
 8. Aos 18 anos, o acesso do responsável termina; o jovem mantém a mesma conta e histórico permitido, confirma email pessoal e recebe apoio administrativo quando necessário.
 
-## Deliberação 3 — registo de exceções
+## Decisão 3 — registo de exceções
 
-A Direção aprova o [registo de exceções pré-preenchido](109-exception-register-draft-2026-09-14.md). Cada linha marcada **ATIVA** exige os campos completos antes de qualquer funcionalidade depender dela. Linhas **EXCLUÍDA** não podem ser usadas na plataforma sem nova deliberação.
+O responsável pelo produto confirma o [registo de exceções](109-exception-register-draft-2026-09-14.md). Cada linha marcada **ATIVA** exige os campos completos antes de qualquer funcionalidade depender dela. Linhas **EXCLUÍDA** não podem ser usadas na plataforma sem nova decisão.
 
 ## Deliberação 4 — prestadores e prova restrita
 
@@ -57,4 +57,3 @@ Esta deliberação não ativa pedidos de privacidade, execução de apagamentos,
 - `docs/legal/registo-prestadores.md`
 - `docs/planning/109-adoption-evidence-2026-09-13.md`
 - `docs/planning/109-exception-register-draft-2026-09-14.md`
-
