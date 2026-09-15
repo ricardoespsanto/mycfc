@@ -22,7 +22,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/wneessen/go-mail v0.8.1
-	github.com/yuin/goldmark/v2 v2.0.1
+	github.com/yuin/goldmark/v2 v2.0.2
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.46.0
 	golang.org/x/term v0.46.0
