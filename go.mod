@@ -20,7 +20,7 @@ require (
 	github.com/aws/smithy-go v1.28.1
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/wneessen/go-mail v0.8.1
 	github.com/yuin/goldmark/v2 v2.0.1
 	golang.org/x/crypto v0.57.0
