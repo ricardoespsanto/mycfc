@@ -96,8 +96,8 @@ jobs:
       - name: Create the retained production plan
         if: inputs.operation != 'discover-inputs'
         env:
-          STACK_TF_VARS: ${{ secrets[inputs.stack == 'hetzner' && 'HETZNER_TF_VARS' || 'TF_VARS'] }}
-          STACK_PROVIDER_TOKEN: ${{ secrets[inputs.stack == 'hetzner' && 'HCLOUD_TOKEN' || 'CLOUDFLARE_API_TOKEN'] }}
+          STACK_TF_VARS: ${{ inputs.stack == 'hetzner' && secrets.HETZNER_TF_VARS || inputs.stack != 'hetzner' && secrets.TF_VARS || '' }}
+          STACK_PROVIDER_TOKEN: ${{ inputs.stack == 'hetzner' && secrets.HCLOUD_TOKEN || inputs.stack != 'hetzner' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.sha }}
         run: |

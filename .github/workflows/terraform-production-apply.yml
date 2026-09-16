@@ -87,8 +87,8 @@ jobs:
       - name: Create the plan for production approval
         id: plan
         env:
-          STACK_TF_VARS: ${{ secrets[inputs.stack == 'hetzner' && 'HETZNER_TF_VARS' || 'TF_VARS'] }}
-          STACK_PROVIDER_TOKEN: ${{ secrets[inputs.stack == 'hetzner' && 'HCLOUD_TOKEN' || 'CLOUDFLARE_API_TOKEN'] }}
+          STACK_TF_VARS: ${{ inputs.stack == 'hetzner' && secrets.HETZNER_TF_VARS || inputs.stack != 'hetzner' && secrets.TF_VARS || '' }}
+          STACK_PROVIDER_TOKEN: ${{ inputs.stack == 'hetzner' && secrets.HCLOUD_TOKEN || inputs.stack != 'hetzner' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.sha }}
@@ -179,8 +179,8 @@ jobs:
       - name: Recreate and apply the reviewed plan
         id: apply
         env:
-          STACK_TF_VARS: ${{ secrets[inputs.stack == 'hetzner' && 'HETZNER_TF_VARS' || 'TF_VARS'] }}
-          STACK_PROVIDER_TOKEN: ${{ secrets[inputs.stack == 'hetzner' && 'HCLOUD_TOKEN' || 'CLOUDFLARE_API_TOKEN'] }}
+          STACK_TF_VARS: ${{ inputs.stack == 'hetzner' && secrets.HETZNER_TF_VARS || inputs.stack != 'hetzner' && secrets.TF_VARS || '' }}
+          STACK_PROVIDER_TOKEN: ${{ inputs.stack == 'hetzner' && secrets.HCLOUD_TOKEN || inputs.stack != 'hetzner' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
           EXPECTED_REVIEW_SHA: ${{ needs.plan.outputs.review_sha }}
           EXPECTED_SEMANTIC_HMAC: ${{ needs.plan.outputs.semantic_hmac }}

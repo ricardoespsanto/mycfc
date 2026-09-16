@@ -57,13 +57,17 @@ for invalid in '' '../production' 'production/../../hetzner' 'PRODUCTION' 'hetzn
   fi
 done
 [[ ! -e injected ]]
-for missing in STACK_TF_VARS STACK_PROVIDER_TOKEN; do
-  (
-    export REQUESTED_STACK=hetzner STACK_TF_VARS=present STACK_PROVIDER_TOKEN=present
-    unset "$missing"
-    if terraform_stack_prepare 2>/dev/null; then exit 1; fi
-    [[ ! -e infra/environments/hetzner/ci.auto.tfvars ]]
-  )
+for stack in production hetzner; do
+  for missing in STACK_TF_VARS STACK_PROVIDER_TOKEN; do
+    for state in empty unset; do
+      (
+        export REQUESTED_STACK=$stack STACK_TF_VARS=present STACK_PROVIDER_TOKEN=present
+        if [[ "$state" == empty ]]; then printf -v "$missing" '%s' ''; else unset "$missing"; fi
+        if terraform_stack_prepare 2>/dev/null; then exit 1; fi
+        [[ ! -e "infra/environments/$stack/ci.auto.tfvars" ]]
+      )
+    done
+  done
 done
 # Unknown selection fails before writing either secret into a checkout.
 (
@@ -83,9 +87,47 @@ hetzner_hmac=$(printf '%s' '{}' | python3 "$repo/scripts/terraform-plan-hmac.py"
 # The source-controlled foundation posture must never enable later capabilities.
 python3 - "$repo" <<'PY'
 from pathlib import Path
+import ast
+import itertools
 import re
 import sys
 root = Path(sys.argv[1])
+# Evaluate the actual six workflow expressions over their full string truth
+# table. Only a constrained boolean/comparison grammar is accepted; dynamic
+# secret lookup and references outside the exact two allowed names are rejected.
+expected_names = {
+    'STACK_TF_VARS': ('HETZNER_TF_VARS', 'TF_VARS'),
+    'STACK_PROVIDER_TOKEN': ('HCLOUD_TOKEN', 'CLOUDFLARE_API_TOKEN'),
+}
+expression_count = 0
+for workflow in ['terraform-production-plan.yml', 'terraform-production-apply.yml']:
+    workflow_source = (root / '.github/workflows' / workflow).read_text()
+    expressions = re.findall(r"^\s+(STACK_TF_VARS|STACK_PROVIDER_TOKEN): \$\{\{ (.+) \}\}$", workflow_source, re.M)
+    assert len(expressions) == (2 if workflow.endswith('plan.yml') else 4)
+    for key, expression in expressions:
+        expression_count += 1
+        hetzner_name, production_name = expected_names[key]
+        assert set(re.findall(r'secrets\.(\w+)', expression)) == {hetzner_name, production_name}
+        assert 'secrets[' not in expression
+        python_expression = (expression.replace('inputs.stack', 'stack')
+                             .replace('secrets.' + hetzner_name, 'hetzner_secret')
+                             .replace('secrets.' + production_name, 'production_secret')
+                             .replace('&&', 'and').replace('||', 'or'))
+        tree = ast.parse(python_expression, mode='eval')
+        allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.Compare,
+                   ast.Eq, ast.NotEq, ast.Name, ast.Load, ast.Constant)
+        assert all(isinstance(node, allowed) for node in ast.walk(tree))
+        assert {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} <= {
+            'stack', 'hetzner_secret', 'production_secret'}
+        compiled = compile(tree, '<workflow-secret-selection>', 'eval')
+        for stack, hetzner_secret, production_secret in itertools.product(
+                ('hetzner', 'production', ''), ('', 'hetzner-only'), ('', 'production-only')):
+            result = eval(compiled, {'__builtins__': {}}, {
+                'stack': stack, 'hetzner_secret': hetzner_secret,
+                'production_secret': production_secret})
+            expected = hetzner_secret if stack == 'hetzner' else production_secret
+            assert result == expected, (workflow, key, stack, 'cross-stack secret fallback')
+assert expression_count == 6
 for stack, enabled in [('production', 'privacy_worker_infrastructure_enabled'),
                        ('hetzner', 'privacy_restore_infrastructure_enabled')]:
     text = (root / f'infra/environments/{stack}/privacy-infrastructure.tfvars').read_text()
