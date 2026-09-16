@@ -3450,6 +3450,17 @@ VALUES($1,$2,$3,1,1,clock_timestamp())`, attemptID, binding.JobID, leaseID); err
 		if err != nil {
 			t.Fatal(err)
 		}
+		var firstCategory, firstOperation string
+		if err = pool.QueryRow(ctx, `SELECT job.category_key,checkpoint.operation_code
+			FROM privacy_erasure_category_jobs job
+			JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+			WHERE job.execution_id=$1
+			ORDER BY job.plan_entry_position,checkpoint.operation_position LIMIT 1`, execution.ID).Scan(&firstCategory, &firstOperation); err != nil {
+			t.Fatal(err)
+		}
+		if firstCategory != "backup-tombstones" || firstOperation != "BACKUP_TOMBSTONE_REPLAY" {
+			t.Fatalf("first closure checkpoint=%s/%s", firstCategory, firstOperation)
+		}
 		var active bool
 		var indexedSessions, ownerRoles, activeTokens int
 		if err = pool.QueryRow(ctx, "SELECT is_active FROM users WHERE id=$1", owner).Scan(&active); err != nil {

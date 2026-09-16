@@ -327,10 +327,11 @@ func (p AdoptedPolicy) DecisionPlan(scope Scope, inputs map[string]CategoryDecis
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
-	// Prescriptions retain both membership and athlete identifiers. Delete them
-	// before membership history is pseudonymised so the latter never preserves
-	// a reverse identity path. Membership is last because its processing guard
-	// prevents new memberships or prescriptions once execution has started.
+	// Establish the restore intent before any destructive work. Prescriptions
+	// retain both membership and athlete identifiers, so delete them before
+	// membership history is pseudonymised. Membership remains last because its
+	// processing guard prevents new memberships or prescriptions once execution
+	// has started.
 	sort.SliceStable(plan.Entries, func(i, j int) bool {
 		return executionCategoryPriority(plan.Entries[i].Category) < executionCategoryPriority(plan.Entries[j].Category)
 	})
@@ -342,6 +343,8 @@ func (p AdoptedPolicy) DecisionPlan(scope Scope, inputs map[string]CategoryDecis
 
 func executionCategoryPriority(category string) int {
 	switch category {
+	case "backup-tombstones":
+		return -2
 	case "training-prescriptions":
 		return -1
 	case "membership-history":

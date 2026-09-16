@@ -82,14 +82,15 @@ func TestExecutionWorkGraphExactlyMirrorsImmutablePlan(t *testing.T) {
 	}
 }
 
-func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(t *testing.T) {
+func TestDecisionPlanOrdersRestoreIntentBeforeDestructiveWork(t *testing.T) {
 	policy := testPolicy()
 	created := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
 	_, plan, err := policy.DecisionPlan(
-		Scope{Kind: Categories, Categories: []Category{"membership-history", "training-prescriptions"}},
+		Scope{Kind: Categories, Categories: []Category{"membership-history", "training-prescriptions", "backup-tombstones"}},
 		map[string]CategoryDecision{
 			"membership-history":     {Outcome: "APPROVE"},
 			"training-prescriptions": {Outcome: "APPROVE"},
+			"backup-tombstones":      {Outcome: "APPROVE"},
 		},
 		"approve",
 		created,
@@ -97,8 +98,9 @@ func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Entries) != 2 || plan.Entries[0].Category != "training-prescriptions" || plan.Entries[1].Category != "membership-history" {
-		t.Fatalf("unsafe membership dependency order: %+v", plan.Entries)
+	if len(plan.Entries) != 3 || plan.Entries[0].Category != "backup-tombstones" ||
+		plan.Entries[1].Category != "training-prescriptions" || plan.Entries[2].Category != "membership-history" {
+		t.Fatalf("unsafe restore or membership dependency order: %+v", plan.Entries)
 	}
 	plan.RequestVersion = 2
 	plan.Entries[0], plan.Entries[1] = plan.Entries[1], plan.Entries[0]
@@ -114,7 +116,7 @@ func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(
 		CreatedAt: pgtype.Timestamptz{Time: created, Valid: true},
 	}
 	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
-		t.Fatalf("legacy unsafe dependency order accepted: %v", err)
+		t.Fatalf("plan with destructive work before restore intent accepted: %v", err)
 	}
 }
 

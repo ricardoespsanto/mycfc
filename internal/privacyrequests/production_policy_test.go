@@ -76,6 +76,10 @@ func TestProductionPolicyCompilesClosureAndRejectsUnverifiedRetention(t *testing
 	if err != nil || len(plan.Entries) != len(p.Categories) {
 		t.Fatalf("closure plan rejected: %v", err)
 	}
+	if len(plan.Entries) == 0 || plan.Entries[0].Category != "backup-tombstones" ||
+		len(plan.Entries[0].Operations) != 1 || plan.Entries[0].Operations[0] != "BACKUP_TOMBSTONE_REPLAY" {
+		t.Fatalf("closure plan does not establish restore intent before destructive work: %+v", plan.Entries)
+	}
 	decisions["identity-core"] = CategoryDecision{Category: "identity-core", Outcome: "RETAIN", Ground: "LEGAL_HOLD"}
 	if _, _, err = p.DecisionPlan(scope, decisions, "partial", at); err == nil {
 		t.Fatal("unverified legal hold accepted")
