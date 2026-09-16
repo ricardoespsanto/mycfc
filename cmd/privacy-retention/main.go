@@ -29,10 +29,20 @@ type config struct {
 }
 
 func main() {
-	if err := run(context.Background(), os.Getenv, os.Stdout); err != nil {
+	if err := runCommand(context.Background(), os.Args[1:], os.Getenv, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "privacy_retention_failed")
 		os.Exit(1)
 	}
+}
+
+func runCommand(ctx context.Context, args []string, getenv func(string) string, output io.Writer) error {
+	if len(args) == 0 {
+		return run(ctx, getenv, output)
+	}
+	if len(args) != 1 {
+		return errors.New("retention command rejected")
+	}
+	return runCredentialOperation(ctx, args[0], getenv, output)
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
