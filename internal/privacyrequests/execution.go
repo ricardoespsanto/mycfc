@@ -713,10 +713,13 @@ func recordAccessRevocation(ctx context.Context, q *dbgen.Queries, executionID u
 // ExecutionWorker is deliberately separate from Service so a process can use
 // the least-privilege worker database role without inheriting web mutations.
 type ExecutionWorker struct {
-	Pool          *pgxpool.Pool
-	WorkerRef     uuid.UUID
-	LeaseDuration time.Duration
-	MaxAttempts   int32
+	// AcceptanceProof selects only the DB-issued synthetic fixture bound to WorkerRef.
+	// An empty proof retains ordinary queue behavior.
+	AcceptanceProof []byte
+	Pool            *pgxpool.Pool
+	WorkerRef       uuid.UUID
+	LeaseDuration   time.Duration
+	MaxAttempts     int32
 }
 
 type ExecutionLease struct {
@@ -774,7 +777,7 @@ func (w ExecutionWorker) maxAttempts() int32 {
 }
 
 func (w ExecutionWorker) valid() bool {
-	return w.Pool != nil && w.WorkerRef != uuid.Nil && w.leaseDuration() >= time.Second && w.leaseDuration() <= time.Hour && w.maxAttempts() >= 1 && w.maxAttempts() <= 100
+	return (len(w.AcceptanceProof) == 0 || len(w.AcceptanceProof) == 32) && w.Pool != nil && w.WorkerRef != uuid.Nil && w.leaseDuration() >= time.Second && w.leaseDuration() <= time.Hour && w.maxAttempts() >= 1 && w.maxAttempts() <= 100
 }
 
 func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
@@ -789,7 +792,11 @@ func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
 	defer tx.Rollback(ctx)
 	q := dbgen.New(tx)
 	var jobID, leaseID, attemptID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_worker_claim($1,$2)`, w.leaseDuration().Milliseconds(), w.WorkerRef).Scan(&jobID, &leaseID, &attemptID)
+	if len(w.AcceptanceProof) > 0 {
+		err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_acceptance_claim($1,$2,$3)`, w.leaseDuration().Milliseconds(), w.WorkerRef, w.AcceptanceProof).Scan(&jobID, &leaseID, &attemptID)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_worker_claim($1,$2)`, w.leaseDuration().Milliseconds(), w.WorkerRef).Scan(&jobID, &leaseID, &attemptID)
+	}
 	if err != nil {
 		return zero, err
 	}

@@ -62,7 +62,7 @@ func TestEventResultsMigrationIsExactFinalBaselineSegment(t *testing.T) {
 	}
 	const marker = "-- Baseline through 202609130001_event_results_links."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+	if index < 0 || strings.TrimSpace(strings.Split(baselineSchema[index+len(marker):], "-- Baseline through 202609170001_privacy_synthetic_acceptance.")[0]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("event results migration is not the exact final baseline segment")
 	}
 }
@@ -1131,5 +1131,17 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	if !strings.Contains(string(cutoffMigration), "CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs") ||
 		!strings.Contains(baselineSchema, "CREATE FUNCTION guardian_authority_reconcile_cutoffs") {
 		t.Error("cutoff reconciliation function missing from migration or baseline")
+	}
+}
+
+func TestSyntheticAcceptanceMigrationIsFinalBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170001_privacy_synthetic_acceptance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170001_privacy_synthetic_acceptance."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("synthetic acceptance migration differs from baseline")
 	}
 }

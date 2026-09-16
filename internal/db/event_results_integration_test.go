@@ -226,6 +226,7 @@ func TestEventResultsMigrationFromPredecessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
+	rewindSyntheticAcceptanceBinding(t, ctx, tx)
 	// The predecessor is reconstructed within a rollback-only test transaction.
 	if _, err = tx.Exec(ctx, `ALTER TABLE events DROP COLUMN official_results_url,DROP COLUMN results_updated_by_id,DROP COLUMN results_updated_at,DROP COLUMN results_version;
       ALTER TABLE privacy_activation_authenticated_artifacts RENAME CONSTRAINT privacy_activation_authenticated_artifacts_v16_check TO privacy_activation_authenticated_artifacts_v15_check;

@@ -2432,6 +2432,38 @@ type PrivacyOutboxDeliveryEvidence struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
 
+type PrivacyProtectedAcceptanceFinished struct {
+	FixtureID  uuid.UUID          `json:"fixture_id"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+type PrivacyProtectedAcceptanceFixture struct {
+	ID           uuid.UUID          `json:"id"`
+	SubjectRef   uuid.UUID          `json:"subject_ref"`
+	ReviewerRef  uuid.UUID          `json:"reviewer_ref"`
+	ExecutorRef  uuid.UUID          `json:"executor_ref"`
+	WorkerRef    uuid.UUID          `json:"worker_ref"`
+	ProofSha256  []byte             `json:"proof_sha256"`
+	MarkerSha256 []byte             `json:"marker_sha256"`
+	ImageDigest  string             `json:"image_digest"`
+	SchemaDigest string             `json:"schema_digest"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
+type PrivacyProtectedAcceptanceNoticeSimulation struct {
+	OutboxID      uuid.UUID          `json:"outbox_id"`
+	FixtureID     uuid.UUID          `json:"fixture_id"`
+	MessageType   string             `json:"message_type"`
+	PayloadSha256 []byte             `json:"payload_sha256"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+}
+
+type PrivacyProtectedAcceptanceRequest struct {
+	FixtureID uuid.UUID `json:"fixture_id"`
+	RequestID uuid.UUID `json:"request_id"`
+}
+
 type PrivacyProtectedActivationBrokerReceipt struct {
 	ProposalID              uuid.UUID          `json:"proposal_id"`
 	ApprovalID              uuid.UUID          `json:"approval_id"`

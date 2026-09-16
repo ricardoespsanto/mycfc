@@ -572,6 +572,8 @@ func TestExecutionWorkerDefaultsBoundsAndClosedPoolErrors(t *testing.T) {
 		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Millisecond},
 		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: 2 * time.Hour},
 		{Pool: pool, WorkerRef: uuid.New(), MaxAttempts: 101},
+		{Pool: pool, WorkerRef: uuid.New(), AcceptanceProof: make([]byte, 31)},
+		{Pool: pool, WorkerRef: uuid.New(), AcceptanceProof: make([]byte, 33)},
 	} {
 		if invalid.valid() {
 			t.Fatalf("invalid worker accepted: %+v", invalid)
