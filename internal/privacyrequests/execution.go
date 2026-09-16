@@ -204,6 +204,9 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	}
 
 	if r.ScopeKind == string(AccountClosure) {
+		if _, err = tx.Exec(ctx, `SELECT privacy_execution_capture_retention_sources($1,$2)`, execution.ID, subject.ID); err != nil {
+			return zero, err
+		}
 		if err = s.cutOffPrivacyAccount(ctx, q, execution, subject, actor.ID, now); err != nil {
 			return zero, err
 		}
@@ -616,12 +619,33 @@ func supportedOperation(operation string) bool {
 var relationalExecutableOperations = map[string]bool{
 	"ACTIVITY_CONNECTION_DISCONNECT": true, "ACTIVITY_SUBJECT_DELETE": true,
 	"ANNOUNCEMENT_DELIVERY_DELETE": true, "AUTH_ACCESS_REVOKE": true,
-	"AUTH_TOKEN_DELETE": true, "DEPENDANT_RELATIONSHIP_DELETE": true,
+	"AUDIT_ACTOR_ANONYMIZE": true, "AUTH_SESSION_EXPIRE": true,
+	"AUTH_TOKEN_DELETE": true, "CONSENT_EVIDENCE_RESTRICT": true,
+	"CONSENT_NETWORK_EXPIRE": true, "DEPENDANT_RELATIONSHIP_DELETE": true,
 	"EVENT_RESPONSE_DELETE": true, "IDENTITY_CLEAR": true,
+	"IDENTITY_RESTRICT": true, "LOG_RECORD_EXPIRE": true,
 	"MEMBERSHIP_ACTIVE_REVOKE": true, "MEMBERSHIP_HISTORY_ANONYMIZE": true, "PROFILE_HEALTH_DELETE": true,
-	"PROFILE_IDENTITY_DELETE": true, "REPAIR_REPORTER_ANONYMIZE": true,
+	"OUTBOX_PAYLOAD_EXPIRE": true, "PRIVACY_CASE_RESTRICT": true,
+	"PROFILE_IDENTITY_DELETE": true, "PROFILE_RESTRICT": true, "REPAIR_REPORTER_ANONYMIZE": true,
 	"SUGGESTION_SUBJECT_DELETE": true, "TRAINING_PRESCRIPTION_DELETE": true,
 	"TRAINING_RESULT_DELETE": true,
+}
+
+// ProductionExecutionCapabilities returns a new closed capability set for the
+// current executor contract. Callers still have to install every operation's
+// runtime prerequisite: activation and lease fencing are enforced in the
+// database, object plans require the seal-only target protector, and provider
+// plans require a factually evidenced non-empty adapter registry.
+func ProductionExecutionCapabilities() map[string]bool {
+	out := make(map[string]bool)
+	for _, profile := range executionProfiles {
+		for _, operation := range profile.Operations {
+			if executableOperation(operation) {
+				out[operation] = true
+			}
+		}
+	}
+	return out
 }
 
 func relationalExecutableOperation(operation string) bool {
@@ -630,6 +654,19 @@ func relationalExecutableOperation(operation string) bool {
 
 func executableOperation(operation string) bool {
 	return operation == "OBJECT_VERSION_DELETE" || operation == "PROVIDER_RECIPIENT_NOTIFY" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
+}
+
+func productionHandlerCount(operation string) int {
+	count := 0
+	if relationalExecutableOperation(operation) {
+		count++
+	}
+	for _, specialized := range []string{"OBJECT_VERSION_DELETE", "PROVIDER_RECIPIENT_NOTIFY", "BACKUP_TOMBSTONE_REPLAY"} {
+		if operation == specialized {
+			count++
+		}
+	}
+	return count
 }
 
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {

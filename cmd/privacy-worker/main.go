@@ -96,6 +96,10 @@ type objectExecutionRuntime interface {
 	CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error)
 }
 
+type providerExecutionRuntime interface {
+	CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error)
+}
+
 type tombstoneRuntime interface {
 	Export(context.Context, privacyrequests.ExecutionLease) error
 	ExportClosure(context.Context, uuid.UUID) error
@@ -116,6 +120,7 @@ type runtime struct {
 	execution      executionRuntime
 	uploadCleanup  uploadCleanupRuntime
 	objects        objectExecutionRuntime
+	providers      providerExecutionRuntime
 	tombstones     tombstoneRuntime
 	completion     completionRuntime
 	events         eventRuntime
@@ -220,6 +225,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	if err = events.open(ctx); err != nil {
 		return errors.New("open privacy worker log stream")
 	}
+	providerRegistry, err := privacyrequests.NewProviderExecutionRegistry()
+	if err != nil {
+		return errors.New("configure privacy provider registry")
+	}
 	r := runtime{
 		pool:      pool,
 		execution: privacyrequests.ExecutionWorker{Pool: pool, WorkerRef: workerRef, LeaseDuration: cfg.leaseDuration, MaxAttempts: cfg.maxAttempts},
@@ -228,6 +237,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 			LeaseDuration: cfg.leaseDuration, MaxAttempts: cfg.maxAttempts},
 		objects: privacyrequests.ObjectExecutionWorker{Pool: pool, Objects: versionedObjects, WorkerRef: workerRef, PrivateKey: cfg.objectPrivate,
 			TranscriptKeyID: cfg.objectEvidenceKeyID, TranscriptKey: cfg.objectEvidence},
+		providers: privacyrequests.ProviderExecutionWorker{Pool: pool, Registry: providerRegistry, WorkerRef: workerRef,
+			PrivateKey: cfg.providerPrivate, TranscriptKeyID: cfg.providerEvidenceKeyID, TranscriptKey: cfg.providerEvidence,
+			CredentialDigestKeys: cfg.providerCredentialKeys},
 		tombstones:     privacyrequests.TombstoneExportWorker{Store: pool, Ledger: ledger, Protector: protector, WorkerRef: workerRef},
 		completion:     completion,
 		events:         events,
@@ -463,9 +475,11 @@ func (r runtime) completeCheckpoint(ctx context.Context, lease privacyrequests.E
 	case "BACKUP_TOMBSTONE_REPLAY":
 		return r.tombstones.Export(ctx, lease)
 	case "PROVIDER_RECIPIENT_NOTIFY":
-		// The production registry remains intentionally empty until factual #109
-		// registrations and reviewed adapters are shipped together.
-		return privacyrequests.ErrProviderRegistryUnavailable
+		if r.providers == nil {
+			return privacyrequests.ErrProviderRegistryUnavailable
+		}
+		_, err := r.providers.CompleteCheckpoint(ctx, lease)
+		return err
 	default:
 		_, err := r.execution.CompleteCheckpoint(ctx, lease, operation, actionVersion)
 		return err

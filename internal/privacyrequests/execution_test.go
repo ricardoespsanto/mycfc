@@ -242,8 +242,8 @@ func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	knownButUnsafe := plan
 	knownButUnsafe.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
 	knownButUnsafe.Entries[0].Operations = []string{"AUDIT_ACTOR_ANONYMIZE"}
-	if (Service{ExecutionCapabilities: map[string]bool{"AUDIT_ACTOR_ANONYMIZE": true}}).ExecutionCapabilitiesReady(knownButUnsafe) {
-		t.Fatal("known but unimplemented relational operation enabled execution start")
+	if !(Service{ExecutionCapabilities: ProductionExecutionCapabilities()}).ExecutionCapabilitiesReady(knownButUnsafe) {
+		t.Fatal("implemented audit anonymisation was absent from the production registry")
 	}
 
 	disabled := make(map[string]bool, len(all))
@@ -325,29 +325,21 @@ func TestClaimedWorkRequiresFencedAllowlistedCheckpoints(t *testing.T) {
 	}
 }
 
-func TestUnimplementedAnonymisationCannotBeClaimedOrCheckpointed(t *testing.T) {
-	for _, operation := range []string{"AUDIT_ACTOR_ANONYMIZE"} {
-		t.Run(operation, func(t *testing.T) {
-			jobID := uuid.New()
-			job := ExecutionJob{
-				PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
-					ID: jobID, ExecutionID: uuid.New(), EntrySha256: make([]byte, sha256.Size),
-					CategoryKey: "blocked-category", PurposeCode: "BLOCKED_PURPOSE", Status: "LEASED", LeaseEpoch: 1, AttemptCount: 1,
-				},
-				ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New(),
+func TestCanonicalOperationsHaveExactlyOneProductionHandler(t *testing.T) {
+	capabilities := ProductionExecutionCapabilities()
+	for profileName, profile := range executionProfiles {
+		for _, operation := range profile.Operations {
+			if productionHandlerCount(operation) != 1 {
+				t.Errorf("profile %s operation %s has %d production handlers", profileName, operation, productionHandlerCount(operation))
 			}
-			checkpoints := []dbgen.PrivacyErasureJobCheckpoint{{JobID: jobID, OperationPosition: 1, OperationCode: operation, ActionVersion: SupportedActionVersion, Status: "PENDING"}}
-			if !supportedOperation(operation) || relationalExecutableOperation(operation) {
-				t.Fatalf("operation vocabulary/executable boundary is wrong")
+			if !capabilities[operation] {
+				t.Errorf("profile %s operation %s is absent from production capabilities", profileName, operation)
 			}
-			if err := validateClaimedWork(job, checkpoints); !errors.Is(err, ErrExecutorUnavailable) {
-				t.Fatalf("unsafe anonymisation claim error=%v", err)
-			}
-			worker := ExecutionWorker{WorkerRef: uuid.New()}
-			if _, err := worker.CompleteCheckpoint(context.Background(), ExecutionLease{Job: job, Checkpoints: checkpoints}, operation, SupportedActionVersion); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("unsafe anonymisation checkpoint error=%v", err)
-			}
-		})
+		}
+	}
+	capabilities["IDENTITY_CLEAR"] = false
+	if !ProductionExecutionCapabilities()["IDENTITY_CLEAR"] {
+		t.Fatal("production capability caller mutated the closed registry")
 	}
 }
 

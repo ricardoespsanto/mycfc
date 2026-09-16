@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -122,7 +121,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609170001_privacy_synthetic_acceptance"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609170002_privacy_executor_retention_handlers"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -334,19 +333,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		FROM guardian_authority_policy_approvals approval WHERE gate.singleton AND approval.policy_version=$1`, guardianPolicy, owner); e != nil {
 		t.Fatal(e)
 	}
-	capabilities := map[string]bool{}
-	for _, profile := range executionProfiles {
-		for _, operation := range profile.Operations {
-			capabilities[operation] = true
-		}
-	}
-	productionRelationalCapabilities := relationalExecutableOperations
-	testRelationalCapabilities := maps.Clone(productionRelationalCapabilities)
-	for operation := range capabilities {
-		testRelationalCapabilities[operation] = true
-	}
-	relationalExecutableOperations = testRelationalCapabilities
-	defer func() { relationalExecutableOperations = productionRelationalCapabilities }()
+	capabilities := ProductionExecutionCapabilities()
 	targetPrivateKey, e := ecdh.X25519().GenerateKey(rand.Reader)
 	if e != nil {
 		t.Fatal(e)
@@ -548,9 +535,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 	})
 	t.Run("unsupported-account-closure-cannot-start-or-cut-off-access", func(t *testing.T) {
-		saved := relationalExecutableOperations
-		relationalExecutableOperations = productionRelationalCapabilities
-		defer func() { relationalExecutableOperations = saved }()
+		blocked := s
+		blocked.ExecutionCapabilities = ProductionExecutionCapabilities()
+		delete(blocked.ExecutionCapabilities, "AUTH_SESSION_EXPIRE")
 		subject := user(nil)
 		request, err := submit(subject, subject, AccountClosure)
 		if err != nil {
@@ -565,7 +552,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err = pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&beforeCredential); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
+		if _, err = blocked.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
 			t.Fatalf("unsupported closure start error=%v", err)
 		}
 		var active bool
@@ -736,9 +723,6 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 	})
 	t.Run("membership-history-revokes-current-and-pseudonymises-preserved-history", func(t *testing.T) {
-		savedCapabilities := relationalExecutableOperations
-		relationalExecutableOperations = productionRelationalCapabilities
-		defer func() { relationalExecutableOperations = savedCapabilities }()
 		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
 			t.Fatal(err)
 		}

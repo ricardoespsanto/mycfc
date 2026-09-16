@@ -25,7 +25,7 @@ func TestPrivacyObjectTargetFoundationMigrationIsAdditiveProtectedAndImmutable(t
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 
-	rewindSyntheticAcceptanceBinding(t, ctx, tx)
+	rewindExecutorAndSyntheticAcceptanceBinding(t, ctx, tx)
 	if _, err = tx.Exec(ctx, `DROP SCHEMA IF EXISTS privacy_protected CASCADE`); err != nil {
 		t.Fatal(err)
 	}

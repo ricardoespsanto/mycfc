@@ -494,6 +494,9 @@ func validProviderDigestKeyring(keyring map[string][]byte, transcriptKeyID strin
 
 func (w ProviderExecutionWorker) CompleteCheckpoint(ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
 	var zero dbgen.PrivacyErasureJobCheckpoint
+	if w.Registry == nil || !w.Registry.Ready() {
+		return zero, ErrProviderRegistryUnavailable
+	}
 	if !w.valid() || !validLease(lease) {
 		return zero, ErrProviderExecutionFailed
 	}

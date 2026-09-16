@@ -1134,14 +1134,27 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSyntheticAcceptanceMigrationIsFinalBaselineSegment(t *testing.T) {
+func TestSyntheticAcceptanceMigrationIsExactBaselineSegment(t *testing.T) {
 	migration, err := migrationFiles.ReadFile("migrations/202609170001_privacy_synthetic_acceptance.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	const marker = "-- Baseline through 202609170001_privacy_synthetic_acceptance."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170002_privacy_executor_retention_handlers.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("synthetic acceptance migration differs from baseline")
+	}
+}
+
+func TestPrivacyExecutorRetentionMigrationIsFinalBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170002_privacy_executor_retention_handlers.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170002_privacy_executor_retention_handlers."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy executor retention migration differs from baseline")
 	}
 }

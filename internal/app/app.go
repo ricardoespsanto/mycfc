@@ -276,9 +276,9 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos", ObjectTargets: objectTargetProtector}
+	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos", ObjectTargets: objectTargetProtector,
+		ExecutionCapabilities: privacyrequests.ProductionExecutionCapabilities()}
 	if cfg.AppEnv == "test" {
-		privacyService.ExecutionCapabilities = map[string]bool{}
 		for _, capability := range strings.Split(cfg.PrivacyExecutionTestCapabilities, ",") {
 			if capability = strings.TrimSpace(capability); capability != "" {
 				privacyService.ExecutionCapabilities[capability] = true

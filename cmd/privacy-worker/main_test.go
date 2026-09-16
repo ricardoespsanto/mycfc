@@ -160,6 +160,16 @@ type objectExecutionRuntimeFake struct {
 	err   error
 }
 
+type providerExecutionRuntimeFake struct {
+	calls int
+	err   error
+}
+
+func (f *providerExecutionRuntimeFake) CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
+	f.calls++
+	return dbgen.PrivacyErasureJobCheckpoint{}, f.err
+}
+
 func (f *objectExecutionRuntimeFake) CompleteCheckpoint(context.Context, privacyrequests.ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
 	f.calls++
 	return dbgen.PrivacyErasureJobCheckpoint{}, f.err
@@ -510,6 +520,22 @@ func TestFailureClassificationKeepsProviderRegistryClosed(t *testing.T) {
 	retry := classifyFailure("OBJECT_VERSION_DELETE", errors.New("opaque dependency"))
 	if retry.Classification != privacyrequests.FailureRetryable || retry.Code != privacyrequests.FailureDependencyUnavailable {
 		t.Fatalf("retry=%+v", retry)
+	}
+}
+
+func TestProviderCheckpointUsesProviderExecutionWorker(t *testing.T) {
+	fixture := newRuntimeFixture()
+	providers := &providerExecutionRuntimeFake{}
+	fixture.runtime.providers = providers
+	if err := fixture.runtime.completeCheckpoint(t.Context(), privacyrequests.ExecutionLease{}, "PROVIDER_RECIPIENT_NOTIFY", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if providers.calls != 1 || len(fixture.execution.checkpointOperations) != 0 || fixture.objects.calls != 0 {
+		t.Fatalf("provider calls=%d relational=%v object=%d", providers.calls, fixture.execution.checkpointOperations, fixture.objects.calls)
+	}
+	fixture.runtime.providers = nil
+	if err := fixture.runtime.completeCheckpoint(t.Context(), privacyrequests.ExecutionLease{}, "PROVIDER_RECIPIENT_NOTIFY", "v1"); !errors.Is(err, privacyrequests.ErrProviderRegistryUnavailable) {
+		t.Fatalf("closed registry error=%v", err)
 	}
 }
 
