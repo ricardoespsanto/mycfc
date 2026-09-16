@@ -53,3 +53,10 @@ tf() {
     -e AWS_REGION -e "$TF_PROVIDER_VARIABLE" -e TF_IN_AUTOMATION -e TF_PLUGIN_CACHE_DIR \
     "$TERRAFORM_IMAGE" "-chdir=$TF_ROOT" "$operation" "$@" "${desired[@]}"
 }
+
+terraform_preview_operation_select() {
+  case "${1-}" in
+    plan|discover-inputs) ;;
+    *) printf '%s\n' 'Unsupported Terraform preview operation.' >&2; return 1 ;;
+  esac
+}

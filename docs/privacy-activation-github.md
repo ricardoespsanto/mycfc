@@ -29,6 +29,14 @@ Do not assume the following are provisioned merely because source supports them.
 
 Use the Actions UI to run **Terraform production plan**, selecting one stack and the current main SHA. Review its resource actions before dispatching **Terraform production apply** for that stack and SHA. Review the new plan before approving its production job. Repeat for the other stack. No automatic apply or local AWS/SSH fallback is provided.
 
+## Discover existing AWS inputs without reading their values
+
+The preview workflow additionally offers `operation=discover-inputs` (`plan` remains the default). It retains the exact signed-main, successful-CI, protected `production-plan` environment and OIDC checks. It skips Terraform checks and the secret-bound planning step: neither `TF_VARS` nor a provider token is needed for discovery. The apply workflow has no discovery operation.
+
+Run **Terraform production plan** from current main, choose **discover-inputs**, and supply that main SHA. The workflow lists Secrets Manager names only in the configured `AWS_REGION`, selecting names containing `mycfc`, `hetzner` or `hcloud` case-insensitively. The summary renders sanitized names, with no values, descriptions, tags, ARNs or raw provider errors. AWS CLI pagination remains enabled. It does not search another account or region, read nested payloads, retrieve any value, or mutate configuration.
+
+The existing plan role must already allow `secretsmanager:ListSecrets` (an account/region inventory permission with resource `*`; it cannot be scoped to individual secret ARNs). Discovery does not grant that permission or broaden the role. Denied access is reported explicitly and stops the run. Review any needed external role change separately. An empty result means only that no top-level names matched; it does not prove the inputs are absent from another secret's payload. A found name is a candidate for a later narrowly scoped review, not authorization to read its value or copy it into GitHub.
+
 ## Remaining activation work
 
 Subsequent GitHub-only stages still need an explicit implementation and review for credential provisioning, protected host installation, a current isolated restore drill, policy import and account grants, release-bound technical evidence, the two independent activation signers, readiness checks and worker start. Governance approval and its yearly review are already handled by #109; these are the application's existing execution checks, not additional legal paperwork. Technical evidence currently expires after 90 days, so its renewal must be scheduled separately from the annual policy review.
