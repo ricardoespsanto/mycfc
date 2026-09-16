@@ -128,11 +128,20 @@ for workflow in ['terraform-production-plan.yml', 'terraform-production-apply.ym
             expected = hetzner_secret if stack == 'hetzner' else production_secret
             assert result == expected, (workflow, key, stack, 'cross-stack secret fallback')
 assert expression_count == 6
-for stack, enabled in [('production', 'privacy_worker_infrastructure_enabled'),
-                       ('hetzner', 'privacy_restore_infrastructure_enabled')]:
+expected_enabled = {
+    'production': {
+        'privacy_worker_infrastructure_enabled': 'true',
+        'operations_observer_enabled': 'true',
+        'operations_observer_github_oidc_provider_arn':
+            '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
+    },
+    'hetzner': {'privacy_restore_infrastructure_enabled': 'true'},
+}
+for stack, enabled in expected_enabled.items():
     text = (root / f'infra/environments/{stack}/privacy-infrastructure.tfvars').read_text()
     pairs = dict(re.findall(r'^(\w+)\s*=\s*(\S+)', text, re.M))
-    assert pairs.pop(enabled) == 'true'
+    for key, value in enabled.items():
+        assert pairs.pop(key) == value
     assert all(value in ('false', 'null') for value in pairs.values())
 PY
 printf '%s\n' 'Terraform stack selection, credential isolation and durable posture tests passed.'
