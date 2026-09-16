@@ -87,6 +87,8 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	sh scripts/release-upgrade_test.sh
 	sh scripts/terraform-plan-policy_test.sh
 	sh scripts/terraform-plan-hmac_test.sh
+	bash scripts/terraform-stack_test.sh
+	bash scripts/discover-terraform-inputs_test.sh
 
 test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
 	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"

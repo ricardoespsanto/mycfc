@@ -12,6 +12,10 @@ on:
       - scripts/terraform-plan-policy_test.sh
       - scripts/terraform-plan-hmac.py
       - scripts/terraform-plan-hmac_test.sh
+      - scripts/terraform-stack.sh
+      - scripts/terraform-stack_test.sh
+      - scripts/discover-terraform-inputs.sh
+      - scripts/discover-terraform-inputs_test.sh
   push:
     branches: [main]
     paths:
@@ -24,6 +28,10 @@ on:
       - scripts/terraform-plan-policy_test.sh
       - scripts/terraform-plan-hmac.py
       - scripts/terraform-plan-hmac_test.sh
+      - scripts/terraform-stack.sh
+      - scripts/terraform-stack_test.sh
+      - scripts/discover-terraform-inputs.sh
+      - scripts/discover-terraform-inputs_test.sh
   workflow_dispatch:
 
 permissions:

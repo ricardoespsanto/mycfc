@@ -495,3 +495,8 @@ output "privacy_restore_ledger_broker_function_name" {
   description = "One-shot append broker invoked by the isolated worker; the worker has no direct ledger or retention permissions."
   value       = try(aws_lambda_function.privacy_restore_broker[0].function_name, null)
 }
+
+output "privacy_restore_ledger_broker_function_arn" {
+  description = "Exact unqualified broker ARN for the separately approved worker invocation gate."
+  value       = try(aws_lambda_function.privacy_restore_broker[0].arn, null)
+}

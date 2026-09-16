@@ -36,6 +36,8 @@ go.work.sum
 **/*.tfplan
 **/tfplan
 **/*.tfvars
+!infra/environments/production/privacy-infrastructure.tfvars
+!infra/environments/hetzner/privacy-infrastructure.tfvars
 **/backend.hcl
 
 # env file

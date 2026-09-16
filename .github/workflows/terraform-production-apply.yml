@@ -1,9 +1,17 @@
 name: Terraform production apply
-run-name: terraform production apply ${{ inputs.sha }}
+run-name: terraform ${{ inputs.stack || 'production' }} apply ${{ inputs.sha }}
 
 on:
   workflow_dispatch:
     inputs:
+      stack:
+        description: Reviewed Terraform root to operate on.
+        type: choice
+        required: true
+        default: production
+        options:
+          - production
+          - hetzner
       sha:
         description: Exact current main-branch commit to plan, approve, and apply.
         required: true
@@ -17,7 +25,7 @@ concurrency:
 
 env:
   TERRAFORM_IMAGE: hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
-  TF_BACKEND_KEY: mycfc/production/terraform.tfstate
+  REQUESTED_STACK: ${{ inputs.stack || 'production' }}
   TF_IN_AUTOMATION: 'true'
   TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
 
@@ -52,6 +60,8 @@ jobs:
           DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
           [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$DISPATCH_REF" = refs/heads/main
           test "$REQUESTED_SHA" = "$DISPATCH_SHA"
@@ -77,47 +87,32 @@ jobs:
       - name: Create the plan for production approval
         id: plan
         env:
-          TF_VARS: ${{ secrets.TF_VARS }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          STACK_TF_VARS: ${{ inputs.stack == 'hetzner' && secrets.HETZNER_TF_VARS || inputs.stack != 'hetzner' && secrets.TF_VARS || '' }}
+          STACK_PROVIDER_TOKEN: ${{ inputs.stack == 'hetzner' && secrets.HCLOUD_TOKEN || inputs.stack != 'hetzner' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           set -Eeuo pipefail
-          test -n "$TF_VARS"
-          test -n "$CLOUDFLARE_API_TOKEN"
           [[ "$TF_PLAN_HMAC_KEY" =~ ^[0-9a-f]{64}$ ]]
-          mkdir -p .cache/terraform/plugin-cache
-          umask 077
-          printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
-          cleanup() {
-            rm -f infra/environments/production/ci.auto.tfvars \
-              infra/environments/production/production.tfplan \
-              infra/environments/production/production.tfplan.json \
-              infra/environments/production/production.tfplan.review.txt
-          }
-          trap cleanup EXIT
-          tf() {
-            docker run --rm --user "$(id -u):$(id -g)" \
-              -v "$PWD:/workspace" -v "$PWD/.cache/terraform/plugin-cache:/terraform-plugin-cache" \
-              -w /workspace -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-              -e AWS_REGION -e CLOUDFLARE_API_TOKEN -e TF_IN_AUTOMATION -e TF_PLUGIN_CACHE_DIR \
-              "$TERRAFORM_IMAGE" -chdir=infra/environments/production "$@"
-          }
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          trap terraform_stack_cleanup EXIT
+          terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
           tf plan -input=false -lock-timeout=5m -out=production.tfplan
-          tf show -json production.tfplan > infra/environments/production/production.tfplan.json
+          tf show -json production.tfplan > "$TF_ROOT/production.tfplan.json"
           jq -e -f scripts/terraform-plan-policy.jq \
-            infra/environments/production/production.tfplan.json >/dev/null
-          tf show -no-color production.tfplan | tee infra/environments/production/production.tfplan.review.txt
-          review_sha=$(sha256sum infra/environments/production/production.tfplan.review.txt | awk '{print $1}')
+            "$TF_ROOT/production.tfplan.json" >/dev/null
+          tf show -no-color production.tfplan | tee "$TF_ROOT/production.tfplan.review.txt"
+          review_sha=$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           semantic_components=$(python3 scripts/terraform-plan-hmac.py --components \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           change_count=$(jq '[.resource_changes[]? | select(.change.actions != ["no-op"])] | length' \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
           test "$REQUESTED_SHA" = "$main_sha"
           {
@@ -127,9 +122,9 @@ jobs:
             echo "change_count=$change_count"
           } >> "$GITHUB_OUTPUT"
           {
-            echo '## Retained production Terraform awaiting approval'
+            echo "## $REQUESTED_STACK Terraform awaiting approval"
             echo
-            echo "- Commit: \`${{ inputs.sha }}\`"
+            echo "- Commit: \`$REQUESTED_SHA\`"
             echo "- Changed resources: **$change_count**"
             echo "- Redacted review fingerprint: \`$review_sha\`"
             echo "- Protected semantic HMAC: \`$semantic_hmac\`"
@@ -164,6 +159,8 @@ jobs:
           DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
           [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$DISPATCH_REF" = refs/heads/main
           test "$REQUESTED_SHA" = "$DISPATCH_SHA"
@@ -182,8 +179,8 @@ jobs:
       - name: Recreate and apply the reviewed plan
         id: apply
         env:
-          TF_VARS: ${{ secrets.TF_VARS }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          STACK_TF_VARS: ${{ inputs.stack == 'hetzner' && secrets.HETZNER_TF_VARS || inputs.stack != 'hetzner' && secrets.TF_VARS || '' }}
+          STACK_PROVIDER_TOKEN: ${{ inputs.stack == 'hetzner' && secrets.HCLOUD_TOKEN || inputs.stack != 'hetzner' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
           EXPECTED_REVIEW_SHA: ${{ needs.plan.outputs.review_sha }}
           EXPECTED_SEMANTIC_HMAC: ${{ needs.plan.outputs.semantic_hmac }}
@@ -192,42 +189,27 @@ jobs:
           REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           set -Eeuo pipefail
-          test -n "$TF_VARS"
-          test -n "$CLOUDFLARE_API_TOKEN"
           [[ "$TF_PLAN_HMAC_KEY" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_REVIEW_SHA" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_SEMANTIC_HMAC" =~ ^[0-9a-f]{64}$ ]]
           jq -e 'type == "object" and length > 0 and all(.[]; test("^[0-9a-f]{64}$"))' \
             <<< "$EXPECTED_SEMANTIC_COMPONENTS" >/dev/null
-          mkdir -p .cache/terraform/plugin-cache
-          umask 077
-          printf '%s' "$TF_VARS" > infra/environments/production/ci.auto.tfvars
-          cleanup() {
-            rm -f infra/environments/production/ci.auto.tfvars \
-              infra/environments/production/production.tfplan \
-              infra/environments/production/production.tfplan.json \
-              infra/environments/production/production.tfplan.review.txt
-          }
-          trap cleanup EXIT
-          tf() {
-            docker run --rm --user "$(id -u):$(id -g)" \
-              -v "$PWD:/workspace" -v "$PWD/.cache/terraform/plugin-cache:/terraform-plugin-cache" \
-              -w /workspace -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-              -e AWS_REGION -e CLOUDFLARE_API_TOKEN -e TF_IN_AUTOMATION -e TF_PLUGIN_CACHE_DIR \
-              "$TERRAFORM_IMAGE" -chdir=infra/environments/production "$@"
-          }
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          trap terraform_stack_cleanup EXIT
+          terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
           tf plan -input=false -lock-timeout=5m -out=production.tfplan
-          tf show -json production.tfplan > infra/environments/production/production.tfplan.json
+          tf show -json production.tfplan > "$TF_ROOT/production.tfplan.json"
           jq -e -f scripts/terraform-plan-policy.jq \
-            infra/environments/production/production.tfplan.json >/dev/null
-          tf show -no-color production.tfplan | tee infra/environments/production/production.tfplan.review.txt
-          review_sha=$(sha256sum infra/environments/production/production.tfplan.review.txt | awk '{print $1}')
+            "$TF_ROOT/production.tfplan.json" >/dev/null
+          tf show -no-color production.tfplan | tee "$TF_ROOT/production.tfplan.review.txt"
+          review_sha=$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           semantic_components=$(python3 scripts/terraform-plan-hmac.py --components \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           if test "$review_sha" != "$EXPECTED_REVIEW_SHA"; then
             echo '::error::The recreated redacted plan does not match the human-reviewed plan.'
             exit 1
@@ -241,7 +223,7 @@ jobs:
             exit 1
           fi
           change_count=$(jq '[.resource_changes[]? | select(.change.actions != ["no-op"])] | length' \
-            infra/environments/production/production.tfplan.json)
+            "$TF_ROOT/production.tfplan.json")
           main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
           test "$REQUESTED_SHA" = "$main_sha"
           tf apply -input=false -lock-timeout=5m -auto-approve production.tfplan
@@ -250,7 +232,10 @@ jobs:
           verify_exit=$?
           set -e
           test "$verify_exit" = 0
-          observer_arn=$(tf output -raw operations_observer_role_arn 2>/dev/null || true)
+          observer_arn=
+          if [[ "$REQUESTED_STACK" == production ]]; then
+            observer_arn=$(tf output -raw operations_observer_role_arn 2>/dev/null || true)
+          fi
           {
             echo "change_count=$change_count"
             echo "review_sha=$review_sha"
@@ -258,18 +243,24 @@ jobs:
             echo "observer_role_arn=$observer_arn"
           } >> "$GITHUB_OUTPUT"
       - name: Record verified infrastructure application
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+          CHANGE_COUNT: ${{ steps.apply.outputs.change_count }}
+          REVIEW_SHA: ${{ steps.apply.outputs.review_sha }}
+          SEMANTIC_HMAC: ${{ steps.apply.outputs.semantic_hmac }}
+          OBSERVER_ROLE_ARN: ${{ steps.apply.outputs.observer_role_arn }}
         run: |
           {
-            echo '## Retained production Terraform applied'
+            echo "## $REQUESTED_STACK Terraform applied"
             echo
-            echo "- Commit: \`${{ inputs.sha }}\`"
-            echo "- Changed resources: **${{ steps.apply.outputs.change_count }}**"
-            echo "- Matched reviewed fingerprint: \`${{ steps.apply.outputs.review_sha }}\`"
-            echo "- Matched protected semantic HMAC: \`${{ steps.apply.outputs.semantic_hmac }}\`"
+            echo "- Commit: \`$REQUESTED_SHA\`"
+            echo "- Changed resources: **$CHANGE_COUNT**"
+            echo "- Matched reviewed fingerprint: \`$REVIEW_SHA\`"
+            echo "- Matched protected semantic HMAC: \`$SEMANTIC_HMAC\`"
             echo '- Delete, replacement, forget, import, action, deferred, unknown, and provisioner operations: **0**'
             echo '- Allowed create/update semantics: **human-reviewed after plan generation**'
             echo '- Post-apply plan: **no changes**'
-            if [[ -n "${{ steps.apply.outputs.observer_role_arn }}" ]]; then
-              echo "- Operations observer role: \`${{ steps.apply.outputs.observer_role_arn }}\`"
+            if [[ -n "$OBSERVER_ROLE_ARN" ]]; then
+              echo "- Operations observer role: \`$OBSERVER_ROLE_ARN\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
