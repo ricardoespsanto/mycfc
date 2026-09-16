@@ -188,14 +188,17 @@ func TestExecutionReplayRequiresExactAcceptedHandoff(t *testing.T) {
 }
 
 func TestExecutionActivationDoesNotStrandAnOlderImmutablePlan(t *testing.T) {
-	if !executionActivationReady(dbgen.PrivacyRequestActivation{PolicyVersion: "new-policy", Enabled: true, FulfilmentReady: true}) {
+	if !executionActivationReady(true, true) {
 		t.Fatal("ready activation rejected because its current policy differs from the stored request plan")
 	}
-	for _, activation := range []dbgen.PrivacyRequestActivation{
-		{Enabled: false, FulfilmentReady: true},
-		{Enabled: true, FulfilmentReady: false},
+	for _, activation := range []struct {
+		enabled         bool
+		fulfilmentReady bool
+	}{
+		{enabled: false, fulfilmentReady: true},
+		{enabled: true, fulfilmentReady: false},
 	} {
-		if executionActivationReady(activation) {
+		if executionActivationReady(activation.enabled, activation.fulfilmentReady) {
 			t.Fatalf("unready activation accepted: %+v", activation)
 		}
 	}

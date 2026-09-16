@@ -285,7 +285,7 @@ BEGIN
           'provider_inventory_contract','mycfc/privacy-provider-registry-source/v2')
         WHEN 'SCHEMA' THEN jsonb_build_object(
           'evidence_ref','s3://fixture/schema?versionId=e2e','signing_key_id','fixture-key','schema_migration_digest',encode(fixture_digest,'base64'),
-		  'baseline_includes_through','202609170002_privacy_executor_retention_handlers')
+		  'baseline_includes_through','202609170004_privacy_empty_provider_execution')
       END
     ) AS id
     FROM (VALUES

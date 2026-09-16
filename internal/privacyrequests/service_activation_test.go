@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type activationReadinessStore struct {
@@ -25,7 +24,7 @@ func (activationReadinessStore) Query(context.Context, string, ...any) (pgx.Rows
 	return nil, errors.New("unexpected query")
 }
 func (s activationReadinessStore) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
-	return activationReadinessRow{activation: strings.Contains(query, "FROM privacy_request_activation"), ready: s.ready, err: s.readyErr}
+	return activationReadinessRow{activation: strings.Contains(query, "privacy_activation_snapshot()"), ready: s.ready, err: s.readyErr}
 }
 
 type activationReadinessRow struct {
@@ -36,13 +35,10 @@ type activationReadinessRow struct {
 
 func (r activationReadinessRow) Scan(dest ...any) error {
 	if r.activation {
-		*dest[0].(*bool) = true
-		*dest[1].(*string) = "policy-v2"
+		*dest[0].(*string) = "policy-v2"
+		*dest[1].(*bool) = true
 		*dest[2].(*bool) = true
-		*dest[3].(*bool) = true
-		*dest[4].(*uuid.UUID) = uuid.New()
-		*dest[5].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
-		*dest[6].(**uuid.UUID) = nil
+		*dest[3].(*uuid.UUID) = uuid.New()
 		return nil
 	}
 	if r.err != nil {

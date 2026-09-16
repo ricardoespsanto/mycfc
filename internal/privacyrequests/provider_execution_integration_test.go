@@ -220,6 +220,100 @@ func TestUnknownProviderRollsBackCaptureAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedEmptyProviderInventoryCompletesZeroTargetCheckpoint(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	fixture := seedProviderExecutionFixture(t, ctx, tx, "unexpected-provider", ProviderRoleProcessor, "unexpected/v1", "ACTIVE")
+	if _, err = tx.Exec(ctx, `DELETE FROM privacy_protected.provider_connections WHERE id=$1`, fixture.connectionID); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewProviderExecutionRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := Service{ProviderRegistry: registry}
+	if err = service.materializeProviderTargets(ctx, tx, dbgen.New(tx), fixture.execution,
+		providerExecutionPlanFixture(fixture.category, fixture.entryDigest), fixture.subjectID); err != nil {
+		t.Fatalf("authenticated complete-empty inventory was rejected: %v", err)
+	}
+	worker := ProviderExecutionWorker{Pool: tx, Registry: registry, WorkerRef: fixture.workerRef}
+	checkpoint, err := worker.CompleteCheckpoint(ctx, fixture.lease)
+	if err != nil {
+		t.Fatalf("zero-target provider checkpoint failed: %v", err)
+	}
+	if checkpoint.Status != "SUCCEEDED" || checkpoint.AffectedRows == nil || *checkpoint.AffectedRows != 0 {
+		t.Fatalf("checkpoint status=%s affected=%v", checkpoint.Status, checkpoint.AffectedRows)
+	}
+}
+
+func TestEmptyProviderInventoryFailsClosedForTargetOrStaleEvidence(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	fixture := seedProviderExecutionFixture(t, ctx, tx, "unexpected-provider", ProviderRoleProcessor, "unexpected/v1", "ACTIVE")
+	registry, err := NewProviderExecutionRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := Service{ProviderRegistry: registry}
+	if _, err = tx.Exec(ctx, "SAVEPOINT empty_provider_target"); err != nil {
+		t.Fatal(err)
+	}
+	err = service.materializeProviderTargets(ctx, tx, dbgen.New(tx), fixture.execution,
+		providerExecutionPlanFixture(fixture.category, fixture.entryDigest), fixture.subjectID)
+	if !errors.Is(err, ErrProviderRegistryUnavailable) {
+		t.Fatalf("unexpected target error=%v", err)
+	}
+	if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT empty_provider_target"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM privacy_protected.provider_connections WHERE id=$1`, fixture.connectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_activation_evidence DISABLE TRIGGER privacy_activation_evidence_immutable;
+		UPDATE privacy_activation_evidence SET observed_at=observed_at-interval '100 days',expires_at=expires_at-interval '100 days'
+		WHERE kind='PROVIDER' AND id IN(
+		 SELECT unnest(proposal.evidence_ids) FROM privacy_request_activation activation
+		 JOIN privacy_activation_approvals approval ON approval.id=activation.approval_id
+		 JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id WHERE activation.singleton
+		);
+		ALTER TABLE privacy_activation_evidence ENABLE TRIGGER privacy_activation_evidence_immutable`); err != nil {
+		t.Fatal(err)
+	}
+	err = service.materializeProviderTargets(ctx, tx, dbgen.New(tx), fixture.execution,
+		providerExecutionPlanFixture(fixture.category, fixture.entryDigest), fixture.subjectID)
+	if !errors.Is(err, ErrProviderRegistryUnavailable) {
+		t.Fatalf("stale empty inventory error=%v", err)
+	}
+}
+
 func TestProviderMaterializationFailsClosedAtEveryProtectionBoundary(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

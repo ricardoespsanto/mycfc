@@ -64,11 +64,35 @@ func TestPrivacyExecutorRetentionSurfaceIsFenced(t *testing.T) {
 	}
 }
 
-// Older forward-migration fixtures first remove the two later privacy schema
+// Older forward-migration fixtures first remove the later privacy schema
 // bindings so they can reconstruct their exact predecessor release.
 func rewindExecutorAndSyntheticAcceptanceBinding(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
 	_, err := tx.Exec(ctx, `DO $$DECLARE d text;BEGIN
+ IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v20_check') THEN
+  ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  DELETE FROM privacy_activation_authenticated_artifacts;
+  ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  SELECT pg_get_constraintdef(oid) INTO d FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v20_check';
+  IF strpos(d,'202609170004_privacy_empty_provider_execution')=0 THEN RAISE EXCEPTION 'empty provider execution rewind mismatch'; END IF;
+  d:=replace(d,', ''202609170004_privacy_empty_provider_execution''::text','');
+  ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v20_check;
+  EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v19_check '||d;
+  EXECUTE replace(pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure),'202609170004_privacy_empty_provider_execution','202609170003_privacy_activation_fixed_access');
+  EXECUTE replace(pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure),'202609170004_privacy_empty_provider_execution','202609170003_privacy_activation_fixed_access');
+ END IF;
+ IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v19_check') THEN
+  ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  DELETE FROM privacy_activation_authenticated_artifacts;
+  ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  SELECT pg_get_constraintdef(oid) INTO d FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v19_check';
+  IF strpos(d,'202609170003_privacy_activation_fixed_access')=0 THEN RAISE EXCEPTION 'activation fixed access rewind mismatch'; END IF;
+  d:=replace(d,', ''202609170003_privacy_activation_fixed_access''::text','');
+  ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v19_check;
+  EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v18_check '||d;
+  EXECUTE replace(pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure),'202609170003_privacy_activation_fixed_access','202609170002_privacy_executor_retention_handlers');
+  EXECUTE replace(pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure),'202609170003_privacy_activation_fixed_access','202609170002_privacy_executor_retention_handlers');
+ END IF;
  IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v18_check') THEN
   ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
   DELETE FROM privacy_activation_authenticated_artifacts;

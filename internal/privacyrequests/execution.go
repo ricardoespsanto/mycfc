@@ -116,7 +116,7 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 		return zero, ErrExecutorUnavailable
 	}
 	activation, err := q.GetPrivacyActivationForUpdate(ctx)
-	if err != nil || !executionActivationReady(activation) {
+	if err != nil || !executionActivationReady(activation.Enabled, activation.FulfilmentReady) {
 		return zero, ErrExecutorUnavailable
 	}
 	ready, err := q.PrivacyActivationReady(ctx, activation.PolicyVersion)
@@ -238,8 +238,8 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 
 func sameOptionalString(value *string, want string) bool { return value != nil && *value == want }
 
-func executionActivationReady(activation dbgen.PrivacyRequestActivation) bool {
-	return activation.Enabled && activation.FulfilmentReady
+func executionActivationReady(enabled, fulfilmentReady bool) bool {
+	return enabled && fulfilmentReady
 }
 
 // ExecutionCapabilitiesReady is a read-only rendering hint. It lets a case
@@ -257,7 +257,8 @@ func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
 		for _, operation := range entry.Operations {
 			if !supportedOperation(operation) || !executableOperation(operation) || !s.ExecutionCapabilities[operation] ||
 				(operation == "OBJECT_VERSION_DELETE" && s.ObjectTargets == nil) ||
-				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderTargets == nil || s.ProviderRegistry == nil || !s.ProviderRegistry.Ready())) {
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderRegistry == nil ||
+					(!s.ProviderRegistry.Empty() && (s.ProviderTargets == nil || !s.ProviderRegistry.Ready())))) {
 				return false
 			}
 		}

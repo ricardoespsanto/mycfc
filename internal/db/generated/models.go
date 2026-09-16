@@ -2495,6 +2495,29 @@ type PrivacyProtectedCompletionNoticeTarget struct {
 	CapturedAt     pgtype.Timestamptz `json:"captured_at"`
 }
 
+type PrivacyProtectedExecutionRetentionPending struct {
+	ExecutionID        uuid.UUID          `json:"execution_id"`
+	CategoryKey        string             `json:"category_key"`
+	SubjectRef         uuid.UUID          `json:"subject_ref"`
+	AnchorCode         string             `json:"anchor_code"`
+	RetentionUnit      string             `json:"retention_unit"`
+	ReviewAfter        int32              `json:"review_after"`
+	ExpireAfter        int32              `json:"expire_after"`
+	RetainedFieldCodes []string           `json:"retained_field_codes"`
+	RetainedData       []byte             `json:"retained_data"`
+	WorkerRef          uuid.UUID          `json:"worker_ref"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedExecutionRetentionSource struct {
+	ExecutionID  uuid.UUID          `json:"execution_id"`
+	CategoryKey  string             `json:"category_key"`
+	SubjectRef   uuid.UUID          `json:"subject_ref"`
+	AnchorAt     pgtype.Timestamptz `json:"anchor_at"`
+	RetainedData []byte             `json:"retained_data"`
+	CapturedAt   pgtype.Timestamptz `json:"captured_at"`
+}
+
 type PrivacyProtectedMembershipHistoryReplayCapture struct {
 	RunID      uuid.UUID          `json:"run_id"`
 	CapturedAt pgtype.Timestamptz `json:"captured_at"`

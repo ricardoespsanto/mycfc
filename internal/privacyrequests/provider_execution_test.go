@@ -118,6 +118,14 @@ func TestProviderOperationIsV2Only(t *testing.T) {
 	if service.ExecutionCapabilitiesReady(plan) {
 		t.Fatal("provider capability was ready without registry and target protection")
 	}
+	emptyRegistry, err := NewProviderExecutionRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.ProviderRegistry = emptyRegistry
+	if !service.ExecutionCapabilitiesReady(plan) || emptyRegistry.Ready() {
+		t.Fatal("explicit empty registry did not expose only the database-authenticated zero-target path")
+	}
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

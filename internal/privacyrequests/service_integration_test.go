@@ -121,7 +121,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609170002_privacy_executor_retention_handlers"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609170004_privacy_empty_provider_execution"
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
