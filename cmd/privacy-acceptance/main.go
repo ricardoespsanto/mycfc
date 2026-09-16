@@ -7,18 +7,22 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/jackc/pgx/v5"
 )
 
 const maxCredentialFile = 16384
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(signalContext, 45*time.Minute)
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Getenv, os.Geteuid(), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "privacy_acceptance_failed")
@@ -29,6 +33,9 @@ func main() {
 func run(ctx context.Context, args []string, getenv func(string) string, uid int, out io.Writer) error {
 	if uid != 0 || len(args) != 1 {
 		return errors.New("acceptance operator command rejected")
+	}
+	if privacyrequests.AcceptanceMode(args[0]) {
+		return runAcceptance(ctx, args[0], getenv, out)
 	}
 	switch args[0] {
 	case "provision", "rotate", "revoke":
