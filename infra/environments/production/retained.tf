@@ -114,7 +114,8 @@ resource "aws_ecr_lifecycle_policy" "app" {
   policy = jsonencode({ rules = [
     { rulePriority = 1, description = "Keep 30 release images", selection = { tagStatus = "tagged", tagPrefixList = ["release-"], countType = "imageCountMoreThan", countNumber = 30 }, action = { type = "expire" } },
     { rulePriority = 2, description = "Expire one-time purge images after seven days", selection = { tagStatus = "tagged", tagPrefixList = ["purge-"], countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } },
-    { rulePriority = 3, description = "Expire untagged images after seven days", selection = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } }
+    { rulePriority = 3, description = "Expire privacy operation requests after seven days", selection = { tagStatus = "tagged", tagPrefixList = ["privacy-op-"], countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } },
+    { rulePriority = 4, description = "Expire untagged images after seven days", selection = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } }
   ] })
 }
 

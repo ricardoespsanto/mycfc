@@ -204,6 +204,19 @@ case "${PRIVACY_RETENTION_ENABLED:-false}" in
 	*) printf '%s\n' 'PRIVACY_RETENTION_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
 
+case "${PRIVACY_PRODUCTION_OPERATIONS_ENABLED:-false}" in
+	true | false) ;;
+	*) printf '%s\n' 'PRIVACY_PRODUCTION_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+case "${PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED:-false}" in
+	true | false) ;;
+	*) printf '%s\n' 'PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+case "${PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED:-false}" in
+	true | false) ;;
+	*) printf '%s\n' 'PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
 case "${PRIVACY_COMPLETION_ENABLED:-false}" in
 	true | false) ;;
 	*) printf '%s\n' 'PRIVACY_COMPLETION_ENABLED must be true or false.' >&2; exit 1 ;;
@@ -296,6 +309,8 @@ chmod 0755 "$deployment_dir/postgres-restore-drill.sh"
 chmod 0755 "$deployment_dir/privacy-restore-observer.sh"
 chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
 chmod 0755 "$deployment_dir/privacy-retention.sh"
+chmod 0755 "$deployment_dir/privacy-production-operation.sh"
+chmod 0755 "$deployment_dir/privacy-production-operation-agent.sh"
 chmod 0755 "$deployment_dir/privacy-worker.sh"
 chmod 0755 "$deployment_dir/privacy-activation.sh"
 chmod 0755 "$deployment_dir/guardian-activation.sh"
@@ -314,6 +329,8 @@ install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.service" /etc/syst
 install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.timer" /etc/systemd/system/mycfc-postgres-restore-drill.timer
 install -m 0644 "$deployment_dir/mycfc-privacy-retention.service" /etc/systemd/system/mycfc-privacy-retention.service
 install -m 0644 "$deployment_dir/mycfc-privacy-retention.timer" /etc/systemd/system/mycfc-privacy-retention.timer
+install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.service" /etc/systemd/system/mycfc-privacy-production-operation.service
+install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.timer" /etc/systemd/system/mycfc-privacy-production-operation.timer
 install -m 0644 "$deployment_dir/mycfc-privacy-worker.service" /etc/systemd/system/mycfc-privacy-worker.service
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
@@ -338,6 +355,7 @@ if [ "${PRIVACY_RETENTION_ENABLED:-false}" = true ]; then
 else
 	systemctl disable --now mycfc-privacy-retention.timer >/dev/null 2>&1 || true
 fi
+install -d -o root -g root -m 0700 /var/lib/mycfc/privacy-operations /var/lib/mycfc/privacy-operations/processed /var/lib/mycfc/privacy-operations/receipts
 if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
 	systemctl enable --now mycfc-privacy-worker.service
 else
@@ -348,3 +366,8 @@ docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --
 systemctl start mycfc-pull-release.service
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps cloudflared
 systemctl start mycfc-pull-release.timer
+if [ "${PRIVACY_PRODUCTION_OPERATIONS_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-privacy-production-operation.timer
+else
+	systemctl disable --now mycfc-privacy-production-operation.timer >/dev/null 2>&1 || true
+fi

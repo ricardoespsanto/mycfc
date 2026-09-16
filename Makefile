@@ -180,6 +180,8 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/verify-privacy-restore-attestation_test.sh
 	sh deployment/hetzner-backup-posture_test.sh
 	sh deployment/privacy-retention_test.sh
+	sh deployment/privacy-production-operation_test.sh
+	sh deployment/privacy-production-operation-agent_test.sh
 	sh deployment/privacy-worker_test.sh
 	sh deployment/privacy-activation_test.sh
 	sh deployment/guardian-activation_test.sh

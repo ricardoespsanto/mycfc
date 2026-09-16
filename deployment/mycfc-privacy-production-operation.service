@@ -1,0 +1,17 @@
+[Unit]
+Description=Poll for one attested MyCFC privacy production operation
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/privacy-production-operation-agent.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/release-aws/credentials /opt/mycfc/deployment
+ReadWritePaths=/run /var/lib/mycfc/privacy-operations /run/docker.sock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
