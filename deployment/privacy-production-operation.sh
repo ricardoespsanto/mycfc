@@ -4,6 +4,8 @@ set -eu
 env_file=${MYCFC_ENV_FILE:-/etc/mycfc/mycfc.env}
 state_dir=${MYCFC_PRIVACY_OPERATION_STATE_DIR:-/var/lib/mycfc/privacy-operations}
 deployment_dir=${MYCFC_DEPLOYMENT_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)}
+control_dir=${MYCFC_PRIVACY_OPERATION_CONTROL_DIR:-/etc/mycfc/privacy-production-operations}
+legacy_evidence_dir=${MYCFC_LEGACY_MEDIA_PURGE_EVIDENCE_DIR:-/var/lib/mycfc/legacy-media-purge}
 request_file=${1:-}
 receipt_output=${2:-}
 lock_file=${MYCFC_PRIVACY_OPERATION_LOCK_FILE:-/run/mycfc-privacy-production-operation.lock}
@@ -14,6 +16,7 @@ operation=
 source_sha=
 expected_image=
 request_sha256=
+evidence_sha256=
 receipt_trusted=false
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -42,6 +45,7 @@ write_receipt() {
 		--arg source_sha "$source_sha" \
 		--arg expected_image "$expected_image" \
 		--arg request_sha256 "$request_sha256" \
+		--arg evidence_sha256 "$evidence_sha256" \
 		--arg result "$result" \
 		--arg reason "$reason" \
 		--arg started_at "$started_at" \
@@ -50,7 +54,7 @@ write_receipt() {
 		--argjson retention_active "$(service_active mycfc-privacy-retention.service)" \
 		--argjson restore_active "$(service_active mycfc-postgres-restore-drill.service)" \
 		--argjson cleanup_active "$(service_active mycfc-postgres-backup-version-cleanup.service)" \
-		'{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,request_sha256:$request_sha256,result:$result,reason:(if $reason == "" then null else $reason end),started_at:$started_at,finished_at:$finished_at,services:{privacy_worker:$worker_active,privacy_retention:$retention_active,privacy_restore:$restore_active,backup_cleanup:$cleanup_active}}' \
+		'{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,evidence_sha256:$evidence_sha256,request_sha256:$request_sha256,result:$result,reason:(if $reason == "" then null else $reason end),started_at:$started_at,finished_at:$finished_at,services:{privacy_worker:$worker_active,privacy_retention:$retention_active,privacy_restore:$restore_active,backup_cleanup:$cleanup_active}}' \
 		>"$temporary"
 	chmod 0600 "$temporary"
 	mv "$temporary" "$receipt_output"
@@ -78,6 +82,7 @@ privacy_operation_container_active() {
 	for container in \
 		mycfc-production-privacy-worker-1 \
 		mycfc-production-privacy-retention-1 \
+		mycfc-production-privacy-acceptance-1 \
 		mycfc-production-privacy-activation-1 \
 		mycfc-production-privacy-activation-disable-1; do
 		if [ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" = true ]; then
@@ -89,16 +94,48 @@ privacy_operation_container_active() {
 
 operation_is_credential_change() {
 	case "$1" in
-		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke) return 0 ;;
+		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | activation-disable-provision) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
 operation_is_destructive() {
 	case "$1" in
-		retention-revoke | acceptance-revoke) return 0 ;;
+		retention-revoke | acceptance-revoke | acceptance-run | acceptance-canary-* | legacy-purge | legacy-credential-remove | retention-run | retention-enable | activation-activate | flags-enable | worker-enable) return 0 ;;
 		*) return 1 ;;
 	esac
+}
+
+operation_is_activation_change() {
+	case "$1" in
+		policy-import | acceptance-run | acceptance-canary-* | activation-record | activation-prepare | activation-activate | flags-enable | worker-enable) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+require_evidence_file() {
+	file=$1
+	contract=$2
+	if [ "$evidence_sha256" = "$(printf '0%.0s' $(seq 1 64))" ] || [ ! -f "$file" ] || [ -L "$file" ] ||
+		[ "$(stat -c '%u:%g:%a' "$file" 2>/dev/null || true)" != '0:0:600' ] ||
+		[ "$(sha256sum "$file" | awk '{print $1}')" != "$evidence_sha256" ] ||
+		! jq -e --arg contract "$contract" 'type == "object" and .contract == $contract' "$file" >/dev/null 2>&1; then
+		return 1
+	fi
+}
+
+require_manifest_binding() {
+	manifest=$1
+	shift
+	for name in "$@"; do
+		path=${MYCFC_PRIVACY_ACTIVATION_EVIDENCE_DIR:-/etc/mycfc/privacy-activation/evidence}/$name
+		expected=$(jq -r --arg name "$name" '.files[$name] // empty' "$manifest" 2>/dev/null || true)
+		if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$' || [ ! -f "$path" ] || [ -L "$path" ] ||
+			[ "$(stat -c '%u:%g:%a' "$path" 2>/dev/null || true)" != '0:0:600' ] ||
+			[ "$(sha256sum "$path" | awk '{print $1}')" != "$expected" ]; then
+			return 1
+		fi
+	done
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -128,12 +165,13 @@ fi
 
 if ! jq -e '
 	type == "object" and
-	(keys | sort) == ["contract","expected_image","expires_at","issued_at","operation","request_id","source_sha","workflow_run_attempt","workflow_run_id"] and
-	.contract == "mycfc/privacy-production-operation-request/v1" and
+	(keys | sort) == ["contract","evidence_sha256","expected_image","expires_at","issued_at","operation","request_id","source_sha","workflow_run_attempt","workflow_run_id"] and
+	.contract == "mycfc/privacy-production-operation-request/v2" and
 	(.request_id | type == "string") and
 	(.operation | type == "string") and
 	(.source_sha | type == "string" and test("^[0-9a-f]{40}$")) and
 	(.expected_image | type == "string") and
+	(.evidence_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
 	(.issued_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
 	(.expires_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
 	(.workflow_run_id | type == "number" and . > 0 and floor == .) and
@@ -148,6 +186,7 @@ request_id=$(jq -r .request_id "$request_file")
 operation=$(jq -r .operation "$request_file")
 source_sha=$(jq -r .source_sha "$request_file")
 expected_image=$(jq -r .expected_image "$request_file")
+evidence_sha256=$(jq -r .evidence_sha256 "$request_file")
 issued_at=$(jq -r .issued_at "$request_file")
 expires_at=$(jq -r .expires_at "$request_file")
 request_sha256=$(sha256sum "$request_file" | awk '{print $1}')
@@ -155,7 +194,14 @@ request_sha256=$(sha256sum "$request_file" | awk '{print $1}')
 valid_request_id "$request_id" || reject request_id_invalid
 valid_image "$expected_image" || reject expected_image_invalid
 case "$operation" in
-	preflight | status | retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | acceptance-run) ;;
+	preflight | status | infrastructure-observe | policy-import | activation-disable-provision | \
+	retention-provision | retention-rotate | retention-revoke | retention-run | retention-enable | retention-disable | \
+	acceptance-provision | acceptance-rotate | acceptance-revoke | acceptance-run | \
+	acceptance-canary-retry | acceptance-canary-failure | acceptance-canary-aged | acceptance-canary-heartbeat | acceptance-canary-recovery | \
+	legacy-inventory | legacy-purge | legacy-verify | legacy-credential-remove | \
+	backup-run | backup-posture | backup-cleanup-inventory | restore-run | restore-verify | \
+	activation-record | activation-prepare | activation-activate | activation-disable | \
+	flags-enable | flags-disable | worker-enable | worker-disable) ;;
 	*) reject operation_not_allowlisted ;;
 esac
 
@@ -219,6 +265,9 @@ fi
 if operation_is_destructive "$operation" && [ "${PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED:-false}" != true ]; then
 	reject destructive_operations_disabled
 fi
+if operation_is_activation_change "$operation" && [ "${PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED:-false}" != true ]; then
+	reject activation_operations_disabled
+fi
 
 event "event=privacy_operation_started request_id=$request_id operation=$operation"
 case "$operation" in
@@ -232,6 +281,22 @@ case "$operation" in
 			[ "$(service_active mycfc-postgres-backup-version-cleanup.service)" = true ] ||
 			privacy_operation_container_active; then
 			reject privacy_activity_not_quiescent
+		fi
+		;;
+	infrastructure-observe)
+		if ! require_evidence_file "$control_dir/infrastructure.json" mycfc/privacy-infrastructure-posture/v1; then
+			reject infrastructure_evidence_invalid
+		fi
+		;;
+	policy-import)
+		if [ "$evidence_sha256" != 98d80915d8911b296768eddb278934cfb6c0f49c731bd50b14358756c07a163e ] ||
+			! "$deployment_dir/privacy-policy-import.sh" >/dev/null 2>&1; then
+			reject policy_import_failed
+		fi
+		;;
+	activation-disable-provision)
+		if ! "$deployment_dir/privacy-activation.sh" provision-disable >/dev/null 2>&1; then
+			reject activation_disable_provision_failed
 		fi
 		;;
 	retention-provision)
@@ -249,11 +314,96 @@ case "$operation" in
 			reject retention_revoke_failed
 		fi
 		;;
-	acceptance-provision | acceptance-rotate | acceptance-revoke | acceptance-run)
-		# Reserved for the reviewed synthetic-acceptance wrapper. Do not guess its
-		# credential or invocation contract, and never report an unavailable
-		# transition as successful.
-		reject operation_not_available
+	retention-run)
+		if ! "$deployment_dir/privacy-retention.sh" run >/dev/null 2>&1; then reject retention_run_failed; fi
+		;;
+	retention-enable | retention-disable)
+		if ! "$deployment_dir/privacy-production-config.sh" "$operation" >/dev/null 2>&1; then reject retention_config_failed; fi
+		;;
+	acceptance-provision | acceptance-rotate | acceptance-revoke)
+		mode=${operation#acceptance-}
+		if ! "$deployment_dir/privacy-acceptance.sh" "$mode" >/dev/null 2>&1; then reject acceptance_credential_failed; fi
+		;;
+	acceptance-run | acceptance-canary-retry | acceptance-canary-failure | acceptance-canary-aged | acceptance-canary-heartbeat | acceptance-canary-recovery)
+		case "$operation" in
+			acceptance-run) mode=run ;;
+			acceptance-canary-*) mode=${operation#acceptance-} ;;
+		esac
+		output="$state_dir/acceptance/$request_id.json"
+		if ! MYCFC_PRIVACY_OPERATION_STATE_DIR="$state_dir" MYCFC_PRIVACY_ACCEPTANCE_EVIDENCE_OUTPUT="$output" \
+			"$deployment_dir/privacy-acceptance.sh" "$mode"; then
+			reject acceptance_run_failed
+		fi
+		;;
+	legacy-inventory)
+		output=$legacy_evidence_dir/inventory-$request_id.json
+		if ! "$deployment_dir/legacy-media-purge.sh" inventory "$expected_image" "$output" >/dev/null 2>&1; then reject legacy_inventory_failed; fi
+		;;
+	legacy-purge)
+		if [ "$evidence_sha256" = "$(printf '0%.0s' $(seq 1 64))" ]; then reject legacy_inventory_approval_missing; fi
+		output=$legacy_evidence_dir/purge-$request_id.json
+		if ! "$deployment_dir/legacy-media-purge.sh" execute "$expected_image" "$evidence_sha256" "$output" >/dev/null 2>&1; then reject legacy_purge_failed; fi
+		;;
+	legacy-verify)
+		output=$legacy_evidence_dir/verify-$request_id.json
+		if ! "$deployment_dir/legacy-media-purge.sh" inventory "$expected_image" "$output" >/dev/null 2>&1 ||
+			! jq -e '.versions == 0 and .delete_markers == 0' "$output" >/dev/null 2>&1; then reject legacy_absence_not_proven; fi
+		;;
+	legacy-credential-remove)
+		teardown=$control_dir/legacy-purge-teardown.json
+		if ! require_evidence_file "$teardown" mycfc/legacy-media-purge-teardown/v1 ||
+			! jq -e '.identity_absent == true and .access_keys_absent == true and (.terraform_apply_sha256 | test("^[0-9a-f]{64}$"))' "$teardown" >/dev/null 2>&1; then
+			reject legacy_teardown_evidence_invalid
+		fi
+		rm -f /etc/mycfc/legacy-media-purge/aws-credentials
+		;;
+	backup-run)
+		if ! systemctl start mycfc-postgres-backup.service; then reject backup_run_failed; fi
+		;;
+	backup-posture)
+		if ! systemctl start mycfc-hetzner-backup-posture.service; then reject backup_posture_failed; fi
+		;;
+	backup-cleanup-inventory)
+		cleanup_env=/etc/mycfc/backup-cleanup.env
+		if [ ! -f "$cleanup_env" ] || [ -L "$cleanup_env" ] ||
+			[ "$(stat -c '%u:%g:%a' "$cleanup_env" 2>/dev/null || true)" != '0:0:600' ] ||
+			! grep -Eq "^BACKUP_NONCURRENT_CLEANER_DRY_RUN='?true'?$" "$cleanup_env" ||
+			! systemctl start mycfc-postgres-backup-version-cleanup.service; then reject backup_cleanup_inventory_failed; fi
+		;;
+	restore-run)
+		if ! systemctl start mycfc-postgres-restore-drill.service; then reject restore_run_failed; fi
+		;;
+	restore-verify)
+		if ! "$deployment_dir/verify-privacy-restore-attestation.sh" "$expected_image" >/dev/null 2>&1; then reject restore_attestation_invalid; fi
+		;;
+	activation-record)
+		manifest=$control_dir/activation-evidence-set.json
+		if ! require_evidence_file "$manifest" mycfc/privacy-activation-evidence-set/v1 ||
+			! require_manifest_binding "$manifest" restore-attestation.json infrastructure.json provider-registry.json schema-inventory.json restore-attestation.key artifact-public.key ||
+			! "$deployment_dir/privacy-activation.sh" record-evidence >/dev/null 2>&1; then reject activation_evidence_failed; fi
+		;;
+	activation-prepare)
+		manifest=$control_dir/activation-evidence-set.json
+		if ! require_evidence_file "$manifest" mycfc/privacy-activation-evidence-set/v1 ||
+			! require_manifest_binding "$manifest" restore-attestation.json infrastructure.json provider-registry.json schema-inventory.json restore-attestation.key artifact-public.key; then reject activation_evidence_invalid; fi
+		output="$state_dir/approval-material-$request_id.json"
+		if ! "$deployment_dir/privacy-activation.sh" prepare-approvals >"$output" 2>/dev/null ||
+			! jq -e '.contract == "mycfc/privacy-activation-approval-material/v1"' "$output" >/dev/null 2>&1; then
+			rm -f "$output"; reject activation_prepare_failed
+		fi
+		chmod 0600 "$output"
+		;;
+	activation-activate)
+		manifest=$control_dir/activation-approval-bundle.json
+		if ! require_evidence_file "$manifest" mycfc/privacy-activation-approval-bundle/v1 ||
+			! require_manifest_binding "$manifest" approval-material.json executor-approval.json administrator-approval.json executor-approval-public.key administrator-approval-public.key ||
+			! "$deployment_dir/privacy-activation.sh" activate >/dev/null 2>&1; then reject activation_approval_failed; fi
+		;;
+	activation-disable)
+		if ! "$deployment_dir/privacy-activation.sh" disable >/dev/null 2>&1; then reject activation_disable_failed; fi
+		;;
+	flags-enable | flags-disable | worker-enable | worker-disable)
+		if ! "$deployment_dir/privacy-production-config.sh" "$operation" >/dev/null 2>&1; then reject production_config_failed; fi
 		;;
 esac
 

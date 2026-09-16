@@ -131,11 +131,22 @@ assert expression_count == 6
 expected_enabled = {
     'production': {
         'privacy_worker_infrastructure_enabled': 'true',
+        'privacy_worker_s3_deletion_enabled': 'true',
+        'privacy_worker_metadata_rewrite_enabled': 'true',
+        'privacy_worker_ledger_broker_invoke_enabled': 'true',
+        'privacy_worker_ledger_broker_function_arn':
+            '"arn:aws:lambda:eu-west-1:334960985019:function:mycfc-production-privacy-ledger-broker"',
+        'privacy_worker_monitoring_enabled': 'true',
         'operations_observer_enabled': 'true',
         'operations_observer_github_oidc_provider_arn':
             '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
     },
-    'hetzner': {'privacy_restore_infrastructure_enabled': 'true'},
+    'hetzner': {
+        'privacy_restore_infrastructure_enabled': 'true',
+        'privacy_restore_ledger_write_enabled': 'true',
+        'privacy_restore_ledger_replay_enabled': 'true',
+        'postgres_backup_cleanup_identity_enabled': 'true',
+    },
 }
 for stack, enabled in expected_enabled.items():
     text = (root / f'infra/environments/{stack}/privacy-infrastructure.tfvars').read_text()

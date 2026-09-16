@@ -182,6 +182,9 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/privacy-retention_test.sh
 	sh deployment/privacy-production-operation_test.sh
 	sh deployment/privacy-production-operation-agent_test.sh
+	sh deployment/privacy-production-config_test.sh
+	sh deployment/privacy-policy-import_test.sh
+	sh deployment/privacy-acceptance_test.sh
 	sh deployment/privacy-worker_test.sh
 	sh deployment/privacy-activation_test.sh
 	sh deployment/guardian-activation_test.sh

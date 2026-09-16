@@ -36,7 +36,32 @@ cat >"$test_dir/deployment/privacy-retention.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$RETENTION_CALLS"
 EOF
-chmod 0755 "$test_dir/bin/"* "$test_dir/deployment/privacy-retention.sh"
+cat >"$test_dir/deployment/privacy-policy-import.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' policy-import >>"$OPERATION_CALLS"
+EOF
+cat >"$test_dir/deployment/privacy-activation.sh" <<'EOF'
+#!/bin/sh
+printf 'activation %s\n' "$*" >>"$OPERATION_CALLS"
+EOF
+cat >"$test_dir/deployment/privacy-production-config.sh" <<'EOF'
+#!/bin/sh
+printf 'config %s\n' "$*" >>"$OPERATION_CALLS"
+EOF
+cat >"$test_dir/deployment/privacy-acceptance.sh" <<'EOF'
+#!/bin/sh
+printf 'acceptance %s\n' "$*" >>"$OPERATION_CALLS"
+EOF
+cat >"$test_dir/deployment/legacy-media-purge.sh" <<'EOF'
+#!/bin/sh
+printf 'legacy %s\n' "$*" >>"$OPERATION_CALLS"
+mkdir -p "$(dirname -- "${4:-$3}")"
+case "$1" in
+	inventory) printf '%s\n' '{"versions":0,"delete_markers":0}' >"$3" ;;
+	execute) printf '%s\n' '{}' >"$4" ;;
+esac
+EOF
+chmod 0755 "$test_dir/bin/"* "$test_dir/deployment/"*.sh
 
 sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 digest=$(printf 'b%.0s' $(seq 1 64))
@@ -46,6 +71,8 @@ env_file="$test_dir/mycfc.env"
 lock_file="$test_dir/operation.lock"
 release_lock_file="$test_dir/release.lock"
 export RETENTION_CALLS="$test_dir/retention.calls"
+export OPERATION_CALLS="$test_dir/operation.calls"
+mkdir -p "$test_dir/control" "$test_dir/legacy"
 
 write_env() {
 	enabled=$1
@@ -55,6 +82,7 @@ write_env() {
 PRIVACY_PRODUCTION_OPERATIONS_ENABLED=$enabled
 PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED=$credentials
 PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED=$destructive
+PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED=${4:-false}
 GIT_SHA=$sha
 MYCFC_IMAGE=$image
 EOF
@@ -69,9 +97,10 @@ write_request() {
 	expires=$(date -u -d "$issued + 10 minutes" +%Y-%m-%dT%H:%M:%SZ)
 	request="$test_dir/request-$id.json"
 	jq -cS -n --arg id "$id" --arg op "$operation" --arg sha "$sha" --arg image "$target_image" \
+		--arg evidence "${4:-0000000000000000000000000000000000000000000000000000000000000000}" \
 		--arg issued "$issued" --arg expires "$expires" \
 		--argjson run "${id%-*}" --argjson attempt "${id#*-}" \
-		'{contract:"mycfc/privacy-production-operation-request/v1",request_id:$id,operation:$op,source_sha:$sha,expected_image:$image,issued_at:$issued,expires_at:$expires,workflow_run_id:$run,workflow_run_attempt:$attempt}' \
+		'{contract:"mycfc/privacy-production-operation-request/v2",request_id:$id,operation:$op,source_sha:$sha,expected_image:$image,evidence_sha256:$evidence,issued_at:$issued,expires_at:$expires,workflow_run_id:$run,workflow_run_attempt:$attempt}' \
 		>"$request"
 	chmod 0600 "$request"
 	printf '%s\n' "$request"
@@ -87,6 +116,8 @@ run_operation() {
 		MYCFC_PRIVACY_OPERATION_LOCK_FILE="$lock_file" \
 		MYCFC_RELEASE_LOCK_FILE="$release_lock_file" \
 		MYCFC_DEPLOYMENT_DIR="$test_dir/deployment" \
+		MYCFC_PRIVACY_OPERATION_CONTROL_DIR="$test_dir/control" \
+		MYCFC_LEGACY_MEDIA_PURGE_EVIDENCE_DIR="$test_dir/legacy" \
 		sh "$script_dir/privacy-production-operation.sh" "$request" "$state_dir/receipts/$id.json"
 }
 
@@ -106,7 +137,7 @@ printf '%s' "$output" | grep -q '^event=privacy_operation_started request_id=102
 printf '%s' "$output" | grep -q '^event=privacy_operation_succeeded request_id=102-1 operation=status '
 receipt="$state_dir/receipts/102-1.json"
 jq -e --arg image "$image" --arg sha "$sha" '
-	(keys | sort) == ["contract","expected_image","finished_at","operation","reason","request_id","request_sha256","result","services","source_sha","started_at"] and
+	(keys | sort) == ["contract","evidence_sha256","expected_image","finished_at","operation","reason","request_id","request_sha256","result","services","source_sha","started_at"] and
 	.contract == "mycfc/privacy-production-operation-receipt/v1" and .request_id == "102-1" and .operation == "status" and
 	.source_sha == $sha and .expected_image == $image and .result == "SUCCEEDED" and .reason == null and
 	(.request_sha256 | test("^[0-9a-f]{64}$")) and ([.services[]] | all(. == false))
@@ -189,21 +220,71 @@ fi
 grep -q 'reason=destructive_operations_disabled' "$test_dir/acceptance-destructive.out"
 
 rm -rf "$state_dir"
-write_env true true true
+write_env true true true false
 request=$(write_request 110-1 acceptance-run)
-if run_operation "$request" >"$test_dir/acceptance-unavailable.out" 2>&1; then
-	printf '%s\n' 'unintegrated acceptance operation was reported as successful' >&2
+if run_operation "$request" >"$test_dir/acceptance-activation-gate.out" 2>&1; then
+	printf '%s\n' 'synthetic acceptance bypassed the activation gate' >&2
 	exit 1
 fi
-grep -q 'reason=operation_not_available' "$test_dir/acceptance-unavailable.out"
+grep -q 'reason=activation_operations_disabled' "$test_dir/acceptance-activation-gate.out"
+
+rm -rf "$state_dir"
+write_env true true true true
+request=$(write_request 117-1 acceptance-canary-retry)
+run_operation "$request" >/dev/null
+grep -q '^acceptance canary-retry$' "$OPERATION_CALLS"
+
+rm -rf "$state_dir"
+write_env true true true true
+request=$(write_request 112-1 policy-import "$image" 98d80915d8911b296768eddb278934cfb6c0f49c731bd50b14358756c07a163e)
+run_operation "$request" >/dev/null
+grep -q '^policy-import$' "$OPERATION_CALLS"
+
+rm -rf "$state_dir"
+write_env true true true false
+request=$(write_request 113-1 flags-enable)
+if run_operation "$request" >"$test_dir/activation-gate.out" 2>&1; then
+	printf '%s\n' 'activation operation bypassed its independent gate' >&2
+	exit 1
+fi
+grep -q 'reason=activation_operations_disabled' "$test_dir/activation-gate.out"
+
+rm -rf "$state_dir"
+write_env true true true true
+request=$(write_request 114-1 activation-disable)
+run_operation "$request" >/dev/null
+grep -q '^activation disable$' "$OPERATION_CALLS"
+
+rm -rf "$state_dir"
+printf '%s\n' '{"contract":"mycfc/privacy-infrastructure-posture/v1"}' >"$test_dir/control/infrastructure.json"
+chmod 0600 "$test_dir/control/infrastructure.json"
+infrastructure_sha=$(sha256sum "$test_dir/control/infrastructure.json" | awk '{print $1}')
+write_env true false false false
+request=$(write_request 115-1 infrastructure-observe "$image" "$infrastructure_sha")
+run_operation "$request" >/dev/null
+
+rm -rf "$state_dir"
+write_env true false true false
+request=$(write_request 116-1 legacy-purge "$image" "$digest")
+run_operation "$request" >/dev/null
+grep -q "^legacy execute $image $digest $test_dir/legacy/purge-116-1.json$" "$OPERATION_CALLS"
 
 workflow="$repo_dir/.github/workflows/privacy-production-operations.yml"
 grep -q '^    environment: production$' "$workflow"
 grep -q '^          - preflight$' "$workflow"
 grep -q '^          - status$' "$workflow"
+grep -q '^          - activation-disable$' "$workflow"
+grep -q '^          - worker-enable$' "$workflow"
+grep -q '^          - acceptance-run$' "$workflow"
+grep -q '^          - acceptance-canary-recovery$' "$workflow"
 if grep -Eq 'inputs\.(command|args|script|shell)' "$workflow"; then
 	printf '%s\n' 'workflow exposes arbitrary command-shaped input' >&2
 	exit 1
 fi
+unit="$script_dir/mycfc-privacy-production-operation.service"
+grep -q 'ReadWritePaths=.* /etc/mycfc/deployment ' "$unit"
+grep -q '^ReadWritePaths=/etc/mycfc ' "$unit"
+grep -q 'ReadOnlyPaths=.*-/etc/mycfc/privacy-acceptance ' "$unit"
+grep -q -- '-/var/lib/mycfc/legacy-media-purge' "$unit"
 
 printf '%s\n' 'privacy production operation state-machine tests passed'

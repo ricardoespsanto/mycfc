@@ -5,12 +5,47 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Fixed non-destructive production operation to request.
+        description: Fixed production operation to request; protected environment approval is required.
         type: choice
         required: true
         options:
           - preflight
           - status
+          - infrastructure-observe
+          - policy-import
+          - activation-disable-provision
+          - retention-provision
+          - retention-rotate
+          - retention-revoke
+          - retention-run
+          - retention-enable
+          - retention-disable
+          - acceptance-provision
+          - acceptance-rotate
+          - acceptance-revoke
+          - acceptance-run
+          - acceptance-canary-retry
+          - acceptance-canary-failure
+          - acceptance-canary-aged
+          - acceptance-canary-heartbeat
+          - acceptance-canary-recovery
+          - legacy-inventory
+          - legacy-purge
+          - legacy-verify
+          - legacy-credential-remove
+          - backup-run
+          - backup-posture
+          - backup-cleanup-inventory
+          - restore-run
+          - restore-verify
+          - activation-record
+          - activation-prepare
+          - activation-activate
+          - activation-disable
+          - flags-enable
+          - flags-disable
+          - worker-enable
+          - worker-disable
       sha:
         description: Exact current signed and CI-green main commit.
         required: true
@@ -18,6 +53,11 @@ on:
       image:
         description: Exact active application image by sha256 digest.
         required: true
+        type: string
+      evidence_sha256:
+        description: Exact approved evidence or inventory SHA-256; use 64 zeroes only for operations without evidence.
+        required: true
+        default: "0000000000000000000000000000000000000000000000000000000000000000"
         type: string
 
 permissions: {}
@@ -29,7 +69,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 58
     environment: production
     permissions:
       actions: read
@@ -56,7 +96,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$REQUESTED_OPERATION" == preflight || "$REQUESTED_OPERATION" == status ]]
+          case "$REQUESTED_OPERATION" in
+            preflight|status|infrastructure-observe|policy-import|activation-disable-provision|retention-provision|retention-rotate|retention-revoke|retention-run|retention-enable|retention-disable|acceptance-provision|acceptance-rotate|acceptance-revoke|acceptance-run|acceptance-canary-retry|acceptance-canary-failure|acceptance-canary-aged|acceptance-canary-heartbeat|acceptance-canary-recovery|legacy-inventory|legacy-purge|legacy-verify|legacy-credential-remove|backup-run|backup-posture|backup-cleanup-inventory|restore-run|restore-verify|activation-record|activation-prepare|activation-activate|activation-disable|flags-enable|flags-disable|worker-enable|worker-disable) ;;
+            *) exit 1 ;;
+          esac
           test "$DISPATCH_REF" = refs/heads/main
           test "$REQUESTED_SHA" = "$DISPATCH_SHA"
           test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
@@ -99,23 +142,26 @@ jobs:
         env:
           REQUESTED_OPERATION: ${{ inputs.operation }}
           REQUESTED_SHA: ${{ inputs.sha }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
         run: |
           set -Eeuo pipefail
           request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           issued_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           expires_at=$(date -u -d "$issued_at + 10 minutes" +%Y-%m-%dT%H:%M:%SZ)
+          [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           mkdir -m 0700 operation-image
           jq -cS -n \
-            --arg contract 'mycfc/privacy-production-operation-request/v1' \
+            --arg contract 'mycfc/privacy-production-operation-request/v2' \
             --arg request_id "$request_id" \
             --arg operation "$REQUESTED_OPERATION" \
             --arg source_sha "$REQUESTED_SHA" \
             --arg expected_image "$TARGET_IMAGE" \
+            --arg evidence_sha256 "$EVIDENCE_SHA256" \
             --arg issued_at "$issued_at" \
             --arg expires_at "$expires_at" \
             --argjson workflow_run_id "$GITHUB_RUN_ID" \
             --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
-            '{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,issued_at:$issued_at,expires_at:$expires_at,workflow_run_id:$workflow_run_id,workflow_run_attempt:$workflow_run_attempt}' \
+            '{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,evidence_sha256:$evidence_sha256,issued_at:$issued_at,expires_at:$expires_at,workflow_run_id:$workflow_run_id,workflow_run_attempt:$workflow_run_attempt}' \
             > operation-image/privacy-operation.json
           printf 'FROM scratch\nCOPY privacy-operation.json /privacy-operation.json\n' > operation-image/Dockerfile
           {
@@ -146,7 +192,7 @@ jobs:
           tags: ${{ steps.ecr-login.outputs.registry }}/mycfc-production:${{ steps.request.outputs.tag }}
           labels: |
             org.opencontainers.image.revision=${{ inputs.sha }}
-            org.mycfc.privacy-operation-contract=mycfc/privacy-production-operation-request/v1
+            org.mycfc.privacy-operation-contract=mycfc/privacy-production-operation-request/v2
           provenance: false
       - name: Attest operation-request provenance
         # actions/attest-build-provenance v4.2.2
@@ -167,7 +213,7 @@ jobs:
           revision=$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' "$REQUEST_IMAGE")
           contract=$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.mycfc.privacy-operation-contract"}}' "$REQUEST_IMAGE")
           test "$revision" = "$REQUESTED_SHA"
-          test "$contract" = mycfc/privacy-production-operation-request/v1
+          test "$contract" = mycfc/privacy-production-operation-request/v2
           gh attestation verify "oci://$REQUEST_IMAGE" --repo "${{ github.repository }}" \
             --signer-workflow "${{ github.repository }}/.github/workflows/privacy-production-operations.yml" \
             --source-digest "$REQUESTED_SHA" --deny-self-hosted-runners >/dev/null
@@ -195,7 +241,7 @@ jobs:
           set -Eeuo pipefail
           [[ "$REQUEST_ID" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
           [[ "$RECEIPT_NOT_BEFORE_MS" =~ ^[1-9][0-9]*$ ]]
-          for attempt in $(seq 1 40); do
+          for attempt in $(seq 1 200); do
             aws logs filter-log-events --region "$AWS_REGION" \
               --log-group-name "$CLOUDWATCH_LOG_GROUP" \
               --start-time "$RECEIPT_NOT_BEFORE_MS" --output json > events.json
@@ -220,5 +266,46 @@ jobs:
             fi
             sleep 15
           done
-          echo 'No fresh host receipt arrived before the short-lived request expired.' >&2
+          echo 'No fresh host receipt arrived within the protected observation window.' >&2
+          exit 1
+      - name: Observe the isolated canary alarm and recovery
+        if: startsWith(inputs.operation, 'acceptance-canary-')
+        env:
+          ALARM_NAME: mycfc-production-privacy-acceptance-canary
+          OBSERVATION_NOT_BEFORE_MS: ${{ steps.request.outputs.receipt_not_before_ms }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$OBSERVATION_NOT_BEFORE_MS" =~ ^[1-9][0-9]*$ ]]
+          observation_start=$(date -u -d "@$((OBSERVATION_NOT_BEFORE_MS / 1000))" +%Y-%m-%dT%H:%M:%SZ)
+          for attempt in $(seq 1 24); do
+            aws cloudwatch describe-alarm-history --region "$AWS_REGION" --alarm-name "$ALARM_NAME" \
+              --history-item-type StateUpdate --start-date "$observation_start" \
+              --scan-by TimestampAscending --output json > alarm-history.json
+            jq -r '.AlarmHistoryItems[]? | [.Timestamp, (.HistoryData | fromjson | .newState.stateValue)] | @tsv' \
+              alarm-history.json > alarm-transitions.tsv
+            alarm_state_ms=
+            ok_state_ms=
+            while IFS=$'\t' read -r state_time state; do
+              state_ms=$(($(date -u -d "$state_time" +%s) * 1000))
+              if [[ "$state" == ALARM && "$state_ms" -ge "$OBSERVATION_NOT_BEFORE_MS" ]]; then
+                alarm_state_ms=$state_ms
+              elif [[ "$state" == OK && -n "$alarm_state_ms" && "$state_ms" -gt "$alarm_state_ms" ]]; then
+                ok_state_ms=$state_ms
+                break
+              fi
+            done < alarm-transitions.tsv
+            if [[ -n "$alarm_state_ms" && -n "$ok_state_ms" ]]; then
+              {
+                echo
+                echo '### Isolated canary alarm observation'
+                echo
+                echo "- Alarm: \`$ALARM_NAME\`"
+                echo '- Observed a fresh **ALARM** transition followed by a fresh **OK** transition.'
+                echo '- The ordinary privacy-worker alarms remain isolated from synthetic fixtures.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'A fresh isolated canary ALARM-to-OK transition was not observed.' >&2
           exit 1

@@ -255,6 +255,9 @@ run "broker_permission_and_worker_alarms_are_exact" {
       aws_cloudwatch_metric_alarm.privacy_worker_failure,
       aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat,
       aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing,
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm,
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery,
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary,
     ]
   }
 
@@ -289,6 +292,24 @@ run "broker_permission_and_worker_alarms_are_exact" {
       aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing[0].treat_missing_data == "breaching"
     )
     error_message = "An activated worker must alarm after two missing five-minute heartbeats."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].log_group_name == aws_cloudwatch_log_group.deployment.name &&
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].metric_transformation[0].namespace == "MyCFC/PrivacyCanary" &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].pattern, "privacy_acceptance_canary_retry_observed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].pattern, "privacy_acceptance_canary_failure_observed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].pattern, "privacy_acceptance_canary_aged_observed") &&
+      strcontains(aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm[0].pattern, "privacy_acceptance_canary_heartbeat_missing_observed") &&
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery[0].pattern == "\"event=privacy_acceptance_canary_recovery_observed count=1\"" &&
+      aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery[0].metric_transformation[0].namespace == "MyCFC/PrivacyCanary" &&
+      !strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "privacy_acceptance_canary") &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].period == 60 &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].treat_missing_data == "notBreaching"
+    )
+    error_message = "Synthetic canary signals must use an isolated deployment-log metric and recover after the one-minute signal period without entering ordinary worker alarms."
   }
 }
 

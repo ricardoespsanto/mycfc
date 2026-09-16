@@ -10,6 +10,7 @@ locals {
     "ecr:ListImages",
   ]
   operations_observer_alarm_actions = [
+    "cloudwatch:DescribeAlarmHistory",
     "cloudwatch:DescribeAlarms",
     "cloudwatch:GetMetricData",
     "cloudwatch:GetMetricStatistics",

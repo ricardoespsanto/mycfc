@@ -43,7 +43,7 @@ case "$1:$2" in
 	image:inspect)
 		case "$*" in
 			*org.opencontainers.image.revision*) printf '%s\n' "$EXPECTED_SHA" ;;
-			*org.mycfc.privacy-operation-contract*) printf '%s\n' mycfc/privacy-production-operation-request/v1 ;;
+			*org.mycfc.privacy-operation-contract*) printf '%s\n' mycfc/privacy-production-operation-request/v2 ;;
 		esac
 		;;
 	create:*) printf '%s\n' request-container ;;
@@ -87,7 +87,7 @@ EOF
 issued=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 expires=$(date -u -d "$issued + 10 minutes" +%Y-%m-%dT%H:%M:%SZ)
 jq -cS -n --arg sha "$sha" --arg image "$repository@sha256:$target_digest" --arg issued "$issued" --arg expires "$expires" \
-	'{contract:"mycfc/privacy-production-operation-request/v1",request_id:"201-1",operation:"status",source_sha:$sha,expected_image:$image,issued_at:$issued,expires_at:$expires,workflow_run_id:201,workflow_run_attempt:1}' >"$request"
+	'{contract:"mycfc/privacy-production-operation-request/v2",request_id:"201-1",operation:"status",source_sha:$sha,expected_image:$image,evidence_sha256:("0"*64),issued_at:$issued,expires_at:$expires,workflow_run_id:201,workflow_run_attempt:1}' >"$request"
 
 export AWS_CALLS="$calls/aws" DOCKER_CALLS="$calls/docker" GH_CALLS="$calls/gh" WRAPPER_CALLS="$calls/wrapper"
 export IMAGE_INVENTORY="$inventory" REQUEST_FIXTURE="$request" EXPECTED_SHA="$sha"

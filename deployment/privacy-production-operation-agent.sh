@@ -120,7 +120,7 @@ fi
 revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true)
 contract=$(docker image inspect --format '{{index .Config.Labels "org.mycfc.privacy-operation-contract"}}' "$image" 2>/dev/null || true)
 if ! printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$' ||
-	[ "$contract" != mycfc/privacy-production-operation-request/v1 ]; then
+	[ "$contract" != mycfc/privacy-production-operation-request/v2 ]; then
 	fail request_labels_invalid
 fi
 if ! gh attestation verify "oci://$image" \

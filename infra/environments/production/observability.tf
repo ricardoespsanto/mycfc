@@ -212,6 +212,62 @@ resource "aws_cloudwatch_metric_alarm" "privacy_worker_heartbeat_missing" {
   depends_on = [aws_cloudwatch_log_metric_filter.privacy_worker_heartbeat]
 }
 
+# Synthetic acceptance fixtures are deliberately excluded from the ordinary
+# worker alarms. Their fixed aggregate events enter through the protected
+# deployment-operation log path and drive this isolated canary alarm only.
+resource "aws_cloudwatch_log_metric_filter" "privacy_acceptance_canary_alarm" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-acceptance-canary-alarm"
+  pattern        = "%event=privacy_acceptance_canary_retry_observed|event=privacy_acceptance_canary_failure_observed|event=privacy_acceptance_canary_aged_observed|event=privacy_acceptance_canary_heartbeat_missing_observed%"
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyAcceptanceCanaryAlarm"
+    namespace     = "MyCFC/PrivacyCanary"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "privacy_acceptance_canary_recovery" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  name           = "${local.name}-privacy-acceptance-canary-recovery"
+  pattern        = "\"event=privacy_acceptance_canary_recovery_observed count=1\""
+  log_group_name = aws_cloudwatch_log_group.deployment.name
+
+  metric_transformation {
+    name          = "PrivacyAcceptanceCanaryRecovery"
+    namespace     = "MyCFC/PrivacyCanary"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "privacy_acceptance_canary" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-acceptance-canary"
+  alarm_description   = "The isolated synthetic privacy acceptance canary emitted a verified retry, failure, aged-work, or missing-heartbeat condition."
+  namespace           = "MyCFC/PrivacyCanary"
+  metric_name         = "PrivacyAcceptanceCanaryAlarm"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+
+  depends_on = [
+    aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm,
+    aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery,
+  ]
+}
+
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name
 }

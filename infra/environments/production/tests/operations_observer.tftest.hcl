@@ -98,7 +98,7 @@ run "observer_is_short_lived_and_denies_sensitive_reads_and_mutation" {
   }
   assert {
     condition = alltrue([
-      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarms"] :
+      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms"] :
       contains(concat(local.operations_observer_log_actions, local.operations_observer_ecr_actions, local.operations_observer_alarm_actions), action)
     ])
     error_message = "Observer policy must contain only the required operational read paths."

@@ -216,6 +216,10 @@ case "${PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED:-false}" in
 	true | false) ;;
 	*) printf '%s\n' 'PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
+case "${PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED:-false}" in
+	true | false) ;;
+	*) printf '%s\n' 'PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
 
 case "${PRIVACY_COMPLETION_ENABLED:-false}" in
 	true | false) ;;
@@ -311,6 +315,9 @@ chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
 chmod 0755 "$deployment_dir/privacy-retention.sh"
 chmod 0755 "$deployment_dir/privacy-production-operation.sh"
 chmod 0755 "$deployment_dir/privacy-production-operation-agent.sh"
+chmod 0755 "$deployment_dir/privacy-production-config.sh"
+chmod 0755 "$deployment_dir/privacy-policy-import.sh"
+chmod 0755 "$deployment_dir/privacy-acceptance.sh"
 chmod 0755 "$deployment_dir/privacy-worker.sh"
 chmod 0755 "$deployment_dir/privacy-activation.sh"
 chmod 0755 "$deployment_dir/guardian-activation.sh"
