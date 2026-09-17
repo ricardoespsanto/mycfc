@@ -221,6 +221,36 @@ case "${PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED:-false}" in
 	*) printf '%s\n' 'PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
 
+case "${PRIVACY_ACTIVATION_EXCHANGE_ENABLED:-false}" in
+	true)
+		for file in \
+			/etc/mycfc/privacy-activation-exchange.env \
+			/etc/mycfc/privacy-activation/signer-registry.json \
+			/etc/mycfc/privacy-activation/executor-public-key-spki.der \
+			/etc/mycfc/privacy-activation/administrator-public-key-spki.der; do
+			if [ ! -f "$file" ] || [ -L "$file" ] || [ "$(stat -c '%u:%g:%a' "$file" 2>/dev/null || true)" != '0:0:600' ]; then
+				printf '%s\n' 'A privacy activation exchange input is missing or is not root-owned mode 0600.' >&2
+				exit 1
+			fi
+		done
+		if [ -e /etc/mycfc/privacy-activation-exchange/aws-credentials ] &&
+			{ [ ! -f /etc/mycfc/privacy-activation-exchange/aws-credentials ] ||
+				[ -L /etc/mycfc/privacy-activation-exchange/aws-credentials ] ||
+				[ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-activation-exchange/aws-credentials 2>/dev/null || true)" != '0:0:600' ]; }; then
+			printf '%s\n' 'The privacy activation courier credentials are present but are not a root-owned regular file with mode 0600.' >&2
+			exit 1
+		fi
+		registry_sha=$(sed -n 's/^PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256=//p' /etc/mycfc/privacy-activation-exchange.env)
+		if ! printf '%s' "$registry_sha" | grep -Eq '^[0-9a-f]{64}$' ||
+			[ "$registry_sha" != "$(sha256sum /etc/mycfc/privacy-activation/signer-registry.json | awk '{print $1}')" ]; then
+			printf '%s\n' 'The privacy activation signer registry does not match its separately pinned digest.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'PRIVACY_ACTIVATION_EXCHANGE_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
 case "${PRIVACY_COMPLETION_ENABLED:-false}" in
 	true | false) ;;
 	*) printf '%s\n' 'PRIVACY_COMPLETION_ENABLED must be true or false.' >&2; exit 1 ;;
@@ -320,6 +350,9 @@ chmod 0755 "$deployment_dir/privacy-policy-import.sh"
 chmod 0755 "$deployment_dir/privacy-acceptance.sh"
 chmod 0755 "$deployment_dir/privacy-worker.sh"
 chmod 0755 "$deployment_dir/privacy-activation.sh"
+chmod 0755 "$deployment_dir/privacy-activation-exchange.sh"
+chmod 0755 "$deployment_dir/privacy-activation-courier-credentials.sh"
+chmod 0755 "$deployment_dir/privacy-activation-sign-approval.sh"
 chmod 0755 "$deployment_dir/guardian-activation.sh"
 chmod 0755 "$deployment_dir/guardian-release-bind.sh"
 chmod 0755 "$deployment_dir/legacy-media-purge.sh"
@@ -338,6 +371,8 @@ install -m 0644 "$deployment_dir/mycfc-privacy-retention.service" /etc/systemd/s
 install -m 0644 "$deployment_dir/mycfc-privacy-retention.timer" /etc/systemd/system/mycfc-privacy-retention.timer
 install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.service" /etc/systemd/system/mycfc-privacy-production-operation.service
 install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.timer" /etc/systemd/system/mycfc-privacy-production-operation.timer
+install -m 0644 "$deployment_dir/mycfc-privacy-activation-collector.service" /etc/systemd/system/mycfc-privacy-activation-collector.service
+install -m 0644 "$deployment_dir/mycfc-privacy-activation-collector.timer" /etc/systemd/system/mycfc-privacy-activation-collector.timer
 install -m 0644 "$deployment_dir/mycfc-privacy-worker.service" /etc/systemd/system/mycfc-privacy-worker.service
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
@@ -363,6 +398,8 @@ else
 	systemctl disable --now mycfc-privacy-retention.timer >/dev/null 2>&1 || true
 fi
 install -d -o root -g root -m 0700 /var/lib/mycfc/privacy-operations /var/lib/mycfc/privacy-operations/processed /var/lib/mycfc/privacy-operations/receipts
+install -d -o root -g root -m 0700 /var/lib/mycfc/privacy-activation-exchange /var/lib/mycfc/privacy-activation-exchange/receipts
+systemctl disable --now mycfc-privacy-activation-collector.timer >/dev/null 2>&1 || true
 if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
 	systemctl enable --now mycfc-privacy-worker.service
 else

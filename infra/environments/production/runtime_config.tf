@@ -226,12 +226,53 @@ data "aws_iam_policy_document" "release_agent" {
     ]
     resources = ["${aws_cloudwatch_log_group.deployment.arn}:*"]
   }
+
 }
 
 resource "aws_iam_user_policy" "release_agent" {
   name   = "release-agent"
   user   = aws_iam_user.release_agent.name
   policy = data.aws_iam_policy_document.release_agent.json
+}
+
+resource "aws_iam_user_policy" "privacy_activation_courier_credential_admin" {
+  count = var.privacy_activation_exchange_enabled ? 1 : 0
+
+  name = "privacy-activation-courier-credential-admin"
+  user = aws_iam_user.release_agent.name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ManageOnlyPrivacyActivationCourierAccessKeys"
+        Effect = "Allow"
+        Action = [
+          "iam:CreateAccessKey",
+          "iam:DeleteAccessKey",
+          "iam:ListAccessKeys",
+          "iam:UpdateAccessKey",
+        ]
+        Resource = aws_iam_user.privacy_activation_courier[0].arn
+      },
+      {
+        Sid    = "DenyAccessKeyManagementForEveryOtherIdentity"
+        Effect = "Deny"
+        Action = [
+          "iam:CreateAccessKey",
+          "iam:DeleteAccessKey",
+          "iam:ListAccessKeys",
+          "iam:UpdateAccessKey",
+        ]
+        NotResource = aws_iam_user.privacy_activation_courier[0].arn
+      },
+      {
+        Sid      = "DenyRoleChaining"
+        Effect   = "Deny"
+        Action   = ["sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity"]
+        Resource = "*"
+      },
+    ]
+  })
 }
 
 output "runtime_parameter_prefix" {

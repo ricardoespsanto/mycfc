@@ -13,6 +13,8 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 5. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` with the dedicated release-agent credentials described below.
 6. Run `sudo sh deployment/install.sh` from this checkout.
 
+The dual-signer privacy activation exchange has additional root-owned inputs and remains inactive until its Terraform gate, host gates, courier credential, and two protected signer environments are configured. Its collector timer is disabled by the installer and starts only for an approved ceremony. Follow [`../docs/privacy-activation-exchange.md`](../docs/privacy-activation-exchange.md); do not stage approval JSON manually.
+
 The installer validates the Compose configuration, prepares persistent routing state under `/etc/mycfc/deployment`, installs the pull-release systemd timer, and performs one release check before enabling periodic polling. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
 
 ## Required host environment

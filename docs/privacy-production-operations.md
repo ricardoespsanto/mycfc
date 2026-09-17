@@ -39,8 +39,9 @@ Keep the credential, destructive, and activation gates false during bundle insta
 | 2 | `legacy-credential-remove` | teardown artifact | Require proof that Terraform removed the IAM identity and access keys, then remove the local credential copy. It cannot substitute for the Terraform teardown. |
 | 3 | `backup-run`, `backup-posture`, `backup-cleanup-inventory`, `restore-run`, `restore-verify` | zero | Invoke the existing authenticated backup, bounded dry-run cleanup, isolated restore and attestation verifiers. |
 | 3 | `retention-run`, `retention-enable`, `retention-disable` | zero | Run retention once, or manage its timer through the exact configuration editor. Run and enable require the destructive gate. |
-| 4 | `activation-record`, `activation-prepare` | evidence-set manifest | Bind and verify the four current artifacts; record them; produce short-lived approval material in protected local state. |
-| 4 | `activation-activate` | approval-bundle manifest | Bind approval material, both signed approvals and both public keys before the broker verifies distinct actors, roles and keys. |
+| 4 | `activation-record` | evidence-set manifest | Bind, verify, and record the four current activation artifacts. |
+| 4 | `activation-courier-provision`, `activation-courier-rotate`, `activation-courier-revoke` | zero | Manage only the fixed exchange courier key through the already installed release-agent profile. Terraform never creates or stores the courier key. Revoke also requires the destructive gate. |
+| 4 | `activation-ceremony-open` | evidence-set manifest | Prepare and immutably publish one approval material version valid for at most 15 minutes. The collector automatically verifies and activates after both independent approvals arrive. Requires both destructive and activation gates. |
 | 4 | `acceptance-run` | zero | Exercise the real request, executor, object/provider, tombstone, completion and cleanup paths with a generated synthetic fixture; retain separately verified signed evidence only on the host. |
 | 4 | `acceptance-canary-retry`, `acceptance-canary-failure`, `acceptance-canary-aged`, `acceptance-canary-heartbeat`, `acceptance-canary-recovery` | zero | Exercise one fixed synthetic operational condition. The host accepts only the mode's exact aggregate events and signed outcome. GitHub separately requires a fresh isolated canary `ALARM` followed by `OK`. |
 | Rollback | `activation-disable` | zero | Engage the isolated database kill switch through the disable-only credential. |
@@ -58,7 +59,7 @@ The policy importer requires these root-owned mode-`0600` files:
 - `/etc/mycfc/privacy-production-operations/policy-operator`, containing only the active administrator UUID;
 - `/etc/mycfc/privacy-production-operations/club-2026-09-15-v1.json`, with the exact canonical digest.
 
-Activation evidence manifests use contract `mycfc/privacy-activation-evidence-set/v1` and a `files` object binding `restore-attestation.json`, `infrastructure.json`, `provider-registry.json`, `schema-inventory.json`, `restore-attestation.key`, and `artifact-public.key`. Approval manifests use `mycfc/privacy-activation-approval-bundle/v1` and bind `approval-material.json`, both role approvals, and both public keys. The existing activation CLI performs the semantic, release, validity, signature, distinct-role, distinct-actor and distinct-key checks after these file bindings pass.
+Activation evidence manifests use contract `mycfc/privacy-activation-evidence-set/v1` and a `files` object binding `restore-attestation.json`, `infrastructure.json`, `provider-registry.json`, `schema-inventory.json`, `restore-attestation.key`, and `artifact-public.key`. The dual-signer ceremony has no GitHub-provided approval bundle or manual staging route. The host writes material, the two protected signer workflows write their own fixed S3 object, and the collector downloads exact immutable versions, verifies the complete bundle offline, then invokes the database broker. See [`privacy-activation-exchange.md`](privacy-activation-exchange.md).
 
 ## Privacy-safe receipts
 

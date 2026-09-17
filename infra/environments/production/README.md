@@ -28,6 +28,10 @@ The optional privacy-worker source is disabled by default and creates no credent
 
 The optional operations observer is also disabled by default. It creates no access key or IAM user. When separately reviewed and applied, `operations_observer_enabled` creates a one-hour role trusted only by exact IAM Identity Center permission-set role ARNs (with MFA enforced in Identity Center) and/or the exact protected GitHub production-environment OIDC subject. A matching permissions boundary and inline policy allow deployment-log, ECR inventory, and alarm reads while denying secret, Parameter Store, state-bucket, ECR/log mutation, and role-chaining access. Configure the resulting role ARN as the protected `AWS_OPERATIONS_OBSERVER_ROLE_ARN` repository environment variable; never install it on the Hetzner host.
 
+The privacy activation exchange is gated by `privacy_activation_exchange_enabled`. When enabled it creates a dedicated Object-Locked, versioned, KMS-encrypted exchange bucket; a separate 90-day CloudTrail data-event destination; two non-exportable P-256 signing keys; exact-environment GitHub OIDC signer roles; a read-only coordinator role; and a credential-free host courier IAM user. Its payload lifecycle is two days and default Object Lock retention is one day. Every exchange identity has a matching permissions boundary and explicit state, secret, role-chaining, list, and delete denials.
+
+Terraform deliberately creates no courier access key. The existing release-agent user receives a separate inline policy that can list, create, update, and delete access keys only on the exact courier user, denies those actions for every other identity, and denies role chaining. The protected host operation writes the generated courier profile directly as root-owned mode `0600`; no key value enters Terraform state, GitHub, logs, or command output. Review [`../../../docs/privacy-activation-exchange.md`](../../../docs/privacy-activation-exchange.md) before enabling or applying this gate.
+
 ## Amazon SES provisioning
 
 SES is provisioned in `eu-west-1` for the production `domain_name`. Terraform creates:

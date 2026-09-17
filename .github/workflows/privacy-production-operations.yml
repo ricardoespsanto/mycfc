@@ -39,8 +39,10 @@ on:
           - restore-run
           - restore-verify
           - activation-record
-          - activation-prepare
-          - activation-activate
+          - activation-courier-provision
+          - activation-courier-rotate
+          - activation-courier-revoke
+          - activation-ceremony-open
           - activation-disable
           - flags-enable
           - flags-disable
@@ -97,7 +99,7 @@ jobs:
           set -Eeuo pipefail
           [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           case "$REQUESTED_OPERATION" in
-            preflight|status|infrastructure-observe|policy-import|activation-disable-provision|retention-provision|retention-rotate|retention-revoke|retention-run|retention-enable|retention-disable|acceptance-provision|acceptance-rotate|acceptance-revoke|acceptance-run|acceptance-canary-retry|acceptance-canary-failure|acceptance-canary-aged|acceptance-canary-heartbeat|acceptance-canary-recovery|legacy-inventory|legacy-purge|legacy-verify|legacy-credential-remove|backup-run|backup-posture|backup-cleanup-inventory|restore-run|restore-verify|activation-record|activation-prepare|activation-activate|activation-disable|flags-enable|flags-disable|worker-enable|worker-disable) ;;
+            preflight|status|infrastructure-observe|policy-import|activation-disable-provision|retention-provision|retention-rotate|retention-revoke|retention-run|retention-enable|retention-disable|acceptance-provision|acceptance-rotate|acceptance-revoke|acceptance-run|acceptance-canary-retry|acceptance-canary-failure|acceptance-canary-aged|acceptance-canary-heartbeat|acceptance-canary-recovery|legacy-inventory|legacy-purge|legacy-verify|legacy-credential-remove|backup-run|backup-posture|backup-cleanup-inventory|restore-run|restore-verify|activation-record|activation-courier-provision|activation-courier-rotate|activation-courier-revoke|activation-ceremony-open|activation-disable|flags-enable|flags-disable|worker-enable|worker-disable) ;;
             *) exit 1 ;;
           esac
           test "$DISPATCH_REF" = refs/heads/main
@@ -232,6 +234,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_OPERATIONS_OBSERVER_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Wait for the exact privacy-safe host receipt
+        id: host-receipt
         env:
           CLOUDWATCH_LOG_GROUP: /mycfc/production/deployment
           REQUEST_ID: ${{ steps.request.outputs.request_id }}
@@ -248,6 +251,23 @@ jobs:
             succeeded=$(jq --arg id "$REQUEST_ID" '[.events[]? | select(.message | contains("event=privacy_operation_succeeded request_id=" + $id + " "))] | length' events.json)
             rejected=$(jq --arg id "$REQUEST_ID" '[.events[]? | select(.message | contains("event=privacy_operation_rejected request_id=" + $id + " "))] | length' events.json)
             if [ "$succeeded" -gt 0 ]; then
+              if [[ "${{ inputs.operation }}" == activation-ceremony-open ]]; then
+                mapfile -t ceremony_events < <(jq -r --arg id "$REQUEST_ID" '[.events[]? | .message | select(contains("event=privacy_activation_ceremony_opened ") and endswith(" request_id=" + $id))] | unique[]' events.json)
+                test "${#ceremony_events[@]}" -eq 1
+                ceremony_event=${ceremony_events[0]}
+                [[ "$ceremony_event" =~ ^event=privacy_activation_ceremony_opened\ ceremony_id=([0-9a-f-]{36})\ material_sha256=([0-9a-f]{64})\ material_version_id=([-A-Za-z0-9._~+/=]{1,1024})\ expires_at=([0-9TZ:-]{20})\ source_sha=([0-9a-f]{40})\ image_digest=(sha256:[0-9a-f]{64})\ schema_migration_digest=([0-9a-f]{64})\ request_id=$REQUEST_ID$ ]]
+                test "${BASH_REMATCH[5]}" = "${{ inputs.sha }}"
+                test "${BASH_REMATCH[6]}" = "${TARGET_IMAGE##*@}"
+                {
+                  echo "ceremony_id=${BASH_REMATCH[1]}"
+                  echo "material_sha256=${BASH_REMATCH[2]}"
+                  echo "material_version_id=${BASH_REMATCH[3]}"
+                  echo "ceremony_expires_at=${BASH_REMATCH[4]}"
+                  echo "ceremony_source_sha=${BASH_REMATCH[5]}"
+                  echo "ceremony_image_digest=${BASH_REMATCH[6]}"
+                  echo "ceremony_schema_migration_digest=${BASH_REMATCH[7]}"
+                } >> "$GITHUB_OUTPUT"
+              fi
               {
                 echo '## Privacy production operation verified'
                 echo
@@ -268,6 +288,70 @@ jobs:
           done
           echo 'No fresh host receipt arrived within the protected observation window.' >&2
           exit 1
+      # aws-actions/configure-aws-credentials v6.2.4
+      - name: Assume the fixed read-only ceremony coordinator role
+        if: inputs.operation == 'activation-ceremony-open'
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: arn:aws:iam::334960985019:role/mycfc-production-privacy-activation-exchange-coordinator
+          aws-region: eu-west-1
+          role-duration-seconds: 900
+      - name: Verify the immutable material and publish its review summary
+        if: inputs.operation == 'activation-ceremony-open'
+        env:
+          CEREMONY_ID: ${{ steps.host-receipt.outputs.ceremony_id }}
+          CEREMONY_EXPIRES_AT: ${{ steps.host-receipt.outputs.ceremony_expires_at }}
+          EXCHANGE_BUCKET: ${{ vars.PRIVACY_ACTIVATION_EXCHANGE_BUCKET }}
+          EXCHANGE_KMS_KEY_ARN: ${{ vars.PRIVACY_ACTIVATION_EXCHANGE_KMS_KEY_ARN }}
+          MATERIAL_SHA256: ${{ steps.host-receipt.outputs.material_sha256 }}
+          MATERIAL_VERSION_ID: ${{ steps.host-receipt.outputs.material_version_id }}
+          CEREMONY_SCHEMA_MIGRATION_DIGEST: ${{ steps.host-receipt.outputs.ceremony_schema_migration_digest }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ "$CEREMONY_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ "$MATERIAL_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$MATERIAL_VERSION_ID" =~ ^[-A-Za-z0-9._~+/=]{1,1024}$ ]]
+          key="ceremonies/$CEREMONY_ID/material.json"
+          aws s3api get-object --region "$AWS_REGION" --bucket "$EXCHANGE_BUCKET" --key "$key" \
+            --version-id "$MATERIAL_VERSION_ID" --checksum-mode ENABLED material.json > material-response.json
+          actual_sha=$(sha256sum material.json | cut -d' ' -f1)
+          actual_checksum=$(openssl dgst -sha256 -binary material.json | base64 -w0)
+          test "$actual_sha" = "$MATERIAL_SHA256"
+          jq -e --arg version "$MATERIAL_VERSION_ID" --arg checksum "$actual_checksum" --arg kms "$EXCHANGE_KMS_KEY_ARN" \
+            '.VersionId == $version and .ChecksumSHA256 == $checksum and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms' \
+            material-response.json >/dev/null
+          jq -e --arg ceremony "$CEREMONY_ID" --arg source "${{ inputs.sha }}" \
+            --arg image "${TARGET_IMAGE##*@}" --arg schema "$CEREMONY_SCHEMA_MIGRATION_DIGEST" \
+            --arg expires "$CEREMONY_EXPIRES_AT" '
+              .contract == "mycfc/privacy-activation-approval-material/v2" and
+              .ceremony_id == $ceremony and .source_sha == $source and .image_digest == $image and
+              .schema_migration_digest == $schema and .ceremony_expires_at == $expires and
+              .policy_version == "club-2026-09-15-v1" and (.signer_registry_sha256 | test("^[0-9a-f]{64}$")) and
+              (.evidence_ids | type == "array" and length == 4) and
+              ([.evidence_set_sha256,.activation_sha256] | all(.[]; test("^[0-9a-f]{64}$")))
+            ' material.json >/dev/null
+          prepared_epoch=$(date -u -d "$(jq -r .prepared_at material.json)" +%s)
+          expires_epoch=$(date -u -d "$CEREMONY_EXPIRES_AT" +%s)
+          now_epoch=$(date -u +%s)
+          test "$expires_epoch" -gt "$now_epoch"
+          test "$expires_epoch" -gt "$prepared_epoch"
+          test "$((expires_epoch - prepared_epoch))" -le 900
+          {
+            echo
+            echo '### Dual-signature ceremony material'
+            echo
+            echo "- Ceremony: \`$CEREMONY_ID\`"
+            echo "- Material version: \`$MATERIAL_VERSION_ID\`"
+            echo "- Material SHA-256: \`$MATERIAL_SHA256\`"
+            echo "- Expires: \`$CEREMONY_EXPIRES_AT\`"
+            echo "- Source: \`${{ inputs.sha }}\`"
+            echo "- Image digest: \`${TARGET_IMAGE##*@}\`"
+            echo "- Schema digest: \`$CEREMONY_SCHEMA_MIGRATION_DIGEST\`"
+            echo "- Evidence set: \`$(jq -r .evidence_set_sha256 material.json)\`"
+            echo '- Dispatch each fixed signer workflow with these exact values before expiry. Two valid approvals cause automatic activation.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f material.json material-response.json
       - name: Observe the isolated canary alarm and recovery
         if: startsWith(inputs.operation, 'acceptance-canary-')
         env:

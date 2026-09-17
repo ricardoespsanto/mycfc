@@ -94,21 +94,21 @@ privacy_operation_container_active() {
 
 operation_is_credential_change() {
 	case "$1" in
-		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | activation-disable-provision) return 0 ;;
+		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | activation-disable-provision | activation-courier-provision | activation-courier-rotate | activation-courier-revoke) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
 operation_is_destructive() {
 	case "$1" in
-		retention-revoke | acceptance-revoke | acceptance-run | acceptance-canary-* | legacy-purge | legacy-credential-remove | retention-run | retention-enable | activation-activate | flags-enable | worker-enable) return 0 ;;
+		retention-revoke | acceptance-revoke | acceptance-run | acceptance-canary-* | legacy-purge | legacy-credential-remove | retention-run | retention-enable | activation-courier-revoke | activation-ceremony-open | flags-enable | worker-enable) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
 operation_is_activation_change() {
 	case "$1" in
-		policy-import | acceptance-run | acceptance-canary-* | activation-record | activation-prepare | activation-activate | flags-enable | worker-enable) return 0 ;;
+		policy-import | acceptance-run | acceptance-canary-* | activation-record | activation-ceremony-open | flags-enable | worker-enable) return 0 ;;
 		*) return 1 ;;
 	esac
 }
@@ -200,7 +200,7 @@ case "$operation" in
 	acceptance-canary-retry | acceptance-canary-failure | acceptance-canary-aged | acceptance-canary-heartbeat | acceptance-canary-recovery | \
 	legacy-inventory | legacy-purge | legacy-verify | legacy-credential-remove | \
 	backup-run | backup-posture | backup-cleanup-inventory | restore-run | restore-verify | \
-	activation-record | activation-prepare | activation-activate | activation-disable | \
+	activation-record | activation-courier-provision | activation-courier-rotate | activation-courier-revoke | activation-ceremony-open | activation-disable | \
 	flags-enable | flags-disable | worker-enable | worker-disable) ;;
 	*) reject operation_not_allowlisted ;;
 esac
@@ -299,6 +299,12 @@ case "$operation" in
 			reject activation_disable_provision_failed
 		fi
 		;;
+	activation-courier-provision | activation-courier-rotate | activation-courier-revoke)
+		mode=${operation#activation-courier-}
+		if ! "$deployment_dir/privacy-activation-courier-credentials.sh" "$mode"; then
+			reject activation_courier_credential_failed
+		fi
+		;;
 	retention-provision)
 		if ! "$deployment_dir/privacy-retention.sh" provision >/dev/null 2>&1; then
 			reject retention_provision_failed
@@ -382,22 +388,17 @@ case "$operation" in
 			! require_manifest_binding "$manifest" restore-attestation.json infrastructure.json provider-registry.json schema-inventory.json restore-attestation.key artifact-public.key ||
 			! "$deployment_dir/privacy-activation.sh" record-evidence >/dev/null 2>&1; then reject activation_evidence_failed; fi
 		;;
-	activation-prepare)
+	activation-ceremony-open)
 		manifest=$control_dir/activation-evidence-set.json
 		if ! require_evidence_file "$manifest" mycfc/privacy-activation-evidence-set/v1 ||
 			! require_manifest_binding "$manifest" restore-attestation.json infrastructure.json provider-registry.json schema-inventory.json restore-attestation.key artifact-public.key; then reject activation_evidence_invalid; fi
-		output="$state_dir/approval-material-$request_id.json"
-		if ! "$deployment_dir/privacy-activation.sh" prepare-approvals >"$output" 2>/dev/null ||
-			! jq -e '.contract == "mycfc/privacy-activation-approval-material/v1"' "$output" >/dev/null 2>&1; then
-			rm -f "$output"; reject activation_prepare_failed
+		open_event=$("$deployment_dir/privacy-activation-exchange.sh" open) || {
+			reject activation_ceremony_open_failed
+		}
+		if ! printf '%s' "$open_event" | grep -Eq '^event=privacy_activation_ceremony_opened ceremony_id=[0-9a-f-]{36} material_sha256=[0-9a-f]{64} material_version_id=[-A-Za-z0-9._~+/=]{1,1024} expires_at=[0-9TZ:-]{20} source_sha=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} schema_migration_digest=[0-9a-f]{64}$'; then
+			reject activation_ceremony_open_receipt_invalid
 		fi
-		chmod 0600 "$output"
-		;;
-	activation-activate)
-		manifest=$control_dir/activation-approval-bundle.json
-		if ! require_evidence_file "$manifest" mycfc/privacy-activation-approval-bundle/v1 ||
-			! require_manifest_binding "$manifest" approval-material.json executor-approval.json administrator-approval.json executor-approval-public.key administrator-approval-public.key ||
-			! "$deployment_dir/privacy-activation.sh" activate >/dev/null 2>&1; then reject activation_approval_failed; fi
+		event "$open_event request_id=$request_id"
 		;;
 	activation-disable)
 		if ! "$deployment_dir/privacy-activation.sh" disable >/dev/null 2>&1; then reject activation_disable_failed; fi

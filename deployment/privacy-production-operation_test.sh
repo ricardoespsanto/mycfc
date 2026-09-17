@@ -44,6 +44,17 @@ cat >"$test_dir/deployment/privacy-activation.sh" <<'EOF'
 #!/bin/sh
 printf 'activation %s\n' "$*" >>"$OPERATION_CALLS"
 EOF
+cat >"$test_dir/deployment/privacy-activation-courier-credentials.sh" <<'EOF'
+#!/bin/sh
+printf 'courier %s\n' "$*" >>"$OPERATION_CALLS"
+EOF
+cat >"$test_dir/deployment/privacy-activation-exchange.sh" <<'EOF'
+#!/bin/sh
+printf 'exchange %s\n' "$*" >>"$OPERATION_CALLS"
+expires=$(date -u -d '+ 10 minutes' +%Y-%m-%dT%H:%M:%SZ)
+printf 'event=privacy_activation_ceremony_opened ceremony_id=11111111-1111-4111-8111-111111111111 material_sha256=%s material_version_id=material-version-1 expires_at=%s source_sha=%s image_digest=%s schema_migration_digest=%s\n' \
+	"$(printf 'c%.0s' $(seq 1 64))" "$expires" "$MOCK_SOURCE_SHA" "$MOCK_IMAGE_DIGEST" "$(printf 'd%.0s' $(seq 1 64))"
+EOF
 cat >"$test_dir/deployment/privacy-production-config.sh" <<'EOF'
 #!/bin/sh
 printf 'config %s\n' "$*" >>"$OPERATION_CALLS"
@@ -72,7 +83,8 @@ lock_file="$test_dir/operation.lock"
 release_lock_file="$test_dir/release.lock"
 export RETENTION_CALLS="$test_dir/retention.calls"
 export OPERATION_CALLS="$test_dir/operation.calls"
-mkdir -p "$test_dir/control" "$test_dir/legacy"
+mkdir -p "$test_dir/control" "$test_dir/legacy" "$test_dir/evidence"
+export MOCK_SOURCE_SHA="$sha" MOCK_IMAGE_DIGEST="sha256:$digest"
 
 write_env() {
 	enabled=$1
@@ -117,6 +129,7 @@ run_operation() {
 		MYCFC_RELEASE_LOCK_FILE="$release_lock_file" \
 		MYCFC_DEPLOYMENT_DIR="$test_dir/deployment" \
 		MYCFC_PRIVACY_OPERATION_CONTROL_DIR="$test_dir/control" \
+		MYCFC_PRIVACY_ACTIVATION_EVIDENCE_DIR="$test_dir/evidence" \
 		MYCFC_LEGACY_MEDIA_PURGE_EVIDENCE_DIR="$test_dir/legacy" \
 		sh "$script_dir/privacy-production-operation.sh" "$request" "$state_dir/receipts/$id.json"
 }
@@ -220,6 +233,21 @@ fi
 grep -q 'reason=destructive_operations_disabled' "$test_dir/acceptance-destructive.out"
 
 rm -rf "$state_dir"
+write_env true true false false
+request=$(write_request 118-1 activation-courier-provision)
+run_operation "$request" >/dev/null
+grep -q '^courier provision$' "$OPERATION_CALLS"
+
+rm -rf "$state_dir"
+write_env true true false false
+request=$(write_request 119-1 activation-courier-revoke)
+if run_operation "$request" >"$test_dir/courier-revoke.out" 2>&1; then
+	printf '%s\n' 'courier revoke bypassed the destructive gate' >&2
+	exit 1
+fi
+grep -q 'reason=destructive_operations_disabled' "$test_dir/courier-revoke.out"
+
+rm -rf "$state_dir"
 write_env true true true false
 request=$(write_request 110-1 acceptance-run)
 if run_operation "$request" >"$test_dir/acceptance-activation-gate.out" 2>&1; then
@@ -255,6 +283,38 @@ request=$(write_request 114-1 activation-disable)
 run_operation "$request" >/dev/null
 grep -q '^activation disable$' "$OPERATION_CALLS"
 
+for file in restore-attestation.json infrastructure.json provider-registry.json schema-inventory.json restore-attestation.key artifact-public.key; do
+	printf '%s\n' "$file" >"$test_dir/evidence/$file"
+	chmod 0600 "$test_dir/evidence/$file"
+done
+jq -n --arg contract mycfc/privacy-activation-evidence-set/v1 \
+	--arg restore "$(sha256sum "$test_dir/evidence/restore-attestation.json" | awk '{print $1}')" \
+	--arg infrastructure "$(sha256sum "$test_dir/evidence/infrastructure.json" | awk '{print $1}')" \
+	--arg provider "$(sha256sum "$test_dir/evidence/provider-registry.json" | awk '{print $1}')" \
+	--arg schema "$(sha256sum "$test_dir/evidence/schema-inventory.json" | awk '{print $1}')" \
+	--arg restore_key "$(sha256sum "$test_dir/evidence/restore-attestation.key" | awk '{print $1}')" \
+	--arg artifact_key "$(sha256sum "$test_dir/evidence/artifact-public.key" | awk '{print $1}')" \
+	'{contract:$contract,files:{"restore-attestation.json":$restore,"infrastructure.json":$infrastructure,"provider-registry.json":$provider,"schema-inventory.json":$schema,"restore-attestation.key":$restore_key,"artifact-public.key":$artifact_key}}' \
+	>"$test_dir/control/activation-evidence-set.json"
+chmod 0600 "$test_dir/control/activation-evidence-set.json"
+manifest_sha=$(sha256sum "$test_dir/control/activation-evidence-set.json" | awk '{print $1}')
+
+rm -rf "$state_dir"
+write_env true true true false
+request=$(write_request 120-1 activation-ceremony-open "$image" "$manifest_sha")
+if run_operation "$request" >"$test_dir/ceremony-gate.out" 2>&1; then
+	printf '%s\n' 'ceremony open bypassed the activation gate' >&2
+	exit 1
+fi
+grep -q 'reason=activation_operations_disabled' "$test_dir/ceremony-gate.out"
+
+rm -rf "$state_dir"
+write_env true true true true
+request=$(write_request 121-1 activation-ceremony-open "$image" "$manifest_sha")
+output=$(run_operation "$request")
+printf '%s' "$output" | grep -q '^event=privacy_activation_ceremony_opened .* request_id=121-1$'
+grep -q '^exchange open$' "$OPERATION_CALLS"
+
 rm -rf "$state_dir"
 printf '%s\n' '{"contract":"mycfc/privacy-infrastructure-posture/v1"}' >"$test_dir/control/infrastructure.json"
 chmod 0600 "$test_dir/control/infrastructure.json"
@@ -274,6 +334,14 @@ grep -q '^    environment: production$' "$workflow"
 grep -q '^          - preflight$' "$workflow"
 grep -q '^          - status$' "$workflow"
 grep -q '^          - activation-disable$' "$workflow"
+grep -q '^          - activation-courier-provision$' "$workflow"
+grep -q '^          - activation-courier-rotate$' "$workflow"
+grep -q '^          - activation-courier-revoke$' "$workflow"
+grep -q '^          - activation-ceremony-open$' "$workflow"
+if grep -Eq '^          - activation-(prepare|activate)$' "$workflow"; then
+	printf '%s\n' 'workflow retained the manual approval-staging bypass' >&2
+	exit 1
+fi
 grep -q '^          - worker-enable$' "$workflow"
 grep -q '^          - acceptance-run$' "$workflow"
 grep -q '^          - acceptance-canary-recovery$' "$workflow"
