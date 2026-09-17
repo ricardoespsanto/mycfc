@@ -111,6 +111,13 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 	if _, err = tx.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, guardianAdminID); err != nil {
 		t.Fatal(err)
 	}
+	activationPolicy := "activation-privilege-" + suffix
+	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_policies(version,category_catalogue) VALUES($1,'[]'::jsonb)`, activationPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by) VALUES(true,$1,false,false,$2)`, activationPolicy, guardianAdminID); err != nil {
+		t.Fatal(err)
+	}
 	credentials := RoleCredentials{
 		AppUsername: appRole, AppPassword: "unused-app-password",
 		MigrationUsername: migrationRole, MigrationPassword: "unused-migration-password",
@@ -163,11 +170,15 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 		{"worker cannot mutate plan", executorRole, "privacy_request_execution_plans", "UPDATE", false},
 		{"worker cannot read request events", executorRole, "data_erasure_request_events", "SELECT", false},
 		{"web cannot read restricted records", appRole, "privacy_erasure_restricted_records", "SELECT", false},
+		{"web cannot read activation control row", appRole, "privacy_request_activation", "SELECT", false},
+		{"web cannot lock activation control row", appRole, "privacy_request_activation", "UPDATE", false},
 		{"web cannot read pseudonymous principals", appRole, "privacy_pseudonymous_principals", "SELECT", false},
 		{"worker reads retention anchors", executorRole, "privacy_erasure_retention_anchors", "SELECT", true},
 		{"worker cannot update memberships", executorRole, "user_memberships", "UPDATE", false},
 		{"worker cannot update equipment audit", executorRole, "equipment_audit_events", "UPDATE", false},
 		{"worker cannot update pseudonymous principals", executorRole, "privacy_pseudonymous_principals", "UPDATE", false},
+		{"worker cannot read activation control row", executorRole, "privacy_request_activation", "SELECT", false},
+		{"worker cannot lock activation control row", executorRole, "privacy_request_activation", "UPDATE", false},
 		{"web cannot read protected targets", appRole, "privacy_protected.object_targets", "SELECT", false},
 		{"web cannot insert protected targets", appRole, "privacy_protected.object_targets", "INSERT", false},
 		{"worker cannot read protected targets directly", executorRole, "privacy_protected.object_targets", "SELECT", false},
@@ -222,6 +233,54 @@ func TestHardenPrivacyExecutionRolesEnforcesWorkerBoundary(t *testing.T) {
 				t.Fatalf("has_table_privilege(%q, %q, %q)=%t want %t", check.role, check.table, check.privilege, got, check.want)
 			}
 		})
+	}
+	var appSnapshot, appLock, appEmptyProvider, workerSnapshot, workerLock, workerReady, workerEmptyProvider bool
+	if err = tx.QueryRow(ctx, `SELECT
+		has_function_privilege($1,'privacy_activation_snapshot()','EXECUTE'),
+		has_function_privilege($1,'privacy_activation_lock()','EXECUTE'),
+		has_function_privilege($1,'privacy_provider_empty_inventory_ready()','EXECUTE'),
+		has_function_privilege($2,'privacy_activation_snapshot()','EXECUTE'),
+		has_function_privilege($2,'privacy_activation_lock()','EXECUTE'),
+		has_function_privilege($2,'privacy_worker_activation_ready()','EXECUTE'),
+		has_function_privilege($2,'privacy_provider_empty_inventory_ready()','EXECUTE')`, appRole, executorRole).
+		Scan(&appSnapshot, &appLock, &appEmptyProvider, &workerSnapshot, &workerLock, &workerReady, &workerEmptyProvider); err != nil {
+		t.Fatal(err)
+	}
+	if !appSnapshot || !appLock || !appEmptyProvider || workerSnapshot || workerLock || !workerReady || !workerEmptyProvider {
+		t.Fatalf("activation routine boundary app_snapshot=%t app_lock=%t app_empty_provider=%t worker_snapshot=%t worker_lock=%t worker_ready=%t worker_empty_provider=%t",
+			appSnapshot, appLock, appEmptyProvider, workerSnapshot, workerLock, workerReady, workerEmptyProvider)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(appRole)); err != nil {
+		t.Fatal(err)
+	}
+	var policyVersion string
+	var enabled, fulfilmentReady bool
+	var approvalID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT policy_version,enabled,fulfilment_ready,approval_id FROM privacy_activation_snapshot()`).
+		Scan(&policyVersion, &enabled, &fulfilmentReady, &approvalID); err != nil {
+		t.Fatalf("web activation snapshot failed without table privilege: %v", err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT policy_version,enabled,fulfilment_ready,approval_id FROM privacy_activation_lock()`).
+		Scan(&policyVersion, &enabled, &fulfilmentReady, &approvalID); err != nil {
+		t.Fatalf("web activation lock failed without table privilege: %v", err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT privacy_provider_empty_inventory_ready()`).Scan(&appEmptyProvider); err != nil {
+		t.Fatalf("web empty-provider readiness failed without control-table privilege: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE `+quoteIdentifier(executorRole)); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT privacy_worker_activation_ready()`).Scan(&workerReady); err != nil {
+		t.Fatalf("worker activation readiness failed without table privilege: %v", err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT privacy_provider_empty_inventory_ready()`).Scan(&workerEmptyProvider); err != nil {
+		t.Fatalf("worker empty-provider readiness failed without control-table privilege: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
 	}
 	var appCanReadHandoff, appCanReadGuardianHandoff, appCanProposeHandoff, appCanConfirmHandoff bool
 	if err := tx.QueryRow(ctx, `SELECT

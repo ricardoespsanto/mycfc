@@ -62,7 +62,7 @@ func TestEventResultsMigrationIsExactFinalBaselineSegment(t *testing.T) {
 	}
 	const marker = "-- Baseline through 202609130001_event_results_links."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+	if index < 0 || strings.TrimSpace(strings.Split(baselineSchema[index+len(marker):], "-- Baseline through 202609170001_privacy_synthetic_acceptance.")[0]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("event results migration is not the exact final baseline segment")
 	}
 }
@@ -403,6 +403,7 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		AppUsername: "mycfc_app", AppPassword: "app-password",
 		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
 		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+		PrivacyActivationBrokerUsername: "mycfc_privacy_activation_broker", PrivacyActivationBrokerPassword: "broker-password",
 	}
 	conn := &bootstrapRoleConnectionFake{}
 	if err := HardenPrivacyExecutionRoles(t.Context(), conn, "mycfc", credentials); err != nil {
@@ -445,6 +446,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text)`,
 		`privacy_execution_complete_provider_capture(uuid,text) TO "mycfc_app"`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_activation_broker"`,
+		`privacy_activation_broker_activate(uuid,bytea,jsonb,bytea,jsonb,bytea,bytea), privacy_activation_ready(text) TO "mycfc_privacy_activation_broker"`,
 		`GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)`,
 		`privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2`,
@@ -452,8 +455,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`GRANT EXECUTE ON FUNCTION privacy_tombstone_prepare_v2(uuid,uuid,uuid,bigint,uuid), privacy_tombstone_confirm_v2`,
 		`privacy_tombstone_prepare_closure_v4(uuid,uuid), privacy_tombstone_confirm_closure_v4`,
 		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid)`,
-		`privacy_activation_control_snapshot(uuid) TO "mycfc_app"`,
-		`GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_worker_status() TO "mycfc_privacy_executor"`,
+		`privacy_activation_snapshot(), privacy_activation_lock(), privacy_activation_ready(text), privacy_provider_empty_inventory_ready(), privacy_activation_control_snapshot(uuid) TO "mycfc_app"`,
+		`GRANT EXECUTE ON FUNCTION privacy_completion_prepare(uuid,uuid), privacy_completion_list_pending(uuid,integer), privacy_completion_finalize(uuid,uuid,bytea,bytea), privacy_worker_activation_ready(), privacy_provider_empty_inventory_ready(), privacy_worker_status() TO "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_execution_capture_completion_notice(uuid,uuid), privacy_completion_consume(bytea)`,
 	} {
 		if !strings.Contains(joined, expected) {
@@ -492,6 +495,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	appOnly := &bootstrapRoleConnectionFake{}
 	credentials.PrivacyExecutorUsername = ""
 	credentials.PrivacyExecutorPassword = ""
+	credentials.PrivacyActivationBrokerUsername = ""
+	credentials.PrivacyActivationBrokerPassword = ""
 	if err := HardenPrivacyExecutionRoles(t.Context(), appOnly, "mycfc", credentials); err != nil {
 		t.Fatal(err)
 	}
@@ -1131,5 +1136,126 @@ func TestGuardianAuthorityMigrationMatchesBaselineAndFailsClosed(t *testing.T) {
 	if !strings.Contains(string(cutoffMigration), "CREATE OR REPLACE FUNCTION guardian_authority_reconcile_cutoffs") ||
 		!strings.Contains(baselineSchema, "CREATE FUNCTION guardian_authority_reconcile_cutoffs") {
 		t.Error("cutoff reconciliation function missing from migration or baseline")
+	}
+}
+
+func TestSyntheticAcceptanceMigrationIsExactBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170001_privacy_synthetic_acceptance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170001_privacy_synthetic_acceptance."
+	index := strings.LastIndex(baselineSchema, marker)
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170002_privacy_executor_retention_handlers.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("synthetic acceptance migration differs from baseline")
+	}
+}
+
+func TestPrivacyExecutorRetentionMigrationIsSqlcCompatibleBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170002_privacy_executor_retention_handlers.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170002_privacy_executor_retention_handlers."
+	index := strings.LastIndex(baselineSchema, marker)
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170003_privacy_activation_fixed_access.")
+	// sqlc does not model ALTER FUNCTION ... RENAME when compiling the reset
+	// schema. Keep the forward migration exact, while making only the two new
+	// public wrappers idempotent in the reset-only representation.
+	expectedBaseline := string(migration)
+	for _, wrapper := range []string{
+		"public.privacy_worker_execute_checkpoint(",
+		"public.privacy_completion_finalize(",
+	} {
+		expectedBaseline = strings.Replace(expectedBaseline, "CREATE FUNCTION "+wrapper, "CREATE OR REPLACE FUNCTION "+wrapper, 1)
+	}
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(expectedBaseline) {
+		t.Fatal("privacy executor retention migration differs from baseline")
+	}
+	for _, wrapper := range []string{
+		"CREATE FUNCTION public.privacy_worker_execute_checkpoint(",
+		"CREATE FUNCTION public.privacy_completion_finalize(",
+	} {
+		if !strings.Contains(string(migration), wrapper) {
+			t.Fatalf("forward migration lost non-idempotent wrapper creation %q", wrapper)
+		}
+	}
+}
+
+func TestPrivacyActivationFixedAccessMigrationIsExactBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170003_privacy_activation_fixed_access.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170003_privacy_activation_fixed_access."
+	index := strings.LastIndex(baselineSchema, marker)
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170004_privacy_empty_provider_execution.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy activation fixed-access migration differs from baseline")
+	}
+	for _, expected := range []string{
+		"CREATE FUNCTION public.privacy_activation_snapshot()",
+		"CREATE FUNCTION public.privacy_activation_lock()",
+		"FOR UPDATE OF activation",
+		"REVOKE ALL ON FUNCTION public.privacy_activation_snapshot(),public.privacy_activation_lock() FROM PUBLIC",
+		"privacy_activation_authenticated_artifacts_v19_check",
+		"202609170003_privacy_activation_fixed_access",
+		"UPDATE privacy_worker_kill_switch SET engaged=true",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("privacy activation fixed-access migration missing %q", expected)
+		}
+	}
+}
+
+func TestPrivacyEmptyProviderExecutionMigrationIsExactBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170004_privacy_empty_provider_execution.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170004_privacy_empty_provider_execution."
+	index := strings.LastIndex(baselineSchema, marker)
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170005_privacy_activation_dual_signer.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy empty-provider execution migration differs from baseline")
+	}
+	for _, expected := range []string{
+		"CREATE FUNCTION public.privacy_provider_empty_inventory_ready()",
+		"switch_row.activation_approval_id=approval.id",
+		"artifact.provider_registration_count=0",
+		"privacy_activation_authenticated_artifacts_v20_check",
+		"202609170004_privacy_empty_provider_execution",
+		"UPDATE privacy_worker_kill_switch SET engaged=true",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("privacy empty-provider execution migration missing %q", expected)
+		}
+	}
+}
+
+func TestPrivacyActivationDualSignerMigrationIsFinalBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170005_privacy_activation_dual_signer.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170005_privacy_activation_dual_signer."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy activation dual-signer migration differs from baseline")
+	}
+	for _, expected := range []string{
+		"CREATE TABLE privacy_protected.activation_ceremonies",
+		"privacy_activation_broker_register_ceremony",
+		"mycfc/privacy-activation-approval-material/v2",
+		"mycfc/privacy-activation-approval/v2",
+		"ECDSA_SHA_256",
+		"privacy_activation_authenticated_artifacts_v21_check",
+		"202609170005_privacy_activation_dual_signer",
+		"DROP FUNCTION public.privacy_activation_broker_activate(uuid,text,uuid[]",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("privacy activation dual-signer migration missing %q", expected)
+		}
 	}
 }

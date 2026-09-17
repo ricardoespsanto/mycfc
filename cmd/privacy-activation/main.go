@@ -63,6 +63,8 @@ func (s postgresActivationEvidenceStore) Close() { s.close() }
 var verifyRestoreActivationAttestation = privacyrequests.VerifyRestoreActivationAttestation
 var verifyActivationArtifact = privacyrequests.VerifyActivationArtifact
 var exitProcess = os.Exit
+var prepareActivationApprovalMaterial = prepareApprovalMaterial
+var activateApprovalMaterial = activateApprovedMaterial
 var openActivationEvidenceStore = func(ctx context.Context, databaseURL string) (activationEvidenceStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -84,11 +86,9 @@ func main() {
 	switch mode {
 	case "record-evidence":
 		err = run(context.Background(), os.Getenv, os.Stdout)
-	case "prepare-approvals":
+	case "prepare-exchange":
 		err = runPrepare(context.Background(), os.Getenv, os.Stdout)
-	case "sign-approval":
-		err = runSign(os.Getenv)
-	case "activate":
+	case "activate-exchange":
 		err = runActivate(context.Background(), os.Getenv, os.Stdout)
 	case "disable":
 		err = runDisable(context.Background(), os.Getenv, os.Stdout)
@@ -206,74 +206,75 @@ func runPrepare(ctx context.Context, getenv func(string) string, output io.Write
 	if err != nil {
 		return err
 	}
-	material, err := prepareApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), release)
+	registryDigest := strings.TrimSpace(getenv("PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256"))
+	registry, err := loadSignerRegistry(getenv("PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE"), registryDigest)
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(material)
+	payload, material, err := prepareActivationApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), release,
+		strings.TrimSpace(getenv("PRIVACY_ACTIVATION_SOURCE_SHA")), registryDigest, registry, time.Now().UTC())
 	if err != nil {
-		return errors.New("privacy activation approval material rejected")
+		return err
 	}
-	if path := strings.TrimSpace(getenv("PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT")); path != "" {
-		return writeExclusive(path, payload)
+	if err = writeExclusive(getenv("PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT"), payload); err != nil {
+		return err
 	}
-	_, err = fmt.Fprintln(output, string(payload))
+	_, err = fmt.Fprintf(output, "privacy_activation_ceremony_prepared ceremony_id=%s expires_at=%s\n",
+		material.CeremonyID, material.CeremonyExpiresAt.Format(time.RFC3339))
 	return err
-}
-
-func runSign(getenv func(string) string) error {
-	material, err := loadMaterial(getenv("PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"))
-	if err != nil {
-		return err
-	}
-	actor, err := uuid.Parse(strings.TrimSpace(getenv("PRIVACY_ACTIVATION_APPROVAL_ACTOR_REF")))
-	if err != nil {
-		return errors.New("privacy activation signer rejected")
-	}
-	privateKey, err := readPrivateKey(getenv("PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE"))
-	if err != nil {
-		return err
-	}
-	payload, err := makeApproval(material, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_APPROVAL_ROLE")),
-		strings.TrimSpace(getenv("PRIVACY_ACTIVATION_APPROVAL_SIGNING_KEY_ID")), actor, privateKey, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	return writeExclusive(getenv("PRIVACY_ACTIVATION_APPROVAL_OUTPUT"), payload)
 }
 
 func runActivate(ctx context.Context, getenv func(string) string, output io.Writer) error {
 	if getenv("PRIVACY_ACTIVATION_EVIDENCE_ENABLED") != "true" {
 		return errors.New("privacy activation evidence command is disabled")
 	}
-	material, err := loadMaterial(getenv("PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"))
+	now := time.Now().UTC()
+	materialRaw, err := readSecret(getenv("PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"))
 	if err != nil {
 		return err
 	}
 	release, err := trustedRelease(getenv)
-	if err != nil || material.PolicyVersion != release.PolicyVersion || material.ExecutorVersion != release.ExecutorVersion ||
-		material.PlanSchemaVersion != release.PlanSchemaVersion || material.ImageDigest != release.ImageDigest || material.SchemaMigrationDigest != release.SchemaMigrationDigest {
+	if err != nil {
 		return errors.New("privacy activation approval release rejected")
 	}
-	executorRaw, err := readArtifact(getenv("PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"))
+	registryDigest := strings.TrimSpace(getenv("PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256"))
+	registry, err := loadSignerRegistry(getenv("PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE"), registryDigest)
 	if err != nil {
 		return err
 	}
-	administratorRaw, err := readArtifact(getenv("PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"))
+	ceremonyID, err := uuid.Parse(strings.TrimSpace(getenv("PRIVACY_ACTIVATION_CEREMONY_ID")))
+	if err != nil || ceremonyID == uuid.Nil {
+		return errors.New("privacy activation ceremony rejected")
+	}
+	material, err := privacyrequests.VerifyActivationApprovalMaterial(materialRaw, privacyrequests.ActivationMaterialExpectation{
+		CeremonyID: ceremonyID, SourceSHA: strings.TrimSpace(getenv("PRIVACY_ACTIVATION_SOURCE_SHA")),
+		PolicyVersion: release.PolicyVersion, ImageDigest: release.ImageDigest,
+		SchemaMigrationDigest: release.SchemaMigrationDigest, SignerRegistrySHA256: registryDigest,
+	}, now)
 	if err != nil {
 		return err
 	}
-	executorPublic, err := readBase64Key(getenv("PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_PUBLIC_KEY_FILE"))
+	if material.ExecutorVersion != release.ExecutorVersion || material.PlanSchemaVersion != release.PlanSchemaVersion {
+		return errors.New("privacy activation approval release rejected")
+	}
+	executorRaw, err := readSecret(getenv("PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"))
 	if err != nil {
 		return err
 	}
-	administratorPublic, err := readBase64Key(getenv("PRIVACY_ACTIVATION_ADMIN_APPROVAL_PUBLIC_KEY_FILE"))
+	administratorRaw, err := readSecret(getenv("PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"))
 	if err != nil {
 		return err
 	}
-	if err = activateApprovedMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), material,
-		executorRaw, administratorRaw, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_SIGNING_KEY_ID")),
-		strings.TrimSpace(getenv("PRIVACY_ACTIVATION_ADMIN_APPROVAL_SIGNING_KEY_ID")), ed25519.PublicKey(executorPublic), ed25519.PublicKey(administratorPublic), time.Now().UTC()); err != nil {
+	executorPublic, err := readSecret(getenv("PRIVACY_ACTIVATION_EXECUTOR_PUBLIC_KEY_SPKI_FILE"))
+	if err != nil {
+		return err
+	}
+	administratorPublic, err := readSecret(getenv("PRIVACY_ACTIVATION_ADMINISTRATOR_PUBLIC_KEY_SPKI_FILE"))
+	if err != nil {
+		return err
+	}
+	if err = activateApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), materialRaw, material,
+		registry, executorRaw, administratorRaw, executorPublic, administratorPublic, now); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(output, "privacy_activation_approved independent_signatures=2")
@@ -315,7 +316,7 @@ func readSecret(path string) ([]byte, error) {
 	if err != nil || !pathInfo.Mode().IsRegular() {
 		return nil, errors.New("privacy activation secret rejected")
 	}
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, errors.New("privacy activation secret unavailable")
 	}
@@ -325,12 +326,21 @@ func readSecret(path string) ([]byte, error) {
 		return nil, errors.New("privacy activation secret rejected")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Geteuid() {
+	if !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
 		return nil, errors.New("privacy activation secret rejected")
 	}
 	payload, err := io.ReadAll(io.LimitReader(file, maximumArtifactBytes+1))
 	if err != nil || len(payload) == 0 || len(payload) > maximumArtifactBytes {
 		return nil, errors.New("privacy activation secret rejected")
+	}
+	final, err := file.Stat()
+	if err != nil {
+		return nil, errors.New("privacy activation secret changed while reading")
+	}
+	finalStat, finalOK := final.Sys().(*syscall.Stat_t)
+	if !finalOK || !os.SameFile(info, final) || info.Size() != final.Size() ||
+		info.Mode() != final.Mode() || !info.ModTime().Equal(final.ModTime()) || stat.Ctim != finalStat.Ctim {
+		return nil, errors.New("privacy activation secret changed while reading")
 	}
 	return payload, nil
 }

@@ -40,8 +40,11 @@ func providerRegistration(adapter ProviderErasureAdapter) ProviderExecutionRegis
 
 func TestProviderRegistryIsClosedAndFailsWithoutFactualEvidence(t *testing.T) {
 	empty, err := NewProviderExecutionRegistry()
-	if err != nil || empty.Ready() {
-		t.Fatalf("empty registry ready=%v err=%v", empty.Ready(), err)
+	if err != nil || empty.Ready() || !empty.Empty() || (*ProviderExecutionRegistry)(nil).Empty() {
+		t.Fatalf("empty registry ready=%v empty=%v err=%v", empty.Ready(), empty.Empty(), err)
+	}
+	if _, err = (ProviderExecutionWorker{}).CompleteCheckpoint(t.Context(), ExecutionLease{}); !errors.Is(err, ErrProviderRegistryUnavailable) {
+		t.Fatalf("nil registry checkpoint error=%v", err)
 	}
 	invalid := providerRegistration(&fakeProviderAdapter{})
 	invalid.RegistryEvidenceDigest = nil
@@ -117,6 +120,14 @@ func TestProviderOperationIsV2Only(t *testing.T) {
 	service := Service{ExecutionCapabilities: map[string]bool{"PROVIDER_RECIPIENT_NOTIFY": true}}
 	if service.ExecutionCapabilitiesReady(plan) {
 		t.Fatal("provider capability was ready without registry and target protection")
+	}
+	emptyRegistry, err := NewProviderExecutionRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.ProviderRegistry = emptyRegistry
+	if !service.ExecutionCapabilitiesReady(plan) || emptyRegistry.Ready() {
+		t.Fatal("explicit empty registry did not expose only the database-authenticated zero-target path")
 	}
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {

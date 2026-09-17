@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll for approved MyCFC privacy production operations
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+RandomizedDelaySec=10s
+AccuracySec=1s
+Persistent=true
+Unit=mycfc-privacy-production-operation.service
+
+[Install]
+WantedBy=timers.target

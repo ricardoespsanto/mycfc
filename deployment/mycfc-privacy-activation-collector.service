@@ -1,0 +1,18 @@
+[Unit]
+Description=Collect one MyCFC privacy activation dual-signature ceremony
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=2min
+ExecStart=/opt/mycfc/deployment/run-with-cloudwatch-logs.sh /opt/mycfc/deployment/privacy-activation-exchange.sh collect
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/mycfc/mycfc.env /etc/mycfc/privacy-activation.env /etc/mycfc/privacy-activation-exchange.env /etc/mycfc/privacy-activation-exchange /etc/mycfc/privacy-activation /etc/mycfc/release-aws /opt/mycfc/deployment
+ReadWritePaths=/run /var/lib/mycfc/privacy-activation-exchange /run/docker.sock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -13,6 +13,8 @@ Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the 
 5. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` with the dedicated release-agent credentials described below.
 6. Run `sudo sh deployment/install.sh` from this checkout.
 
+The dual-signer privacy activation exchange has additional root-owned inputs and remains inactive until its Terraform gate, host gates, courier credential, and two protected signer environments are configured. Its collector timer is disabled by the installer and starts only for an approved ceremony. Follow [`../docs/privacy-activation-exchange.md`](../docs/privacy-activation-exchange.md); do not stage approval JSON manually.
+
 The installer validates the Compose configuration, prepares persistent routing state under `/etc/mycfc/deployment`, installs the pull-release systemd timer, and performs one release check before enabling periodic polling. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
 
 ## Required host environment
@@ -57,6 +59,13 @@ PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=false
 # Independent bounded retention maintenance; remains inert by default.
 PRIVACY_RETENTION_ENABLED=false
 
+# Attested GitHub-to-host operations pull agent. Credential and destructive
+# operation families remain independently disabled.
+PRIVACY_PRODUCTION_OPERATIONS_ENABLED=false
+PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED=false
+PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED=false
+PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED=false
+
 # Evidence-bound privacy execution; every independent gate remains inert by default.
 PRIVACY_REQUESTS_ENABLED=false
 PRIVACY_COMPLETION_ENABLED=false
@@ -85,6 +94,8 @@ DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
 Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. The disabled #248 worker and its activation broker use two distinct logins provisioned by routine release bootstrap. Their credentials may be present in the root-only host environment only for those one-shot database jobs. The disable-only login is provisioned separately from `/etc/mycfc/privacy-activation-disable.env`; its password must never be copied into the main host environment or application-readable AWS secrets. The web app and worker never receive broker credentials or human approval keys. Provisioning, activation, and rollback are documented in `docs/privacy-worker-infrastructure.md`.
 
 The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
+
+The installer also installs the privacy production-operation pull timer, disabled by default. When `PRIVACY_PRODUCTION_OPERATIONS_ENABLED=true`, it uses the existing read-only ECR/release identity to fetch one immutable `privacy-op-*` request at a time, requires GitHub provenance from the protected operation workflow, binds the request to the exact active signed application image and commit, and invokes only the root-side allowlist in `privacy-production-operation.sh`. The workflow cannot submit shell text, paths, credentials or file payloads; evidence-bearing operations carry only the exact reviewed SHA-256 of a fixed-path root-owned input. Credential, destructive and activation families require their independent host gates above. The host signs canonical privacy-safe receipts with the root-only Ed25519 key, then publishes them once to the checksummed, versioned, Object-Locked KMS receipt bucket. GitHub verifies the exact S3 version and pinned signature; deployment-log text is monitoring only. Synthetic acceptance modes retain signed evidence under the protected host state directory and expose only fixed canary event counters; adverse and recovery signals use separate alarm transitions. See `docs/privacy-production-operations.md`.
 
 The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a root-only one-shot activation operator. Its explicit `provision-disable` mode provisions or rotates the fixed break-glass database login after migration; routine releases never receive that password. Its `disable` mode uses only `/etc/mycfc/privacy-activation-disable.env` (root-owned mode `0600`) and the separate `mycfc_privacy_activation_disable` credential; that runtime container receives no broker configuration, evidence files, or signing keys. See `docs/privacy-worker-infrastructure.md` for custody, incident, and verification steps.
 

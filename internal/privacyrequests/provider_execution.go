@@ -97,6 +97,13 @@ func (r *ProviderExecutionRegistry) Ready() bool {
 	return r != nil && len(r.registrations) > 0
 }
 
+// Empty reports an explicitly constructed registry with no registrations.
+// It is never sufficient by itself: the service and worker also require the
+// current activation approval to authenticate the complete-empty inventory.
+func (r *ProviderExecutionRegistry) Empty() bool {
+	return r != nil && len(r.registrations) == 0
+}
+
 func (r *ProviderExecutionRegistry) registration(service string, role ProviderRole, contract, evidenceKeyID string, evidenceDigest []byte) (ProviderExecutionRegistration, bool) {
 	if r == nil {
 		return ProviderExecutionRegistration{}, false
@@ -356,8 +363,15 @@ func (s Service) materializeProviderTargets(ctx context.Context, tx pgx.Tx, q *d
 		if !containsOperation(entry.Operations, "PROVIDER_RECIPIENT_NOTIFY") {
 			continue
 		}
-		if s.ProviderRegistry == nil || !s.ProviderRegistry.Ready() || s.ProviderTargets == nil {
+		if s.ProviderRegistry == nil || (!s.ProviderRegistry.Ready() && !s.ProviderRegistry.Empty()) || (s.ProviderRegistry.Ready() && s.ProviderTargets == nil) {
 			return ErrExecutorUnavailable
+		}
+		emptyInventory := s.ProviderRegistry.Empty()
+		if emptyInventory {
+			ready, readyErr := q.PrivacyProviderEmptyInventoryReady(ctx)
+			if readyErr != nil || !ready {
+				return ErrProviderRegistryUnavailable
+			}
 		}
 		rows, err := tx.Query(ctx, `SELECT connection_id,job_id,checkpoint_id,plan_entry_sha256,category_key,service_code,provider_role,provider_contract_version,target_version,local_state,registry_evidence_key_id,registry_evidence_digest,target_source_key_id,target_opaque,credential_source_key_id,credential_opaque FROM privacy_execution_capture_provider_connections($1,$2,$3)`, execution.ID, subjectID, entry.Category)
 		if err != nil {
@@ -379,6 +393,9 @@ func (s Service) materializeProviderTargets(ctx context.Context, tx pgx.Tx, q *d
 			return ErrProviderCaptureFailed
 		}
 		rows.Close()
+		if emptyInventory && len(captures) != 0 {
+			return ErrProviderRegistryUnavailable
+		}
 		for _, capture := range captures {
 			role := ProviderRole(capture.Role)
 			registration, known := s.ProviderRegistry.registration(capture.Service, role, capture.ContractVersion, capture.RegistryEvidenceKeyID, capture.RegistryEvidenceDigest)
@@ -494,8 +511,19 @@ func validProviderDigestKeyring(keyring map[string][]byte, transcriptKeyID strin
 
 func (w ProviderExecutionWorker) CompleteCheckpoint(ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
 	var zero dbgen.PrivacyErasureJobCheckpoint
-	if !w.valid() || !validLease(lease) {
+	if w.Registry == nil || (!w.Registry.Ready() && !w.Registry.Empty()) {
+		return zero, ErrProviderRegistryUnavailable
+	}
+	emptyInventory := w.Registry.Empty()
+	if w.Pool == nil || w.WorkerRef == uuid.Nil || !validLease(lease) || (!emptyInventory && !w.valid()) {
 		return zero, ErrProviderExecutionFailed
+	}
+	q := dbgen.New(w.Pool)
+	if emptyInventory {
+		ready, readyErr := q.PrivacyProviderEmptyInventoryReady(ctx)
+		if readyErr != nil || !ready {
+			return zero, ErrProviderRegistryUnavailable
+		}
 	}
 	rows, err := w.Pool.Query(ctx, `SELECT target_id,execution_id,job_id,checkpoint_id,plan_entry_sha256,category_key,service_code,target_kind,provider_role,target_version,operation_code,action_version,provider_contract_version,registry_evidence_key_id,registry_evidence_digest,local_state,target_envelope_version,target_algorithm,target_encryption_key_id,target_encapsulation,target_nonce,target_ciphertext,credential_envelope_version,credential_algorithm,credential_encryption_key_id,credential_encapsulation,credential_nonce,credential_ciphertext,credential_commitment_key_id,credential_source_commitment FROM privacy_worker_list_provider_targets($1,$2,$3,$4,$5)`, lease.Job.ID, lease.Job.ActiveLeaseID, lease.Job.ActiveAttemptID, lease.Job.LeaseEpoch, w.WorkerRef)
 	if err != nil {
@@ -540,7 +568,9 @@ func (w ProviderExecutionWorker) CompleteCheckpoint(ctx context.Context, lease E
 		return zero, ErrProviderExecutionFailed
 	}
 	rows.Close()
-	q := dbgen.New(w.Pool)
+	if emptyInventory && len(targets) != 0 {
+		return zero, ErrProviderRegistryUnavailable
+	}
 	for _, target := range targets {
 		registration, ok := w.Registry.registration(target.binding.Service, target.binding.Role, target.binding.ProviderContractVersion, target.registryKeyID, target.registryDigest)
 		if !ok {

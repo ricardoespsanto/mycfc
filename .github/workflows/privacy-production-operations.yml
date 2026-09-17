@@ -1,0 +1,488 @@
+name: Privacy production operation
+run-name: privacy operation ${{ inputs.operation }} ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Fixed production operation to request; protected environment approval is required.
+        type: choice
+        required: true
+        options:
+          - preflight
+          - status
+          - infrastructure-observe
+          - policy-import
+          - activation-disable-provision
+          - receipt-key-provision
+          - receipt-key-rotate-prepare
+          - receipt-key-rotate-activate
+          - receipt-key-revoke
+          - retention-provision
+          - retention-rotate
+          - retention-revoke
+          - retention-run
+          - retention-enable
+          - retention-disable
+          - acceptance-provision
+          - acceptance-rotate
+          - acceptance-revoke
+          - acceptance-run
+          - acceptance-canary-retry
+          - acceptance-canary-failure
+          - acceptance-canary-aged
+          - acceptance-canary-heartbeat
+          - acceptance-canary-recovery
+          - legacy-inventory
+          - legacy-purge
+          - legacy-verify
+          - legacy-credential-remove
+          - backup-run
+          - backup-posture
+          - backup-cleanup-inventory
+          - restore-run
+          - restore-verify
+          - activation-record
+          - activation-courier-provision
+          - activation-courier-rotate
+          - activation-courier-revoke
+          - activation-ceremony-open
+          - activation-disable
+          - flags-enable
+          - flags-disable
+          - worker-enable
+          - worker-disable
+      sha:
+        description: Exact current signed and CI-green main commit.
+        required: true
+        type: string
+      image:
+        description: Exact active application image by sha256 digest.
+        required: true
+        type: string
+      evidence_sha256:
+        description: Exact approved evidence or inventory SHA-256; use 64 zeroes only for operations without evidence.
+        required: true
+        default: "0000000000000000000000000000000000000000000000000000000000000000"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: mycfc-privacy-production-operation
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 58
+    environment: production
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TARGET_IMAGE: ${{ inputs.image }}
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact signed main commit and canonical CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+          REQUESTED_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$REQUESTED_OPERATION" in
+            preflight|status|infrastructure-observe|policy-import|activation-disable-provision|receipt-key-provision|receipt-key-rotate-prepare|receipt-key-rotate-activate|receipt-key-revoke|retention-provision|retention-rotate|retention-revoke|retention-run|retention-enable|retention-disable|acceptance-provision|acceptance-rotate|acceptance-revoke|acceptance-run|acceptance-canary-retry|acceptance-canary-failure|acceptance-canary-aged|acceptance-canary-heartbeat|acceptance-canary-recovery|legacy-inventory|legacy-purge|legacy-verify|legacy-credential-remove|backup-run|backup-posture|backup-cleanup-inventory|restore-run|restore-verify|activation-record|activation-courier-provision|activation-courier-rotate|activation-courier-revoke|activation-ceremony-open|activation-disable|flags-enable|flags-disable|worker-enable|worker-disable) ;;
+            *) exit 1 ;;
+          esac
+          test "$DISPATCH_REF" = refs/heads/main
+          test "$REQUESTED_SHA" = "$DISPATCH_SHA"
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
+          main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          test "$REQUESTED_SHA" = "$main_sha"
+          verified_commit=$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" \
+            --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha')
+          test "$verified_commit" = "$REQUESTED_SHA"
+          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" \
+            --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty")
+          test -n "$ci_run"
+      # aws-actions/configure-aws-credentials v6.2.4
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr-login
+        # aws-actions/amazon-ecr-login v2.1.6
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd
+      - name: Verify the exact active-image candidate
+        env:
+          EXPECTED_REPOSITORY: ${{ steps.ecr-login.outputs.registry }}/mycfc-production
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          case "$TARGET_IMAGE" in
+            "$EXPECTED_REPOSITORY"@sha256:*) ;;
+            *) exit 1 ;;
+          esac
+          image_digest=${TARGET_IMAGE#"$EXPECTED_REPOSITORY"@}
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          revision=$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' "$TARGET_IMAGE")
+          test "$revision" = "$REQUESTED_SHA"
+          gh attestation verify "oci://$TARGET_IMAGE" --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/deploy.yml" \
+            --source-digest "$REQUESTED_SHA" --deny-self-hosted-runners >/dev/null
+      - name: Create the canonical short-lived operation request
+        id: request
+        env:
+          REQUESTED_OPERATION: ${{ inputs.operation }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          issued_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          expires_at=$(date -u -d "$issued_at + 10 minutes" +%Y-%m-%dT%H:%M:%SZ)
+          [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          mkdir -m 0700 operation-image
+          jq -cS -n \
+            --arg contract 'mycfc/privacy-production-operation-request/v2' \
+            --arg request_id "$request_id" \
+            --arg operation "$REQUESTED_OPERATION" \
+            --arg source_sha "$REQUESTED_SHA" \
+            --arg expected_image "$TARGET_IMAGE" \
+            --arg evidence_sha256 "$EVIDENCE_SHA256" \
+            --arg issued_at "$issued_at" \
+            --arg expires_at "$expires_at" \
+            --argjson workflow_run_id "$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,evidence_sha256:$evidence_sha256,issued_at:$issued_at,expires_at:$expires_at,workflow_run_id:$workflow_run_id,workflow_run_attempt:$workflow_run_attempt}' \
+            > operation-image/privacy-operation.json
+          printf 'FROM scratch\nCOPY privacy-operation.json /privacy-operation.json\n' > operation-image/Dockerfile
+          {
+            echo "request_id=$request_id"
+            echo "issued_at=$issued_at"
+            echo "receipt_not_before_ms=$(($(date +%s) * 1000))"
+            echo "request_sha256=$(sha256sum operation-image/privacy-operation.json | cut -d' ' -f1)"
+            echo "tag=privacy-op-$request_id"
+          } >> "$GITHUB_OUTPUT"
+      - name: Refuse an existing operation tag
+        env:
+          REPOSITORY_NAME: mycfc-production
+          REQUEST_TAG: ${{ steps.request.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          if aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY_NAME" \
+            --image-ids imageTag="$REQUEST_TAG" >/dev/null 2>&1; then
+            echo 'The immutable operation tag already exists.' >&2
+            exit 1
+          fi
+      # docker/setup-buildx-action v4.3.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Publish immutable operation request
+        id: build
+        # docker/build-push-action v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: operation-image
+          push: true
+          tags: ${{ steps.ecr-login.outputs.registry }}/mycfc-production:${{ steps.request.outputs.tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.sha }}
+            org.mycfc.privacy-operation-contract=mycfc/privacy-production-operation-request/v2
+          provenance: false
+      - name: Attest operation-request provenance
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.ecr-login.outputs.registry }}/mycfc-production
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify immutable operation request
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.sha }}
+          REQUEST_IMAGE: ${{ steps.ecr-login.outputs.registry }}/mycfc-production@${{ steps.build.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUEST_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          revision=$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' "$REQUEST_IMAGE")
+          contract=$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.mycfc.privacy-operation-contract"}}' "$REQUEST_IMAGE")
+          test "$revision" = "$REQUESTED_SHA"
+          test "$contract" = mycfc/privacy-production-operation-request/v2
+          gh attestation verify "oci://$REQUEST_IMAGE" --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/privacy-production-operations.yml" \
+            --source-digest "$REQUESTED_SHA" --deny-self-hosted-runners >/dev/null
+          echo "request_image=$REQUEST_IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Remove publisher registry credentials
+        if: always()
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker logout "$REGISTRY" >/dev/null 2>&1 || true
+          rm -f "$HOME/.docker/config.json"
+      # aws-actions/configure-aws-credentials v6.2.4
+      - name: Assume the read-only receipt observer role
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_OPERATIONS_OBSERVER_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Wait for the exact privacy-safe host receipt
+        id: host-receipt
+        env:
+          RECEIPT_BUCKET: ${{ vars.PRIVACY_OPERATION_RECEIPT_BUCKET }}
+          RECEIPT_KMS_KEY_ARN: ${{ vars.PRIVACY_OPERATION_RECEIPT_KMS_KEY_ARN }}
+          RECEIPT_PUBLIC_KEY_B64: ${{ vars.PRIVACY_OPERATION_RECEIPT_PUBLIC_KEY_PEM_B64 }}
+          RECEIPT_PUBLIC_KEY_SHA256: ${{ vars.PRIVACY_OPERATION_RECEIPT_PUBLIC_KEY_SHA256 }}
+          CLOUDWATCH_LOG_GROUP: /mycfc/production/deployment
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          RECEIPT_NOT_BEFORE_MS: ${{ steps.request.outputs.receipt_not_before_ms }}
+          REQUEST_SHA256: ${{ steps.request.outputs.request_sha256 }}
+          REQUEST_ISSUED_AT: ${{ steps.request.outputs.issued_at }}
+          REQUEST_IMAGE: ${{ steps.verify.outputs.request_image }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ "$REQUEST_ID" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
+          [[ "$RECEIPT_NOT_BEFORE_MS" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          PUBLISHED_PUBLIC_KEY_SHA256=
+          if [[ "${{ inputs.operation }}" == receipt-key-provision || "${{ inputs.operation }}" == receipt-key-rotate-prepare ]]; then
+            for _ in $(seq 1 40); do
+              if aws s3api head-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
+                --key "public-keys/$REQUEST_ID.pem" --checksum-mode ENABLED --output json > public-key-head.json 2>/dev/null; then
+                public_key_version=$(jq -r '.VersionId // empty' public-key-head.json)
+                [[ "$public_key_version" =~ ^[-A-Za-z0-9._~+/=]{1,1024}$ ]]
+                aws s3api get-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
+                  --key "public-keys/$REQUEST_ID.pem" --version-id "$public_key_version" --checksum-mode ENABLED \
+                  published-public.pem > public-key-get.json
+                public_key_checksum=$(openssl dgst -sha256 -binary published-public.pem | base64 -w0)
+                for response in public-key-head.json public-key-get.json; do
+                  jq -e --arg version "$public_key_version" --arg checksum "$public_key_checksum" --arg kms "$RECEIPT_KMS_KEY_ARN" '
+                    .VersionId == $version and .ChecksumSHA256 == $checksum and
+                    .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms
+                  ' "$response" >/dev/null
+                done
+                PUBLISHED_PUBLIC_KEY_SHA256=$(openssl pkey -pubin -in published-public.pem -outform DER | sha256sum | cut -d' ' -f1)
+                break
+              fi
+              sleep 15
+            done
+            test -s published-public.pem
+          fi
+          if [[ "${{ inputs.operation }}" == receipt-key-provision ]]; then
+            cp published-public.pem receipt-public.pem
+            RECEIPT_PUBLIC_KEY_SHA256=$PUBLISHED_PUBLIC_KEY_SHA256
+          else
+            [[ "$RECEIPT_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            printf '%s' "$RECEIPT_PUBLIC_KEY_B64" | base64 -d > receipt-public.pem
+          fi
+          actual_public_key_spki_sha256=$(openssl pkey -pubin -in receipt-public.pem -outform DER | sha256sum | cut -d' ' -f1)
+          test "$actual_public_key_spki_sha256" = "$RECEIPT_PUBLIC_KEY_SHA256"
+          chmod 0400 receipt-public.pem
+          for _ in $(seq 1 200); do
+            if aws s3api head-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
+              --key "receipts/$REQUEST_ID.json" --checksum-mode ENABLED --output json > receipt-head.json 2>/dev/null; then
+              version_id=$(jq -r '.VersionId // empty' receipt-head.json)
+              [[ "$version_id" =~ ^[-A-Za-z0-9._~+/=]{1,1024}$ ]]
+              aws s3api get-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
+                --key "receipts/$REQUEST_ID.json" --version-id "$version_id" --checksum-mode ENABLED \
+                signed-receipt.json > receipt-get.json
+              actual_checksum=$(openssl dgst -sha256 -binary signed-receipt.json | base64 -w0)
+              jq -e --arg version "$version_id" --arg checksum "$actual_checksum" --arg kms "$RECEIPT_KMS_KEY_ARN" '
+                .VersionId == $version and .ChecksumSHA256 == $checksum and
+                .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms
+              ' receipt-head.json >/dev/null
+              jq -e --arg version "$version_id" --arg checksum "$actual_checksum" --arg kms "$RECEIPT_KMS_KEY_ARN" '
+                .VersionId == $version and .ChecksumSHA256 == $checksum and
+                .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms
+              ' receipt-get.json >/dev/null
+              go run ./cmd/privacy-operation-receipt verify \
+                --input signed-receipt.json --public-key receipt-public.pem \
+                --public-key-spki-sha256 "$RECEIPT_PUBLIC_KEY_SHA256" \
+                --expected-request-id "$REQUEST_ID" --expected-operation "${{ inputs.operation }}" \
+                --expected-source-sha "${{ inputs.sha }}" --expected-image "$TARGET_IMAGE" \
+                --expected-request-sha256 "$REQUEST_SHA256" \
+                --expected-issued-at "$REQUEST_ISSUED_AT" \
+                --expected-evidence-sha256 "${{ inputs.evidence_sha256 }}" \
+                --expected-result SUCCEEDED --expected-reason none \
+                --expected-workflow-run-id "$GITHUB_RUN_ID" \
+                --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --max-age 15m
+              if [[ "${{ inputs.operation }}" == activation-ceremony-open ]]; then
+                aws logs filter-log-events --region "$AWS_REGION" \
+                  --log-group-name "$CLOUDWATCH_LOG_GROUP" --start-time "$RECEIPT_NOT_BEFORE_MS" \
+                  --output json > events.json
+                mapfile -t ceremony_events < <(jq -r --arg id "$REQUEST_ID" '[.events[]? | .message | select(contains("event=privacy_activation_ceremony_opened ") and endswith(" request_id=" + $id))] | unique[]' events.json)
+                test "${#ceremony_events[@]}" -eq 1
+                ceremony_event=${ceremony_events[0]}
+                [[ "$ceremony_event" =~ ^event=privacy_activation_ceremony_opened\ ceremony_id=([0-9a-f-]{36})\ material_sha256=([0-9a-f]{64})\ material_version_id=([-A-Za-z0-9._~+/=]{1,1024})\ expires_at=([0-9TZ:-]{20})\ source_sha=([0-9a-f]{40})\ image_digest=(sha256:[0-9a-f]{64})\ schema_migration_digest=([0-9a-f]{64})\ request_id=$REQUEST_ID$ ]]
+                test "${BASH_REMATCH[5]}" = "${{ inputs.sha }}"
+                test "${BASH_REMATCH[6]}" = "${TARGET_IMAGE##*@}"
+                {
+                  echo "ceremony_id=${BASH_REMATCH[1]}"
+                  echo "material_sha256=${BASH_REMATCH[2]}"
+                  echo "material_version_id=${BASH_REMATCH[3]}"
+                  echo "ceremony_expires_at=${BASH_REMATCH[4]}"
+                  echo "ceremony_source_sha=${BASH_REMATCH[5]}"
+                  echo "ceremony_image_digest=${BASH_REMATCH[6]}"
+                  echo "ceremony_schema_migration_digest=${BASH_REMATCH[7]}"
+                } >> "$GITHUB_OUTPUT"
+              fi
+              {
+                if [[ "${{ inputs.operation }}" == receipt-key-provision ]]; then
+                  echo '## Receipt-key bootstrap publication observed'
+                else
+                  echo '## Privacy production operation verified'
+                fi
+                echo
+                echo "- Request: \`$REQUEST_ID\`"
+                echo "- Operation: \`${{ inputs.operation }}\`"
+                echo "- Source: \`${{ inputs.sha }}\`"
+                echo "- Request image: \`$REQUEST_IMAGE\`"
+                if [[ "${{ inputs.operation }}" == receipt-key-provision ]]; then
+                  echo '- Host result: **self-consistent bootstrap; not trusted until the key is independently pinned and a subsequent signed status receipt verifies**'
+                else
+                  echo '- Host result: **succeeded**'
+                fi
+                echo '- Receipt contained only the fixed operation identity, result, timestamps, image binding, request digest, and service-state booleans.'
+                if [[ "${{ inputs.operation }}" == receipt-key-provision ]]; then
+                  echo "- Bootstrap public-key SPKI SHA-256: \`$RECEIPT_PUBLIC_KEY_SHA256\` (review and pin independently, then verify with a signed status request)."
+                elif [[ "${{ inputs.operation }}" == receipt-key-rotate-prepare ]]; then
+                  echo "- Prepared public-key SPKI SHA-256: \`$PUBLISHED_PUBLIC_KEY_SHA256\`. Use this exact digest as \`evidence_sha256\` for \`receipt-key-rotate-activate\`; keep the old receipt key pinned through activation verification."
+                fi
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'No cryptographically valid host receipt arrived within the protected observation window.' >&2
+          exit 1
+      # aws-actions/configure-aws-credentials v6.2.4
+      - name: Assume the fixed read-only ceremony coordinator role
+        if: inputs.operation == 'activation-ceremony-open'
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: arn:aws:iam::334960985019:role/mycfc-production-privacy-activation-exchange-coordinator
+          aws-region: eu-west-1
+          role-duration-seconds: 900
+      - name: Verify the immutable material and publish its review summary
+        if: inputs.operation == 'activation-ceremony-open'
+        env:
+          CEREMONY_ID: ${{ steps.host-receipt.outputs.ceremony_id }}
+          CEREMONY_EXPIRES_AT: ${{ steps.host-receipt.outputs.ceremony_expires_at }}
+          EXCHANGE_BUCKET: ${{ vars.PRIVACY_ACTIVATION_EXCHANGE_BUCKET }}
+          EXCHANGE_KMS_KEY_ARN: ${{ vars.PRIVACY_ACTIVATION_EXCHANGE_KMS_KEY_ARN }}
+          MATERIAL_SHA256: ${{ steps.host-receipt.outputs.material_sha256 }}
+          MATERIAL_VERSION_ID: ${{ steps.host-receipt.outputs.material_version_id }}
+          CEREMONY_SCHEMA_MIGRATION_DIGEST: ${{ steps.host-receipt.outputs.ceremony_schema_migration_digest }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ "$CEREMONY_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ "$MATERIAL_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$MATERIAL_VERSION_ID" =~ ^[-A-Za-z0-9._~+/=]{1,1024}$ ]]
+          key="ceremonies/$CEREMONY_ID/material.json"
+          aws s3api get-object --region "$AWS_REGION" --bucket "$EXCHANGE_BUCKET" --key "$key" \
+            --version-id "$MATERIAL_VERSION_ID" --checksum-mode ENABLED material.json > material-response.json
+          actual_sha=$(sha256sum material.json | cut -d' ' -f1)
+          actual_checksum=$(openssl dgst -sha256 -binary material.json | base64 -w0)
+          test "$actual_sha" = "$MATERIAL_SHA256"
+          jq -e --arg version "$MATERIAL_VERSION_ID" --arg checksum "$actual_checksum" --arg kms "$EXCHANGE_KMS_KEY_ARN" \
+            '.VersionId == $version and .ChecksumSHA256 == $checksum and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms' \
+            material-response.json >/dev/null
+          jq -e --arg ceremony "$CEREMONY_ID" --arg source "${{ inputs.sha }}" \
+            --arg image "${TARGET_IMAGE##*@}" --arg schema "$CEREMONY_SCHEMA_MIGRATION_DIGEST" \
+            --arg expires "$CEREMONY_EXPIRES_AT" '
+              .contract == "mycfc/privacy-activation-approval-material/v2" and
+              .ceremony_id == $ceremony and .source_sha == $source and .image_digest == $image and
+              .schema_migration_digest == $schema and .ceremony_expires_at == $expires and
+              .policy_version == "club-2026-09-15-v1" and (.signer_registry_sha256 | test("^[0-9a-f]{64}$")) and
+              (.evidence_ids | type == "array" and length == 4) and
+              ([.evidence_set_sha256,.activation_sha256] | all(.[]; test("^[0-9a-f]{64}$")))
+            ' material.json >/dev/null
+          prepared_epoch=$(date -u -d "$(jq -r .prepared_at material.json)" +%s)
+          expires_epoch=$(date -u -d "$CEREMONY_EXPIRES_AT" +%s)
+          now_epoch=$(date -u +%s)
+          test "$expires_epoch" -gt "$now_epoch"
+          test "$expires_epoch" -gt "$prepared_epoch"
+          test "$((expires_epoch - prepared_epoch))" -le 900
+          {
+            echo
+            echo '### Dual-signature ceremony material'
+            echo
+            echo "- Ceremony: \`$CEREMONY_ID\`"
+            echo "- Material version: \`$MATERIAL_VERSION_ID\`"
+            echo "- Material SHA-256: \`$MATERIAL_SHA256\`"
+            echo "- Expires: \`$CEREMONY_EXPIRES_AT\`"
+            echo "- Source: \`${{ inputs.sha }}\`"
+            echo "- Image digest: \`${TARGET_IMAGE##*@}\`"
+            echo "- Schema digest: \`$CEREMONY_SCHEMA_MIGRATION_DIGEST\`"
+            echo "- Evidence set: \`$(jq -r .evidence_set_sha256 material.json)\`"
+            echo '- Dispatch each fixed signer workflow with these exact values before expiry. Two valid approvals cause automatic activation.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f material.json material-response.json
+      - name: Observe the isolated canary alarm and recovery
+        if: startsWith(inputs.operation, 'acceptance-canary-')
+        env:
+          ADVERSE_ALARM_NAME: mycfc-production-privacy-acceptance-canary
+          RECOVERY_ALARM_NAME: mycfc-production-privacy-acceptance-canary-recovery
+          OBSERVATION_NOT_BEFORE_MS: ${{ steps.request.outputs.receipt_not_before_ms }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$OBSERVATION_NOT_BEFORE_MS" =~ ^[1-9][0-9]*$ ]]
+          observation_start=$(date -u -d "@$((OBSERVATION_NOT_BEFORE_MS / 1000))" +%Y-%m-%dT%H:%M:%SZ)
+          for _ in $(seq 1 24); do
+            aws cloudwatch describe-alarm-history --region "$AWS_REGION" --alarm-name "$ADVERSE_ALARM_NAME" \
+              --history-item-type StateUpdate --start-date "$observation_start" \
+              --scan-by TimestampAscending --output json > adverse-history.json
+            adverse_alarm=$(jq -r '.AlarmHistoryItems[]? |
+              [.Timestamp, (.HistoryData | fromjson | .newState.stateValue)] | @tsv' adverse-history.json |
+              while IFS=$'\t' read -r state_time state; do
+                state_ms=$(($(date -u -d "$state_time" +%s) * 1000))
+                if [[ "$state" == ALARM && "$state_ms" -ge "$OBSERVATION_NOT_BEFORE_MS" ]]; then echo 1; break; fi
+              done)
+            adverse_alarm=${adverse_alarm:-0}
+            recovery_alarm=0
+            if [[ "${{ inputs.operation }}" != acceptance-canary-failure ]]; then
+              aws cloudwatch describe-alarm-history --region "$AWS_REGION" --alarm-name "$RECOVERY_ALARM_NAME" \
+                --history-item-type StateUpdate --start-date "$observation_start" \
+                --scan-by TimestampAscending --output json > recovery-history.json
+              recovery_alarm=$(jq -r '.AlarmHistoryItems[]? |
+                [.Timestamp, (.HistoryData | fromjson | .newState.stateValue)] | @tsv' recovery-history.json |
+                while IFS=$'\t' read -r state_time state; do
+                  state_ms=$(($(date -u -d "$state_time" +%s) * 1000))
+                  if [[ "$state" == ALARM && "$state_ms" -ge "$OBSERVATION_NOT_BEFORE_MS" ]]; then echo 1; break; fi
+                done)
+              recovery_alarm=${recovery_alarm:-0}
+            fi
+            if [[ "$adverse_alarm" -gt 0 ]] && { [[ "${{ inputs.operation }}" == acceptance-canary-failure ]] || [[ "$recovery_alarm" -gt 0 ]]; }; then
+              {
+                echo
+                echo '### Isolated canary alarm observation'
+                echo
+                echo "- Adverse alarm: \`$ADVERSE_ALARM_NAME\` (**ALARM** observed)."
+                if [[ "${{ inputs.operation }}" != acceptance-canary-failure ]]; then
+                  echo "- Recovery signal: \`$RECOVERY_ALARM_NAME\` (**ALARM** observed from the separate recovery metric)."
+                else
+                  echo '- This fixed failure canary intentionally emits no recovery event.'
+                fi
+                echo '- The ordinary privacy-worker alarms remain isolated from synthetic fixtures.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'The expected fresh adverse and recovery metric transitions were not observed.' >&2
+          exit 1

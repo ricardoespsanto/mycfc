@@ -9,7 +9,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -388,12 +387,6 @@ func validReplayPrescription(prescription *RelationalReplayPrescription) bool {
 func validMembershipHistoryPostcondition(postcondition *MembershipHistoryPostcondition) bool {
 	return postcondition != nil && postcondition.Contract == MembershipHistoryPostconditionVersion &&
 		len(postcondition.SHA256) == sha256.Size && postcondition.MembershipCount <= 10000 && postcondition.VariationCount <= 100000
-}
-
-func equalMembershipHistoryPostcondition(left, right *MembershipHistoryPostcondition) bool {
-	return validMembershipHistoryPostcondition(left) && validMembershipHistoryPostcondition(right) &&
-		left.Contract == right.Contract && left.MembershipCount == right.MembershipCount && left.VariationCount == right.VariationCount &&
-		subtle.ConstantTimeCompare(left.SHA256, right.SHA256) == 1
 }
 
 func tombstoneAADV1(kind string, executionID uuid.UUID, keyID string) []byte {

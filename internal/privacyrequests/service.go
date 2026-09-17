@@ -460,7 +460,7 @@ func (s Service) executionViewBlockers(ctx context.Context, tx pgx.Tx, q *dbgen.
 			return nil, err
 		}
 		add("ACTIVATION_DISABLED")
-	} else if ready, readyErr := q.PrivacyActivationReady(ctx, activation.PolicyVersion); !executionActivationReady(activation) || readyErr != nil || !ready {
+	} else if ready, readyErr := q.PrivacyActivationReady(ctx, activation.PolicyVersion); !executionActivationReady(activation.Enabled, activation.FulfilmentReady) || readyErr != nil || !ready {
 		add("ACTIVATION_DISABLED")
 	}
 	if r.ScopeKind != string(AccountClosure) {

@@ -1,8 +1,11 @@
 -- name: GetPrivacyActivation :one
-SELECT * FROM privacy_request_activation WHERE singleton = true;
+SELECT policy_version::text,enabled::boolean,fulfilment_ready::boolean,approval_id::uuid FROM privacy_activation_snapshot();
 
 -- name: PrivacyActivationReady :one
 SELECT privacy_activation_ready(sqlc.arg(policy_version));
+
+-- name: PrivacyProviderEmptyInventoryReady :one
+SELECT privacy_provider_empty_inventory_ready();
 
 -- name: GetPrivacyPolicy :one
 SELECT * FROM privacy_request_policies WHERE version = sqlc.arg(version);
@@ -125,7 +128,7 @@ INSERT INTO privacy_request_policies(version,category_catalogue,executor_version
 VALUES(sqlc.arg(version),sqlc.arg(category_catalogue),sqlc.narg(executor_version),sqlc.narg(plan_schema_version),sqlc.arg(account_closure_enabled),sqlc.narg(working_retention_days),sqlc.arg(response_months),sqlc.arg(extension_months),sqlc.narg(adopted_at),sqlc.narg(adopted_by),sqlc.arg(created_at)) RETURNING *;
 
 -- name: GetPrivacyActivationForUpdate :one
-SELECT * FROM privacy_request_activation WHERE singleton = true FOR UPDATE;
+SELECT policy_version::text,enabled::boolean,fulfilment_ready::boolean,approval_id::uuid FROM privacy_activation_lock();
 
 -- name: SetPrivacyActivation :one
 INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at)

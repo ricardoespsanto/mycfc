@@ -17,17 +17,35 @@ The S3 lifecycle rule expires current objects under `repairs/` after 30 days and
 
 ## Least-privilege database identity
 
-Database bootstrap creates `mycfc_privacy_retention` as `NOLOGIN`. It has no direct table or sequence privileges and can execute only `privacy_retention_run(uuid,integer)` and `privacy_retention_status()`. Provision a separate login through the production secret process, grant only membership in that fixed capability role, and put its PostgreSQL URL in `/etc/mycfc/privacy-retention.env`. Do not reuse the web, migration, bootstrap, privacy-executor, or backup identity.
+Database bootstrap creates `mycfc_privacy_retention` as `NOLOGIN`. It has no direct table or sequence privileges and can execute only `privacy_retention_run(uuid,integer)` and `privacy_retention_status()`. The separately invoked root-only credential command provisions the fixed `mycfc_privacy_retention_login` login, with only explicit membership in that capability role and database CONNECT. Put its PostgreSQL URL in `/etc/mycfc/privacy-retention.env`. Do not reuse the web, migration, bootstrap, privacy-executor, or backup identity.
 
 The root-owned file must be mode `0600` and contain only:
 
 ```text
-PRIVACY_RETENTION_DATABASE_URL=postgres://<dedicated-login>:<secret>@postgres:5432/<database>?sslmode=disable
+PRIVACY_RETENTION_DATABASE_URL=postgres://mycfc_privacy_retention_login:<secret>@postgres:5432/<database>?sslmode=disable
 PRIVACY_RETENTION_WORKER_REF=<stable-random-uuid>
 PRIVACY_RETENTION_BATCH_LIMIT=500
 ```
 
 The command refuses a missing gate, credential URL, non-UUID worker reference, or batch outside 1–10,000. It uses `SET LOCAL ROLE mycfc_privacy_retention`, verifies the effective role, runs one transaction, and emits counts and ages only. It never emits a database URL, object key, user ID, request ID, consent ID, or audit content.
+
+## Explicit credential operations
+
+The existing `/app/privacy-retention` binary adds exactly three operator modes: `provision`, `rotate`, and `revoke`. Running without arguments retains the existing bounded maintenance behavior. The modes require effective UID 0; use a separately approved root-only one-shot container from the selected immutable release. They do not enable the retention timer or run maintenance. No production command has been run by this source change; the later GitHub host state machine owns execution.
+
+Required inputs are:
+
+- `PRIVACY_RETENTION_EXPECTED_DATABASE`: exact database name.
+- `PRIVACY_RETENTION_ADMIN_DATABASE_URL_FILE`: absolute path to a root:root mode-0600 regular file containing the bootstrap administrator URL. The live database name must match and the connection must be a PostgreSQL superuser.
+- `PRIVACY_RETENTION_LOGIN_DATABASE_URL_FILE`: absolute path to a separate root:root mode-0600 regular file containing the new fixed-login URL, with the same endpoint, database and TLS settings. Provision/rotation require a separately generated password of 32–1,024 bytes. Revocation neither reads nor requires this file.
+
+Only a single PostgreSQL URL and optional final newline are accepted in each file. Symbolic links, nonregular files, unsafe ownership/modes, alternate usernames, mismatched endpoints/databases, duplicate or unrecognized query settings, and short/empty passwords fail closed. The only accepted URL query setting is an explicit `sslmode` from `disable`, `require`, `verify-ca`, or `verify-full`. Password bytes never enter command arguments, success output or returned diagnostics. PostgreSQL statement and parameter logging is disabled transaction-locally before a bound password is submitted; the tool does not print driver/SQL errors.
+
+Keep the retention timer/service stopped during every credential change. `provision` requires an absent login and the installed, hardened NOLOGIN capability with its two fixed functions. `rotate` requires the existing login; it rejects login-owned objects, removes prior role memberships and direct application-schema privileges, resets role options, then grants only database CONNECT and non-inherited SET ROLE access to `mycfc_privacy_retention`. This preserves the worker's explicit `SET LOCAL ROLE` boundary. The credential and privilege changes commit atomically. Rotation then terminates old sessions and checks that none remain before reporting success.
+
+`revoke` removes capability membership, clears the password and sets NOLOGIN before terminating existing sessions. It is idempotent if the login is absent; it does not drop owned application objects or database data. If session termination fails after commit, the command reports failure while the committed credential restriction remains in place. Do not restart the timer on any failed outcome. Preserve the new protected file for deliberate retry/reconciliation; never revert to the old password as an automatic compensation.
+
+The only successful output is `privacy_retention_credential_provision_succeeded`, `privacy_retention_credential_rotate_succeeded`, or `privacy_retention_credential_revoke_succeeded`. The executable's failure output remains the fixed `privacy_retention_failed` with nonzero exit. Workflow identity and the reviewed release provide operator audit; no username, database URL, password or file content is emitted. These credentials must remain separate from worker, broker, disable-only, application and backup credentials.
 
 ## Inactive rollout and monitoring
 

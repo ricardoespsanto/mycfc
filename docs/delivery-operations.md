@@ -35,7 +35,7 @@ The status output contains operational identifiers and service states only. It n
 
 ## Observer boundary
 
-`operations_observer_enabled` is false by default. When explicitly planned and applied, Terraform creates a role with a one-hour maximum session and no IAM user or access key. Human trust is limited to exact IAM Identity Center permission-set role ARNs; MFA must be enforced in Identity Center. Workflow trust is limited to the exact GitHub repository and protected production-environment OIDC subject. Its permissions boundary and inline policy allow only deployment-log, ECR inventory, and alarm reads, while explicitly denying secret, Parameter Store, Terraform-state S3, ECR/log mutation, and role chaining.
+`operations_observer_enabled` is false by default. When explicitly planned and applied, Terraform creates a role with a one-hour maximum session and no IAM user or access key. Human trust is limited to exact IAM Identity Center permission-set role ARNs; MFA must be enforced in Identity Center. Workflow trust is limited to the exact GitHub repository and protected production-environment OIDC subject. Its permissions boundary and inline policy allow only deployment-log, ECR inventory, alarm, and exact signed-receipt-version reads plus decrypt on the dedicated receipt KMS key, while explicitly denying secret, Parameter Store, bucket listing, receipt mutation, ECR/log mutation, and role chaining.
 
 ## Rollback and activation
 

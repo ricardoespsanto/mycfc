@@ -20,6 +20,19 @@ type objectTargetProtectorStub struct {
 	digestErr error
 }
 
+func productionHandlerCount(operation string) int {
+	count := 0
+	if relationalExecutableOperation(operation) {
+		count++
+	}
+	for _, specialized := range []string{"OBJECT_VERSION_DELETE", "PROVIDER_RECIPIENT_NOTIFY", "BACKUP_TOMBSTONE_REPLAY"} {
+		if operation == specialized {
+			count++
+		}
+	}
+	return count
+}
+
 func (s objectTargetProtectorStub) SealObjectKey(ObjectTargetBinding, string) (ObjectTargetEnvelope, error) {
 	return ObjectTargetEnvelope{}, s.sealErr
 }
@@ -82,14 +95,15 @@ func TestExecutionWorkGraphExactlyMirrorsImmutablePlan(t *testing.T) {
 	}
 }
 
-func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(t *testing.T) {
+func TestDecisionPlanOrdersRestoreIntentBeforeDestructiveWork(t *testing.T) {
 	policy := testPolicy()
 	created := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
 	_, plan, err := policy.DecisionPlan(
-		Scope{Kind: Categories, Categories: []Category{"membership-history", "training-prescriptions"}},
+		Scope{Kind: Categories, Categories: []Category{"membership-history", "training-prescriptions", "backup-tombstones"}},
 		map[string]CategoryDecision{
 			"membership-history":     {Outcome: "APPROVE"},
 			"training-prescriptions": {Outcome: "APPROVE"},
+			"backup-tombstones":      {Outcome: "APPROVE"},
 		},
 		"approve",
 		created,
@@ -97,8 +111,9 @@ func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Entries) != 2 || plan.Entries[0].Category != "training-prescriptions" || plan.Entries[1].Category != "membership-history" {
-		t.Fatalf("unsafe membership dependency order: %+v", plan.Entries)
+	if len(plan.Entries) != 3 || plan.Entries[0].Category != "backup-tombstones" ||
+		plan.Entries[1].Category != "training-prescriptions" || plan.Entries[2].Category != "membership-history" {
+		t.Fatalf("unsafe restore or membership dependency order: %+v", plan.Entries)
 	}
 	plan.RequestVersion = 2
 	plan.Entries[0], plan.Entries[1] = plan.Entries[1], plan.Entries[0]
@@ -114,7 +129,7 @@ func TestDecisionPlanOrdersPrescriptionDeletionBeforeMembershipPseudonymisation(
 		CreatedAt: pgtype.Timestamptz{Time: created, Valid: true},
 	}
 	if _, err = ReadExecutionPlan(row); !errors.Is(err, ErrPolicyUnresolved) {
-		t.Fatalf("legacy unsafe dependency order accepted: %v", err)
+		t.Fatalf("plan with destructive work before restore intent accepted: %v", err)
 	}
 }
 
@@ -188,14 +203,17 @@ func TestExecutionReplayRequiresExactAcceptedHandoff(t *testing.T) {
 }
 
 func TestExecutionActivationDoesNotStrandAnOlderImmutablePlan(t *testing.T) {
-	if !executionActivationReady(dbgen.PrivacyRequestActivation{PolicyVersion: "new-policy", Enabled: true, FulfilmentReady: true}) {
+	if !executionActivationReady(true, true) {
 		t.Fatal("ready activation rejected because its current policy differs from the stored request plan")
 	}
-	for _, activation := range []dbgen.PrivacyRequestActivation{
-		{Enabled: false, FulfilmentReady: true},
-		{Enabled: true, FulfilmentReady: false},
+	for _, activation := range []struct {
+		enabled         bool
+		fulfilmentReady bool
+	}{
+		{enabled: false, fulfilmentReady: true},
+		{enabled: true, fulfilmentReady: false},
 	} {
-		if executionActivationReady(activation) {
+		if executionActivationReady(activation.enabled, activation.fulfilmentReady) {
 			t.Fatalf("unready activation accepted: %+v", activation)
 		}
 	}
@@ -242,8 +260,8 @@ func TestExecutionCapabilitiesMustCoverEveryExactPlanOperation(t *testing.T) {
 	knownButUnsafe := plan
 	knownButUnsafe.Entries = append([]ExecutionPlanEntry(nil), plan.Entries...)
 	knownButUnsafe.Entries[0].Operations = []string{"AUDIT_ACTOR_ANONYMIZE"}
-	if (Service{ExecutionCapabilities: map[string]bool{"AUDIT_ACTOR_ANONYMIZE": true}}).ExecutionCapabilitiesReady(knownButUnsafe) {
-		t.Fatal("known but unimplemented relational operation enabled execution start")
+	if !(Service{ExecutionCapabilities: ProductionExecutionCapabilities()}).ExecutionCapabilitiesReady(knownButUnsafe) {
+		t.Fatal("implemented audit anonymisation was absent from the production registry")
 	}
 
 	disabled := make(map[string]bool, len(all))
@@ -325,29 +343,21 @@ func TestClaimedWorkRequiresFencedAllowlistedCheckpoints(t *testing.T) {
 	}
 }
 
-func TestUnimplementedAnonymisationCannotBeClaimedOrCheckpointed(t *testing.T) {
-	for _, operation := range []string{"AUDIT_ACTOR_ANONYMIZE"} {
-		t.Run(operation, func(t *testing.T) {
-			jobID := uuid.New()
-			job := ExecutionJob{
-				PrivacyErasureCategoryJob: dbgen.PrivacyErasureCategoryJob{
-					ID: jobID, ExecutionID: uuid.New(), EntrySha256: make([]byte, sha256.Size),
-					CategoryKey: "blocked-category", PurposeCode: "BLOCKED_PURPOSE", Status: "LEASED", LeaseEpoch: 1, AttemptCount: 1,
-				},
-				ActiveLeaseID: uuid.New(), ActiveAttemptID: uuid.New(),
+func TestCanonicalOperationsHaveExactlyOneProductionHandler(t *testing.T) {
+	capabilities := ProductionExecutionCapabilities()
+	for profileName, profile := range executionProfiles {
+		for _, operation := range profile.Operations {
+			if productionHandlerCount(operation) != 1 {
+				t.Errorf("profile %s operation %s has %d production handlers", profileName, operation, productionHandlerCount(operation))
 			}
-			checkpoints := []dbgen.PrivacyErasureJobCheckpoint{{JobID: jobID, OperationPosition: 1, OperationCode: operation, ActionVersion: SupportedActionVersion, Status: "PENDING"}}
-			if !supportedOperation(operation) || relationalExecutableOperation(operation) {
-				t.Fatalf("operation vocabulary/executable boundary is wrong")
+			if !capabilities[operation] {
+				t.Errorf("profile %s operation %s is absent from production capabilities", profileName, operation)
 			}
-			if err := validateClaimedWork(job, checkpoints); !errors.Is(err, ErrExecutorUnavailable) {
-				t.Fatalf("unsafe anonymisation claim error=%v", err)
-			}
-			worker := ExecutionWorker{WorkerRef: uuid.New()}
-			if _, err := worker.CompleteCheckpoint(context.Background(), ExecutionLease{Job: job, Checkpoints: checkpoints}, operation, SupportedActionVersion); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("unsafe anonymisation checkpoint error=%v", err)
-			}
-		})
+		}
+	}
+	capabilities["IDENTITY_CLEAR"] = false
+	if !ProductionExecutionCapabilities()["IDENTITY_CLEAR"] {
+		t.Fatal("production capability caller mutated the closed registry")
 	}
 }
 
@@ -572,6 +582,8 @@ func TestExecutionWorkerDefaultsBoundsAndClosedPoolErrors(t *testing.T) {
 		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: time.Millisecond},
 		{Pool: pool, WorkerRef: uuid.New(), LeaseDuration: 2 * time.Hour},
 		{Pool: pool, WorkerRef: uuid.New(), MaxAttempts: 101},
+		{Pool: pool, WorkerRef: uuid.New(), AcceptanceProof: make([]byte, 31)},
+		{Pool: pool, WorkerRef: uuid.New(), AcceptanceProof: make([]byte, 33)},
 	} {
 		if invalid.valid() {
 			t.Fatalf("invalid worker accepted: %+v", invalid)

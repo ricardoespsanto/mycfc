@@ -68,7 +68,7 @@ func TestActivationDisableIncidentDrillReengagesSwitchAndBlocksReadiness(t *test
 		has_function_privilege($1,'privacy_disable.privacy_activation_disable(uuid,text)','EXECUTE'),
 		has_schema_privilege($1,'public','USAGE'),
 		has_function_privilege($1,'privacy_activation_broker_material(text)','EXECUTE'),
-		has_function_privilege($1,'privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)','EXECUTE'),
+		has_function_privilege($1,'privacy_activation_broker_activate(uuid,bytea,jsonb,bytea,jsonb,bytea,bytea)','EXECUTE'),
 		has_table_privilege($1,'privacy_request_activation','SELECT')`, privacyActivationDisableRole).
 		Scan(&canDisable, &canUsePublicSchema, &canReadBroker, &canActivateBroker, &canReadActivationTable); err != nil {
 		t.Fatal(err)

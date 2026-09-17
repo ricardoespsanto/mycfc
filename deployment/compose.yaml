@@ -199,6 +199,43 @@ services:
     profiles: [maintenance]
     restart: "no"
 
+  privacy-policy-import:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    environment:
+      APP_ENV: production
+      APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
+      GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
+      AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    networks: [mycfc]
+    profiles: [privacy-policy-import]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  privacy-acceptance:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-acceptance"]
+    env_file:
+      - path: /etc/mycfc/privacy-acceptance.env
+        required: false
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [privacy-acceptance]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
   privacy-worker:
     image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
     entrypoint: ["/app/privacy-worker"]
@@ -234,6 +271,7 @@ services:
         required: false
     environment:
       PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
+      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
     volumes:
       - /etc/mycfc/privacy-activation/evidence:/run/privacy-activation:ro
     networks: [mycfc]
@@ -245,6 +283,88 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 64
+    restart: "no"
+
+  privacy-activation-prepare:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-activation"]
+    command: ["prepare-exchange"]
+    env_file:
+      - path: /etc/mycfc/privacy-activation.env
+        required: false
+    environment:
+      PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT: /run/privacy-activation/material.json
+      PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
+      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
+      PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE: /run/privacy-activation/signer-registry.json
+      PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256: ${PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256:-}
+      PRIVACY_ACTIVATION_SOURCE_SHA: ${GIT_SHA:-}
+    volumes:
+      - /var/lib/mycfc/privacy-activation-exchange/prepare:/run/privacy-activation
+      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [privacy-activation-prepare]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  privacy-activation-approval:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/usr/local/bin/mycfc-privacy-activation-approval"]
+    volumes:
+      - /var/lib/mycfc/privacy-activation-exchange/active:/run/privacy-activation:ro
+      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
+      - /etc/mycfc/privacy-activation/executor-public-key-spki.der:/run/privacy-activation/executor-public-key-spki.der:ro
+      - /etc/mycfc/privacy-activation/administrator-public-key-spki.der:/run/privacy-activation/administrator-public-key-spki.der:ro
+    network_mode: none
+    user: "0:0"
+    profiles: [privacy-activation-approval]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+
+  privacy-activation-exchange:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/privacy-activation"]
+    command: ["activate-exchange"]
+    env_file:
+      - path: /etc/mycfc/privacy-activation.env
+        required: false
+    environment:
+      PRIVACY_ACTIVATION_ADMINISTRATOR_APPROVAL_FILE: /run/privacy-activation/administrator.json
+      PRIVACY_ACTIVATION_ADMINISTRATOR_PUBLIC_KEY_SPKI_FILE: /run/privacy-activation/administrator-public-key-spki.der
+      PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE: /run/privacy-activation/material.json
+      PRIVACY_ACTIVATION_CEREMONY_ID: ${PRIVACY_ACTIVATION_CEREMONY_ID:-}
+      PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
+      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
+      PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE: /run/privacy-activation/executor.json
+      PRIVACY_ACTIVATION_EXECUTOR_PUBLIC_KEY_SPKI_FILE: /run/privacy-activation/executor-public-key-spki.der
+      PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE: /run/privacy-activation/signer-registry.json
+      PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256: ${PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256:-}
+      PRIVACY_ACTIVATION_SOURCE_SHA: ${GIT_SHA:-}
+    volumes:
+      - /var/lib/mycfc/privacy-activation-exchange/active:/run/privacy-activation:ro
+      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
+      - /etc/mycfc/privacy-activation/executor-public-key-spki.der:/run/privacy-activation/executor-public-key-spki.der:ro
+      - /etc/mycfc/privacy-activation/administrator-public-key-spki.der:/run/privacy-activation/administrator-public-key-spki.der:ro
+    networks: [mycfc]
+    user: "0:0"
+    profiles: [privacy-activation-exchange]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
     restart: "no"
 
   privacy-activation-disable:

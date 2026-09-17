@@ -1,0 +1,352 @@
+{
+  "version": "club-2026-09-15-v1",
+  "executor_version": "privacy-erasure-executor/v2",
+  "plan_schema_version": "privacy-erasure-plan/v2",
+  "categories": [
+    {
+      "key": "announcement-deliveries",
+      "label": "Entregas de anúncios",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "ANNOUNCEMENT_DELIVERY_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "CONTENT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "audit-evidence",
+      "label": "Evidência de auditoria",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "AUDIT_ACTOR_ANONYMIZE_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SECURITY",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "backup-tombstones",
+      "label": "Marcadores de cópia de segurança",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "BACKUP_TOMBSTONE_RESTRICT_V1",
+        "retained_fields": [
+          "users.id"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "OPERATIONS",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_MONTH",
+        "review_after": 12,
+        "expire_after": 24,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "consent-evidence",
+      "label": "Evidência de consentimento",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "CONSENT_EVIDENCE_RESTRICT_V1",
+        "retained_fields": [
+          "consent.decided_at",
+          "consent.decision",
+          "consent.document_hash",
+          "consent.document_type",
+          "consent.document_version",
+          "consent.method"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_YEAR",
+        "review_after": 1,
+        "expire_after": 3,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "consent-network",
+      "label": "Rede de consentimento",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "CONSENT_NETWORK_EXPIRE_V1",
+        "retained_fields": [
+          "consent.decided_at"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_MONTH",
+        "review_after": 12,
+        "expire_after": 12,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "dependant-relations",
+      "label": "Relações de dependência",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "DEPENDANT_RELATION_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "event-responses",
+      "label": "Respostas a eventos",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "EVENT_RESPONSE_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "OPERATIONS",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "health-emergency",
+      "label": "Saúde e emergência",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "PROFILE_HEALTH_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "identity-core",
+      "label": "Identidade da conta",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "IDENTITY_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "membership-history",
+      "label": "Histórico de filiação",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "MEMBERSHIP_HISTORY_ANONYMIZE_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SECRETARIAT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "object-storage",
+      "label": "Objetos privados",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "OBJECT_VERSIONS_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "IT",
+        "complete_within_days": 30,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "operational-logs",
+      "label": "Registos operacionais",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "LOG_EXPIRE_V1",
+        "retained_fields": [
+          "audit.action",
+          "audit.occurred_at",
+          "audit.reason_code"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SECURITY",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_DAY",
+        "review_after": 90,
+        "expire_after": 90,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "outbox-email",
+      "label": "Fila de correio",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "OUTBOX_EXPIRE_V1",
+        "retained_fields": [
+          "audit.occurred_at"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "IT",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_DAY",
+        "review_after": 90,
+        "expire_after": 90,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "privacy-cases",
+      "label": "Casos de privacidade",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "PRIVACY_CASE_RESTRICT_V1",
+        "retained_fields": [
+          "privacy_request.completed_at",
+          "privacy_request.decided_at",
+          "privacy_request.decision_code",
+          "privacy_request.evidence_expires_at",
+          "privacy_request.public_ref",
+          "privacy_request.received_at",
+          "privacy_request.result_code"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "PRIVACY",
+        "complete_within_days": 0,
+        "retention_unit": "CALENDAR_MONTH",
+        "review_after": 12,
+        "expire_after": 24,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "profile-core",
+      "label": "Perfil do membro",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "PROFILE_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SECRETARIAT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "profile-photo",
+      "label": "Fotografia de perfil",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "OBJECT_VERSIONS_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "IT",
+        "complete_within_days": 30,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "repair-history",
+      "label": "Histórico de reparações",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "REPAIR_REPORTER_ANONYMIZE_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "OPERATIONS",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "sessions",
+      "label": "Sessões",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "AUTH_SESSION_EXPIRE_V1",
+        "retained_fields": [
+          "users.id"
+        ],
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "IT",
+        "complete_within_days": 0,
+        "retention_unit": "HOUR",
+        "review_after": 12,
+        "expire_after": 12,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "suggestions",
+      "label": "Sugestões",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "SUGGESTION_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "MODERATION",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "training-prescriptions",
+      "label": "Prescrições de treino",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "TRAINING_PRESCRIPTION_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SPORT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "training-results",
+      "label": "Resultados de treino",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "TRAINING_RESULT_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "SPORT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    },
+    {
+      "key": "verification-reset",
+      "label": "Verificação e reposição",
+      "description": "Tratamento segundo a matriz de conservação aprovada pelo clube; exceções não aprovadas bloqueiam a decisão.",
+      "rule": {
+        "profile": "AUTH_TOKEN_CLEAR_V1",
+        "legal_ground": "APPROVED_POLICY",
+        "owner": "IT",
+        "complete_within_days": 0,
+        "fallback": "BLOCK"
+      },
+      "grounds": []
+    }
+  ],
+  "account_closure_enabled": true,
+  "working_retention_days": 90,
+  "response_months": 1,
+  "extension_months": 2
+}

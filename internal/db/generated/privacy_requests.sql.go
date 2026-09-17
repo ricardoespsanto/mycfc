@@ -1060,38 +1060,46 @@ func (q *Queries) GetPrivacyAccountForUpdate(ctx context.Context, id uuid.UUID) 
 }
 
 const getPrivacyActivation = `-- name: GetPrivacyActivation :one
-SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at, approval_id FROM privacy_request_activation WHERE singleton = true
+SELECT policy_version::text,enabled::boolean,fulfilment_ready::boolean,approval_id::uuid FROM privacy_activation_snapshot()
 `
 
-func (q *Queries) GetPrivacyActivation(ctx context.Context) (PrivacyRequestActivation, error) {
+type GetPrivacyActivationRow struct {
+	PolicyVersion   string    `json:"policy_version"`
+	Enabled         bool      `json:"enabled"`
+	FulfilmentReady bool      `json:"fulfilment_ready"`
+	ApprovalID      uuid.UUID `json:"approval_id"`
+}
+
+func (q *Queries) GetPrivacyActivation(ctx context.Context) (GetPrivacyActivationRow, error) {
 	row := q.db.QueryRow(ctx, getPrivacyActivation)
-	var i PrivacyRequestActivation
+	var i GetPrivacyActivationRow
 	err := row.Scan(
-		&i.Singleton,
 		&i.PolicyVersion,
 		&i.Enabled,
 		&i.FulfilmentReady,
-		&i.UpdatedBy,
-		&i.UpdatedAt,
 		&i.ApprovalID,
 	)
 	return i, err
 }
 
 const getPrivacyActivationForUpdate = `-- name: GetPrivacyActivationForUpdate :one
-SELECT singleton, policy_version, enabled, fulfilment_ready, updated_by, updated_at, approval_id FROM privacy_request_activation WHERE singleton = true FOR UPDATE
+SELECT policy_version::text,enabled::boolean,fulfilment_ready::boolean,approval_id::uuid FROM privacy_activation_lock()
 `
 
-func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (PrivacyRequestActivation, error) {
+type GetPrivacyActivationForUpdateRow struct {
+	PolicyVersion   string    `json:"policy_version"`
+	Enabled         bool      `json:"enabled"`
+	FulfilmentReady bool      `json:"fulfilment_ready"`
+	ApprovalID      uuid.UUID `json:"approval_id"`
+}
+
+func (q *Queries) GetPrivacyActivationForUpdate(ctx context.Context) (GetPrivacyActivationForUpdateRow, error) {
 	row := q.db.QueryRow(ctx, getPrivacyActivationForUpdate)
-	var i PrivacyRequestActivation
+	var i GetPrivacyActivationForUpdateRow
 	err := row.Scan(
-		&i.Singleton,
 		&i.PolicyVersion,
 		&i.Enabled,
 		&i.FulfilmentReady,
-		&i.UpdatedBy,
-		&i.UpdatedAt,
 		&i.ApprovalID,
 	)
 	return i, err
@@ -2713,6 +2721,17 @@ func (q *Queries) PrivacyActivationReady(ctx context.Context, policyVersion stri
 	var privacy_activation_ready bool
 	err := row.Scan(&privacy_activation_ready)
 	return privacy_activation_ready, err
+}
+
+const privacyProviderEmptyInventoryReady = `-- name: PrivacyProviderEmptyInventoryReady :one
+SELECT privacy_provider_empty_inventory_ready()
+`
+
+func (q *Queries) PrivacyProviderEmptyInventoryReady(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, privacyProviderEmptyInventoryReady)
+	var privacy_provider_empty_inventory_ready bool
+	err := row.Scan(&privacy_provider_empty_inventory_ready)
+	return privacy_provider_empty_inventory_ready, err
 }
 
 const privacyRestoreReplayAlreadyApplied = `-- name: PrivacyRestoreReplayAlreadyApplied :one

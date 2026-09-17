@@ -17,6 +17,7 @@ import (
 // rewind their own predecessor.
 func rewindGuardianSchemaReadyOwnerMigration(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
+	rewindExecutorAndSyntheticAcceptanceBinding(t, ctx, tx)
 	// Reconstruct the prior privacy boundary before older guardian migrations.
 	// This rollback state is only a test fixture, never a production downgrade.
 	if _, err := tx.Exec(ctx, `DO $$DECLARE definition text;rewritten text;BEGIN

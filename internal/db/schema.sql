@@ -9442,3 +9442,1163 @@ SELECT guardian_authority_reconcile_cutoffs();
 DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
 UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
  WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+
+-- Baseline through 202609170001_privacy_synthetic_acceptance.
+-- Synthetic acceptance uses only database-created identities and a 256-bit
+-- capability bound to their immutable registry. It cannot adopt an existing user.
+CREATE TABLE privacy_protected.acceptance_fixtures (
+ id uuid PRIMARY KEY, subject_ref uuid NOT NULL UNIQUE, reviewer_ref uuid NOT NULL UNIQUE,
+ executor_ref uuid NOT NULL UNIQUE, worker_ref uuid NOT NULL UNIQUE,
+ proof_sha256 bytea NOT NULL CHECK(octet_length(proof_sha256)=32),
+ marker_sha256 bytea NOT NULL CHECK(octet_length(marker_sha256)=32),
+ image_digest text NOT NULL CHECK(image_digest ~ '^sha256:[0-9a-f]{64}$'),
+ schema_digest text NOT NULL CHECK(schema_digest ~ '^[0-9a-f]{64}$'),
+ created_at timestamptz NOT NULL, expires_at timestamptz NOT NULL,
+ CHECK(expires_at=created_at+interval '1 hour'),
+ CHECK(subject_ref<>reviewer_ref AND subject_ref<>executor_ref AND reviewer_ref<>executor_ref)
+);
+CREATE TABLE privacy_protected.acceptance_finished (fixture_id uuid PRIMARY KEY REFERENCES privacy_protected.acceptance_fixtures(id), finished_at timestamptz NOT NULL DEFAULT clock_timestamp());
+CREATE TRIGGER acceptance_finished_immutable BEFORE UPDATE OR DELETE ON privacy_protected.acceptance_finished FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TABLE privacy_protected.acceptance_requests (
+ fixture_id uuid PRIMARY KEY REFERENCES privacy_protected.acceptance_fixtures(id),
+ request_id uuid NOT NULL UNIQUE
+);
+CREATE TABLE privacy_protected.acceptance_notice_simulations (
+ outbox_id uuid PRIMARY KEY, fixture_id uuid NOT NULL REFERENCES privacy_protected.acceptance_fixtures(id),
+ message_type text NOT NULL, payload_sha256 bytea NOT NULL, observed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER acceptance_fixtures_immutable BEFORE UPDATE OR DELETE ON privacy_protected.acceptance_fixtures
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TRIGGER acceptance_requests_immutable BEFORE UPDATE OR DELETE ON privacy_protected.acceptance_requests
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+CREATE TRIGGER acceptance_simulations_immutable BEFORE UPDATE OR DELETE ON privacy_protected.acceptance_notice_simulations
+ FOR EACH ROW EXECUTE FUNCTION prevent_privacy_audit_mutation();
+
+CREATE FUNCTION privacy_protected.acceptance_create(p_password_hash text,p_image text,p_schema text)
+RETURNS TABLE(fixture_id uuid,subject_ref uuid,reviewer_ref uuid,executor_ref uuid,worker_ref uuid,proof bytea,marker_sha256 bytea)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE f uuid:=gen_random_uuid();s uuid:=gen_random_uuid();r uuid:=gen_random_uuid();e uuid:=gen_random_uuid();w uuid:=gen_random_uuid();
+ token bytea:=gen_random_bytes(32);marker bytea;at timestamptz:=clock_timestamp();grant_ref uuid;
+BEGIN
+ IF session_user<>'mycfc_privacy_acceptance' OR p_password_hash IS NULL OR p_image IS NULL OR p_schema IS NULL OR p_password_hash !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$'
+  OR p_image !~ '^sha256:[0-9a-f]{64}$' OR p_schema !~ '^[0-9a-f]{64}$'
+ THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_rejected'; END IF;
+ PERFORM privacy_worker_require_activation();
+ IF NOT EXISTS(SELECT 1 FROM privacy_request_activation a JOIN privacy_activation_approvals approval ON approval.id=a.approval_id
+   JOIN privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+   JOIN privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=ANY(proposal.evidence_ids) AND artifact.kind='SCHEMA'
+   WHERE a.singleton AND a.enabled AND artifact.image_digest=p_image AND encode(artifact.schema_migration_digest,'hex')=p_schema) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_activation_required'; END IF;
+ marker:=hmac(convert_to('mycfc/privacy-acceptance-fixture/v1:'||f||':'||s||':'||r||':'||e||':'||w||':'||p_image||':'||p_schema,'UTF8'),token,'sha256');
+ INSERT INTO privacy_protected.acceptance_fixtures VALUES(f,s,r,e,w,digest(token,'sha256'),marker,p_image,p_schema,at,at+interval '1 hour');
+ INSERT INTO users(id,name,email,password_hash,date_of_birth,leaderboard_visible)
+ VALUES(s,'Synthetic privacy acceptance fixture','synthetic-'||s||'@invalid.invalid',p_password_hash,'1900-01-01',false),
+ (r,'Synthetic privacy acceptance reviewer','synthetic-'||r||'@invalid.invalid','synthetic-disabled','1900-01-01',false),
+ (e,'Synthetic privacy acceptance executor','synthetic-'||e||'@invalid.invalid','synthetic-disabled','1900-01-01',false);
+ INSERT INTO privacy_reviewer_grants(user_id,granted_by,granted_at) VALUES(r,e,at) RETURNING id INTO grant_ref;
+ INSERT INTO privacy_reviewer_grant_events(grant_id,actor_ref,action,occurred_at) VALUES(grant_ref,e,'GRANTED',at);
+ INSERT INTO privacy_executor_grants(user_id,granted_by,granted_at) VALUES(e,r,at) RETURNING id INTO grant_ref;
+ INSERT INTO privacy_executor_grant_events(grant_id,actor_ref,action,occurred_at) VALUES(grant_ref,r,'GRANTED',at);
+ RETURN QUERY SELECT f,s,r,e,w,token,marker;
+END;$$;
+
+-- Bind the very first real service-submitted request to its synthetic subject;
+-- a marker must never be attached to an existing request or another person.
+CREATE FUNCTION privacy_acceptance_bind_request() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE fixture privacy_protected.acceptance_fixtures%ROWTYPE;
+BEGIN
+ IF TG_OP='UPDATE' THEN
+  SELECT f.* INTO fixture FROM privacy_protected.acceptance_fixtures f JOIN privacy_protected.acceptance_requests r ON r.fixture_id=f.id WHERE r.request_id=OLD.id;
+  IF FOUND THEN
+   IF NEW.id IS DISTINCT FROM OLD.id OR (NEW.subject_user_id IS NOT NULL AND NEW.subject_user_id<>fixture.subject_ref)
+    OR (NEW.requester_user_id IS NOT NULL AND NEW.requester_user_id<>fixture.subject_ref)
+   THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_request_retarget_forbidden'; END IF;
+   RETURN NEW;
+  END IF;
+  IF EXISTS(SELECT 1 FROM privacy_protected.acceptance_fixtures WHERE subject_ref=NEW.subject_user_id) THEN
+   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_existing_request_forbidden'; END IF;
+  RETURN NEW;
+ END IF;
+ SELECT * INTO fixture FROM privacy_protected.acceptance_fixtures WHERE subject_ref=NEW.subject_user_id;
+ IF NOT FOUND THEN RETURN NEW; END IF;
+ IF NEW.requester_user_id IS DISTINCT FROM fixture.subject_ref OR fixture.expires_at<=clock_timestamp()
+  OR EXISTS(SELECT 1 FROM privacy_protected.acceptance_finished WHERE fixture_id=fixture.id)
+  OR digest(decode(current_setting('mycfc.acceptance_proof',true),'hex'),'sha256') IS DISTINCT FROM fixture.proof_sha256
+ THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_request_rejected'; END IF;
+ INSERT INTO privacy_protected.acceptance_requests VALUES(fixture.id,NEW.id);
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER privacy_acceptance_request_bound BEFORE INSERT OR UPDATE ON data_erasure_requests
+ FOR EACH ROW EXECUTE FUNCTION privacy_acceptance_bind_request();
+
+-- No generated identity may gain a browser session or recovery credential.
+CREATE FUNCTION privacy_acceptance_reject_auth() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+BEGIN
+ IF EXISTS(SELECT 1 FROM privacy_protected.acceptance_fixtures WHERE NEW.user_id IN(subject_ref,reviewer_ref,executor_ref)) THEN
+  RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_auth_forbidden'; END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER acceptance_no_session BEFORE INSERT OR UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION privacy_acceptance_reject_auth();
+CREATE TRIGGER acceptance_no_reset BEFORE INSERT OR UPDATE ON password_reset_tokens FOR EACH ROW EXECUTE FUNCTION privacy_acceptance_reject_auth();
+CREATE TRIGGER acceptance_no_verify BEFORE INSERT OR UPDATE ON email_verification_tokens FOR EACH ROW EXECUTE FUNCTION privacy_acceptance_reject_auth();
+
+-- Cancel before the row can ever become visible to any email sender. Keep the
+-- encrypted processing target for the existing completion machinery, recording
+-- only the ciphertext digest in the simulation receipt. Attempts to requeue a
+-- synthetic notice remain cancelled. No timestamp or external send is faked.
+CREATE FUNCTION privacy_acceptance_simulate_notice() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE f uuid;
+BEGIN
+ IF TG_OP='UPDATE' THEN
+  SELECT fixture_id INTO f FROM privacy_protected.acceptance_notice_simulations WHERE outbox_id=OLD.id;
+  IF FOUND AND (NEW.id IS DISTINCT FROM OLD.id OR NEW.privacy_request_id IS DISTINCT FROM OLD.privacy_request_id) THEN
+   RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_notice_retarget_forbidden'; END IF;
+ END IF;
+ IF f IS NULL THEN SELECT fixture_id INTO f FROM privacy_protected.acceptance_requests WHERE request_id=NEW.privacy_request_id; END IF;
+ IF f IS NOT NULL THEN
+  IF TG_OP='INSERT' AND NEW.sealed_payload IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_notice_rejected'; END IF;
+  NEW.status:='CANCELLED';NEW.claimed_at:=NULL;NEW.sent_at:=NULL;
+  IF TG_OP='INSERT' THEN
+  INSERT INTO privacy_protected.acceptance_notice_simulations(outbox_id,fixture_id,message_type,payload_sha256)
+  VALUES(NEW.id,f,NEW.message_type,digest(NEW.sealed_payload,'sha256')) ON CONFLICT(outbox_id) DO NOTHING;
+  END IF;
+ END IF;
+ RETURN NEW;
+END;$$;
+CREATE TRIGGER acceptance_no_external_notice BEFORE INSERT OR UPDATE ON email_outbox FOR EACH ROW EXECUTE FUNCTION privacy_acceptance_simulate_notice();
+
+CREATE FUNCTION privacy_acceptance_authorized(p_worker uuid,p_proof bytea) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE result uuid;
+BEGIN
+ IF octet_length(p_proof) IS DISTINCT FROM 32 THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_rejected'; END IF;
+ SELECT request.request_id INTO result FROM privacy_protected.acceptance_fixtures fixture
+ JOIN privacy_protected.acceptance_requests request ON request.fixture_id=fixture.id
+ WHERE fixture.worker_ref=p_worker AND fixture.proof_sha256=digest(p_proof,'sha256') AND fixture.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM privacy_protected.acceptance_finished WHERE fixture_id=fixture.id);
+ IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_rejected'; END IF;
+ RETURN result;
+END;$$;
+
+-- Clone the reviewed claim implementation with an exact synthetic request
+-- predicate. Retain its ordering, dependencies, SKIP LOCKED and lease fences.
+DO $$DECLARE source text;candidate text;
+BEGIN
+ source:=pg_get_functiondef('privacy_worker_claim_inner_013(bigint,uuid)'::regprocedure);
+ IF strpos(source,'WHERE p_lease_milliseconds BETWEEN 1000 AND 3600000')=0 THEN
+  RAISE EXCEPTION 'privacy_acceptance_claim_predecessor_mismatch'; END IF;
+ candidate:=replace(source,'privacy_worker_claim_inner_013(p_lease_milliseconds bigint, p_worker_ref uuid)',
+  'privacy_acceptance_claim_inner(p_lease_milliseconds bigint, p_worker_ref uuid, p_request_id uuid)');
+ IF candidate=source THEN RAISE EXCEPTION 'privacy_acceptance_claim_signature_mismatch'; END IF;
+ candidate:=replace(candidate,'WHERE p_lease_milliseconds BETWEEN 1000 AND 3600000',
+  'WHERE job.execution_id IN (SELECT id FROM public.privacy_erasure_executions WHERE request_id=p_request_id) AND p_lease_milliseconds BETWEEN 1000 AND 3600000');
+ EXECUTE candidate;
+ source:=replace(source,'WHERE p_lease_milliseconds BETWEEN 1000 AND 3600000',
+  'WHERE NOT EXISTS(SELECT 1 FROM public.privacy_erasure_executions execution JOIN privacy_protected.acceptance_requests synthetic ON synthetic.request_id=execution.request_id WHERE execution.id=job.execution_id) AND p_lease_milliseconds BETWEEN 1000 AND 3600000');
+ EXECUTE source;
+END$$;
+CREATE FUNCTION privacy_acceptance_claim(p_lease_milliseconds bigint,p_worker_ref uuid,p_proof bytea)
+RETURNS TABLE(job_id uuid,lease_id uuid,attempt_id uuid) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE request_ref uuid;
+BEGIN
+ PERFORM privacy_worker_require_activation();
+ request_ref:=privacy_acceptance_authorized(p_worker_ref,p_proof);
+ RETURN QUERY SELECT * FROM privacy_acceptance_claim_inner(p_lease_milliseconds,p_worker_ref,request_ref);
+END;$$;
+
+-- Ordinary workers must not attempt synthetic completion with their delivery
+-- key; acceptance uses the same finalizer with a fixture-local delivery key.
+DO $$DECLARE source text;
+BEGIN
+ source:=pg_get_functiondef('privacy_completion_list_pending_inner_013(uuid,integer)'::regprocedure);
+ IF strpos(source,'WHERE p_worker_ref IS NOT NULL')=0 THEN RAISE EXCEPTION 'privacy_acceptance_completion_predecessor_mismatch'; END IF;
+ EXECUTE replace(source,'WHERE p_worker_ref IS NOT NULL',
+  'WHERE NOT EXISTS(SELECT 1 FROM privacy_protected.acceptance_requests fixture WHERE fixture.request_id=execution.request_id) AND p_worker_ref IS NOT NULL');
+END$$;
+CREATE OR REPLACE FUNCTION privacy_worker_status()
+RETURNS TABLE(pending bigint,leased bigint,retryable bigint,terminal bigint,aged_nonterminal bigint)
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+ SELECT count(*) FILTER(WHERE job.status='PENDING'),count(*) FILTER(WHERE job.status='LEASED'),
+ count(*) FILTER(WHERE job.status='RETRY_WAIT'),count(*) FILTER(WHERE job.status='TERMINAL_FAILED'),
+ count(*) FILTER(WHERE job.status IN('PENDING','LEASED','RETRY_WAIT') AND job.updated_at<=clock_timestamp()-interval '15 minutes')
+ FROM privacy_erasure_category_jobs job WHERE NOT EXISTS(SELECT 1 FROM privacy_erasure_executions execution JOIN privacy_protected.acceptance_requests synthetic ON synthetic.request_id=execution.request_id WHERE execution.id=job.execution_id);
+$$;
+REVOKE ALL ON TABLE privacy_protected.acceptance_finished,privacy_protected.acceptance_fixtures,privacy_protected.acceptance_requests,privacy_protected.acceptance_notice_simulations FROM PUBLIC;
+REVOKE ALL ON FUNCTION privacy_protected.acceptance_create(text,text,text),privacy_acceptance_authorized(uuid,bytea),privacy_acceptance_claim_inner(bigint,uuid,uuid),privacy_acceptance_claim(bigint,uuid,bytea),privacy_acceptance_bind_request() FROM PUBLIC;
+
+CREATE FUNCTION privacy_protected.acceptance_finish(p_worker uuid,p_proof bytea) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE fixture privacy_protected.acceptance_fixtures%ROWTYPE;at timestamptz:=clock_timestamp();
+BEGIN
+ SELECT * INTO fixture FROM privacy_protected.acceptance_fixtures WHERE worker_ref=p_worker AND proof_sha256=digest(p_proof,'sha256');
+ IF octet_length(p_proof) IS DISTINCT FROM 32 OR fixture.id IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_acceptance_rejected'; END IF;
+ INSERT INTO privacy_protected.acceptance_finished(fixture_id) VALUES(fixture.id) ON CONFLICT DO NOTHING;
+ UPDATE users SET is_active=false,credential_version=credential_version+1,updated_at=at
+ WHERE id IN(fixture.subject_ref,fixture.reviewer_ref,fixture.executor_ref) AND is_active;
+ WITH revoked AS(UPDATE privacy_reviewer_grants SET revoked_by=fixture.executor_ref,revoked_at=at WHERE user_id=fixture.reviewer_ref AND revoked_at IS NULL RETURNING id)
+ INSERT INTO privacy_reviewer_grant_events(grant_id,actor_ref,action,occurred_at) SELECT id,fixture.executor_ref,'REVOKED',at FROM revoked;
+ WITH revoked AS(UPDATE privacy_executor_grants SET revoked_by=fixture.reviewer_ref,revoked_at=at WHERE user_id=fixture.executor_ref AND revoked_at IS NULL RETURNING id)
+ INSERT INTO privacy_executor_grant_events(grant_id,actor_ref,action,occurred_at) SELECT id,fixture.reviewer_ref,'REVOKED',at FROM revoked;
+END;$$;
+
+CREATE FUNCTION privacy_protected.acceptance_observe(p_worker uuid,p_proof bytea)
+RETURNS TABLE(marker_sha256 bytea,manifest_sha256 bytea,simulated_notices bigint,checkpoints bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE request_ref uuid;fixture privacy_protected.acceptance_fixtures%ROWTYPE;execution_ref uuid;
+BEGIN
+ request_ref:=privacy_acceptance_authorized(p_worker,p_proof);
+ SELECT * INTO fixture FROM privacy_protected.acceptance_fixtures WHERE worker_ref=p_worker;
+ SELECT id INTO execution_ref FROM privacy_erasure_executions WHERE request_id=request_ref AND status='SUCCEEDED';
+ IF execution_ref IS NULL OR NOT EXISTS(SELECT 1 FROM data_erasure_requests WHERE id=request_ref AND status='COMPLETED')
+  OR NOT EXISTS(SELECT 1 FROM users WHERE id=fixture.subject_ref AND erased_at IS NOT NULL AND erasure_execution_id=execution_ref AND email IS NULL AND password_hash IS NULL AND NOT is_active)
+  OR EXISTS(SELECT 1 FROM sessions WHERE user_id=fixture.subject_ref)
+  OR EXISTS(SELECT 1 FROM member_profiles WHERE user_id=fixture.subject_ref)
+  OR EXISTS(SELECT 1 FROM activity_connections WHERE user_id=fixture.subject_ref)
+  OR EXISTS(SELECT 1 FROM privacy_protected.object_targets WHERE execution_id=execution_ref)
+  OR EXISTS(SELECT 1 FROM privacy_protected.provider_targets WHERE execution_id=execution_ref)
+  OR EXISTS(SELECT 1 FROM email_outbox WHERE privacy_request_id=request_ref AND (status<>'CANCELLED' OR sent_at IS NOT NULL))
+  OR NOT EXISTS(SELECT 1 FROM privacy_protected.acceptance_notice_simulations WHERE fixture_id=fixture.id AND message_type='PRIVACY_COMPLETED')
+  OR NOT EXISTS(SELECT 1 FROM privacy_protected.restore_tombstone_closure_receipts WHERE execution_id=execution_ref AND ledger_version='restore-tombstone-closure/v4')
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_acceptance_absence_unverified'; END IF;
+ RETURN QUERY SELECT fixture.marker_sha256,manifest.manifest_sha256,
+  (SELECT count(*) FROM privacy_protected.acceptance_notice_simulations WHERE fixture_id=fixture.id),
+  (SELECT count(*) FROM privacy_erasure_job_checkpoints checkpoint JOIN privacy_erasure_category_jobs job ON job.id=checkpoint.job_id WHERE job.execution_id=execution_ref AND checkpoint.status='SUCCEEDED')
+ FROM privacy_erasure_completion_manifests manifest WHERE manifest.execution_id=execution_ref;
+END;$$;
+REVOKE ALL ON FUNCTION privacy_protected.acceptance_finish(uuid,bytea),privacy_protected.acceptance_observe(uuid,bytea) FROM PUBLIC;
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v16_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609130001_event_results_links',''))<>length('202609130001_event_results_links') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='synthetic_acceptance_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609130001_event_results_links''',
+  '''202609130001_event_results_links'', ''202609170001_privacy_synthetic_acceptance''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v16_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v17_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v17_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609130001_event_results_links''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609170001_privacy_synthetic_acceptance''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='synthetic_acceptance_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609130001_event_results_links''';
+ new_clause:='schema_row.baseline_includes_through=''202609170001_privacy_synthetic_acceptance''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='synthetic_acceptance_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+-- Every schema revision invalidates privacy evidence and both guardian gates.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+
+-- Baseline through 202609170002_privacy_executor_retention_handlers.
+-- Complete the adopted v2 executor contract for retained and expiring
+-- categories. Source facts are captured before account cut-off and kept in
+-- the protected schema; the worker can only consume them through the exact
+-- lease/attempt/epoch-fenced checkpoint routine below.
+
+CREATE TABLE privacy_protected.execution_retention_sources (
+ execution_id uuid NOT NULL,
+ category_key varchar(120) NOT NULL,
+ subject_ref uuid NOT NULL,
+ anchor_at timestamptz NULL,
+ retained_data jsonb NOT NULL CHECK(jsonb_typeof(retained_data)='object'),
+ captured_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(execution_id,category_key),
+ FOREIGN KEY(execution_id) REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT
+);
+CREATE TRIGGER execution_retention_sources_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.execution_retention_sources FOR EACH ROW
+ EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE TABLE privacy_protected.execution_retention_pending (
+ execution_id uuid NOT NULL,
+ category_key varchar(120) NOT NULL,
+ subject_ref uuid NOT NULL,
+ anchor_code varchar(80) NOT NULL CHECK(anchor_code='CASE_CLOSURE'),
+ retention_unit varchar(40) NOT NULL,
+ review_after integer NOT NULL CHECK(review_after>0),
+ expire_after integer NOT NULL CHECK(expire_after>=review_after),
+ retained_field_codes text[] NOT NULL CHECK(cardinality(retained_field_codes)>0 AND array_position(retained_field_codes,NULL) IS NULL),
+ retained_data jsonb NOT NULL CHECK(jsonb_typeof(retained_data)='object'),
+ worker_ref uuid NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(execution_id,category_key),
+ FOREIGN KEY(execution_id) REFERENCES public.privacy_erasure_executions(id) ON DELETE RESTRICT
+);
+CREATE TRIGGER execution_retention_pending_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.execution_retention_pending FOR EACH ROW
+ EXECUTE FUNCTION public.prevent_privacy_execution_record_delete();
+
+CREATE FUNCTION public.privacy_retention_add_offset(p_anchor timestamptz,p_amount integer,p_unit text)
+RETURNS timestamptz LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+ CASE p_unit
+ WHEN 'HOUR' THEN RETURN p_anchor+make_interval(hours=>p_amount);
+ WHEN 'CALENDAR_DAY' THEN RETURN p_anchor+make_interval(days=>p_amount);
+ WHEN 'CALENDAR_MONTH' THEN RETURN p_anchor+make_interval(months=>p_amount);
+ WHEN 'CALENDAR_YEAR' THEN RETURN p_anchor+make_interval(years=>p_amount);
+ ELSE RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_retention_unit_invalid';
+ END CASE;
+END;$$;
+
+CREATE FUNCTION public.privacy_retention_select_fields(p_data jsonb,p_fields text[])
+RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+ SELECT COALESCE(jsonb_object_agg(field,p_data->field ORDER BY field),'{}'::jsonb)
+ FROM unnest(p_fields) field WHERE p_data ? field
+$$;
+
+CREATE FUNCTION public.privacy_execution_capture_retention_sources(p_execution_id uuid,p_subject_id uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE request_ref uuid;accepted timestamptz;retained_categories text[];
+BEGIN
+ SELECT execution.request_id,execution.accepted_at INTO request_ref,accepted
+ FROM privacy_erasure_executions execution JOIN data_erasure_requests request ON request.id=execution.request_id
+ WHERE execution.id=p_execution_id AND request.subject_user_id=p_subject_id FOR SHARE OF execution,request;
+ IF request_ref IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_retention_capture_invalid'; END IF;
+ SELECT array_agg(entry->>'category' ORDER BY entry->>'category') INTO retained_categories
+ FROM privacy_erasure_executions execution JOIN privacy_request_execution_plans plan ON plan.request_id=execution.request_id
+ CROSS JOIN LATERAL jsonb_array_elements(plan.plan->'entries') entry
+ WHERE execution.id=p_execution_id AND entry->>'disposition' IN ('RESTRICT','EXPIRE');
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'sessions',p_subject_id,max(expiry),jsonb_build_object('users.id',to_jsonb(p_subject_id::text))
+ FROM sessions WHERE subject_indexed AND user_id=p_subject_id AND 'sessions'=ANY(retained_categories) HAVING count(*)>0 ON CONFLICT DO NOTHING;
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'consent-evidence',p_subject_id,accepted,
+  jsonb_build_object(
+   'consent.decided_at',COALESCE(jsonb_agg(to_char(date_signed AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') ORDER BY date_signed,id),'[]'::jsonb),
+   'consent.decision',COALESCE(jsonb_agg(is_accepted ORDER BY date_signed,id),'[]'::jsonb),
+   'consent.document_hash',COALESCE(jsonb_agg(document_sha256 ORDER BY date_signed,id),'[]'::jsonb),
+   'consent.document_type',COALESCE(jsonb_agg(consent_type::text ORDER BY date_signed,id),'[]'::jsonb),
+   'consent.document_version',COALESCE(jsonb_agg(document_version ORDER BY date_signed,id),'[]'::jsonb),
+   'consent.method',COALESCE(jsonb_agg(CASE WHEN granted_by_user_id IS NULL OR granted_by_user_id=user_id THEN 'SELF' ELSE 'REPRESENTATIVE' END ORDER BY date_signed,id),'[]'::jsonb))
+ FROM consent_forms WHERE user_id=p_subject_id AND 'consent-evidence'=ANY(retained_categories) HAVING count(*)>0 ON CONFLICT DO NOTHING;
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'consent-network',p_subject_id,max(date_signed),
+  jsonb_build_object('consent.decided_at',COALESCE(jsonb_agg(to_char(date_signed AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') ORDER BY date_signed,id),'[]'::jsonb))
+ FROM consent_forms WHERE user_id=p_subject_id AND 'consent-network'=ANY(retained_categories) HAVING count(*)>0 ON CONFLICT DO NOTHING;
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'profile-core',p_subject_id,NULL,
+  jsonb_build_object('member_profile.federation_id',to_jsonb(federation_licence_number))
+ FROM member_profiles WHERE user_id=p_subject_id AND 'profile-core'=ANY(retained_categories) ON CONFLICT DO NOTHING;
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'identity-core',p_subject_id,NULL,jsonb_build_object('users.id',p_subject_id::text)
+ WHERE 'identity-core'=ANY(retained_categories) ON CONFLICT DO NOTHING;
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'outbox-email',p_subject_id,max(outbox.created_at),
+  jsonb_build_object('audit.occurred_at',COALESCE(jsonb_agg(to_char(outbox.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') ORDER BY outbox.created_at,outbox.id),'[]'::jsonb))
+ FROM email_outbox outbox LEFT JOIN email_verification_tokens verification ON verification.id=outbox.verification_token_id
+ LEFT JOIN password_reset_tokens reset ON reset.id=outbox.password_reset_token_id
+ WHERE (verification.user_id=p_subject_id OR reset.user_id=p_subject_id OR outbox.privacy_requester_id=p_subject_id)
+  AND 'outbox-email'=ANY(retained_categories)
+ HAVING count(*)>0
+ ON CONFLICT DO NOTHING;
+
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'privacy-cases',p_subject_id,NULL,jsonb_build_object(
+  'privacy_request.public_ref',request.public_ref::text,
+  'privacy_request.received_at',to_char(request.received_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'privacy_request.decided_at',to_char(request.decided_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'privacy_request.decision_code',request.decision_code,
+  'privacy_request.completed_at',NULL,
+  'privacy_request.evidence_expires_at',NULL,
+  'privacy_request.result_code','COMPLETED')
+ FROM data_erasure_requests request WHERE request.id=request_ref
+  AND 'privacy-cases'=ANY(retained_categories) ON CONFLICT DO NOTHING;
+
+ -- Audit retention stores stable codes and times only; free-text audit payloads
+ -- remain governed by the separate anonymisation checkpoint.
+ INSERT INTO privacy_protected.execution_retention_sources(execution_id,category_key,subject_ref,anchor_at,retained_data)
+ SELECT p_execution_id,'operational-logs',p_subject_id,max(row_at),jsonb_build_object(
+  'audit.action',COALESCE(jsonb_agg(action_code ORDER BY row_at,row_id),'[]'::jsonb),
+  'audit.occurred_at',COALESCE(jsonb_agg(to_char(row_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') ORDER BY row_at,row_id),'[]'::jsonb),
+  'audit.reason_code',COALESCE(jsonb_agg(reason_code ORDER BY row_at,row_id),'[]'::jsonb))
+ FROM (
+  SELECT id row_id,created_at row_at,'MINOR_CREDENTIAL'::text action_code,'ACCOUNT_SECURITY'::text reason_code FROM minor_credential_audit WHERE minor_user_id=p_subject_id OR guardian_user_id=p_subject_id OR actor_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,action::text,'EQUIPMENT' FROM equipment_audit_events WHERE actor_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,action::text,'MEMBER_PROFILE' FROM member_profile_audit_events WHERE actor_user_id=p_subject_id OR subject_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,action::text,'STAFF_GRANT' FROM staff_grant_audit_events WHERE actor_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,action::text,'PHOTO_ALBUM' FROM photo_album_audit_events WHERE actor_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,action::text,'ANNOUNCEMENT' FROM announcement_audit_events WHERE actor_user_id=p_subject_id
+  UNION ALL SELECT id,occurred_at,'FEATURE_FLAG','FEATURE_FLAG' FROM feature_flag_events WHERE actor_user_id=p_subject_id
+  UNION ALL SELECT id,copied_at,'TRAINING_COPY','TRAINING' FROM training_copy_events WHERE copied_by_id=p_subject_id
+ ) retained_log WHERE 'operational-logs'=ANY(retained_categories)
+ HAVING count(*)>0 ON CONFLICT DO NOTHING;
+ RETURN p_execution_id;
+END;$$;
+
+CREATE FUNCTION public.privacy_worker_execute_retention_checkpoint(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE checkpoint_ref uuid;execution_ref uuid;subject_ref uuid;category text;entry jsonb;operation_index integer;
+ fields text[];source privacy_protected.execution_retention_sources%ROWTYPE;anchor_at timestamptz;review_at timestamptz;expires_at timestamptz;
+ changed bigint:=0;n bigint:=0;result_digest bytea;pending boolean;request_ref uuid;source_exists boolean;
+BEGIN
+ PERFORM public.privacy_worker_require_activation();
+ SELECT checkpoint.id,execution.id,request.id,request.subject_user_id,job.category_key,
+  plan.plan->'entries'->(job.plan_entry_position-1),checkpoint.operation_position
+ INTO checkpoint_ref,execution_ref,request_ref,subject_ref,category,entry,operation_index
+ FROM privacy_erasure_category_jobs job
+ JOIN privacy_erasure_job_leases lease ON lease.id=p_lease_id AND lease.job_id=job.id AND lease.epoch=p_epoch
+ JOIN privacy_erasure_job_attempts attempt ON attempt.id=p_attempt_id AND attempt.job_id=job.id AND attempt.lease_id=lease.id AND attempt.lease_epoch=p_epoch
+ JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id AND checkpoint.operation_code=p_operation_code AND checkpoint.action_version=p_action_version
+ JOIN privacy_erasure_executions execution ON execution.id=job.execution_id
+ JOIN data_erasure_requests request ON request.id=execution.request_id
+ JOIN privacy_request_execution_plans plan ON plan.request_id=request.id AND plan.plan_sha256=execution.plan_sha256
+ WHERE job.id=p_job_id AND job.status='LEASED' AND lease.worker_ref=p_worker_ref AND lease.released_at IS NULL
+  AND lease.expires_at>clock_timestamp() AND attempt.finished_at IS NULL
+ FOR UPDATE OF job,lease,attempt,checkpoint;
+ IF checkpoint_ref IS NULL THEN RETURN NULL; END IF;
+ IF (SELECT status FROM privacy_erasure_job_checkpoints WHERE id=checkpoint_ref)='SUCCEEDED' THEN RETURN checkpoint_ref; END IF;
+ IF subject_ref IS NULL OR entry IS NULL OR entry->>'category'<>category OR entry->>'fallback'<>'BLOCK'
+  OR entry->>'action_version'<>p_action_version OR entry->'operations'->>(operation_index-1)<>p_operation_code
+  OR entry->>'disposition' NOT IN ('RESTRICT','EXPIRE')
+  OR EXISTS(SELECT 1 FROM privacy_erasure_job_checkpoints prior WHERE prior.job_id=p_job_id AND prior.operation_position<operation_index AND prior.status<>'SUCCEEDED')
+  OR EXISTS(SELECT 1 FROM privacy_erasure_category_jobs prior WHERE prior.execution_id=execution_ref AND prior.plan_entry_position<(SELECT plan_entry_position FROM privacy_erasure_category_jobs WHERE id=p_job_id) AND prior.status<>'SUCCEEDED')
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_execution_order_or_plan_invalid'; END IF;
+ IF (category,p_operation_code) NOT IN (
+  ('sessions','AUTH_SESSION_EXPIRE'),('consent-evidence','CONSENT_EVIDENCE_RESTRICT'),('consent-network','CONSENT_NETWORK_EXPIRE'),
+  ('identity-core','IDENTITY_RESTRICT'),('operational-logs','LOG_RECORD_EXPIRE'),('outbox-email','OUTBOX_PAYLOAD_EXPIRE'),
+  ('privacy-cases','PRIVACY_CASE_RESTRICT'),('profile-core','PROFILE_RESTRICT'))
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_operation_unsupported'; END IF;
+ SELECT array_agg(value ORDER BY value) INTO fields FROM jsonb_array_elements_text(entry->'retained_fields');
+ IF fields IS NULL OR entry->>'retention_anchor' IS NULL OR (entry->>'review_after')::integer<1
+  OR (entry->>'expire_after')::integer<(entry->>'review_after')::integer
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_retention_contract_invalid'; END IF;
+ PERFORM public.privacy_execution_capture_retention_sources(execution_ref,subject_ref);
+ SELECT * INTO source FROM privacy_protected.execution_retention_sources
+ WHERE execution_id=execution_ref AND category_key=category FOR SHARE;
+ source_exists:=FOUND;
+ IF NOT source_exists THEN
+  source.execution_id:=execution_ref;source.category_key:=category;source.subject_ref:=subject_ref;source.retained_data:='{}'::jsonb;
+ END IF;
+ pending:=entry->>'retention_anchor'='CASE_CLOSURE';
+ IF pending AND source_exists THEN
+  INSERT INTO privacy_protected.execution_retention_pending(execution_id,category_key,subject_ref,anchor_code,retention_unit,review_after,expire_after,retained_field_codes,retained_data,worker_ref)
+  VALUES(execution_ref,category,subject_ref,'CASE_CLOSURE',entry->>'retention_unit',(entry->>'review_after')::integer,(entry->>'expire_after')::integer,fields,
+   public.privacy_retention_select_fields(source.retained_data,fields),p_worker_ref);
+ ELSIF source_exists THEN
+  anchor_at:=source.anchor_at;
+  IF category='consent-evidence' THEN anchor_at:=(SELECT accepted_at FROM privacy_erasure_executions WHERE id=execution_ref); END IF;
+  IF anchor_at IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_retention_anchor_unresolved'; END IF;
+  review_at:=public.privacy_retention_add_offset(anchor_at,(entry->>'review_after')::integer,entry->>'retention_unit');
+  expires_at:=public.privacy_retention_add_offset(anchor_at,(entry->>'expire_after')::integer,entry->>'retention_unit');
+  INSERT INTO privacy_erasure_retention_anchors(execution_id,category_key,anchor_code,anchor_at,review_at,expires_at,retained_field_codes,worker_ref)
+  VALUES(execution_ref,category,entry->>'retention_anchor',anchor_at,review_at,expires_at,fields,p_worker_ref);
+  INSERT INTO privacy_erasure_restricted_records(execution_id,category_key,subject_ref,retained_data,review_at,expires_at)
+  VALUES(execution_ref,category,subject_ref,public.privacy_retention_select_fields(source.retained_data,fields),review_at,expires_at);
+ END IF;
+
+ CASE p_operation_code
+ WHEN 'AUTH_SESSION_EXPIRE' THEN DELETE FROM sessions WHERE subject_indexed AND user_id=subject_ref; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'CONSENT_NETWORK_EXPIRE' THEN UPDATE consent_forms SET ip_address=NULL,user_agent='' WHERE user_id=subject_ref AND (ip_address IS NOT NULL OR user_agent<>''); GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'CONSENT_EVIDENCE_RESTRICT' THEN
+  UPDATE member_profiles SET photo_object_key=NULL,photo_content_type=NULL,photo_size_bytes=NULL,photo_consent_form_id=NULL,photo_upload_intent_id=NULL,updated_at=clock_timestamp()
+   WHERE user_id=subject_ref AND photo_consent_form_id IS NOT NULL;
+  DELETE FROM consent_forms WHERE user_id=subject_ref; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'OUTBOX_PAYLOAD_EXPIRE' THEN
+  DELETE FROM email_outbox outbox USING email_verification_tokens verification WHERE outbox.verification_token_id=verification.id AND verification.user_id=subject_ref;
+  GET DIAGNOSTICS changed=ROW_COUNT;
+  DELETE FROM email_outbox outbox USING password_reset_tokens reset WHERE outbox.password_reset_token_id=reset.id AND reset.user_id=subject_ref;
+  GET DIAGNOSTICS n=ROW_COUNT;changed:=changed+n;
+  DELETE FROM email_outbox WHERE privacy_requester_id=subject_ref AND privacy_request_id<>request_ref;
+  GET DIAGNOSTICS n=ROW_COUNT;changed:=changed+n;
+ WHEN 'PROFILE_RESTRICT' THEN DELETE FROM member_profiles WHERE user_id=subject_ref; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'IDENTITY_RESTRICT' THEN
+  IF EXISTS(SELECT 1 FROM users WHERE guardian_id=subject_ref) THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_dependants_unresolved'; END IF;
+  DELETE FROM sessions WHERE subject_indexed AND user_id=subject_ref;DELETE FROM email_verification_tokens WHERE user_id=subject_ref;
+  DELETE FROM password_reset_tokens WHERE user_id=subject_ref;DELETE FROM user_platform_roles WHERE user_id=subject_ref;
+  UPDATE users SET name='Conta eliminada',email=NULL,email_verified_at=NULL,minor_login_id=NULL,password_hash=NULL,guardian_id=NULL,is_dependent=false,
+   date_of_birth=DATE '1900-01-01',is_active=false,leaderboard_visible=false,credential_version=credential_version+1,erased_at=clock_timestamp(),
+   erasure_execution_id=execution_ref,updated_at=clock_timestamp() WHERE id=subject_ref AND erased_at IS NULL; GET DIAGNOSTICS changed=ROW_COUNT;
+ WHEN 'LOG_RECORD_EXPIRE','PRIVACY_CASE_RESTRICT' THEN changed:=0;
+ END CASE;
+ IF p_operation_code='AUTH_SESSION_EXPIRE' AND EXISTS(SELECT 1 FROM sessions WHERE subject_indexed AND user_id=subject_ref)
+  OR p_operation_code='CONSENT_NETWORK_EXPIRE' AND EXISTS(SELECT 1 FROM consent_forms WHERE user_id=subject_ref AND (ip_address IS NOT NULL OR user_agent<>''))
+  OR p_operation_code='CONSENT_EVIDENCE_RESTRICT' AND EXISTS(SELECT 1 FROM consent_forms WHERE user_id=subject_ref)
+  OR p_operation_code='PROFILE_RESTRICT' AND EXISTS(SELECT 1 FROM member_profiles WHERE user_id=subject_ref)
+  OR p_operation_code='IDENTITY_RESTRICT' AND NOT EXISTS(SELECT 1 FROM users WHERE id=subject_ref AND erased_at IS NOT NULL AND NOT is_active AND email IS NULL AND minor_login_id IS NULL AND password_hash IS NULL)
+ THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_relational_verification_failed'; END IF;
+ result_digest:=digest(convert_to(p_operation_code||':'||subject_ref::text||':'||changed::text||':'||encode(digest(convert_to(public.privacy_retention_select_fields(source.retained_data,fields)::text,'UTF8'),'sha256'),'hex'),'UTF8'),'sha256');
+ PERFORM set_config('mycfc.privacy_retention_mutation','CONSUME',true);
+ DELETE FROM privacy_protected.execution_retention_sources WHERE execution_id=execution_ref AND category_key=category;
+ UPDATE privacy_erasure_job_checkpoints SET status='SUCCEEDED',completed_at=clock_timestamp(),completed_by_attempt_id=p_attempt_id,
+  affected_rows=changed,result_sha256=result_digest WHERE id=checkpoint_ref AND status='PENDING';
+ RETURN checkpoint_ref;
+END;$$;
+
+ALTER FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)
+ RENAME TO privacy_worker_execute_checkpoint_inner_017;
+CREATE OR REPLACE FUNCTION public.privacy_worker_execute_checkpoint(
+ p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM public.privacy_worker_require_activation();
+ IF p_operation_code IN ('AUTH_SESSION_EXPIRE','CONSENT_EVIDENCE_RESTRICT','CONSENT_NETWORK_EXPIRE','IDENTITY_RESTRICT',
+  'LOG_RECORD_EXPIRE','OUTBOX_PAYLOAD_EXPIRE','PRIVACY_CASE_RESTRICT','PROFILE_RESTRICT') THEN
+  RETURN public.privacy_worker_execute_retention_checkpoint(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+ END IF;
+ RETURN public.privacy_worker_execute_checkpoint_inner_017(p_job_id,p_lease_id,p_attempt_id,p_lease_epoch,p_worker_ref,p_operation_code,p_action_version);
+END;$$;
+
+CREATE FUNCTION public.privacy_completion_resolve_retention(p_execution_id uuid,p_worker_ref uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE row_record record;closure_at timestamptz;review_at timestamptz;expires_at timestamptz;resolved_data jsonb;
+BEGIN
+ SELECT closed_at INTO closure_at FROM privacy_protected.restore_tombstone_closure_intents WHERE execution_id=p_execution_id FOR SHARE;
+ IF closure_at IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_retention_closure_unresolved'; END IF;
+ FOR row_record IN SELECT * FROM privacy_protected.execution_retention_pending WHERE execution_id=p_execution_id ORDER BY category_key FOR SHARE LOOP
+  review_at:=public.privacy_retention_add_offset(closure_at,row_record.review_after,row_record.retention_unit);
+  expires_at:=public.privacy_retention_add_offset(closure_at,row_record.expire_after,row_record.retention_unit);
+  resolved_data:=row_record.retained_data;
+  IF row_record.category_key='privacy-cases' THEN
+   resolved_data:=jsonb_set(jsonb_set(jsonb_set(resolved_data,'{"privacy_request.completed_at"}',to_jsonb(to_char(closure_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
+    '{"privacy_request.evidence_expires_at"}',to_jsonb(to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
+    '{"privacy_request.result_code"}',to_jsonb('COMPLETED'::text));
+  END IF;
+  INSERT INTO privacy_erasure_retention_anchors(execution_id,category_key,anchor_code,anchor_at,review_at,expires_at,retained_field_codes,worker_ref)
+  VALUES(p_execution_id,row_record.category_key,'CASE_CLOSURE',closure_at,review_at,expires_at,row_record.retained_field_codes,p_worker_ref);
+  INSERT INTO privacy_erasure_restricted_records(execution_id,category_key,subject_ref,retained_data,review_at,expires_at)
+  VALUES(p_execution_id,row_record.category_key,row_record.subject_ref,public.privacy_retention_select_fields(resolved_data,row_record.retained_field_codes),review_at,expires_at);
+ END LOOP;
+ PERFORM set_config('mycfc.privacy_retention_mutation','RESOLVE',true);
+ DELETE FROM privacy_protected.execution_retention_pending WHERE execution_id=p_execution_id;
+END;$$;
+
+ALTER FUNCTION public.privacy_completion_finalize(uuid,uuid,bytea,bytea) RENAME TO privacy_completion_finalize_inner_017;
+CREATE OR REPLACE FUNCTION public.privacy_completion_finalize(p_execution_id uuid,p_worker_ref uuid,p_token_sha256 bytea,p_sealed_delivery bytea)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ PERFORM public.privacy_worker_require_activation();
+ PERFORM public.privacy_completion_resolve_retention(p_execution_id,p_worker_ref);
+ IF EXISTS(SELECT 1 FROM privacy_protected.execution_retention_pending WHERE execution_id=p_execution_id) THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_retention_closure_unresolved'; END IF;
+ RETURN public.privacy_completion_finalize_inner_017(p_execution_id,p_worker_ref,p_token_sha256,p_sealed_delivery);
+END;$$;
+
+CREATE OR REPLACE FUNCTION public.prevent_privacy_retention_record_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' AND current_user<>session_user AND current_setting('mycfc.privacy_retention_mutation',true) IN ('CONSUME','EXPIRE','RESOLVE') THEN RETURN OLD; END IF;
+ RAISE EXCEPTION 'privacy execution records are immutable';
+END;$$;
+DROP TRIGGER privacy_erasure_retention_anchors_immutable ON privacy_erasure_retention_anchors;
+CREATE TRIGGER privacy_erasure_retention_anchors_immutable BEFORE UPDATE OR DELETE ON privacy_erasure_retention_anchors
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_retention_record_mutation();
+DROP TRIGGER privacy_erasure_restricted_records_immutable ON privacy_erasure_restricted_records;
+CREATE TRIGGER privacy_erasure_restricted_records_immutable BEFORE UPDATE OR DELETE ON privacy_erasure_restricted_records
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_retention_record_mutation();
+DROP TRIGGER execution_retention_pending_immutable ON privacy_protected.execution_retention_pending;
+CREATE TRIGGER execution_retention_pending_immutable BEFORE UPDATE OR DELETE ON privacy_protected.execution_retention_pending
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_retention_record_mutation();
+DROP TRIGGER execution_retention_sources_immutable ON privacy_protected.execution_retention_sources;
+CREATE TRIGGER execution_retention_sources_immutable BEFORE UPDATE OR DELETE ON privacy_protected.execution_retention_sources
+ FOR EACH ROW EXECUTE FUNCTION public.prevent_privacy_retention_record_mutation();
+
+ALTER FUNCTION public.privacy_retention_run(uuid,integer) RENAME TO privacy_retention_run_inner_017;
+CREATE FUNCTION public.privacy_retention_run(p_worker_ref uuid,p_batch_limit integer)
+RETURNS TABLE(run_id uuid,sessions_deleted integer,tokens_deleted integer,outbox_stopped integer,outbox_payloads_deleted integer,
+ outbox_evidence_deleted integer,consent_network_scrubbed integer,consent_evidence_deleted integer,audit_events_pseudonymized integer,
+ repair_attachments_queued integer,event_responses_deleted integer,announcement_deliveries_deleted integer,suggestions_deleted integer,
+ privacy_working_scrubbed integer,auth_limits_deleted integer)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ RETURN QUERY SELECT * FROM public.privacy_retention_run_inner_017(p_worker_ref,p_batch_limit);
+ PERFORM set_config('mycfc.privacy_retention_mutation','EXPIRE',true);
+ WITH due AS (SELECT execution_id,category_key FROM privacy_erasure_restricted_records WHERE expires_at<=clock_timestamp() ORDER BY expires_at,execution_id,category_key LIMIT p_batch_limit)
+ DELETE FROM privacy_erasure_restricted_records retained USING due WHERE retained.execution_id=due.execution_id AND retained.category_key=due.category_key;
+ WITH due AS (SELECT execution_id,category_key FROM privacy_erasure_retention_anchors WHERE expires_at<=clock_timestamp() AND NOT EXISTS(
+  SELECT 1 FROM privacy_erasure_restricted_records retained WHERE retained.execution_id=privacy_erasure_retention_anchors.execution_id AND retained.category_key=privacy_erasure_retention_anchors.category_key)
+  ORDER BY expires_at,execution_id,category_key LIMIT p_batch_limit)
+ DELETE FROM privacy_erasure_retention_anchors anchor USING due WHERE anchor.execution_id=due.execution_id AND anchor.category_key=due.category_key;
+END;$$;
+
+REVOKE ALL ON TABLE privacy_protected.execution_retention_sources,privacy_protected.execution_retention_pending FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_retention_add_offset(timestamptz,integer,text),public.privacy_retention_select_fields(jsonb,text[]),
+ public.privacy_execution_capture_retention_sources(uuid,uuid),public.privacy_worker_execute_retention_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text),
+ public.privacy_worker_execute_checkpoint_inner_017(uuid,uuid,uuid,bigint,uuid,text,text),public.privacy_completion_resolve_retention(uuid,uuid),
+ public.privacy_completion_finalize_inner_017(uuid,uuid,bytea,bytea),public.privacy_retention_run_inner_017(uuid,integer),
+ public.prevent_privacy_retention_record_mutation() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text),
+ public.privacy_completion_finalize(uuid,uuid,bytea,bytea),public.privacy_retention_run(uuid,integer) FROM PUBLIC;
+DO $$BEGIN
+ IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_retention') THEN
+  REVOKE EXECUTE ON FUNCTION public.privacy_retention_run_inner_017(uuid,integer),public.privacy_retention_add_offset(timestamptz,integer,text),
+   public.privacy_retention_select_fields(jsonb,text[]),public.prevent_privacy_retention_record_mutation() FROM mycfc_privacy_retention;
+ END IF;
+END$$;
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v17_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609170001_privacy_synthetic_acceptance',''))<>length('202609170001_privacy_synthetic_acceptance') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='executor_retention_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609170001_privacy_synthetic_acceptance''',
+  '''202609170001_privacy_synthetic_acceptance'', ''202609170002_privacy_executor_retention_handlers''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v17_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v18_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v18_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609170001_privacy_synthetic_acceptance''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609170002_privacy_executor_retention_handlers''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='executor_retention_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609170001_privacy_synthetic_acceptance''';
+ new_clause:='schema_row.baseline_includes_through=''202609170002_privacy_executor_retention_handlers''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='executor_retention_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+-- Every schema revision invalidates privacy evidence and both guardian gates.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+
+-- Baseline through 202609170003_privacy_activation_fixed_access.
+-- The application can inspect and lock only the activation fields required to
+-- gate execution. SECURITY DEFINER keeps the activation control row private
+-- while preserving the transaction-scoped row lock used by StartExecution.
+CREATE FUNCTION public.privacy_activation_snapshot()
+RETURNS TABLE(policy_version text,enabled boolean,fulfilment_ready boolean,approval_id uuid)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT activation.policy_version::text,activation.enabled,activation.fulfilment_ready,
+  COALESCE(activation.approval_id,'00000000-0000-0000-0000-000000000000'::uuid)
+ FROM public.privacy_request_activation activation
+ WHERE activation.singleton
+$$;
+
+CREATE FUNCTION public.privacy_activation_lock()
+RETURNS TABLE(policy_version text,enabled boolean,fulfilment_ready boolean,approval_id uuid)
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ RETURN QUERY
+ SELECT activation.policy_version::text,activation.enabled,activation.fulfilment_ready,
+  COALESCE(activation.approval_id,'00000000-0000-0000-0000-000000000000'::uuid)
+ FROM public.privacy_request_activation activation
+ WHERE activation.singleton
+ FOR UPDATE OF activation;
+END;$$;
+
+REVOKE ALL ON FUNCTION public.privacy_activation_snapshot(),public.privacy_activation_lock() FROM PUBLIC;
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v18_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609170002_privacy_executor_retention_handlers',''))<>length('202609170002_privacy_executor_retention_handlers') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='activation_fixed_access_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609170002_privacy_executor_retention_handlers''',
+  '''202609170002_privacy_executor_retention_handlers'', ''202609170003_privacy_activation_fixed_access''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v18_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v19_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v19_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609170002_privacy_executor_retention_handlers''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609170003_privacy_activation_fixed_access''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='activation_fixed_access_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609170002_privacy_executor_retention_handlers''';
+ new_clause:='schema_row.baseline_includes_through=''202609170003_privacy_activation_fixed_access''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='activation_fixed_access_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+-- Every schema revision invalidates privacy evidence and both guardian gates.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+
+-- Baseline through 202609170004_privacy_empty_provider_execution.
+-- Authenticate the one provider case that needs no adapter: the active
+-- approval is bound to a current, complete, zero-registration inventory.
+CREATE FUNCTION public.privacy_provider_empty_inventory_ready()
+RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ SELECT EXISTS(
+  SELECT 1
+  FROM public.privacy_request_activation activation
+  JOIN public.privacy_activation_approvals approval ON approval.id=activation.approval_id
+  JOIN public.privacy_activation_proposals proposal ON proposal.id=approval.proposal_id
+  JOIN public.privacy_worker_kill_switch switch_row ON switch_row.singleton AND NOT switch_row.engaged
+   AND switch_row.activation_approval_id=approval.id
+  JOIN public.privacy_activation_evidence evidence ON evidence.id=ANY(proposal.evidence_ids) AND evidence.kind='PROVIDER'
+   AND evidence.expires_at>clock_timestamp() AND evidence.reference_code='mycfc/privacy-provider-registry/v2'
+  JOIN public.privacy_activation_authenticated_artifacts artifact ON artifact.evidence_id=evidence.id AND artifact.kind='PROVIDER'
+  WHERE activation.singleton AND activation.enabled AND activation.fulfilment_ready
+   AND proposal.policy_version=activation.policy_version AND approval.activation_sha256=proposal.activation_sha256
+   AND approval.approved_by_ref<>proposal.proposed_by_ref
+   AND public.privacy_activation_authenticated_set_digest(proposal.policy_version,proposal.evidence_ids)=proposal.evidence_set_sha256
+   AND artifact.policy_version=activation.policy_version
+   AND artifact.provider_registry_state='READY' AND artifact.provider_registration_count=0
+   AND artifact.provider_inventory_contract='mycfc/privacy-provider-registry-source/v2'
+   AND octet_length(artifact.provider_registry_sha256)=32
+ );
+$$;
+
+REVOKE ALL ON FUNCTION public.privacy_provider_empty_inventory_ready() FROM PUBLIC;
+
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v19_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609170003_privacy_activation_fixed_access',''))<>length('202609170003_privacy_activation_fixed_access') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='empty_provider_execution_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609170003_privacy_activation_fixed_access''',
+  '''202609170003_privacy_activation_fixed_access'', ''202609170004_privacy_empty_provider_execution''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v19_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v20_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v20_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609170003_privacy_activation_fixed_access''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609170004_privacy_empty_provider_execution''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='empty_provider_execution_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609170003_privacy_activation_fixed_access''';
+ new_clause:='schema_row.baseline_includes_through=''202609170004_privacy_empty_provider_execution''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='empty_provider_execution_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+-- Every schema revision invalidates privacy evidence and both guardian gates.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);
+
+-- Baseline through 202609170005_privacy_activation_dual_signer.
+-- Replace the file-staged v1 approval with a registered, release-bound,
+-- 15-minute ceremony and two registry-pinned KMS P-256 approvals.
+DO $$DECLARE definition text;rewritten text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass
+  AND conname='privacy_activation_authenticated_artifacts_v20_check';
+ IF definition IS NULL OR length(definition)-length(replace(definition,'202609170004_privacy_empty_provider_execution',''))<>length('202609170004_privacy_empty_provider_execution') THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='dual_signer_privacy_constraint_predecessor_mismatch';
+ END IF;
+ rewritten:=replace(definition,
+  '''202609170004_privacy_empty_provider_execution''',
+  '''202609170004_privacy_empty_provider_execution'', ''202609170005_privacy_activation_dual_signer''');
+ ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v20_check;
+ EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v21_check '||rewritten||' NOT VALID';
+ ALTER TABLE privacy_activation_authenticated_artifacts VALIDATE CONSTRAINT privacy_activation_authenticated_artifacts_v21_check;
+END$$;
+
+DO $$DECLARE definition text;old_clause text;new_clause text;
+BEGIN
+ SELECT pg_get_functiondef('public.privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure) INTO definition;
+ old_clause:='p_artifact->>''baseline_includes_through''<>''202609170004_privacy_empty_provider_execution''';
+ new_clause:='p_artifact->>''baseline_includes_through''<>''202609170005_privacy_activation_dual_signer''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='dual_signer_privacy_evidence_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+
+ SELECT pg_get_functiondef('public.privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure) INTO definition;
+ old_clause:='schema_row.baseline_includes_through=''202609170004_privacy_empty_provider_execution''';
+ new_clause:='schema_row.baseline_includes_through=''202609170005_privacy_activation_dual_signer''';
+ IF strpos(definition,old_clause)=0 OR strpos(replace(definition,old_clause,''),old_clause)>0 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='dual_signer_privacy_digest_predecessor_mismatch'; END IF;
+ EXECUTE replace(definition,old_clause,new_clause);
+END$$;
+
+CREATE TABLE privacy_protected.activation_ceremonies (
+ ceremony_id uuid PRIMARY KEY,
+ proposal_id uuid NOT NULL UNIQUE,
+ source_sha varchar(40) NOT NULL CHECK(source_sha~'^[0-9a-f]{40}$'),
+ policy_version varchar(120) NOT NULL,
+ evidence_ids uuid[] NOT NULL CHECK(cardinality(evidence_ids)=4),
+ evidence_set_sha256 bytea NOT NULL CHECK(octet_length(evidence_set_sha256)=32),
+ activation_sha256 bytea NOT NULL CHECK(octet_length(activation_sha256)=32),
+ executor_version varchar(80) NOT NULL,
+ plan_schema_version varchar(80) NOT NULL,
+ image_digest varchar(71) NOT NULL CHECK(image_digest~'^sha256:[0-9a-f]{64}$'),
+ schema_migration_digest bytea NOT NULL CHECK(octet_length(schema_migration_digest)=32),
+ signer_registry_sha256 bytea NOT NULL CHECK(octet_length(signer_registry_sha256)=32),
+ material_sha256 bytea NOT NULL UNIQUE CHECK(octet_length(material_sha256)=32),
+ raw_material bytea NOT NULL CHECK(octet_length(raw_material) BETWEEN 1 AND 65536),
+ parsed_material jsonb NOT NULL,
+ prepared_at timestamptz NOT NULL,
+ ceremony_expires_at timestamptz NOT NULL,
+ executor_actor_ref uuid NOT NULL,
+ executor_signing_key_id varchar(120) NOT NULL,
+ executor_kms_key_arn text NOT NULL,
+ executor_public_key_spki_sha256 bytea NOT NULL CHECK(octet_length(executor_public_key_spki_sha256)=32),
+ executor_github_actor_id bigint NOT NULL CHECK(executor_github_actor_id>0),
+ executor_github_environment text NOT NULL CHECK(executor_github_environment='privacy-activation-executor'),
+ administrator_actor_ref uuid NOT NULL,
+ administrator_signing_key_id varchar(120) NOT NULL,
+ administrator_kms_key_arn text NOT NULL,
+ administrator_public_key_spki_sha256 bytea NOT NULL CHECK(octet_length(administrator_public_key_spki_sha256)=32),
+ administrator_github_actor_id bigint NOT NULL CHECK(administrator_github_actor_id>0),
+ administrator_github_environment text NOT NULL CHECK(administrator_github_environment='privacy-activation-administrator'),
+ recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(ceremony_expires_at>prepared_at AND ceremony_expires_at<=prepared_at+interval '15 minutes'),
+ CHECK(executor_actor_ref<>administrator_actor_ref),
+ CHECK(executor_signing_key_id<>administrator_signing_key_id),
+ CHECK(executor_kms_key_arn<>administrator_kms_key_arn),
+ CHECK(executor_public_key_spki_sha256<>administrator_public_key_spki_sha256),
+ CHECK(executor_github_actor_id<>administrator_github_actor_id)
+);
+CREATE TRIGGER privacy_activation_ceremonies_immutable BEFORE UPDATE OR DELETE
+ ON privacy_protected.activation_ceremonies FOR EACH ROW EXECUTE FUNCTION prevent_privacy_execution_record_delete();
+
+ALTER TABLE privacy_protected.activation_signed_approvals
+ ADD COLUMN ceremony_id uuid NULL REFERENCES privacy_protected.activation_ceremonies(ceremony_id) ON DELETE RESTRICT,
+ ADD COLUMN material_sha256 bytea NULL CHECK(material_sha256 IS NULL OR octet_length(material_sha256)=32),
+ ADD COLUMN signature_algorithm text NULL,
+ ADD COLUMN kms_key_arn text NULL,
+ ADD COLUMN public_key_spki_sha256 bytea NULL CHECK(public_key_spki_sha256 IS NULL OR octet_length(public_key_spki_sha256)=32),
+ ADD COLUMN github_actor_id bigint NULL CHECK(github_actor_id IS NULL OR github_actor_id>0),
+ ADD COLUMN github_environment text NULL,
+ ADD COLUMN github_run_id bigint NULL CHECK(github_run_id IS NULL OR github_run_id>0),
+ ADD COLUMN github_run_attempt bigint NULL CHECK(github_run_attempt IS NULL OR github_run_attempt>0),
+ ADD COLUMN signature_der_sha256 bytea NULL CHECK(signature_der_sha256 IS NULL OR octet_length(signature_der_sha256)=32);
+
+ALTER TABLE privacy_protected.activation_broker_receipts
+ ADD COLUMN ceremony_id uuid NULL REFERENCES privacy_protected.activation_ceremonies(ceremony_id) ON DELETE RESTRICT;
+
+REVOKE ALL ON FUNCTION public.privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) FROM PUBLIC;
+DROP FUNCTION public.privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz);
+
+CREATE FUNCTION public.privacy_activation_broker_register_ceremony(
+ p_ceremony_id uuid,p_proposal_id uuid,p_source_sha text,p_policy_version text,p_evidence_ids uuid[],
+ p_evidence_set_sha256 bytea,p_activation_sha256 bytea,p_executor_version text,p_plan_schema_version text,p_image_digest text,
+ p_schema_migration_digest bytea,p_signer_registry_sha256 bytea,p_material_sha256 bytea,p_material_raw bytea,p_material jsonb,
+ p_prepared_at timestamptz,p_ceremony_expires_at timestamptz,
+ p_executor_actor uuid,p_executor_key_id text,p_executor_kms_key_arn text,p_executor_public_key_sha256 bytea,
+ p_executor_github_actor_id bigint,p_executor_github_environment text,
+ p_administrator_actor uuid,p_administrator_key_id text,p_administrator_kms_key_arn text,p_administrator_public_key_sha256 bytea,
+ p_administrator_github_actor_id bigint,p_administrator_github_environment text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE material record;now_at timestamptz;
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_broker' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_broker_required'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0));
+ now_at:=clock_timestamp();
+ SELECT * INTO material FROM privacy_activation_broker_material(p_policy_version);
+ IF p_ceremony_id IS NULL OR p_proposal_id IS NULL OR p_ceremony_id=p_proposal_id
+  OR p_source_sha!~'^[0-9a-f]{40}$' OR material.evidence_ids IS DISTINCT FROM p_evidence_ids
+  OR material.evidence_set_sha256 IS DISTINCT FROM p_evidence_set_sha256 OR material.activation_sha256 IS DISTINCT FROM p_activation_sha256
+  OR material.executor_version IS DISTINCT FROM p_executor_version OR material.plan_schema_version IS DISTINCT FROM p_plan_schema_version
+  OR material.image_digest IS DISTINCT FROM p_image_digest OR material.schema_migration_digest IS DISTINCT FROM p_schema_migration_digest
+  OR octet_length(p_signer_registry_sha256)<>32 OR octet_length(p_material_sha256)<>32
+  OR digest(p_material_raw,'sha256') IS DISTINCT FROM p_material_sha256 OR convert_from(p_material_raw,'UTF8')::jsonb IS DISTINCT FROM p_material
+  OR jsonb_typeof(p_material)<>'object'
+  OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(p_material) key)<>ARRAY[
+   'activation_sha256','ceremony_expires_at','ceremony_id','contract','evidence_ids','evidence_set_sha256','executor_version',
+   'image_digest','plan_schema_version','policy_version','prepared_at','proposal_id','schema_migration_digest','signer_registry_sha256','source_sha']
+  OR p_material->>'contract'<>'mycfc/privacy-activation-approval-material/v2'
+  OR p_material->>'ceremony_id'<>p_ceremony_id::text OR p_material->>'proposal_id'<>p_proposal_id::text
+  OR p_material->>'source_sha'<>p_source_sha OR p_material->>'policy_version'<>p_policy_version
+  OR p_material->'evidence_ids'<>to_jsonb(p_evidence_ids)
+  OR p_material->>'evidence_set_sha256'<>encode(p_evidence_set_sha256,'hex')
+  OR p_material->>'activation_sha256'<>encode(p_activation_sha256,'hex')
+  OR p_material->>'executor_version'<>p_executor_version OR p_material->>'plan_schema_version'<>p_plan_schema_version
+  OR p_material->>'image_digest'<>p_image_digest OR p_material->>'schema_migration_digest'<>encode(p_schema_migration_digest,'hex')
+  OR p_material->>'signer_registry_sha256'<>encode(p_signer_registry_sha256,'hex')
+  OR (p_material->>'prepared_at')::timestamptz IS DISTINCT FROM p_prepared_at
+  OR (p_material->>'ceremony_expires_at')::timestamptz IS DISTINCT FROM p_ceremony_expires_at
+  OR p_prepared_at>now_at OR p_ceremony_expires_at<=now_at OR p_ceremony_expires_at<=p_prepared_at
+  OR p_ceremony_expires_at>p_prepared_at+interval '15 minutes'
+  OR p_prepared_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton)
+  OR EXISTS(SELECT 1 FROM privacy_activation_evidence evidence WHERE evidence.id=ANY(p_evidence_ids)
+    AND evidence.recorded_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton))
+  OR p_executor_actor IS NULL OR p_administrator_actor IS NULL OR p_executor_actor=p_administrator_actor
+  OR p_executor_key_id IS NULL OR p_executor_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'
+  OR p_administrator_key_id IS NULL OR p_administrator_key_id!~'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$'
+  OR p_executor_key_id=p_administrator_key_id
+  OR p_executor_kms_key_arn IS NULL OR p_executor_kms_key_arn!~'^arn:aws[a-zA-Z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$'
+  OR p_administrator_kms_key_arn IS NULL OR p_administrator_kms_key_arn!~'^arn:aws[a-zA-Z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$'
+  OR p_executor_kms_key_arn=p_administrator_kms_key_arn
+  OR octet_length(p_executor_public_key_sha256)<>32 OR octet_length(p_administrator_public_key_sha256)<>32
+  OR p_executor_public_key_sha256=p_administrator_public_key_sha256
+  OR p_executor_github_actor_id<=0 OR p_administrator_github_actor_id<=0 OR p_executor_github_actor_id=p_administrator_github_actor_id
+  OR p_executor_github_environment<>'privacy-activation-executor'
+  OR p_administrator_github_environment<>'privacy-activation-administrator'
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN privacy_executor_grants g ON g.user_id=u.id AND g.revoked_at IS NULL
+    WHERE u.id=p_executor_actor AND u.is_active AND NOT u.is_dependent)
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN user_platform_roles a ON a.user_id=u.id JOIN platform_roles r ON r.id=a.role_id
+    WHERE u.id=p_administrator_actor AND u.is_active AND NOT u.is_dependent AND r.code='ADMIN')
+ THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_ceremony_rejected'; END IF;
+
+ INSERT INTO privacy_protected.activation_ceremonies(
+  ceremony_id,proposal_id,source_sha,policy_version,evidence_ids,evidence_set_sha256,activation_sha256,executor_version,
+  plan_schema_version,image_digest,schema_migration_digest,signer_registry_sha256,material_sha256,raw_material,parsed_material,
+  prepared_at,ceremony_expires_at,executor_actor_ref,executor_signing_key_id,executor_kms_key_arn,
+  executor_public_key_spki_sha256,executor_github_actor_id,executor_github_environment,administrator_actor_ref,
+  administrator_signing_key_id,administrator_kms_key_arn,administrator_public_key_spki_sha256,
+  administrator_github_actor_id,administrator_github_environment)
+ VALUES(p_ceremony_id,p_proposal_id,p_source_sha,p_policy_version,p_evidence_ids,p_evidence_set_sha256,p_activation_sha256,
+  p_executor_version,p_plan_schema_version,p_image_digest,p_schema_migration_digest,p_signer_registry_sha256,p_material_sha256,
+  p_material_raw,p_material,p_prepared_at,p_ceremony_expires_at,p_executor_actor,p_executor_key_id,p_executor_kms_key_arn,
+  p_executor_public_key_sha256,p_executor_github_actor_id,p_executor_github_environment,p_administrator_actor,
+  p_administrator_key_id,p_administrator_kms_key_arn,p_administrator_public_key_sha256,p_administrator_github_actor_id,
+  p_administrator_github_environment);
+ RETURN p_ceremony_id;
+EXCEPTION
+ WHEN unique_violation THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_ceremony_replay';
+ WHEN invalid_text_representation OR character_not_in_repertoire OR datetime_field_overflow THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_ceremony_rejected';
+END;$$;
+
+CREATE FUNCTION public.privacy_activation_broker_activate(
+ p_ceremony_id uuid,p_executor_envelope_raw bytea,p_executor_envelope jsonb,
+ p_administrator_envelope_raw bytea,p_administrator_envelope jsonb,
+ p_executor_nonce_sha256 bytea,p_administrator_nonce_sha256 bytea
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE ceremony privacy_protected.activation_ceremonies%ROWTYPE;material record;now_at timestamptz;
+ executor_envelope_id uuid;administrator_envelope_id uuid;approval_id uuid;switch_version bigint;
+ executor_issued_at timestamptz;executor_expires_at timestamptz;administrator_issued_at timestamptz;administrator_expires_at timestamptz;
+BEGIN
+ IF session_user<>'mycfc_privacy_activation_broker' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='privacy_activation_broker_required'; END IF;
+ PERFORM pg_advisory_xact_lock(hashtextextended('mycfc/privacy-activation',0));
+ now_at:=clock_timestamp();
+ SELECT * INTO ceremony FROM privacy_protected.activation_ceremonies row WHERE row.ceremony_id=p_ceremony_id FOR SHARE;
+ IF ceremony.ceremony_id IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_signed_approval_rejected'; END IF;
+ SELECT * INTO material FROM privacy_activation_broker_material(ceremony.policy_version);
+ executor_issued_at:=(p_executor_envelope->>'issued_at')::timestamptz;
+ executor_expires_at:=(p_executor_envelope->>'expires_at')::timestamptz;
+ administrator_issued_at:=(p_administrator_envelope->>'issued_at')::timestamptz;
+ administrator_expires_at:=(p_administrator_envelope->>'expires_at')::timestamptz;
+ IF ceremony.ceremony_expires_at<=now_at OR ceremony.prepared_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton)
+  OR material.evidence_ids IS DISTINCT FROM ceremony.evidence_ids
+  OR material.evidence_set_sha256 IS DISTINCT FROM ceremony.evidence_set_sha256
+  OR material.activation_sha256 IS DISTINCT FROM ceremony.activation_sha256
+  OR material.executor_version IS DISTINCT FROM ceremony.executor_version
+  OR material.plan_schema_version IS DISTINCT FROM ceremony.plan_schema_version
+  OR material.image_digest IS DISTINCT FROM ceremony.image_digest
+  OR material.schema_migration_digest IS DISTINCT FROM ceremony.schema_migration_digest
+  OR EXISTS(SELECT 1 FROM privacy_activation_evidence evidence WHERE evidence.id=ANY(ceremony.evidence_ids)
+    AND evidence.recorded_at<=(SELECT changed_at FROM privacy_worker_kill_switch WHERE singleton))
+  OR octet_length(p_executor_nonce_sha256)<>32 OR octet_length(p_administrator_nonce_sha256)<>32
+  OR p_executor_nonce_sha256=p_administrator_nonce_sha256
+  OR jsonb_typeof(p_executor_envelope)<>'object' OR jsonb_typeof(p_administrator_envelope)<>'object'
+  OR convert_from(p_executor_envelope_raw,'UTF8')::jsonb IS DISTINCT FROM p_executor_envelope
+  OR convert_from(p_administrator_envelope_raw,'UTF8')::jsonb IS DISTINCT FROM p_administrator_envelope
+  OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(p_executor_envelope) key)<>ARRAY[
+   'activation_sha256','actor_ref','ceremony_expires_at','ceremony_id','contract','evidence_ids','evidence_set_sha256',
+   'executor_version','expires_at','github_actor_id','github_environment','github_run_attempt','github_run_id','image_digest',
+   'issued_at','kms_key_arn','material_sha256','nonce','plan_schema_version','policy_version','prepared_at','proposal_id',
+   'public_key_spki_sha256','role','schema_migration_digest','signature_algorithm','signature_der_base64',
+   'signer_registry_sha256','signing_key_id','source_sha']
+  OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(p_administrator_envelope) key)<>ARRAY[
+   'activation_sha256','actor_ref','ceremony_expires_at','ceremony_id','contract','evidence_ids','evidence_set_sha256',
+   'executor_version','expires_at','github_actor_id','github_environment','github_run_attempt','github_run_id','image_digest',
+   'issued_at','kms_key_arn','material_sha256','nonce','plan_schema_version','policy_version','prepared_at','proposal_id',
+   'public_key_spki_sha256','role','schema_migration_digest','signature_algorithm','signature_der_base64',
+   'signer_registry_sha256','signing_key_id','source_sha']
+  OR p_executor_envelope->>'contract'<>'mycfc/privacy-activation-approval/v2'
+  OR p_administrator_envelope->>'contract'<>'mycfc/privacy-activation-approval/v2'
+  OR p_executor_envelope->>'role'<>'EXECUTOR' OR p_administrator_envelope->>'role'<>'ADMINISTRATOR'
+  OR p_executor_envelope->>'ceremony_id'<>ceremony.ceremony_id::text
+  OR p_administrator_envelope->>'ceremony_id'<>ceremony.ceremony_id::text
+  OR p_executor_envelope->>'proposal_id'<>ceremony.proposal_id::text
+  OR p_administrator_envelope->>'proposal_id'<>ceremony.proposal_id::text
+  OR p_executor_envelope->>'source_sha'<>ceremony.source_sha OR p_administrator_envelope->>'source_sha'<>ceremony.source_sha
+  OR p_executor_envelope->>'policy_version'<>ceremony.policy_version OR p_administrator_envelope->>'policy_version'<>ceremony.policy_version
+  OR p_executor_envelope->'evidence_ids'<>to_jsonb(ceremony.evidence_ids)
+  OR p_administrator_envelope->'evidence_ids'<>to_jsonb(ceremony.evidence_ids)
+  OR p_executor_envelope->>'evidence_set_sha256'<>encode(ceremony.evidence_set_sha256,'hex')
+  OR p_administrator_envelope->>'evidence_set_sha256'<>encode(ceremony.evidence_set_sha256,'hex')
+  OR p_executor_envelope->>'activation_sha256'<>encode(ceremony.activation_sha256,'hex')
+  OR p_administrator_envelope->>'activation_sha256'<>encode(ceremony.activation_sha256,'hex')
+  OR p_executor_envelope->>'executor_version'<>ceremony.executor_version OR p_administrator_envelope->>'executor_version'<>ceremony.executor_version
+  OR p_executor_envelope->>'plan_schema_version'<>ceremony.plan_schema_version OR p_administrator_envelope->>'plan_schema_version'<>ceremony.plan_schema_version
+  OR p_executor_envelope->>'image_digest'<>ceremony.image_digest OR p_administrator_envelope->>'image_digest'<>ceremony.image_digest
+  OR p_executor_envelope->>'schema_migration_digest'<>encode(ceremony.schema_migration_digest,'hex')
+  OR p_administrator_envelope->>'schema_migration_digest'<>encode(ceremony.schema_migration_digest,'hex')
+  OR p_executor_envelope->>'signer_registry_sha256'<>encode(ceremony.signer_registry_sha256,'hex')
+  OR p_administrator_envelope->>'signer_registry_sha256'<>encode(ceremony.signer_registry_sha256,'hex')
+  OR p_executor_envelope->>'material_sha256'<>encode(ceremony.material_sha256,'hex')
+  OR p_administrator_envelope->>'material_sha256'<>encode(ceremony.material_sha256,'hex')
+  OR (p_executor_envelope->>'prepared_at')::timestamptz IS DISTINCT FROM ceremony.prepared_at
+  OR (p_administrator_envelope->>'prepared_at')::timestamptz IS DISTINCT FROM ceremony.prepared_at
+  OR (p_executor_envelope->>'ceremony_expires_at')::timestamptz IS DISTINCT FROM ceremony.ceremony_expires_at
+  OR (p_administrator_envelope->>'ceremony_expires_at')::timestamptz IS DISTINCT FROM ceremony.ceremony_expires_at
+  OR p_executor_envelope->>'actor_ref'<>ceremony.executor_actor_ref::text
+  OR p_administrator_envelope->>'actor_ref'<>ceremony.administrator_actor_ref::text
+  OR p_executor_envelope->>'signing_key_id'<>ceremony.executor_signing_key_id
+  OR p_administrator_envelope->>'signing_key_id'<>ceremony.administrator_signing_key_id
+  OR p_executor_envelope->>'kms_key_arn'<>ceremony.executor_kms_key_arn
+  OR p_administrator_envelope->>'kms_key_arn'<>ceremony.administrator_kms_key_arn
+  OR p_executor_envelope->>'public_key_spki_sha256'<>encode(ceremony.executor_public_key_spki_sha256,'hex')
+  OR p_administrator_envelope->>'public_key_spki_sha256'<>encode(ceremony.administrator_public_key_spki_sha256,'hex')
+  OR p_executor_envelope->>'signature_algorithm'<>'ECDSA_SHA_256'
+  OR p_administrator_envelope->>'signature_algorithm'<>'ECDSA_SHA_256'
+  OR (p_executor_envelope->>'github_actor_id')::bigint<>ceremony.executor_github_actor_id
+  OR (p_administrator_envelope->>'github_actor_id')::bigint<>ceremony.administrator_github_actor_id
+  OR p_executor_envelope->>'github_environment'<>ceremony.executor_github_environment
+  OR p_administrator_envelope->>'github_environment'<>ceremony.administrator_github_environment
+  OR (p_executor_envelope->>'github_run_id')::bigint<=0 OR (p_administrator_envelope->>'github_run_id')::bigint<=0
+  OR (p_executor_envelope->>'github_run_attempt')::bigint<=0 OR (p_administrator_envelope->>'github_run_attempt')::bigint<=0
+  OR executor_issued_at<ceremony.prepared_at OR administrator_issued_at<ceremony.prepared_at
+  OR executor_issued_at>now_at OR administrator_issued_at>now_at
+  OR executor_expires_at<=now_at OR administrator_expires_at<=now_at
+  OR executor_expires_at<=executor_issued_at OR administrator_expires_at<=administrator_issued_at
+  OR executor_expires_at>executor_issued_at+interval '15 minutes'
+  OR administrator_expires_at>administrator_issued_at+interval '15 minutes'
+  OR executor_expires_at>ceremony.ceremony_expires_at OR administrator_expires_at>ceremony.ceremony_expires_at
+  OR digest(decode(p_executor_envelope->>'nonce','base64'),'sha256') IS DISTINCT FROM p_executor_nonce_sha256
+  OR digest(decode(p_administrator_envelope->>'nonce','base64'),'sha256') IS DISTINCT FROM p_administrator_nonce_sha256
+  OR octet_length(decode(p_executor_envelope->>'nonce','base64'))<>32
+  OR octet_length(decode(p_administrator_envelope->>'nonce','base64'))<>32
+  OR octet_length(decode(p_executor_envelope->>'signature_der_base64','base64')) NOT BETWEEN 8 AND 80
+  OR octet_length(decode(p_administrator_envelope->>'signature_der_base64','base64')) NOT BETWEEN 8 AND 80
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN privacy_executor_grants g ON g.user_id=u.id AND g.revoked_at IS NULL
+    WHERE u.id=ceremony.executor_actor_ref AND u.is_active AND NOT u.is_dependent)
+  OR NOT EXISTS(SELECT 1 FROM users u JOIN user_platform_roles a ON a.user_id=u.id JOIN platform_roles r ON r.id=a.role_id
+    WHERE u.id=ceremony.administrator_actor_ref AND u.is_active AND NOT u.is_dependent AND r.code='ADMIN')
+ THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_signed_approval_rejected'; END IF;
+
+ INSERT INTO privacy_activation_proposals(id,policy_version,evidence_ids,evidence_set_sha256,activation_sha256,proposed_by_ref,proposed_at)
+ VALUES(ceremony.proposal_id,ceremony.policy_version,ceremony.evidence_ids,ceremony.evidence_set_sha256,ceremony.activation_sha256,
+  ceremony.executor_actor_ref,now_at);
+ INSERT INTO privacy_protected.activation_signed_approvals(
+  proposal_id,signer_role,actor_ref,signing_key_id,nonce_sha256,envelope_sha256,raw_envelope,parsed_envelope,issued_at,expires_at,
+  ceremony_id,material_sha256,signature_algorithm,kms_key_arn,public_key_spki_sha256,github_actor_id,github_environment,
+  github_run_id,github_run_attempt,signature_der_sha256)
+ VALUES(ceremony.proposal_id,'EXECUTOR',ceremony.executor_actor_ref,ceremony.executor_signing_key_id,p_executor_nonce_sha256,
+  digest(p_executor_envelope_raw,'sha256'),p_executor_envelope_raw,p_executor_envelope,executor_issued_at,executor_expires_at,
+  ceremony.ceremony_id,ceremony.material_sha256,'ECDSA_SHA_256',ceremony.executor_kms_key_arn,ceremony.executor_public_key_spki_sha256,
+  ceremony.executor_github_actor_id,ceremony.executor_github_environment,(p_executor_envelope->>'github_run_id')::bigint,
+  (p_executor_envelope->>'github_run_attempt')::bigint,digest(decode(p_executor_envelope->>'signature_der_base64','base64'),'sha256'))
+ RETURNING id INTO executor_envelope_id;
+ INSERT INTO privacy_protected.activation_signed_approvals(
+  proposal_id,signer_role,actor_ref,signing_key_id,nonce_sha256,envelope_sha256,raw_envelope,parsed_envelope,issued_at,expires_at,
+  ceremony_id,material_sha256,signature_algorithm,kms_key_arn,public_key_spki_sha256,github_actor_id,github_environment,
+  github_run_id,github_run_attempt,signature_der_sha256)
+ VALUES(ceremony.proposal_id,'ADMINISTRATOR',ceremony.administrator_actor_ref,ceremony.administrator_signing_key_id,p_administrator_nonce_sha256,
+  digest(p_administrator_envelope_raw,'sha256'),p_administrator_envelope_raw,p_administrator_envelope,administrator_issued_at,administrator_expires_at,
+  ceremony.ceremony_id,ceremony.material_sha256,'ECDSA_SHA_256',ceremony.administrator_kms_key_arn,ceremony.administrator_public_key_spki_sha256,
+  ceremony.administrator_github_actor_id,ceremony.administrator_github_environment,(p_administrator_envelope->>'github_run_id')::bigint,
+  (p_administrator_envelope->>'github_run_attempt')::bigint,digest(decode(p_administrator_envelope->>'signature_der_base64','base64'),'sha256'))
+ RETURNING id INTO administrator_envelope_id;
+ INSERT INTO privacy_activation_approvals(proposal_id,activation_sha256,approved_by_ref,approved_at)
+ VALUES(ceremony.proposal_id,ceremony.activation_sha256,ceremony.administrator_actor_ref,now_at) RETURNING id INTO approval_id;
+ PERFORM set_config('mycfc.privacy_activation_approval','approved',true);
+ INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by,updated_at,approval_id)
+ VALUES(true,ceremony.policy_version,true,true,ceremony.administrator_actor_ref,now_at,approval_id)
+ ON CONFLICT(singleton) DO UPDATE SET policy_version=EXCLUDED.policy_version,enabled=true,fulfilment_ready=true,
+  updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,approval_id=EXCLUDED.approval_id;
+ INSERT INTO privacy_request_activation_events(policy_version,actor_ref,enabled,fulfilment_ready,occurred_at)
+ VALUES(ceremony.policy_version,ceremony.administrator_actor_ref,true,true,now_at);
+ UPDATE privacy_worker_kill_switch SET engaged=false,version=version+1,activation_approval_id=approval_id,changed_at=now_at
+  WHERE singleton RETURNING version INTO switch_version;
+ INSERT INTO privacy_worker_kill_switch_events(version,engaged,activation_approval_id,occurred_at)
+ VALUES(switch_version,false,approval_id,now_at);
+ INSERT INTO privacy_protected.activation_broker_receipts(
+  proposal_id,approval_id,executor_envelope_id,administrator_envelope_id,evidence_set_sha256,activation_sha256,ceremony_id)
+ VALUES(ceremony.proposal_id,approval_id,executor_envelope_id,administrator_envelope_id,ceremony.evidence_set_sha256,
+  ceremony.activation_sha256,ceremony.ceremony_id);
+ RETURN approval_id;
+EXCEPTION
+ WHEN unique_violation THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_activation_signed_approval_replay';
+ WHEN invalid_text_representation OR character_not_in_repertoire OR datetime_field_overflow OR numeric_value_out_of_range THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='privacy_activation_signed_approval_rejected';
+END;$$;
+
+REVOKE ALL ON TABLE privacy_protected.activation_ceremonies FROM PUBLIC;
+REVOKE ALL ON FUNCTION
+ public.privacy_activation_broker_register_ceremony(uuid,uuid,text,text,uuid[],bytea,bytea,text,text,text,bytea,bytea,bytea,bytea,jsonb,timestamptz,timestamptz,uuid,text,text,bytea,bigint,text,uuid,text,text,bytea,bigint,text),
+ public.privacy_activation_broker_activate(uuid,bytea,jsonb,bytea,jsonb,bytea,bytea)
+FROM PUBLIC;
+DO $$BEGIN
+ IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_privacy_activation_broker') THEN
+  GRANT EXECUTE ON FUNCTION
+   public.privacy_activation_broker_register_ceremony(uuid,uuid,text,text,uuid[],bytea,bytea,text,text,text,bytea,bytea,bytea,bytea,jsonb,timestamptz,timestamptz,uuid,text,text,bytea,bigint,text,uuid,text,text,bytea,bigint,text),
+   public.privacy_activation_broker_activate(uuid,bytea,jsonb,bytea,jsonb,bytea,bytea)
+  TO mycfc_privacy_activation_broker;
+ END IF;
+END$$;
+
+-- Every schema revision invalidates all prior activation evidence and keeps
+-- both activation switches engaged until a fresh v2 ceremony completes.
+UPDATE privacy_request_activation SET enabled=false,fulfilment_ready=false,approval_id=NULL,updated_at=clock_timestamp() WHERE singleton;
+UPDATE privacy_worker_kill_switch SET engaged=true,version=version+1,activation_approval_id=NULL,changed_at=clock_timestamp() WHERE singleton;
+INSERT INTO privacy_worker_kill_switch_events(version,engaged,occurred_at) SELECT version,true,changed_at FROM privacy_worker_kill_switch WHERE singleton;
+UPDATE guardian_application_intake_release SET enabled=false,policy_version=NULL,policy_sha256=NULL,approval_sha256=NULL,image_digest=NULL,schema_migration_digest=NULL,enabled_by=NULL,enabled_at=NULL WHERE singleton;
+WITH disabled AS (UPDATE guardian_authority_policies SET enabled=false,enabled_at=NULL,enabled_by=NULL WHERE enabled RETURNING id,version)
+INSERT INTO guardian_authority_policy_events(policy_id,policy_version,actor_ref,action) SELECT id,version,NULL,'MIGRATION_DISABLED' FROM disabled;
+SELECT guardian_authority_reconcile_cutoffs();
+DELETE FROM sessions session USING users subject WHERE session.user_id=subject.id AND session.subject_indexed AND subject.is_dependent;
+UPDATE users SET minor_login_id=NULL,password_hash=NULL,credential_version=credential_version+1,updated_at=clock_timestamp()
+ WHERE is_dependent AND (minor_login_id IS NOT NULL OR password_hash IS NOT NULL);

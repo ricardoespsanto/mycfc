@@ -253,6 +253,12 @@ variable "operations_observer_github_oidc_provider_arn" {
     error_message = "operations_observer_github_oidc_provider_arn must be the exact GitHub Actions OIDC provider ARN."
   }
 }
+
+variable "privacy_operation_receipts_enabled" {
+  type        = bool
+  default     = false
+  description = "Create the private KMS-encrypted, versioned transport for host-signed privacy operation receipts."
+}
 variable "alb_log_retention_days" {
   type    = number
   default = 90
@@ -419,6 +425,50 @@ variable "privacy_worker_monitoring_enabled" {
   validation {
     condition     = !var.privacy_worker_monitoring_enabled || var.privacy_worker_infrastructure_enabled
     error_message = "privacy_worker_monitoring_enabled requires privacy_worker_infrastructure_enabled."
+  }
+}
+
+variable "privacy_activation_exchange_enabled" {
+  type        = bool
+  default     = false
+  description = "Provision the private, short-lived dual-signer exchange, non-exportable signing keys, exact OIDC roles, and credential-free host courier identity. This does not create access keys, configure GitHub environments, open a ceremony, or activate privacy processing."
+
+  validation {
+    condition = !var.privacy_activation_exchange_enabled || (
+      var.privacy_activation_github_oidc_provider_arn != null &&
+      var.privacy_activation_terraform_state_bucket_name != null
+    )
+    error_message = "privacy_activation_exchange_enabled requires the exact GitHub OIDC provider ARN and Terraform state bucket name."
+  }
+}
+
+variable "privacy_activation_github_oidc_provider_arn" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Existing GitHub Actions OIDC provider used only by the fixed executor, administrator, and protected-production coordinator subjects."
+
+  validation {
+    condition = var.privacy_activation_github_oidc_provider_arn == null || can(regex(
+      "^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$",
+      var.privacy_activation_github_oidc_provider_arn,
+    ))
+    error_message = "privacy_activation_github_oidc_provider_arn must be the exact GitHub Actions OIDC provider ARN."
+  }
+}
+
+variable "privacy_activation_terraform_state_bucket_name" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Exact remote-state bucket name used only to install explicit state-access denies on every activation-exchange identity."
+
+  validation {
+    condition = var.privacy_activation_terraform_state_bucket_name == null || can(regex(
+      "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
+      var.privacy_activation_terraform_state_bucket_name,
+    ))
+    error_message = "privacy_activation_terraform_state_bucket_name must be null or a valid exact S3 bucket name."
   }
 }
 

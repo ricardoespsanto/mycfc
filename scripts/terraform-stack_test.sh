@@ -128,11 +128,36 @@ for workflow in ['terraform-production-plan.yml', 'terraform-production-apply.ym
             expected = hetzner_secret if stack == 'hetzner' else production_secret
             assert result == expected, (workflow, key, stack, 'cross-stack secret fallback')
 assert expression_count == 6
-for stack, enabled in [('production', 'privacy_worker_infrastructure_enabled'),
-                       ('hetzner', 'privacy_restore_infrastructure_enabled')]:
+expected_enabled = {
+    'production': {
+        'privacy_worker_infrastructure_enabled': 'true',
+        'privacy_worker_s3_deletion_enabled': 'true',
+        'privacy_worker_metadata_rewrite_enabled': 'true',
+        'privacy_worker_ledger_broker_invoke_enabled': 'true',
+        'privacy_worker_ledger_broker_function_arn':
+            '"arn:aws:lambda:eu-west-1:334960985019:function:mycfc-production-privacy-ledger-broker"',
+        'privacy_worker_monitoring_enabled': 'true',
+        'operations_observer_enabled': 'true',
+        'operations_observer_github_oidc_provider_arn':
+            '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
+        'privacy_operation_receipts_enabled': 'true',
+        'privacy_activation_exchange_enabled': 'true',
+        'privacy_activation_github_oidc_provider_arn':
+            '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
+        'privacy_activation_terraform_state_bucket_name': '"mycfcterraformstatebucket"',
+    },
+    'hetzner': {
+        'privacy_restore_infrastructure_enabled': 'true',
+        'privacy_restore_ledger_write_enabled': 'true',
+        'privacy_restore_ledger_replay_enabled': 'true',
+        'postgres_backup_cleanup_identity_enabled': 'true',
+    },
+}
+for stack, enabled in expected_enabled.items():
     text = (root / f'infra/environments/{stack}/privacy-infrastructure.tfvars').read_text()
     pairs = dict(re.findall(r'^(\w+)\s*=\s*(\S+)', text, re.M))
-    assert pairs.pop(enabled) == 'true'
+    for key, value in enabled.items():
+        assert pairs.pop(key) == value
     assert all(value in ('false', 'null') for value in pairs.values())
 PY
 printf '%s\n' 'Terraform stack selection, credential isolation and durable posture tests passed.'

@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -122,7 +121,7 @@ func recordActivationFixtureEvidence(t *testing.T, ctx context.Context, query ac
 	case "SCHEMA":
 		contract = "mycfc/schema-migration-inventory/v1"
 		common["evidence_ref"], common["signing_key_id"] = "s3://fixture/schema?versionId=v1", "fixture-key"
-		common["schema_migration_digest"], common["baseline_includes_through"] = value, "202609130001_event_results_links"
+		common["schema_migration_digest"], common["baseline_includes_through"] = value, ActivationSchemaBaselineThrough
 	default:
 		t.Fatalf("unsupported activation fixture kind %q", kind)
 	}
@@ -334,19 +333,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		FROM guardian_authority_policy_approvals approval WHERE gate.singleton AND approval.policy_version=$1`, guardianPolicy, owner); e != nil {
 		t.Fatal(e)
 	}
-	capabilities := map[string]bool{}
-	for _, profile := range executionProfiles {
-		for _, operation := range profile.Operations {
-			capabilities[operation] = true
-		}
-	}
-	productionRelationalCapabilities := relationalExecutableOperations
-	testRelationalCapabilities := maps.Clone(productionRelationalCapabilities)
-	for operation := range capabilities {
-		testRelationalCapabilities[operation] = true
-	}
-	relationalExecutableOperations = testRelationalCapabilities
-	defer func() { relationalExecutableOperations = productionRelationalCapabilities }()
+	capabilities := ProductionExecutionCapabilities()
 	targetPrivateKey, e := ecdh.X25519().GenerateKey(rand.Reader)
 	if e != nil {
 		t.Fatal(e)
@@ -548,9 +535,9 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 	})
 	t.Run("unsupported-account-closure-cannot-start-or-cut-off-access", func(t *testing.T) {
-		saved := relationalExecutableOperations
-		relationalExecutableOperations = productionRelationalCapabilities
-		defer func() { relationalExecutableOperations = saved }()
+		blocked := s
+		blocked.ExecutionCapabilities = ProductionExecutionCapabilities()
+		delete(blocked.ExecutionCapabilities, "AUTH_SESSION_EXPIRE")
 		subject := user(nil)
 		request, err := submit(subject, subject, AccountClosure)
 		if err != nil {
@@ -565,7 +552,7 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		if err = pool.QueryRow(ctx, `SELECT credential_version FROM users WHERE id=$1`, subject).Scan(&beforeCredential); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = s.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
+		if _, err = blocked.StartExecution(ctx, StartInput{ActorID: reviewerB, Reference: request.PublicRef, Version: request.Version, Confirmed: true}); !errors.Is(err, ErrExecutorUnavailable) {
 			t.Fatalf("unsupported closure start error=%v", err)
 		}
 		var active bool
@@ -736,9 +723,6 @@ func TestPrivacyServiceTransactions(t *testing.T) {
 		}
 	})
 	t.Run("membership-history-revokes-current-and-pseudonymises-preserved-history", func(t *testing.T) {
-		savedCapabilities := relationalExecutableOperations
-		relationalExecutableOperations = productionRelationalCapabilities
-		defer func() { relationalExecutableOperations = savedCapabilities }()
 		if _, err := pool.Exec(ctx, `UPDATE privacy_erasure_category_jobs SET next_attempt_at=clock_timestamp()+interval '2 hours' WHERE status IN ('PENDING','RETRY_WAIT')`); err != nil {
 			t.Fatal(err)
 		}
@@ -3465,6 +3449,17 @@ VALUES($1,$2,$3,1,1,clock_timestamp())`, attemptID, binding.JobID, leaseID); err
 		execution, err := s.StartExecution(ctx, input)
 		if err != nil {
 			t.Fatal(err)
+		}
+		var firstCategory, firstOperation string
+		if err = pool.QueryRow(ctx, `SELECT job.category_key,checkpoint.operation_code
+			FROM privacy_erasure_category_jobs job
+			JOIN privacy_erasure_job_checkpoints checkpoint ON checkpoint.job_id=job.id
+			WHERE job.execution_id=$1
+			ORDER BY job.plan_entry_position,checkpoint.operation_position LIMIT 1`, execution.ID).Scan(&firstCategory, &firstOperation); err != nil {
+			t.Fatal(err)
+		}
+		if firstCategory != "backup-tombstones" || firstOperation != "BACKUP_TOMBSTONE_REPLAY" {
+			t.Fatalf("first closure checkpoint=%s/%s", firstCategory, firstOperation)
 		}
 		var active bool
 		var indexedSessions, ownerRoles, activeTokens int

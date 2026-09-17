@@ -116,7 +116,7 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 		return zero, ErrExecutorUnavailable
 	}
 	activation, err := q.GetPrivacyActivationForUpdate(ctx)
-	if err != nil || !executionActivationReady(activation) {
+	if err != nil || !executionActivationReady(activation.Enabled, activation.FulfilmentReady) {
 		return zero, ErrExecutorUnavailable
 	}
 	ready, err := q.PrivacyActivationReady(ctx, activation.PolicyVersion)
@@ -204,6 +204,9 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 	}
 
 	if r.ScopeKind == string(AccountClosure) {
+		if _, err = tx.Exec(ctx, `SELECT privacy_execution_capture_retention_sources($1,$2)`, execution.ID, subject.ID); err != nil {
+			return zero, err
+		}
 		if err = s.cutOffPrivacyAccount(ctx, q, execution, subject, actor.ID, now); err != nil {
 			return zero, err
 		}
@@ -235,8 +238,8 @@ func (s Service) StartExecution(ctx context.Context, in StartInput) (dbgen.Priva
 
 func sameOptionalString(value *string, want string) bool { return value != nil && *value == want }
 
-func executionActivationReady(activation dbgen.PrivacyRequestActivation) bool {
-	return activation.Enabled && activation.FulfilmentReady
+func executionActivationReady(enabled, fulfilmentReady bool) bool {
+	return enabled && fulfilmentReady
 }
 
 // ExecutionCapabilitiesReady is a read-only rendering hint. It lets a case
@@ -254,7 +257,8 @@ func (s Service) ExecutionCapabilitiesReady(plan ExecutionPlan) bool {
 		for _, operation := range entry.Operations {
 			if !supportedOperation(operation) || !executableOperation(operation) || !s.ExecutionCapabilities[operation] ||
 				(operation == "OBJECT_VERSION_DELETE" && s.ObjectTargets == nil) ||
-				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderTargets == nil || s.ProviderRegistry == nil || !s.ProviderRegistry.Ready())) {
+				(operation == "PROVIDER_RECIPIENT_NOTIFY" && (s.ProviderRegistry == nil ||
+					(!s.ProviderRegistry.Empty() && (s.ProviderTargets == nil || !s.ProviderRegistry.Ready())))) {
 				return false
 			}
 		}
@@ -616,12 +620,33 @@ func supportedOperation(operation string) bool {
 var relationalExecutableOperations = map[string]bool{
 	"ACTIVITY_CONNECTION_DISCONNECT": true, "ACTIVITY_SUBJECT_DELETE": true,
 	"ANNOUNCEMENT_DELIVERY_DELETE": true, "AUTH_ACCESS_REVOKE": true,
-	"AUTH_TOKEN_DELETE": true, "DEPENDANT_RELATIONSHIP_DELETE": true,
+	"AUDIT_ACTOR_ANONYMIZE": true, "AUTH_SESSION_EXPIRE": true,
+	"AUTH_TOKEN_DELETE": true, "CONSENT_EVIDENCE_RESTRICT": true,
+	"CONSENT_NETWORK_EXPIRE": true, "DEPENDANT_RELATIONSHIP_DELETE": true,
 	"EVENT_RESPONSE_DELETE": true, "IDENTITY_CLEAR": true,
+	"IDENTITY_RESTRICT": true, "LOG_RECORD_EXPIRE": true,
 	"MEMBERSHIP_ACTIVE_REVOKE": true, "MEMBERSHIP_HISTORY_ANONYMIZE": true, "PROFILE_HEALTH_DELETE": true,
-	"PROFILE_IDENTITY_DELETE": true, "REPAIR_REPORTER_ANONYMIZE": true,
+	"OUTBOX_PAYLOAD_EXPIRE": true, "PRIVACY_CASE_RESTRICT": true,
+	"PROFILE_IDENTITY_DELETE": true, "PROFILE_RESTRICT": true, "REPAIR_REPORTER_ANONYMIZE": true,
 	"SUGGESTION_SUBJECT_DELETE": true, "TRAINING_PRESCRIPTION_DELETE": true,
 	"TRAINING_RESULT_DELETE": true,
+}
+
+// ProductionExecutionCapabilities returns a new closed capability set for the
+// current executor contract. Callers still have to install every operation's
+// runtime prerequisite: activation and lease fencing are enforced in the
+// database, object plans require the seal-only target protector, and provider
+// plans require a factually evidenced non-empty adapter registry.
+func ProductionExecutionCapabilities() map[string]bool {
+	out := make(map[string]bool)
+	for _, profile := range executionProfiles {
+		for _, operation := range profile.Operations {
+			if executableOperation(operation) {
+				out[operation] = true
+			}
+		}
+	}
+	return out
 }
 
 func relationalExecutableOperation(operation string) bool {
@@ -713,10 +738,13 @@ func recordAccessRevocation(ctx context.Context, q *dbgen.Queries, executionID u
 // ExecutionWorker is deliberately separate from Service so a process can use
 // the least-privilege worker database role without inheriting web mutations.
 type ExecutionWorker struct {
-	Pool          *pgxpool.Pool
-	WorkerRef     uuid.UUID
-	LeaseDuration time.Duration
-	MaxAttempts   int32
+	// AcceptanceProof selects only the DB-issued synthetic fixture bound to WorkerRef.
+	// An empty proof retains ordinary queue behavior.
+	AcceptanceProof []byte
+	Pool            *pgxpool.Pool
+	WorkerRef       uuid.UUID
+	LeaseDuration   time.Duration
+	MaxAttempts     int32
 }
 
 type ExecutionLease struct {
@@ -774,7 +802,7 @@ func (w ExecutionWorker) maxAttempts() int32 {
 }
 
 func (w ExecutionWorker) valid() bool {
-	return w.Pool != nil && w.WorkerRef != uuid.Nil && w.leaseDuration() >= time.Second && w.leaseDuration() <= time.Hour && w.maxAttempts() >= 1 && w.maxAttempts() <= 100
+	return (len(w.AcceptanceProof) == 0 || len(w.AcceptanceProof) == 32) && w.Pool != nil && w.WorkerRef != uuid.Nil && w.leaseDuration() >= time.Second && w.leaseDuration() <= time.Hour && w.maxAttempts() >= 1 && w.maxAttempts() <= 100
 }
 
 func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
@@ -789,7 +817,11 @@ func (w ExecutionWorker) Claim(ctx context.Context) (ExecutionLease, error) {
 	defer tx.Rollback(ctx)
 	q := dbgen.New(tx)
 	var jobID, leaseID, attemptID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_worker_claim($1,$2)`, w.leaseDuration().Milliseconds(), w.WorkerRef).Scan(&jobID, &leaseID, &attemptID)
+	if len(w.AcceptanceProof) > 0 {
+		err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_acceptance_claim($1,$2,$3)`, w.leaseDuration().Milliseconds(), w.WorkerRef, w.AcceptanceProof).Scan(&jobID, &leaseID, &attemptID)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT job_id,lease_id,attempt_id FROM privacy_worker_claim($1,$2)`, w.leaseDuration().Milliseconds(), w.WorkerRef).Scan(&jobID, &leaseID, &attemptID)
+	}
 	if err != nil {
 		return zero, err
 	}

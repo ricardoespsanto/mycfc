@@ -2432,6 +2432,38 @@ type PrivacyOutboxDeliveryEvidence struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
 
+type PrivacyProtectedAcceptanceFinished struct {
+	FixtureID  uuid.UUID          `json:"fixture_id"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+type PrivacyProtectedAcceptanceFixture struct {
+	ID           uuid.UUID          `json:"id"`
+	SubjectRef   uuid.UUID          `json:"subject_ref"`
+	ReviewerRef  uuid.UUID          `json:"reviewer_ref"`
+	ExecutorRef  uuid.UUID          `json:"executor_ref"`
+	WorkerRef    uuid.UUID          `json:"worker_ref"`
+	ProofSha256  []byte             `json:"proof_sha256"`
+	MarkerSha256 []byte             `json:"marker_sha256"`
+	ImageDigest  string             `json:"image_digest"`
+	SchemaDigest string             `json:"schema_digest"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
+type PrivacyProtectedAcceptanceNoticeSimulation struct {
+	OutboxID      uuid.UUID          `json:"outbox_id"`
+	FixtureID     uuid.UUID          `json:"fixture_id"`
+	MessageType   string             `json:"message_type"`
+	PayloadSha256 []byte             `json:"payload_sha256"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+}
+
+type PrivacyProtectedAcceptanceRequest struct {
+	FixtureID uuid.UUID `json:"fixture_id"`
+	RequestID uuid.UUID `json:"request_id"`
+}
+
 type PrivacyProtectedActivationBrokerReceipt struct {
 	ProposalID              uuid.UUID          `json:"proposal_id"`
 	ApprovalID              uuid.UUID          `json:"approval_id"`
@@ -2440,27 +2472,94 @@ type PrivacyProtectedActivationBrokerReceipt struct {
 	EvidenceSetSha256       []byte             `json:"evidence_set_sha256"`
 	ActivationSha256        []byte             `json:"activation_sha256"`
 	RecordedAt              pgtype.Timestamptz `json:"recorded_at"`
+	CeremonyID              *uuid.UUID         `json:"ceremony_id"`
+}
+
+type PrivacyProtectedActivationCeremony struct {
+	CeremonyID                       uuid.UUID          `json:"ceremony_id"`
+	ProposalID                       uuid.UUID          `json:"proposal_id"`
+	SourceSha                        string             `json:"source_sha"`
+	PolicyVersion                    string             `json:"policy_version"`
+	EvidenceIds                      []uuid.UUID        `json:"evidence_ids"`
+	EvidenceSetSha256                []byte             `json:"evidence_set_sha256"`
+	ActivationSha256                 []byte             `json:"activation_sha256"`
+	ExecutorVersion                  string             `json:"executor_version"`
+	PlanSchemaVersion                string             `json:"plan_schema_version"`
+	ImageDigest                      string             `json:"image_digest"`
+	SchemaMigrationDigest            []byte             `json:"schema_migration_digest"`
+	SignerRegistrySha256             []byte             `json:"signer_registry_sha256"`
+	MaterialSha256                   []byte             `json:"material_sha256"`
+	RawMaterial                      []byte             `json:"raw_material"`
+	ParsedMaterial                   []byte             `json:"parsed_material"`
+	PreparedAt                       pgtype.Timestamptz `json:"prepared_at"`
+	CeremonyExpiresAt                pgtype.Timestamptz `json:"ceremony_expires_at"`
+	ExecutorActorRef                 uuid.UUID          `json:"executor_actor_ref"`
+	ExecutorSigningKeyID             string             `json:"executor_signing_key_id"`
+	ExecutorKmsKeyArn                string             `json:"executor_kms_key_arn"`
+	ExecutorPublicKeySpkiSha256      []byte             `json:"executor_public_key_spki_sha256"`
+	ExecutorGithubActorID            int64              `json:"executor_github_actor_id"`
+	ExecutorGithubEnvironment        string             `json:"executor_github_environment"`
+	AdministratorActorRef            uuid.UUID          `json:"administrator_actor_ref"`
+	AdministratorSigningKeyID        string             `json:"administrator_signing_key_id"`
+	AdministratorKmsKeyArn           string             `json:"administrator_kms_key_arn"`
+	AdministratorPublicKeySpkiSha256 []byte             `json:"administrator_public_key_spki_sha256"`
+	AdministratorGithubActorID       int64              `json:"administrator_github_actor_id"`
+	AdministratorGithubEnvironment   string             `json:"administrator_github_environment"`
+	RecordedAt                       pgtype.Timestamptz `json:"recorded_at"`
 }
 
 type PrivacyProtectedActivationSignedApproval struct {
-	ID             uuid.UUID          `json:"id"`
-	ProposalID     uuid.UUID          `json:"proposal_id"`
-	SignerRole     string             `json:"signer_role"`
-	ActorRef       uuid.UUID          `json:"actor_ref"`
-	SigningKeyID   string             `json:"signing_key_id"`
-	NonceSha256    []byte             `json:"nonce_sha256"`
-	EnvelopeSha256 []byte             `json:"envelope_sha256"`
-	RawEnvelope    []byte             `json:"raw_envelope"`
-	ParsedEnvelope []byte             `json:"parsed_envelope"`
-	IssuedAt       pgtype.Timestamptz `json:"issued_at"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
-	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+	ID                  uuid.UUID          `json:"id"`
+	ProposalID          uuid.UUID          `json:"proposal_id"`
+	SignerRole          string             `json:"signer_role"`
+	ActorRef            uuid.UUID          `json:"actor_ref"`
+	SigningKeyID        string             `json:"signing_key_id"`
+	NonceSha256         []byte             `json:"nonce_sha256"`
+	EnvelopeSha256      []byte             `json:"envelope_sha256"`
+	RawEnvelope         []byte             `json:"raw_envelope"`
+	ParsedEnvelope      []byte             `json:"parsed_envelope"`
+	IssuedAt            pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	RecordedAt          pgtype.Timestamptz `json:"recorded_at"`
+	CeremonyID          *uuid.UUID         `json:"ceremony_id"`
+	MaterialSha256      []byte             `json:"material_sha256"`
+	SignatureAlgorithm  *string            `json:"signature_algorithm"`
+	KmsKeyArn           *string            `json:"kms_key_arn"`
+	PublicKeySpkiSha256 []byte             `json:"public_key_spki_sha256"`
+	GithubActorID       *int64             `json:"github_actor_id"`
+	GithubEnvironment   *string            `json:"github_environment"`
+	GithubRunID         *int64             `json:"github_run_id"`
+	GithubRunAttempt    *int64             `json:"github_run_attempt"`
+	SignatureDerSha256  []byte             `json:"signature_der_sha256"`
 }
 
 type PrivacyProtectedCompletionNoticeTarget struct {
 	ExecutionID    uuid.UUID          `json:"execution_id"`
 	SealedDelivery []byte             `json:"sealed_delivery"`
 	CapturedAt     pgtype.Timestamptz `json:"captured_at"`
+}
+
+type PrivacyProtectedExecutionRetentionPending struct {
+	ExecutionID        uuid.UUID          `json:"execution_id"`
+	CategoryKey        string             `json:"category_key"`
+	SubjectRef         uuid.UUID          `json:"subject_ref"`
+	AnchorCode         string             `json:"anchor_code"`
+	RetentionUnit      string             `json:"retention_unit"`
+	ReviewAfter        int32              `json:"review_after"`
+	ExpireAfter        int32              `json:"expire_after"`
+	RetainedFieldCodes []string           `json:"retained_field_codes"`
+	RetainedData       []byte             `json:"retained_data"`
+	WorkerRef          uuid.UUID          `json:"worker_ref"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type PrivacyProtectedExecutionRetentionSource struct {
+	ExecutionID  uuid.UUID          `json:"execution_id"`
+	CategoryKey  string             `json:"category_key"`
+	SubjectRef   uuid.UUID          `json:"subject_ref"`
+	AnchorAt     pgtype.Timestamptz `json:"anchor_at"`
+	RetainedData []byte             `json:"retained_data"`
+	CapturedAt   pgtype.Timestamptz `json:"captured_at"`
 }
 
 type PrivacyProtectedMembershipHistoryReplayCapture struct {
