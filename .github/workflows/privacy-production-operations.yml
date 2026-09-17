@@ -260,7 +260,7 @@ jobs:
           [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
           PUBLISHED_PUBLIC_KEY_SHA256=
           if [[ "${{ inputs.operation }}" == receipt-key-provision || "${{ inputs.operation }}" == receipt-key-rotate-prepare ]]; then
-            for key_attempt in $(seq 1 40); do
+            for _ in $(seq 1 40); do
               if aws s3api head-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
                 --key "public-keys/$REQUEST_ID.pem" --checksum-mode ENABLED --output json > public-key-head.json 2>/dev/null; then
                 public_key_version=$(jq -r '.VersionId // empty' public-key-head.json)
@@ -292,7 +292,7 @@ jobs:
           actual_public_key_spki_sha256=$(openssl pkey -pubin -in receipt-public.pem -outform DER | sha256sum | cut -d' ' -f1)
           test "$actual_public_key_spki_sha256" = "$RECEIPT_PUBLIC_KEY_SHA256"
           chmod 0400 receipt-public.pem
-          for attempt in $(seq 1 200); do
+          for _ in $(seq 1 200); do
             if aws s3api head-object --region "$AWS_REGION" --bucket "$RECEIPT_BUCKET" \
               --key "receipts/$REQUEST_ID.json" --checksum-mode ENABLED --output json > receipt-head.json 2>/dev/null; then
               version_id=$(jq -r '.VersionId // empty' receipt-head.json)
@@ -443,7 +443,7 @@ jobs:
           set -Eeuo pipefail
           [[ "$OBSERVATION_NOT_BEFORE_MS" =~ ^[1-9][0-9]*$ ]]
           observation_start=$(date -u -d "@$((OBSERVATION_NOT_BEFORE_MS / 1000))" +%Y-%m-%dT%H:%M:%SZ)
-          for attempt in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             aws cloudwatch describe-alarm-history --region "$AWS_REGION" --alarm-name "$ADVERSE_ALARM_NAME" \
               --history-item-type StateUpdate --start-date "$observation_start" \
               --scan-by TimestampAscending --output json > adverse-history.json
