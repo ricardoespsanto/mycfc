@@ -320,6 +320,11 @@ func TestAcceptanceCommandWiresBoundDependenciesAndSignsEvidence(t *testing.T) {
 		files["app"] = []byte("postgres://mycfc_app:" + strings.Repeat("a", 32) + "@database:5432/other")
 		return func() { files["app"] = previous }
 	})
+	assertRejected("fallback database binding", func() func() {
+		previous := files["app"]
+		files["app"] = []byte("postgres://mycfc_app:" + strings.Repeat("a", 32) + "@database:5432,other:5432/mycfc")
+		return func() { files["app"] = previous }
+	})
 	assertRejected("signing key read", missingFile("PRIVACY_ACCEPTANCE_SIGNING_KEY_FILE"))
 	assertRejected("signing key", func() func() {
 		previous := files["signing"]
