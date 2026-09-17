@@ -19,6 +19,8 @@ import (
 
 const maxCredentialFile = 16384
 
+var exitAcceptanceProcess = os.Exit
+
 func main() {
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -26,7 +28,7 @@ func main() {
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Getenv, os.Geteuid(), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "privacy_acceptance_failed")
-		os.Exit(1)
+		exitAcceptanceProcess(1)
 	}
 }
 
@@ -43,7 +45,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, uid int
 		return errors.New("acceptance operator mode rejected")
 	}
 	expected := getenv("PRIVACY_ACCEPTANCE_EXPECTED_DATABASE")
-	adminRaw, err := readProtectedFile(getenv("PRIVACY_ACCEPTANCE_ADMIN_DATABASE_URL_FILE"), 0)
+	adminRaw, err := readAcceptanceProtectedFile(getenv("PRIVACY_ACCEPTANCE_ADMIN_DATABASE_URL_FILE"), 0)
 	if err != nil {
 		return err
 	}
@@ -53,7 +55,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, uid int
 	}
 	password := ""
 	if args[0] != "revoke" {
-		raw, e := readProtectedFile(getenv("PRIVACY_ACCEPTANCE_DATABASE_URL_FILE"), 0)
+		raw, e := readAcceptanceProtectedFile(getenv("PRIVACY_ACCEPTANCE_DATABASE_URL_FILE"), 0)
 		if e != nil {
 			return e
 		}
@@ -63,12 +65,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, uid int
 		}
 		password = operator.Password
 	}
-	conn, err := pgx.ConnectConfig(ctx, admin)
+	conn, err := connectAcceptanceDatabase(ctx, admin)
 	if err != nil {
 		return errors.New("acceptance administrator unavailable")
 	}
-	defer conn.Close(ctx)
-	if err = db.ConfigurePrivacyAcceptanceRole(ctx, conn, expected, password, args[0] == "revoke"); err != nil {
+	defer closeAcceptanceDatabase(conn, ctx)
+	if err = configureAcceptanceRole(ctx, conn, expected, password, args[0] == "revoke"); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "event=privacy_acceptance_credential operation=%s outcome=complete\n", args[0])

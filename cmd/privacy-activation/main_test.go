@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -295,6 +296,182 @@ func TestActivationInputAndKeyFailureBoundaries(t *testing.T) {
 	emptySecret := writeActivationFile(t, directory, "empty.secret", nil)
 	if _, err := readSecret(emptySecret); err == nil {
 		t.Fatal("empty secret accepted")
+	}
+}
+
+func TestPrepareExchangeWritesBoundCeremonyMaterial(t *testing.T) {
+	registry := commandRegistryFixture(t)
+	registryRaw, err := json.Marshal(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	registryPath := writeActivationFile(t, directory, "registry.json", registryRaw)
+	registryDigest := commandApprovalDigest(registryRaw)
+	outputPath := filepath.Join(directory, "material.json")
+	ceremonyID := uuid.New()
+	expiresAt := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second)
+	previous := prepareActivationApprovalMaterial
+	t.Cleanup(func() { prepareActivationApprovalMaterial = previous })
+	prepareActivationApprovalMaterial = func(_ context.Context, databaseURL string, release privacyrequests.ActivationReleaseBinding,
+		sourceSHA, pinnedRegistry string, gotRegistry privacyrequests.ActivationSignerRegistry, _ time.Time,
+	) ([]byte, privacyrequests.ActivationApprovalMaterial, error) {
+		if databaseURL != "postgres://broker.invalid/mycfc" || sourceSHA != "0123456789abcdef0123456789abcdef01234567" ||
+			pinnedRegistry != registryDigest || gotRegistry.Signers.Executor.ActorRef != registry.Signers.Executor.ActorRef ||
+			release.PolicyVersion != "policy-v1" || release.SchemaMigrationDigest != db.EmbeddedMigrationDigest() {
+			t.Fatalf("unexpected prepare binding: database=%q source=%q registry=%q release=%+v", databaseURL, sourceSHA, pinnedRegistry, release)
+		}
+		return []byte(`{"contract":"material"}`), privacyrequests.ActivationApprovalMaterial{
+			CeremonyID: ceremonyID, CeremonyExpiresAt: expiresAt,
+		}, nil
+	}
+	env := map[string]string{
+		"PRIVACY_ACTIVATION_EVIDENCE_ENABLED":         "true",
+		"PRIVACY_ACTIVATION_POLICY_VERSION":           "policy-v1",
+		"PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST":     "sha256:" + strings.Repeat("a", 64),
+		"PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE":     registryPath,
+		"PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256":   registryDigest,
+		"PRIVACY_ACTIVATION_BROKER_DATABASE_URL":      "postgres://broker.invalid/mycfc",
+		"PRIVACY_ACTIVATION_SOURCE_SHA":               "0123456789abcdef0123456789abcdef01234567",
+		"PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT": outputPath,
+	}
+	var output bytes.Buffer
+	if err := runPrepare(t.Context(), func(name string) string { return env[name] }, &output); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != `{"contract":"material"}` || !strings.Contains(output.String(), ceremonyID.String()) ||
+		!strings.Contains(output.String(), expiresAt.Format(time.RFC3339)) {
+		t.Fatalf("material=%q output=%q", written, output.String())
+	}
+	if info, err := os.Stat(outputPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("material permissions: info=%v err=%v", info, err)
+	}
+	prepareActivationApprovalMaterial = func(context.Context, string, privacyrequests.ActivationReleaseBinding,
+		string, string, privacyrequests.ActivationSignerRegistry, time.Time,
+	) ([]byte, privacyrequests.ActivationApprovalMaterial, error) {
+		return nil, privacyrequests.ActivationApprovalMaterial{}, errors.New("broker material unavailable")
+	}
+	if err := runPrepare(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
+		t.Fatal("broker preparation failure accepted")
+	}
+}
+
+func TestActivateExchangeVerifiesReleaseAndDispatchesBoundApprovals(t *testing.T) {
+	registry := commandRegistryFixture(t)
+	registryRaw, err := json.Marshal(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryDigest := commandApprovalDigest(registryRaw)
+	directory := t.TempDir()
+	now := time.Now().UTC()
+	sourceSHA := "0123456789abcdef0123456789abcdef01234567"
+	imageDigest := "sha256:" + commandDigestByte(0x31)
+	materialRaw, material, err := privacyrequests.GenerateActivationApprovalMaterial(privacyrequests.ActivationApprovalMaterial{
+		SourceSHA: sourceSHA, PolicyVersion: "policy-v1", EvidenceIDs: []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()},
+		EvidenceSetSHA256: commandDigestByte(0x32), ActivationSHA256: commandDigestByte(0x33),
+		ExecutorVersion: privacyrequests.SupportedExecutorVersion, PlanSchemaVersion: privacyrequests.SupportedPlanSchemaVersion,
+		ImageDigest: imageDigest, SchemaMigrationDigest: db.EmbeddedMigrationDigest(), SignerRegistrySHA256: registryDigest,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE":             writeActivationFile(t, directory, "material.json", materialRaw),
+		"PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE":               writeActivationFile(t, directory, "registry.json", registryRaw),
+		"PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE":             writeActivationFile(t, directory, "executor.json", []byte("executor-approval")),
+		"PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE":                writeActivationFile(t, directory, "administrator.json", []byte("administrator-approval")),
+		"PRIVACY_ACTIVATION_EXECUTOR_PUBLIC_KEY_SPKI_FILE":      writeActivationFile(t, directory, "executor.der", []byte("executor-public")),
+		"PRIVACY_ACTIVATION_ADMINISTRATOR_PUBLIC_KEY_SPKI_FILE": writeActivationFile(t, directory, "administrator.der", []byte("administrator-public")),
+	}
+	previous := activateApprovalMaterial
+	t.Cleanup(func() { activateApprovalMaterial = previous })
+	dispatched := false
+	activateApprovalMaterial = func(_ context.Context, databaseURL string, gotMaterialRaw []byte,
+		gotMaterial privacyrequests.ActivationApprovalMaterial, gotRegistry privacyrequests.ActivationSignerRegistry,
+		executorRaw, administratorRaw, executorPublic, administratorPublic []byte, _ time.Time,
+	) error {
+		dispatched = true
+		if databaseURL != "postgres://broker.invalid/mycfc" || !bytes.Equal(gotMaterialRaw, materialRaw) ||
+			gotMaterial.CeremonyID != material.CeremonyID || gotRegistry.Signers.Administrator.ActorRef != registry.Signers.Administrator.ActorRef ||
+			string(executorRaw) != "executor-approval" || string(administratorRaw) != "administrator-approval" ||
+			string(executorPublic) != "executor-public" || string(administratorPublic) != "administrator-public" {
+			t.Fatal("activation exchange lost a verified binding")
+		}
+		return nil
+	}
+	env := map[string]string{
+		"PRIVACY_ACTIVATION_EVIDENCE_ENABLED":       "true",
+		"PRIVACY_ACTIVATION_POLICY_VERSION":         material.PolicyVersion,
+		"PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST":   material.ImageDigest,
+		"PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256": registryDigest,
+		"PRIVACY_ACTIVATION_CEREMONY_ID":            material.CeremonyID.String(),
+		"PRIVACY_ACTIVATION_SOURCE_SHA":             sourceSHA,
+		"PRIVACY_ACTIVATION_BROKER_DATABASE_URL":    "postgres://broker.invalid/mycfc",
+	}
+	for name, value := range files {
+		env[name] = value
+	}
+	var output bytes.Buffer
+	if err := runActivate(t.Context(), func(name string) string { return env[name] }, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !dispatched || output.String() != "privacy_activation_approved independent_signatures=2\n" {
+		t.Fatalf("dispatched=%t output=%q", dispatched, output.String())
+	}
+
+	env["PRIVACY_ACTIVATION_CEREMONY_ID"] = "not-a-uuid"
+	dispatched = false
+	if err := runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil || dispatched {
+		t.Fatal("invalid ceremony reached activation broker")
+	}
+	env["PRIVACY_ACTIVATION_CEREMONY_ID"] = material.CeremonyID.String()
+	for _, variable := range []string{
+		"PRIVACY_ACTIVATION_EXECUTOR_PUBLIC_KEY_SPKI_FILE",
+		"PRIVACY_ACTIVATION_ADMINISTRATOR_PUBLIC_KEY_SPKI_FILE",
+	} {
+		previousPath := env[variable]
+		env[variable] = filepath.Join(directory, "missing")
+		dispatched = false
+		if err := runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil || dispatched {
+			t.Fatalf("missing %s reached activation broker", variable)
+		}
+		env[variable] = previousPath
+	}
+}
+
+func TestExchangeModesFailClosedWhenDisabled(t *testing.T) {
+	getenv := func(string) string { return "" }
+	if err := runPrepare(t.Context(), getenv, io.Discard); err == nil {
+		t.Fatal("disabled prepare exchange accepted")
+	}
+	if err := runActivate(t.Context(), getenv, io.Discard); err == nil {
+		t.Fatal("disabled activate exchange accepted")
+	}
+}
+
+func TestMainDispatchesExchangeModes(t *testing.T) {
+	previousArgs := os.Args
+	previousExit := exitProcess
+	t.Setenv("PRIVACY_ACTIVATION_EVIDENCE_ENABLED", "")
+	t.Cleanup(func() {
+		os.Args = previousArgs
+		exitProcess = previousExit
+	})
+	for _, mode := range []string{"prepare-exchange", "activate-exchange"} {
+		t.Run(mode, func(t *testing.T) {
+			os.Args = []string{"privacy-activation", mode}
+			exitCode := 0
+			exitProcess = func(code int) { exitCode = code }
+			main()
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d", exitCode)
+			}
+		})
 	}
 }
 

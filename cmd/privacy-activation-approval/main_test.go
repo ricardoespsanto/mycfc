@@ -80,6 +80,16 @@ func TestSigningOnlyCommandRoundTrip(t *testing.T) {
 	}
 	executorApproval := fixture.makeApproval(t, common, privacyrequests.ActivationExecutorRole, "101", "501", fixture.executorPrivate, fixture.executorPublicPath)
 	administratorApproval := fixture.makeApproval(t, common, privacyrequests.ActivationAdministratorRole, "202", "502", fixture.administratorPrivate, fixture.administratorPublicPath)
+	var verificationOutput bytes.Buffer
+	verificationArguments := append([]string{"approval-verify"}, common...)
+	verificationArguments = append(verificationArguments, "--role", privacyrequests.ActivationExecutorRole,
+		"--approval", executorApproval, "--public-key-spki", fixture.executorPublicPath)
+	if err := run(verificationArguments, &verificationOutput); err != nil {
+		t.Fatal(err)
+	}
+	if verificationOutput.String() != "privacy_activation_approval_verified\n" {
+		t.Fatalf("unexpected verification output %q", verificationOutput.String())
+	}
 	arguments := append([]string{"bundle-verify"}, common...)
 	arguments = append(arguments, "--executor-approval", executorApproval, "--administrator-approval", administratorApproval,
 		"--executor-public-key-spki", fixture.executorPublicPath, "--administrator-public-key-spki", fixture.administratorPublicPath)
@@ -146,6 +156,180 @@ func TestExclusiveOutputRejectsExistingAndSymlink(t *testing.T) {
 	if err := writeExclusive(target, []byte("new")); err == nil {
 		t.Fatal("symlink output followed")
 	}
+}
+
+func TestCommandRejectsMissingAndUnknownModes(t *testing.T) {
+	for _, arguments := range [][]string{nil, {"unknown"}} {
+		if err := run(arguments, ioDiscard{}); err == nil {
+			t.Fatalf("arguments %q were accepted", arguments)
+		}
+	}
+}
+
+func TestProtectedReadAcceptsReadOnlyAndRejectsSizeBounds(t *testing.T) {
+	directory := t.TempDir()
+	readOnly := commandWrite(t, directory, "read-only", []byte("content"))
+	if err := os.Chmod(readOnly, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := readProtected(readOnly, 100)
+	if err != nil || string(payload) != "content" {
+		t.Fatalf("read-only input: payload=%q err=%v", payload, err)
+	}
+	for name, payload := range map[string][]byte{
+		"empty":     nil,
+		"oversized": bytes.Repeat([]byte{'x'}, 101),
+	} {
+		path := commandWrite(t, directory, name, payload)
+		if _, err := readProtected(path, 100); err == nil {
+			t.Fatalf("%s protected input accepted", name)
+		}
+	}
+	if _, err := readProtected(filepath.Join(directory, "missing"), 100); err == nil {
+		t.Fatal("missing protected input accepted")
+	}
+}
+
+func TestExclusiveOutputRejectsEmptyInputs(t *testing.T) {
+	if err := writeExclusive("", []byte("content")); err == nil {
+		t.Fatal("empty output path accepted")
+	}
+	if err := writeExclusive(filepath.Join(t.TempDir(), "output"), nil); err == nil {
+		t.Fatal("empty output accepted")
+	}
+}
+
+func TestCommandFailureBoundaries(t *testing.T) {
+	fixture := newCommandFixture(t)
+	previousTime := currentTime
+	currentTime = func() time.Time { return fixture.now.Add(time.Minute) }
+	t.Cleanup(func() { currentTime = previousTime })
+	common := fixture.commonArguments()
+	executorApproval := fixture.makeApproval(t, common, privacyrequests.ActivationExecutorRole, "101", "501",
+		fixture.executorPrivate, fixture.executorPublicPath)
+	administratorApproval := fixture.makeApproval(t, common, privacyrequests.ActivationAdministratorRole, "202", "502",
+		fixture.administratorPrivate, fixture.administratorPublicPath)
+	executorUnsigned := filepath.Join(fixture.directory, privacyrequests.ActivationExecutorRole+"-unsigned.json")
+	executorSignature := filepath.Join(fixture.directory, privacyrequests.ActivationExecutorRole+"-signature.txt")
+	missing := filepath.Join(fixture.directory, "missing")
+
+	expectError := func(name string, arguments []string) {
+		t.Helper()
+		if err := run(arguments, ioDiscard{}); err == nil {
+			t.Fatalf("%s failure was accepted", name)
+		}
+	}
+	badCommon := append([]string(nil), common...)
+	for index := range badCommon {
+		if badCommon[index] == "--expected-ceremony-id" {
+			badCommon[index+1] = "not-a-uuid"
+		}
+	}
+
+	expectError("material flags", []string{"material-verify", "--unknown"})
+	expectError("material binding", append([]string{"material-verify"}, badCommon...))
+
+	unsignedArguments := func(bound []string, role, output, digest string) []string {
+		arguments := append([]string{"approval-unsigned"}, bound...)
+		return append(arguments, "--role", role, "--github-actor-id", "101", "--github-run-id", "700",
+			"--github-run-attempt", "1", "--output", output, "--digest-output", digest)
+	}
+	expectError("unsigned material binding", unsignedArguments(badCommon, privacyrequests.ActivationExecutorRole,
+		filepath.Join(fixture.directory, "bad-unsigned.json"), filepath.Join(fixture.directory, "bad-digest.bin")))
+	expectError("unsigned role", unsignedArguments(common, "UNKNOWN",
+		filepath.Join(fixture.directory, "unknown-unsigned.json"), filepath.Join(fixture.directory, "unknown-digest.bin")))
+	expectError("unsigned existing output", unsignedArguments(common, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, filepath.Join(fixture.directory, "unused-digest.bin")))
+	cleanupOutput := filepath.Join(fixture.directory, "cleanup-unsigned.json")
+	expectError("unsigned existing digest", unsignedArguments(common, privacyrequests.ActivationExecutorRole,
+		cleanupOutput, filepath.Join(fixture.directory, privacyrequests.ActivationExecutorRole+"-digest.bin")))
+	if _, err := os.Stat(cleanupOutput); !os.IsNotExist(err) {
+		t.Fatalf("partial unsigned output was retained: %v", err)
+	}
+
+	assembleArguments := func(bound []string, role, unsigned, signature, publicKey, output string) []string {
+		arguments := append([]string{"approval-assemble"}, bound...)
+		return append(arguments, "--role", role, "--unsigned", unsigned, "--signature", signature,
+			"--public-key-spki", publicKey, "--output", output)
+	}
+	expectError("assemble flags", []string{"approval-assemble", "--unknown"})
+	expectError("assemble material binding", assembleArguments(badCommon, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, executorSignature, fixture.executorPublicPath, filepath.Join(fixture.directory, "bad-approval.json")))
+	expectError("assemble unsigned read", assembleArguments(common, privacyrequests.ActivationExecutorRole,
+		missing, executorSignature, fixture.executorPublicPath, filepath.Join(fixture.directory, "missing-unsigned-approval.json")))
+	expectError("assemble signature read", assembleArguments(common, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, missing, fixture.executorPublicPath, filepath.Join(fixture.directory, "missing-signature-approval.json")))
+	invalidSignature := commandWrite(t, fixture.directory, "invalid-signature.txt", []byte("not-base64"))
+	expectError("assemble signature", assembleArguments(common, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, invalidSignature, fixture.executorPublicPath, filepath.Join(fixture.directory, "invalid-signature-approval.json")))
+	expectError("assemble public key read", assembleArguments(common, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, executorSignature, missing, filepath.Join(fixture.directory, "missing-key-approval.json")))
+	expectError("assemble role binding", assembleArguments(common, privacyrequests.ActivationAdministratorRole,
+		executorUnsigned, executorSignature, fixture.executorPublicPath, filepath.Join(fixture.directory, "wrong-role-approval.json")))
+	expectError("assemble existing output", assembleArguments(common, privacyrequests.ActivationExecutorRole,
+		executorUnsigned, executorSignature, fixture.executorPublicPath, executorApproval))
+
+	verifyArguments := func(bound []string, role, approval, publicKey string) []string {
+		arguments := append([]string{"approval-verify"}, bound...)
+		return append(arguments, "--role", role, "--approval", approval, "--public-key-spki", publicKey)
+	}
+	expectError("verify flags", []string{"approval-verify", "--unknown"})
+	expectError("verify material binding", verifyArguments(badCommon, privacyrequests.ActivationExecutorRole,
+		executorApproval, fixture.executorPublicPath))
+	expectError("verify approval read", verifyArguments(common, privacyrequests.ActivationExecutorRole, missing, fixture.executorPublicPath))
+	expectError("verify public key read", verifyArguments(common, privacyrequests.ActivationExecutorRole, executorApproval, missing))
+	expectError("verify role binding", verifyArguments(common, privacyrequests.ActivationAdministratorRole,
+		executorApproval, fixture.executorPublicPath))
+
+	bundleArguments := func(bound []string, executor, administrator, executorPublic, administratorPublic string) []string {
+		arguments := append([]string{"bundle-verify"}, bound...)
+		return append(arguments, "--executor-approval", executor, "--administrator-approval", administrator,
+			"--executor-public-key-spki", executorPublic, "--administrator-public-key-spki", administratorPublic)
+	}
+	expectError("bundle flags", []string{"bundle-verify", "--unknown"})
+	expectError("bundle material binding", bundleArguments(badCommon, executorApproval, administratorApproval,
+		fixture.executorPublicPath, fixture.administratorPublicPath))
+	expectError("bundle executor approval read", bundleArguments(common, missing, administratorApproval,
+		fixture.executorPublicPath, fixture.administratorPublicPath))
+	expectError("bundle administrator approval read", bundleArguments(common, executorApproval, missing,
+		fixture.executorPublicPath, fixture.administratorPublicPath))
+	expectError("bundle executor public key read", bundleArguments(common, executorApproval, administratorApproval,
+		missing, fixture.administratorPublicPath))
+	expectError("bundle administrator public key read", bundleArguments(common, executorApproval, administratorApproval,
+		fixture.executorPublicPath, missing))
+	expectError("bundle key binding", bundleArguments(common, executorApproval, administratorApproval,
+		fixture.administratorPublicPath, fixture.executorPublicPath))
+}
+
+func TestCommonInputFailureBoundaries(t *testing.T) {
+	fixture := newCommandFixture(t)
+	valid := commonOptions{
+		materialPath: fixture.materialPath, registryPath: fixture.registryPath, registrySHA256: fixture.registryDigest,
+		expectedCeremonyID: fixture.material.CeremonyID.String(), expectedSourceSHA: fixture.material.SourceSHA,
+		expectedPolicyVersion: fixture.material.PolicyVersion, expectedImageDigest: fixture.material.ImageDigest,
+		expectedSchemaMigrationDigest: fixture.material.SchemaMigrationDigest,
+	}
+	assertRejected := func(name string, options commonOptions) {
+		t.Helper()
+		if _, err := options.load(fixture.now.Add(time.Minute)); err == nil {
+			t.Fatalf("%s input was accepted", name)
+		}
+	}
+	options := valid
+	options.expectedCeremonyID = "not-a-uuid"
+	assertRejected("ceremony", options)
+	options = valid
+	options.registryPath = filepath.Join(fixture.directory, "missing-registry")
+	assertRejected("registry read", options)
+	options = valid
+	options.registryPath = commandWrite(t, fixture.directory, "invalid-registry.json", []byte(`{"contract":"wrong"}`))
+	assertRejected("registry", options)
+	options = valid
+	options.materialPath = filepath.Join(fixture.directory, "missing-material")
+	assertRejected("material read", options)
+	options = valid
+	options.expectedSourceSHA = "ffffffffffffffffffffffffffffffffffffffff"
+	assertRejected("material binding", options)
 }
 
 func (f commandFixture) commonArguments() []string {

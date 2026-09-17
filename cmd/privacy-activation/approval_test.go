@@ -155,6 +155,15 @@ func TestSignerRegistryReadRejectsSymlinkAndLooseMode(t *testing.T) {
 	}
 }
 
+func TestExclusiveApprovalOutputRejectsEmptyInputs(t *testing.T) {
+	if err := writeExclusive("", []byte("material")); err == nil {
+		t.Fatal("empty output path accepted")
+	}
+	if err := writeExclusive(filepath.Join(t.TempDir(), "material.json"), nil); err == nil {
+		t.Fatal("empty approval material accepted")
+	}
+}
+
 func activationCommandFixture(t *testing.T) (privacyrequests.ActivationSignerRegistry, []byte, privacyrequests.ActivationApprovalMaterial,
 	*ecdsa.PrivateKey, []byte, *ecdsa.PrivateKey, []byte, time.Time) {
 	t.Helper()

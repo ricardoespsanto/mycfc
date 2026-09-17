@@ -63,6 +63,8 @@ func (s postgresActivationEvidenceStore) Close() { s.close() }
 var verifyRestoreActivationAttestation = privacyrequests.VerifyRestoreActivationAttestation
 var verifyActivationArtifact = privacyrequests.VerifyActivationArtifact
 var exitProcess = os.Exit
+var prepareActivationApprovalMaterial = prepareApprovalMaterial
+var activateApprovalMaterial = activateApprovedMaterial
 var openActivationEvidenceStore = func(ctx context.Context, databaseURL string) (activationEvidenceStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -209,7 +211,7 @@ func runPrepare(ctx context.Context, getenv func(string) string, output io.Write
 	if err != nil {
 		return err
 	}
-	payload, material, err := prepareApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), release,
+	payload, material, err := prepareActivationApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), release,
 		strings.TrimSpace(getenv("PRIVACY_ACTIVATION_SOURCE_SHA")), registryDigest, registry, time.Now().UTC())
 	if err != nil {
 		return err
@@ -271,7 +273,7 @@ func runActivate(ctx context.Context, getenv func(string) string, output io.Writ
 	if err != nil {
 		return err
 	}
-	if err = activateApprovedMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), materialRaw, material,
+	if err = activateApprovalMaterial(ctx, strings.TrimSpace(getenv("PRIVACY_ACTIVATION_BROKER_DATABASE_URL")), materialRaw, material,
 		registry, executorRaw, administratorRaw, executorPublic, administratorPublic, now); err != nil {
 		return err
 	}
