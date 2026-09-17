@@ -27,17 +27,17 @@ func TestPrivacyActivationFixedAccessSurface(t *testing.T) {
 	defer conn.Close(ctx)
 
 	var snapshotDefinition, lockDefinition, evidenceDefinition string
-	var v20, publicSnapshot, publicLock bool
+	var v21, publicSnapshot, publicLock bool
 	if err = conn.QueryRow(ctx, `SELECT
 		pg_get_functiondef('privacy_activation_snapshot()'::regprocedure),
 		pg_get_functiondef('privacy_activation_lock()'::regprocedure),
 		pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure),
-		EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v20_check'),
+		EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v21_check'),
 		EXISTS(SELECT 1 FROM pg_proc routine CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl,acldefault('f',routine.proowner))) acl
 		 WHERE routine.oid='privacy_activation_snapshot()'::regprocedure AND acl.grantee=0 AND acl.privilege_type='EXECUTE'),
 		EXISTS(SELECT 1 FROM pg_proc routine CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl,acldefault('f',routine.proowner))) acl
 		 WHERE routine.oid='privacy_activation_lock()'::regprocedure AND acl.grantee=0 AND acl.privilege_type='EXECUTE')`).
-		Scan(&snapshotDefinition, &lockDefinition, &evidenceDefinition, &v20, &publicSnapshot, &publicLock); err != nil {
+		Scan(&snapshotDefinition, &lockDefinition, &evidenceDefinition, &v21, &publicSnapshot, &publicLock); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(snapshotDefinition, "SECURITY DEFINER") ||
@@ -45,8 +45,8 @@ func TestPrivacyActivationFixedAccessSurface(t *testing.T) {
 		!strings.Contains(lockDefinition, "SECURITY DEFINER") ||
 		!strings.Contains(lockDefinition, "FOR UPDATE OF activation") ||
 		!strings.Contains(evidenceDefinition, baselineIncludesThrough) ||
-		!v20 || publicSnapshot || publicLock {
-		t.Fatalf("fixed activation surface snapshot=%q lock=%q v20=%t public_snapshot=%t public_lock=%t", snapshotDefinition, lockDefinition, v20, publicSnapshot, publicLock)
+		!v21 || publicSnapshot || publicLock {
+		t.Fatalf("fixed activation surface snapshot=%q lock=%q v21=%t public_snapshot=%t public_lock=%t", snapshotDefinition, lockDefinition, v21, publicSnapshot, publicLock)
 	}
 }
 

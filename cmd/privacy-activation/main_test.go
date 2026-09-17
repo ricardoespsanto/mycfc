@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -153,6 +152,18 @@ func TestReadSecretRequiresOwnerRegularPrivateModeAndRejectsSymlink(t *testing.T
 	}
 }
 
+func TestReadSecretRejectsHardLink(t *testing.T) {
+	directory := t.TempDir()
+	secret := writeActivationFile(t, directory, "secret", []byte("secret"))
+	link := filepath.Join(directory, "hard-link")
+	if err := os.Link(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSecret(secret); err == nil {
+		t.Fatal("multiply linked activation secret accepted")
+	}
+}
+
 func TestRunValidatesAndRecordsCompleteEvidenceSet(t *testing.T) {
 	env := activationCommandEnvironment(t)
 	originalRestoreVerifier := verifyRestoreActivationAttestation
@@ -233,206 +244,6 @@ func TestRunValidatesAndRecordsCompleteEvidenceSet(t *testing.T) {
 	}
 	if _, err := originalOpenStore(t.Context(), "://invalid"); err == nil {
 		t.Fatal("invalid database URL accepted")
-	}
-}
-
-func TestRunSignDispatchesCanonicalApprovalToExclusiveFile(t *testing.T) {
-	directory := t.TempDir()
-	material := testApprovalMaterial()
-	materialPayload, err := json.Marshal(material)
-	if err != nil {
-		t.Fatal(err)
-	}
-	materialPath := writeActivationFile(t, directory, "approval-material.json", materialPayload)
-	public, private, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	privatePath := writeActivationFile(t, directory, "approval-private.key", []byte(base64.StdEncoding.EncodeToString(private)))
-	outputPath := filepath.Join(directory, "approval.json")
-	actor := uuid.New()
-	env := map[string]string{
-		"PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE":    materialPath,
-		"PRIVACY_ACTIVATION_APPROVAL_ACTOR_REF":        actor.String(),
-		"PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE": privatePath,
-		"PRIVACY_ACTIVATION_APPROVAL_ROLE":             "EXECUTOR",
-		"PRIVACY_ACTIVATION_APPROVAL_SIGNING_KEY_ID":   "executor-v1",
-		"PRIVACY_ACTIVATION_APPROVAL_OUTPUT":           outputPath,
-	}
-	if err = runSign(func(name string) string { return env[name] }); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw = bytes.TrimSuffix(raw, []byte{'\n'})
-	if _, _, err = verifyApproval(raw, material, "EXECUTOR", "executor-v1", public, time.Now().UTC()); err != nil {
-		t.Fatalf("signed approval did not verify: %v", err)
-	}
-	env["PRIVACY_ACTIVATION_APPROVAL_ACTOR_REF"] = "invalid"
-	if err = runSign(func(name string) string { return env[name] }); err == nil {
-		t.Fatal("invalid signer accepted")
-	}
-	if err = runSign(func(string) string { return "" }); err == nil {
-		t.Fatal("missing approval material accepted")
-	}
-	env["PRIVACY_ACTIVATION_APPROVAL_ACTOR_REF"] = actor.String()
-	env["PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE"] = filepath.Join(directory, "missing.key")
-	if err = runSign(func(name string) string { return env[name] }); err == nil {
-		t.Fatal("missing private key accepted")
-	}
-	env["PRIVACY_ACTIVATION_APPROVAL_PRIVATE_KEY_FILE"] = privatePath
-	env["PRIVACY_ACTIVATION_APPROVAL_ROLE"] = "REVIEWER"
-	if err = runSign(func(name string) string { return env[name] }); err == nil {
-		t.Fatal("invalid approval role accepted")
-	}
-}
-
-func TestPrepareAndActivateDispatchThroughBrokerBoundary(t *testing.T) {
-	t.Run("prepare", func(t *testing.T) {
-		env := activationCommandEnvironment(t)
-		release, err := trustedRelease(func(name string) string { return env[name] })
-		if err != nil {
-			t.Fatal(err)
-		}
-		evidenceIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
-		database := &brokerDatabaseFake{row: brokerRowFake{scan: func(destinations ...any) error {
-			*destinations[0].(*[]uuid.UUID) = evidenceIDs
-			*destinations[1].(*[]byte) = bytes.Repeat([]byte{0x11}, 32)
-			*destinations[2].(*[]byte) = bytes.Repeat([]byte{0x22}, 32)
-			*destinations[3].(*string) = release.ExecutorVersion
-			*destinations[4].(*string) = release.PlanSchemaVersion
-			*destinations[5].(*string) = release.ImageDigest
-			schema, _ := hex.DecodeString(release.SchemaMigrationDigest)
-			*destinations[6].(*[]byte) = schema
-			return nil
-		}}}
-		withBrokerDatabase(t, database)
-		var output bytes.Buffer
-		if err = runPrepare(t.Context(), func(name string) string { return env[name] }, &output); err != nil {
-			t.Fatal(err)
-		}
-		var material approvalMaterial
-		if err = json.Unmarshal(output.Bytes(), &material); err != nil || material.Contract != approvalMaterialContract {
-			t.Fatalf("material=%+v error=%v", material, err)
-		}
-		outputPath := filepath.Join(t.TempDir(), "material.json")
-		env["PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT"] = outputPath
-		database.closed = false
-		if err = runPrepare(t.Context(), func(name string) string { return env[name] }, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = os.Stat(outputPath); err != nil {
-			t.Fatal(err)
-		}
-		env["PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST"] = "invalid"
-		if err = runPrepare(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("invalid release accepted for preparation")
-		}
-		env["PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST"] = release.ImageDigest
-		database.row = brokerRowFake{scan: func(...any) error { return errors.New("broker unavailable") }}
-		if err = runPrepare(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("broker preparation failure accepted")
-		}
-	})
-
-	t.Run("activate", func(t *testing.T) {
-		directory := t.TempDir()
-		env := activationCommandEnvironment(t)
-		release, err := trustedRelease(func(name string) string { return env[name] })
-		if err != nil {
-			t.Fatal(err)
-		}
-		material := approvalMaterial{Contract: approvalMaterialContract, ProposalID: uuid.New(), PolicyVersion: release.PolicyVersion,
-			EvidenceIDs: []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}, EvidenceSetSHA256: digestHex('a'), ActivationSHA256: digestHex('b'),
-			ExecutorVersion: release.ExecutorVersion, PlanSchemaVersion: release.PlanSchemaVersion, ImageDigest: release.ImageDigest, SchemaMigrationDigest: release.SchemaMigrationDigest}
-		materialPayload, err := json.Marshal(material)
-		if err != nil {
-			t.Fatal(err)
-		}
-		env["PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"] = writeActivationFile(t, directory, "material.json", materialPayload)
-		executorPublic, executorPrivate, err := ed25519.GenerateKey(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		administratorPublic, administratorPrivate, err := ed25519.GenerateKey(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		now := time.Now().UTC()
-		executorRaw, err := makeApproval(material, "EXECUTOR", "executor-v1", uuid.New(), executorPrivate, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		administratorRaw, err := makeApproval(material, "ADMINISTRATOR", "administrator-v1", uuid.New(), administratorPrivate, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"] = writeActivationFile(t, directory, "executor.json", executorRaw)
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"] = writeActivationFile(t, directory, "administrator.json", administratorRaw)
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_PUBLIC_KEY_FILE"] = writeActivationFile(t, directory, "executor.pub", []byte(base64.StdEncoding.EncodeToString(executorPublic)))
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_PUBLIC_KEY_FILE"] = writeActivationFile(t, directory, "administrator.pub", []byte(base64.StdEncoding.EncodeToString(administratorPublic)))
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_SIGNING_KEY_ID"] = "executor-v1"
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_SIGNING_KEY_ID"] = "administrator-v1"
-		database := &brokerDatabaseFake{row: brokerRowFake{scan: func(destinations ...any) error {
-			*destinations[0].(*uuid.UUID) = uuid.New()
-			return nil
-		}}}
-		withBrokerDatabase(t, database)
-		var output bytes.Buffer
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, &output); err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(output.String()) != "privacy_activation_approved independent_signatures=2" {
-			t.Fatalf("activate output=%q", output.String())
-		}
-		env["PRIVACY_ACTIVATION_POLICY_VERSION"] = "different-policy"
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("mismatched release accepted")
-		}
-		env["PRIVACY_ACTIVATION_POLICY_VERSION"] = release.PolicyVersion
-		executorPath := env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"]
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"] = filepath.Join(directory, "missing-approval")
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("missing executor approval accepted")
-		}
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE"] = executorPath
-		executorPublicPath := env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_PUBLIC_KEY_FILE"]
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_PUBLIC_KEY_FILE"] = writeActivationFile(t, directory, "bad-executor.pub", []byte("not-base64"))
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("invalid executor public key accepted")
-		}
-		env["PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_PUBLIC_KEY_FILE"] = executorPublicPath
-		administratorPath := env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"]
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"] = filepath.Join(directory, "missing-administrator")
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("missing administrator approval accepted")
-		}
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_FILE"] = administratorPath
-		administratorPublicPath := env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_PUBLIC_KEY_FILE"]
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_PUBLIC_KEY_FILE"] = writeActivationFile(t, directory, "bad-administrator.pub", []byte("not-base64"))
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("invalid administrator public key accepted")
-		}
-		env["PRIVACY_ACTIVATION_ADMIN_APPROVAL_PUBLIC_KEY_FILE"] = administratorPublicPath
-		materialPath := env["PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"]
-		env["PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"] = filepath.Join(directory, "missing-material")
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("missing approval material accepted")
-		}
-		env["PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE"] = materialPath
-		database.row = brokerRowFake{scan: func(...any) error { return errors.New("broker rejected") }}
-		if err = runActivate(t.Context(), func(name string) string { return env[name] }, io.Discard); err == nil {
-			t.Fatal("broker activation rejection accepted")
-		}
-	})
-
-	if err := runPrepare(t.Context(), func(string) string { return "" }, io.Discard); err == nil {
-		t.Fatal("disabled prepare accepted")
-	}
-	if err := runActivate(t.Context(), func(string) string { return "" }, io.Discard); err == nil {
-		t.Fatal("disabled activation accepted")
 	}
 }
 

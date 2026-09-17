@@ -54,6 +54,15 @@ func TestPrivacyActivationEmergencyFenceForwardMigrationAppliesToPreviousBoundar
 	if _, err = tx.Exec(ctx, v5); err != nil {
 		t.Fatal(err)
 	}
+	brokerMigration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activationPredecessor := migrationFunctionSegment(t, string(brokerMigration),
+		"CREATE FUNCTION privacy_activation_broker_activate(", "CREATE FUNCTION privacy_activation_disable")
+	if _, err = tx.Exec(ctx, activationPredecessor); err != nil {
+		t.Fatal(err)
+	}
 
 	var activateDefinition string
 	if err = tx.QueryRow(ctx, `SELECT pg_get_functiondef('privacy_activation_broker_activate(uuid,text,uuid[],bytea,bytea,uuid,uuid,text,text,bytea,bytea,bytea,bytea,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz)'::regprocedure)`).Scan(&activateDefinition); err != nil {
@@ -77,10 +86,6 @@ END$$`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `DROP FUNCTION privacy_disable.privacy_activation_disable(uuid,text); DROP SCHEMA privacy_disable`); err != nil {
-		t.Fatal(err)
-	}
-	brokerMigration, err := migrationFiles.ReadFile("migrations/202609100014_privacy_activation_broker.sql")
-	if err != nil {
 		t.Fatal(err)
 	}
 	disablePredecessor := migrationFunctionSegment(t, string(brokerMigration),

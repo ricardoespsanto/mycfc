@@ -24,17 +24,17 @@ func TestPrivacyExecutorRetentionSurfaceIsFenced(t *testing.T) {
 	defer conn.Close(ctx)
 
 	var checkpointDefinition, completionDefinition, retentionDefinition string
-	var sources, pending, v18, publicHelper, publicInner bool
+	var sources, pending, v21, publicHelper, publicInner bool
 	err = conn.QueryRow(ctx, `SELECT
 		pg_get_functiondef('privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)'::regprocedure),
 		pg_get_functiondef('privacy_completion_finalize(uuid,uuid,bytea,bytea)'::regprocedure),
 		pg_get_functiondef('privacy_retention_run(uuid,integer)'::regprocedure),
 		to_regclass('privacy_protected.execution_retention_sources') IS NOT NULL,
 		to_regclass('privacy_protected.execution_retention_pending') IS NOT NULL,
-		EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v18_check'),
+		EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v21_check'),
 		has_function_privilege('public','privacy_worker_execute_retention_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE'),
 		has_function_privilege('public','privacy_worker_execute_checkpoint_inner_017(uuid,uuid,uuid,bigint,uuid,text,text)','EXECUTE')`).Scan(
-		&checkpointDefinition, &completionDefinition, &retentionDefinition, &sources, &pending, &v18, &publicHelper, &publicInner)
+		&checkpointDefinition, &completionDefinition, &retentionDefinition, &sources, &pending, &v21, &publicHelper, &publicInner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +49,8 @@ func TestPrivacyExecutorRetentionSurfaceIsFenced(t *testing.T) {
 	}
 	if !strings.Contains(completionDefinition, "privacy_completion_resolve_retention") ||
 		!strings.Contains(retentionDefinition, "privacy_retention_run_inner_017") ||
-		!sources || !pending || !v18 || publicHelper || publicInner {
-		t.Fatalf("surface sources=%v pending=%v v18=%v public_helper=%v public_inner=%v", sources, pending, v18, publicHelper, publicInner)
+		!sources || !pending || !v21 || publicHelper || publicInner {
+		t.Fatalf("surface sources=%v pending=%v v21=%v public_helper=%v public_inner=%v", sources, pending, v21, publicHelper, publicInner)
 	}
 
 	var leapYear, calendarMonth string
@@ -69,6 +69,18 @@ func TestPrivacyExecutorRetentionSurfaceIsFenced(t *testing.T) {
 func rewindExecutorAndSyntheticAcceptanceBinding(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
 	_, err := tx.Exec(ctx, `DO $$DECLARE d text;BEGIN
+ IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v21_check') THEN
+  ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  DELETE FROM privacy_activation_authenticated_artifacts;
+  ALTER TABLE privacy_activation_authenticated_artifacts ENABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
+  SELECT pg_get_constraintdef(oid) INTO d FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v21_check';
+  IF strpos(d,'202609170005_privacy_activation_dual_signer')=0 THEN RAISE EXCEPTION 'dual signer rewind mismatch'; END IF;
+  d:=replace(d,', ''202609170005_privacy_activation_dual_signer''::text','');
+  ALTER TABLE privacy_activation_authenticated_artifacts DROP CONSTRAINT privacy_activation_authenticated_artifacts_v21_check;
+  EXECUTE 'ALTER TABLE privacy_activation_authenticated_artifacts ADD CONSTRAINT privacy_activation_authenticated_artifacts_v20_check '||d;
+  EXECUTE replace(pg_get_functiondef('privacy_activation_record_authenticated_evidence(uuid,text,bytea,text,timestamptz,timestamptz,jsonb)'::regprocedure),'202609170005_privacy_activation_dual_signer','202609170004_privacy_empty_provider_execution');
+  EXECUTE replace(pg_get_functiondef('privacy_activation_authenticated_set_digest(text,uuid[])'::regprocedure),'202609170005_privacy_activation_dual_signer','202609170004_privacy_empty_provider_execution');
+ END IF;
  IF EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='privacy_activation_authenticated_artifacts'::regclass AND conname='privacy_activation_authenticated_artifacts_v20_check') THEN
   ALTER TABLE privacy_activation_authenticated_artifacts DISABLE TRIGGER privacy_activation_authenticated_artifacts_immutable;
   DELETE FROM privacy_activation_authenticated_artifacts;

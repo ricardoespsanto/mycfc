@@ -1186,14 +1186,15 @@ func TestPrivacyActivationFixedAccessMigrationIsExactBaselineSegment(t *testing.
 	}
 }
 
-func TestPrivacyEmptyProviderExecutionMigrationIsFinalBaselineSegment(t *testing.T) {
+func TestPrivacyEmptyProviderExecutionMigrationIsExactBaselineSegment(t *testing.T) {
 	migration, err := migrationFiles.ReadFile("migrations/202609170004_privacy_empty_provider_execution.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	const marker = "-- Baseline through 202609170004_privacy_empty_provider_execution."
 	index := strings.LastIndex(baselineSchema, marker)
-	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170005_privacy_activation_dual_signer.")
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("privacy empty-provider execution migration differs from baseline")
 	}
 	for _, expected := range []string{
@@ -1206,6 +1207,32 @@ func TestPrivacyEmptyProviderExecutionMigrationIsFinalBaselineSegment(t *testing
 	} {
 		if !strings.Contains(string(migration), expected) {
 			t.Errorf("privacy empty-provider execution migration missing %q", expected)
+		}
+	}
+}
+
+func TestPrivacyActivationDualSignerMigrationIsFinalBaselineSegment(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202609170005_privacy_activation_dual_signer.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Baseline through 202609170005_privacy_activation_dual_signer."
+	index := strings.LastIndex(baselineSchema, marker)
+	if index < 0 || strings.TrimSpace(baselineSchema[index+len(marker):]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("privacy activation dual-signer migration differs from baseline")
+	}
+	for _, expected := range []string{
+		"CREATE TABLE privacy_protected.activation_ceremonies",
+		"privacy_activation_broker_register_ceremony",
+		"mycfc/privacy-activation-approval-material/v2",
+		"mycfc/privacy-activation-approval/v2",
+		"ECDSA_SHA_256",
+		"privacy_activation_authenticated_artifacts_v21_check",
+		"202609170005_privacy_activation_dual_signer",
+		"DROP FUNCTION public.privacy_activation_broker_activate(uuid,text,uuid[]",
+	} {
+		if !strings.Contains(string(migration), expected) {
+			t.Errorf("privacy activation dual-signer migration missing %q", expected)
 		}
 	}
 }
