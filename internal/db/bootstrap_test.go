@@ -403,6 +403,7 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		AppUsername: "mycfc_app", AppPassword: "app-password",
 		MigrationUsername: "mycfc_migrate", MigrationPassword: "migration-password",
 		PrivacyExecutorUsername: "mycfc_privacy_executor", PrivacyExecutorPassword: "executor-password",
+		PrivacyActivationBrokerUsername: "mycfc_privacy_activation_broker", PrivacyActivationBrokerPassword: "broker-password",
 	}
 	conn := &bootstrapRoleConnectionFake{}
 	if err := HardenPrivacyExecutionRoles(t.Context(), conn, "mycfc", credentials); err != nil {
@@ -445,6 +446,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 		`privacy_worker_complete_object_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 		`GRANT EXECUTE ON FUNCTION privacy_execution_capture_provider_connections(uuid,uuid,text)`,
 		`privacy_execution_complete_provider_capture(uuid,text) TO "mycfc_app"`,
+		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "mycfc_privacy_activation_broker"`,
+		`privacy_activation_broker_activate(uuid,bytea,jsonb,bytea,jsonb,bytea,bytea), privacy_activation_ready(text) TO "mycfc_privacy_activation_broker"`,
 		`GRANT EXECUTE ON FUNCTION privacy_worker_list_provider_targets(uuid,uuid,uuid,bigint,uuid)`,
 		`privacy_worker_complete_provider_checkpoint(uuid,uuid,uuid,bigint,uuid) TO "mycfc_privacy_executor"`,
 		`REVOKE EXECUTE ON FUNCTION privacy_tombstone_prepare_closure_v2(uuid,uuid), privacy_tombstone_confirm_closure_v2`,
@@ -492,6 +495,8 @@ func TestHardenPrivacyExecutionRolesSeparatesWebAndWorkerMutations(t *testing.T)
 	appOnly := &bootstrapRoleConnectionFake{}
 	credentials.PrivacyExecutorUsername = ""
 	credentials.PrivacyExecutorPassword = ""
+	credentials.PrivacyActivationBrokerUsername = ""
+	credentials.PrivacyActivationBrokerPassword = ""
 	if err := HardenPrivacyExecutionRoles(t.Context(), appOnly, "mycfc", credentials); err != nil {
 		t.Fatal(err)
 	}

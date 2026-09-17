@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -287,6 +288,79 @@ func TestActivationBundleRejectsRepeatedNonce(t *testing.T) {
 	if _, err := VerifyActivationApprovalBundle(fixture.materialRaw, fixture.material, fixture.registry, executorRaw,
 		administratorApproval, fixture.executorPublic, fixture.administratorPub, fixture.now.Add(3*time.Minute)); err == nil {
 		t.Fatal("same nonce accepted across roles")
+	}
+}
+
+func TestActivationApprovalBoundaryHelpersFailClosed(t *testing.T) {
+	fixture := newApprovalTestFixture(t)
+	if _, ok := fixture.registry.Signer("AUDITOR"); ok {
+		t.Fatal("unknown signer role accepted")
+	}
+	if parsed, err := ParseActivationApprovalMaterial(fixture.materialRaw, fixture.registryDigest, fixture.now.Add(time.Minute)); err != nil || parsed.CeremonyID != fixture.material.CeremonyID {
+		t.Fatalf("material parse=%+v error=%v", parsed, err)
+	}
+	invalidMaterial := fixture.material
+	invalidMaterial.EvidenceIDs = append([]uuid.UUID(nil), fixture.material.EvidenceIDs...)
+	invalidMaterial.EvidenceIDs[1] = invalidMaterial.EvidenceIDs[0]
+	if validActivationMaterial(invalidMaterial, fixture.now) {
+		t.Fatal("material with duplicate evidence accepted")
+	}
+	if _, _, _, err := NewActivationApprovalUnsigned(fixture.materialRaw, fixture.material, fixture.registry,
+		"AUDITOR", 101, 501, 1, fixture.now.Add(time.Minute)); err == nil {
+		t.Fatal("unknown approval role accepted")
+	}
+	if _, _, err := AssembleActivationApproval([]byte("{}"), []byte("signature"), fixture.executorPublic,
+		fixture.materialRaw, fixture.material, fixture.registry, ActivationExecutorRole, fixture.now.Add(time.Minute)); err == nil {
+		t.Fatal("invalid unsigned approval assembled")
+	}
+	executorRaw, _ := makeSignedApproval(t, fixture, ActivationExecutorRole, 101, 501, 1,
+		fixture.executorPrivate, fixture.executorPublic, fixture.now.Add(time.Minute))
+	var envelope ActivationApprovalEnvelope
+	if err := json.Unmarshal(executorRaw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope.SignatureDERBase64 = "%%%"
+	invalidSignatureRaw, _ := json.Marshal(envelope)
+	if _, _, err := VerifyActivationApproval(invalidSignatureRaw, fixture.materialRaw, fixture.material, fixture.registry,
+		ActivationExecutorRole, fixture.executorPublic, fixture.now.Add(2*time.Minute)); err == nil {
+		t.Fatal("invalid base64 signature accepted")
+	}
+	if _, err := VerifyActivationApprovalBundle(fixture.materialRaw, fixture.material, fixture.registry,
+		[]byte("{}"), []byte("{}"), fixture.executorPublic, fixture.administratorPub, fixture.now.Add(time.Minute)); err == nil {
+		t.Fatal("bundle with invalid executor approval accepted")
+	}
+
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384DER, err := x509.MarshalPKIXPublicKey(&p384.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyActivationECDSA(p384DER, digestBytes(p384DER), []byte("message"), []byte{0x30, 0}); err == nil {
+		t.Fatal("non-P256 public key accepted")
+	}
+	if raw, material, err := GenerateActivationApprovalMaterial(ActivationApprovalMaterial{}, fixture.now); err == nil || raw != nil || material.CeremonyID != uuid.Nil {
+		t.Fatalf("invalid generated material raw=%q material=%+v error=%v", raw, material, err)
+	}
+	if _, err = ParseActivationPublicKeySPKIBase64("%%% "); err == nil {
+		t.Fatal("invalid public key encoding accepted")
+	}
+	if _, err = DecodeActivationSignatureBase64(""); err == nil {
+		t.Fatal("empty signature accepted")
+	}
+	if err = decodeCanonicalActivationJSON(bytes.Repeat([]byte("x"), MaximumActivationApprovalBytes+1), &ActivationApprovalMaterial{}); err == nil {
+		t.Fatal("oversized approval JSON accepted")
+	}
+	if distinctUUIDs([]uuid.UUID{uuid.Nil}) || distinctUUIDs([]uuid.UUID{fixture.material.EvidenceIDs[0], fixture.material.EvidenceIDs[0]}) {
+		t.Fatal("non-distinct UUID list accepted")
+	}
+	if equalActivationUUIDs([]uuid.UUID{uuid.New()}, nil) || equalActivationUUIDs([]uuid.UUID{uuid.New()}, []uuid.UUID{uuid.New()}) {
+		t.Fatal("different UUID lists treated as equal")
+	}
+	if got := fixture.material.String(); !strings.Contains(got, fixture.material.CeremonyID.String()) || !strings.Contains(got, fixture.material.ProposalID.String()) {
+		t.Fatalf("material string=%q", got)
 	}
 }
 

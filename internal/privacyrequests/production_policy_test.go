@@ -85,3 +85,21 @@ func TestProductionPolicyCompilesClosureAndRejectsUnverifiedRetention(t *testing
 		t.Fatal("unverified legal hold accepted")
 	}
 }
+
+func TestProductionPolicyFailsClosedWhenEmbeddedArtifactIsInvalid(t *testing.T) {
+	original := bytes.Clone(productionPolicyJSON)
+	t.Cleanup(func() { productionPolicyJSON = original })
+
+	productionPolicyJSON = []byte(`{"version":`)
+	if _, err := ProductionPolicy(); err == nil {
+		t.Fatal("malformed embedded policy accepted")
+	}
+	if raw, digest, err := ProductionPolicyArtifact(); err == nil || raw != nil || digest != "" {
+		t.Fatalf("invalid policy artifact raw=%q digest=%q error=%v", raw, digest, err)
+	}
+
+	productionPolicyJSON = append(bytes.Clone(original), []byte("{}")...)
+	if _, err := ProductionPolicy(); err == nil {
+		t.Fatal("trailing embedded policy document accepted")
+	}
+}

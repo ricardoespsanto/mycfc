@@ -40,8 +40,11 @@ func providerRegistration(adapter ProviderErasureAdapter) ProviderExecutionRegis
 
 func TestProviderRegistryIsClosedAndFailsWithoutFactualEvidence(t *testing.T) {
 	empty, err := NewProviderExecutionRegistry()
-	if err != nil || empty.Ready() {
-		t.Fatalf("empty registry ready=%v err=%v", empty.Ready(), err)
+	if err != nil || empty.Ready() || !empty.Empty() || (*ProviderExecutionRegistry)(nil).Empty() {
+		t.Fatalf("empty registry ready=%v empty=%v err=%v", empty.Ready(), empty.Empty(), err)
+	}
+	if _, err = (ProviderExecutionWorker{}).CompleteCheckpoint(t.Context(), ExecutionLease{}); !errors.Is(err, ErrProviderRegistryUnavailable) {
+		t.Fatalf("nil registry checkpoint error=%v", err)
 	}
 	invalid := providerRegistration(&fakeProviderAdapter{})
 	invalid.RegistryEvidenceDigest = nil

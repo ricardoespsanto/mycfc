@@ -138,6 +138,73 @@ type acceptanceRun struct {
 	evidence   AcceptanceEvidence
 }
 
+// acceptanceRuntimeOperations keeps orchestration tests deterministic while
+// production still executes the concrete database and executor boundaries.
+// Tests replace the whole value and restore it before another test can run.
+type acceptanceRuntimeOperations struct {
+	bound               func(*acceptanceRun, context.Context) error
+	wait                func(context.Context, time.Duration) error
+	aged                func(*acceptanceRun, context.Context) (bool, error)
+	claim               func(*acceptanceRun, context.Context) (ExecutionLease, error)
+	heartbeat           func(*acceptanceRun, context.Context, ExecutionLease) (dbgen.PrivacyErasureJobLease, error)
+	failJob             func(*acceptanceRun, context.Context, ExecutionLease, ExecutionFailure) (dbgen.PrivacyErasureExecution, error)
+	retryStatus         func(*acceptanceRun, context.Context, ExecutionLease) (string, error)
+	executionStatus     func(*acceptanceRun, context.Context) (string, error)
+	objectCheckpoint    func(*acceptanceRun, context.Context, ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error)
+	providerCheckpoint  func(*acceptanceRun, context.Context, ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error)
+	tombstoneCheckpoint func(*acceptanceRun, context.Context, ExecutionLease) error
+	ordinaryCheckpoint  func(*acceptanceRun, context.Context, ExecutionLease, dbgen.PrivacyErasureJobCheckpoint) (dbgen.PrivacyErasureJobCheckpoint, error)
+	completeJob         func(*acceptanceRun, context.Context, ExecutionLease) (dbgen.PrivacyErasureExecution, error)
+	exportClosure       func(*acceptanceRun, context.Context) error
+	completeExecution   func(*acceptanceRun, context.Context) (CompletionResult, error)
+}
+
+var acceptanceRuntime = acceptanceRuntimeOperations{
+	bound: func(r *acceptanceRun, ctx context.Context) error { return r.bound(ctx) },
+	wait:  acceptanceWait,
+	aged: func(r *acceptanceRun, ctx context.Context) (bool, error) {
+		var aged bool
+		err := r.options.Worker.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs WHERE execution_id=$1 AND status='PENDING' AND updated_at<=clock_timestamp()-interval '15 minutes')`, r.execution).Scan(&aged)
+		return aged, err
+	},
+	claim: func(r *acceptanceRun, ctx context.Context) (ExecutionLease, error) { return r.worker.Claim(ctx) },
+	heartbeat: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureJobLease, error) {
+		return r.worker.Heartbeat(ctx, lease)
+	},
+	failJob: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease, failure ExecutionFailure) (dbgen.PrivacyErasureExecution, error) {
+		return r.worker.FailJob(ctx, lease, failure)
+	},
+	retryStatus: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) (string, error) {
+		var status string
+		err := r.options.Worker.QueryRow(ctx, `SELECT status FROM privacy_erasure_category_jobs WHERE id=$1 AND execution_id=$2`, lease.Job.ID, r.execution).Scan(&status)
+		return status, err
+	},
+	executionStatus: func(r *acceptanceRun, ctx context.Context) (string, error) {
+		var status string
+		err := r.options.Worker.QueryRow(ctx, `SELECT status FROM privacy_erasure_executions WHERE id=$1`, r.execution).Scan(&status)
+		return status, err
+	},
+	objectCheckpoint: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
+		return r.objects.CompleteCheckpoint(ctx, lease)
+	},
+	providerCheckpoint: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureJobCheckpoint, error) {
+		return r.providers.CompleteCheckpoint(ctx, lease)
+	},
+	tombstoneCheckpoint: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) error {
+		return r.tombstones.Export(ctx, lease)
+	},
+	ordinaryCheckpoint: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease, checkpoint dbgen.PrivacyErasureJobCheckpoint) (dbgen.PrivacyErasureJobCheckpoint, error) {
+		return r.worker.CompleteCheckpoint(ctx, lease, checkpoint.OperationCode, checkpoint.ActionVersion)
+	},
+	completeJob: func(r *acceptanceRun, ctx context.Context, lease ExecutionLease) (dbgen.PrivacyErasureExecution, error) {
+		return r.worker.CompleteJob(ctx, lease)
+	},
+	exportClosure: func(r *acceptanceRun, ctx context.Context) error { return r.tombstones.ExportClosure(ctx, r.execution) },
+	completeExecution: func(r *acceptanceRun, ctx context.Context) (CompletionResult, error) {
+		return r.completion.Complete(ctx, r.execution)
+	},
+}
+
 // RunSyntheticAcceptance exercises the actual service and production executors.
 // The only external mutation is the authenticated ledger write for the generated
 // fixture. Any unexpected object target fails closed without calling S3.
@@ -258,7 +325,7 @@ func RunSyntheticAcceptance(ctx context.Context, o AcceptanceOptions) (result Ac
 	r.objects = ObjectExecutionWorker{Pool: o.Worker, Objects: acceptanceNoObjects{}, WorkerRef: f.worker, PrivateKey: private.Bytes(), TranscriptKeyID: "acceptance-object", TranscriptKey: secret}
 	r.providers = ProviderExecutionWorker{Pool: o.Worker, Registry: registry, WorkerRef: f.worker, PrivateKey: private.Bytes(), TranscriptKeyID: "acceptance-provider", TranscriptKey: secret, CredentialDigestKeys: map[string][]byte{"acceptance-credential": credentialSecret}}
 	r.tombstones = TombstoneExportWorker{Store: o.Worker, Ledger: o.Ledger, Protector: o.Protector, WorkerRef: f.worker}
-	if err = r.bound(ctx); err != nil {
+	if err = acceptanceRuntime.bound(&r, ctx); err != nil {
 		return result, err
 	}
 	policy, err := r.service.Available(ctx)
@@ -273,7 +340,7 @@ func RunSyntheticAcceptance(ctx context.Context, o AcceptanceOptions) (result Ac
 		return result, fmt.Errorf("acceptance submit: %w", err)
 	}
 	for _, action := range []string{"claim", "verify", "approve"} {
-		if err = r.bound(ctx); err != nil {
+		if err = acceptanceRuntime.bound(&r, ctx); err != nil {
 			return result, err
 		}
 		input := ReviewInput{ActorID: f.reviewer, Reference: request.PublicRef, Version: request.Version, Action: action}
@@ -295,7 +362,7 @@ func RunSyntheticAcceptance(ctx context.Context, o AcceptanceOptions) (result Ac
 			return result, fmt.Errorf("acceptance %s: %w", action, err)
 		}
 	}
-	if err = r.bound(ctx); err != nil {
+	if err = acceptanceRuntime.bound(&r, ctx); err != nil {
 		return result, err
 	}
 	execution, err := r.service.StartExecution(ctx, StartInput{ActorID: f.executor, Reference: request.PublicRef, Version: request.Version, Confirmed: true})
@@ -314,7 +381,7 @@ func RunSyntheticAcceptance(ctx context.Context, o AcceptanceOptions) (result Ac
 	if err = r.complete(ctx); err != nil {
 		return result, err
 	}
-	if err = r.bound(ctx); err != nil {
+	if err = acceptanceRuntime.bound(&r, ctx); err != nil {
 		return result, err
 	}
 	var marker, manifest []byte
@@ -365,25 +432,24 @@ func (r *acceptanceRun) canary(ctx context.Context) error {
 	if mode == "run" {
 		return nil
 	}
-	if err := r.bound(ctx); err != nil {
+	if err := acceptanceRuntime.bound(r, ctx); err != nil {
 		return err
 	}
 	if mode == "canary-aged" {
 		// Observe actual database time. No UPDATE of scheduling timestamps, global
 		// queue operation or artificial clock is available to this runner.
 		for {
-			var aged bool
-			err := r.options.Worker.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM privacy_erasure_category_jobs WHERE execution_id=$1 AND status='PENDING' AND updated_at<=clock_timestamp()-interval '15 minutes')`, r.execution).Scan(&aged)
+			aged, err := acceptanceRuntime.aged(r, ctx)
 			if err != nil {
 				return ErrAcceptance
 			}
 			if aged {
 				break
 			}
-			if err = r.bound(ctx); err != nil {
+			if err = acceptanceRuntime.bound(r, ctx); err != nil {
 				return err
 			}
-			if err = acceptanceWait(ctx, 5*time.Second); err != nil {
+			if err = acceptanceRuntime.wait(ctx, 5*time.Second); err != nil {
 				return err
 			}
 		}
@@ -391,21 +457,21 @@ func (r *acceptanceRun) canary(ctx context.Context) error {
 	}
 	if mode == "canary-heartbeat" || mode == "canary-recovery" {
 		r.worker.LeaseDuration = time.Second
-		lease, err := r.worker.Claim(ctx)
+		lease, err := acceptanceRuntime.claim(r, ctx)
 		if err != nil {
 			return err
 		}
-		if err = acceptanceWait(ctx, 1100*time.Millisecond); err != nil {
+		if err = acceptanceRuntime.wait(ctx, 1100*time.Millisecond); err != nil {
 			return err
 		}
-		if _, err = r.worker.Heartbeat(ctx, lease); !errors.Is(err, ErrLeaseLost) {
+		if _, err = acceptanceRuntime.heartbeat(r, ctx, lease); !errors.Is(err, ErrLeaseLost) {
 			return ErrAcceptance
 		}
 		if err = r.event(ctx, "heartbeat_missing"); err != nil {
 			return err
 		}
 		r.worker.LeaseDuration = time.Minute
-		recovered, err := r.worker.Claim(ctx)
+		recovered, err := acceptanceRuntime.claim(r, ctx)
 		if err != nil || recovered.Job.ID != lease.Job.ID || recovered.Job.LeaseEpoch <= lease.Job.LeaseEpoch {
 			return ErrAcceptance
 		}
@@ -416,7 +482,7 @@ func (r *acceptanceRun) canary(ctx context.Context) error {
 			return nil
 		}
 	}
-	lease, err := r.worker.Claim(ctx)
+	lease, err := acceptanceRuntime.claim(r, ctx)
 	if err != nil {
 		return err
 	}
@@ -424,7 +490,7 @@ func (r *acceptanceRun) canary(ctx context.Context) error {
 	if mode == "canary-failure" {
 		failure.Classification = FailureTerminal
 	}
-	execution, err := r.worker.FailJob(ctx, lease, failure)
+	execution, err := acceptanceRuntime.failJob(r, ctx, lease, failure)
 	if err != nil {
 		return err
 	}
@@ -434,8 +500,8 @@ func (r *acceptanceRun) canary(ctx context.Context) error {
 		}
 		return r.event(ctx, "failure")
 	}
-	var status string
-	if err = r.options.Worker.QueryRow(ctx, `SELECT status FROM privacy_erasure_category_jobs WHERE id=$1 AND execution_id=$2`, lease.Job.ID, r.execution).Scan(&status); err != nil || status != "RETRY_WAIT" {
+	status, statusErr := acceptanceRuntime.retryStatus(r, ctx, lease)
+	if statusErr != nil || status != "RETRY_WAIT" {
 		return ErrAcceptance
 	}
 	return r.event(ctx, "retry")
@@ -448,46 +514,46 @@ func (r *acceptanceRun) perform(ctx context.Context, lease ExecutionLease) error
 		if checkpoint.Status == "SUCCEEDED" {
 			continue
 		}
-		if err := r.bound(ctx); err != nil {
+		if err := acceptanceRuntime.bound(r, ctx); err != nil {
 			return err
 		}
 		// Refresh immediately before each bounded operation; a lost lease stops the
 		// fixture, and ordinary workers are unable to acquire it.
-		if _, err := r.worker.Heartbeat(ctx, lease); err != nil {
+		if _, err := acceptanceRuntime.heartbeat(r, ctx, lease); err != nil {
 			return err
 		}
 		operationCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 		var err error
 		switch checkpoint.OperationCode {
 		case "OBJECT_VERSION_DELETE":
-			_, err = r.objects.CompleteCheckpoint(operationCtx, lease)
+			_, err = acceptanceRuntime.objectCheckpoint(r, operationCtx, lease)
 		case "PROVIDER_RECIPIENT_NOTIFY":
-			_, err = r.providers.CompleteCheckpoint(operationCtx, lease)
+			_, err = acceptanceRuntime.providerCheckpoint(r, operationCtx, lease)
 		case "BACKUP_TOMBSTONE_REPLAY":
-			err = r.tombstones.Export(operationCtx, lease)
+			err = acceptanceRuntime.tombstoneCheckpoint(r, operationCtx, lease)
 		default:
-			_, err = r.worker.CompleteCheckpoint(operationCtx, lease, checkpoint.OperationCode, checkpoint.ActionVersion)
+			_, err = acceptanceRuntime.ordinaryCheckpoint(r, operationCtx, lease, checkpoint)
 		}
 		cancel()
 		if err != nil {
 			return fmt.Errorf("acceptance checkpoint %s: %w", checkpoint.OperationCode, err)
 		}
 	}
-	if err := r.bound(ctx); err != nil {
+	if err := acceptanceRuntime.bound(r, ctx); err != nil {
 		return err
 	}
-	_, err := r.worker.CompleteJob(ctx, lease)
+	_, err := acceptanceRuntime.completeJob(r, ctx, lease)
 	return err
 }
 func (r *acceptanceRun) complete(ctx context.Context) error {
 	for {
-		if err := r.bound(ctx); err != nil {
+		if err := acceptanceRuntime.bound(r, ctx); err != nil {
 			return err
 		}
-		lease, err := r.worker.Claim(ctx)
+		lease, err := acceptanceRuntime.claim(r, ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var status string
-			if err = r.options.Worker.QueryRow(ctx, `SELECT status FROM privacy_erasure_executions WHERE id=$1`, r.execution).Scan(&status); err != nil {
+			status, statusErr := acceptanceRuntime.executionStatus(r, ctx)
+			if statusErr != nil {
 				return ErrAcceptance
 			}
 			if status == "SUCCEEDED" {
@@ -496,7 +562,7 @@ func (r *acceptanceRun) complete(ctx context.Context) error {
 			if status == "TERMINAL_FAILED" {
 				return ErrAcceptance
 			}
-			if err = acceptanceWait(ctx, time.Second); err != nil {
+			if err = acceptanceRuntime.wait(ctx, time.Second); err != nil {
 				return err
 			}
 			continue
@@ -508,16 +574,16 @@ func (r *acceptanceRun) complete(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := r.bound(ctx); err != nil {
+	if err := acceptanceRuntime.bound(r, ctx); err != nil {
 		return err
 	}
-	if err := r.tombstones.ExportClosure(ctx, r.execution); err != nil {
+	if err := acceptanceRuntime.exportClosure(r, ctx); err != nil {
 		return err
 	}
-	if err := r.bound(ctx); err != nil {
+	if err := acceptanceRuntime.bound(r, ctx); err != nil {
 		return err
 	}
-	_, err := r.completion.Complete(ctx, r.execution)
+	_, err := acceptanceRuntime.completeExecution(r, ctx)
 	return err
 }
 

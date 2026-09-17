@@ -48,10 +48,13 @@ type Application struct {
 }
 
 var (
-	loadApplicationConfig = config.Load
-	openApplicationPool   = pgxpool.NewWithConfig
-	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
-	loadApplicationAWS    = awsconfig.LoadDefaultConfig
+	loadApplicationConfig          = config.Load
+	openApplicationPool            = pgxpool.NewWithConfig
+	pingApplicationPool            = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
+	loadApplicationAWS             = awsconfig.LoadDefaultConfig
+	newApplicationProviderRegistry = func() (*privacyrequests.ProviderExecutionRegistry, error) {
+		return privacyrequests.NewProviderExecutionRegistry()
+	}
 )
 
 func New(ctx context.Context) (*Application, error) {
@@ -276,7 +279,7 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	providerRegistry, err := privacyrequests.NewProviderExecutionRegistry()
+	providerRegistry, err := newApplicationProviderRegistry()
 	if err != nil {
 		return nil, errors.New("configure privacy provider registry")
 	}

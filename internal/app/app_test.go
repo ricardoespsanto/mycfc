@@ -20,6 +20,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
+	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -90,9 +91,10 @@ func TestNewHTTPServerAppliesSecurityAndTrustedProxyMiddleware(t *testing.T) {
 }
 
 func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *testing.T) {
-	originalLoad, originalOpen, originalPing, originalAWS := loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS
+	originalLoad, originalOpen, originalPing, originalAWS, originalRegistry := loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS, newApplicationProviderRegistry
 	t.Cleanup(func() {
 		loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS = originalLoad, originalOpen, originalPing, originalAWS
+		newApplicationProviderRegistry = originalRegistry
 	})
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -122,6 +124,14 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 	application, err := New(t.Context())
 	if err != nil || application.Server == nil || application.EmailWorker == nil || application.Server.Addr != ":8080" || application.Sessions.Cookie.Name != "mycfc_session" {
 		t.Fatalf("application=%#v error=%v", application, err)
+	}
+	application.Close()
+
+	newApplicationProviderRegistry = func() (*privacyrequests.ProviderExecutionRegistry, error) {
+		return nil, errors.New("invalid provider registry")
+	}
+	if _, err = New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy provider registry") {
+		t.Fatalf("provider registry error=%v", err)
 	}
 }
 

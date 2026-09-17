@@ -144,6 +144,68 @@ func TestSyntheticAcceptanceRealRolesAndHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validOptions := func() AcceptanceOptions {
+		return AcceptanceOptions{Mode: "run", ExpectedDatabase: database, AppRole: "acceptance_app",
+			ImageDigest: "sha256:" + strings.Repeat("7", 64), SchemaDigest: hex.EncodeToString([]byte(strings.Repeat("\x07", 32))),
+			Operator: operator, AppConfig: appConfig, Worker: worker, Ledger: &capturingTombstoneLedger{}, Protector: protector}
+	}
+	assertRejected := func(t *testing.T, options AcceptanceOptions) {
+		t.Helper()
+		if result, runErr := RunSyntheticAcceptance(ctx, options); runErr == nil || !reflect.DeepEqual(result, AcceptanceEvidence{}) {
+			t.Fatalf("unsafe acceptance result=%+v error=%v", result, runErr)
+		}
+	}
+	t.Run("rejects operator database mismatch", func(t *testing.T) {
+		options := validOptions()
+		options.ExpectedDatabase = "other_database"
+		assertRejected(t, options)
+	})
+	t.Run("rejects worker role mismatch", func(t *testing.T) {
+		options := validOptions()
+		options.Worker = appCheck
+		assertRejected(t, options)
+	})
+	t.Run("rejects app connection mismatch", func(t *testing.T) {
+		options := validOptions()
+		missingRole := appConfig.Copy()
+		missingRole.ConnConfig.User = "acceptance_missing_role"
+		options.AppConfig = missingRole
+		options.AppRole = "acceptance_missing_role"
+		assertRejected(t, options)
+	})
+	t.Run("rejects elevated app connection", func(t *testing.T) {
+		options := validOptions()
+		options.AppConfig = adminPoolConfig
+		options.AppRole = adminPoolConfig.ConnConfig.User
+		assertRejected(t, options)
+	})
+	t.Run("rejects app activation mutation", func(t *testing.T) {
+		options := validOptions()
+		migrationPoolConfig := adminPoolConfig.Copy()
+		migrationPoolConfig.ConnConfig.User = credentials.MigrationUsername
+		migrationPoolConfig.ConnConfig.Password = password
+		options.AppConfig = migrationPoolConfig
+		options.AppRole = credentials.MigrationUsername
+		assertRejected(t, options)
+	})
+	t.Run("rejects worker people mutation", func(t *testing.T) {
+		if _, grantErr := databaseAdmin.Exec(ctx, `GRANT UPDATE ON TABLE users TO mycfc_privacy_executor`); grantErr != nil {
+			t.Fatal(grantErr)
+		}
+		t.Cleanup(func() {
+			_, _ = databaseAdmin.Exec(context.Background(), `REVOKE UPDATE ON TABLE users FROM mycfc_privacy_executor`)
+		})
+		assertRejected(t, validOptions())
+	})
+	t.Run("rejects denied fixture creation", func(t *testing.T) {
+		if _, revokeErr := databaseAdmin.Exec(ctx, `REVOKE EXECUTE ON FUNCTION privacy_protected.acceptance_create(text,text,text) FROM mycfc_privacy_acceptance`); revokeErr != nil {
+			t.Fatal(revokeErr)
+		}
+		t.Cleanup(func() {
+			_, _ = databaseAdmin.Exec(context.Background(), `GRANT EXECUTE ON FUNCTION privacy_protected.acceptance_create(text,text,text) TO mycfc_privacy_acceptance`)
+		})
+		assertRejected(t, validOptions())
+	})
 	modes := []string{"run", "canary-heartbeat", "canary-failure", "canary-retry", "canary-recovery", "canary-aged"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
