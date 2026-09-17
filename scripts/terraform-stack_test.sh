@@ -140,6 +140,7 @@ expected_enabled = {
         'operations_observer_enabled': 'true',
         'operations_observer_github_oidc_provider_arn':
             '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
+        'privacy_operation_receipts_enabled': 'true',
         'privacy_activation_exchange_enabled': 'true',
         'privacy_activation_github_oidc_provider_arn':
             '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
