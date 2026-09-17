@@ -10,6 +10,8 @@ The host reads evidence only from fixed root-owned mode-`0600` paths. It never a
 
 The host independently requires the active `GIT_SHA` and immutable `MYCFC_IMAGE`, a root-owned mode-`0600` environment and request, the production release lock, a one-operation lock, exact JSON keys, the compiled allowlist, and a new request digest. The ECR agent verifies the request image's label and GitHub provenance before extraction. Rejected requests require a new protected dispatch.
 
+Each poll scans the newest bounded set of 128 operation tags in ECR push order and executes at most the first eligible request. A provenance-verified canonical request that has expired or targets an inactive commit or image is atomically recorded as skipped before scanning continues. Unattested, noncanonical, or identity-mismatched images emit privacy-safe candidate rejection events and cannot block a later eligible request; they are not recorded as trusted processed requests. AWS, registry, Docker, filesystem, and receipt-transport failures remain terminal for that poll so a host fault cannot be mistaken for an invalid candidate.
+
 ## Independent host gates
 
 All gates default to `false`:

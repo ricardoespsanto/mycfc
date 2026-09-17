@@ -37,6 +37,36 @@ receipt_fail() {
 	fail "$reason"
 }
 
+operation_allowlisted() {
+	case "$1" in
+		preflight | status | infrastructure-observe | policy-import | activation-disable-provision | \
+		receipt-key-provision | receipt-key-rotate-prepare | receipt-key-rotate-activate | receipt-key-revoke | \
+		retention-provision | retention-rotate | retention-revoke | retention-run | retention-enable | retention-disable | \
+		acceptance-provision | acceptance-rotate | acceptance-revoke | acceptance-run | \
+		acceptance-canary-retry | acceptance-canary-failure | acceptance-canary-aged | acceptance-canary-heartbeat | acceptance-canary-recovery | \
+		legacy-inventory | legacy-purge | legacy-verify | legacy-credential-remove | \
+		backup-run | backup-posture | backup-cleanup-inventory | restore-run | restore-verify | \
+		activation-record | activation-courier-provision | activation-courier-rotate | activation-courier-revoke | activation-ceremony-open | activation-disable | \
+		flags-enable | flags-disable | worker-enable | worker-disable) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+candidate_rejected() {
+	rejected_candidates=$((rejected_candidates + 1))
+	printf '%s\n' "event=privacy_operation_agent_candidate_rejected digest=$digest tag=$tag reason=$1"
+}
+
+record_processed() {
+	processed_digest=$1
+	processed_result=$2
+	processed_marker="$state_dir/processed/${processed_digest#sha256:}"
+	temporary_marker=$(mktemp "$state_dir/processed/.processed.XXXXXX")
+	printf '%s\t%s\n' "$processed_digest" "$processed_result" >"$temporary_marker"
+	chmod 0600 "$temporary_marker"
+	mv "$temporary_marker" "$processed_marker"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
 	fail root_required
 fi
@@ -65,10 +95,14 @@ fi
 if ! printf '%s' "$ECR_REPOSITORY_URL" | grep -Eq '^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/mycfc-production$'; then
 	fail repository_invalid
 fi
+if ! printf '%s' "${GIT_SHA:-}" | grep -Eq '^[0-9a-f]{40}$' ||
+	! printf '%s' "${MYCFC_IMAGE:-}" | grep -Eq "^${ECR_REPOSITORY_URL}@sha256:[0-9a-f]{64}$"; then
+	fail active_release_identity_invalid
+fi
 registry=${ECR_REPOSITORY_URL%%/*}
 repository_name=${ECR_REPOSITORY_URL#*/}
 
-for command in aws base64 docker gh jq openssl sha256sum; do
+for command in aws base64 cmp docker gh jq openssl sha256sum; do
 	command -v "$command" >/dev/null 2>&1 || fail runtime_dependency_missing
 done
 
@@ -94,72 +128,151 @@ if ! jq -e '.imageDetails | type == "array"' "$work_dir/images.json" >/dev/null;
 	fail image_inventory_invalid
 fi
 
-jq -r '
+if ! jq -r '
 	[.imageDetails[]
 	 | select(.imageDigest | test("^sha256:[0-9a-f]{64}$"))
 	 | . as $image
 	 | (.imageTags // [])[]
 	 | select(test("^privacy-op-[1-9][0-9]{0,19}-[1-9][0-9]{0,4}$"))
 	 | {digest:$image.imageDigest,tag:.,pushed:$image.imagePushedAt}]
-	| sort_by(.pushed,.tag)[]
+	| sort_by(.pushed,.tag)
+	| if length > 128 then .[-128:] else . end
+	| .[]
 	| [.digest,.tag] | @tsv
-' "$work_dir/images.json" >"$work_dir/candidates.tsv"
+' "$work_dir/images.json" >"$work_dir/candidates.tsv"; then
+	fail image_inventory_invalid
+fi
 
 candidate_digest=
-candidate_tag=
+rejected_candidates=0
+if ! aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null 2>&1; then
+	fail registry_login_failed
+fi
 while IFS="$(printf '\t')" read -r digest tag; do
 	[ -n "$digest" ] || continue
 	marker="$state_dir/processed/${digest#sha256:}"
-	if [ ! -e "$marker" ]; then
-		candidate_digest=$digest
-		candidate_tag=$tag
-		break
+	[ ! -e "$marker" ] || continue
+	image="$ECR_REPOSITORY_URL@$digest"
+	if ! docker pull "$image" >/dev/null 2>&1; then
+		fail request_pull_failed
 	fi
+	if ! revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null) ||
+		! contract=$(docker image inspect --format '{{index .Config.Labels "org.mycfc.privacy-operation-contract"}}' "$image" 2>/dev/null); then
+		fail request_image_inspect_failed
+	fi
+	if ! printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$' ||
+		[ "$contract" != mycfc/privacy-production-operation-request/v2 ]; then
+		candidate_rejected request_labels_invalid
+		continue
+	fi
+	if ! gh attestation verify "oci://$image" \
+		--repo ricardoespsanto/mycfc \
+		--signer-workflow ricardoespsanto/mycfc/.github/workflows/privacy-production-operations.yml \
+		--source-digest "$revision" \
+		--deny-self-hosted-runners >/dev/null 2>&1; then
+		candidate_rejected request_attestation_invalid
+		continue
+	fi
+
+	request_candidate="$work_dir/request-${digest#sha256:}.json"
+	if ! request_container=$(docker create "$image"); then
+		fail request_container_create_failed
+	fi
+	if ! docker cp "$request_container:/privacy-operation.json" "$request_candidate" >/dev/null 2>&1; then
+		if ! docker inspect "$request_container" >/dev/null 2>&1; then
+			fail request_container_invalid
+		fi
+		docker rm "$request_container" >/dev/null
+		request_container=
+		candidate_rejected request_payload_missing
+		continue
+	fi
+	docker rm "$request_container" >/dev/null
+	request_container=
+	chown root:root "$request_candidate"
+	chmod 0600 "$request_candidate"
+
+	canonical_request="$work_dir/canonical-${digest#sha256:}.json"
+	if ! jq -cS '.' "$request_candidate" >"$canonical_request" 2>/dev/null ||
+		! cmp -s "$request_candidate" "$canonical_request" ||
+		! jq -e '
+			type == "object" and
+			(keys | sort) == ["contract","evidence_sha256","expected_image","expires_at","issued_at","operation","request_id","source_sha","workflow_run_attempt","workflow_run_id"] and
+			.contract == "mycfc/privacy-production-operation-request/v2" and
+			(.request_id | type == "string" and test("^[1-9][0-9]{0,19}-[1-9][0-9]{0,4}$")) and
+			(.operation | type == "string") and
+			(.source_sha | type == "string" and test("^[0-9a-f]{40}$")) and
+			(.expected_image | type == "string") and
+			(.evidence_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+			(.issued_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+			(.expires_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+			(.workflow_run_id | type == "number" and . > 0 and floor == .) and
+			(.workflow_run_attempt | type == "number" and . > 0 and floor == .) and
+			.request_id == ((.workflow_run_id | tostring) + "-" + (.workflow_run_attempt | tostring))
+		' "$request_candidate" >/dev/null 2>&1; then
+		candidate_rejected request_contract_invalid
+		continue
+	fi
+
+	request_id=$(jq -r .request_id "$request_candidate")
+	source_sha=$(jq -r .source_sha "$request_candidate")
+	operation=$(jq -r .operation "$request_candidate")
+	target_image=$(jq -r .expected_image "$request_candidate")
+	issued_at=$(jq -r .issued_at "$request_candidate")
+	expires_at=$(jq -r .expires_at "$request_candidate")
+	if [ "$source_sha" != "$revision" ] || [ "$tag" != "privacy-op-$request_id" ]; then
+		candidate_rejected request_identity_mismatch
+		continue
+	fi
+	if ! operation_allowlisted "$operation" ||
+		! printf '%s' "$target_image" | grep -Eq "^${ECR_REPOSITORY_URL}@sha256:[0-9a-f]{64}$"; then
+		candidate_rejected request_contract_invalid
+		continue
+	fi
+	issued_epoch=$(date -u -d "$issued_at" +%s 2>/dev/null || true)
+	expires_epoch=$(date -u -d "$expires_at" +%s 2>/dev/null || true)
+	now_epoch=$(date -u +%s)
+	case "$issued_epoch:$expires_epoch" in
+		*[!0-9:]*)
+			candidate_rejected request_time_invalid
+			continue
+			;;
+	esac
+	if [ "$expires_epoch" -le "$now_epoch" ]; then
+		printf '%s\n' "event=privacy_operation_agent_candidate_skipped digest=$digest tag=$tag request_id=$request_id reason=request_expired"
+		record_processed "$digest" "skipped:$request_id:request_expired"
+		continue
+	fi
+	if [ "$issued_epoch" -gt "$((now_epoch + 30))" ] || [ "$expires_epoch" -le "$issued_epoch" ] ||
+		[ "$((expires_epoch - issued_epoch))" -gt 900 ]; then
+		candidate_rejected request_time_invalid
+		continue
+	fi
+	if [ "$source_sha" != "$GIT_SHA" ]; then
+		printf '%s\n' "event=privacy_operation_agent_candidate_skipped digest=$digest tag=$tag request_id=$request_id reason=source_sha_not_active"
+		record_processed "$digest" "skipped:$request_id:source_sha_not_active"
+		continue
+	fi
+	if [ "$target_image" != "$MYCFC_IMAGE" ]; then
+		printf '%s\n' "event=privacy_operation_agent_candidate_skipped digest=$digest tag=$tag request_id=$request_id reason=image_not_active"
+		record_processed "$digest" "skipped:$request_id:image_not_active"
+		continue
+	fi
+
+	candidate_digest=$digest
+	mv "$request_candidate" "$work_dir/request.json"
+	break
 done <"$work_dir/candidates.tsv"
 
 if [ -z "$candidate_digest" ]; then
+	if [ "$rejected_candidates" -ne 0 ]; then
+		fail no_eligible_candidate
+	fi
 	printf '%s\n' 'event=privacy_operation_agent_idle'
 	exit 0
 fi
 
 image="$ECR_REPOSITORY_URL@$candidate_digest"
-if ! aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null 2>&1; then
-	fail registry_login_failed
-fi
-if ! docker pull "$image" >/dev/null 2>&1; then
-	fail request_pull_failed
-fi
-revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true)
-contract=$(docker image inspect --format '{{index .Config.Labels "org.mycfc.privacy-operation-contract"}}' "$image" 2>/dev/null || true)
-if ! printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$' ||
-	[ "$contract" != mycfc/privacy-production-operation-request/v2 ]; then
-	fail request_labels_invalid
-fi
-if ! gh attestation verify "oci://$image" \
-	--repo ricardoespsanto/mycfc \
-	--signer-workflow ricardoespsanto/mycfc/.github/workflows/privacy-production-operations.yml \
-	--source-digest "$revision" \
-	--deny-self-hosted-runners >/dev/null 2>&1; then
-	fail request_attestation_invalid
-fi
-
-request_container=$(docker create "$image")
-docker cp "$request_container:/privacy-operation.json" "$work_dir/request.json" >/dev/null
-docker rm "$request_container" >/dev/null
-request_container=
-chown root:root "$work_dir/request.json"
-chmod 0600 "$work_dir/request.json"
-
-request_id=$(jq -r '.request_id // empty' "$work_dir/request.json" 2>/dev/null || true)
-source_sha=$(jq -r '.source_sha // empty' "$work_dir/request.json" 2>/dev/null || true)
-operation=$(jq -r '.operation // empty' "$work_dir/request.json" 2>/dev/null || true)
-target_image=$(jq -r '.expected_image // empty' "$work_dir/request.json" 2>/dev/null || true)
-if [ "$source_sha" != "$revision" ] || [ "$candidate_tag" != "privacy-op-$request_id" ]; then
-	fail request_identity_mismatch
-fi
-case "$request_id" in
-	*[!0-9-]* | '' | *-*-*) fail request_identity_invalid ;;
-esac
 if [ ! -f "$receipt_signing_key_file" ] || [ -L "$receipt_signing_key_file" ] ||
 	[ "$(stat -c '%u:%g:%a' "$receipt_signing_key_file" 2>/dev/null || true)" != '0:0:600' ]; then
 	[ "$operation" = receipt-key-provision ] || fail receipt_signing_key_invalid
@@ -229,11 +342,7 @@ if [ "$operation" = receipt-key-rotate-activate ]; then
 	fi
 fi
 
-marker="$state_dir/processed/${candidate_digest#sha256:}"
-temporary_marker=$(mktemp "$state_dir/processed/.processed.XXXXXX")
-printf '%s\t%s\n' "$candidate_digest" "$request_id" >"$temporary_marker"
-chmod 0600 "$temporary_marker"
-mv "$temporary_marker" "$marker"
+record_processed "$candidate_digest" "$request_id"
 
 if [ "$operation_status" -ne 0 ]; then
 	exit "$operation_status"
