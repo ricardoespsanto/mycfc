@@ -471,6 +471,12 @@ var activationArtifactContracts = map[string]string{
 	"SCHEMA":         "mycfc/schema-migration-inventory/v1",
 }
 
+// ActivationSchemaBaselineThrough is the newest migration that schema
+// activation evidence must prove. Keep the producer and verifier on this
+// single contract so a newer embedded migration cannot silently produce stale
+// evidence.
+const ActivationSchemaBaselineThrough = "202609170005_privacy_activation_dual_signer"
+
 type signedActivationArtifact struct {
 	Contract          string `json:"contract"`
 	Result            string `json:"result"`
@@ -571,7 +577,7 @@ func VerifyActivationArtifact(payload []byte, trustedKeys map[string]ed25519.Pub
 	case "SCHEMA":
 		var artifact schemaActivationArtifact
 		if !decodeExactJSON(payload, &artifact) || !validSHA256Hex(artifact.SchemaMigrationDigest) ||
-			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != "202609170004_privacy_empty_provider_execution" {
+			artifact.SchemaMigrationDigest != release.SchemaMigrationDigest || artifact.BaselineIncludesThrough != ActivationSchemaBaselineThrough {
 			return VerifiedActivationEvidence{}, ErrActivationUnavailable
 		}
 		header = artifact.signedActivationArtifact

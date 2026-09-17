@@ -277,21 +277,12 @@ func observeSchema(versionsPath string) (schemaObservation, error) {
 	if len(want) < 2 || strings.Join(versions, "\n") != strings.Join(want, "\n") || digest(payload) != db.EmbeddedMigrationDigest() {
 		return schemaObservation{}, errors.New("schema version inventory rejected")
 	}
-	const baselineThrough = "202609170004_privacy_empty_provider_execution"
-	if !containsExact(versions, "reset-baseline-v1") || !containsExact(versions, baselineThrough) {
+	const baselineThrough = privacyrequests.ActivationSchemaBaselineThrough
+	if versions[len(versions)-2] != baselineThrough || versions[len(versions)-1] != "reset-baseline-v1" {
 		return schemaObservation{}, errors.New("schema version inventory mismatch")
 	}
 	return schemaObservation{Contract: "mycfc/schema-migration-observation/v1", SchemaMigrationDigest: digest(payload),
 		BaselineThrough: baselineThrough, MigrationCount: len(want) - 1}, nil
-}
-
-func containsExact(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func signArtifact(common commonOptions, observation, artifact any, output io.Writer) error {
