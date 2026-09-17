@@ -72,3 +72,13 @@ func TestRunRejectsDisabledConfigurationBeforeDatabaseAccess(t *testing.T) {
 		t.Fatal("disabled retention run accepted")
 	}
 }
+
+func TestRunCommandDispatchesMaintenanceAndRejectsExtraArguments(t *testing.T) {
+	getenv := func(string) string { return "" }
+	if err := runCommand(t.Context(), nil, getenv, io.Discard); err == nil || err.Error() != "retention maintenance is disabled" {
+		t.Fatalf("maintenance dispatch error = %v", err)
+	}
+	if err := runCommand(t.Context(), []string{"provision", "extra"}, getenv, io.Discard); err == nil || err.Error() != "retention command rejected" {
+		t.Fatalf("extra argument error = %v", err)
+	}
+}

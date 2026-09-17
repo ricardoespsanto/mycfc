@@ -539,6 +539,23 @@ func TestProviderCheckpointUsesProviderExecutionWorker(t *testing.T) {
 	}
 }
 
+func TestNewProviderRuntimeBuildsClosedRegistry(t *testing.T) {
+	workerRef := uuid.New()
+	cfg := workerConfig{
+		providerPrivate:        []byte("private"),
+		providerEvidenceKeyID:  "provider-evidence-v1",
+		providerEvidence:       []byte("evidence"),
+		providerCredentialKeys: map[string][]byte{"provider-v1": []byte("digest")},
+	}
+	runtimeValue := newProviderRuntime(nil, workerRef, cfg)
+	worker, ok := runtimeValue.(privacyrequests.ProviderExecutionWorker)
+	if !ok || worker.WorkerRef != workerRef || worker.Registry == nil || !worker.Registry.Empty() ||
+		worker.TranscriptKeyID != cfg.providerEvidenceKeyID || !bytes.Equal(worker.PrivateKey, cfg.providerPrivate) ||
+		!bytes.Equal(worker.TranscriptKey, cfg.providerEvidence) || !bytes.Equal(worker.CredentialDigestKeys["provider-v1"], []byte("digest")) {
+		t.Fatalf("provider runtime = %#v", runtimeValue)
+	}
+}
+
 func TestStepEventsExposeOnlyFixedPolicyOperationCodes(t *testing.T) {
 	if got := stepEvent("OBJECT_VERSION_DELETE", "started"); got != "privacy_worker_step_object_version_delete_started" {
 		t.Fatalf("stepEvent=%q", got)

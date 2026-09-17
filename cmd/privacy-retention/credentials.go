@@ -23,6 +23,10 @@ var retentionDatabaseName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 type credentialInputs struct{ adminURL, password, database string }
 
 func readRootCredential(path string) (string, error) {
+	return readCredential(path, 0, 0)
+}
+
+func readCredential(path string, ownerUID, ownerGID uint32) (string, error) {
 	if !strings.HasPrefix(path, "/") {
 		return "", errors.New("credential file rejected")
 	}
@@ -37,7 +41,7 @@ func readRootCredential(path string) (string, error) {
 		return "", errors.New("credential file rejected")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != 0 || stat.Gid != 0 {
+	if !ok || stat.Uid != ownerUID || stat.Gid != ownerGID {
 		return "", errors.New("credential file rejected")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 8193))
@@ -113,13 +117,26 @@ func loadCredentialInputs(mode string, getenv func(string) string, read func(str
 }
 
 func runCredentialOperation(ctx context.Context, mode string, getenv func(string) string, output io.Writer) error {
-	inputs, err := loadCredentialInputs(mode, getenv, readRootCredential)
+	return runCredentialOperationWith(ctx, mode, getenv, output, readRootCredential, connectCredentialDatabase)
+}
+
+type credentialConnection interface {
+	credentialDatabase
+	Close(context.Context) error
+}
+
+func connectCredentialDatabase(ctx context.Context, databaseURL string) (credentialConnection, error) {
+	return pgx.Connect(ctx, databaseURL)
+}
+
+func runCredentialOperationWith(ctx context.Context, mode string, getenv func(string) string, output io.Writer, read func(string) (string, error), connect func(context.Context, string) (credentialConnection, error)) error {
+	inputs, err := loadCredentialInputs(mode, getenv, read)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	conn, err := pgx.Connect(ctx, inputs.adminURL)
+	conn, err := connect(ctx, inputs.adminURL)
 	if err != nil {
 		return errors.New("retention credential connection failed")
 	}

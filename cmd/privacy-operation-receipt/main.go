@@ -45,7 +45,11 @@ func run(args []string, output io.Writer) error {
 }
 
 func runSign(args []string, output io.Writer) error {
-	if os.Geteuid() != 0 {
+	return runSignAs(args, output, os.Geteuid(), 0, 0)
+}
+
+func runSignAs(args []string, output io.Writer, effectiveUID int, ownerUID, ownerGID uint32) error {
+	if effectiveUID != 0 {
 		return errors.New("receipt signing requires root")
 	}
 	set := flag.NewFlagSet("sign", flag.ContinueOnError)
@@ -57,13 +61,14 @@ func runSign(args []string, output io.Writer) error {
 		return errors.New("receipt signing arguments rejected")
 	}
 	input, err := readProtected(*inputPath, privacyreceipt.MaximumReceiptBytes, filePolicy{
-		owners: map[uint32]bool{0: true}, exactModes: map[os.FileMode]bool{0o400: true, 0o600: true},
+		owners: map[uint32]bool{ownerUID: true}, exactModes: map[os.FileMode]bool{0o400: true, 0o600: true},
 	})
 	if err != nil {
 		return err
 	}
 	privateBytes, err := readProtected(*privateKeyPath, maximumKeyBytes, filePolicy{
-		owners: map[uint32]bool{0: true}, exactModes: map[os.FileMode]bool{0o400: true, 0o600: true}, rootGroup: true,
+		owners: map[uint32]bool{ownerUID: true}, exactModes: map[os.FileMode]bool{0o400: true, 0o600: true},
+		requiredGroup: true, groupID: ownerGID,
 	})
 	if err != nil {
 		return err
@@ -78,7 +83,7 @@ func runSign(args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = writeExclusiveRoot(*outputPath, signed); err != nil {
+	if err = writeExclusive(*outputPath, signed, ownerUID, ownerGID); err != nil {
 		return err
 	}
 	_, err = io.WriteString(output, "receipt_signed\n")
@@ -229,7 +234,8 @@ type filePolicy struct {
 	owners         map[uint32]bool
 	exactModes     map[os.FileMode]bool
 	publicReadOnly bool
-	rootGroup      bool
+	requiredGroup  bool
+	groupID        uint32
 }
 
 func readProtected(path string, maximum int64, policy filePolicy) ([]byte, error) {
@@ -269,7 +275,7 @@ func acceptableFile(info os.FileInfo, policy filePolicy) bool {
 		return false
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !policy.owners[stat.Uid] || stat.Nlink != 1 || (policy.rootGroup && stat.Gid != 0) {
+	if !ok || !policy.owners[stat.Uid] || stat.Nlink != 1 || (policy.requiredGroup && stat.Gid != policy.groupID) {
 		return false
 	}
 	permissions := info.Mode().Perm()
@@ -309,7 +315,7 @@ func secureAbsolutePath(path string) (string, error) {
 	return abs, nil
 }
 
-func writeExclusiveRoot(path string, payload []byte) error {
+func writeExclusive(path string, payload []byte, ownerUID, ownerGID uint32) error {
 	abs, err := secureAbsolutePath(path)
 	if err != nil || len(payload) == 0 {
 		return errors.New("receipt output rejected")
@@ -317,7 +323,7 @@ func writeExclusiveRoot(path string, payload []byte) error {
 	parent := filepath.Dir(abs)
 	info, err := os.Lstat(parent)
 	stat, ok := infoSys(info)
-	if err != nil || !ok || !info.IsDir() || info.Mode().Perm() != 0o700 || stat.Uid != 0 || stat.Gid != 0 {
+	if err != nil || !ok || !info.IsDir() || info.Mode().Perm() != 0o700 || stat.Uid != ownerUID || stat.Gid != ownerGID {
 		return errors.New("receipt output directory rejected")
 	}
 	file, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
@@ -336,7 +342,7 @@ func writeExclusiveRoot(path string, payload []byte) error {
 	}
 	created, err := os.Lstat(abs)
 	createdStat, createdOK := infoSys(created)
-	if err != nil || !createdOK || !created.Mode().IsRegular() || created.Mode().Perm() != 0o600 || createdStat.Uid != 0 || createdStat.Gid != 0 || createdStat.Nlink != 1 {
+	if err != nil || !createdOK || !created.Mode().IsRegular() || created.Mode().Perm() != 0o600 || createdStat.Uid != ownerUID || createdStat.Gid != ownerGID || createdStat.Nlink != 1 {
 		return errors.New("receipt output rejected")
 	}
 	directory, err := os.Open(parent)

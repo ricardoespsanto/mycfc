@@ -225,21 +225,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	if err = events.open(ctx); err != nil {
 		return errors.New("open privacy worker log stream")
 	}
-	providerRegistry, err := privacyrequests.NewProviderExecutionRegistry()
-	if err != nil {
-		return errors.New("configure privacy provider registry")
-	}
 	r := runtime{
-		pool:      pool,
+		pool: pool, providers: newProviderRuntime(pool, workerRef, cfg),
 		execution: privacyrequests.ExecutionWorker{Pool: pool, WorkerRef: workerRef, LeaseDuration: cfg.leaseDuration, MaxAttempts: cfg.maxAttempts},
 		uploadCleanup: privacyrequests.UploadCleanupWorker{Store: privacyrequests.PostgresUploadCleanupStore{DB: pool}, Objects: versionedObjects,
 			WorkerRef: workerRef, PrivateKey: cfg.uploadPrivate, TranscriptKeyID: cfg.uploadEvidenceKeyID, TranscriptKey: cfg.uploadEvidence,
 			LeaseDuration: cfg.leaseDuration, MaxAttempts: cfg.maxAttempts},
 		objects: privacyrequests.ObjectExecutionWorker{Pool: pool, Objects: versionedObjects, WorkerRef: workerRef, PrivateKey: cfg.objectPrivate,
 			TranscriptKeyID: cfg.objectEvidenceKeyID, TranscriptKey: cfg.objectEvidence},
-		providers: privacyrequests.ProviderExecutionWorker{Pool: pool, Registry: providerRegistry, WorkerRef: workerRef,
-			PrivateKey: cfg.providerPrivate, TranscriptKeyID: cfg.providerEvidenceKeyID, TranscriptKey: cfg.providerEvidence,
-			CredentialDigestKeys: cfg.providerCredentialKeys},
 		tombstones:     privacyrequests.TombstoneExportWorker{Store: pool, Ledger: ledger, Protector: protector, WorkerRef: workerRef},
 		completion:     completion,
 		events:         events,
@@ -247,6 +240,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 		statusInterval: cfg.statusInterval,
 	}
 	return r.serve(ctx, cfg.heartbeatInterval, cfg.completionBatch)
+}
+
+func newProviderRuntime(pool *pgxpool.Pool, workerRef uuid.UUID, cfg workerConfig) providerExecutionRuntime {
+	// The production registry is intentionally empty until factual provider
+	// registrations and their reviewed adapters ship together. The no-argument
+	// constructor cannot reject this closed state.
+	providerRegistry, _ := privacyrequests.NewProviderExecutionRegistry()
+	return privacyrequests.ProviderExecutionWorker{Pool: pool, Registry: providerRegistry, WorkerRef: workerRef,
+		PrivateKey: cfg.providerPrivate, TranscriptKeyID: cfg.providerEvidenceKeyID, TranscriptKey: cfg.providerEvidence,
+		CredentialDigestKeys: cfg.providerCredentialKeys}
 }
 
 func loadConfig(getenv func(string) string) (workerConfig, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,23 @@ func TestVerifyCommandChecksExactBindingsAndPrintsOnlyStatus(t *testing.T) {
 		if strings.Contains(output.String(), sensitive) {
 			t.Fatalf("verification output exposed receipt material %q", sensitive)
 		}
+	}
+	reason := "retention_run_failed"
+	receipt.Reason = &reason
+	receipt.Result = "REJECTED"
+	unsigned, err = privacyreceipt.EncodeUnsigned(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err = privacyreceipt.SignCanonical(unsigned, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMode(t, receiptPath, signed, 0o600)
+	args = replaceFlag(verifyArgs(receiptPath, publicPath, digest, receipt), "--expected-reason", reason)
+	output.Reset()
+	if err = run(args, &output); err != nil || output.String() != "receipt_verified\n" {
+		t.Fatalf("verify receipt reason: err=%v output=%q", err, output.String())
 	}
 
 	bad := append([]string(nil), args...)
@@ -185,9 +203,6 @@ func TestSignCommandIsRootOnly(t *testing.T) {
 }
 
 func TestSignCommandRootRoundTrip(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("root-only host signing round trip")
-	}
 	nowValue := time.Now().UTC().Truncate(time.Second)
 	previousNow := now
 	now = func() time.Time { return nowValue }
@@ -216,7 +231,8 @@ func TestSignCommandRootRoundTrip(t *testing.T) {
 	writeMode(t, inputPath, unsigned, 0o600)
 	writeMode(t, privatePath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), 0o600)
 	var output bytes.Buffer
-	if err = run([]string{"sign", "--input", inputPath, "--output", outputPath, "--private-key", privatePath}, &output); err != nil {
+	args := []string{"--input", inputPath, "--output", outputPath, "--private-key", privatePath}
+	if err = runSignAs(args, &output, 0, uint32(os.Geteuid()), uint32(os.Getegid())); err != nil {
 		t.Fatalf("root sign command: %v", err)
 	}
 	if output.String() != "receipt_signed\n" {
@@ -227,7 +243,7 @@ func TestSignCommandRootRoundTrip(t *testing.T) {
 		t.Fatalf("signed output mode rejected: info=%v err=%v", info, err)
 	}
 	output.Reset()
-	if err = run([]string{"sign", "--input", inputPath, "--output", outputPath, "--private-key", privatePath}, &output); err == nil {
+	if err = runSignAs(args, &output, 0, uint32(os.Geteuid()), uint32(os.Getegid())); err == nil {
 		t.Fatal("existing signed output overwritten")
 	}
 	spki, _ := x509.MarshalPKIXPublicKey(publicKey)
@@ -236,6 +252,120 @@ func TestSignCommandRootRoundTrip(t *testing.T) {
 	output.Reset()
 	if err = run(verifyArgs(outputPath, publicPath, digest, receipt), &output); err != nil || output.String() != "receipt_verified\n" {
 		t.Fatalf("verify root-signed receipt: err=%v output=%q", err, output.String())
+	}
+}
+
+func TestSignCommandRejectsBadArgumentsInputsAndKeys(t *testing.T) {
+	uid, gid := uint32(os.Geteuid()), uint32(os.Getegid())
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(directory, "unsigned.json")
+	keyPath := filepath.Join(directory, "private.pem")
+	outputPath := filepath.Join(directory, "signed.json")
+	writeMode(t, inputPath, []byte(`{"not":"a canonical receipt"}`), 0o600)
+	writeMode(t, keyPath, []byte("not a private key"), 0o600)
+
+	for name, args := range map[string][]string{
+		"missing":       nil,
+		"extra":         {"--input", inputPath, "--output", outputPath, "--private-key", keyPath, "extra"},
+		"missing input": {"--output", outputPath, "--private-key", keyPath},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := runSignAs(args, io.Discard, 0, uid, gid); err == nil {
+				t.Fatal("invalid signing invocation accepted")
+			}
+		})
+	}
+	if err := runSignAs([]string{"--input", filepath.Join(directory, "missing"), "--output", outputPath, "--private-key", keyPath}, io.Discard, 0, uid, gid); err == nil {
+		t.Fatal("missing input accepted")
+	}
+	if err := runSignAs([]string{"--input", inputPath, "--output", outputPath, "--private-key", filepath.Join(directory, "missing")}, io.Discard, 0, uid, gid); err == nil {
+		t.Fatal("missing private key accepted")
+	}
+	if err := runSignAs([]string{"--input", inputPath, "--output", outputPath, "--private-key", keyPath}, io.Discard, 0, uid, gid); err == nil {
+		t.Fatal("invalid private key accepted")
+	}
+}
+
+func TestProtectedFileAndOutputBoundaries(t *testing.T) {
+	uid, gid := uint32(os.Geteuid()), uint32(os.Getegid())
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "input")
+	writeMode(t, path, []byte("payload"), 0o600)
+	policy := filePolicy{owners: map[uint32]bool{uid: true}, exactModes: map[os.FileMode]bool{0o600: true}, requiredGroup: true, groupID: gid}
+	if got, err := readProtected(path, 7, policy); err != nil || string(got) != "payload" {
+		t.Fatalf("protected file = %q, %v", got, err)
+	}
+	for name, maximum := range map[string]int64{"zero maximum": 0, "too small": 6} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := readProtected(path, maximum, policy); err == nil {
+				t.Fatal("invalid size accepted")
+			}
+		})
+	}
+	empty := filepath.Join(directory, "empty")
+	writeMode(t, empty, nil, 0o600)
+	if _, err := readProtected(empty, 1, policy); err == nil {
+		t.Fatal("empty protected file accepted")
+	}
+	wrongGroup := policy
+	wrongGroup.groupID++
+	if _, err := readProtected(path, 7, wrongGroup); err == nil {
+		t.Fatal("wrong group accepted")
+	}
+
+	outputPath := filepath.Join(directory, "output")
+	if err := writeExclusive(outputPath, []byte("signed"), uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(outputPath); err != nil || string(got) != "signed" {
+		t.Fatalf("exclusive output = %q, %v", got, err)
+	}
+	if err := writeExclusive(outputPath, []byte("replacement"), uid, gid); err == nil {
+		t.Fatal("exclusive output overwritten")
+	}
+	if err := writeExclusive(filepath.Join(directory, "empty-output"), nil, uid, gid); err == nil {
+		t.Fatal("empty output accepted")
+	}
+	if err := writeExclusive(filepath.Join(directory, "wrong-owner"), []byte("signed"), uid+1, gid); err == nil {
+		t.Fatal("wrong output owner accepted")
+	}
+	unsafeDirectory := filepath.Join(directory, "unsafe")
+	if err := os.Mkdir(unsafeDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExclusive(filepath.Join(unsafeDirectory, "output"), []byte("signed"), uid, gid); err == nil {
+		t.Fatal("unsafe output directory accepted")
+	}
+}
+
+func TestReceiptUtilityBoundaries(t *testing.T) {
+	if err := run(nil, io.Discard); err == nil {
+		t.Fatal("missing command accepted")
+	}
+	var flag optionalBoolFlag
+	if flag.String() != "" {
+		t.Fatal("unset optional boolean rendered")
+	}
+	if err := flag.Set("false"); err != nil || flag.String() != "false" || !flag.optional().Set || flag.optional().Value {
+		t.Fatalf("optional boolean = %+v, %v", flag, err)
+	}
+	if _, err := parsePrivateKey([]byte("not PEM")); err == nil {
+		t.Fatal("malformed private key accepted")
+	}
+	if _, err := parsePublicKey([]byte("not DER")); err == nil {
+		t.Fatal("malformed public key accepted")
+	}
+	if _, err := secureAbsolutePath(""); err == nil {
+		t.Fatal("empty path accepted")
+	}
+	if _, ok := infoSys(nil); ok {
+		t.Fatal("nil file info accepted")
 	}
 }
 
