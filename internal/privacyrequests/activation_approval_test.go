@@ -268,13 +268,16 @@ func TestActivationBundleRejectsRepeatedNonce(t *testing.T) {
 	if err := json.Unmarshal(executorRaw, &executor); err != nil {
 		t.Fatal(err)
 	}
-	administratorUnsigned, administratorRaw, _, err := NewActivationApprovalUnsigned(fixture.materialRaw, fixture.material, fixture.registry,
+	administratorUnsigned, _, _, err := NewActivationApprovalUnsigned(fixture.materialRaw, fixture.material, fixture.registry,
 		ActivationAdministratorRole, 202, 502, 1, fixture.now.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	administratorUnsigned.Nonce = executor.Nonce
-	administratorRaw, _ = json.Marshal(administratorUnsigned)
+	administratorRaw, err := json.Marshal(administratorUnsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
 	signature := validSignature(t, fixture.administratorKey, administratorRaw)
 	administratorApproval, _, err := AssembleActivationApproval(administratorRaw, signature, fixture.administratorPub,
 		fixture.materialRaw, fixture.material, fixture.registry, ActivationAdministratorRole, fixture.now.Add(2*time.Minute))

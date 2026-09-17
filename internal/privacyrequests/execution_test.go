@@ -20,6 +20,19 @@ type objectTargetProtectorStub struct {
 	digestErr error
 }
 
+func productionHandlerCount(operation string) int {
+	count := 0
+	if relationalExecutableOperation(operation) {
+		count++
+	}
+	for _, specialized := range []string{"OBJECT_VERSION_DELETE", "PROVIDER_RECIPIENT_NOTIFY", "BACKUP_TOMBSTONE_REPLAY"} {
+		if operation == specialized {
+			count++
+		}
+	}
+	return count
+}
+
 func (s objectTargetProtectorStub) SealObjectKey(ObjectTargetBinding, string) (ObjectTargetEnvelope, error) {
 	return ObjectTargetEnvelope{}, s.sealErr
 }

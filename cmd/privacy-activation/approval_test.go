@@ -246,10 +246,3 @@ func testReleaseBinding() privacyrequests.ActivationReleaseBinding {
 		SchemaMigrationDigest: commandDigestByte(0x72),
 	}
 }
-
-func withBrokerDatabase(t *testing.T, database activationBrokerDatabase) {
-	t.Helper()
-	previous := openActivationBrokerDatabase
-	openActivationBrokerDatabase = func(context.Context, string) (activationBrokerDatabase, error) { return database, nil }
-	t.Cleanup(func() { openActivationBrokerDatabase = previous })
-}

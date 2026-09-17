@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,12 @@ func currentClosureFixture(record RestoreTombstone) RestoreTombstone {
 	}
 	copy.Replay = &replay
 	return copy
+}
+
+func equalMembershipHistoryPostcondition(left, right *MembershipHistoryPostcondition) bool {
+	return validMembershipHistoryPostcondition(left) && validMembershipHistoryPostcondition(right) &&
+		left.Contract == right.Contract && left.MembershipCount == right.MembershipCount && left.VariationCount == right.VariationCount &&
+		subtle.ConstantTimeCompare(left.SHA256, right.SHA256) == 1
 }
 
 func TestMembershipHistoryPostconditionComparisonBindsEveryField(t *testing.T) {

@@ -657,19 +657,6 @@ func executableOperation(operation string) bool {
 	return operation == "OBJECT_VERSION_DELETE" || operation == "PROVIDER_RECIPIENT_NOTIFY" || operation == "BACKUP_TOMBSTONE_REPLAY" || relationalExecutableOperation(operation)
 }
 
-func productionHandlerCount(operation string) int {
-	count := 0
-	if relationalExecutableOperation(operation) {
-		count++
-	}
-	for _, specialized := range []string{"OBJECT_VERSION_DELETE", "PROVIDER_RECIPIENT_NOTIFY", "BACKUP_TOMBSTONE_REPLAY"} {
-		if operation == specialized {
-			count++
-		}
-	}
-	return count
-}
-
 func (s Service) cutOffPrivacyAccount(ctx context.Context, q *dbgen.Queries, execution dbgen.PrivacyErasureExecution, subject dbgen.User, executorID uuid.UUID, now time.Time) error {
 	legacy, err := q.CountActiveUnindexedPrivacySessions(ctx)
 	if err != nil {
