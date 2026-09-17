@@ -16,7 +16,7 @@ plan() {
       errored: false,
       complete: true,
       configuration: {root_module: {resources: []}},
-      resource_changes: [{address: "test.example", change: {actions: $actions}}]
+      resource_changes: [{address: "test.example", type: "test", change: {actions: $actions}}]
     } + $extra'
 }
 
@@ -44,6 +44,23 @@ for actions in \
   '["create","forget"]' \
   '["future-action"]'; do
   candidate=$(plan "$actions")
+  rejects "$candidate"
+done
+
+ecr_policy_replacement=$(plan '["delete","create"]' '{
+  "resource_changes": [{
+    "address": "aws_ecr_lifecycle_policy.app",
+    "type": "aws_ecr_lifecycle_policy",
+    "change": {"actions": ["delete", "create"]}
+  }]
+}')
+accepts "$ecr_policy_replacement"
+
+for extra in \
+  '{"resource_changes":[{"address":"aws_ecr_lifecycle_policy.other","type":"aws_ecr_lifecycle_policy","change":{"actions":["delete","create"]}}]}' \
+  '{"resource_changes":[{"address":"aws_ecr_lifecycle_policy.app","type":"aws_ecr_repository","change":{"actions":["delete","create"]}}]}' \
+  '{"resource_changes":[{"address":"aws_ecr_lifecycle_policy.app","type":"aws_ecr_lifecycle_policy","change":{"actions":["create","delete"]}}]}'; do
+  candidate=$(plan '["no-op"]' "$extra")
   rejects "$candidate"
 done
 
