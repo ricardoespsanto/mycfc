@@ -257,7 +257,8 @@ run "broker_permission_and_worker_alarms_are_exact" {
       aws_cloudwatch_metric_alarm.privacy_worker_heartbeat_missing,
       aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm,
       aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery,
-      aws_cloudwatch_metric_alarm.privacy_acceptance_canary,
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_adverse,
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_recovery,
     ]
   }
 
@@ -305,11 +306,14 @@ run "broker_permission_and_worker_alarms_are_exact" {
       aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery[0].pattern == "\"event=privacy_acceptance_canary_recovery_observed count=1\"" &&
       aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery[0].metric_transformation[0].namespace == "MyCFC/PrivacyCanary" &&
       !strcontains(aws_cloudwatch_log_metric_filter.privacy_worker_failure[0].pattern, "privacy_acceptance_canary") &&
-      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].period == 60 &&
-      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].evaluation_periods == 1 &&
-      aws_cloudwatch_metric_alarm.privacy_acceptance_canary[0].treat_missing_data == "notBreaching"
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_adverse[0].period == 60 &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_adverse[0].evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_adverse[0].comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_recovery[0].metric_name == "PrivacyAcceptanceCanaryRecovery" &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_recovery[0].comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.privacy_acceptance_canary_recovery[0].treat_missing_data == "notBreaching"
     )
-    error_message = "Synthetic canary signals must use an isolated deployment-log metric and recover after the one-minute signal period without entering ordinary worker alarms."
+    error_message = "Synthetic adverse and recovery signals must drive separate exact transitions without entering ordinary worker alarms."
   }
 }
 

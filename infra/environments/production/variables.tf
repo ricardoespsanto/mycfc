@@ -253,6 +253,12 @@ variable "operations_observer_github_oidc_provider_arn" {
     error_message = "operations_observer_github_oidc_provider_arn must be the exact GitHub Actions OIDC provider ARN."
   }
 }
+
+variable "privacy_operation_receipts_enabled" {
+  type        = bool
+  default     = false
+  description = "Create the private KMS-encrypted, versioned transport for host-signed privacy operation receipts."
+}
 variable "alb_log_retention_days" {
   type    = number
   default = 90

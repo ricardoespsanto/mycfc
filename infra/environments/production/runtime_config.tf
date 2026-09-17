@@ -145,19 +145,6 @@ data "aws_iam_policy_document" "host_runtime" {
     }
   }
 
-  dynamic "statement" {
-    for_each = var.release_agent_cutover_complete ? [] : [1]
-
-    content {
-      sid    = "WriteDeploymentLogsDuringReleaseAgentCutover"
-      effect = "Allow"
-      actions = [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-      ]
-      resources = ["${aws_cloudwatch_log_group.deployment.arn}:*"]
-    }
-  }
   statement {
     sid     = "ReadRuntimeParameters"
     effect  = "Allow"

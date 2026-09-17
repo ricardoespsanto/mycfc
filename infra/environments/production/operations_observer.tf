@@ -16,10 +16,15 @@ locals {
     "cloudwatch:GetMetricStatistics",
     "cloudwatch:ListMetrics",
   ]
+  operations_observer_receipt_actions = [
+    "s3:GetObject",
+    "s3:GetObjectAttributes",
+    "s3:GetObjectVersion",
+  ]
   operations_observer_deny_actions = [
     "ecr:BatchDeleteImage", "ecr:CompleteLayerUpload", "ecr:DeleteRepository*", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:PutImageTagMutability", "ecr:UploadLayerPart",
     "logs:CreateLogGroup", "logs:CreateLogStream", "logs:Delete*", "logs:PutLogEvents", "logs:PutMetricFilter",
-    "s3:GetObject*", "s3:ListBucket*", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "sts:AssumeRole",
+    "s3:DeleteObject*", "s3:ListBucket*", "s3:PutObject", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "sts:AssumeRole",
   ]
   operations_observer_trust_statements = concat(
     length(var.operations_observer_principal_arns) == 0 ? [] : [{
@@ -59,6 +64,21 @@ locals {
         Effect   = "Allow"
         Action   = local.operations_observer_alarm_actions
         Resource = "*"
+      },
+      {
+        Sid    = "ReadExactSignedReceiptVersions"
+        Effect = "Allow"
+        Action = local.operations_observer_receipt_actions
+        Resource = [
+          "${local.privacy_operation_receipt_bucket_arn}/receipts/*",
+          "${local.privacy_operation_receipt_bucket_arn}/public-keys/*",
+        ]
+      },
+      {
+        Sid      = "DecryptOnlySignedReceipts"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = local.privacy_operation_receipt_key_arn
       },
       {
         Sid      = "DenySecretsStateAndMutation"

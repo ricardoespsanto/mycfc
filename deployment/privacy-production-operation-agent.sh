@@ -7,6 +7,8 @@ release_aws_profile=${MYCFC_RELEASE_AWS_PROFILE:-mycfc-release}
 state_dir=${MYCFC_PRIVACY_OPERATION_STATE_DIR:-/var/lib/mycfc/privacy-operations}
 deployment_dir=${MYCFC_DEPLOYMENT_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)}
 runtime_dir=${MYCFC_RUNTIME_DIR:-/run}
+receipt_signing_key_file=${MYCFC_PRIVACY_OPERATION_RECEIPT_SIGNING_KEY_FILE:-/etc/mycfc/privacy-operation-receipt/private.pem}
+receipt_key_dir=${MYCFC_PRIVACY_OPERATION_RECEIPT_KEY_DIR:-/etc/mycfc/privacy-operation-receipt}
 
 work_dir=
 docker_config=
@@ -25,6 +27,14 @@ trap cleanup EXIT HUP INT TERM
 fail() {
 	printf '%s\n' "event=privacy_operation_agent_rejected reason=$1"
 	exit 1
+}
+
+receipt_fail() {
+	reason=$1
+	if [ "${operation:-}" = receipt-key-rotate-activate ] && [ -e "$receipt_key_dir/previous/activate-after-${request_id:-}" ]; then
+		"$deployment_dir/privacy-operation-receipt-key.sh" rollback-rotate "$request_id" >/dev/null 2>&1 || true
+	fi
+	fail "$reason"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -50,13 +60,15 @@ if [ "${PRIVACY_PRODUCTION_OPERATIONS_ENABLED:-false}" != true ]; then
 fi
 : "${AWS_REGION:?}"
 : "${ECR_REPOSITORY_URL:?}"
+: "${PRIVACY_OPERATION_RECEIPT_BUCKET:?}"
+: "${PRIVACY_OPERATION_RECEIPT_KMS_KEY_ARN:?}"
 if ! printf '%s' "$ECR_REPOSITORY_URL" | grep -Eq '^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/mycfc-production$'; then
 	fail repository_invalid
 fi
 registry=${ECR_REPOSITORY_URL%%/*}
 repository_name=${ECR_REPOSITORY_URL#*/}
 
-for command in aws docker gh jq sha256sum; do
+for command in aws base64 docker gh jq openssl sha256sum; do
 	command -v "$command" >/dev/null 2>&1 || fail runtime_dependency_missing
 done
 
@@ -140,18 +152,82 @@ chmod 0600 "$work_dir/request.json"
 
 request_id=$(jq -r '.request_id // empty' "$work_dir/request.json" 2>/dev/null || true)
 source_sha=$(jq -r '.source_sha // empty' "$work_dir/request.json" 2>/dev/null || true)
+operation=$(jq -r '.operation // empty' "$work_dir/request.json" 2>/dev/null || true)
+target_image=$(jq -r '.expected_image // empty' "$work_dir/request.json" 2>/dev/null || true)
 if [ "$source_sha" != "$revision" ] || [ "$candidate_tag" != "privacy-op-$request_id" ]; then
 	fail request_identity_mismatch
 fi
 case "$request_id" in
 	*[!0-9-]* | '' | *-*-*) fail request_identity_invalid ;;
 esac
+if [ ! -f "$receipt_signing_key_file" ] || [ -L "$receipt_signing_key_file" ] ||
+	[ "$(stat -c '%u:%g:%a' "$receipt_signing_key_file" 2>/dev/null || true)" != '0:0:600' ]; then
+	[ "$operation" = receipt-key-provision ] || fail receipt_signing_key_invalid
+fi
+if ! printf '%s' "$target_image" | grep -Eq "^${ECR_REPOSITORY_URL}@sha256:[0-9a-f]{64}$" ||
+	! docker pull "$target_image" >/dev/null 2>&1; then
+	fail receipt_signer_image_invalid
+fi
 
 receipt="$state_dir/receipts/$request_id.json"
 set +e
 "$deployment_dir/privacy-production-operation.sh" "$work_dir/request.json" "$receipt"
 operation_status=$?
 set -e
+
+if [ ! -f "$receipt" ] || [ -L "$receipt" ] || [ "$(stat -c '%u:%g:%a' "$receipt" 2>/dev/null || true)" != '0:0:600' ]; then
+	fail unsigned_receipt_invalid
+fi
+signed_receipt="$work_dir/signed-receipt.json"
+receipt_signing_key="$receipt_signing_key_file"
+if [ "$operation" = receipt-key-rotate-activate ]; then
+	receipt_signing_key="$receipt_key_dir/previous/private.pem"
+fi
+if [ ! -f "$receipt_signing_key" ] || [ -L "$receipt_signing_key" ] ||
+	[ "$(stat -c '%u:%g:%a' "$receipt_signing_key" 2>/dev/null || true)" != '0:0:600' ]; then
+	receipt_fail receipt_signing_key_transition_invalid
+fi
+if ! docker run --rm --network none --read-only --user 0:0 \
+	-v "$receipt:/receipt/unsigned.json:ro" \
+	-v "$receipt_signing_key:/receipt/private.pem:ro" \
+	-v "$work_dir:/receipt/output" \
+	--entrypoint /app/privacy-operation-receipt "$target_image" \
+	sign --input /receipt/unsigned.json --output /receipt/output/signed-receipt.json \
+	--private-key /receipt/private.pem >/dev/null; then
+	receipt_fail receipt_signing_failed
+fi
+if [ ! -f "$signed_receipt" ] || [ -L "$signed_receipt" ] ||
+	[ "$(stat -c '%u:%g:%a' "$signed_receipt" 2>/dev/null || true)" != '0:0:600' ]; then
+	receipt_fail signed_receipt_invalid
+fi
+receipt_sha256=$(sha256sum "$signed_receipt" | awk '{print $1}')
+receipt_checksum=$(openssl dgst -sha256 -binary "$signed_receipt" | base64 -w0)
+if [ "$operation" = receipt-key-revoke ]; then
+	if ! "$deployment_dir/privacy-operation-receipt-key.sh" finalize-revoke "$request_id"; then
+		fail receipt_key_revoke_finalize_failed
+	fi
+fi
+receipt_response="$work_dir/receipt-put.json"
+if ! aws s3api put-object --region "$AWS_REGION" \
+	--bucket "$PRIVACY_OPERATION_RECEIPT_BUCKET" --key "receipts/$request_id.json" \
+	--body "$signed_receipt" --if-none-match '*' --checksum-algorithm SHA256 \
+	--server-side-encryption aws:kms --ssekms-key-id "$PRIVACY_OPERATION_RECEIPT_KMS_KEY_ARN" \
+	--output json >"$receipt_response"; then
+	receipt_fail receipt_transport_failed
+fi
+if ! jq -e --arg checksum "$receipt_checksum" --arg kms "$PRIVACY_OPERATION_RECEIPT_KMS_KEY_ARN" '
+	(.VersionId | type == "string" and length > 0) and .ChecksumSHA256 == $checksum and
+	.ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kms
+' "$receipt_response" >/dev/null 2>&1; then
+	receipt_fail receipt_transport_response_invalid
+fi
+mv "$signed_receipt" "$receipt"
+printf '%s\n' "event=privacy_operation_receipt_published request_id=$request_id receipt_sha256=$receipt_sha256"
+if [ "$operation" = receipt-key-rotate-activate ]; then
+	if ! "$deployment_dir/privacy-operation-receipt-key.sh" finalize-rotate "$request_id"; then
+		printf '%s\n' "event=privacy_operation_receipt_key_rotation_cleanup_failed request_id=$request_id"
+	fi
+fi
 
 marker="$state_dir/processed/${candidate_digest#sha256:}"
 temporary_marker=$(mktemp "$state_dir/processed/.processed.XXXXXX")

@@ -20,6 +20,7 @@ legacy_media_purge_deletion_enabled            = false
 legacy_media_purge_write_fence_enabled         = false
 legacy_media_purge_permission_expires_at       = null
 release_agent_cutover_complete                = false
+privacy_operation_receipts_enabled            = false
 
 calendar_competition_id = "competition@example.com"
 calendar_training_id    = "training@example.com"

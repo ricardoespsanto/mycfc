@@ -17,6 +17,8 @@ source_sha=
 expected_image=
 request_sha256=
 evidence_sha256=
+workflow_run_id=
+workflow_run_attempt=
 receipt_trusted=false
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -39,7 +41,7 @@ write_receipt() {
 	temporary=$(mktemp "$state_dir/.privacy-operation-receipt.XXXXXX")
 	trap 'rm -f "$temporary"' EXIT HUP INT TERM
 	jq -cS -n \
-		--arg contract 'mycfc/privacy-production-operation-receipt/v1' \
+		--arg contract 'mycfc/privacy-production-operation-receipt/v2' \
 		--arg request_id "$request_id" \
 		--arg operation "$operation" \
 		--arg source_sha "$source_sha" \
@@ -49,12 +51,15 @@ write_receipt() {
 		--arg result "$result" \
 		--arg reason "$reason" \
 		--arg started_at "$started_at" \
+		--arg issued_at "$issued_at" \
 		--arg finished_at "$finished_at" \
+		--argjson workflow_run_id "$workflow_run_id" \
+		--argjson workflow_run_attempt "$workflow_run_attempt" \
 		--argjson worker_active "$(service_active mycfc-privacy-worker.service)" \
 		--argjson retention_active "$(service_active mycfc-privacy-retention.service)" \
 		--argjson restore_active "$(service_active mycfc-postgres-restore-drill.service)" \
 		--argjson cleanup_active "$(service_active mycfc-postgres-backup-version-cleanup.service)" \
-		'{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,evidence_sha256:$evidence_sha256,request_sha256:$request_sha256,result:$result,reason:(if $reason == "" then null else $reason end),started_at:$started_at,finished_at:$finished_at,services:{privacy_worker:$worker_active,privacy_retention:$retention_active,privacy_restore:$restore_active,backup_cleanup:$cleanup_active}}' \
+		'{contract:$contract,request_id:$request_id,operation:$operation,source_sha:$source_sha,expected_image:$expected_image,evidence_sha256:$evidence_sha256,request_sha256:$request_sha256,result:$result,reason:(if $reason == "" then null else $reason end),issued_at:$issued_at,started_at:$started_at,finished_at:$finished_at,workflow_run_id:$workflow_run_id,workflow_run_attempt:$workflow_run_attempt,services:{privacy_worker:$worker_active,privacy_retention:$retention_active,privacy_restore:$restore_active,backup_cleanup:$cleanup_active}}' \
 		>"$temporary"
 	chmod 0600 "$temporary"
 	mv "$temporary" "$receipt_output"
@@ -94,14 +99,14 @@ privacy_operation_container_active() {
 
 operation_is_credential_change() {
 	case "$1" in
-		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | activation-disable-provision | activation-courier-provision | activation-courier-rotate | activation-courier-revoke) return 0 ;;
+		retention-provision | retention-rotate | retention-revoke | acceptance-provision | acceptance-rotate | acceptance-revoke | activation-disable-provision | activation-courier-provision | activation-courier-rotate | activation-courier-revoke | receipt-key-provision | receipt-key-rotate-prepare | receipt-key-rotate-activate | receipt-key-revoke) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
 operation_is_destructive() {
 	case "$1" in
-		retention-revoke | acceptance-revoke | acceptance-run | acceptance-canary-* | legacy-purge | legacy-credential-remove | retention-run | retention-enable | activation-courier-revoke | activation-ceremony-open | flags-enable | worker-enable) return 0 ;;
+		retention-revoke | acceptance-revoke | acceptance-run | acceptance-canary-* | legacy-purge | legacy-credential-remove | retention-run | retention-enable | activation-courier-revoke | activation-ceremony-open | receipt-key-revoke | flags-enable | worker-enable) return 0 ;;
 		*) return 1 ;;
 	esac
 }
@@ -187,6 +192,8 @@ operation=$(jq -r .operation "$request_file")
 source_sha=$(jq -r .source_sha "$request_file")
 expected_image=$(jq -r .expected_image "$request_file")
 evidence_sha256=$(jq -r .evidence_sha256 "$request_file")
+workflow_run_id=$(jq -r .workflow_run_id "$request_file")
+workflow_run_attempt=$(jq -r .workflow_run_attempt "$request_file")
 issued_at=$(jq -r .issued_at "$request_file")
 expires_at=$(jq -r .expires_at "$request_file")
 request_sha256=$(sha256sum "$request_file" | awk '{print $1}')
@@ -195,6 +202,7 @@ valid_request_id "$request_id" || reject request_id_invalid
 valid_image "$expected_image" || reject expected_image_invalid
 case "$operation" in
 	preflight | status | infrastructure-observe | policy-import | activation-disable-provision | \
+	receipt-key-provision | receipt-key-rotate-prepare | receipt-key-rotate-activate | receipt-key-revoke | \
 	retention-provision | retention-rotate | retention-revoke | retention-run | retention-enable | retention-disable | \
 	acceptance-provision | acceptance-rotate | acceptance-revoke | acceptance-run | \
 	acceptance-canary-retry | acceptance-canary-failure | acceptance-canary-aged | acceptance-canary-heartbeat | acceptance-canary-recovery | \
@@ -297,6 +305,23 @@ case "$operation" in
 	activation-disable-provision)
 		if ! "$deployment_dir/privacy-activation.sh" provision-disable >/dev/null 2>&1; then
 			reject activation_disable_provision_failed
+		fi
+		;;
+	receipt-key-provision | receipt-key-rotate-prepare)
+		mode=${operation#receipt-key-}
+		if ! "$deployment_dir/privacy-operation-receipt-key.sh" "$mode" "$request_id"; then
+			reject receipt_key_change_failed
+		fi
+		;;
+	receipt-key-rotate-activate)
+		if [ "$evidence_sha256" = "$(printf '0%.0s' $(seq 1 64))" ] ||
+			! "$deployment_dir/privacy-operation-receipt-key.sh" rotate-activate "$request_id" "$evidence_sha256"; then
+			reject receipt_key_rotation_activation_failed
+		fi
+		;;
+	receipt-key-revoke)
+		if ! "$deployment_dir/privacy-operation-receipt-key.sh" stage-revoke "$request_id"; then
+			reject receipt_key_revoke_stage_failed
 		fi
 		;;
 	activation-courier-provision | activation-courier-rotate | activation-courier-revoke)
@@ -409,4 +434,4 @@ case "$operation" in
 esac
 
 write_receipt SUCCEEDED ''
-event "event=privacy_operation_succeeded request_id=$request_id operation=$operation receipt_contract=mycfc/privacy-production-operation-receipt/v1"
+event "event=privacy_operation_succeeded request_id=$request_id operation=$operation receipt_contract=mycfc/privacy-production-operation-receipt/v2"

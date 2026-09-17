@@ -245,7 +245,7 @@ resource "aws_cloudwatch_log_metric_filter" "privacy_acceptance_canary_recovery"
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "privacy_acceptance_canary" {
+resource "aws_cloudwatch_metric_alarm" "privacy_acceptance_canary_adverse" {
   count = var.privacy_worker_monitoring_enabled ? 1 : 0
 
   alarm_name          = "${local.name}-privacy-acceptance-canary"
@@ -260,13 +260,31 @@ resource "aws_cloudwatch_metric_alarm" "privacy_acceptance_canary" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.deployment_alerts.arn]
-  ok_actions          = [aws_sns_topic.deployment_alerts.arn]
+  ok_actions          = []
 
   depends_on = [
     aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_alarm,
-    aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery,
   ]
 }
+
+resource "aws_cloudwatch_metric_alarm" "privacy_acceptance_canary_recovery" {
+  count = var.privacy_worker_monitoring_enabled ? 1 : 0
+
+  alarm_name          = "${local.name}-privacy-acceptance-canary-recovery"
+  alarm_description   = "The isolated synthetic privacy acceptance canary emitted its explicit recovery condition."
+  namespace           = "MyCFC/PrivacyCanary"
+  metric_name         = "PrivacyAcceptanceCanaryRecovery"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  depends_on = [aws_cloudwatch_log_metric_filter.privacy_acceptance_canary_recovery]
+}
+
 
 output "deployment_log_group_name" {
   value = aws_cloudwatch_log_group.deployment.name

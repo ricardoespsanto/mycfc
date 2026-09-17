@@ -150,9 +150,10 @@ printf '%s' "$output" | grep -q '^event=privacy_operation_started request_id=102
 printf '%s' "$output" | grep -q '^event=privacy_operation_succeeded request_id=102-1 operation=status '
 receipt="$state_dir/receipts/102-1.json"
 jq -e --arg image "$image" --arg sha "$sha" '
-	(keys | sort) == ["contract","evidence_sha256","expected_image","finished_at","operation","reason","request_id","request_sha256","result","services","source_sha","started_at"] and
-	.contract == "mycfc/privacy-production-operation-receipt/v1" and .request_id == "102-1" and .operation == "status" and
+	(keys | sort) == ["contract","evidence_sha256","expected_image","finished_at","issued_at","operation","reason","request_id","request_sha256","result","services","source_sha","started_at","workflow_run_attempt","workflow_run_id"] and
+	.contract == "mycfc/privacy-production-operation-receipt/v2" and .request_id == "102-1" and .operation == "status" and
 	.source_sha == $sha and .expected_image == $image and .result == "SUCCEEDED" and .reason == null and
+	.workflow_run_id == 102 and .workflow_run_attempt == 1 and
 	(.request_sha256 | test("^[0-9a-f]{64}$")) and ([.services[]] | all(. == false))
 ' "$receipt" >/dev/null
 
@@ -345,6 +346,23 @@ fi
 grep -q '^          - worker-enable$' "$workflow"
 grep -q '^          - acceptance-run$' "$workflow"
 grep -q '^          - acceptance-canary-recovery$' "$workflow"
+for operation_name in receipt-key-provision receipt-key-rotate-prepare receipt-key-rotate-activate receipt-key-revoke; do
+	grep -q "^          - $operation_name$" "$workflow"
+done
+grep -q 'public-keys/$REQUEST_ID.pem' "$workflow"
+grep -q 'inputs.operation.*receipt-key-provision.*inputs.operation.*receipt-key-rotate-prepare' "$workflow"
+grep -q 'Prepared public-key SPKI SHA-256' "$workflow"
+grep -q 'Use this exact digest as.*evidence_sha256.*receipt-key-rotate-activate' "$workflow"
+grep -q -- '--public-key-spki-sha256 "$RECEIPT_PUBLIC_KEY_SHA256"' "$workflow"
+grep -q -- '--expected-request-sha256 "$REQUEST_SHA256"' "$workflow"
+grep -q -- '--expected-issued-at "$REQUEST_ISSUED_AT"' "$workflow"
+grep -q -- '--expected-result SUCCEEDED --expected-reason none' "$workflow"
+grep -q '== ALARM.*-ge.*OBSERVATION_NOT_BEFORE_MS' "$workflow"
+test "$(grep -c '== ALARM.*-ge.*OBSERVATION_NOT_BEFORE_MS' "$workflow")" -eq 2
+if grep -A6 'Wait for the exact privacy-safe host receipt' "$workflow" | grep -q 'filter-log-events'; then
+	printf '%s\n' 'workflow still trusts deployment log text as the host receipt' >&2
+	exit 1
+fi
 if grep -Eq 'inputs\.(command|args|script|shell)' "$workflow"; then
 	printf '%s\n' 'workflow exposes arbitrary command-shaped input' >&2
 	exit 1
@@ -354,5 +372,26 @@ grep -q 'ReadWritePaths=.* /etc/mycfc/deployment ' "$unit"
 grep -q '^ReadWritePaths=/etc/mycfc ' "$unit"
 grep -q 'ReadOnlyPaths=.*-/etc/mycfc/privacy-acceptance ' "$unit"
 grep -q -- '-/var/lib/mycfc/legacy-media-purge' "$unit"
+
+agent="$script_dir/privacy-production-operation-agent.sh"
+old_key_line=$(grep -n 'receipt_signing_key="$receipt_key_dir/previous/private.pem"' "$agent" | cut -d: -f1)
+publish_line=$(grep -n 'event=privacy_operation_receipt_published' "$agent" | cut -d: -f1)
+finalize_line=$(grep -n 'finalize-rotate "$request_id"' "$agent" | cut -d: -f1)
+test "$old_key_line" -lt "$publish_line"
+test "$publish_line" -lt "$finalize_line"
+grep -q 'rollback-rotate "$request_id"' "$agent"
+
+receipt_tf="$repo_dir/infra/environments/production/privacy_operation_receipts.tf"
+grep -q 'variable = "s3:if-none-match"' "$receipt_tf"
+grep -q 'variable = "s3:x-amz-checksum-sha256"' "$receipt_tf"
+grep -q 'sid       = "DenyDeletion"' "$receipt_tf"
+grep -q 'Sid      = "DenyReceiptMutationAndReadback"' "$receipt_tf"
+grep -Fq '"${local.privacy_operation_receipt_bucket_arn}/receipts/*"' "$receipt_tf"
+grep -Fq '"${local.privacy_operation_receipt_bucket_arn}/public-keys/*"' "$receipt_tf"
+
+runbook="$repo_dir/docs/privacy-production-operations.md"
+grep -q 'separate authenticated Hetzner web-console/root session' "$runbook"
+grep -q 'S3, the workflow summary and CloudWatch.*not an independent pinning channel' "$runbook"
+grep -q 'keep the protected environment pinned to the old key' "$runbook"
 
 printf '%s\n' 'privacy production operation state-machine tests passed'
