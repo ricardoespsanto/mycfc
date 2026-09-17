@@ -9,7 +9,7 @@ COPY cmd/legacy-media-purge ./cmd/legacy-media-purge
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -tags=legacy_media_purge_execute -ldflags="-s -w" -o /out/legacy-media-purge ./cmd/legacy-media-purge
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 WORKDIR /app
 COPY --from=build /out/legacy-media-purge /app/legacy-media-purge
 USER nonroot:nonroot
