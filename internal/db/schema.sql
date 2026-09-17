@@ -9956,7 +9956,7 @@ END;$$;
 
 ALTER FUNCTION public.privacy_worker_execute_checkpoint(uuid,uuid,uuid,bigint,uuid,text,text)
  RENAME TO privacy_worker_execute_checkpoint_inner_017;
-CREATE FUNCTION public.privacy_worker_execute_checkpoint(
+CREATE OR REPLACE FUNCTION public.privacy_worker_execute_checkpoint(
  p_job_id uuid,p_lease_id uuid,p_attempt_id uuid,p_lease_epoch bigint,p_worker_ref uuid,p_operation_code text,p_action_version text
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 BEGIN
@@ -9993,7 +9993,7 @@ BEGIN
 END;$$;
 
 ALTER FUNCTION public.privacy_completion_finalize(uuid,uuid,bytea,bytea) RENAME TO privacy_completion_finalize_inner_017;
-CREATE FUNCTION public.privacy_completion_finalize(p_execution_id uuid,p_worker_ref uuid,p_token_sha256 bytea,p_sealed_delivery bytea)
+CREATE OR REPLACE FUNCTION public.privacy_completion_finalize(p_execution_id uuid,p_worker_ref uuid,p_token_sha256 bytea,p_sealed_delivery bytea)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 BEGIN
  PERFORM public.privacy_worker_require_activation();

@@ -1147,7 +1147,7 @@ func TestSyntheticAcceptanceMigrationIsExactBaselineSegment(t *testing.T) {
 	}
 }
 
-func TestPrivacyExecutorRetentionMigrationIsExactBaselineSegment(t *testing.T) {
+func TestPrivacyExecutorRetentionMigrationIsSqlcCompatibleBaselineSegment(t *testing.T) {
 	migration, err := migrationFiles.ReadFile("migrations/202609170002_privacy_executor_retention_handlers.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -1155,8 +1155,26 @@ func TestPrivacyExecutorRetentionMigrationIsExactBaselineSegment(t *testing.T) {
 	const marker = "-- Baseline through 202609170002_privacy_executor_retention_handlers."
 	index := strings.LastIndex(baselineSchema, marker)
 	next := strings.LastIndex(baselineSchema, "-- Baseline through 202609170003_privacy_activation_fixed_access.")
-	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(string(migration)) {
+	// sqlc does not model ALTER FUNCTION ... RENAME when compiling the reset
+	// schema. Keep the forward migration exact, while making only the two new
+	// public wrappers idempotent in the reset-only representation.
+	expectedBaseline := string(migration)
+	for _, wrapper := range []string{
+		"public.privacy_worker_execute_checkpoint(",
+		"public.privacy_completion_finalize(",
+	} {
+		expectedBaseline = strings.Replace(expectedBaseline, "CREATE FUNCTION "+wrapper, "CREATE OR REPLACE FUNCTION "+wrapper, 1)
+	}
+	if index < 0 || next <= index || strings.TrimSpace(baselineSchema[index+len(marker):next]) != strings.TrimSpace(expectedBaseline) {
 		t.Fatal("privacy executor retention migration differs from baseline")
+	}
+	for _, wrapper := range []string{
+		"CREATE FUNCTION public.privacy_worker_execute_checkpoint(",
+		"CREATE FUNCTION public.privacy_completion_finalize(",
+	} {
+		if !strings.Contains(string(migration), wrapper) {
+			t.Fatalf("forward migration lost non-idempotent wrapper creation %q", wrapper)
+		}
 	}
 }
 
