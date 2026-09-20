@@ -171,7 +171,6 @@ jobs:
           GIT_TREE_SHA: ${{ steps.release.outputs.tree_sha }}
           IMAGE_REPOSITORY: ${{ steps.image-refs.outputs.repository }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
-          RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           RELEASE_PUBLICATION_MANIFEST: release-publication.json
           SCHEMA_MIGRATION_DIGEST: ${{ steps.schema.outputs.digest }}
