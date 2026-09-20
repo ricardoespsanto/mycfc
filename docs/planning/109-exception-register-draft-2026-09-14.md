@@ -2,7 +2,7 @@
 
 **Estado:** decisões finais do responsável pelo produto, confirmadas em 14 de setembro de 2026. `ATIVA` significa que o fluxo é conhecido na plataforma; `EXCLUÍDA` significa que não pode ser usado sem nova decisão do responsável pelo produto. Esta tabela não substitui obrigação legal, contrato ou parecer jurídico.
 
-| Tema | Estado proposto | Facto conhecido | Deliberação necessária | Se ficar ativo, completar antes de uso | 
+| Tema | Estado proposto | Facto conhecido | Deliberação necessária | Se ficar ativo, completar antes de uso |
 |---|---|---|---|---|
 | Número de licença FPC e ligação externa | **ATIVA** | O administrador introduz o número de licença; MyCFCoimbra constrói ligação externa; o navegador do utilizador contacta a FPC. O servidor não transmite nem copia perfis para a FPC. | Limite confirmado pelo responsável pelo produto em 14 de setembro de 2026. | Finalidade, revisão e referência da confirmação já existente. Não criar integração servidor-a-servidor sem nova decisão. |
 | Seguro, acidentes e sinistros | **EXCLUÍDA** | Não existe fluxo MyCFCoimbra confirmado. | Exclusão confirmada pelo responsável pelo produto em 14 de setembro de 2026. | Campos mínimos, destinatário concreto, fundamento, retenção, responsável, prova e revisão, antes de qualquer uso futuro. |

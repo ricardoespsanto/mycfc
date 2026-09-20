@@ -16,10 +16,10 @@ A Direção aprova o conjunto de governação MyCFCoimbra composto por:
 
 A Direção é responsável pela aplicação e revisão anual deste conjunto. Uma alteração material — nova categoria de dados, novo prestador, novo país, pagamento, transporte, fotografia privada, integração externa ou mudança legal — exige revisão antes de entrar em produção.
 
-**Referência da ata:** ____________________  
-**Data de aprovação:** ____________________  
-**Entrada em vigor:** ____________________  
-**Próxima revisão ordinária:** ____________________  
+**Referência da ata:** ____________________
+**Data de aprovação:** ____________________
+**Entrada em vigor:** ____________________
+**Próxima revisão ordinária:** ____________________
 **Revisão jurídica — referência e conclusão:** ____________________
 
 ## Deliberação 2 — autoridade de responsável por menor
