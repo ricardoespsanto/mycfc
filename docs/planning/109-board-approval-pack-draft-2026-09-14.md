@@ -46,6 +46,8 @@ A Direção confirma que:
 - termos públicos não substituem prova de adesão da conta;
 - novas integrações ou prestadores exigem atualização prévia do registo e da matriz.
 
+A Direção adota este conjunto como registo do estado atualmente comprovado. Os controlos que o pacote de evidência identifica como pendentes, não comprovados ou apenas presentes no código-fonte ficam expressamente excluídos de qualquer ativação até haver prova nova e revisão da Direção.
+
 ## Deliberação 5 — limite de ativação
 
 Esta deliberação não ativa pedidos de privacidade, execução de apagamentos, eliminação de objetos, integrações externas ou novas autorizações de responsáveis. Essas funções só podem ser ativadas depois de a Direção confirmar que o registo de exceções, a prova dos prestadores e a verificação técnica estão completos para a versão de produção em causa.
@@ -57,3 +59,4 @@ Esta deliberação não ativa pedidos de privacidade, execução de apagamentos,
 - `docs/legal/registo-prestadores.md`
 - `docs/planning/109-adoption-evidence-2026-09-13.md`
 - `docs/planning/109-exception-register-draft-2026-09-14.md`
+- pacote restrito de evidência de prestadores e delta de implementação, datado de 20 de setembro de 2026
