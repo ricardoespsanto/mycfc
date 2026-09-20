@@ -71,6 +71,7 @@ verify_image_revision() {
 
 verify_release_manifest() {
 	: "${RELEASE_PUBLICATION_MANIFEST:?RELEASE_PUBLICATION_MANIFEST is required for production promotion}"
+	: "${RELEASE_TAG:?RELEASE_TAG is required for production promotion}"
 	[ -f "$RELEASE_PUBLICATION_MANIFEST" ] || {
 		printf '%s\n' 'release publication manifest is missing' >&2
 		exit 1

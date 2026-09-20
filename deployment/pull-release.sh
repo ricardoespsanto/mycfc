@@ -359,9 +359,9 @@ release_tag=$(
 	for candidate in $release_tags; do
 		candidate_without_prefix=${candidate#release-}
 		candidate_sha=${candidate_without_prefix##*-}
-		candidate_without_sha=${candidate_without_prefix%-$candidate_sha}
+		candidate_without_sha=${candidate_without_prefix%-"$candidate_sha"}
 		candidate_stamp=${candidate_without_sha##*-}
-		candidate_version=${candidate_without_sha%-$candidate_stamp}
+		candidate_version=${candidate_without_sha%-"$candidate_stamp"}
 		case "$candidate_stamp:$candidate_sha" in
 			??????????????:????????????????????????????????????????) ;;
 			*) continue ;;
@@ -376,16 +376,16 @@ case "$release_tag" in
 esac
 release_without_prefix=${release_tag#release-}
 sha=${release_without_prefix##*-}
-release_without_sha=${release_without_prefix%-$sha}
+release_without_sha=${release_without_prefix%-"$sha"}
 stamp=${release_without_sha##*-}
-release_version=${release_without_sha%-$stamp}
+release_version=${release_without_sha%-"$stamp"}
 printf '%s\n' "$release_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || { log 'release tag has no canonical semantic version'; exit 1; }
 released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
 
 release_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
 printf '%s' "$release_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { log 'release has no valid digest'; exit 1; }
 printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || { log 'release tag has no valid lowercase git SHA'; exit 1; }
-case "$release_tag" in "release-$release_version"-"$stamp"-"$sha") ;; *) log 'release tag does not bind its semantic version, timestamp, and SHA'; exit 1 ;; esac
+case "$release_tag" in "release-$release_version-$stamp-$sha") ;; *) log 'release tag does not bind its semantic version, timestamp, and SHA'; exit 1 ;; esac
 
 # A signed manifest image is published before the application release tag. The
 # host verifies both immutable subjects before it executes any candidate code.

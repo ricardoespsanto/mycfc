@@ -82,9 +82,9 @@ latest_tag=$(
 	while IFS= read -r candidate; do
 		candidate_without_prefix=${candidate#release-}
 		candidate_sha=${candidate_without_prefix##*-}
-		candidate_without_sha=${candidate_without_prefix%-$candidate_sha}
+		candidate_without_sha=${candidate_without_prefix%-"$candidate_sha"}
 		candidate_stamp=${candidate_without_sha##*-}
-		candidate_version=${candidate_without_sha%-$candidate_stamp}
+		candidate_version=${candidate_without_sha%-"$candidate_stamp"}
 		case "$candidate_stamp:$candidate_sha" in
 			??????????????:????????????????????????????????????????) ;;
 			*) continue ;;
@@ -105,9 +105,9 @@ case "$latest_digest" in
 esac
 latest_without_prefix=${latest_tag#release-}
 latest_sha=${latest_without_prefix##*-}
-latest_without_sha=${latest_without_prefix%-$latest_sha}
+latest_without_sha=${latest_without_prefix%-"$latest_sha"}
 release_stamp=${latest_without_sha##*-}
-latest_version=${latest_without_sha%-$release_stamp}
+latest_version=${latest_without_sha%-"$release_stamp"}
 printf '%s\n' "$latest_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || fail 'latest release tag has no canonical semantic version'
 release_published_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$release_stamp" | cut -c1-4)" "$(printf '%s' "$release_stamp" | cut -c5-6)" "$(printf '%s' "$release_stamp" | cut -c7-8)" "$(printf '%s' "$release_stamp" | cut -c9-10)" "$(printf '%s' "$release_stamp" | cut -c11-12)" "$(printf '%s' "$release_stamp" | cut -c13-14)")"
 
