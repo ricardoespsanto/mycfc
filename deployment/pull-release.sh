@@ -354,21 +354,38 @@ ecr_password=$(aws ecr get-login-password --region "$AWS_REGION")
 printf '%s' "$ecr_password" | docker login --username AWS --password-stdin "$registry"
 
 tags=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --query 'imageDetails[].imageTags[]' --output text)
-release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-/')
-release_tag=$(printf '%s\n' "$release_tags" | sort | tail -n 1)
+release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-v/ { print }')
+release_tag=$(
+	for candidate in $release_tags; do
+		candidate_without_prefix=${candidate#release-}
+		candidate_sha=${candidate_without_prefix##*-}
+		candidate_without_sha=${candidate_without_prefix%-"$candidate_sha"}
+		candidate_stamp=${candidate_without_sha##*-}
+		candidate_version=${candidate_without_sha%-"$candidate_stamp"}
+		case "$candidate_stamp:$candidate_sha" in
+			??????????????:????????????????????????????????????????) ;;
+			*) continue ;;
+		esac
+		printf '%s\n' "$candidate_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || continue
+		printf '%s\t%s\n' "$candidate_stamp" "$candidate"
+	done | sort | tail -n 1 | cut -f2-
+)
 case "$release_tag" in
-	release-??????????????-????????????????????????????????????????) ;;
+	release-v*-??????????????-????????????????????????????????????????) ;;
 	*) log 'ECR has no valid release tag'; exit 1 ;;
 esac
-stamp=${release_tag#release-}
-stamp=${stamp%%-*}
+release_without_prefix=${release_tag#release-}
+sha=${release_without_prefix##*-}
+release_without_sha=${release_without_prefix%-"$sha"}
+stamp=${release_without_sha##*-}
+release_version=${release_without_sha%-"$stamp"}
+printf '%s\n' "$release_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || { log 'release tag has no canonical semantic version'; exit 1; }
 released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
 
 release_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
 printf '%s' "$release_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { log 'release has no valid digest'; exit 1; }
-sha=${release_tag##*-}
 printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || { log 'release tag has no valid lowercase git SHA'; exit 1; }
-case "$release_tag" in release-??????????????-"$sha") ;; *) log 'release tag does not bind its SHA'; exit 1 ;; esac
+case "$release_tag" in "release-$release_version-$stamp-$sha") ;; *) log 'release tag does not bind its semantic version, timestamp, and SHA'; exit 1 ;; esac
 
 # A signed manifest image is published before the application release tag. The
 # host verifies both immutable subjects before it executes any candidate code.
@@ -403,11 +420,11 @@ if ! docker cp "$manifest_container:/release-publication.json" "$manifest_tempor
 fi
 docker rm "$manifest_container" >/dev/null
 expected_gates=$(jq -cS . "$deployment_dir/release-gates.json")
-if ! jq -e --arg version "$(jq -r .version "$manifest_temporary")" \
+if ! jq -e --arg version "$(jq -r .version "$manifest_temporary")" --arg release_version "$release_version" \
 	--arg sha "$sha" --arg repository "$ECR_REPOSITORY_URL" --arg digest "$release_digest" \
 	--arg tag "$release_tag" --arg published "$released_at" --argjson gates "$expected_gates" '
 	(keys | sort) == ["ci_run_id","contract","expected_gates","git_sha","git_tree_sha","image","issues","published_at","release_tag","schema","version"] and
-	.contract == "mycfc/release-publication/v1" and .version == $version and
+	.contract == "mycfc/release-publication/v1" and .version == $version and .version == $release_version and
 	($version | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")) and
 	.git_sha == $sha and (.git_tree_sha | test("^[0-9a-f]{40}$")) and
 	.image == {repository:$repository,digest:$digest} and .release_tag == $tag and
