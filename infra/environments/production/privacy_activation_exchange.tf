@@ -263,22 +263,6 @@ data "aws_iam_policy_document" "privacy_activation_exchange_bucket" {
   }
 
   statement {
-    sid       = "DenyPutWithoutSHA256Checksum"
-    effect    = "Deny"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.privacy_activation_exchange[0].arn}/*"]
-    principals {
-      type        = "*"
-      identifiers = ["*"]
-    }
-    condition {
-      test     = "Null"
-      variable = "s3:x-amz-checksum-sha256"
-      values   = ["true"]
-    }
-  }
-
-  statement {
     sid       = "DenyOverwriteCapablePut"
     effect    = "Deny"
     actions   = ["s3:PutObject"]

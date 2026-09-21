@@ -47,7 +47,7 @@ check_signer "$repo_dir/.github/workflows/privacy-activation-administrator-appro
 	arn:aws:iam::334960985019:role/mycfc-production-privacy-activation-exchange-administrator \
 	ADMINISTRATOR
 
-for sid in DenyInsecureTransport DenyIncorrectEncryption DenyIncorrectEncryptionKey DenyPutWithoutSHA256Checksum DenyOverwriteCapablePut; do
+for sid in DenyInsecureTransport DenyIncorrectEncryption DenyIncorrectEncryptionKey DenyOverwriteCapablePut; do
 	grep -q "sid.*= \"$sid\"" "$terraform_file"
 done
 grep -q 'NotResource = aws_iam_user.privacy_activation_courier\[0\].arn' "$repo_dir/infra/environments/production/runtime_config.tf"
