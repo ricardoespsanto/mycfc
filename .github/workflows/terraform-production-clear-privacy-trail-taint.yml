@@ -20,6 +20,7 @@ env:
   TF_IN_AUTOMATION: 'true'
   TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
   REQUESTED_SHA: ${{ inputs.sha }}
+  REQUESTED_STACK: production
   TARGET_ADDRESS: aws_cloudtrail.privacy_activation_exchange[0]
 
 jobs:
