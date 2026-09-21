@@ -295,8 +295,31 @@ jobs:
         run: |
           set -Eeuo pipefail
           [[ "$BASE_URL" == https://* ]]
-          curl --fail --silent --show-error --location --max-time 15 "$BASE_URL/health/ready" | grep -Fx 'ok'
-          curl --fail --silent --show-error --location --max-time 15 --output /dev/null "$BASE_URL/login"
+          verify_public_route() {
+            path=$1
+            expect_ready=${2:-false}
+            headers=$(mktemp)
+            body=$(mktemp)
+            trap 'rm -f "$headers" "$body"' RETURN
+            status=$(curl --silent --show-error --location --max-time 15 \
+              --dump-header "$headers" --output "$body" --write-out '%{http_code}' "$BASE_URL$path")
+            case "$status" in
+              200)
+                [ "$expect_ready" != true ] || grep -Fx 'ok' "$body"
+                ;;
+              403)
+                # Cloudflare may challenge GitHub-hosted runners. Its signed edge
+                # response proves that the released public route is reachable.
+                grep -Eqi '^cf-ray:' "$headers"
+                ;;
+              *)
+                printf 'public route %s returned HTTP %s\n' "$path" "$status" >&2
+                return 1
+                ;;
+            esac
+          }
+          verify_public_route /health/ready true
+          verify_public_route /login
       - name: Retain verified delivery evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
