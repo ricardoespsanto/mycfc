@@ -16,7 +16,7 @@ publication=$work_dir/publication.json
 
 generate_publication() {
 	env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha GIT_TREE_SHA=$tree IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
-		RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" MIGRATION_INVENTORY_JSON="$migrations" \
+		RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" MIGRATION_INVENTORY_JSON="$migrations" \
 		EXPECTED_GATES_JSON="$gates" PUBLISHED_AT=2026-09-12T12:00:00Z CI_RUN_ID=123 RELEASE_ISSUES="$1" \
 		RELEASE_EVIDENCE_OUTPUT="$publication" sh "$script_dir/release-evidence.sh" publication
 }
@@ -34,7 +34,7 @@ test "$(sha256sum "$publication" | awk '{print $1}')" = "$first"
 
 receipt=$work_dir/receipt.json
 env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
-	RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" PUBLICATION_MANIFEST_SHA256=$manifest \
+	RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" PUBLICATION_MANIFEST_SHA256=$manifest \
 	RELEASE_RESULT=failed RELEASE_SLOT=blue RELEASE_FAILURE_PHASE=database_migrate TRAFFIC_SWITCHED=false ROLLBACK_PERFORMED=false \
 	GUARDIAN_INTAKE_ACTIVE=false PRIVACY_WORKER_ACTIVE=false PRIVACY_WORKER_ACTIVATION_REQUIRED=false \
 	RELEASE_STARTED_AT=2026-09-12T12:00:01Z RELEASE_FINISHED_AT=2026-09-12T12:00:03Z \
@@ -42,7 +42,7 @@ env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc
 jq -e '.contract == "mycfc/deployment-receipt/v1" and .result == "failed" and .failure_phase == "database_migrate" and .traffic_switched == false and .rollback_performed == false and .actual_gates == {guardian_intake:false,privacy_worker:false} and .privacy_worker_activation_required == false' "$receipt" >/dev/null
 
 if env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
-	RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" PUBLICATION_MANIFEST_SHA256=$manifest \
+	RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" PUBLICATION_MANIFEST_SHA256=$manifest \
 	RELEASE_RESULT=succeeded RELEASE_SLOT=blue RELEASE_FAILURE_PHASE=database_migrate TRAFFIC_SWITCHED=true ROLLBACK_PERFORMED=false \
 	GUARDIAN_INTAKE_ACTIVE=false PRIVACY_WORKER_ACTIVE=true PRIVACY_WORKER_ACTIVATION_REQUIRED=false \
 	RELEASE_STARTED_AT=2026-09-12T12:00:03Z RELEASE_FINISHED_AT=2026-09-12T12:00:01Z \
@@ -53,7 +53,7 @@ fi
 
 canary='postgres://operator:secret@example.invalid/mycfc'
 if env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha GIT_TREE_SHA=$tree IMAGE_REPOSITORY="$canary" IMAGE_DIGEST=$digest \
-	RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" MIGRATION_INVENTORY_JSON="$migrations" \
+	RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST="$schema" MIGRATION_INVENTORY_JSON="$migrations" \
 	EXPECTED_GATES_JSON="$gates" PUBLISHED_AT=2026-09-12T12:00:00Z CI_RUN_ID=123 RELEASE_EVIDENCE_OUTPUT="$work_dir/rejected.json" \
 	sh "$script_dir/release-evidence.sh" publication >/dev/null 2>&1; then
 	printf '%s\n' 'credential-shaped repository was accepted' >&2
