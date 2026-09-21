@@ -77,9 +77,11 @@ jobs:
             [.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["create"] and .change.actions != ["read"] and .change.actions != ["update"])] as $blocked |
             ($blocked | length) == 1 and $blocked[0].address == $target and $blocked[0].change.actions == ["delete", "create"]
           ' "$TF_ROOT/recovery.tfplan.json" >/dev/null
-          echo "## Stale Terraform taint verified" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Commit: \`$REQUESTED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Recovery changes state only; it does not create, update, or delete a cloud resource." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Stale Terraform taint verified"
+            echo "- Commit: \`$REQUESTED_SHA\`"
+            echo "- Recovery changes state only; it does not create, update, or delete a cloud resource."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   clear:
     needs: review
@@ -125,6 +127,8 @@ jobs:
           tf plan -input=false -lock-timeout=5m -out=after.tfplan
           tf show -json after.tfplan > "$TF_ROOT/after.tfplan.json"
           jq -e -f scripts/terraform-plan-policy.jq "$TF_ROOT/after.tfplan.json" >/dev/null
-          echo "## Stale Terraform taint cleared" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Commit: \`$REQUESTED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Verified follow-up plan has no delete or replacement actions." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Stale Terraform taint cleared"
+            echo "- Commit: \`$REQUESTED_SHA\`"
+            echo "- Verified follow-up plan has no delete or replacement actions."
+          } >> "$GITHUB_STEP_SUMMARY"
