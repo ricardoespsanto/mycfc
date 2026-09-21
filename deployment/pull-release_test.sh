@@ -2,6 +2,7 @@
 set -eu
 
 deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+jq -e '. == {guardian_intake:false,privacy_worker:false}' "$deployment_dir/release-gates.json" >/dev/null
 compose_file="$deployment_dir/compose.yaml"
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
@@ -59,7 +60,7 @@ case "$1" in
 		manifest_release_tag=${TEST_MANIFEST_RELEASE_TAG:-release-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}
 		case "$manifest_release_tag" in release-v1.25.0-20260810190000-*) manifest_published_at=2026-08-10T19:00:00Z ;; *) manifest_published_at=2026-08-10T18:37:43Z ;; esac
 		cat >"$destination" <<JSON
-{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884","ordered_migrations":["001_initial","reset-baseline-v1"]},"version":"v1.25.0"}
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":false},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884","ordered_migrations":["001_initial","reset-baseline-v1"]},"version":"v1.25.0"}
 JSON
 		;;
 	rm) ;;
