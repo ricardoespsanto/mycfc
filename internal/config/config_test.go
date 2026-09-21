@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	urlpkg "net/url"
 	"strings"
@@ -277,6 +278,7 @@ func TestLoadParsesAndValidatesCompleteLocalEnvironment(t *testing.T) {
 		"APP_ENV": "local", "APP_VERSION": "test", "GIT_SHA": strings.Repeat("0", 40), "BASE_URL": "http://localhost:8080",
 		"DATABASE_URL": "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable", "DB_HOST": "", "DB_PORT": "", "DB_NAME": "", "DB_USER": "", "DB_PASSWORD": "", "DB_SSLMODE": "",
 		"CSRF_AUTH_KEY_B64": base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")), "EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
+		"POLAR_CLIENT_ID": "", "POLAR_CLIENT_SECRET": "", "ACTIVITY_CREDENTIAL_KEY_ID": "", "ACTIVITY_CREDENTIAL_KEYS_JSON": "",
 		"SMTP_HOST": "localhost", "SMTP_PORT": "1025", "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM_ADDRESS": "mycfc@example.test", "SMTP_FROM_NAME": "MyCFCoimbra", "SMTP_TLS_MODE": "none",
 		"AWS_REGION": "eu-west-1", "S3_BUCKET_NAME": "mycfc-local", "S3_ENDPOINT": "http://localhost:9000", "S3_FORCE_PATH_STYLE": "true", "GALLERY_URL": "https://example.invalid/gallery",
 		"CONSENT_TERMS_VERSION": "dev-v1", "CONSENT_TERMS_SHA256": strings.Repeat("0", 64), "CONSENT_TERMS_URL": "http://localhost:8080/legal/termos",
@@ -942,5 +944,21 @@ func TestConfigurationValueHelpersValidateBoundaryCases(t *testing.T) {
 	}
 	if _, err := (Config{TrustedProxyCIDRValues: []string{"not-a-cidr"}}).TrustedProxyCIDRs(); err == nil {
 		t.Fatal("TrustedProxyCIDRs() accepted invalid CIDR")
+	}
+}
+
+func TestPolarCredentialsRequireACompleteOptionalConfiguration(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	keys, _ := json.Marshal(map[string]string{"activity-v1": key})
+	complete := Config{PolarClientID: "polar-client", PolarClientSecret: Secret("polar-secret"), ActivityCredentialKeyID: "activity-v1", ActivityCredentialKeysJSON: Secret(keys)}
+	decoded, keyID, enabled, err := complete.PolarCredentials()
+	if err != nil || !enabled || keyID != "activity-v1" || len(decoded) != 32 {
+		t.Fatalf("credentials = %d bytes, key=%q enabled=%t, err=%v", len(decoded), keyID, enabled, err)
+	}
+	if _, _, enabled, err = (Config{}).PolarCredentials(); err != nil || enabled {
+		t.Fatalf("empty optional configuration enabled=%t err=%v", enabled, err)
+	}
+	if _, _, _, err = (Config{PolarClientID: "polar-client"}).PolarCredentials(); err == nil {
+		t.Fatal("partial Polar configuration was accepted")
 	}
 }

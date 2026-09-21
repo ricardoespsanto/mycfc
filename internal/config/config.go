@@ -36,61 +36,65 @@ const productionParameterPrefix = "/mycfc/production"
 const productionSecretID = "/mycfc/production/app-secrets"
 
 var productionParameterNames = map[string]string{
-	"BASE_URL":                 productionParameterPrefix + "/base-url",
-	"DB_HOST":                  productionParameterPrefix + "/db/host",
-	"DB_PORT":                  productionParameterPrefix + "/db/port",
-	"DB_NAME":                  productionParameterPrefix + "/db/name",
-	"DB_USER":                  productionParameterPrefix + "/db/user",
-	"POSTGRES_USER":            productionParameterPrefix + "/db/bootstrap-user",
-	"MIGRATION_DB_USER":        productionParameterPrefix + "/db/migration-user",
-	"DB_SSLMODE":               productionParameterPrefix + "/db/sslmode",
-	"SMTP_HOST":                productionParameterPrefix + "/smtp/host",
-	"SMTP_PORT":                productionParameterPrefix + "/smtp/port",
-	"SMTP_FROM_ADDRESS":        productionParameterPrefix + "/smtp/from-address",
-	"SMTP_FROM_NAME":           productionParameterPrefix + "/smtp/from-name",
-	"SMTP_TLS_MODE":            productionParameterPrefix + "/smtp/tls-mode",
-	"SMTP_TIMEOUT":             productionParameterPrefix + "/smtp/timeout",
-	"TURNSTILE_SITE_KEY":       productionParameterPrefix + "/turnstile/site-key",
-	"S3_BUCKET_NAME":           productionParameterPrefix + "/s3/bucket-name",
-	"S3_FORCE_PATH_STYLE":      productionParameterPrefix + "/s3/force-path-style",
-	"GALLERY_URL":              productionParameterPrefix + "/gallery-url",
-	"CONSENT_TERMS_VERSION":    productionParameterPrefix + "/consent/terms/version",
-	"CONSENT_TERMS_SHA256":     productionParameterPrefix + "/consent/terms/sha256",
-	"CONSENT_TERMS_URL":        productionParameterPrefix + "/consent/terms/url",
-	"CONSENT_IMAGE_VERSION":    productionParameterPrefix + "/consent/image/version",
-	"CONSENT_IMAGE_SHA256":     productionParameterPrefix + "/consent/image/sha256",
-	"CONSENT_IMAGE_URL":        productionParameterPrefix + "/consent/image/url",
-	"CONSENT_MINOR_VERSION":    productionParameterPrefix + "/consent/minor/version",
-	"CONSENT_MINOR_SHA256":     productionParameterPrefix + "/consent/minor/sha256",
-	"CONSENT_MINOR_URL":        productionParameterPrefix + "/consent/minor/url",
-	"PRIVACY_NOTICE_URL":       productionParameterPrefix + "/legal/privacy-url",
-	"COOKIE_NOTICE_URL":        productionParameterPrefix + "/legal/cookies-url",
-	"DATA_RIGHTS_CONTACT":      productionParameterPrefix + "/legal/rights-contact",
-	"LOG_LEVEL":                productionParameterPrefix + "/log-level",
-	"TRUSTED_PROXY_CIDRS":      productionParameterPrefix + "/trusted-proxy-cidrs",
-	"RELEASE_REPOSITORY":       productionParameterPrefix + "/release/repository",
-	"DB_MAX_CONNS":             productionParameterPrefix + "/db/max-conns",
-	"DB_MIN_CONNS":             productionParameterPrefix + "/db/min-conns",
-	"DB_MAX_CONN_LIFETIME":     productionParameterPrefix + "/db/max-conn-lifetime",
-	"DB_MAX_CONN_IDLE_TIME":    productionParameterPrefix + "/db/max-conn-idle-time",
-	"DB_HEALTH_CHECK_PERIOD":   productionParameterPrefix + "/db/health-check-period",
-	"SESSION_LIFETIME":         productionParameterPrefix + "/session/lifetime",
-	"SESSION_IDLE_TIMEOUT":     productionParameterPrefix + "/session/idle-timeout",
-	"MAX_REQUEST_BYTES":        productionParameterPrefix + "/http/max-request-bytes",
-	"MAX_PHOTO_BYTES":          productionParameterPrefix + "/http/max-photo-bytes",
-	"HTTP_READ_HEADER_TIMEOUT": productionParameterPrefix + "/http/read-header-timeout",
-	"HTTP_READ_TIMEOUT":        productionParameterPrefix + "/http/read-timeout",
-	"HTTP_WRITE_TIMEOUT":       productionParameterPrefix + "/http/write-timeout",
-	"HTTP_IDLE_TIMEOUT":        productionParameterPrefix + "/http/idle-timeout",
-	"SHUTDOWN_TIMEOUT":         productionParameterPrefix + "/http/shutdown-timeout",
-	"RELEASE_CHECK_TIMEOUT":    productionParameterPrefix + "/release/check-timeout",
-	"RELEASE_CHECK_CACHE_TTL":  productionParameterPrefix + "/release/check-cache-ttl",
+	"BASE_URL":                   productionParameterPrefix + "/base-url",
+	"DB_HOST":                    productionParameterPrefix + "/db/host",
+	"DB_PORT":                    productionParameterPrefix + "/db/port",
+	"DB_NAME":                    productionParameterPrefix + "/db/name",
+	"DB_USER":                    productionParameterPrefix + "/db/user",
+	"POSTGRES_USER":              productionParameterPrefix + "/db/bootstrap-user",
+	"MIGRATION_DB_USER":          productionParameterPrefix + "/db/migration-user",
+	"DB_SSLMODE":                 productionParameterPrefix + "/db/sslmode",
+	"SMTP_HOST":                  productionParameterPrefix + "/smtp/host",
+	"SMTP_PORT":                  productionParameterPrefix + "/smtp/port",
+	"SMTP_FROM_ADDRESS":          productionParameterPrefix + "/smtp/from-address",
+	"SMTP_FROM_NAME":             productionParameterPrefix + "/smtp/from-name",
+	"SMTP_TLS_MODE":              productionParameterPrefix + "/smtp/tls-mode",
+	"SMTP_TIMEOUT":               productionParameterPrefix + "/smtp/timeout",
+	"TURNSTILE_SITE_KEY":         productionParameterPrefix + "/turnstile/site-key",
+	"POLAR_CLIENT_ID":            productionParameterPrefix + "/polar/client-id",
+	"ACTIVITY_CREDENTIAL_KEY_ID": productionParameterPrefix + "/activity/credential-key-id",
+	"S3_BUCKET_NAME":             productionParameterPrefix + "/s3/bucket-name",
+	"S3_FORCE_PATH_STYLE":        productionParameterPrefix + "/s3/force-path-style",
+	"GALLERY_URL":                productionParameterPrefix + "/gallery-url",
+	"CONSENT_TERMS_VERSION":      productionParameterPrefix + "/consent/terms/version",
+	"CONSENT_TERMS_SHA256":       productionParameterPrefix + "/consent/terms/sha256",
+	"CONSENT_TERMS_URL":          productionParameterPrefix + "/consent/terms/url",
+	"CONSENT_IMAGE_VERSION":      productionParameterPrefix + "/consent/image/version",
+	"CONSENT_IMAGE_SHA256":       productionParameterPrefix + "/consent/image/sha256",
+	"CONSENT_IMAGE_URL":          productionParameterPrefix + "/consent/image/url",
+	"CONSENT_MINOR_VERSION":      productionParameterPrefix + "/consent/minor/version",
+	"CONSENT_MINOR_SHA256":       productionParameterPrefix + "/consent/minor/sha256",
+	"CONSENT_MINOR_URL":          productionParameterPrefix + "/consent/minor/url",
+	"PRIVACY_NOTICE_URL":         productionParameterPrefix + "/legal/privacy-url",
+	"COOKIE_NOTICE_URL":          productionParameterPrefix + "/legal/cookies-url",
+	"DATA_RIGHTS_CONTACT":        productionParameterPrefix + "/legal/rights-contact",
+	"LOG_LEVEL":                  productionParameterPrefix + "/log-level",
+	"TRUSTED_PROXY_CIDRS":        productionParameterPrefix + "/trusted-proxy-cidrs",
+	"RELEASE_REPOSITORY":         productionParameterPrefix + "/release/repository",
+	"DB_MAX_CONNS":               productionParameterPrefix + "/db/max-conns",
+	"DB_MIN_CONNS":               productionParameterPrefix + "/db/min-conns",
+	"DB_MAX_CONN_LIFETIME":       productionParameterPrefix + "/db/max-conn-lifetime",
+	"DB_MAX_CONN_IDLE_TIME":      productionParameterPrefix + "/db/max-conn-idle-time",
+	"DB_HEALTH_CHECK_PERIOD":     productionParameterPrefix + "/db/health-check-period",
+	"SESSION_LIFETIME":           productionParameterPrefix + "/session/lifetime",
+	"SESSION_IDLE_TIMEOUT":       productionParameterPrefix + "/session/idle-timeout",
+	"MAX_REQUEST_BYTES":          productionParameterPrefix + "/http/max-request-bytes",
+	"MAX_PHOTO_BYTES":            productionParameterPrefix + "/http/max-photo-bytes",
+	"HTTP_READ_HEADER_TIMEOUT":   productionParameterPrefix + "/http/read-header-timeout",
+	"HTTP_READ_TIMEOUT":          productionParameterPrefix + "/http/read-timeout",
+	"HTTP_WRITE_TIMEOUT":         productionParameterPrefix + "/http/write-timeout",
+	"HTTP_IDLE_TIMEOUT":          productionParameterPrefix + "/http/idle-timeout",
+	"SHUTDOWN_TIMEOUT":           productionParameterPrefix + "/http/shutdown-timeout",
+	"RELEASE_CHECK_TIMEOUT":      productionParameterPrefix + "/release/check-timeout",
+	"RELEASE_CHECK_CACHE_TTL":    productionParameterPrefix + "/release/check-cache-ttl",
 }
 
 var rolloutOptionalProductionParameters = map[string]bool{
-	"PRIVACY_NOTICE_URL":  true,
-	"COOKIE_NOTICE_URL":   true,
-	"DATA_RIGHTS_CONTACT": true,
+	"PRIVACY_NOTICE_URL":         true,
+	"COOKIE_NOTICE_URL":          true,
+	"DATA_RIGHTS_CONTACT":        true,
+	"POLAR_CLIENT_ID":            true,
+	"ACTIVITY_CREDENTIAL_KEY_ID": true,
 }
 
 var productionSecretFields = []string{
@@ -143,6 +147,10 @@ type Config struct {
 	EmailVerificationHMACKeyB64 Secret `env:"EMAIL_VERIFICATION_HMAC_KEY_B64"`
 	TurnstileSiteKey            string `env:"TURNSTILE_SITE_KEY"`
 	TurnstileSecretKey          Secret `env:"TURNSTILE_SECRET_KEY"`
+	PolarClientID               string `env:"POLAR_CLIENT_ID"`
+	PolarClientSecret           Secret `env:"POLAR_CLIENT_SECRET"`
+	ActivityCredentialKeyID     string `env:"ACTIVITY_CREDENTIAL_KEY_ID"`
+	ActivityCredentialKeysJSON  Secret `env:"ACTIVITY_CREDENTIAL_KEYS_JSON"`
 
 	SMTPHost        string        `env:"SMTP_HOST"`
 	SMTPPort        int           `env:"SMTP_PORT" envDefault:"587"`
@@ -382,6 +390,10 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	c.EmailVerificationHMACKeyB64 = Secret(secrets["EMAIL_VERIFICATION_HMAC_KEY_B64"])
 	c.TurnstileSiteKey = parameters["TURNSTILE_SITE_KEY"]
 	c.TurnstileSecretKey = Secret(secrets["TURNSTILE_SECRET_KEY"])
+	c.PolarClientID = parameters["POLAR_CLIENT_ID"]
+	c.PolarClientSecret = Secret(secrets["POLAR_CLIENT_SECRET"])
+	c.ActivityCredentialKeyID = parameters["ACTIVITY_CREDENTIAL_KEY_ID"]
+	c.ActivityCredentialKeysJSON = Secret(secrets["ACTIVITY_CREDENTIAL_KEYS_JSON"])
 	c.SMTPHost = parameters["SMTP_HOST"]
 	c.SMTPUsername = secrets["SMTP_USERNAME"]
 	c.SMTPPassword = Secret(secrets["SMTP_PASSWORD"])
@@ -703,6 +715,35 @@ func (c Config) TrustedProxyCIDRs() ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
+// PolarCredentials returns the current dedicated credential-encryption key only
+// when the entire optional integration is configured. The key-ring format makes
+// rotations possible without making existing member credentials unreadable.
+func (c Config) PolarCredentials() (key []byte, keyID string, enabled bool, err error) {
+	values := []string{strings.TrimSpace(c.PolarClientID), strings.TrimSpace(c.PolarClientSecret.Value()), strings.TrimSpace(c.ActivityCredentialKeyID), strings.TrimSpace(c.ActivityCredentialKeysJSON.Value())}
+	set := 0
+	for _, value := range values {
+		if value != "" {
+			set++
+		}
+	}
+	if set == 0 {
+		return nil, "", false, nil
+	}
+	if set != len(values) {
+		return nil, "", false, errors.New("POLAR_CLIENT_ID, POLAR_CLIENT_SECRET, ACTIVITY_CREDENTIAL_KEY_ID, and ACTIVITY_CREDENTIAL_KEYS_JSON must be configured together")
+	}
+	var encoded map[string]string
+	if json.Unmarshal([]byte(c.ActivityCredentialKeysJSON.Value()), &encoded) != nil {
+		return nil, "", false, errors.New("ACTIVITY_CREDENTIAL_KEYS_JSON must be a JSON object of base64 keys")
+	}
+	value := encoded[c.ActivityCredentialKeyID]
+	decoded, decodeErr := base64.StdEncoding.DecodeString(value)
+	if decodeErr != nil || len(decoded) != 32 {
+		return nil, "", false, errors.New("ACTIVITY_CREDENTIAL_KEY_ID must identify a base64-encoded 32-byte key")
+	}
+	return decoded, c.ActivityCredentialKeyID, true, nil
+}
+
 func (c Config) Validate() error {
 	var problems Problems
 
@@ -766,6 +807,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.EmailVerificationHMACKey(); err != nil {
 		problems.Add("EMAIL_VERIFICATION_HMAC_KEY_B64", err.Error())
+	}
+	if _, _, _, err := c.PolarCredentials(); err != nil {
+		problems.Add("POLAR", err.Error())
 	}
 	if (strings.TrimSpace(c.TurnstileSiteKey) == "") != (strings.TrimSpace(c.TurnstileSecretKey.Value()) == "") {
 		problems.Add("TURNSTILE_SITE_KEY", "and TURNSTILE_SECRET_KEY must either both be set or both be empty")

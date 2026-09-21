@@ -522,3 +522,19 @@ check "production_input_validation" {
     error_message = "ALB log retention and WAF/autoscaling thresholds are invalid."
   }
 }
+
+variable "polar_client_id" {
+  type      = string
+  sensitive = true
+}
+variable "polar_client_secret" {
+  type      = string
+  sensitive = true
+}
+variable "activity_credential_key_id" {
+  type = string
+}
+variable "activity_credential_keys_json" {
+  type      = string
+  sensitive = true
+}

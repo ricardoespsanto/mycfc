@@ -32,11 +32,16 @@ type LoginUserLookup interface {
 	GetActiveDependentByLoginID(ctx context.Context, minorLoginID *string) (dbgen.GetActiveDependentByLoginIDRow, error)
 }
 
+type ActivitySyncStarter interface {
+	StartRecentSync(context.Context, uuid.UUID)
+}
+
 type Login struct {
-	Users       LoginUserLookup
-	Sessions    *scs.SessionManager
-	PageMeta    components.PageMeta
-	FailureWait func(context.Context)
+	Users        LoginUserLookup
+	Sessions     *scs.SessionManager
+	PageMeta     components.PageMeta
+	FailureWait  func(context.Context)
+	ActivitySync ActivitySyncStarter
 }
 
 func (h Login) Get(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +109,9 @@ func (h Login) Post(w http.ResponseWriter, r *http.Request) {
 	authenticatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	h.Sessions.Put(r.Context(), "last_seen_at", authenticatedAt)
 	h.Sessions.Put(r.Context(), "authenticated_at", authenticatedAt)
+	if h.ActivitySync != nil {
+		go h.ActivitySync.StartRecentSync(context.Background(), userID)
+	}
 	if next == "" {
 		next = "/dashboard"
 	}
