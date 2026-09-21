@@ -249,6 +249,7 @@ jobs:
           GIT_SHA: ${{ steps.image-refs.outputs.sha }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.image-refs.outputs.image_digest }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_PUBLICATION_MANIFEST: release-publication.json
         run: |
           set -Eeuo pipefail
           echo "receipt_not_before_ms=$(($(date +%s) * 1000))" >> "$GITHUB_OUTPUT"
