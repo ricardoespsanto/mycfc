@@ -20,7 +20,7 @@ started=$(date -u -d "@$((now - 2))" +%Y-%m-%dT%H:%M:%SZ)
 finished=$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)
 receipt=$work_dir/source-receipt.json
 env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
-	RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
+	RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
 	RELEASE_RESULT=succeeded RELEASE_SLOT=green TRAFFIC_SWITCHED=true ROLLBACK_PERFORMED=false \
 	GUARDIAN_INTAKE_ACTIVE=false PRIVACY_WORKER_ACTIVE=true PRIVACY_WORKER_ACTIVATION_REQUIRED=false \
 	RELEASE_STARTED_AT="$started" RELEASE_FINISHED_AT="$finished" RELEASE_EVIDENCE_OUTPUT="$receipt" \
@@ -37,7 +37,7 @@ output=$work_dir/verified-receipt.json
 run_verify() {
 	PATH="$work_dir/bin:$PATH" TEST_LOG_JSON="$1" AWS_REGION=eu-west-1 CLOUDWATCH_LOG_GROUP=/mycfc/production/deployment \
 		RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
-		RELEASE_TAG=release-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
+		RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
 		EXPECTED_GATES_JSON='{"guardian_intake":false,"privacy_worker":true}' \
 		RELEASE_EVIDENCE_START_TIME_MS=$((event_ms - 1000)) RELEASE_EVIDENCE_OUTPUT="$output" RELEASE_EVIDENCE_ATTEMPTS=1 \
 		sh "$script_dir/verify-release-evidence.sh"
