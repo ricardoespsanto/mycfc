@@ -383,7 +383,7 @@ grep -q 'rollback-rotate "$request_id"' "$agent"
 
 receipt_tf="$repo_dir/infra/environments/production/privacy_operation_receipts.tf"
 grep -q 'variable = "s3:if-none-match"' "$receipt_tf"
-grep -q 'variable = "s3:x-amz-checksum-sha256"' "$receipt_tf"
+! grep -q 'variable = "s3:x-amz-checksum-sha256"' "$receipt_tf"
 grep -q 'sid       = "DenyDeletion"' "$receipt_tf"
 grep -q 'Sid      = "DenyReceiptMutationAndReadback"' "$receipt_tf"
 grep -Fq '"${local.privacy_operation_receipt_bucket_arn}/receipts/*"' "$receipt_tf"
