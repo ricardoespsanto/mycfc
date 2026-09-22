@@ -25,6 +25,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestPostgresUploadCleanupStoreFailRejectsUnclaimedIntent(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	pool, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store := PostgresUploadCleanupStore{DB: pool}
+	if err = store.Fail(t.Context(), UploadCleanupClaim{IntentID: uuid.New(), AttemptID: uuid.New(), LeaseEpoch: 1}, uuid.New(), false, 0); err == nil {
+		t.Fatal("unclaimed cleanup intent accepted")
+	}
+}
+
 type cleanupVersionedStoreFake struct{ key string }
 
 func (s *cleanupVersionedStoreFake) DeleteAllVersions(_ context.Context, key string) (storage.VersionDeletionEvidence, error) {

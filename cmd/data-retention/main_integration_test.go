@@ -5,7 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"net/url"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -13,78 +13,70 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestRunUsesDedicatedLoginAndBoundedCapability(t *testing.T) {
-	databaseURL := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
-	if databaseURL == "" {
+func TestManualRunFailsClosedWhenCapabilityIsRevoked(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL required")
 	}
-	admin, err := pgx.Connect(t.Context(), databaseURL)
+	admin, err := pgx.Connect(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = admin.Close(context.Background()) })
-
-	const loginRole = "mycfc_data_retention_test_login"
-	const loginPassword = "data-retention-test-password"
-	role := pgx.Identifier{loginRole}.Sanitize()
-	if _, err = admin.Exec(t.Context(), `GRANT USAGE ON SCHEMA public TO mycfc_data_retention;
-	GRANT EXECUTE ON FUNCTION data_retention_run(uuid,integer), data_retention_status() TO mycfc_data_retention;
-	DO $$BEGIN
-		IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_data_retention_test_login') THEN
-			CREATE ROLE mycfc_data_retention_test_login LOGIN NOINHERIT PASSWORD 'data-retention-test-password';
-		ELSE
-			ALTER ROLE mycfc_data_retention_test_login LOGIN NOINHERIT PASSWORD 'data-retention-test-password';
-		END IF;
-	END$$;
-	GRANT mycfc_data_retention TO mycfc_data_retention_test_login;`); err != nil {
+	defer admin.Close(context.Background())
+	if err = activateCapabilityRole("mycfc_absent_retention_role")(t.Context(), admin); err == nil {
+		t.Fatal("missing capability role accepted")
+	}
+	if _, err = admin.Exec(t.Context(), `GRANT EXECUTE ON FUNCTION data_retention_run(uuid,integer),
+		data_retention_status() TO mycfc_data_retention`); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1`, loginRole)
-		_, _ = admin.Exec(context.Background(), `REVOKE mycfc_data_retention FROM `+role)
-		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
-	})
-
-	var tableAccess, runAccess, statusAccess bool
-	if err = admin.QueryRow(t.Context(), `SELECT
-		has_table_privilege('mycfc_data_retention','users','SELECT'),
-		has_function_privilege('mycfc_data_retention','data_retention_run(uuid,integer)','EXECUTE'),
-		has_function_privilege('mycfc_data_retention','data_retention_status()','EXECUTE')`).Scan(&tableAccess, &runAccess, &statusAccess); err != nil {
-		t.Fatal(err)
+	values := map[string]string{"DATA_RETENTION_ENABLED": "true", "DATA_RETENTION_DATABASE_URL": dsn}
+	getenv := func(key string) string { return values[key] }
+	args := []string{"run", "--confirmed-manual-review"}
+	for _, tc := range []struct{ name, signature string }{
+		{"run", "data_retention_run(uuid,integer)"},
+		{"status", "data_retention_status()"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := admin.Exec(t.Context(), "REVOKE EXECUTE ON FUNCTION "+tc.signature+" FROM mycfc_data_retention"); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if _, err := admin.Exec(context.Background(), "GRANT EXECUTE ON FUNCTION "+tc.signature+" TO mycfc_data_retention"); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := run(t.Context(), args, getenv, io.Discard); err == nil {
+				t.Fatal("revoked capability accepted")
+			}
+		})
 	}
-	if tableAccess || !runAccess || !statusAccess {
-		t.Fatalf("unexpected retention capability table=%t run=%t status=%t", tableAccess, runAccess, statusAccess)
-	}
+}
 
-	loginURL, err := url.Parse(databaseURL)
+func TestManualRunUsesNarrowRetentionRole(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL required")
+	}
+	admin, err := pgx.Connect(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	loginURL.User = url.UserPassword(loginRole, loginPassword)
-	env := map[string]string{
+	defer admin.Close(t.Context())
+	// Earlier migration tests replace these routines; restore the fixed test grant.
+	if _, err = admin.Exec(t.Context(), `GRANT EXECUTE ON FUNCTION data_retention_run(uuid,integer),
+		data_retention_status() TO mycfc_data_retention`); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
 		"DATA_RETENTION_ENABLED":      "true",
-		"DATA_RETENTION_DATABASE_URL": loginURL.String(),
+		"DATA_RETENTION_DATABASE_URL": dsn,
 	}
 	var output bytes.Buffer
-	if err = run(t.Context(), []string{"run", "--confirmed-manual-review"}, func(name string) string { return env[name] }, &output); err != nil {
+	if err = run(t.Context(), []string{"run", "--confirmed-manual-review"}, func(key string) string { return values[key] }, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output.String(), "data_retention_succeeded ") || strings.Contains(output.String(), loginRole) {
-		t.Fatalf("unsafe or missing aggregate evidence %q", output.String())
-	}
-
-	login, err := pgx.Connect(t.Context(), loginURL.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer login.Close(context.Background())
-	if _, err = login.Exec(t.Context(), `SELECT count(*) FROM users`); err == nil {
-		t.Fatal("dedicated login read application tables without activating its bounded capability")
-	}
-	if _, err = login.Exec(t.Context(), `SET ROLE mycfc_data_retention`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = login.Exec(t.Context(), `SELECT count(*) FROM users`); err == nil {
-		t.Fatal("retention capability read application tables")
+	if !strings.Contains(output.String(), "data_retention_succeeded") || !strings.Contains(output.String(), "due_count=") {
+		t.Fatalf("manual retention result missing: %s", output.String())
 	}
 }

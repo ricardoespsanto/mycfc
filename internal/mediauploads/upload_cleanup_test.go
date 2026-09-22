@@ -138,6 +138,14 @@ func TestPostgresUploadCleanupStoreRequiresDatabase(t *testing.T) {
 	}
 }
 
+func TestDecodeFieldsRejectsTruncatedEnvelope(t *testing.T) {
+	for _, payload := range [][]byte{{1, 2, 3}, {0, 0, 0, 2, 'x'}} {
+		if _, ok := decodeFields(payload, 1); ok {
+			t.Fatalf("truncated field accepted: %x", payload)
+		}
+	}
+}
+
 func cleanupWorkerClaim(t *testing.T) (UploadCleanupClaim, []byte) {
 	t.Helper()
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
