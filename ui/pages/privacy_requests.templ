@@ -174,24 +174,32 @@ templ privacyActivationControlContent(page PrivacyActivationControlPage) {
 		if page.Error != "" {
 			@components.ErrorSummary([]components.FieldError{{Field: "privacy-activation-action", Message: page.Error}})
 		}
-		<section id="privacy-activation-action" tabindex="-1" class="module" aria-labelledby="privacy-activation-status-title">
-			<h2 id="privacy-activation-status-title">Estado da ativação</h2>
-			<dl><dt>Política</dt><dd>{ page.PolicyVersion }</dd><dt>Processamento</dt><dd>{ privacyReadyLabel(page.Ready) }</dd></dl>
-			<p>Os comprovativos são autenticados e registados pelo processo operacional protegido. Não envie chaves ou ficheiros de prova através desta página.</p>
-		</section>
-		<section class="module" aria-labelledby="privacy-activation-evidence-title">
-			<h2 id="privacy-activation-evidence-title">Comprovativos atuais</h2>
-			if len(page.Evidence) == 0 {
-				@components.EmptyState("Sem comprovativos atuais", "Registe os quatro comprovativos através do processo operacional protegido.")
-			} else {
-				<ul>
-					for _, evidence := range page.Evidence {
-						<li><strong>{ privacyEvidenceKind(evidence.Kind) }</strong> — observado em { evidence.ObservedAt }</li>
-					}
-				</ul>
-			}
-		</section>
-		if page.ProposedAt != "" {
+		if page.Unavailable {
+			<section id="privacy-activation-action" tabindex="-1" class="module" aria-labelledby="privacy-activation-status-title">
+				<h2 id="privacy-activation-status-title">Ativação ainda não configurada</h2>
+				<p>Não existe uma política de execução adotada para ativar neste ambiente.</p>
+				<p>O processamento permanece inativo. A configuração e os comprovativos têm de ser preparados através do processo operacional protegido.</p>
+			</section>
+		} else {
+			<section id="privacy-activation-action" tabindex="-1" class="module" aria-labelledby="privacy-activation-status-title">
+				<h2 id="privacy-activation-status-title">Estado da ativação</h2>
+				<dl><dt>Política</dt><dd>{ page.PolicyVersion }</dd><dt>Processamento</dt><dd>{ privacyReadyLabel(page.Ready) }</dd></dl>
+				<p>Os comprovativos são autenticados e registados pelo processo operacional protegido. Não envie chaves ou ficheiros de prova através desta página.</p>
+			</section>
+			<section class="module" aria-labelledby="privacy-activation-evidence-title">
+				<h2 id="privacy-activation-evidence-title">Comprovativos atuais</h2>
+				if len(page.Evidence) == 0 {
+					@components.EmptyState("Sem comprovativos atuais", "Registe os quatro comprovativos através do processo operacional protegido.")
+				} else {
+					<ul>
+						for _, evidence := range page.Evidence {
+							<li><strong>{ privacyEvidenceKind(evidence.Kind) }</strong> — observado em { evidence.ObservedAt }</li>
+						}
+					</ul>
+				}
+			</section>
+		}
+		if !page.Unavailable && page.ProposedAt != "" {
 			<section class="module" aria-labelledby="privacy-activation-proposal-title">
 				<h2 id="privacy-activation-proposal-title">Ativação proposta</h2>
 				<p>Proposta registada em { page.ProposedAt }. A aprovação tem de ser feita por uma pessoa administradora diferente.</p>
@@ -203,7 +211,7 @@ templ privacyActivationControlContent(page PrivacyActivationControlPage) {
 					</form>
 				}
 			</section>
-		} else if (page.CanPropose || page.CanRenew) && len(page.Evidence) == 4 {
+		} else if !page.Unavailable && (page.CanPropose || page.CanRenew) && len(page.Evidence) == 4 {
 			<section class="module" aria-labelledby="privacy-activation-propose-title">
 				if page.CanRenew {
 					<h2 id="privacy-activation-propose-title">Renovar comprovativos</h2>

@@ -133,6 +133,20 @@ func TestPrivacyActivationUsesRecordedEvidenceAndIndependentNativeApproval(t *te
 	}
 }
 
+func TestPrivacyActivationUnavailableExplainsInactiveStateWithoutControls(t *testing.T) {
+	body := privacyRender(t, privacyActivationControlContent(PrivacyActivationControlPage{Meta: privacyCSRF(), Unavailable: true}))
+	for _, want := range []string{"Ativação ainda não configurada", "processamento permanece inativo", "processo operacional protegido"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("activation unavailable page missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Comprovativos atuais", `action="/admin/privacidade/ativacao/propor"`, `action="/admin/privacidade/ativacao/aprovar"`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("activation unavailable page contains %q", unwanted)
+		}
+	}
+}
+
 func TestPrivacyApprovalClearlyAwaitsExecution(t *testing.T) {
 	for _, status := range []string{"AWAITING_EXECUTION", "PARTIALLY_APPROVED"} {
 		body := privacyRender(t, privacyRequestDetailContent(PrivacyRequestDetailPage{Status: status, History: []PrivacyHistoryItem{{At: "08/09/2026", Label: "Decisão registada"}}, Categories: []PrivacyCategory{{Label: "Fotografias", Outcome: "RETAIN", Ground: "GROUND", Grounds: []PrivacyOption{{Value: "GROUND", Label: "Fundamento aprovado"}}}}}))
