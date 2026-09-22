@@ -377,8 +377,27 @@ func (h PrivacyRequests) ActivationControl(w http.ResponseWriter, r *http.Reques
 }
 
 func (h PrivacyRequests) renderActivationControl(w http.ResponseWriter, r *http.Request, status int, actionError string) {
+	results := r.URL.Query()["resultado"]
+	if len(results) > 1 {
+		h.System.RequestRejected(w, r)
+		return
+	}
+	result := ""
+	if len(results) == 1 {
+		result = results[0]
+	}
 	u, _ := CurrentUserFromContext(r.Context())
 	snapshot, err := h.Service.ActivationControlSnapshot(r.Context(), u.ID)
+	if errors.Is(err, pr.ErrActivationUnavailable) {
+		if result != "" {
+			h.System.RequestRejected(w, r)
+			return
+		}
+		h.render(w, r, status, pages.PrivacyActivationControl(pages.PrivacyActivationControlPage{
+			Meta: h.meta(r), Unavailable: true,
+		}))
+		return
+	}
 	if err != nil {
 		h.controlFailure(w, r, err)
 		return
@@ -386,7 +405,7 @@ func (h PrivacyRequests) renderActivationControl(w http.ResponseWriter, r *http.
 	page := pages.PrivacyActivationControlPage{
 		Meta: h.meta(r), PolicyVersion: snapshot.PolicyVersion, Ready: snapshot.Ready, Error: actionError,
 	}
-	switch r.URL.Query().Get("resultado") {
+	switch result {
 	case "":
 	case "proposta":
 		page.Success = "A ativação foi proposta e aguarda aprovação independente."

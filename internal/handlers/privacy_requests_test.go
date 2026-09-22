@@ -511,7 +511,7 @@ func TestPrivacyOperationalControlFailureAndStaleStateBoundaries(t *testing.T) {
 			result string
 			err    error
 			want   int
-		}{{"", pr.ErrActivationUnavailable, http.StatusNotFound}, {"", errors.New("database unavailable"), http.StatusInternalServerError}, {"unexpected", nil, http.StatusForbidden}, {"proposta", nil, http.StatusOK}, {"aprovada", nil, http.StatusOK}} {
+		}{{"", pr.ErrActivationUnavailable, http.StatusOK}, {"unexpected", pr.ErrActivationUnavailable, http.StatusForbidden}, {"", pr.ErrForbidden, http.StatusNotFound}, {"", errors.New("database unavailable"), http.StatusInternalServerError}, {"unexpected", nil, http.StatusForbidden}, {"proposta", nil, http.StatusOK}, {"aprovada", nil, http.StatusOK}} {
 			s := privacyHandlerFixture(t)
 			s.activationErr = tc.err
 			s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2"}
@@ -520,6 +520,20 @@ func TestPrivacyOperationalControlFailureAndStaleStateBoundaries(t *testing.T) {
 			PrivacyRequests{Service: s}.ActivationControl(w, r)
 			if w.Code != tc.want {
 				t.Fatalf("activation result=%q status=%d want=%d", tc.result, w.Code, tc.want)
+			}
+			if errors.Is(tc.err, pr.ErrActivationUnavailable) && tc.result == "" && !strings.Contains(w.Body.String(), "Ativação ainda não configurada") {
+				t.Fatalf("activation unavailable body=%s", w.Body.String())
+			}
+		}
+		for _, err := range []error{nil, pr.ErrActivationUnavailable} {
+			s := privacyHandlerFixture(t)
+			s.activationErr = err
+			s.activationSnapshot = pr.ActivationControlSnapshot{PolicyVersion: "policy-v2"}
+			w := httptest.NewRecorder()
+			r := request(http.MethodGet, "/admin/privacidade/ativacao?resultado=&resultado=proposta", nil)
+			PrivacyRequests{Service: s}.ActivationControl(w, r)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("duplicate activation result with error %v status=%d", err, w.Code)
 			}
 		}
 	})

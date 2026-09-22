@@ -59,7 +59,8 @@ type PrivacyActivationEvidence struct{ ID, Kind, ObservedAt string }
 type PrivacyActivationControlPage struct {
 	Meta                                    components.PageMeta
 	PolicyVersion, Success, Error           string
-	Ready, CanPropose, CanRenew, CanApprove bool
+	Ready, Unavailable                      bool
+	CanPropose, CanRenew, CanApprove        bool
 	Evidence                                []PrivacyActivationEvidence
 	ProposedAt                              string
 }
