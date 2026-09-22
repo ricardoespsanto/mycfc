@@ -10734,14 +10734,8 @@ REVOKE ALL ON FUNCTION media_upload_cleanup_claim(bigint,uuid),
  media_upload_cleanup_fail(uuid,uuid,bigint,uuid,boolean,bigint) FROM PUBLIC;
 
 DO $$
-DECLARE routine record; legacy_role text; member_role record; granted_role record; protected_schema text;
+DECLARE routine record; legacy_role text;
 BEGIN
- IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_media_cleanup') THEN
-  CREATE ROLE mycfc_media_cleanup NOLOGIN;
- END IF;
- IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_data_retention') THEN
-  CREATE ROLE mycfc_data_retention NOLOGIN;
- END IF;
  REVOKE ALL ON SCHEMA public FROM mycfc_media_cleanup;
  GRANT USAGE ON SCHEMA public TO mycfc_media_cleanup;
  REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM mycfc_media_cleanup;
@@ -10774,45 +10768,6 @@ BEGIN
   END LOOP;
  END LOOP;
 
- FOREACH legacy_role IN ARRAY ARRAY[
-  'mycfc_privacy_executor','mycfc_privacy_retention','mycfc_privacy_activation_broker',
-  'mycfc_privacy_restore_observer','mycfc_privacy_activation_disable','mycfc_privacy_acceptance'
-  ] LOOP
-  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=legacy_role) THEN
-   FOR member_role IN
-    SELECT member.rolname AS member_name
-    FROM pg_auth_members membership
-    JOIN pg_roles granted ON granted.oid=membership.roleid
-    JOIN pg_roles member ON member.oid=membership.member
-    WHERE granted.rolname=legacy_role
-   LOOP
-    EXECUTE format('REVOKE %I FROM %I',legacy_role,member_role.member_name);
-   END LOOP;
-   FOR granted_role IN
-    SELECT granted.rolname AS granted_name FROM pg_auth_members membership
-    JOIN pg_roles granted ON granted.oid=membership.roleid
-    JOIN pg_roles member ON member.oid=membership.member
-    WHERE member.rolname=legacy_role
-   LOOP
-    EXECUTE format('REVOKE %I FROM %I',granted_role.granted_name,legacy_role);
-   END LOOP;
-   EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM %I',current_database(),legacy_role);
-   EXECUTE format('REVOKE ALL ON SCHEMA public FROM %I',legacy_role);
-   EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %I',legacy_role);
-   EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM %I',legacy_role);
-   FOREACH protected_schema IN ARRAY ARRAY['privacy_protected','privacy_disable','mycfc_meta'] LOOP
-    IF to_regnamespace(protected_schema) IS NOT NULL THEN
-     EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I',protected_schema,legacy_role);
-     EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I FROM %I',protected_schema,legacy_role);
-     EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I FROM %I',protected_schema,legacy_role);
-     EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM %I',protected_schema,legacy_role);
-    END IF;
-   END LOOP;
-   EXECUTE format('ALTER ROLE %I NOLOGIN PASSWORD NULL',legacy_role);
-   PERFORM pg_terminate_backend(pid) FROM pg_stat_activity
-    WHERE usename=legacy_role AND pid<>pg_backend_pid();
-  END IF;
- END LOOP;
 END$$;
 
 REVOKE ALL ON FUNCTION privacy_automation_activation_retired(),

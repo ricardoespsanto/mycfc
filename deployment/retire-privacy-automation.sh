@@ -48,7 +48,9 @@ for service in $retired_services; do
 	container_ids=$(docker ps -aq \
 		--filter label=com.docker.compose.project=mycfc-production \
 		--filter "label=com.docker.compose.service=$service")
-	[ -z "$container_ids" ] || docker rm -f $container_ids >/dev/null
+	for container_id in $container_ids; do
+		docker rm -f "$container_id" >/dev/null
+	done
 	remaining=$(docker ps -aq \
 		--filter label=com.docker.compose.project=mycfc-production \
 		--filter "label=com.docker.compose.service=$service")
