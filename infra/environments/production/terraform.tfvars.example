@@ -16,6 +16,12 @@ calendar_training_id    = "training@example.com"
 calendar_social_id      = "social@example.com"
 calendar_cleanups_id    = "cleanups@example.com"
 google_calendar_api_key = "replace-me"
+# Copy the existing production values exactly into BOTH protected plan and
+# apply TF_VARS before any plan/apply; never rotate the credential key ring here.
+polar_client_id               = "existing-polar-client-id-or-empty"
+polar_client_secret           = "existing-polar-client-secret-or-empty"
+activity_credential_key_id    = "existing-active-key-id-or-empty"
+activity_credential_keys_json = "existing-key-ring-json-or-empty"
 gallery_url             = "https://mycfcoimbra.com/gallery"
 
 consent_terms_version = "2026-09-06"

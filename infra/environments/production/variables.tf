@@ -61,6 +61,24 @@ variable "google_calendar_api_key" {
   type      = string
   sensitive = true
 }
+variable "polar_client_id" {
+  type        = string
+  description = "Existing production Polar client ID; preserve it during the runtime-secret cutover."
+}
+variable "polar_client_secret" {
+  type        = string
+  sensitive   = true
+  description = "Existing production Polar client secret; supply through protected Terraform input."
+}
+variable "activity_credential_key_id" {
+  type        = string
+  description = "Existing active Polar activity credential key ID."
+}
+variable "activity_credential_keys_json" {
+  type        = string
+  sensitive   = true
+  description = "Existing Polar activity credential key ring; never rotate during the runtime-secret cutover."
+}
 variable "gallery_url" { type = string }
 variable "consent_terms_version" { type = string }
 variable "consent_terms_sha256" { type = string }
