@@ -52,6 +52,9 @@ func TestPrivacyAutomationRetirementIsPermanentAndPreservesEvidence(t *testing.T
 		VALUES('PRIVACY_DECISION','payload',$1,gen_random_uuid(),'SENDING',clock_timestamp())`, requestID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = tx.Exec(ctx, retireLegacyPrivacyRolesSQL); err != nil {
+		t.Fatal(err)
+	}
 	migration, err := migrationFiles.ReadFile("migrations/202609220001_privacy_automation_retirement.sql")
 	if err != nil {
 		t.Fatal(err)

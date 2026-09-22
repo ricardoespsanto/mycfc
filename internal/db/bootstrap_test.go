@@ -249,7 +249,7 @@ func TestBootstrapRolesExecutesAllRoleHardeningStatementsAndStopsOnFailure(t *te
 		t.Fatal(err)
 	}
 	joined := strings.Join(conn.statements, "\n")
-	if len(conn.statements) < 15 || !strings.Contains(conn.statements[0], "CREATE EXTENSION") || !strings.Contains(joined, "ALTER DEFAULT PRIVILEGES") || strings.Contains(joined, "privacy_executor") {
+	if len(conn.statements) < 15 || !strings.Contains(conn.statements[0], "CREATE EXTENSION") || !strings.Contains(joined, "ALTER DEFAULT PRIVILEGES") || !strings.Contains(joined, "ALTER ROLE %I NOLOGIN PASSWORD NULL") {
 		t.Fatalf("bootstrap statements=%#v", conn.statements)
 	}
 	conn.err = errors.New("permission denied")
@@ -366,7 +366,6 @@ func TestApplyBaselineAndHardenEnforcesRetiredAutomationBoundary(t *testing.T) {
 		"mycfc_privacy_acceptance",
 		"data_erasure_request",
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I",
-		"ALTER ROLE %I NOLOGIN PASSWORD NULL",
 		"GRANT EXECUTE ON FUNCTION media_upload_cleanup_claim",
 		"GRANT EXECUTE ON FUNCTION data_retention_run",
 	} {
