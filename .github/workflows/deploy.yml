@@ -269,6 +269,12 @@ jobs:
           set -Eeuo pipefail
           docker logout "$REGISTRY" >/dev/null 2>&1 || true
           rm -f "$HOME/.docker/config.json"
+      - name: Require the protected operations observer
+        env:
+          OBSERVER_ROLE_ARN: ${{ vars.AWS_OPERATIONS_OBSERVER_ROLE_ARN }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$OBSERVER_ROLE_ARN" =~ ^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]
       - name: Assume the read-only production observer
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:

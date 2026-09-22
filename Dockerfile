@@ -19,25 +19,15 @@ COPY internal ./internal
 COPY ui ./ui
 COPY --from=assets /src/ui/static/dist ./ui/static/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mycfc ./cmd/server \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-restore-replay ./cmd/privacy-restore-replay \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-retention ./cmd/privacy-retention \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-worker ./cmd/privacy-worker \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-activation ./cmd/privacy-activation \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mycfc-privacy-activation-approval ./cmd/privacy-activation-approval \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-acceptance ./cmd/privacy-acceptance \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/privacy-operation-receipt ./cmd/privacy-operation-receipt \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/media-cleanup ./cmd/media-cleanup \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/data-retention ./cmd/data-retention \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/guardian-activation ./cmd/guardian-activation
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/mycfc /app/mycfc
-COPY --from=build /out/privacy-restore-replay /app/privacy-restore-replay
-COPY --from=build /out/privacy-retention /app/privacy-retention
-COPY --from=build /out/privacy-worker /app/privacy-worker
-COPY --from=build /out/privacy-activation /app/privacy-activation
-COPY --from=build /out/mycfc-privacy-activation-approval /usr/local/bin/mycfc-privacy-activation-approval
-COPY --from=build /out/privacy-acceptance /app/privacy-acceptance
-COPY --from=build /out/privacy-operation-receipt /app/privacy-operation-receipt
+COPY --from=build /out/media-cleanup /app/media-cleanup
+COPY --from=build /out/data-retention /app/data-retention
 COPY --from=build /out/guardian-activation /app/guardian-activation
 USER nonroot:nonroot
 EXPOSE 8080

@@ -6,6 +6,8 @@ deployment_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 state_dir=/etc/mycfc/deployment
 release_credentials_file=/etc/mycfc/release-aws/credentials
 guardian_release_bind_env_file=/etc/mycfc/guardian-release-bind.env
+database_maintenance_env_file=/etc/mycfc/database-maintenance.env
+database_control_env_file=/etc/mycfc/database-control.env
 
 if [ "$(id -u)" -ne 0 ]; then
 	printf '%s\n' 'Run this script as root so it can verify the protected environment file.' >&2
@@ -48,6 +50,44 @@ while IFS= read -r line || [ -n "$line" ]; do
 		*) printf '%s\n' "$guardian_release_bind_env_file contains an unsupported key." >&2; exit 1 ;;
 	esac
 done <"$guardian_release_bind_env_file"
+
+if [ ! -f "$database_maintenance_env_file" ] || [ -L "$database_maintenance_env_file" ] ||
+	[ "$(stat -c '%u:%g:%a' "$database_maintenance_env_file" 2>/dev/null || true)" != '0:0:600' ]; then
+	printf '%s\n' "$database_maintenance_env_file must be a root-owned regular file with mode 0600." >&2
+	exit 1
+fi
+for required in MEDIA_CLEANUP_DB_USER MEDIA_CLEANUP_DB_PASSWORD DATA_RETENTION_DB_USER DATA_RETENTION_DB_PASSWORD; do
+	if [ "$(grep -c "^$required=" "$database_maintenance_env_file" 2>/dev/null || true)" -ne 1 ]; then
+		printf '%s\n' "$database_maintenance_env_file is missing the exact maintenance credential contract." >&2
+		exit 1
+	fi
+done
+while IFS= read -r line || [ -n "$line" ]; do
+	case "$line" in
+		''|\#*) ;;
+		MEDIA_CLEANUP_DB_USER=*|MEDIA_CLEANUP_DB_PASSWORD=*|DATA_RETENTION_DB_USER=*|DATA_RETENTION_DB_PASSWORD=*) ;;
+		*) printf '%s\n' "$database_maintenance_env_file contains an unsupported key." >&2; exit 1 ;;
+	esac
+done <"$database_maintenance_env_file"
+
+if [ ! -f "$database_control_env_file" ] || [ -L "$database_control_env_file" ] ||
+	[ "$(stat -c '%u:%g:%a' "$database_control_env_file" 2>/dev/null || true)" != '0:0:600' ]; then
+	printf '%s\n' "$database_control_env_file must be a root-owned regular file with mode 0600." >&2
+	exit 1
+fi
+for required in POSTGRES_PASSWORD MIGRATION_DB_PASSWORD; do
+	if [ "$(grep -c "^$required=" "$database_control_env_file" 2>/dev/null || true)" -ne 1 ]; then
+		printf '%s\n' "$database_control_env_file is missing the exact privileged database credential contract." >&2
+		exit 1
+	fi
+done
+while IFS= read -r line || [ -n "$line" ]; do
+	case "$line" in
+		''|\#*) ;;
+		POSTGRES_PASSWORD=*|MIGRATION_DB_PASSWORD=*) ;;
+		*) printf '%s\n' "$database_control_env_file contains an unsupported key." >&2; exit 1 ;;
+	esac
+done <"$database_control_env_file"
 
 if ! command -v aws >/dev/null 2>&1; then
 	printf '%s\n' 'Missing required command: aws' >&2
@@ -96,6 +136,17 @@ case "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" in
 		;;
 	false) ;;
 	*) printf '%s\n' 'BACKUP_MANIFEST_AUTH_ENABLED must be true or false.' >&2; exit 1 ;;
+esac
+
+case "${POSTGRES_RESTORE_VERIFICATION_ENABLED:-false}" in
+	true)
+		if [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
+			printf '%s\n' 'POSTGRES_RESTORE_VERIFICATION_ENABLED=true requires BACKUP_MANIFEST_AUTH_ENABLED=true.' >&2
+			exit 1
+		fi
+		;;
+	false) ;;
+	*) printf '%s\n' 'POSTGRES_RESTORE_VERIFICATION_ENABLED must be true or false.' >&2; exit 1 ;;
 esac
 
 case "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" in
@@ -158,152 +209,22 @@ chmod 0600 "$cleanup_env_tmp"
 chown root:root "$cleanup_env_tmp"
 mv -f "$cleanup_env_tmp" /etc/mycfc/backup-cleanup.env
 
-case "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" in
+case "${MEDIA_CLEANUP_ENABLED:-false}" in
 	true)
-		if [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
-			printf '%s\n' 'PRIVACY_RESTORE_DRILL_ENABLED requires BACKUP_MANIFEST_AUTH_ENABLED=true.' >&2
-			exit 1
-		fi
-		: "${PRIVACY_RESTORE_LEDGER_BUCKET:?set PRIVACY_RESTORE_LEDGER_BUCKET in /etc/mycfc/mycfc.env}"
-		: "${PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN:?set PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN in /etc/mycfc/mycfc.env}"
-		for protected_file in /etc/mycfc/privacy-restore/credentials /etc/mycfc/privacy-restore/attestation.key /etc/mycfc/privacy-restore/tombstone-replay.key; do
-			if [ ! -f "$protected_file" ] || [ "$(stat -c '%u:%a' "$protected_file")" != '0:600' ]; then
-				printf '%s\n' 'A privacy restore input is missing or not root-owned mode 0600.' >&2
-				exit 1
-			fi
+		[ ! -L /etc/mycfc/media-cleanup.env ] && [ -f /etc/mycfc/media-cleanup.env ] && [ "$(stat -c '%u:%g:%a' /etc/mycfc/media-cleanup.env)" = '0:0:600' ] || {
+			printf '%s\n' '/etc/mycfc/media-cleanup.env must be a root-owned 0600 regular file.' >&2; exit 1;
+		}
+		[ ! -L /etc/mycfc/media-cleanup/keys ] && [ -d /etc/mycfc/media-cleanup/keys ] && [ "$(stat -c '%u:%g:%a' /etc/mycfc/media-cleanup/keys)" = '0:65532:750' ] || {
+			printf '%s\n' '/etc/mycfc/media-cleanup/keys must be a root:65532 0750 directory.' >&2; exit 1;
+		}
+		for path in /etc/mycfc/media-cleanup/keys/media-upload-private.key /etc/mycfc/media-cleanup/keys/media-cleanup-evidence.key; do
+			[ ! -L "$path" ] && [ -f "$path" ] && [ "$(stat -c '%u:%g:%a' "$path")" = '0:65532:440' ] || {
+				printf '%s\n' "$path must be a root:65532 0440 regular file." >&2; exit 1;
+			}
 		done
-		if ! tr -d '\n' </etc/mycfc/privacy-restore/attestation.key | grep -Eq '^[0-9A-Fa-f]{64}$'; then
-			printf '%s\n' 'The restore attestation authentication key must contain exactly 32 bytes encoded as hexadecimal.' >&2
-			exit 1
-		fi
-		install -d -m 0700 /etc/mycfc/privacy-restore/attestations
 		;;
 	false) ;;
-	*) printf '%s\n' 'PRIVACY_RESTORE_DRILL_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
-	true)
-		if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" != true ]; then
-			printf '%s\n' 'PRIVACY_RESTORE_PROMOTION_GATE_ENABLED requires PRIVACY_RESTORE_DRILL_ENABLED=true.' >&2
-			exit 1
-		fi
-		;;
-	false) ;;
-	*) printf '%s\n' 'PRIVACY_RESTORE_PROMOTION_GATE_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_RETENTION_ENABLED:-false}" in
-	true)
-		if [ ! -f /etc/mycfc/privacy-retention.env ] || [ "$(stat -c '%u:%a' /etc/mycfc/privacy-retention.env)" != '0:600' ]; then
-			printf '%s\n' '/etc/mycfc/privacy-retention.env must be owned by root and have mode 0600.' >&2
-			exit 1
-		fi
-		;;
-	false) ;;
-	*) printf '%s\n' 'PRIVACY_RETENTION_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_PRODUCTION_OPERATIONS_ENABLED:-false}" in
-	true | false) ;;
-	*) printf '%s\n' 'PRIVACY_PRODUCTION_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-case "${PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED:-false}" in
-	true | false) ;;
-	*) printf '%s\n' 'PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-case "${PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED:-false}" in
-	true | false) ;;
-	*) printf '%s\n' 'PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-case "${PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED:-false}" in
-	true | false) ;;
-	*) printf '%s\n' 'PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_ACTIVATION_EXCHANGE_ENABLED:-false}" in
-	true)
-		for file in \
-			/etc/mycfc/privacy-activation-exchange.env \
-			/etc/mycfc/privacy-activation/signer-registry.json \
-			/etc/mycfc/privacy-activation/executor-public-key-spki.der \
-			/etc/mycfc/privacy-activation/administrator-public-key-spki.der; do
-			if [ ! -f "$file" ] || [ -L "$file" ] || [ "$(stat -c '%u:%g:%a' "$file" 2>/dev/null || true)" != '0:0:600' ]; then
-				printf '%s\n' 'A privacy activation exchange input is missing or is not root-owned mode 0600.' >&2
-				exit 1
-			fi
-		done
-		if [ -e /etc/mycfc/privacy-activation-exchange/aws-credentials ] &&
-			{ [ ! -f /etc/mycfc/privacy-activation-exchange/aws-credentials ] ||
-				[ -L /etc/mycfc/privacy-activation-exchange/aws-credentials ] ||
-				[ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-activation-exchange/aws-credentials 2>/dev/null || true)" != '0:0:600' ]; }; then
-			printf '%s\n' 'The privacy activation courier credentials are present but are not a root-owned regular file with mode 0600.' >&2
-			exit 1
-		fi
-		registry_sha=$(sed -n 's/^PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256=//p' /etc/mycfc/privacy-activation-exchange.env)
-		if ! printf '%s' "$registry_sha" | grep -Eq '^[0-9a-f]{64}$' ||
-			[ "$registry_sha" != "$(sha256sum /etc/mycfc/privacy-activation/signer-registry.json | awk '{print $1}')" ]; then
-			printf '%s\n' 'The privacy activation signer registry does not match its separately pinned digest.' >&2
-			exit 1
-		fi
-		;;
-	false) ;;
-	*) printf '%s\n' 'PRIVACY_ACTIVATION_EXCHANGE_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_COMPLETION_ENABLED:-false}" in
-	true | false) ;;
-	*) printf '%s\n' 'PRIVACY_COMPLETION_ENABLED must be true or false.' >&2; exit 1 ;;
-esac
-
-case "${PRIVACY_WORKER_ENABLED:-false}" in
-	true)
-		if [ "${PRIVACY_REQUESTS_ENABLED:-false}" != true ]; then
-			printf '%s\n' 'PRIVACY_WORKER_ENABLED requires PRIVACY_REQUESTS_ENABLED=true.' >&2
-			exit 1
-		fi
-		if [ "${PRIVACY_COMPLETION_ENABLED:-false}" != true ]; then
-			printf '%s\n' 'PRIVACY_WORKER_ENABLED requires PRIVACY_COMPLETION_ENABLED=true.' >&2
-			exit 1
-		fi
-		if [ ! -f /etc/mycfc/privacy-worker.env ] || [ "$(stat -c '%u:%a' /etc/mycfc/privacy-worker.env)" != '0:600' ]; then
-			printf '%s\n' '/etc/mycfc/privacy-worker.env must be owned by root and have mode 0600.' >&2
-			exit 1
-		fi
-		if [ ! -f /etc/mycfc/privacy-activation-disable.env ] || [ -L /etc/mycfc/privacy-activation-disable.env ] || [ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-activation-disable.env)" != '0:0:600' ]; then
-			printf '%s\n' '/etc/mycfc/privacy-activation-disable.env must be owned by root and have mode 0600.' >&2
-			exit 1
-		fi
-		if [ ! -d /etc/mycfc/privacy-worker/keys ] || [ "$(stat -c '%u:%g:%a' /etc/mycfc/privacy-worker/keys)" != '0:65532:750' ]; then
-			printf '%s\n' '/etc/mycfc/privacy-worker/keys must be root-owned, group 65532, and mode 0750.' >&2
-			exit 1
-		fi
-		for protected_file in aws-credentials upload-private.key upload-evidence.key object-target-private.key object-evidence.key tombstone-public.key tombstone-locator.key provider-target-private.key provider-evidence.key provider-credential-digest-keys.json completion-delivery.key; do
-			path=/etc/mycfc/privacy-worker/keys/$protected_file
-			if [ ! -f "$path" ] || [ "$(stat -c '%u:%g:%a' "$path")" != '0:65532:440' ]; then
-				printf '%s\n' 'A privacy worker key input is missing or does not have root:65532 mode 0440.' >&2
-				exit 1
-			fi
-		done
-		for name in PRIVACY_EXECUTOR_DB_USER PRIVACY_EXECUTOR_DB_PASSWORD PRIVACY_ACTIVATION_BROKER_DB_USER PRIVACY_ACTIVATION_BROKER_DB_PASSWORD; do
-			case "$name" in
-				PRIVACY_EXECUTOR_DB_USER) value=${PRIVACY_EXECUTOR_DB_USER:-} ;;
-				PRIVACY_EXECUTOR_DB_PASSWORD) value=${PRIVACY_EXECUTOR_DB_PASSWORD:-} ;;
-				PRIVACY_ACTIVATION_BROKER_DB_USER) value=${PRIVACY_ACTIVATION_BROKER_DB_USER:-} ;;
-				PRIVACY_ACTIVATION_BROKER_DB_PASSWORD) value=${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-} ;;
-			esac
-			if [ -z "$value" ]; then
-				printf '%s\n' 'The privacy executor and activation broker database role bootstrap inputs are incomplete.' >&2
-				exit 1
-			fi
-		done
-		if [ "$PRIVACY_EXECUTOR_DB_USER" != mycfc_privacy_executor ] || [ "$PRIVACY_ACTIVATION_BROKER_DB_USER" != mycfc_privacy_activation_broker ]; then
-			printf '%s\n' 'The routine privacy database role identifiers must match the reviewed fixed identities.' >&2
-			exit 1
-		fi
-		;;
-	false) ;;
-	*) printf '%s\n' 'PRIVACY_WORKER_ENABLED must be true or false.' >&2; exit 1 ;;
+	*) printf "%s\n" "MEDIA_CLEANUP_ENABLED must be true or false." >&2; exit 1 ;;
 esac
 
 case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
@@ -327,7 +248,7 @@ case "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" in
 		;;
 esac
 
-for command in aws awk base64 cmp curl date docker flock gh hostname jq logger od openssl python3 sed sha256sum; do
+for command in aws awk base64 cmp curl date docker flock gh hostname jq logger od openssl python3 sed seq sha256sum; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf '%s\n' "Missing required command: $command" >&2
 		exit 1
@@ -339,24 +260,9 @@ chmod 0755 "$deployment_dir/release-status.sh"
 chmod 0755 "$deployment_dir/postgres-backup-version-cleanup.sh"
 chmod 0755 "$deployment_dir/postgres-backup-version-cleanup-cloudwatch.sh"
 chmod 0755 "$deployment_dir/hetzner-backup-posture.sh"
-chmod 0755 "$deployment_dir/postgres-restore-drill.sh"
-chmod 0755 "$deployment_dir/privacy-restore-observer.sh"
-chmod 0755 "$deployment_dir/verify-privacy-restore-attestation.sh"
-chmod 0755 "$deployment_dir/privacy-retention.sh"
-chmod 0755 "$deployment_dir/privacy-production-operation.sh"
-chmod 0755 "$deployment_dir/privacy-production-operation-agent.sh"
-chmod 0755 "$deployment_dir/privacy-operation-receipt-key.sh"
-chmod 0755 "$deployment_dir/privacy-production-config.sh"
-chmod 0755 "$deployment_dir/privacy-policy-import.sh"
-chmod 0755 "$deployment_dir/privacy-acceptance.sh"
-chmod 0755 "$deployment_dir/privacy-worker.sh"
-chmod 0755 "$deployment_dir/privacy-activation.sh"
-chmod 0755 "$deployment_dir/privacy-activation-exchange.sh"
-chmod 0755 "$deployment_dir/privacy-activation-courier-credentials.sh"
-chmod 0755 "$deployment_dir/privacy-activation-sign-approval.sh"
 chmod 0755 "$deployment_dir/guardian-activation.sh"
 chmod 0755 "$deployment_dir/guardian-release-bind.sh"
-chmod 0755 "$deployment_dir/legacy-media-purge.sh"
+chmod 0755 "$deployment_dir/postgres-restore-verification.sh"
 install -m 0644 "$deployment_dir/mycfc-pull-release.service" /etc/systemd/system/mycfc-pull-release.service
 install -m 0644 "$deployment_dir/mycfc-pull-release.timer" /etc/systemd/system/mycfc-pull-release.timer
 install -m 0644 "$deployment_dir/mycfc-postgres-backup.service" /etc/systemd/system/mycfc-postgres-backup.service
@@ -366,18 +272,19 @@ install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup-log.servi
 install -m 0644 "$deployment_dir/mycfc-postgres-backup-version-cleanup.timer" /etc/systemd/system/mycfc-postgres-backup-version-cleanup.timer
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.service" /etc/systemd/system/mycfc-hetzner-backup-posture.service
 install -m 0644 "$deployment_dir/mycfc-hetzner-backup-posture.timer" /etc/systemd/system/mycfc-hetzner-backup-posture.timer
-install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.service" /etc/systemd/system/mycfc-postgres-restore-drill.service
-install -m 0644 "$deployment_dir/mycfc-postgres-restore-drill.timer" /etc/systemd/system/mycfc-postgres-restore-drill.timer
-install -m 0644 "$deployment_dir/mycfc-privacy-retention.service" /etc/systemd/system/mycfc-privacy-retention.service
-install -m 0644 "$deployment_dir/mycfc-privacy-retention.timer" /etc/systemd/system/mycfc-privacy-retention.timer
-install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.service" /etc/systemd/system/mycfc-privacy-production-operation.service
-install -m 0644 "$deployment_dir/mycfc-privacy-production-operation.timer" /etc/systemd/system/mycfc-privacy-production-operation.timer
-install -m 0644 "$deployment_dir/mycfc-privacy-activation-collector.service" /etc/systemd/system/mycfc-privacy-activation-collector.service
-install -m 0644 "$deployment_dir/mycfc-privacy-activation-collector.timer" /etc/systemd/system/mycfc-privacy-activation-collector.timer
-install -m 0644 "$deployment_dir/mycfc-privacy-worker.service" /etc/systemd/system/mycfc-privacy-worker.service
+install -m 0644 "$deployment_dir/mycfc-media-cleanup.service" /etc/systemd/system/mycfc-media-cleanup.service
+install -m 0644 "$deployment_dir/mycfc-postgres-restore-verification.service" /etc/systemd/system/mycfc-postgres-restore-verification.service
+install -m 0644 "$deployment_dir/mycfc-postgres-restore-verification.timer" /etc/systemd/system/mycfc-postgres-restore-verification.timer
+chmod 0755 "$deployment_dir/retire-privacy-automation.sh"
+"$deployment_dir/retire-privacy-automation.sh"
 systemctl daemon-reload
 systemctl enable mycfc-pull-release.timer
 systemctl enable --now mycfc-postgres-backup.timer
+if [ "${POSTGRES_RESTORE_VERIFICATION_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-postgres-restore-verification.timer
+else
+	systemctl disable --now mycfc-postgres-restore-verification.timer >/dev/null 2>&1 || true
+fi
 if [ "${BACKUP_NONCURRENT_CLEANER_ENABLED:-false}" = true ] && [ "${BACKUP_NONCURRENT_CLEANER_DRY_RUN:-true}" = false ]; then
 	systemctl enable --now mycfc-postgres-backup-version-cleanup.timer
 else
@@ -388,31 +295,13 @@ if [ "${HETZNER_BACKUP_POSTURE_ENABLED:-false}" = true ]; then
 else
 	systemctl disable --now mycfc-hetzner-backup-posture.timer >/dev/null 2>&1 || true
 fi
-if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" = true ]; then
-	systemctl enable --now mycfc-postgres-restore-drill.timer
-else
-	systemctl disable --now mycfc-postgres-restore-drill.timer >/dev/null 2>&1 || true
-fi
-if [ "${PRIVACY_RETENTION_ENABLED:-false}" = true ]; then
-	systemctl enable --now mycfc-privacy-retention.timer
-else
-	systemctl disable --now mycfc-privacy-retention.timer >/dev/null 2>&1 || true
-fi
-install -d -o root -g root -m 0700 /var/lib/mycfc/privacy-operations /var/lib/mycfc/privacy-operations/processed /var/lib/mycfc/privacy-operations/receipts
-install -d -o root -g root -m 0700 /var/lib/mycfc/privacy-activation-exchange /var/lib/mycfc/privacy-activation-exchange/receipts
-systemctl disable --now mycfc-privacy-activation-collector.timer >/dev/null 2>&1 || true
-if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-	systemctl enable --now mycfc-privacy-worker.service
-else
-	systemctl disable --now mycfc-privacy-worker.service >/dev/null 2>&1 || true
-fi
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" build caddy
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps --force-recreate caddy
 systemctl start mycfc-pull-release.service
 docker compose --env-file "$env_file" -f "$deployment_dir/compose.yaml" up -d --no-deps cloudflared
 systemctl start mycfc-pull-release.timer
-if [ "${PRIVACY_PRODUCTION_OPERATIONS_ENABLED:-false}" = true ]; then
-	systemctl enable --now mycfc-privacy-production-operation.timer
+if [ "${MEDIA_CLEANUP_ENABLED:-false}" = true ]; then
+	systemctl enable --now mycfc-media-cleanup.service
 else
-	systemctl disable --now mycfc-privacy-production-operation.timer >/dev/null 2>&1 || true
+	systemctl disable --now mycfc-media-cleanup.service >/dev/null 2>&1 || true
 fi

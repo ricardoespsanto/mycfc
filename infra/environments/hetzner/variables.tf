@@ -43,34 +43,6 @@ variable "ssh_source_ips" {
   }
 }
 
-variable "privacy_restore_infrastructure_enabled" {
-  description = "Provision the inert, restore-independent encrypted tombstone ledger. This does not create credentials or enable reads/writes."
-  type        = bool
-  default     = false
-}
-
-variable "privacy_restore_ledger_write_enabled" {
-  description = "Grant the isolated ledger writer permission to append and verify tombstones. Requires separately approved infrastructure."
-  type        = bool
-  default     = false
-
-  validation {
-    condition     = !var.privacy_restore_ledger_write_enabled || var.privacy_restore_infrastructure_enabled
-    error_message = "privacy_restore_ledger_write_enabled requires privacy_restore_infrastructure_enabled."
-  }
-}
-
-variable "privacy_restore_ledger_replay_enabled" {
-  description = "Grant the isolated restore role permission to read tombstones during an offline restore."
-  type        = bool
-  default     = false
-
-  validation {
-    condition     = !var.privacy_restore_ledger_replay_enabled || var.privacy_restore_infrastructure_enabled
-    error_message = "privacy_restore_ledger_replay_enabled requires privacy_restore_infrastructure_enabled."
-  }
-}
-
 variable "postgres_backup_cleanup_identity_enabled" {
   description = "Provision an inert cleanup-only IAM role with version-inventory permission and one-hour sessions. Terraform creates no access key and grants no deletion."
   type        = bool

@@ -17,6 +17,7 @@ printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail 'invalid 
 printf '%s' "$SCHEMA_MIGRATION_DIGEST" | grep -Eq '^[0-9a-f]{64}$' || fail 'invalid schema digest'
 printf '%s' "$PUBLICATION_MANIFEST_SHA256" | grep -Eq '^[0-9a-f]{64}$' || fail 'invalid manifest digest'
 printf '%s' "$EXPECTED_GATES_JSON" | jq -e 'type == "object" and (keys | sort) == ["guardian_intake","privacy_worker"] and all(.[]; type == "boolean")' >/dev/null || fail 'invalid expected gates'
+printf '%s' "$EXPECTED_GATES_JSON" | jq -e '.privacy_worker == false' >/dev/null || fail 'privacy worker gate is permanently retired'
 case "$RELEASE_TAG" in "release-$RELEASE_VERSION"-??????????????-"$GIT_SHA") ;; *) fail 'release tag does not bind exact SHA' ;; esac
 printf '%s' "$CLOUDWATCH_LOG_GROUP" | grep -Eq '^/[A-Za-z0-9._/-]+$' || fail 'invalid log group'
 

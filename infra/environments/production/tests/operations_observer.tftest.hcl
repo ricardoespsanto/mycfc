@@ -29,11 +29,9 @@ variables {
   cookie_notice_url       = "https://mycfcoimbra.com/legal/cookies"
   data_rights_contact     = "privacy@example.com"
   image_git_sha           = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  postgres_password       = "test-bootstrap"
   app_db_username         = "mycfc_app"
   app_db_password         = "test-app"
   migration_db_username   = "mycfc_migrator"
-  migration_db_password   = "test-migrator"
   turnstile_site_key      = "test-site-key"
   turnstile_secret_key    = "test-secret-key"
 }
@@ -98,39 +96,9 @@ run "observer_is_short_lived_and_denies_sensitive_reads_and_mutation" {
   }
   assert {
     condition = alltrue([
-      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms", "s3:GetObjectVersion"] :
-      contains(concat(local.operations_observer_log_actions, local.operations_observer_ecr_actions, local.operations_observer_alarm_actions, local.operations_observer_receipt_actions), action)
+      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms"] :
+      contains(concat(local.operations_observer_log_actions, local.operations_observer_ecr_actions, local.operations_observer_alarm_actions), action)
     ])
     error_message = "Observer policy must contain only the required operational read paths."
   }
-}
-
-run "signed_receipt_transport_is_private_versioned_and_create_only" {
-  command = plan
-  variables {
-    privacy_operation_receipts_enabled = true
-  }
-  plan_options {
-    target = [
-      aws_kms_key.privacy_operation_receipts,
-      aws_s3_bucket.privacy_operation_receipts,
-      aws_s3_bucket_public_access_block.privacy_operation_receipts,
-      aws_s3_bucket_versioning.privacy_operation_receipts,
-      aws_s3_bucket_server_side_encryption_configuration.privacy_operation_receipts,
-      aws_s3_bucket_object_lock_configuration.privacy_operation_receipts,
-      aws_s3_bucket_policy.privacy_operation_receipts,
-      aws_iam_user_policy.privacy_operation_receipt_writer,
-    ]
-  }
-
-  assert {
-    condition = (
-      aws_s3_bucket.privacy_operation_receipts[0].object_lock_enabled == true &&
-      aws_s3_bucket_versioning.privacy_operation_receipts[0].versioning_configuration[0].status == "Enabled" &&
-      one(one(aws_s3_bucket_server_side_encryption_configuration.privacy_operation_receipts[0].rule).apply_server_side_encryption_by_default).sse_algorithm == "aws:kms" &&
-      aws_s3_bucket_public_access_block.privacy_operation_receipts[0].block_public_policy == true
-    )
-    error_message = "Signed receipts must use a private, versioned, Object-Locked KMS bucket."
-  }
-
 }

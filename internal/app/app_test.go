@@ -20,7 +20,6 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -91,10 +90,9 @@ func TestNewHTTPServerAppliesSecurityAndTrustedProxyMiddleware(t *testing.T) {
 }
 
 func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *testing.T) {
-	originalLoad, originalOpen, originalPing, originalAWS, originalRegistry := loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS, newApplicationProviderRegistry
+	originalLoad, originalOpen, originalPing, originalAWS := loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS
 	t.Cleanup(func() {
 		loadApplicationConfig, openApplicationPool, pingApplicationPool, loadApplicationAWS = originalLoad, originalOpen, originalPing, originalAWS
-		newApplicationProviderRegistry = originalRegistry
 	})
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -107,15 +105,10 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 		cfg.PolarClientSecret = config.Secret("polar-secret")
 		cfg.ActivityCredentialKeyID = "activity-v1"
 		cfg.ActivityCredentialKeysJSON = config.Secret(`{"activity-v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`)
-		cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR, AUTH_TOKEN_DELETE, ,IDENTITY_CLEAR"
-		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
-		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
-		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
-		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
-		cfg.PrivacyObjectTargetEncryptionKeyID = "object-target-key-v1"
-		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
-		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
+		cfg.MediaUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.MediaUploadEncryptionKeyID = "upload-key-v1"
+		cfg.MediaUploadDigestKeyID = "upload-digest-v1"
+		cfg.MediaUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 		return cfg, nil
 	}
 	openApplicationPool = func(ctx context.Context, poolConfig *pgxpool.Config) (*pgxpool.Pool, error) {
@@ -140,13 +133,6 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 		t.Fatalf("Polar configuration error=%v", err)
 	}
 	loadApplicationConfig = configuredLoad
-
-	newApplicationProviderRegistry = func() (*privacyrequests.ProviderExecutionRegistry, error) {
-		return nil, errors.New("invalid provider registry")
-	}
-	if _, err = New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy provider registry") {
-		t.Fatalf("provider registry error=%v", err)
-	}
 }
 
 func TestApplicationNewPropagatesConfigurationAndPoolStartupFailures(t *testing.T) {
@@ -200,7 +186,7 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
-		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+		cfg.MediaUploadEncryptionKeyID = "upload-key-v1"
 		return cfg, nil
 	}
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy upload key configuration") {
@@ -213,35 +199,14 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
-		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyUploadEncryptionKeyID = "invalid key id"
-		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
-		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+		cfg.MediaUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.MediaUploadEncryptionKeyID = "invalid key id"
+		cfg.MediaUploadDigestKeyID = "upload-digest-v1"
+		cfg.MediaUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 		return cfg, nil
 	}
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy upload protection") {
 		t.Fatalf("privacy upload protector error=%v", err)
-	}
-
-	loadApplicationConfig = func(context.Context) (config.Config, error) {
-		cfg := applicationStartupTestConfig()
-		cfg.PrivacyObjectTargetEncryptionKeyID = "partial"
-		return cfg, nil
-	}
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy object target key configuration") {
-		t.Fatalf("privacy object target key error=%v", err)
-	}
-
-	loadApplicationConfig = func(context.Context) (config.Config, error) {
-		cfg := applicationStartupTestConfig()
-		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyObjectTargetEncryptionKeyID = "invalid key id"
-		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
-		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
-		return cfg, nil
-	}
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy object target protection") {
-		t.Fatalf("privacy object target protector error=%v", err)
 	}
 
 	loadApplicationConfig = func(context.Context) (config.Config, error) {

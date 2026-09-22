@@ -75,10 +75,10 @@ chmod 0600 "$case_dir/mycfc.env"
 : >"$case_dir/release-aws/credentials"
 chmod 0600 "$case_dir/release-aws/credentials"
 cat >"$case_dir/state/release-publication.json" <<'EOF'
-{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":true},"git_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"2026-08-11T09:00:00Z","release_tag":"release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":{"migration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ordered_migrations":["001_initial.sql"]},"version":"v1.25.0"}
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":false},"git_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"2026-08-11T09:00:00Z","release_tag":"release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":{"migration_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ordered_migrations":["001_initial.sql"]},"version":"v1.25.0"}
 EOF
 manifest_sha=$(sha256sum "$case_dir/state/release-publication.json" | awk '{print $1}')
-jq -cn --arg manifest "$manifest_sha" '{actual_gates:{guardian_intake:false,privacy_worker:true},contract:"mycfc/deployment-receipt/v1",failure_phase:null,finished_at:"2026-08-11T09:01:05Z",git_sha:("b"*40),image:{digest:("sha256:"+("b"*64)),repository:"registry.example/mycfc"},privacy_worker_activation_required:false,publication_manifest_sha256:$manifest,release_tag:("release-v1.25.0-20260811090000-"+("b"*40)),result:"succeeded",rollback_performed:false,schema_migration_digest:("c"*64),slot:"blue",started_at:"2026-08-11T09:00:30Z",traffic_switched:true,version:"v1.25.0"}' >"$case_dir/state/deployment-receipt.json"
+jq -cn --arg manifest "$manifest_sha" '{actual_gates:{guardian_intake:false,privacy_worker:false},contract:"mycfc/deployment-receipt/v1",failure_phase:null,finished_at:"2026-08-11T09:01:05Z",git_sha:("b"*40),image:{digest:("sha256:"+("b"*64)),repository:"registry.example/mycfc"},privacy_worker_activation_required:false,publication_manifest_sha256:$manifest,release_tag:("release-v1.25.0-20260811090000-"+("b"*40)),result:"succeeded",rollback_performed:false,schema_migration_digest:("c"*64),slot:"blue",started_at:"2026-08-11T09:00:30Z",traffic_switched:true,version:"v1.25.0"}' >"$case_dir/state/deployment-receipt.json"
 printf 'blue\n' >"$case_dir/state/active-slot"
 printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-digest"
 printf 'release-v1.25.0-20260811090000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' >"$case_dir/state/release-timeline-tag"
@@ -131,7 +131,7 @@ json_output=$(TEST_RUNNING_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb TEST_RUN
 printf '%s\n' "$json_output" | jq -e '.state == "current" and .receipt_contract == "mycfc/deployment-receipt/v1" and .receipt_result == "succeeded"' >/dev/null
 
 cp "$case_dir/state/deployment-receipt.json" "$case_dir/state/deployment-receipt.saved.json"
-jq '.actual_gates.privacy_worker = false' "$case_dir/state/deployment-receipt.saved.json" >"$case_dir/state/deployment-receipt.json"
+jq '.actual_gates.privacy_worker = true' "$case_dir/state/deployment-receipt.saved.json" >"$case_dir/state/deployment-receipt.json"
 if TEST_RUNNING_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb TEST_RUNNING_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_status >/dev/null 2>&1; then
 	printf '%s\n' 'current release gate-state mismatch did not return nonzero' >&2
 	exit 1

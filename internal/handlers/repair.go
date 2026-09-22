@@ -16,7 +16,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/cfcoimbra/mycfc/ui/pages"
@@ -169,7 +169,7 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 
 	repairID := uuid.New()
 	params := dbgen.CreateRepairRequestParams{ID: repairID, IdempotencyKey: key, EquipmentID: equipmentID, ReportedByID: &user.ID, IssueDescription: form.Description}
-	var upload privacyrequests.PreparedUpload
+	var upload mediauploads.PreparedUpload
 	if photo != nil {
 		file, err := photo.Open()
 		if err != nil {
@@ -188,10 +188,10 @@ func (h Repair) Post(w http.ResponseWriter, r *http.Request) {
 			uploader, _ = h.Objects.(UploadService)
 		}
 		if uploader == nil {
-			h.internal(w, r, privacyrequests.ErrUploadProvenanceUnavailable)
+			h.internal(w, r, mediauploads.ErrUploadProvenanceUnavailable)
 			return
 		}
-		upload, err = uploader.Upload(r.Context(), privacyrequests.UploadInput{SubjectUserID: &user.ID, ActorUserID: user.ID, SourceKind: "REPAIR_ATTACHMENT", SourceRef: repairID}, validated)
+		upload, err = uploader.Upload(r.Context(), mediauploads.UploadInput{SubjectUserID: &user.ID, ActorUserID: user.ID, SourceKind: "REPAIR_ATTACHMENT", SourceRef: repairID}, validated)
 		if err != nil {
 			h.internal(w, r, storage.ErrObjectUpload)
 			return

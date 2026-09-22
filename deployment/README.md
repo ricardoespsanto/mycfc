@@ -1,312 +1,65 @@
-# Single-host deployment
+# Production deployment
 
-This directory runs MyCFC on one Hetzner host: Cloudflare Tunnel is the public edge, Caddy and PostgreSQL have no host ports, and a systemd timer promotes approved immutable ECR releases through blue-green application slots.
+MyCFC runs as a pull-based blue/green deployment. A green push to `main` does not deploy. An approved signed release publishes an immutable image and manifest; the host release service verifies both before migration, candidate checks and traffic switching.
 
-Cloudflare Tunnel connects outbound to Cloudflare and proxies to Caddy over the private Docker network. Caddy trusts client-IP headers only from private Docker ranges. Keep the Hetzner firewall closed to public web traffic.
+## Host installation
 
-## Host setup
+Install Docker, the AWS CLI and systemd, then run `deployment/install.sh` as root from the reviewed release bundle. The installer copies the deployment scripts and units, validates protected files, installs the release poller, nightly PostgreSQL backup and media cleanup service, and invokes `retire-privacy-automation.sh` to disable and remove the exact retired privacy units and containers.
 
-1. Clone this repository at `/opt/mycfc` on the host. The one-off migration container applies the embedded baseline when PostgreSQL is empty.
-2. Install Docker Engine with the Compose plugin. Do not permit inbound TCP 80 or 443.
-3. Install AWS CLI v2, GitHub CLI (`gh`), `curl`, `jq`, `openssl`, `python3`, and Docker Engine with the Compose plugin. `gh` verifies public GitHub artifact attestations and needs no GitHub write credential on the host.
-4. Create `/etc/mycfc/mycfc.env` as root, then set its mode to `0600`. This file is deliberately untracked and must never be copied into the repository.
-5. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` with the dedicated release-agent credentials described below.
-6. Run `sudo sh deployment/install.sh` from this checkout.
+The retirement helper deliberately does not delete legacy credentials or state. Review every reported path and remove it only under a separate host-maintenance approval.
 
-The dual-signer privacy activation exchange has additional root-owned inputs and remains inactive until its Terraform gate, host gates, courier credential, and two protected signer environments are configured. Its collector timer is disabled by the installer and starts only for an approved ceremony. Follow [`../docs/privacy-activation-exchange.md`](../docs/privacy-activation-exchange.md); do not stage approval JSON manually.
+The bootstrap environment is `/etc/mycfc/mycfc.env`, owned by root with mode `0600`. It contains host, AWS and backup inputs but no database passwords. The application password is loaded from the application-only Secrets Manager value. Keep `POSTGRES_PASSWORD` and `MIGRATION_DB_PASSWORD` only in `/etc/mycfc/database-control.env`, a root-owned `0600` file mounted into PostgreSQL and the one-shot release database jobs but never into the web containers. `POSTGRES_RESTORE_VERIFICATION_ENABLED=true` is valid only with `BACKUP_MANIFEST_AUTH_ENABLED=true`; the installer rejects any configuration that would schedule unauthenticated restore verification.
 
-The installer validates the Compose configuration, prepares persistent routing state under `/etc/mycfc/deployment`, installs the pull-release systemd timer, and performs one release check before enabling periodic polling. Each release run remains available in the local journal and is also sent to the `/mycfc/production/deployment` CloudWatch log group with 30-day retention. CloudWatch delivery is best-effort and cannot fail a release. The installer refuses an environment file that is not `root:root` mode `0600`.
-
-## Required host environment
-
-`/etc/mycfc/mycfc.env` is now only the host bootstrap file. The long-running application loads production runtime configuration from AWS Systems Manager Parameter Store and AWS Secrets Manager when `APP_ENV=production`; values left in this file for those settings are ignored by the app.
-
-Use real production values, not the local `.env.example` values.
+Required backup controls include:
 
 ```text
-MYCFC_IMAGE=<account>.dkr.ecr.<region>.amazonaws.com/mycfc-app@sha256:<immutable-digest>
-ECR_REPOSITORY_URL=<account>.dkr.ecr.<region>.amazonaws.com/mycfc-production
-CLOUDFLARE_TUNNEL_TOKEN=<Cloudflare remotely-managed tunnel token>
-MYCFC_DOMAIN=example.com
-APP_VERSION=<release-version>
-GIT_SHA=<40-lowercase-hex-commit>
-
-POSTGRES_DB=<database-name>
-POSTGRES_USER=<bootstrap-superuser>
-POSTGRES_PASSWORD=<bootstrap-superuser-password>
-
-AWS_REGION=<aws-region>
-AWS_ACCESS_KEY_ID=<aws-access-key-id>
-AWS_SECRET_ACCESS_KEY=<aws-secret-access-key>
-# AWS_SESSION_TOKEN=<optional-session-token>
-
-# Root-only backup identity, stored separately from these application credentials.
-BACKUP_S3_BUCKET=<private-postgresql-backup-bucket>
-BACKUP_KMS_KEY_ID=<exact-KMS-key-ARN>
-BACKUP_MANIFEST_AUTH_ENABLED=false
-
-# Separate backup-version inventory/deletion role; both host gates are inert.
-BACKUP_CLEANUP_ROLE_ARN=arn:aws:iam::<account-id>:role/mycfc-production-postgres-backup-cleanup
+BACKUP_S3_BUCKET=<bucket>
+BACKUP_KMS_KEY_ID=<key>
 BACKUP_NONCURRENT_CLEANER_ENABLED=false
 BACKUP_NONCURRENT_CLEANER_DRY_RUN=true
-
-# Independent privacy-restore controls; all remain inert by default.
-PRIVACY_RESTORE_LEDGER_BUCKET=<private-privacy-ledger-bucket>
-PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN=<exact-ledger-KMS-key-ARN>
-PRIVACY_RESTORE_DRILL_ENABLED=false
-PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=false
-
-# Independent bounded retention maintenance; remains inert by default.
-PRIVACY_RETENTION_ENABLED=false
-
-# Attested GitHub-to-host operations pull agent. Credential and destructive
-# operation families remain independently disabled.
-PRIVACY_PRODUCTION_OPERATIONS_ENABLED=false
-PRIVACY_PRODUCTION_CREDENTIAL_OPERATIONS_ENABLED=false
-PRIVACY_PRODUCTION_DESTRUCTIVE_OPERATIONS_ENABLED=false
-PRIVACY_PRODUCTION_ACTIVATION_OPERATIONS_ENABLED=false
-
-# Evidence-bound privacy execution; every independent gate remains inert by default.
-PRIVACY_REQUESTS_ENABLED=false
-PRIVACY_COMPLETION_ENABLED=false
-PRIVACY_WORKER_ENABLED=false
-# PRIVACY_EXECUTOR_DB_USER=<exact reviewed executor login>
-# PRIVACY_EXECUTOR_DB_PASSWORD=<generated executor password>
-# PRIVACY_ACTIVATION_BROKER_DB_USER=mycfc_privacy_activation_broker
-# PRIVACY_ACTIVATION_BROKER_DB_PASSWORD=<generated root-only broker password>
-
-GALLERY_URL=https://example.com/gallery
-
-CONSENT_TERMS_VERSION=2026-09-06
-CONSENT_TERMS_SHA256=21bf1637847c01b9f0be7fc951bd1fdc0b8b3c42c61576c06556519c8282a75a
-CONSENT_TERMS_URL=https://mycfcoimbra.com/legal/termos-gerais/2026-09-06
-CONSENT_IMAGE_VERSION=2026-09-06
-CONSENT_IMAGE_SHA256=8bb45fc72a29f72d13bac15a8c9769572b62408e24a83c5ccd698059aee34cf8
-CONSENT_IMAGE_URL=https://mycfcoimbra.com/legal/uso-imagem/2026-09-06
-CONSENT_MINOR_VERSION=2026-09-06
-CONSENT_MINOR_SHA256=900c3a6a0b29cad578700db47ff3636708496be64b60ec9d1a81f89789102b61
-CONSENT_MINOR_URL=https://mycfcoimbra.com/legal/responsabilidade-menor/2026-09-06
-PRIVACY_NOTICE_URL=https://mycfcoimbra.com/legal/privacidade/2026-09-11
-COOKIE_NOTICE_URL=https://mycfcoimbra.com/legal/cookies/2026-09-06
-DATA_RIGHTS_CONTACT=cfluvialcoimbra@gmail.com
+BACKUP_MANIFEST_AUTH_ENABLED=true
+POSTGRES_RESTORE_VERIFICATION_ENABLED=true
 ```
 
-Only `POSTGRES_*` remains duplicated in the host bootstrap file because the PostgreSQL container needs its initial database identity before AWS-backed application configuration can be loaded. The one-off bootstrap, migration, and hardening containers load the authoritative database names, users, and passwords from Systems Manager and Secrets Manager through the application runtime identity. Do not add `APP_DB_*` or `MIGRATION_DB_*` copies to the host file; stale copies are ignored and should be removed during the next approved host-maintenance window. The disabled #248 worker and its activation broker use two distinct logins provisioned by routine release bootstrap. Their credentials may be present in the root-only host environment only for those one-shot database jobs. The disable-only login is provisioned separately from `/etc/mycfc/privacy-activation-disable.env`; its password must never be copied into the main host environment or application-readable AWS secrets. The web app and worker never receive broker credentials or human approval keys. Provisioning, activation, and rollback are documented in `docs/privacy-worker-infrastructure.md`.
+The exact-version backup cleaner remains separately gated and uses a temporary, role-bound session. The annual isolated PostgreSQL restore verification checks authenticated backups and applies current migrations; it has no privacy-ledger replay or activation function.
 
-The installer also installs the bounded privacy-retention service and timer but disables them while `PRIVACY_RETENTION_ENABLED=false`. Its separate root-only database credential, role boundary, activation procedure, privacy-safe CloudWatch evidence, alert conditions, and forward-only compensation are documented in `docs/privacy-retention-operations.md`. Do not put that credential in this bootstrap file or an application-readable AWS secret.
+## AWS configuration
 
-The installer also installs the privacy production-operation pull timer, disabled by default. When `PRIVACY_PRODUCTION_OPERATIONS_ENABLED=true`, it uses the existing read-only ECR/release identity to fetch one immutable `privacy-op-*` request at a time, requires GitHub provenance from the protected operation workflow, binds the request to the exact active signed application image and commit, and invokes only the root-side allowlist in `privacy-production-operation.sh`. The workflow cannot submit shell text, paths, credentials or file payloads; evidence-bearing operations carry only the exact reviewed SHA-256 of a fixed-path root-owned input. Credential, destructive and activation families require their independent host gates above. The host signs canonical privacy-safe receipts with the root-only Ed25519 key, then publishes them once to the checksummed, versioned, Object-Locked KMS receipt bucket. GitHub verifies the exact S3 version and pinned signature; deployment-log text is monitoring only. Synthetic acceptance modes retain signed evidence under the protected host state directory and expose only fixed canary event counters; adverse and recovery signals use separate alarm transitions. See `docs/privacy-production-operations.md`.
+Apply `infra/environments/production` only after review and infrastructure approval. Terraform provisions the application runtime configuration, app secrets, SES, ECR, deployment logs, backup resources and dedicated identities.
 
-The installer also installs `mycfc-privacy-worker.service`, but disables it while `PRIVACY_WORKER_ENABLED=false`. The service will not start unless the privacy-request application gate is enabled, every protected worker input has the documented ownership/mode, and the executor-only database readiness function verifies current evidence plus dual approval. `privacy-activation.sh` is a root-only one-shot activation operator. Its explicit `provision-disable` mode provisions or rotates the fixed break-glass database login after migration; routine releases never receive that password. Its `disable` mode uses only `/etc/mycfc/privacy-activation-disable.env` (root-owned mode `0600`) and the separate `mycfc_privacy_activation_disable` credential; that runtime container receives no broker configuration, evidence files, or signing keys. See `docs/privacy-worker-infrastructure.md` for custody, incident, and verification steps.
+The application runtime identity may read `/mycfc/production/*`, `/mycfc/production/app-runtime-secrets-v2` and the application media bucket. It is explicitly denied access to the retired `/mycfc/production/app-secrets` secret, including historical versions that may contain former privileged database credentials. It cannot use ECR, deployment logs or delete media objects. The release identity may read the immutable release image and write allowlisted deployment events; it cannot read application configuration or use S3.
 
-Guardian-authority V2 has a root-only `guardian-activation.sh` operator and isolated `mycfc_guardian_activation_operator` login. The distinct root-only `guardian-release-bind.sh provision` step transactionally creates or re-hardens the fixed `mycfc_guardian_release_bind` cutoff login from `/etc/mycfc/guardian-release-bind.env`. On the first rollout, run it from the unpacked candidate bundle against schema 004 before `install.sh`: the role is staged with connect only, migration 005 detects it and grants only the cutoff routine, post-migration hardening reasserts that boundary, and the release cutoff runs before candidate start. The normal one-shot release service receives that file and candidate digest only, never the migration/object-owner connection or AWS configuration. The installer validates the protected file and makes both wrappers executable but never provisions either login; routine release never mounts an approval or invokes status/preflight/enable/disable. Exact two-stage order, credential and approval custody, canonical-byte generation, aggregate CloudWatch evidence, staged activation and destructive fail-closed rollback are documented in `docs/guardian-authority-operations.md`.
+The media cleanup identity is separate. It can list versions and delete only explicitly versioned objects under `profiles/`, `repairs/` and `equipment/`; it cannot read object bodies, create unversioned delete markers, upload, or chain roles. Keep both maintenance database logins only in `/etc/mycfc/database-maintenance.env`, a root-owned `0600` file accepted by the release bootstrap and migration jobs. The file must contain exactly `MEDIA_CLEANUP_DB_USER`, `MEDIA_CLEANUP_DB_PASSWORD`, `DATA_RETENTION_DB_USER`, and `DATA_RETENTION_DB_PASSWORD`. Copy each login only into its own root-protected service environment; never place either login in the application secret or general host environment.
 
-## Required AWS configuration
+## Release flow
 
-Apply `infra/environments/production` before releasing an app image that loads production config from AWS. Terraform creates these SSM `String` parameters under `/mycfc/production`:
+After merge, CI and the separate infrastructure decision, use the repository release command for the approved semantic version and issue list. Publication and deployment require their own approval. The release agent verifies the signed tag, commit, image provenance, manifest, ordered migration inventory and expected inactive gates before it runs the candidate.
 
-```text
-/mycfc/production/base-url
-/mycfc/production/db/host
-/mycfc/production/db/port
-/mycfc/production/db/name
-/mycfc/production/db/user
-/mycfc/production/db/bootstrap-user
-/mycfc/production/db/migration-user
-/mycfc/production/db/sslmode
-/mycfc/production/smtp/host
-/mycfc/production/smtp/port
-/mycfc/production/smtp/from-address
-/mycfc/production/smtp/from-name
-/mycfc/production/smtp/tls-mode
-/mycfc/production/smtp/timeout
-/mycfc/production/turnstile/site-key
-/mycfc/production/s3/bucket-name
-/mycfc/production/s3/force-path-style
-/mycfc/production/calendar/competition-id
-/mycfc/production/calendar/training-id
-/mycfc/production/calendar/social-id
-/mycfc/production/calendar/cleanups-id
-/mycfc/production/gallery-url
-/mycfc/production/consent/terms/version
-/mycfc/production/consent/terms/sha256
-/mycfc/production/consent/terms/url
-/mycfc/production/consent/image/version
-/mycfc/production/consent/image/sha256
-/mycfc/production/consent/image/url
-/mycfc/production/consent/minor/version
-/mycfc/production/consent/minor/sha256
-/mycfc/production/consent/minor/url
-/mycfc/production/legal/privacy-url
-/mycfc/production/legal/cookies-url
-/mycfc/production/legal/rights-contact
-/mycfc/production/log-level
-/mycfc/production/trusted-proxy-cidrs
-/mycfc/production/release/repository
-/mycfc/production/db/max-conns
-/mycfc/production/db/min-conns
-/mycfc/production/db/max-conn-lifetime
-/mycfc/production/db/max-conn-idle-time
-/mycfc/production/db/health-check-period
-/mycfc/production/session/lifetime
-/mycfc/production/session/idle-timeout
-/mycfc/production/http/max-request-bytes
-/mycfc/production/http/max-photo-bytes
-/mycfc/production/http/read-header-timeout
-/mycfc/production/http/read-timeout
-/mycfc/production/http/write-timeout
-/mycfc/production/http/idle-timeout
-/mycfc/production/http/shutdown-timeout
-/mycfc/production/release/check-timeout
-/mycfc/production/release/check-cache-ttl
-```
+The release contract retains the v1 receipt fields for compatibility. `privacy_worker_active` and `privacy_worker_activation_required` must both be `false`; any other value fails verification. Guardian intake remains independently fail closed until its own activation procedure is approved.
 
-Terraform also creates one Secrets Manager secret named `/mycfc/production/app-secrets` with this JSON shape:
+If a candidate fails before traffic switching, the active service is unchanged. A post-switch failure restores the previous route and environment and quarantines the failed digest. Releasing a replacement digest is the normal recovery path.
 
-```json
-{
-  "POSTGRES_PASSWORD": "<bootstrap-superuser-password>",
-  "APP_DB_PASSWORD": "<restricted-application-password>",
-  "MIGRATION_DB_PASSWORD": "<schema-migration-password>",
-  "CSRF_AUTH_KEY_B64": "<base64-encoded-32-byte-key>",
-  "EMAIL_VERIFICATION_HMAC_KEY_B64": "<base64-encoded-32-byte-key>",
-  "TURNSTILE_SECRET_KEY": "<cloudflare-turnstile-secret-key>",
-  "SMTP_USERNAME": "<ses-smtp-username>",
-  "SMTP_PASSWORD": "<ses-smtp-password>"
-}
-```
-
-Terraform creates separate application-runtime and release-agent AWS identities. The application identity can read `/mycfc/production/*`, `/mycfc/production/app-secrets`, and repair-photo S3 objects; it cannot access ECR or deployment logs. Install its sensitive `host_runtime_access_key_id` and `host_runtime_secret_access_key` outputs in `/etc/mycfc/mycfc.env` as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Caddy is built locally with `github.com/mholt/caddy-ratelimit@v0.1.0` and limits `POST /registo` to 5 requests per 5 minutes per client IP using Cloudflare's forwarded client IP.
-
-After a separate release approval, `make release VERSION=vX.Y.Z ISSUES=...` creates a signed annotated semantic tag and dispatches the protected workflow for the exact green `main` commit. A green push alone never publishes or deploys. GitHub verifies and attests both the application image and its canonical manifest before publishing the immutable `release-<tag-time>-<SHA>` ECR tag. The release agent independently verifies both attestations and the manifest/image identity before any candidate database command. It then starts the inactive slot and validates liveness, readiness, login, and the fingerprinted JavaScript asset before switching traffic.
-
-If a candidate fails, the active Caddy route and current application remain unchanged, the prior environment file is restored, and the failed image digest is written to `/etc/mycfc/deployment/failed-release-digest`. Polling will not retry that exact digest; publishing a replacement release resumes promotion automatically. To retry the same digest after correcting an external dependency, remove the marker deliberately and start one release check:
+Useful status commands:
 
 ```sh
-sudo rm /etc/mycfc/deployment/failed-release-digest
-sudo systemctl start mycfc-pull-release.service
-```
-
-The retained AWS Terraform stack provisions the SES identity, authoritative Cloudflare DKIM and MAIL FROM records, least-privilege SMTP credentials, CSRF and email-verification HMAC keys, SSM parameters, and Secrets Manager secret. Confirm SES production access and run `sudo ./deployment/verify-ses.sh`. The smoke test sends only to the AWS SES mailbox simulator.
-
-Use `docs/password-recovery-operations.md` for privacy-safe password-reset event, outbox, token-backlog, and SMTP diagnosis. Never print recipient addresses, sealed payloads, token digests, or reset URLs during an operational check.
-
-The ECR repository retains immutable `git-<SHA>` and `release-<UTC>-<SHA>` tags. The dedicated release identity has `ecr:GetAuthorizationToken`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, and write-only access to the deployment log group. It cannot read application configuration, use S3, or push/delete images. Create `/etc/mycfc/release-aws/credentials` as `root:root` mode `0600` from the sensitive Terraform outputs:
-
-```text
-[mycfc-release]
-aws_access_key_id=<release-agent-access-key-id>
-aws_secret_access_key=<release-agent-secret-access-key>
-```
-
-The root-owned systemd service remains intentional. It must control Docker containers and atomically update protected environment and routing state. Giving a nominal service account membership in the Docker group would still grant root-equivalent host control without creating a meaningful privilege boundary. AWS permissions are independently constrained by the dedicated profile.
-
-Create `/etc/mycfc/backup-aws/credentials` as `root:root` mode `0600` before running the installer. It must contain the dedicated `mycfc-backup` profile used only for the backup bucket and KMS key:
-
-```text
-[mycfc-backup]
-aws_access_key_id=<backup-access-key-id>
-aws_secret_access_key=<backup-secret-access-key>
-```
-
-The standing `mycfc-backup` profile and its permissions boundary retain prefix-scoped, read-only `s3:ListBucketVersions` because the restore drill inventories exact recovery points through that profile. They never receive `s3:DeleteObjectVersion`. When the separate cleanup role has been explicitly provisioned, an approved credential renewer may assume it for at most one hour. Install only that temporary session in `/etc/mycfc/backup-cleanup-aws/credentials` as `root:root` mode `0600`:
-
-```text
-[mycfc-backup-cleanup]
-aws_access_key_id=ASIA<temporary-cleanup-access-key-id>
-aws_secret_access_key=<temporary-cleanup-secret-access-key>
-aws_session_token=<required-temporary-session-token>
-```
-
-The installer and runtime reject long-lived access-key profiles, extra profiles, missing session tokens, expired or otherwise rejected sessions, and sessions whose caller ARN does not match `BACKUP_CLEANUP_ROLE_ARN`. Never put the cleanup session in `/etc/mycfc/backup-aws/credentials` or the application environment. The installer writes only the allowlisted bucket, region, role ARN, gates, and age boundary to `/etc/mycfc/backup-cleanup.env`; systemd presents that file and the temporary AWS session as service credentials to a transient unprivileged `mycfc-backup-cleanup` account. `/etc/mycfc` is otherwise inaccessible to that account, including ordinary backup, release, application, restore, and activation secrets.
-
-With `BACKUP_NONCURRENT_CLEANER_ENABLED=true` and `BACKUP_NONCURRENT_CLEANER_DRY_RUN=true`, the cleanup service can be invoked manually for inventory but the timer stays disabled. Exact-version deletion additionally requires the reviewed Terraform destructive gate and host dry-run false. The cleanup process writes only fixed event codes and aggregate counts to its protected runtime result. A separate root-owned logger service validates that allowlist before using the release logger to upload it to CloudWatch; raw AWS stderr and object keys are discarded locally and never enter that upload. Renew the session before its one-hour expiry or the cleanup fails closed and its existing alarm reports the missed boundary. See `docs/privacy-restore-infrastructure.md`.
-
-The installer always requires the standing backup credential plus `BACKUP_S3_BUCKET` and `BACKUP_KMS_KEY_ID`, then enables the release-poll and nightly backup timers. It requires the separate temporary cleanup session only when `BACKUP_NONCURRENT_CLEANER_ENABLED=true`.
-
-## Operations
-
-Run all commands with the protected environment file:
-
-```sh
-sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml ps
-sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml logs -f
-sudo docker compose --env-file /etc/mycfc/mycfc.env -f deployment/compose.yaml up -d --pull always
+sudo docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml ps
 sudo systemctl status mycfc-pull-release.timer
+sudo systemctl status mycfc-media-cleanup.service
 sudo journalctl -u mycfc-pull-release.service -n 100 --no-pager
-aws logs tail /mycfc/production/deployment --region eu-west-1 --since 1h
 sudo /opt/mycfc/deployment/release-status.sh
 sudo /opt/mycfc/deployment/release-status.sh --json
 ```
 
-`release-status.sh` reports only operational identifiers: the latest eligible tag/SHA/digest, running SHA/digest, active slot, release/worker service states, protected-config presence, last agent result, atomically associated attempt digest/result/time, quarantine marker, release age, and one of `current`, `pending`, `delayed`, `failed`, or `quarantined`. It validates and summarizes the atomic `mycfc/deployment-receipt/v1` file; `--json` emits the same allowlisted fields for local operator tooling. It also reports the tag-and-digest-associated release-tag timestamp, agent-start, ECR-detection, verified-pull, migration, candidate-readiness, traffic-switch, and completion timestamps plus tag-start-to-stage durations. Associating results and timelines with immutable release identity prevents an older attempt from misclassifying a newer release. Structured `event=deployment_*` journal and CloudWatch lines identify the selected release, current phase, duration, slot, rollback boundary, and non-secret database role configuration; the command never prints either credential file.
+## Database maintenance
 
-The source timer polls every 30 seconds with up to 10 seconds of jitter and one second of scheduling accuracy, for a 41-second scheduling bound; a release with no pickup evidence is delayed after 60 seconds. This timer must not be installed or restarted on production without separate release approval. After an approved rollout, record the pickup p90 plus the ECR/API request rate, host load/wakeups, and journal/CloudWatch log volume described in `docs/delivery-performance.md`. Investigate any `failed`, `delayed`, or `quarantined` result using the journal and CloudWatch logs.
+The release runs bootstrap, forward-only migration and privilege hardening before candidate startup. Migration `202609220001_privacy_automation_retirement` is permanent: releases must not restore privacy intake, automation roles, services or schedules.
 
-Terraform creates a CloudWatch metric filter, alarm, and SNS email subscription for repeated non-zero agent results. Confirm the AWS subscription message sent to `alarm_email`; an unconfirmed subscription receives no alerts. The alarm fires when failures occur in at least two of three five-minute periods and sends a recovery notification when the metric returns to normal.
+Media cleanup uses its own database login and only the `media_upload_cleanup_*` API. Manual retention is available as a one-shot binary in the signed image but has no service or timer; an authorized operator runs the `manual-maintenance` Compose profile only after a request-specific review and captures aggregate evidence. See `docs/privacy-rights-operations.md`.
 
-Persistent named volumes retain PostgreSQL data and Caddy certificates/configuration. Do not remove `pgdata` without a verified backup. Before starting a candidate, the release agent idempotently provisions/rotates the restricted roles, transfers legacy bootstrap-owned schema objects to the migration role, grants runtime DML privileges, and runs the new image's `migrate` command as the migration role. That command applies schema changes and the privacy-execution privilege boundary in one transaction, so newly created worker tables never have a committed broad-DML window. The release agent then reapplies the boundary idempotently as defence in depth. The web role can create and read only the durable handoff graph; a separately configured executor role has no direct DML and can advance worker state only through fenced routines. On an empty volume the migration command applies `internal/db/schema.sql`; on an existing database it records and applies pending forward-only migrations from `internal/db/migrations`. The web process never runs migrations during startup. A bootstrap, migration or privilege-hardening failure aborts the rollout before a candidate receives traffic.
+Guardian-authority activation remains a separate root-only operation with isolated `mycfc_guardian_activation_operator` and `mycfc_guardian_release_bind` logins. Routine releases do not provision approval evidence or enable guardian intake. See `docs/guardian-authority-operations.md`.
 
-The active application slot is recorded in `/etc/mycfc/deployment/active-slot`, and `/etc/mycfc/deployment/caddy-upstream.caddy` is generated from that state. Inspect both during an incident with:
+## Backups and recovery
 
-```sh
-sudo cat /etc/mycfc/deployment/active-slot
-sudo cat /etc/mycfc/deployment/caddy-upstream.caddy
-```
+The nightly backup service writes encrypted, authenticated PostgreSQL backups using the dedicated `mycfc-backup` profile. The standing profile cannot delete versions. Non-current cleanup requires a separately provisioned short-lived session and the independent cleaner gates.
 
-## Release rollback and incident access
-
-The release agent saves the last known-good environment as `/etc/mycfc/mycfc.env.previous` before every rollout. A failed candidate is quarantined and never receives traffic. A failure discovered after the Caddy reload restores the previous upstream automatically. To hold a manual rollback while investigating a release, stop the polling timer first:
-
-```sh
-sudo systemctl stop mycfc-pull-release.timer
-```
-
-Use the recorded inactive slot and retained previous environment for a deliberate manual rollback; update the Caddy fragment and reload only after confirming that slot is healthy. Check `/health/ready`, `/login`, and the fingerprinted browser asset through Cloudflare from an external network. Leave the timer stopped until a replacement release is available. Restore normal polling with `sudo systemctl start mycfc-pull-release.timer`.
-
-For a host incident, use the separate operator SSH key from an approved SSH CIDR. The deploy key is limited to deployment automation. Keep the Cloudflare Tunnel public hostname enabled during application rollback. Revert the public hostname to the retained AWS origin only during the approved rollback window, validate the same external checks, and do not retire AWS resources until that path and the PostgreSQL restore drill are accepted.
-
-## PostgreSQL recovery
-
-`mycfc-postgres-backup.timer` runs nightly at 02:15 UTC. It creates a custom-format `pg_dump`, encrypts it locally with a KMS-generated data key, and uploads the encrypted dump and its envelope metadata to the private backup bucket. Its standing credential can inventory exact versions only under the daily and monthly recovery prefixes for restore verification, but cannot delete object versions. Daily recovery points expire after 30 days; a second copy is retained monthly for 365 days. S3 SSE-KMS is an additional storage-at-rest control. Hetzner server backups are a separate recovery path, not a substitute for logical dumps.
-
-The recovery-point objective is 24 hours. The recovery-time objective is four hours, including replacement-host provisioning, credential recovery, download/decryption, restore, and application checks.
-
-Privacy-safe recovery additionally requires the independent tombstone ledger and isolated replay controls described in `docs/privacy-restore-infrastructure.md`. A normal database restore is never eligible for production traffic until current migrations, tombstone replay and absence verification have succeeded. The infrastructure remains disabled by default until its separate rollout gates are approved and evidenced.
-
-Non-current PostgreSQL backup versions use a separately gated exact-version cleaner. Its Terraform permission/lifecycle gate and host scheduling gate both default to false; rollout and privacy-safe event output are documented in `docs/privacy-restore-infrastructure.md`.
-
-The Hetzner backup-posture check is separately disabled by default. It uses a dedicated project-bound read token at `/etc/mycfc/hetzner-read/token` (owned by `root`, mode `0600`) to verify the exact configured server and its paginated image inventory without changing or deleting anything. To schedule the daily check, set all three protected host values and rerun the installer:
-
-```dotenv
-HETZNER_BACKUP_POSTURE_ENABLED=true
-HETZNER_SERVER_ID=123456789
-HETZNER_PROJECT_REF=mycfc
-```
-
-The server must have its Terraform `project` label and a provider-reported backup window. At most seven automatic images may be bound to it. Every snapshot created from it must carry `mycfc-owner-ref`, `mycfc-reason-code`, `mycfc-created-at`, and `mycfc-expires-at` labels. The owner is an opaque accountable operator reference, never a name or email; the reason is a non-identifying uppercase code. Both timestamp labels are ten-digit Unix seconds, the declared creation must equal the provider creation time, and expiry must be after creation, no later than 30 days after creation, and still in the future. A failing check only reports an allowlisted reason and never deletes a snapshot.
-
-The successful CloudWatch/journal event contains only automatic and manual counts, oldest ages, and a canonical inventory SHA-256 digest. It never contains provider image/server IDs, names, labels, or the project reference. The dedicated token establishes the project boundary; the exact server lookup, Terraform project label, `bound_to`, and `created_from` fields establish the server boundary. Run an unscheduled read-only check with `sudo systemctl start mycfc-hetzner-backup-posture.service` and inspect it with `sudo journalctl -u mycfc-hetzner-backup-posture.service -n 100 --no-pager`.
-
-The privacy-safe restore drill is disabled by default. It accepts only authenticated `mycfc/postgres-backup/v3` manifests; legacy v1/v2 manifests remain available to a separately reviewed emergency procedure but can never satisfy privacy promotion evidence. Version 3 derives the OpenSSL key through PBKDF2 from a root-private file so the decrypted KMS data key never appears in process arguments or shell tracing. Before enabling it, create three independently generated 32-byte values/keys and two dedicated AWS credential files:
-
-- `/etc/mycfc/backup-auth/manifest.key`: 64 hexadecimal characters, `root:root` mode `0600`; used by the nightly backup job to authenticate v3 manifests.
-- `/etc/mycfc/privacy-restore/attestation.key`: a different 64-character hexadecimal key, `root:root` mode `0600`; authenticates restore attestations checked by the release agent.
-- `/etc/mycfc/privacy-restore/tombstone-replay.key`: the protected X25519 private replay key, `root:root` mode `0600`; never supplied to the web application or an AWS-connected container.
-- `/etc/mycfc/privacy-restore/credentials`: `root:root` mode `0600`, containing only the dedicated offline ledger-reader profile described in `docs/privacy-restore-infrastructure.md`.
-
-Set `BACKUP_MANIFEST_AUTH_ENABLED=true` first and run/verify a new nightly backup. Then set `PRIVACY_RESTORE_LEDGER_BUCKET`, `PRIVACY_RESTORE_LEDGER_KMS_KEY_ARN`, and `PRIVACY_RESTORE_DRILL_ENABLED=true`, rerun the installer, and run a non-destructive drill with:
-
-```sh
-sudo /opt/mycfc/deployment/postgres-restore-drill.sh
-```
-
-The drill stably inventories both retention classes, skips invalid or unsigned candidates, and selects the oldest retained recovery point whose exact manifest version, manifest HMAC, exact dump version, S3 checksum, KMS identity and ciphertext checksum all verify. It then stably prefetches every exact current privacy-ledger version and its S3/KMS/Object-Lock evidence before creating a Docker `--internal` network. Only a temporary PostgreSQL container and the immutable candidate application image join that network. They receive no application AWS keys, SMTP settings, provider credentials or public route.
-
-Inside the isolated network the drill restores with `--no-owner --no-acl`, applies every current migration from the candidate image, and creates an ephemeral `mycfc_restore_observer` login with access only to the fixed aggregate observation function. It imports and decrypts the bounded v2 ledger through `/app/privacy-restore-replay`, idempotently reapplies the current relational prescriptions, and requires closure-v4 authenticated `erasure_effective_at`, complete membership-history postcondition digest, checkpoint, consent-clock, provider-absence and subject-absence verification. The independently pinned PostgreSQL observer image then queries only those aggregate postconditions and must agree exactly with the candidate counts and digests. Any closure-v1 through closure-v3 record, intent-only record, non-replayable v1 entry, incomplete checkpoint set, replay error, digest mismatch or absence failure rejects the drill before activation evidence is accepted. If the live ledger is empty, the candidate may create the authenticated `mycfc/privacy-restore-synthetic-fixture/v1` only inside the isolated database; that fixture must pass the same ordinary replay and independent observer path and can never enable live deletion. Teardown always removes the temporary database, observer credential, network and plaintext workspace.
-
-A successful run first uploads a canonical non-identifying candidate/observer evidence bundle to the encrypted, versioned `restore-evidence/` prefix and verifies its exact checksum, version and KMS identity. It then atomically writes a root-only `mycfc/privacy-restore-drill-attestation/v2` HMAC envelope at `/etc/mycfc/privacy-restore/attestations/latest.json` and uploads the same uniquely named envelope to `restore-attestations/` for 400 days. The envelope binds the immutable candidate and observer images, current policy/executor/plan/schema versions, exact versioned backup and source-evidence references, migrated-schema and ledger-inventory digests, closure/replay contracts, and both sets of aggregate counts. Logs contain only allowlisted contracts, digests, counts and ages. The attestation expires exactly 90 days after observation.
-
-`mycfc-postgres-restore-drill.timer` runs annually on 15 January with up to one day of jitter and is enabled only with `PRIVACY_RESTORE_DRILL_ENABLED=true`. Also rerun the drill after a backup/encryption/ledger change and after every material privacy or schema change. Setting `PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true` makes the release agent run the candidate image against the oldest valid retained backup before touching the production database, then independently verify the current attestation HMAC and exact candidate digest. A failure leaves traffic and the production database unchanged and quarantines the release through the existing rollback path. Keep this gate false until the reader credential, replay key, at least one fresh authenticated v3 backup, and a successful synthetic drill have all been reviewed. A v3 backup is necessary but not sufficient: every retained ledger entry must use the current closure-v4 contract and membership-history postcondition; any retained v1-v3 closure entry blocks activation.
-
-Check backup status with `sudo systemctl status mycfc-postgres-backup.service` and `sudo journalctl -u mycfc-postgres-backup.service -n 100 --no-pager`. Investigate any failed run before the next backup window; confirm free disk space before retrying. Rotate the `mycfc-production-postgres-backups` IAM access key by creating its replacement, atomically replacing `/etc/mycfc/backup-aws/credentials` as root mode `0600`, running a backup and restore drill, then disabling and deleting the previous key. Review Docker, PostgreSQL, Caddy, and application releases monthly; apply Ubuntu security updates automatically and schedule PostgreSQL major-version upgrades with a tested restore path.
+Before restoring production, stop the release poller, select and verify an exact backup version, restore into an isolated database, apply current migrations, run the full verification suite and obtain explicit approval for the production change. A restored database is never allowed to undo the privacy-automation retirement migration.

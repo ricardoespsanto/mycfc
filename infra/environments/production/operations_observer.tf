@@ -16,11 +16,6 @@ locals {
     "cloudwatch:GetMetricStatistics",
     "cloudwatch:ListMetrics",
   ]
-  operations_observer_receipt_actions = [
-    "s3:GetObject",
-    "s3:GetObjectAttributes",
-    "s3:GetObjectVersion",
-  ]
   operations_observer_deny_actions = [
     "ecr:BatchDeleteImage", "ecr:CompleteLayerUpload", "ecr:DeleteRepository*", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:PutImageTagMutability", "ecr:UploadLayerPart",
     "logs:CreateLogGroup", "logs:CreateLogStream", "logs:Delete*", "logs:PutLogEvents", "logs:PutMetricFilter",
@@ -66,21 +61,6 @@ locals {
         Resource = "*"
       },
       {
-        Sid    = "ReadExactSignedReceiptVersions"
-        Effect = "Allow"
-        Action = local.operations_observer_receipt_actions
-        Resource = [
-          "${local.privacy_operation_receipt_bucket_arn}/receipts/*",
-          "${local.privacy_operation_receipt_bucket_arn}/public-keys/*",
-        ]
-      },
-      {
-        Sid      = "DecryptOnlySignedReceipts"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = local.privacy_operation_receipt_key_arn
-      },
-      {
         Sid      = "DenySecretsStateAndMutation"
         Effect   = "Deny"
         Action   = local.operations_observer_deny_actions
@@ -101,6 +81,10 @@ resource "aws_iam_role" "operations_observer" {
   permissions_boundary = aws_iam_policy.operations_observer_boundary[0].arn
   max_session_duration = 3600
   tags                 = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_iam_policy" "operations_observer_boundary" {
@@ -110,6 +94,10 @@ resource "aws_iam_policy" "operations_observer_boundary" {
   description = "Maximum read-only deployment evidence permissions for the short-lived MyCFC observer."
   policy      = local.operations_observer_policy
   tags        = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy" "operations_observer" {

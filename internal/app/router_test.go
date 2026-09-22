@@ -238,16 +238,15 @@ func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 	}
 }
 
-func TestCompletionDetailRevealRejectsCrossSitePostBeforeConsuming(t *testing.T) {
-	sessions := scs.New()
-	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{}, handlers.PrivacyRequests{})
-	handler := httpx.SecurityHeadersMiddleware(false)(csrfProtection(make([]byte, 32), handlers.System{})(router))
-	request := httptest.NewRequest(http.MethodPost, "https://mycfc.example/privacidade/conclusao/consultar", nil)
-	request.Header.Set("Sec-Fetch-Site", "cross-site")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden || response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("completion cross-site response=%d cache=%q", response.Code, response.Header().Get("Cache-Control"))
+func TestRemovedPrivacyAutomationRoutesAreNotFound(t *testing.T) {
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{})
+	for _, path := range []string{"/perfil/privacidade", "/admin/privacidade", "/admin/privacidade/controlo", "/admin/privacidade/ativacao", "/privacidade/conclusao/token"} {
+		request := httptest.NewRequest(http.MethodGet, "https://mycfc.example"+path, nil)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404", path, response.Code)
+		}
 	}
 }
 

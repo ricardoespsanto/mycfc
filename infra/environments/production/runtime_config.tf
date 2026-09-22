@@ -1,8 +1,13 @@
 locals {
-  runtime_parameter_prefix = "/${var.project_name}/${var.environment}"
-  runtime_secret_name      = "${local.runtime_parameter_prefix}/app-secrets"
-  host_runtime_user_name   = "${local.name}-host-runtime"
-  release_agent_user_name  = "${local.name}-release-agent"
+  runtime_parameter_prefix   = "/${var.project_name}/${var.environment}"
+  legacy_runtime_secret_name = "${local.runtime_parameter_prefix}/app-secrets"
+  runtime_secret_name        = "${local.runtime_parameter_prefix}/app-runtime-secrets-v2"
+  host_runtime_user_name     = "${local.name}-host-runtime"
+  release_agent_user_name    = "${local.name}-release-agent"
+
+  host_runtime_secret_actions         = ["secretsmanager:GetSecretValue"]
+  host_runtime_secret_allow_resources = [aws_secretsmanager_secret.app_runtime.arn]
+  host_runtime_secret_deny_resources  = [aws_secretsmanager_secret.legacy_runtime.arn]
 
   runtime_parameters = {
     "base-url"                 = "https://${var.domain_name}"
@@ -61,9 +66,7 @@ locals {
   }
 
   runtime_secret = {
-    POSTGRES_PASSWORD               = var.postgres_password
     APP_DB_PASSWORD                 = var.app_db_password
-    MIGRATION_DB_PASSWORD           = var.migration_db_password
     CSRF_AUTH_KEY_B64               = random_id.csrf_auth_key.b64_std
     EMAIL_VERIFICATION_HMAC_KEY_B64 = random_id.email_verification_hmac_key.b64_std
     TURNSTILE_SECRET_KEY            = var.turnstile_secret_key
@@ -94,17 +97,45 @@ resource "aws_ssm_parameter" "runtime" {
   }
 }
 
-resource "aws_secretsmanager_secret" "runtime" {
-  name        = local.runtime_secret_name
-  description = "MyCFC production application secrets"
+resource "aws_secretsmanager_secret" "legacy_runtime" {
+  name        = local.legacy_runtime_secret_name
+  description = "Retired contaminated MyCFC application secret; runtime access is explicitly denied"
 
   lifecycle {
     prevent_destroy = true
   }
 }
 
-resource "aws_secretsmanager_secret_version" "runtime" {
-  secret_id     = aws_secretsmanager_secret.runtime.id
+resource "aws_secretsmanager_secret_version" "legacy_runtime" {
+  secret_id     = aws_secretsmanager_secret.legacy_runtime.id
+  secret_string = jsonencode({ RETIRED = true })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+moved {
+  from = aws_secretsmanager_secret.runtime
+  to   = aws_secretsmanager_secret.legacy_runtime
+}
+
+moved {
+  from = aws_secretsmanager_secret_version.runtime
+  to   = aws_secretsmanager_secret_version.legacy_runtime
+}
+
+resource "aws_secretsmanager_secret" "app_runtime" {
+  name        = local.runtime_secret_name
+  description = "MyCFC production web-runtime secrets v2"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "app_runtime" {
+  secret_id     = aws_secretsmanager_secret.app_runtime.id
   secret_string = jsonencode(local.runtime_secret)
 }
 
@@ -157,14 +188,21 @@ data "aws_iam_policy_document" "host_runtime" {
   statement {
     sid       = "ReadRuntimeSecret"
     effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.runtime.arn]
+    actions   = local.host_runtime_secret_actions
+    resources = local.host_runtime_secret_allow_resources
+  }
+
+  statement {
+    sid       = "DenyRetiredContaminatedRuntimeSecret"
+    effect    = "Deny"
+    actions   = local.host_runtime_secret_actions
+    resources = local.host_runtime_secret_deny_resources
   }
 
   statement {
     sid       = "UseRepairPhotoBucket"
     effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.repairs.arn}/*"]
   }
 }
@@ -222,52 +260,13 @@ resource "aws_iam_user_policy" "release_agent" {
   policy = data.aws_iam_policy_document.release_agent.json
 }
 
-resource "aws_iam_user_policy" "privacy_activation_courier_credential_admin" {
-  count = var.privacy_activation_exchange_enabled ? 1 : 0
-
-  name = "privacy-activation-courier-credential-admin"
-  user = aws_iam_user.release_agent.name
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ManageOnlyPrivacyActivationCourierAccessKeys"
-        Effect = "Allow"
-        Action = [
-          "iam:CreateAccessKey",
-          "iam:DeleteAccessKey",
-          "iam:ListAccessKeys",
-          "iam:UpdateAccessKey",
-        ]
-        Resource = aws_iam_user.privacy_activation_courier[0].arn
-      },
-      {
-        Sid    = "DenyAccessKeyManagementForEveryOtherIdentity"
-        Effect = "Deny"
-        Action = [
-          "iam:CreateAccessKey",
-          "iam:DeleteAccessKey",
-          "iam:ListAccessKeys",
-          "iam:UpdateAccessKey",
-        ]
-        NotResource = aws_iam_user.privacy_activation_courier[0].arn
-      },
-      {
-        Sid      = "DenyRoleChaining"
-        Effect   = "Deny"
-        Action   = ["sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity"]
-        Resource = "*"
-      },
-    ]
-  })
-}
 
 output "runtime_parameter_prefix" {
   value = local.runtime_parameter_prefix
 }
 
 output "runtime_secret_arn" {
-  value = aws_secretsmanager_secret.runtime.arn
+  value = aws_secretsmanager_secret.app_runtime.arn
 }
 
 output "host_runtime_access_key_id" {

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -25,15 +24,14 @@ import (
 )
 
 var (
-	lowerHex40     = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowerHex64     = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	bucketName     = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
-	awsRegion      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	lambdaFunction = regexp.MustCompile(`^(?:[A-Za-z0-9_-]{1,64}|arn:(?:aws|aws-us-gov|aws-cn):lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]+)?)$`)
+	lowerHex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowerHex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	bucketName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$`)
+	awsRegion  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
 const productionParameterPrefix = "/mycfc/production"
-const productionSecretID = "/mycfc/production/app-secrets"
+const productionSecretID = "/mycfc/production/app-runtime-secrets-v2"
 
 var productionParameterNames = map[string]string{
 	"BASE_URL":                   productionParameterPrefix + "/base-url",
@@ -98,9 +96,7 @@ var rolloutOptionalProductionParameters = map[string]bool{
 }
 
 var productionSecretFields = []string{
-	"POSTGRES_PASSWORD",
 	"APP_DB_PASSWORD",
-	"MIGRATION_DB_PASSWORD",
 	"CSRF_AUTH_KEY_B64",
 	"EMAIL_VERIFICATION_HMAC_KEY_B64",
 	"TURNSTILE_SECRET_KEY",
@@ -121,16 +117,13 @@ func (Secret) GoString() string { return "[REDACTED]" }
 func (s Secret) Value() string  { return string(s) }
 
 type Config struct {
-	PrivacyRequestsEnabled           bool   `env:"PRIVACY_REQUESTS_ENABLED" envDefault:"false"`
-	PrivacyExecutionTestCapabilities string `env:"PRIVACY_EXECUTION_TEST_CAPABILITIES"`
-	PrivacyRetentionEnabled          bool   `env:"PRIVACY_RETENTION_ENABLED" envDefault:"false"`
-	AppEnv                           string `env:"APP_ENV,required"`
-	AppVersion                       string `env:"APP_VERSION,required"`
-	GITSHA                           string `env:"GIT_SHA,required"`
-	AppReleasedAt                    string `env:"APP_RELEASED_AT"`
-	ReleaseRepository                string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
-	Port                             int    `env:"PORT" envDefault:"8080"`
-	BaseURL                          string `env:"BASE_URL"`
+	AppEnv            string `env:"APP_ENV,required"`
+	AppVersion        string `env:"APP_VERSION,required"`
+	GITSHA            string `env:"GIT_SHA,required"`
+	AppReleasedAt     string `env:"APP_RELEASED_AT"`
+	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
+	Port              int    `env:"PORT" envDefault:"8080"`
+	BaseURL           string `env:"BASE_URL"`
 
 	DatabaseURL                 Secret `env:"DATABASE_URL"`
 	DBHost                      string `env:"DB_HOST"`
@@ -142,6 +135,10 @@ type Config struct {
 	PostgresPassword            Secret `env:"POSTGRES_PASSWORD"`
 	MigrationDBUser             string `env:"MIGRATION_DB_USER"`
 	MigrationDBPassword         Secret `env:"MIGRATION_DB_PASSWORD"`
+	MediaCleanupDBUser          string `env:"MEDIA_CLEANUP_DB_USER"`
+	MediaCleanupDBPassword      Secret `env:"MEDIA_CLEANUP_DB_PASSWORD"`
+	DataRetentionDBUser         string `env:"DATA_RETENTION_DB_USER"`
+	DataRetentionDBPassword     Secret `env:"DATA_RETENTION_DB_PASSWORD"`
 	DBSSLMode                   string `env:"DB_SSLMODE" envDefault:"require"`
 	CSRFAuthKeyB64              Secret `env:"CSRF_AUTH_KEY_B64"`
 	EmailVerificationHMACKeyB64 Secret `env:"EMAIL_VERIFICATION_HMAC_KEY_B64"`
@@ -166,23 +163,10 @@ type Config struct {
 	S3Endpoint       string `env:"S3_ENDPOINT"`
 	S3ForcePathStyle bool   `env:"S3_FORCE_PATH_STYLE" envDefault:"false"`
 
-	PrivacyUploadPublicKeyB64          string `env:"PRIVACY_UPLOAD_PUBLIC_KEY_B64"`
-	PrivacyUploadEncryptionKeyID       string `env:"PRIVACY_UPLOAD_ENCRYPTION_KEY_ID"`
-	PrivacyUploadDigestKeyID           string `env:"PRIVACY_UPLOAD_DIGEST_KEY_ID"`
-	PrivacyUploadDigestKeyB64          Secret `env:"PRIVACY_UPLOAD_DIGEST_KEY_B64"`
-	PrivacyObjectTargetPublicKeyB64    string `env:"PRIVACY_OBJECT_TARGET_PUBLIC_KEY_B64"`
-	PrivacyObjectTargetEncryptionKeyID string `env:"PRIVACY_OBJECT_TARGET_ENCRYPTION_KEY_ID"`
-	PrivacyObjectTargetDigestKeyID     string `env:"PRIVACY_OBJECT_TARGET_DIGEST_KEY_ID"`
-	PrivacyObjectTargetDigestKeyB64    Secret `env:"PRIVACY_OBJECT_TARGET_DIGEST_KEY_B64"`
-
-	// The restore tombstone ledger is a worker-only, independently stored
-	// capability. Merely shipping these fields never enables it.
-	PrivacyTombstoneEnabled            bool   `env:"PRIVACY_TOMBSTONE_ENABLED" envDefault:"false"`
-	PrivacyTombstoneBrokerFunctionName string `env:"PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME"`
-	PrivacyTombstonePublicKeyB64       string `env:"PRIVACY_TOMBSTONE_PUBLIC_KEY_B64"`
-	PrivacyTombstoneEncryptionKeyID    string `env:"PRIVACY_TOMBSTONE_ENCRYPTION_KEY_ID"`
-	PrivacyTombstoneLocatorKeyID       string `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_ID"`
-	PrivacyTombstoneLocatorKeyB64      Secret `env:"PRIVACY_TOMBSTONE_LOCATOR_KEY_B64"`
+	MediaUploadPublicKeyB64    string `env:"MEDIA_UPLOAD_PUBLIC_KEY_B64"`
+	MediaUploadEncryptionKeyID string `env:"MEDIA_UPLOAD_ENCRYPTION_KEY_ID"`
+	MediaUploadDigestKeyID     string `env:"MEDIA_UPLOAD_DIGEST_KEY_ID"`
+	MediaUploadDigestKeyB64    Secret `env:"MEDIA_UPLOAD_DIGEST_KEY_B64"`
 
 	GalleryURL string `env:"GALLERY_URL"`
 
@@ -382,9 +366,7 @@ func (c *Config) applyProductionRemoteConfig(parameters, secrets map[string]stri
 	c.DBUser = parameters["DB_USER"]
 	c.DBPassword = Secret(secrets["APP_DB_PASSWORD"])
 	c.PostgresUser = parameters["POSTGRES_USER"]
-	c.PostgresPassword = Secret(secrets["POSTGRES_PASSWORD"])
 	c.MigrationDBUser = parameters["MIGRATION_DB_USER"]
-	c.MigrationDBPassword = Secret(secrets["MIGRATION_DB_PASSWORD"])
 	c.DBSSLMode = parameters["DB_SSLMODE"]
 	c.CSRFAuthKeyB64 = Secret(secrets["CSRF_AUTH_KEY_B64"])
 	c.EmailVerificationHMACKeyB64 = Secret(secrets["EMAIL_VERIFICATION_HMAC_KEY_B64"])
@@ -625,8 +607,8 @@ func (c Config) EmailVerificationHMACKey() ([]byte, error) {
 	return decoded, nil
 }
 
-func (c Config) PrivacyUploadKeys() (publicKey, digestKey []byte, configured bool, err error) {
-	values := []string{c.PrivacyUploadPublicKeyB64, c.PrivacyUploadEncryptionKeyID, c.PrivacyUploadDigestKeyID, c.PrivacyUploadDigestKeyB64.Value()}
+func (c Config) MediaUploadKeys() (publicKey, digestKey []byte, configured bool, err error) {
+	values := []string{c.MediaUploadPublicKeyB64, c.MediaUploadEncryptionKeyID, c.MediaUploadDigestKeyID, c.MediaUploadDigestKeyB64.Value()}
 	configured = slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
 	if !configured {
 		return nil, nil, false, nil
@@ -634,69 +616,15 @@ func (c Config) PrivacyUploadKeys() (publicKey, digestKey []byte, configured boo
 	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
 		return nil, nil, true, errors.New("privacy upload key configuration must be complete")
 	}
-	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyUploadPublicKeyB64)
+	publicKey, err = base64.StdEncoding.DecodeString(c.MediaUploadPublicKeyB64)
 	if err != nil || len(publicKey) != 32 {
-		return nil, nil, true, errors.New("PRIVACY_UPLOAD_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
+		return nil, nil, true, errors.New("MEDIA_UPLOAD_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
 	}
-	digestKey, err = base64.StdEncoding.DecodeString(c.PrivacyUploadDigestKeyB64.Value())
+	digestKey, err = base64.StdEncoding.DecodeString(c.MediaUploadDigestKeyB64.Value())
 	if err != nil || len(digestKey) < 32 {
-		return nil, nil, true, errors.New("PRIVACY_UPLOAD_DIGEST_KEY_B64 must decode to at least 32 bytes")
+		return nil, nil, true, errors.New("MEDIA_UPLOAD_DIGEST_KEY_B64 must decode to at least 32 bytes")
 	}
 	return publicKey, digestKey, true, nil
-}
-
-func (c Config) PrivacyObjectTargetKeys() (publicKey, digestKey []byte, configured bool, err error) {
-	values := []string{c.PrivacyObjectTargetPublicKeyB64, c.PrivacyObjectTargetEncryptionKeyID, c.PrivacyObjectTargetDigestKeyID, c.PrivacyObjectTargetDigestKeyB64.Value()}
-	configured = slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
-	if !configured {
-		return nil, nil, false, nil
-	}
-	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
-		return nil, nil, true, errors.New("privacy object target key configuration must be complete")
-	}
-	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyObjectTargetPublicKeyB64)
-	if err != nil || len(publicKey) != 32 {
-		return nil, nil, true, errors.New("PRIVACY_OBJECT_TARGET_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
-	}
-	digestKey, err = base64.StdEncoding.DecodeString(c.PrivacyObjectTargetDigestKeyB64.Value())
-	if err != nil || len(digestKey) < 32 {
-		return nil, nil, true, errors.New("PRIVACY_OBJECT_TARGET_DIGEST_KEY_B64 must decode to at least 32 bytes")
-	}
-	uploadPublicKey, uploadDigestKey, uploadConfigured, uploadErr := c.PrivacyUploadKeys()
-	if uploadErr == nil && uploadConfigured && (c.PrivacyObjectTargetEncryptionKeyID == c.PrivacyUploadEncryptionKeyID ||
-		c.PrivacyObjectTargetDigestKeyID == c.PrivacyUploadDigestKeyID || bytes.Equal(publicKey, uploadPublicKey) || bytes.Equal(digestKey, uploadDigestKey)) {
-		return nil, nil, true, errors.New("privacy object target keys must be distinct from privacy upload keys")
-	}
-	return publicKey, digestKey, true, nil
-}
-
-func (c Config) PrivacyTombstoneKeys() (publicKey, locatorKey []byte, enabled bool, err error) {
-	values := []string{
-		c.PrivacyTombstoneBrokerFunctionName, c.PrivacyTombstonePublicKeyB64, c.PrivacyTombstoneEncryptionKeyID,
-		c.PrivacyTombstoneLocatorKeyID, c.PrivacyTombstoneLocatorKeyB64.Value(),
-	}
-	configured := slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) != "" })
-	if !c.PrivacyTombstoneEnabled {
-		if configured {
-			return nil, nil, false, errors.New("privacy tombstone settings require explicit enablement")
-		}
-		return nil, nil, false, nil
-	}
-	if slices.ContainsFunc(values, func(value string) bool { return strings.TrimSpace(value) == "" }) {
-		return nil, nil, true, errors.New("privacy tombstone key configuration must be complete")
-	}
-	if !lambdaFunction.MatchString(strings.TrimSpace(c.PrivacyTombstoneBrokerFunctionName)) {
-		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_BROKER_FUNCTION_NAME is invalid")
-	}
-	publicKey, err = base64.StdEncoding.DecodeString(c.PrivacyTombstonePublicKeyB64)
-	if err != nil || len(publicKey) != 32 {
-		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_PUBLIC_KEY_B64 must decode to exactly 32 bytes")
-	}
-	locatorKey, err = base64.StdEncoding.DecodeString(c.PrivacyTombstoneLocatorKeyB64.Value())
-	if err != nil || len(locatorKey) != 32 {
-		return nil, nil, true, errors.New("PRIVACY_TOMBSTONE_LOCATOR_KEY_B64 must decode to exactly 32 bytes")
-	}
-	return publicKey, locatorKey, true, nil
 }
 
 func (c Config) TrustedProxyCIDRs() ([]netip.Prefix, error) {
@@ -750,17 +678,8 @@ func (c Config) Validate() error {
 	if !slices.Contains([]string{"local", "test", "production"}, c.AppEnv) {
 		problems.Add("APP_ENV", "must be local, test or production")
 	}
-	if strings.TrimSpace(c.PrivacyExecutionTestCapabilities) != "" && c.AppEnv != "test" {
-		problems.Add("PRIVACY_EXECUTION_TEST_CAPABILITIES", "is allowed only when APP_ENV=test")
-	}
-	if _, _, _, err := c.PrivacyUploadKeys(); err != nil {
-		problems.Add("PRIVACY_UPLOAD_KEYS", err.Error())
-	}
-	if _, _, _, err := c.PrivacyObjectTargetKeys(); err != nil {
-		problems.Add("PRIVACY_OBJECT_TARGET_KEYS", err.Error())
-	}
-	if _, _, _, err := c.PrivacyTombstoneKeys(); err != nil {
-		problems.Add("PRIVACY_TOMBSTONE_KEYS", err.Error())
+	if _, _, _, err := c.MediaUploadKeys(); err != nil {
+		problems.Add("MEDIA_UPLOAD_KEYS", err.Error())
 	}
 	if strings.TrimSpace(c.AppVersion) == "" {
 		problems.Add("APP_VERSION", "must not be empty")

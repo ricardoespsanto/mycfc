@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestPrivacyUploadIntentFoundationMigrationIsAdditiveProtectedAndImmutable(t *testing.T) {
+func TestMediaUploadIntentFoundationMigrationIsAdditiveProtectedAndImmutable(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {

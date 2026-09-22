@@ -184,14 +184,9 @@ last_agent_result=$(systemctl show mycfc-pull-release.service --property=Result 
 last_agent_exit_status=$(systemctl show mycfc-pull-release.service --property=ExecMainStatus --value 2>/dev/null || printf 'unknown')
 last_agent_finished_at=$(systemctl show mycfc-pull-release.service --property=ExecMainExitTimestamp --value 2>/dev/null || printf 'unknown')
 release_timer_state=$(systemctl is-active mycfc-pull-release.timer 2>/dev/null || printf 'unknown')
-privacy_worker_state=$(systemctl is-active mycfc-privacy-worker.service 2>/dev/null || printf 'unknown')
 
 guardian_activation_configuration=absent
 [ -f /etc/mycfc/guardian-activation.env ] && [ -f /etc/mycfc/guardian-activation/approval.json ] && guardian_activation_configuration=present
-privacy_activation_configuration=absent
-[ -f /etc/mycfc/privacy-activation.env ] && [ -d /etc/mycfc/privacy-activation/evidence ] && privacy_activation_configuration=present
-privacy_worker_configuration=absent
-[ -f /etc/mycfc/privacy-worker.env ] && privacy_worker_configuration=present
 
 receipt_contract=none
 receipt_version=unknown
@@ -317,10 +312,7 @@ printf 'last_attempt_result=%s\n' "${last_attempt_result:-none}"
 printf 'last_attempt_at=%s\n' "${last_attempt_at:-unknown}"
 printf 'quarantined_digest=%s\n' "${quarantined_digest:-none}"
 printf 'release_timer_state=%s\n' "$release_timer_state"
-printf 'privacy_worker_state=%s\n' "$privacy_worker_state"
 printf 'guardian_activation_configuration=%s\n' "$guardian_activation_configuration"
-printf 'privacy_activation_configuration=%s\n' "$privacy_activation_configuration"
-printf 'privacy_worker_configuration=%s\n' "$privacy_worker_configuration"
 printf 'receipt_contract=%s\n' "$receipt_contract"
 printf 'receipt_version=%s\n' "$receipt_version"
 printf 'receipt_schema_migration_digest=%s\n' "$receipt_schema_migration_digest"
@@ -344,9 +336,7 @@ identity_match=unknown
 if [ "$state" = current ]; then
 	identity_match=false
 	privacy_gate_match=false
-	if [ "$receipt_privacy_worker" = "$manifest_privacy_worker" ] && [ "$receipt_privacy_worker_activation_required" = false ]; then
-		privacy_gate_match=true
-	elif [ "$manifest_privacy_worker:$receipt_privacy_worker:$receipt_privacy_worker_activation_required" = true:false:true ]; then
+	if [ "$manifest_privacy_worker:$receipt_privacy_worker:$receipt_privacy_worker_activation_required" = false:false:false ]; then
 		privacy_gate_match=true
 	fi
 	if [ "$latest_sha" = "$running_sha" ] && [ "$latest_digest" = "$running_digest" ] && \

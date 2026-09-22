@@ -1,0 +1,11 @@
+[Unit]
+Description=Annual MyCFC isolated PostgreSQL restore verification
+
+[Timer]
+OnCalendar=*-01-15 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=1d
+Unit=mycfc-postgres-restore-verification.service
+
+[Install]
+WantedBy=timers.target

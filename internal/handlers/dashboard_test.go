@@ -66,33 +66,6 @@ func TestDashboardRoleShellsRenderOnlyRelevantNavigation(t *testing.T) {
 	}
 }
 
-func TestPrivacyReviewerNavigationIsCapabilityScoped(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		user CurrentUser
-		want bool
-	}{
-		{name: "ordinary member", user: CurrentUser{}},
-		{name: "privacy reviewer", user: CurrentUser{CanReviewPrivacy: true}, want: true},
-		{name: "privacy executor", user: CurrentUser{CanExecutePrivacy: true}, want: true},
-		{name: "administrator without reviewer grant", user: CurrentUser{IsAdmin: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			found := false
-			for _, group := range dashboardNavigation(tc.user) {
-				for _, item := range group.Items {
-					if item.Path == "/admin/privacidade" {
-						found = true
-					}
-				}
-			}
-			if found != tc.want {
-				t.Fatalf("privacy navigation=%v want=%v", found, tc.want)
-			}
-		})
-	}
-}
-
 func TestDashboardCapabilitiesAreContextRatherThanDestinations(t *testing.T) {
 	user := CurrentUser{Programmes: map[string]bool{"Competition": true}, HasVerifiedGuardianAuthority: true, CanManageEvents: true, CanModerateContent: true, IsAdmin: true}
 	labels := strings.Join(dashboardCapabilities(user), ",")
@@ -133,7 +106,7 @@ func TestDashboardNavigationIsOrderedAndUnambiguousForSixPersonas(t *testing.T) 
 		{"athlete", CurrentUser{Programmes: map[string]bool{"Competition": true}}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Inscrições:Competição=/dashboard/competition"},
 		{"coach", CurrentUser{CanManageEvents: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Coordenação:Gerir eventos=/admin/eventos,Planear treinos=/admin/treinos,Gerir avisos=/admin/avisos"},
 		{"moderator", CurrentUser{CanModerateContent: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes,Frota=/fleet|Família:Menores a cargo=/dashboard/guardian|Moderação:Gerir álbuns=/admin/albuns,Triar sugestões=/admin/sugestoes"},
-		{"administrator", CurrentUser{IsAdmin: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes|Família:Menores a cargo=/dashboard/guardian|Coordenação:Gerir eventos=/admin/eventos,Planear treinos=/admin/treinos,Gerir avisos=/admin/avisos|Moderação:Gerir álbuns=/admin/albuns,Triar sugestões=/admin/sugestoes|Verificação:Verificar representações=/admin/representacoes,Transições aos 18 anos=/admin/transicoes-18|Administração:Controlo de privacidade=/admin/privacidade/controlo,Ativação da privacidade=/admin/privacidade/ativacao,Convites de representação=/admin/representacoes/convites,Membros=/admin/membros,Notícias=/admin/noticias,Gerir frota=/admin/fleet,Sistema=/admin/sistema"},
+		{"administrator", CurrentUser{IsAdmin: true}, "Principal:Hoje=/today|Atividade:Eventos=/events,Treinos=/treinos,Álbuns=/albuns,Sugestões=/sugestoes|Família:Menores a cargo=/dashboard/guardian|Coordenação:Gerir eventos=/admin/eventos,Planear treinos=/admin/treinos,Gerir avisos=/admin/avisos|Moderação:Gerir álbuns=/admin/albuns,Triar sugestões=/admin/sugestoes|Verificação:Verificar representações=/admin/representacoes,Transições aos 18 anos=/admin/transicoes-18|Administração:Convites de representação=/admin/representacoes/convites,Membros=/admin/membros,Notícias=/admin/noticias,Gerir frota=/admin/fleet,Sistema=/admin/sistema"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

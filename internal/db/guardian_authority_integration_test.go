@@ -285,15 +285,6 @@ func TestGuardianAuthorityPendingVerificationExpiryConflictAndConcurrency(t *tes
 	if _, err = conn.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,'\\x',clock_timestamp()+interval '1 hour',$2,true)`, sessionToken, dependent.ID); err != nil {
 		t.Fatal(err)
 	}
-	privacySubject, err := q.GetPrivacyAccountForUpdate(ctx, dependent.ID)
-	if err != nil || privacySubject.GuardianID == nil || *privacySubject.GuardianID != guardianID || !privacySubject.UpdatedAt.Time.Equal(verified.UpdatedAt.Time) {
-		t.Fatalf("privacy projection = %+v err=%v relationship=%+v", privacySubject, err, verified)
-	}
-	identityUpdatedAt, err := q.GetPrivacyIdentityUpdatedAt(ctx, dependent.ID)
-	if err != nil || !identityUpdatedAt.Valid || identityUpdatedAt.Time.Equal(privacySubject.UpdatedAt.Time) {
-		t.Fatalf("identity and relationship clocks were not kept independent: identity=%+v relationship=%+v err=%v", identityUpdatedAt, privacySubject.UpdatedAt, err)
-	}
-
 	// Exactly one optimistic transition wins even when two workers start with the same version.
 	reason := "CONFLICT"
 	inputs := []dbgen.TransitionGuardianAuthorityParams{

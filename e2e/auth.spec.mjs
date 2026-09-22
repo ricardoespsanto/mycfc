@@ -603,7 +603,7 @@ test.describe('authentication', () => {
 
   test('renders expired authority as status-only on mobile', async ({ page }) => {
     await page.goto('/login');
-    await page.getByLabel('Correio eletrónico').fill('e2e-privacy-guardian@example.test');
+    await page.getByLabel('Correio eletrónico').fill('e2e-guardian-fixture@example.test');
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Menores a cargo' }).click();

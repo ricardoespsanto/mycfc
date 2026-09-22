@@ -11,7 +11,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +48,7 @@ type ProfileUpdate struct {
 type ProfilePhotoUpdate struct {
 	ActorID, SubjectID uuid.UUID
 	IsAdmin            bool
-	Upload             privacyrequests.PreparedUpload
+	Upload             mediauploads.PreparedUpload
 	ConsentVersion     string
 	ConsentSHA256      string
 	AcceptConsent      bool
@@ -274,9 +274,9 @@ func (s PostgresProfileStore) SavePhoto(ctx context.Context, input ProfilePhotoU
 		}
 		oldKey = current.PhotoObjectKey
 		if input.Upload.IntentID == uuid.Nil || len(input.Upload.HoldToken) != 32 || input.Upload.ObjectKey == "" {
-			return privacyrequests.ErrUploadProvenanceUnavailable
+			return mediauploads.ErrUploadProvenanceUnavailable
 		}
-		if err := q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{
+		if err := q.AttachMediaUploadIntent(ctx, dbgen.AttachMediaUploadIntentParams{
 			IntentID: input.Upload.IntentID, HoldToken: input.Upload.HoldToken, PriorIntentID: current.PhotoUploadIntentID,
 			SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: input.SubjectID, ObjectKey: input.Upload.ObjectKey,
 			ContentType: input.Upload.ContentType, SizeBytes: input.Upload.SizeBytes,
@@ -315,12 +315,12 @@ func (s PostgresProfileStore) RemovePhoto(ctx context.Context, actorID, subjectI
 		}
 		oldKey = current.PhotoObjectKey
 		if current.PhotoUploadIntentID == nil {
-			return privacyrequests.ErrUploadProvenanceUnavailable
+			return mediauploads.ErrUploadProvenanceUnavailable
 		}
 		if _, err := q.CeaseConsentForms(ctx, dbgen.CeaseConsentFormsParams{UserID: subjectID, ConsentType: "Foto_Perfil", Reason: "WITHDRAWN"}); err != nil {
 			return err
 		}
-		if err := q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: *current.PhotoUploadIntentID, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}); err != nil {
+		if err := q.RemoveMediaUploadIntent(ctx, dbgen.RemoveMediaUploadIntentParams{IntentID: *current.PhotoUploadIntentID, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}); err != nil {
 			return err
 		}
 		if _, err := q.ClearMemberProfilePhoto(ctx, subjectID); err != nil {

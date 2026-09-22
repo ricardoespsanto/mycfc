@@ -61,7 +61,15 @@ JOIN LATERAL (
     SELECT season_row.id
     FROM seasons season_row
     WHERE sqlc.arg(week_start) BETWEEN season_row.starts_on AND season_row.ends_on
-    ORDER BY season_row.is_current DESC, season_row.starts_on DESC, season_row.id
+    ORDER BY EXISTS (
+        SELECT 1
+        FROM training_group_members group_member
+        JOIN user_memberships membership ON membership.id = group_member.membership_id
+        WHERE group_member.group_id = group_row.id
+          AND membership.season_id = season_row.id
+          AND membership.starts_on <= sqlc.arg(week_start)
+          AND (membership.ends_on IS NULL OR membership.ends_on >= sqlc.arg(week_start))
+    ) DESC, season_row.is_current DESC, season_row.starts_on DESC, season_row.id
     LIMIT 1
 ) season ON true
 WHERE group_row.id = sqlc.arg(group_id)

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/google/uuid"
@@ -303,15 +303,15 @@ func (s *repairObjectStoreFake) DeleteObject(context.Context, string) error {
 func (s *repairObjectStoreFake) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return "", nil
 }
-func (s *repairObjectStoreFake) Upload(_ context.Context, input privacyrequests.UploadInput, photo storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error) {
+func (s *repairObjectStoreFake) Upload(_ context.Context, input mediauploads.UploadInput, photo storage.ValidatedPhoto) (mediauploads.PreparedUpload, error) {
 	s.puts++
 	if s.putErr != nil {
-		return privacyrequests.PreparedUpload{}, s.putErr
+		return mediauploads.PreparedUpload{}, s.putErr
 	}
 	prefix := map[string]string{"REPAIR_ATTACHMENT": "repairs", "EQUIPMENT_PHOTO": "equipment"}[input.SourceKind]
-	return privacyrequests.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{9}, 32), ObjectKey: prefix + "/photo." + photo.Extension, ContentType: photo.ContentType, SizeBytes: photo.Size}, nil
+	return mediauploads.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{9}, 32), ObjectKey: prefix + "/photo." + photo.Extension, ContentType: photo.ContentType, SizeBytes: photo.Size}, nil
 }
-func (s *repairObjectStoreFake) AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error {
+func (s *repairObjectStoreFake) AttachmentFailed(context.Context, mediauploads.PreparedUpload) error {
 	s.deletes++
 	return s.deleteErr
 }

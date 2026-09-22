@@ -11,7 +11,7 @@ digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 manifest=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 migrations='["001_initial","002_guardian","reset-baseline-v1"]'
 schema=$(printf '%s' "$(printf '%s' "$migrations" | jq -r 'join("\n")')" | sha256sum | awk '{print $1}')
-gates='{"guardian_intake":false,"privacy_worker":true}'
+gates='{"guardian_intake":false,"privacy_worker":false}'
 publication=$work_dir/publication.json
 
 generate_publication() {
@@ -26,7 +26,7 @@ jq -e --arg sha "$sha" --arg digest "$digest" --arg schema "$schema" '
 	.contract == "mycfc/release-publication/v1" and .version == "v1.25.0" and .git_sha == $sha and
 	.image.digest == $digest and .schema.migration_digest == $schema and
 	.schema.ordered_migrations == ["001_initial","002_guardian","reset-baseline-v1"] and
-	.expected_gates == {guardian_intake:false,privacy_worker:true} and .issues == [109,274] and .ci_run_id == 123
+	.expected_gates == {guardian_intake:false,privacy_worker:false} and .issues == [109,274] and .ci_run_id == 123
 ' "$publication" >/dev/null
 first=$(sha256sum "$publication" | awk '{print $1}')
 generate_publication 274,109
