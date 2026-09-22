@@ -510,7 +510,15 @@ JOIN LATERAL (
     SELECT season_row.id
     FROM seasons season_row
     WHERE $3 BETWEEN season_row.starts_on AND season_row.ends_on
-    ORDER BY season_row.is_current DESC, season_row.starts_on DESC, season_row.id
+    ORDER BY EXISTS (
+        SELECT 1
+        FROM training_group_members group_member
+        JOIN user_memberships membership ON membership.id = group_member.membership_id
+        WHERE group_member.group_id = group_row.id
+          AND membership.season_id = season_row.id
+          AND membership.starts_on <= $3
+          AND (membership.ends_on IS NULL OR membership.ends_on >= $3)
+    ) DESC, season_row.is_current DESC, season_row.starts_on DESC, season_row.id
     LIMIT 1
 ) season ON true
 WHERE group_row.id = $6

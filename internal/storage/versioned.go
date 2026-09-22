@@ -50,9 +50,8 @@ func NewS3VersionedStore(client *s3.Client, bucket string) *S3VersionedStore {
 }
 
 // NewGuardedS3VersionedStore re-evaluates an external authorization boundary
-// immediately before every destructive S3 request. The privacy worker uses it
-// to ensure a database-clock activation revocation cannot be missed during a
-// multi-pass, multi-batch exact-version cleanup.
+// immediately before every destructive S3 request during multi-pass,
+// multi-batch exact-version cleanup.
 func NewGuardedS3VersionedStore(client *s3.Client, bucket string, beforeDelete func(context.Context) error) *S3VersionedStore {
 	return &S3VersionedStore{client: client, bucket: bucket, maxPasses: 10, stableChecks: 2, beforeDelete: beforeDelete}
 }

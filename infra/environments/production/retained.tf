@@ -84,16 +84,8 @@ locals {
         Principal = "*"
         Condition = { Bool = { "aws:SecureTransport" = "false" } }
       }
-      ], var.legacy_media_purge_write_fence_enabled ? [
-      {
-        Sid       = "DenyLegacyMediaWritesDuringPurge"
-        Effect    = "Deny"
-        Action    = ["s3:DeleteObject", "s3:PutObject"]
-        Resource  = [for prefix in local.legacy_media_purge_prefixes : "${aws_s3_bucket.repairs.arn}/${prefix}"]
-        Principal = "*"
-        Condition = { DateLessThan = { "aws:CurrentTime" = var.legacy_media_purge_permission_expires_at } }
-      }
-    ] : [])
+      ]
+    )
   }
 }
 
@@ -113,9 +105,7 @@ resource "aws_ecr_lifecycle_policy" "app" {
   repository = aws_ecr_repository.app.name
   policy = jsonencode({ rules = [
     { rulePriority = 1, description = "Keep 30 release images", selection = { tagStatus = "tagged", tagPrefixList = ["release-"], countType = "imageCountMoreThan", countNumber = 30 }, action = { type = "expire" } },
-    { rulePriority = 2, description = "Expire one-time purge images after seven days", selection = { tagStatus = "tagged", tagPrefixList = ["purge-"], countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } },
-    { rulePriority = 3, description = "Expire privacy operation requests after seven days", selection = { tagStatus = "tagged", tagPrefixList = ["privacy-op-"], countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } },
-    { rulePriority = 4, description = "Expire untagged images after seven days", selection = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } }
+    { rulePriority = 2, description = "Expire untagged images after seven days", selection = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }, action = { type = "expire" } }
   ] })
 }
 

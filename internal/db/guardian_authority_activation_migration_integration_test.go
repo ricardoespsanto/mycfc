@@ -4,103 +4,11 @@ package db
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
-
-func TestGuardianActivationForwardMigrationFromExact004DisablesEveryGate(t *testing.T) {
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(ctx)
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
-	reconstructExactGuardian004(t, ctx, tx)
-
-	actor, guardian, subject := uuid.New(), uuid.New(), uuid.New()
-	if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES
-		($1,'Migration administrator',$2,'hash','1990-01-01'),($3,'Migration guardian',$4,'hash','1990-01-01')`, actor, "migration-admin-"+uuid.NewString()+"@example.test", guardian, "migration-guardian-"+uuid.NewString()+"@example.test"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,is_dependent,date_of_birth,password_hash,minor_login_id) VALUES($1,'Migration dependent',true,'2012-01-01','minor-hash',$2)`, subject, "migration-minor-"+uuid.NewString()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, actor); err != nil {
-		t.Fatal(err)
-	}
-	version := "guardian-004-representative-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
-	if _, err = tx.Exec(ctx, `INSERT INTO guardian_authority_policies(version,evidence_types,reason_codes,validity_days,review_days,adopted_at,adopted_by,enabled,enabled_at,enabled_by)
-		VALUES($1,ARRAY['CLUB_REGISTRATION_RECORD','IN_PERSON_ID_AND_CIVIL_RECORD','COURT_OR_LEGAL_AUTHORITY'],
-		ARRAY['RELATIONSHIP_CONFIRMED','EVIDENCE_INSUFFICIENT','AUTHORITY_NOT_ESTABLISHED','CONFLICT','AUTHORITY_CHANGED','UNCERTAINTY','AUTHORITY_ENDED','ELIGIBILITY_ENDED','REVIEW_EXPIRED','MAJORITY_REACHED'],
-		365,365,clock_timestamp(),$2,true,clock_timestamp(),$2)`, version, actor); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,policy_version,verified_at,verified_by,verified_until,review_due_at)
-		VALUES($1,$2,'Migration dependent','VERIFIED',$3,clock_timestamp(),$4,clock_timestamp()+interval '365 days',clock_timestamp()+interval '300 days')`, guardian, subject, version, actor); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO sessions(token,data,expiry,user_id,subject_indexed) VALUES($1,'migration',clock_timestamp()+interval '1 hour',$2,true)`, "migration-session-"+uuid.NewString(), subject); err != nil {
-		t.Fatal(err)
-	}
-	// Build a representative pre-005 active privacy row. The current privacy
-	// evidence trigger is temporarily bypassed only to avoid coupling this
-	// guardian migration proof to the independent signed-evidence fixture.
-	privacyVersion := "privacy-004-representative-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
-	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_policies(version,category_catalogue,adopted_at,adopted_by) VALUES($1,'[]'::jsonb,clock_timestamp(),$2)`, privacyVersion, actor); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO privacy_request_activation(singleton,policy_version,enabled,fulfilment_ready,updated_by) VALUES(true,$1,false,false,$2)`, privacyVersion, actor); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, `ALTER TABLE privacy_request_activation DISABLE TRIGGER privacy_activation_evidence_guard;
-		ALTER TABLE privacy_request_activation DROP CONSTRAINT privacy_activation_requires_evidence_approval;
-		UPDATE privacy_request_activation SET enabled=true,fulfilment_ready=true;
-		ALTER TABLE privacy_request_activation ADD CONSTRAINT privacy_activation_requires_evidence_approval CHECK(NOT enabled OR (fulfilment_ready AND approval_id IS NOT NULL)) NOT VALID;
-		ALTER TABLE privacy_request_activation ENABLE TRIGGER privacy_activation_evidence_guard;`); err != nil {
-		t.Fatal(err)
-	}
-
-	migration, err := migrationFiles.ReadFile("migrations/202609120005_guardian_authority_activation.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply exact 004 -> 005 migration: %v", err)
-	}
-	var intake, policyEnabled, privacyEnabled, fulfilmentReady, killSwitch, runtimeBound bool
-	var relationshipState string
-	var credential, session bool
-	if err = tx.QueryRow(ctx, `SELECT
-		(SELECT enabled FROM guardian_application_intake_release WHERE singleton),
-		EXISTS(SELECT 1 FROM guardian_authority_policies WHERE enabled),
-		(SELECT enabled FROM privacy_request_activation WHERE singleton),
-		(SELECT fulfilment_ready FROM privacy_request_activation WHERE singleton),
-		(SELECT engaged FROM privacy_worker_kill_switch WHERE singleton),
-		EXISTS(SELECT 1 FROM guardian_ops.runtime_release_binding WHERE singleton AND image_digest IS NOT NULL),
-		relationship.state,(subject.minor_login_id IS NOT NULL OR subject.password_hash IS NOT NULL),
-		EXISTS(SELECT 1 FROM sessions WHERE user_id=$1)
-		FROM guardian_authority_relationships relationship JOIN users subject ON subject.id=relationship.subject_user_id WHERE relationship.subject_user_id=$1`, subject).
-		Scan(&intake, &policyEnabled, &privacyEnabled, &fulfilmentReady, &killSwitch, &runtimeBound, &relationshipState, &credential, &session); err != nil {
-		t.Fatal(err)
-	}
-	if intake || policyEnabled || privacyEnabled || fulfilmentReady || !killSwitch || runtimeBound || relationshipState != "EXPIRED" || credential || session {
-		t.Fatalf("005 postcondition intake=%t policy=%t privacy=%t ready=%t kill=%t runtime=%t relationship=%s credential=%t session=%t",
-			intake, policyEnabled, privacyEnabled, fulfilmentReady, killSwitch, runtimeBound, relationshipState, credential, session)
-	}
-	var currentAuthority bool
-	if err = tx.QueryRow(ctx, `SELECT guardian_authority_current($1,$2)`, guardian, subject).Scan(&currentAuthority); err != nil || currentAuthority {
-		t.Fatalf("post-migration current=%t err=%v", currentAuthority, err)
-	}
-}
 
 func reconstructExactGuardian004(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()

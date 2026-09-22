@@ -61,6 +61,24 @@ variable "google_calendar_api_key" {
   type      = string
   sensitive = true
 }
+variable "polar_client_id" {
+  type        = string
+  description = "Existing production Polar client ID; preserve it during the runtime-secret cutover."
+}
+variable "polar_client_secret" {
+  type        = string
+  sensitive   = true
+  description = "Existing production Polar client secret; supply through protected Terraform input."
+}
+variable "activity_credential_key_id" {
+  type        = string
+  description = "Existing active Polar activity credential key ID."
+}
+variable "activity_credential_keys_json" {
+  type        = string
+  sensitive   = true
+  description = "Existing Polar activity credential key ring; never rotate during the runtime-secret cutover."
+}
 variable "gallery_url" { type = string }
 variable "consent_terms_version" { type = string }
 variable "consent_terms_sha256" { type = string }
@@ -92,20 +110,12 @@ variable "postgres_username" {
   type    = string
   default = "mycfc"
 }
-variable "postgres_password" {
-  type      = string
-  sensitive = true
-}
 variable "app_db_username" { type = string }
 variable "app_db_password" {
   type      = string
   sensitive = true
 }
 variable "migration_db_username" { type = string }
-variable "migration_db_password" {
-  type      = string
-  sensitive = true
-}
 variable "database_name" {
   type    = string
   default = "mycfc"
@@ -212,7 +222,7 @@ variable "release_agent_cutover_complete" {
 variable "operations_observer_enabled" {
   type        = bool
   default     = false
-  description = "Create a credential-free, one-hour read-only role for explicit human principals and the protected release workflow."
+  description = "Create the credential-free, one-hour read-only role required by the protected production release workflow. Keep true in both protected plan and apply variables once provisioned."
 
   validation {
     condition = !var.operations_observer_enabled || (
@@ -254,11 +264,6 @@ variable "operations_observer_github_oidc_provider_arn" {
   }
 }
 
-variable "privacy_operation_receipts_enabled" {
-  type        = bool
-  default     = false
-  description = "Create the private KMS-encrypted, versioned transport for host-signed privacy operation receipts."
-}
 variable "alb_log_retention_days" {
   type    = number
   default = 90
@@ -302,175 +307,6 @@ variable "alarm_email" {
   }
 }
 
-variable "privacy_worker_infrastructure_enabled" {
-  type        = bool
-  default     = false
-  description = "Provision the inert privacy-worker IAM user, permissions boundary, empty secret container, and dedicated log group. This does not create credentials or start a worker."
-}
-
-variable "legacy_media_purge_identity_enabled" {
-  type        = bool
-  default     = false
-  description = "Provision the temporary bounded identity for the separately approved one-time legacy media purge. Terraform creates no access key."
-
-  validation {
-    condition = !var.legacy_media_purge_identity_enabled || (
-      var.legacy_media_purge_permission_expires_at != null &&
-      can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.legacy_media_purge_permission_expires_at)) &&
-      can(timecmp(var.legacy_media_purge_permission_expires_at, plantimestamp())) &&
-      timecmp(var.legacy_media_purge_permission_expires_at, plantimestamp()) > 0 &&
-      timecmp(var.legacy_media_purge_permission_expires_at, timeadd(plantimestamp(), "24h")) <= 0
-    )
-    error_message = "legacy_media_purge_identity_enabled requires a valid future UTC expiry no more than 24 hours after plan time."
-  }
-}
-
-variable "legacy_media_purge_deletion_enabled" {
-  type        = bool
-  default     = false
-  description = "Add exact version-deletion permission to the temporary purge identity after matching inventories are approved."
-
-  validation {
-    condition = !var.legacy_media_purge_deletion_enabled || (
-      var.legacy_media_purge_identity_enabled && var.legacy_media_purge_write_fence_enabled
-    )
-    error_message = "legacy_media_purge_deletion_enabled requires both the temporary identity and the bucket write fence."
-  }
-}
-
-variable "legacy_media_purge_write_fence_enabled" {
-  type        = bool
-  default     = false
-  description = "Temporarily deny every principal from writing under the three purge prefixes during the approved deletion window."
-
-  validation {
-    condition     = !var.legacy_media_purge_write_fence_enabled || var.legacy_media_purge_identity_enabled
-    error_message = "legacy_media_purge_write_fence_enabled requires legacy_media_purge_identity_enabled."
-  }
-}
-
-variable "legacy_media_purge_permission_expires_at" {
-  type        = string
-  default     = null
-  nullable    = true
-  description = "UTC RFC3339 deadline enforced by IAM for every temporary legacy-media purge permission."
-}
-
-variable "privacy_worker_s3_deletion_enabled" {
-  type        = bool
-  default     = false
-  description = "Grant the provisioned privacy-worker identity prefix-scoped version listing and version deletion permissions."
-
-  validation {
-    condition     = !var.privacy_worker_s3_deletion_enabled || var.privacy_worker_infrastructure_enabled
-    error_message = "privacy_worker_s3_deletion_enabled requires privacy_worker_infrastructure_enabled."
-  }
-}
-
-variable "privacy_worker_metadata_rewrite_enabled" {
-  type        = bool
-  default     = false
-  description = "Grant the provisioned privacy-worker identity read-version and retained-copy write permissions for repair and equipment metadata rewrites."
-
-  validation {
-    condition     = !var.privacy_worker_metadata_rewrite_enabled || (var.privacy_worker_infrastructure_enabled && var.privacy_worker_s3_deletion_enabled)
-    error_message = "privacy_worker_metadata_rewrite_enabled requires both privacy_worker_infrastructure_enabled and privacy_worker_s3_deletion_enabled."
-  }
-}
-
-variable "privacy_worker_ledger_broker_invoke_enabled" {
-  type        = bool
-  default     = false
-  description = "Grant the provisioned privacy-worker identity invoke-only access to the exact restore-ledger broker Lambda."
-
-  validation {
-    condition = !var.privacy_worker_ledger_broker_invoke_enabled || (
-      var.privacy_worker_infrastructure_enabled &&
-      var.privacy_worker_ledger_broker_function_arn != null
-    )
-    error_message = "privacy_worker_ledger_broker_invoke_enabled requires privacy_worker_infrastructure_enabled and an exact broker function ARN."
-  }
-}
-
-variable "privacy_worker_ledger_broker_function_arn" {
-  type        = string
-  default     = null
-  nullable    = true
-  description = "Exact ARN exported by the separately managed Hetzner privacy-ledger broker stack."
-
-  validation {
-    condition = var.privacy_worker_ledger_broker_function_arn == null || can(regex(
-      "^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]{1,64}$",
-      var.privacy_worker_ledger_broker_function_arn,
-    ))
-    error_message = "privacy_worker_ledger_broker_function_arn must be null or an exact unqualified Lambda function ARN."
-  }
-}
-
-check "privacy_worker_ledger_broker_scope" {
-  assert {
-    condition = var.privacy_worker_ledger_broker_function_arn == null || startswith(
-      var.privacy_worker_ledger_broker_function_arn,
-      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:",
-    )
-    error_message = "privacy_worker_ledger_broker_function_arn must belong to the configured production AWS account and region."
-  }
-}
-
-variable "privacy_worker_monitoring_enabled" {
-  type        = bool
-  default     = false
-  description = "Create terminal-failure, aged-work and missing-heartbeat alarms for an explicitly activated privacy worker."
-
-  validation {
-    condition     = !var.privacy_worker_monitoring_enabled || var.privacy_worker_infrastructure_enabled
-    error_message = "privacy_worker_monitoring_enabled requires privacy_worker_infrastructure_enabled."
-  }
-}
-
-variable "privacy_activation_exchange_enabled" {
-  type        = bool
-  default     = false
-  description = "Provision the private, short-lived dual-signer exchange, non-exportable signing keys, exact OIDC roles, and credential-free host courier identity. This does not create access keys, configure GitHub environments, open a ceremony, or activate privacy processing."
-
-  validation {
-    condition = !var.privacy_activation_exchange_enabled || (
-      var.privacy_activation_github_oidc_provider_arn != null &&
-      var.privacy_activation_terraform_state_bucket_name != null
-    )
-    error_message = "privacy_activation_exchange_enabled requires the exact GitHub OIDC provider ARN and Terraform state bucket name."
-  }
-}
-
-variable "privacy_activation_github_oidc_provider_arn" {
-  type        = string
-  default     = null
-  nullable    = true
-  description = "Existing GitHub Actions OIDC provider used only by the fixed executor, administrator, and protected-production coordinator subjects."
-
-  validation {
-    condition = var.privacy_activation_github_oidc_provider_arn == null || can(regex(
-      "^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$",
-      var.privacy_activation_github_oidc_provider_arn,
-    ))
-    error_message = "privacy_activation_github_oidc_provider_arn must be the exact GitHub Actions OIDC provider ARN."
-  }
-}
-
-variable "privacy_activation_terraform_state_bucket_name" {
-  type        = string
-  default     = null
-  nullable    = true
-  description = "Exact remote-state bucket name used only to install explicit state-access denies on every activation-exchange identity."
-
-  validation {
-    condition = var.privacy_activation_terraform_state_bucket_name == null || can(regex(
-      "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
-      var.privacy_activation_terraform_state_bucket_name,
-    ))
-    error_message = "privacy_activation_terraform_state_bucket_name must be null or a valid exact S3 bucket name."
-  }
-}
 
 check "production_input_validation" {
   assert {
@@ -502,8 +338,8 @@ check "production_input_validation" {
     error_message = "App and migration database users must be distinct PostgreSQL identifiers, as must the database name."
   }
   assert {
-    condition     = can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.postgres_username)) && trimspace(var.postgres_password) != "" && trimspace(var.app_db_password) != "" && trimspace(var.migration_db_password) != "" && !contains([var.app_db_username, var.migration_db_username], var.postgres_username)
-    error_message = "Bootstrap, app, and migration database credentials must be non-empty and use distinct PostgreSQL role names."
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9_]{0,62}$", var.postgres_username)) && trimspace(var.app_db_password) != "" && !contains([var.app_db_username, var.migration_db_username], var.postgres_username)
+    error_message = "Bootstrap, app, and migration role names must be distinct and the application database password must be non-empty."
   }
   assert {
     condition     = trimspace(var.database_host) != "" && var.database_port >= 1 && var.database_port <= 65535 && contains(["disable", "allow", "prefer", "require", "verify-ca", "verify-full"], var.database_sslmode)

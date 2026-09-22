@@ -27,8 +27,8 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/sessionstore"
 	"github.com/cfcoimbra/mycfc/internal/storage"
@@ -50,13 +50,10 @@ type Application struct {
 }
 
 var (
-	loadApplicationConfig          = config.Load
-	openApplicationPool            = pgxpool.NewWithConfig
-	pingApplicationPool            = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
-	loadApplicationAWS             = awsconfig.LoadDefaultConfig
-	newApplicationProviderRegistry = func() (*privacyrequests.ProviderExecutionRegistry, error) {
-		return privacyrequests.NewProviderExecutionRegistry()
-	}
+	loadApplicationConfig = config.Load
+	openApplicationPool   = pgxpool.NewWithConfig
+	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
+	loadApplicationAWS    = awsconfig.LoadDefaultConfig
 )
 
 func New(ctx context.Context) (*Application, error) {
@@ -123,39 +120,22 @@ func New(ctx context.Context) (*Application, error) {
 		}
 	})
 	objectStore := storage.NewS3Store(s3Client, cfg.S3BucketName)
-	var uploadCoordinator *privacyrequests.UploadCoordinator
-	uploadPublicKey, uploadDigestKey, uploadConfigured, err := cfg.PrivacyUploadKeys()
+	var uploadCoordinator *mediauploads.UploadCoordinator
+	uploadPublicKey, uploadDigestKey, uploadConfigured, err := cfg.MediaUploadKeys()
 	if err != nil {
 		sessionStore.StopCleanup()
 		pool.Close()
 		return nil, err
 	}
 	if uploadConfigured {
-		protector, protectorErr := privacyrequests.NewX25519UploadIntentProtector(cfg.PrivacyUploadEncryptionKeyID, uploadPublicKey, cfg.PrivacyUploadDigestKeyID, uploadDigestKey)
+		protector, protectorErr := mediauploads.NewX25519UploadIntentProtector(cfg.MediaUploadEncryptionKeyID, uploadPublicKey, cfg.MediaUploadDigestKeyID, uploadDigestKey)
 		if protectorErr != nil {
 			sessionStore.StopCleanup()
 			pool.Close()
 			return nil, fmt.Errorf("configure privacy upload protection: %w", protectorErr)
 		}
-		uploadCoordinator = &privacyrequests.UploadCoordinator{Store: privacyrequests.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
+		uploadCoordinator = &mediauploads.UploadCoordinator{Store: mediauploads.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
 	}
-	var objectTargetProtector privacyrequests.ObjectTargetProtector
-	objectTargetPublicKey, objectTargetDigestKey, objectTargetConfigured, err := cfg.PrivacyObjectTargetKeys()
-	if err != nil {
-		sessionStore.StopCleanup()
-		pool.Close()
-		return nil, err
-	}
-	if objectTargetConfigured {
-		protector, protectorErr := privacyrequests.NewX25519ObjectTargetProtector(cfg.PrivacyObjectTargetEncryptionKeyID, objectTargetPublicKey, cfg.PrivacyObjectTargetDigestKeyID, objectTargetDigestKey)
-		if protectorErr != nil {
-			sessionStore.StopCleanup()
-			pool.Close()
-			return nil, fmt.Errorf("configure privacy object target protection: %w", protectorErr)
-		}
-		objectTargetProtector = protector
-	}
-
 	csrfKey, err := cfg.CSRFAuthKey()
 	if err != nil {
 		sessionStore.StopCleanup()
@@ -229,7 +209,7 @@ func New(ctx context.Context) (*Application, error) {
 	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
 	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter(), Logger: logger}
-	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, GuardianKey: verificationKey, Logger: logger}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, GuardianKey: verificationKey, Logger: logger}
 	guardianAuthorityWorker := &guardianauthority.Worker{Store: dbgen.New(pool), Logger: logger, Key: verificationKey, BaseURL: cfg.BaseURL}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
@@ -295,26 +275,7 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	providerRegistry, err := newApplicationProviderRegistry()
-	if err != nil {
-		return nil, errors.New("configure privacy provider registry")
-	}
-	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos", ObjectTargets: objectTargetProtector, ProviderRegistry: providerRegistry,
-		ExecutionCapabilities: privacyrequests.ProductionExecutionCapabilities()}
-	if cfg.AppEnv == "test" {
-		for _, capability := range strings.Split(cfg.PrivacyExecutionTestCapabilities, ",") {
-			if capability = strings.TrimSpace(capability); capability != "" {
-				privacyService.ExecutionCapabilities[capability] = true
-			}
-		}
-	}
-	auth.Privacy = privacyService
-	auth.PrivacyExecution = privacyService
-	privacy := handlers.PrivacyRequests{
-		Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL,
-		CompletionLinkKey: verificationKey, SecureCookies: cfg.IsProduction(),
-	}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration, privacy))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

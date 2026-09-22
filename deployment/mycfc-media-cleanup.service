@@ -1,0 +1,17 @@
+[Unit]
+Description=MyCFC media upload cleanup
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mycfc/deployment
+Environment=MYCFC_ENV_FILE=/etc/mycfc/mycfc.env
+ExecStart=/usr/bin/docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile media-cleanup up --no-deps --force-recreate media-cleanup
+ExecStop=/usr/bin/docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile media-cleanup stop media-cleanup
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=45s
+
+[Install]
+WantedBy=multi-user.target

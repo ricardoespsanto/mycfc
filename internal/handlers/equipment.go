@@ -16,7 +16,7 @@ import (
 	"github.com/a-h/templ"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -381,7 +381,7 @@ func (h Dashboard) renderEquipmentPhotoError(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, sourceRef uuid.UUID, photo *storage.ValidatedPhoto) (*privacyrequests.PreparedUpload, bool) {
+func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, sourceRef uuid.UUID, photo *storage.ValidatedPhoto) (*mediauploads.PreparedUpload, bool) {
 	if photo == nil {
 		return nil, true
 	}
@@ -392,14 +392,14 @@ func (h Dashboard) uploadEquipmentPhoto(r *http.Request, user CurrentUser, sourc
 	if uploader == nil {
 		return nil, false
 	}
-	upload, err := uploader.Upload(r.Context(), privacyrequests.UploadInput{ActorUserID: user.ID, SourceKind: "EQUIPMENT_PHOTO", SourceRef: sourceRef}, *photo)
+	upload, err := uploader.Upload(r.Context(), mediauploads.UploadInput{ActorUserID: user.ID, SourceKind: "EQUIPMENT_PHOTO", SourceRef: sourceRef}, *photo)
 	if err != nil {
 		return nil, false
 	}
 	return &upload, true
 }
 
-func (h Dashboard) failEquipmentAttachment(r *http.Request, upload *privacyrequests.PreparedUpload) {
+func (h Dashboard) failEquipmentAttachment(r *http.Request, upload *mediauploads.PreparedUpload) {
 	uploader := h.Uploads
 	if uploader == nil {
 		uploader, _ = h.Objects.(UploadService)

@@ -10,7 +10,6 @@ import (
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,12 +24,6 @@ const (
 type Sender interface {
 	SendVerification(context.Context, string, string, time.Time) error
 	SendPasswordReset(context.Context, string, string, time.Time) error
-}
-
-// PrivacySender is separate so existing verification/reset senders keep their
-// contract. Missing support fails closed rather than silently dropping a notice.
-type PrivacySender interface {
-	SendPrivacyNotification(context.Context, string, string, string) error
 }
 
 type GuardianRenewalSender interface {
@@ -54,7 +47,6 @@ type Worker struct {
 	Sender        Sender
 	Service       Service
 	PasswordReset passwordreset.Service
-	PrivacyKey    []byte
 	GuardianKey   []byte
 	Logger        *slog.Logger
 	Now           func() time.Time
@@ -110,17 +102,6 @@ func (w Worker) deliver(ctx context.Context, item dbgen.ClaimEmailOutboxRow) {
 			invalidPayload = true
 		} else {
 			err = w.Sender.SendPasswordReset(ctx, item.Email, link, item.ExpiresAt.Time)
-		}
-	case "PRIVACY_ACKNOWLEDGEMENT", "PRIVACY_DECISION", "PRIVACY_PROCESSING_STARTED", "PRIVACY_COMPLETED":
-		payload, openErr := privacyrequests.OpenDelivery(w.PrivacyKey, item.SealedPayload)
-		sender, supported := w.Sender.(PrivacySender)
-		if openErr != nil || !supported {
-			err = errors.New("invalid privacy delivery configuration or payload")
-			invalidPayload = true
-		} else {
-			// The encrypted recipient is intentionally independent of a current
-			// account or token, which may disappear during later erasure execution.
-			err = sender.SendPrivacyNotification(ctx, payload.Recipient, payload.ContactURL, item.MessageType)
 		}
 	case "GUARDIAN_RENEWAL_30_DAY", "GUARDIAN_RENEWAL_7_DAY":
 		payload, openErr := guardianauthority.OpenRenewalDelivery(w.GuardianKey, item.SealedPayload)

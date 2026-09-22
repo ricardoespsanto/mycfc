@@ -11,7 +11,7 @@ x-production-config: &production-config
   AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
 
 x-app: &app
-  image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+  image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
   environment:
     <<: *production-config
     PORT: "8080"
@@ -29,7 +29,6 @@ x-app: &app
     PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-https://mycfcoimbra.com/legal/privacidade/2026-09-11}
     COOKIE_NOTICE_URL: ${COOKIE_NOTICE_URL:-https://mycfcoimbra.com/legal/cookies/2026-09-06}
     DATA_RIGHTS_CONTACT: ${DATA_RIGHTS_CONTACT:-cfluvialcoimbra@gmail.com}
-    PRIVACY_REQUESTS_ENABLED: ${PRIVACY_REQUESTS_ENABLED:-false}
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
     TRUSTED_PROXY_CIDRS: 172.30.0.0/24
@@ -43,15 +42,16 @@ x-app: &app
 services:
   postgres:
     image: postgres:16.9-alpine3.21
+    env_file:
+      - path: ${DATABASE_CONTROL_ENV_FILE:-/etc/mycfc/database-control.env}
+        required: true
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in /etc/mycfc/mycfc.env}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in /etc/mycfc/mycfc.env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/mycfc/mycfc.env}
       TZ: Europe/Lisbon
       PGTZ: Europe/Lisbon
     command: ["postgres", "-c", "timezone=Europe/Lisbon"]
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    volumes: [pgdata:/var/lib/postgresql/data]
     networks: [mycfc]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -71,14 +71,15 @@ services:
     profiles: [green]
 
   db-bootstrap:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     command: ["bootstrap-db"]
     environment:
       <<: *production-config
-      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
-      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
-      PRIVACY_ACTIVATION_BROKER_DB_USER: ${PRIVACY_ACTIVATION_BROKER_DB_USER:-}
-      PRIVACY_ACTIVATION_BROKER_DB_PASSWORD: ${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-}
+    env_file:
+      - path: ${DATABASE_CONTROL_ENV_FILE:-/etc/mycfc/database-control.env}
+        required: true
+      - path: ${DATABASE_MAINTENANCE_ENV_FILE:-/etc/mycfc/database-maintenance.env}
+        required: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,14 +87,15 @@ services:
     profiles: [release]
 
   migrate:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     command: ["migrate"]
     environment:
       <<: *production-config
-      PRIVACY_EXECUTOR_DB_USER: ${PRIVACY_EXECUTOR_DB_USER:-}
-      PRIVACY_EXECUTOR_DB_PASSWORD: ${PRIVACY_EXECUTOR_DB_PASSWORD:-}
-      PRIVACY_ACTIVATION_BROKER_DB_USER: ${PRIVACY_ACTIVATION_BROKER_DB_USER:-}
-      PRIVACY_ACTIVATION_BROKER_DB_PASSWORD: ${PRIVACY_ACTIVATION_BROKER_DB_PASSWORD:-}
+    env_file:
+      - path: ${DATABASE_CONTROL_ENV_FILE:-/etc/mycfc/database-control.env}
+        required: true
+      - path: ${DATABASE_MAINTENANCE_ENV_FILE:-/etc/mycfc/database-maintenance.env}
+        required: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,7 +103,7 @@ services:
     profiles: [release]
 
   guardian-release-bind:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     command: ["bind-guardian-release"]
     env_file:
       - path: ${GUARDIAN_RELEASE_BIND_ENV_FILE:-/etc/mycfc/guardian-release-bind.env}
@@ -114,15 +116,14 @@ services:
     networks: [mycfc]
     profiles: [release]
     read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=8m]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 32
     restart: "no"
 
   guardian-release-bind-bootstrap:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     command: ["provision-guardian-release-bind"]
     environment:
       <<: *production-config
@@ -135,36 +136,14 @@ services:
     networks: [mycfc]
     profiles: [guardian-release-bind-bootstrap]
     read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-activation-disable-bootstrap:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    command: ["provision-privacy-activation-disable"]
-    environment:
-      <<: *production-config
-    env_file:
-      - path: /etc/mycfc/privacy-activation-disable.env
-        required: false
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [mycfc]
-    profiles: [privacy-activation-disable-bootstrap]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=8m]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 32
     restart: "no"
 
   guardian-activation-bootstrap:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     command: ["provision-guardian-activation"]
     environment:
       <<: *production-config
@@ -177,216 +156,14 @@ services:
     networks: [mycfc]
     profiles: [guardian-activation-bootstrap]
     read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-retention:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-retention"]
-    env_file:
-      - path: /etc/mycfc/privacy-retention.env
-        required: false
-    environment:
-      PRIVACY_RETENTION_ENABLED: ${PRIVACY_RETENTION_ENABLED:-false}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [mycfc]
-    profiles: [maintenance]
-    restart: "no"
-
-  privacy-policy-import:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    environment:
-      APP_ENV: production
-      APP_VERSION: ${APP_VERSION:?set APP_VERSION in /etc/mycfc/mycfc.env}
-      GIT_SHA: ${GIT_SHA:?set GIT_SHA in /etc/mycfc/mycfc.env}
-      AWS_REGION: ${AWS_REGION:?set AWS_REGION in /etc/mycfc/mycfc.env}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in /etc/mycfc/mycfc.env}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in /etc/mycfc/mycfc.env}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-    networks: [mycfc]
-    profiles: [privacy-policy-import]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-acceptance:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-acceptance"]
-    env_file:
-      - path: /etc/mycfc/privacy-acceptance.env
-        required: false
-    networks: [mycfc]
-    user: "0:0"
-    profiles: [privacy-acceptance]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-worker:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-worker"]
-    command: ["serve"]
-    env_file:
-      - path: /etc/mycfc/privacy-worker.env
-        required: false
-    environment:
-      PRIVACY_WORKER_ENABLED: ${PRIVACY_WORKER_ENABLED:-false}
-      PRIVACY_COMPLETION_ENABLED: ${PRIVACY_COMPLETION_ENABLED:-false}
-    volumes:
-      - /etc/mycfc/privacy-worker/keys:/run/secrets/mycfc:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [mycfc]
-    profiles: [privacy-worker]
-    init: true
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=16m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 128
-    restart: "no"
-    stop_grace_period: 30s
-
-  privacy-activation:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-activation"]
-    env_file:
-      - path: /etc/mycfc/privacy-activation.env
-        required: false
-    environment:
-      PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
-      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
-    volumes:
-      - /etc/mycfc/privacy-activation/evidence:/run/privacy-activation:ro
-    networks: [mycfc]
-    user: "0:0"
-    profiles: [privacy-activation]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 64
-    restart: "no"
-
-  privacy-activation-prepare:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-activation"]
-    command: ["prepare-exchange"]
-    env_file:
-      - path: /etc/mycfc/privacy-activation.env
-        required: false
-    environment:
-      PRIVACY_ACTIVATION_APPROVAL_MATERIAL_OUTPUT: /run/privacy-activation/material.json
-      PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
-      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
-      PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE: /run/privacy-activation/signer-registry.json
-      PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256: ${PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256:-}
-      PRIVACY_ACTIVATION_SOURCE_SHA: ${GIT_SHA:-}
-    volumes:
-      - /var/lib/mycfc/privacy-activation-exchange/prepare:/run/privacy-activation
-      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
-    networks: [mycfc]
-    user: "0:0"
-    profiles: [privacy-activation-prepare]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-activation-approval:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/usr/local/bin/mycfc-privacy-activation-approval"]
-    volumes:
-      - /var/lib/mycfc/privacy-activation-exchange/active:/run/privacy-activation:ro
-      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
-      - /etc/mycfc/privacy-activation/executor-public-key-spki.der:/run/privacy-activation/executor-public-key-spki.der:ro
-      - /etc/mycfc/privacy-activation/administrator-public-key-spki.der:/run/privacy-activation/administrator-public-key-spki.der:ro
-    network_mode: none
-    user: "0:0"
-    profiles: [privacy-activation-approval]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-activation-exchange:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-activation"]
-    command: ["activate-exchange"]
-    env_file:
-      - path: /etc/mycfc/privacy-activation.env
-        required: false
-    environment:
-      PRIVACY_ACTIVATION_ADMINISTRATOR_APPROVAL_FILE: /run/privacy-activation/administrator.json
-      PRIVACY_ACTIVATION_ADMINISTRATOR_PUBLIC_KEY_SPKI_FILE: /run/privacy-activation/administrator-public-key-spki.der
-      PRIVACY_ACTIVATION_APPROVAL_MATERIAL_FILE: /run/privacy-activation/material.json
-      PRIVACY_ACTIVATION_CEREMONY_ID: ${PRIVACY_ACTIVATION_CEREMONY_ID:-}
-      PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST: ${PRIVACY_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
-      PRIVACY_ACTIVATION_POLICY_VERSION: ${PRIVACY_ACTIVATION_POLICY_VERSION:-}
-      PRIVACY_ACTIVATION_EXECUTOR_APPROVAL_FILE: /run/privacy-activation/executor.json
-      PRIVACY_ACTIVATION_EXECUTOR_PUBLIC_KEY_SPKI_FILE: /run/privacy-activation/executor-public-key-spki.der
-      PRIVACY_ACTIVATION_SIGNER_REGISTRY_FILE: /run/privacy-activation/signer-registry.json
-      PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256: ${PRIVACY_ACTIVATION_SIGNER_REGISTRY_SHA256:-}
-      PRIVACY_ACTIVATION_SOURCE_SHA: ${GIT_SHA:-}
-    volumes:
-      - /var/lib/mycfc/privacy-activation-exchange/active:/run/privacy-activation:ro
-      - /etc/mycfc/privacy-activation/signer-registry.json:/run/privacy-activation/signer-registry.json:ro
-      - /etc/mycfc/privacy-activation/executor-public-key-spki.der:/run/privacy-activation/executor-public-key-spki.der:ro
-      - /etc/mycfc/privacy-activation/administrator-public-key-spki.der:/run/privacy-activation/administrator-public-key-spki.der:ro
-    networks: [mycfc]
-    user: "0:0"
-    profiles: [privacy-activation-exchange]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    restart: "no"
-
-  privacy-activation-disable:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
-    entrypoint: ["/app/privacy-activation"]
-    command: ["disable"]
-    env_file:
-      - path: /etc/mycfc/privacy-activation-disable.env
-        required: false
-    networks: [mycfc]
-    user: "0:0"
-    profiles: [privacy-activation-disable]
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=8m]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 32
     restart: "no"
 
   guardian-activation:
-    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE to the immutable ECR image reference in /etc/mycfc/mycfc.env}
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
     entrypoint: ["/app/guardian-activation"]
     env_file:
       - path: /etc/mycfc/guardian-activation.env
@@ -394,18 +171,59 @@ services:
     environment:
       GUARDIAN_ACTIVATION_CURRENT_IMAGE_DIGEST: ${GUARDIAN_ACTIVATION_CURRENT_IMAGE_DIGEST:-}
       GUARDIAN_ACTIVATION_APPROVAL_FILE: /run/guardian-activation/approval.json
-    volumes:
-      - /etc/mycfc/guardian-activation:/run/guardian-activation:ro
+    volumes: [/etc/mycfc/guardian-activation:/run/guardian-activation:ro]
     networks: [mycfc]
     user: "0:0"
     profiles: [guardian-activation]
     read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=8m]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 32
     restart: "no"
+
+  media-cleanup:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/media-cleanup"]
+    command: ["serve"]
+    env_file:
+      - path: /etc/mycfc/media-cleanup.env
+        required: false
+    environment:
+      MEDIA_CLEANUP_ENABLED: ${MEDIA_CLEANUP_ENABLED:-false}
+    volumes: [/etc/mycfc/media-cleanup/keys:/run/secrets/mycfc:ro]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [media-cleanup]
+    init: true
+    read_only: true
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=16m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    restart: "no"
+
+  data-retention:
+    image: ${MYCFC_IMAGE:?set MYCFC_IMAGE in /etc/mycfc/mycfc.env}
+    entrypoint: ["/app/data-retention"]
+    command: ["run", "--confirmed-manual-review"]
+    env_file:
+      - path: ${DATA_RETENTION_ENV_FILE:-/etc/mycfc/data-retention.env}
+        required: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [mycfc]
+    profiles: [manual-maintenance]
+    read_only: true
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=8m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    restart: "no"
+    stop_grace_period: 30s
 
   caddy:
     image: mycfc-caddy-ratelimit:2.10.2-v0.1.0

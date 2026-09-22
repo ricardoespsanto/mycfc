@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const adminEmail = 'e2e-admin@example.test';
-const guardianEmail = 'e2e-privacy-guardian@example.test';
+const guardianEmail = 'e2e-guardian-fixture@example.test';
 const password = 'correct horse 7';
 const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:18080';
 
@@ -151,7 +151,7 @@ test('annual renewal is accessible, mobile-safe, keyboard-safe and works without
   await page.setViewportSize({ width: 320, height: 720 });
   await login(page, guardianEmail);
   await page.goto('/dashboard/guardian');
-  const accessibleRelationship = page.getByRole('listitem').filter({ hasText: 'Menor de privacidade de teste' });
+  const accessibleRelationship = page.getByRole('listitem').filter({ hasText: 'Menor de representação de teste' });
   await expect(accessibleRelationship).toContainText('Renovação disponível');
   await expect(accessibleRelationship).toContainText(/Validade atual:\s\d{2}\/\d{2}\/\d{4}/);
   const accessibleUnchanged = accessibleRelationship.getByLabel('Nada mudou');
@@ -166,7 +166,7 @@ test('annual renewal is accessible, mobile-safe, keyboard-safe and works without
   const noJSPage = await context.newPage();
   await login(noJSPage, guardianEmail);
   await noJSPage.goto('/dashboard/guardian');
-  const relationship = noJSPage.getByRole('listitem').filter({ hasText: 'Menor de privacidade de teste' });
+  const relationship = noJSPage.getByRole('listitem').filter({ hasText: 'Menor de representação de teste' });
   await expect(relationship).toContainText('Renovação disponível');
   await expect(relationship).toContainText(/Validade atual:\s\d{2}\/\d{2}\/\d{4}/);
   const unchanged = relationship.getByLabel('Nada mudou');

@@ -17,7 +17,7 @@ import (
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
@@ -120,7 +120,7 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 	}
 
 	attachErr := errors.New("upload attach unavailable")
-	tx = &profileTransactionFake{subjectID: subjectID, execErrs: map[string]error{"AttachPrivacyUploadIntent": attachErr}}
+	tx = &profileTransactionFake{subjectID: subjectID, execErrs: map[string]error{"AttachMediaUploadIntent": attachErr}}
 	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: testPreparedUpload("profiles/new.png", "image/png", 42), ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
 	if !errors.Is(err, attachErr) || tx.committed {
 		t.Fatalf("attach error=%v committed=%t", err, tx.committed)
@@ -130,7 +130,7 @@ func TestPostgresProfileStorePropagatesReadAndPhotoWriteFailures(t *testing.T) {
 	invalidUpload.HoldToken = nil
 	tx = &profileTransactionFake{subjectID: subjectID}
 	_, err = (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).SavePhoto(context.Background(), ProfilePhotoUpdate{ActorID: subjectID, SubjectID: subjectID, Upload: invalidUpload, ConsentVersion: "2026-09", ConsentSHA256: "digest", AcceptConsent: true})
-	if !errors.Is(err, privacyrequests.ErrUploadProvenanceUnavailable) || tx.committed {
+	if !errors.Is(err, mediauploads.ErrUploadProvenanceUnavailable) || tx.committed {
 		t.Fatalf("invalid provenance error=%v committed=%t", err, tx.committed)
 	}
 }
@@ -218,7 +218,7 @@ func TestPostgresProfileStoreRefusesPhotoChangesWithoutEligibleState(t *testing.
 		oldKey := "profiles/legacy.png"
 		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey}
 		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
-		if !errors.Is(err, privacyrequests.ErrUploadProvenanceUnavailable) || tx.committed {
+		if !errors.Is(err, mediauploads.ErrUploadProvenanceUnavailable) || tx.committed {
 			t.Fatalf("error=%v committed=%t", err, tx.committed)
 		}
 	})
@@ -227,7 +227,7 @@ func TestPostgresProfileStoreRefusesPhotoChangesWithoutEligibleState(t *testing.
 		subjectID, intentID := uuid.New(), uuid.New()
 		oldKey := "profiles/tracked.png"
 		removeErr := errors.New("cleanup transition unavailable")
-		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID, execErrs: map[string]error{"RemovePrivacyUploadIntent": removeErr}}
+		tx := &profileTransactionFake{subjectID: subjectID, oldPhotoKey: &oldKey, oldPhotoIntentID: &intentID, execErrs: map[string]error{"RemoveMediaUploadIntent": removeErr}}
 		_, err := (PostgresProfileStore{DB: profileDatabaseFake{tx: tx}}).RemovePhoto(context.Background(), subjectID, subjectID, false)
 		if !errors.Is(err, removeErr) || tx.committed {
 			t.Fatalf("error=%v committed=%t", err, tx.committed)
@@ -612,8 +612,8 @@ type profileObjectStoreFake struct {
 	presignErr    error
 }
 
-func testPreparedUpload(key, contentType string, size int64) privacyrequests.PreparedUpload {
-	return privacyrequests.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{7}, 32), ObjectKey: key, ContentType: contentType, SizeBytes: size}
+func testPreparedUpload(key, contentType string, size int64) mediauploads.PreparedUpload {
+	return mediauploads.PreparedUpload{IntentID: uuid.New(), HoldEpoch: 1, HoldToken: bytes.Repeat([]byte{7}, 32), ObjectKey: key, ContentType: contentType, SizeBytes: size}
 }
 
 type profileSQLCall struct {
@@ -777,14 +777,14 @@ func (s *profileObjectStoreFake) DeleteObject(context.Context, string) error {
 func (s *profileObjectStoreFake) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return s.presignedURL, s.presignErr
 }
-func (s *profileObjectStoreFake) Upload(_ context.Context, input privacyrequests.UploadInput, photo storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error) {
+func (s *profileObjectStoreFake) Upload(_ context.Context, input mediauploads.UploadInput, photo storage.ValidatedPhoto) (mediauploads.PreparedUpload, error) {
 	s.puts++
 	if s.putErr != nil {
-		return privacyrequests.PreparedUpload{}, s.putErr
+		return mediauploads.PreparedUpload{}, s.putErr
 	}
 	return testPreparedUpload(strings.ToLower(input.SourceKind)+"/photo."+photo.Extension, photo.ContentType, photo.Size), nil
 }
-func (s *profileObjectStoreFake) AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error {
+func (s *profileObjectStoreFake) AttachmentFailed(context.Context, mediauploads.PreparedUpload) error {
 	s.deletes++
 	return s.deleteErr
 }

@@ -69,6 +69,7 @@ publication() {
 	inventory_digest=$(printf '%s' "$(printf '%s' "$MIGRATION_INVENTORY_JSON" | jq -r 'join("\n")')" | sha256sum | awk '{print $1}')
 	[ "$inventory_digest" = "$SCHEMA_MIGRATION_DIGEST" ] || fail 'schema migration digest does not represent MIGRATION_INVENTORY_JSON'
 	printf '%s' "$EXPECTED_GATES_JSON" | jq -e 'type == "object" and (keys | sort) == ["guardian_intake","privacy_worker"] and all(.[]; type == "boolean")' >/dev/null || fail 'EXPECTED_GATES_JSON is invalid'
+	printf '%s' "$EXPECTED_GATES_JSON" | jq -e '.privacy_worker == false' >/dev/null || fail 'privacy worker gate is permanently retired'
 	issues=$(issues_json "${RELEASE_ISSUES:-}")
 	write_canonical "$RELEASE_EVIDENCE_OUTPUT" jq -n \
 		--arg contract 'mycfc/release-publication/v1' \
@@ -105,6 +106,7 @@ receipt() {
 	case "$GUARDIAN_INTAKE_ACTIVE" in true|false) ;; *) fail 'actual gate states must be booleans' ;; esac
 	case "$PRIVACY_WORKER_ACTIVE" in true|false) ;; *) fail 'actual gate states must be booleans' ;; esac
 	case "$PRIVACY_WORKER_ACTIVATION_REQUIRED" in true|false) ;; *) fail 'actual gate states must be booleans' ;; esac
+	[ "$PRIVACY_WORKER_ACTIVE:$PRIVACY_WORKER_ACTIVATION_REQUIRED" = false:false ] || fail 'privacy worker gate is permanently retired'
 	if [ "$PRIVACY_WORKER_ACTIVE" = true ] && [ "$PRIVACY_WORKER_ACTIVATION_REQUIRED" = true ]; then fail 'active privacy worker cannot require activation'; fi
 	case "$RELEASE_SLOT" in blue|green|unknown) ;; *) fail 'RELEASE_SLOT is invalid' ;; esac
 	case "$RELEASE_TAG" in "release-$RELEASE_VERSION"-??????????????-"$GIT_SHA") ;; *) fail 'RELEASE_TAG does not bind the exact SHA' ;; esac

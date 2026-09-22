@@ -4,29 +4,24 @@ github_org        = "ricardoespsanto"
 github_repo       = "mycfc"
 alarm_email       = "operations@example.com"
 
-# Privacy execution remains inert until the separately evidenced activation
-# procedure is approved. The broker ARN comes from the Hetzner Terraform output.
-privacy_worker_infrastructure_enabled         = false
-privacy_worker_s3_deletion_enabled            = false
-privacy_worker_metadata_rewrite_enabled       = false
-privacy_worker_ledger_broker_invoke_enabled   = false
-privacy_worker_ledger_broker_function_arn     = null
-privacy_worker_monitoring_enabled             = false
-privacy_activation_exchange_enabled            = false
-privacy_activation_github_oidc_provider_arn    = null
-privacy_activation_terraform_state_bucket_name = null
-legacy_media_purge_identity_enabled            = false
-legacy_media_purge_deletion_enabled            = false
-legacy_media_purge_write_fence_enabled         = false
-legacy_media_purge_permission_expires_at       = null
-release_agent_cutover_complete                = false
-privacy_operation_receipts_enabled            = false
+release_agent_cutover_complete = false
+
+# Required by the protected production deployment workflow. Preserve these in
+# both protected plan and apply TF_VARS after the role is first provisioned.
+operations_observer_enabled                  = true
+operations_observer_github_oidc_provider_arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
 
 calendar_competition_id = "competition@example.com"
 calendar_training_id    = "training@example.com"
 calendar_social_id      = "social@example.com"
 calendar_cleanups_id    = "cleanups@example.com"
 google_calendar_api_key = "replace-me"
+# Copy the existing production values exactly into BOTH protected plan and
+# apply TF_VARS before any plan/apply; never rotate the credential key ring here.
+polar_client_id               = "existing-polar-client-id-or-empty"
+polar_client_secret           = "existing-polar-client-secret-or-empty"
+activity_credential_key_id    = "existing-active-key-id-or-empty"
+activity_credential_keys_json = "existing-key-ring-json-or-empty"
 gallery_url             = "https://mycfcoimbra.com/gallery"
 
 consent_terms_version = "2026-09-06"
@@ -46,11 +41,9 @@ image_digest  = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 image_git_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 postgres_username      = "mycfc"
-postgres_password      = "replace-me"
 app_db_username        = "mycfc_app"
 app_db_password        = "replace-me"
 migration_db_username  = "mycfc_migrator"
-migration_db_password  = "replace-me"
 database_name          = "mycfc"
 turnstile_site_key     = "0x4AAAA..."
 turnstile_secret_key   = "0x4AAAA..."

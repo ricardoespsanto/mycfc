@@ -22,11 +22,11 @@ receipt=$work_dir/source-receipt.json
 env RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
 	RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
 	RELEASE_RESULT=succeeded RELEASE_SLOT=green TRAFFIC_SWITCHED=true ROLLBACK_PERFORMED=false \
-	GUARDIAN_INTAKE_ACTIVE=false PRIVACY_WORKER_ACTIVE=true PRIVACY_WORKER_ACTIVATION_REQUIRED=false \
+	GUARDIAN_INTAKE_ACTIVE=false PRIVACY_WORKER_ACTIVE=false PRIVACY_WORKER_ACTIVATION_REQUIRED=false \
 	RELEASE_STARTED_AT="$started" RELEASE_FINISHED_AT="$finished" RELEASE_EVIDENCE_OUTPUT="$receipt" \
 	sh "$script_dir/release-evidence.sh" receipt
 receipt_sha=$(sha256sum "$receipt" | awk '{print $1}')
-event="event=deployment_receipt result=succeeded version=v1.25.0 sha=$sha digest=$digest schema_migration_digest=$schema manifest_sha256=$manifest slot=green failure_phase=none traffic_switched=true rollback_performed=false guardian_intake_active=false privacy_worker_active=true privacy_worker_activation_required=false started_at=$started finished_at=$finished receipt_sha256=$receipt_sha"
+event="event=deployment_receipt result=succeeded version=v1.25.0 sha=$sha digest=$digest schema_migration_digest=$schema manifest_sha256=$manifest slot=green failure_phase=none traffic_switched=true rollback_performed=false guardian_intake_active=false privacy_worker_active=false privacy_worker_activation_required=false started_at=$started finished_at=$finished receipt_sha256=$receipt_sha"
 event_ms=$((now * 1000))
 wrapped_event="host=mycfc-production exit_status=0
 $event
@@ -38,7 +38,7 @@ run_verify() {
 	PATH="$work_dir/bin:$PATH" TEST_LOG_JSON="$1" AWS_REGION=eu-west-1 CLOUDWATCH_LOG_GROUP=/mycfc/production/deployment \
 		RELEASE_VERSION=v1.25.0 GIT_SHA=$sha IMAGE_REPOSITORY=registry.example/mycfc IMAGE_DIGEST=$digest \
 		RELEASE_TAG=release-v1.25.0-20260912120000-$sha SCHEMA_MIGRATION_DIGEST=$schema PUBLICATION_MANIFEST_SHA256=$manifest \
-		EXPECTED_GATES_JSON='{"guardian_intake":false,"privacy_worker":true}' \
+		EXPECTED_GATES_JSON='{"guardian_intake":false,"privacy_worker":false}' \
 		RELEASE_EVIDENCE_START_TIME_MS=$((event_ms - 1000)) RELEASE_EVIDENCE_OUTPUT="$output" RELEASE_EVIDENCE_ATTEMPTS=1 \
 		sh "$script_dir/verify-release-evidence.sh"
 }

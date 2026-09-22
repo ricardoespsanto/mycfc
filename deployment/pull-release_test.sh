@@ -77,7 +77,13 @@ JSON
 			*NetworkSettings.Networks*app-blue-1*) printf '172.30.0.20\n' ;;
 			*NetworkSettings.Networks*app-green-1*) printf '172.30.0.21\n' ;;
 			*State.Running*caddy-1*) printf 'true\n' ;;
-			*Config.Image*privacy-worker-1*) cat "$TEST_WORKER_IMAGE_FILE" ;;
+			*State.Running*State.Restarting*media-cleanup-1*)
+				if [ "${TEST_MEDIA_CLEANUP_BAD_STATE:-false}" = true ]; then
+					printf 'false false registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+				else
+					printf 'true false registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+				fi
+				;;
 			*Config.Image*) printf '%s\n' "${TEST_ACTIVE_IMAGE:-registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;
 			*) exit 1 ;;
 		esac
@@ -85,9 +91,6 @@ JSON
 	compose)
 		if printf '%s\n' "$*" | grep -q 'guardian-release-bind guardian-release-status'; then
 			printf 'guardian_intake_active=%s\n' "${TEST_GUARDIAN_INTAKE_ACTIVE:-false}"
-		fi
-		if printf '%s\n' "$*" | grep -q -- '--profile privacy-worker create --no-build --no-deps --force-recreate privacy-worker'; then
-			printf '%s\n' 'registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' >"$TEST_WORKER_IMAGE_FILE"
 		fi
 		if [ "${TEST_POST_SWITCH_FAILURE:-}" = true ] && printf '%s\n' "$*" | grep -q 'exec -T caddy wget'; then
 			exit 1
@@ -129,22 +132,6 @@ cat >"$fake_bin/verify-restore-attestation" <<'EOF'
 #!/bin/sh
 printf 'verify-restore-attestation %s\n' "$*" >>"$TEST_DOCKER_LOG"
 EOF
-cat >"$fake_bin/privacy-worker" <<'EOF'
-#!/bin/sh
-printf 'privacy-worker %s\n' "$*" >>"$TEST_DOCKER_LOG"
-case "${TEST_PRIVACY_WORKER_READINESS_RESULT:-ready}" in
-	ready) exit 0 ;;
-	inactive)
-		printf '%s\n' 'privacy_worker_readiness_activation_required' >&2
-		exit 3
-		;;
-	error)
-		printf '%s\n' 'privacy_worker_failed' >&2
-		exit 1
-		;;
-	*) exit 2 ;;
-esac
-EOF
 cat >"$fake_bin/systemctl" <<'EOF'
 #!/bin/sh
 printf 'systemctl %s\n' "$*" >>"$TEST_DOCKER_LOG"
@@ -152,6 +139,7 @@ case "$1" in
 	stop) printf '%s\n' inactive >"$TEST_WORKER_STATE_FILE" ;;
 	restart) printf '%s\n' active >"$TEST_WORKER_STATE_FILE" ;;
 	is-active) [ "$(cat "$TEST_WORKER_STATE_FILE")" = active ] ;;
+	is-enabled) [ "${TEST_MEDIA_CLEANUP_NOT_ENABLED:-false}" != true ] ;;
 	*) exit 1 ;;
 esac
 EOF
@@ -170,6 +158,7 @@ MYCFC_IMAGE=registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 APP_VERSION=old
 APP_RELEASED_AT=2026-08-09T00:00:00Z
 GIT_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+MEDIA_CLEANUP_ENABLED=true
 EOF
 	chmod 0600 "$case_dir/mycfc.env"
 	cat >"$case_dir/guardian-release-bind.env" <<'EOF'
@@ -189,7 +178,7 @@ EOF
 	: >"$case_dir/aws.log"
 	: >"$case_dir/events.log"
 	: >"$case_dir/gh.log"
-	printf '%s\n' active >"$case_dir/worker.state"
+	printf '%s\n' inactive >"$case_dir/worker.state"
 	printf '%s\n' 'registry.example/mycfc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"$case_dir/worker.image"
 }
 
@@ -256,6 +245,8 @@ for phase in postgres_ready database_bootstrap database_migrate database_harden 
 done
 grep -q 'event=release_selected .*active_slot=legacy' "$success_case/events.log"
 grep -q 'event=deployment_succeeded .*slot=blue' "$success_case/events.log"
+grep -q 'systemctl restart mycfc-media-cleanup.service' "$success_case/docker.log"
+grep -q 'event=media_cleanup_validated digest=sha256:bbbb' "$success_case/events.log"
 jq -e '.contract == "mycfc/deployment-receipt/v1" and .version == "v1.25.0" and .result == "succeeded" and .slot == "blue" and .failure_phase == null and .traffic_switched == true and .rollback_performed == false and .actual_gates == {guardian_intake:false,privacy_worker:false} and .privacy_worker_activation_required == false and (.publication_manifest_sha256 | test("^[0-9a-f]{64}$"))' "$success_case/state/deployment-receipt.json" >/dev/null
 
 test "$(wc -l <"$success_case/gh.log")" -eq 2
@@ -317,144 +308,6 @@ if grep -Eq '^restore-drill |^verify-restore-attestation ' "$success_case/docker
 	exit 1
 fi
 
-privacy_gate_case="$work_dir/privacy-gate"
-setup_case "$privacy_gate_case"
-cat >>"$privacy_gate_case/mycfc.env" <<'EOF'
-BACKUP_MANIFEST_AUTH_ENABLED=true
-PRIVACY_RESTORE_DRILL_ENABLED=true
-PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true
-EOF
-run_release "$privacy_gate_case" \
-	MYCFC_RESTORE_DRILL_COMMAND=restore-drill \
-	MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND=verify-restore-attestation
-grep -q '^restore-drill registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$' "$privacy_gate_case/docker.log"
-grep -q '^verify-restore-attestation registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$' "$privacy_gate_case/docker.log"
-awk '
-	/^restore-drill / { drill = NR }
-	/^verify-restore-attestation / { attestation = NR }
-	/compose .* up -d --wait postgres$/ { postgres = NR }
-	END { exit !(drill < attestation && attestation < postgres) }
-' "$privacy_gate_case/docker.log"
-for phase in privacy_restore_drill privacy_restore_attestation; do
-	grep -q "event=deployment_phase_started phase=$phase" "$privacy_gate_case/events.log"
-	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_gate_case/events.log"
-done
-
-privacy_worker_case="$work_dir/privacy-worker"
-setup_case "$privacy_worker_case"
-cat >>"$privacy_worker_case/mycfc.env" <<'EOF'
-PRIVACY_WORKER_ENABLED=true
-PRIVACY_REQUESTS_ENABLED=true
-EOF
-run_release "$privacy_worker_case" MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker
-jq -e '.actual_gates == {guardian_intake:false,privacy_worker:true} and .privacy_worker_activation_required == false' "$privacy_worker_case/state/deployment-receipt.json" >/dev/null
-for phase in privacy_worker_stop privacy_worker_readiness privacy_worker_restart privacy_worker_verify; do
-	grep -q "event=deployment_phase_started phase=$phase" "$privacy_worker_case/events.log"
-	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_worker_case/events.log"
-done
-awk '
-	/systemctl stop mycfc-privacy-worker.service/ { stopped = NR }
-	/run --rm migrate$/ { migrated = NR }
-	/privacy-worker readiness/ { ready = NR }
-	/systemctl restart mycfc-privacy-worker.service/ { restarted = NR }
-	END { exit !(stopped < migrated && migrated < ready && ready < restarted) }
-' "$privacy_worker_case/docker.log"
-
-privacy_worker_inactive_case="$work_dir/privacy-worker-inactive"
-setup_case "$privacy_worker_inactive_case"
-cat >>"$privacy_worker_inactive_case/mycfc.env" <<'EOF'
-PRIVACY_WORKER_ENABLED=true
-PRIVACY_REQUESTS_ENABLED=true
-EOF
-run_release "$privacy_worker_inactive_case" \
-	MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker \
-	TEST_PRIVACY_WORKER_READINESS_RESULT=inactive
-jq -e '.actual_gates == {guardian_intake:false,privacy_worker:false} and .privacy_worker_activation_required == true' "$privacy_worker_inactive_case/state/deployment-receipt.json" >/dev/null
-test "$(cat "$privacy_worker_inactive_case/state/active-slot")" = blue
-test "$(cat "$privacy_worker_inactive_case/state/last-attempt-result")" = succeeded
-grep -q 'event=deployment_phase_started phase=privacy_worker_readiness' "$privacy_worker_inactive_case/events.log"
-grep -q 'event=deployment_phase_completed phase=privacy_worker_readiness outcome=activation-required' "$privacy_worker_inactive_case/events.log"
-grep -q 'event=privacy_worker_activation_required worker_state=stopped readiness_exit_status=3' "$privacy_worker_inactive_case/events.log"
-grep -q 'event=deployment_succeeded .*slot=blue' "$privacy_worker_inactive_case/events.log"
-for phase in privacy_worker_stage_inactive privacy_worker_verify_inactive; do
-	grep -q "event=deployment_phase_started phase=$phase" "$privacy_worker_inactive_case/events.log"
-	grep -q "event=deployment_phase_completed phase=$phase" "$privacy_worker_inactive_case/events.log"
-done
-test "$(grep -c 'systemctl stop mycfc-privacy-worker.service' "$privacy_worker_inactive_case/docker.log")" -eq 1
-test "$(cat "$privacy_worker_inactive_case/worker.state")" = inactive
-grep -q -- '--profile privacy-worker create --no-build --no-deps --force-recreate privacy-worker' "$privacy_worker_inactive_case/docker.log"
-if grep -q 'systemctl restart mycfc-privacy-worker.service' "$privacy_worker_inactive_case/docker.log"; then
-	printf '%s\n' 'An activation-required release restarted the stopped worker.' >&2
-	exit 1
-fi
-: >"$privacy_worker_inactive_case/docker.log"
-run_release "$privacy_worker_inactive_case" \
-	MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker \
-	TEST_ACTIVE_IMAGE=registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-	TEST_PRIVACY_WORKER_READINESS_RESULT=inactive
-grep -q 'already deployed in the blue slot' "$privacy_worker_inactive_case/events.log"
-if grep -Eq 'privacy-worker readiness|run --rm migrate|force-recreate app-' "$privacy_worker_inactive_case/docker.log"; then
-	printf '%s\n' 'A stable inactive worker release was deployed again.' >&2
-	exit 1
-fi
-
-privacy_worker_readiness_failure_case="$work_dir/privacy-worker-readiness-failure"
-setup_case "$privacy_worker_readiness_failure_case"
-cat >>"$privacy_worker_readiness_failure_case/mycfc.env" <<'EOF'
-PRIVACY_WORKER_ENABLED=true
-PRIVACY_REQUESTS_ENABLED=true
-EOF
-if run_release "$privacy_worker_readiness_failure_case" \
-	MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker \
-	TEST_PRIVACY_WORKER_READINESS_RESULT=error; then
-	printf '%s\n' 'A release passed after a genuine privacy worker readiness error.' >&2
-	exit 1
-fi
-test "$(cat "$privacy_worker_readiness_failure_case/state/active-slot")" = legacy
-test "$(cat "$privacy_worker_readiness_failure_case/state/last-attempt-result")" = failed
-grep -q 'event=deployment_failed phase=privacy_worker_readiness exit_status=1' "$privacy_worker_readiness_failure_case/events.log"
-if grep -q 'event=privacy_worker_activation_required' "$privacy_worker_readiness_failure_case/events.log"; then
-	printf '%s\n' 'A genuine readiness error was misclassified as activation-required.' >&2
-	exit 1
-fi
-test "$(grep -c 'systemctl restart mycfc-privacy-worker.service' "$privacy_worker_readiness_failure_case/docker.log")" -eq 1
-
-privacy_worker_failure_case="$work_dir/privacy-worker-failure"
-setup_case "$privacy_worker_failure_case"
-cat >>"$privacy_worker_failure_case/mycfc.env" <<'EOF'
-PRIVACY_WORKER_ENABLED=true
-PRIVACY_REQUESTS_ENABLED=true
-EOF
-if run_release "$privacy_worker_failure_case" MYCFC_PRIVACY_WORKER_COMMAND=privacy-worker TEST_BAD_ASSET=true; then
-	printf '%s\n' 'A worker-enabled release passed after candidate validation failed.' >&2
-	exit 1
-fi
-test "$(grep -c 'systemctl stop mycfc-privacy-worker.service' "$privacy_worker_failure_case/docker.log")" -eq 1
-test "$(grep -c 'systemctl restart mycfc-privacy-worker.service' "$privacy_worker_failure_case/docker.log")" -eq 1
-grep -q '^MYCFC_IMAGE=.*aaaaaaaa' "$privacy_worker_failure_case/mycfc.env"
-
-privacy_gate_failure_case="$work_dir/privacy-gate-failure"
-setup_case "$privacy_gate_failure_case"
-cat >>"$privacy_gate_failure_case/mycfc.env" <<'EOF'
-BACKUP_MANIFEST_AUTH_ENABLED=true
-PRIVACY_RESTORE_DRILL_ENABLED=true
-PRIVACY_RESTORE_PROMOTION_GATE_ENABLED=true
-EOF
-if run_release "$privacy_gate_failure_case" \
-	MYCFC_RESTORE_DRILL_COMMAND=restore-drill \
-	MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND=verify-restore-attestation \
-	TEST_RESTORE_DRILL_FAILURE=true; then
-	printf '%s\n' 'A release passed after the privacy restore drill failed.' >&2
-	exit 1
-fi
-test "$(cat "$privacy_gate_failure_case/state/active-slot")" = legacy
-test "$(cat "$privacy_gate_failure_case/state/last-attempt-result")" = failed
-grep -q 'event=deployment_failed phase=privacy_restore_drill' "$privacy_gate_failure_case/events.log"
-if grep -Eq '^verify-restore-attestation |compose .*up -d --wait postgres' "$privacy_gate_failure_case/docker.log"; then
-	printf '%s\n' 'A failed privacy restore drill reached attestation validation or the production database.' >&2
-	exit 1
-fi
-
 failure_case="$work_dir/failure"
 setup_case "$failure_case"
 if run_release "$failure_case" TEST_BAD_ASSET=true; then
@@ -491,6 +344,16 @@ test "$(grep -c 'exec -T caddy caddy reload' "$post_switch_case/docker.log")" -g
 grep -q 'event=deployment_failed phase=post_switch_validation exit_status=1 .*candidate_started=true route_switched=true' "$post_switch_case/events.log"
 jq -e '.traffic_switched == true and .rollback_performed == true and .failure_phase == "post_switch_validation"' "$post_switch_case/state/deployment-receipt.json" >/dev/null
 
+media_cleanup_failure_case="$work_dir/media-cleanup-failure"
+setup_case "$media_cleanup_failure_case"
+if run_release "$media_cleanup_failure_case" TEST_MEDIA_CLEANUP_BAD_STATE=true; then
+	printf '%s\n' 'release with unstable media cleanup unexpectedly succeeded' >&2
+	exit 1
+fi
+grep -q 'event=deployment_failed phase=media_cleanup_validation' "$media_cleanup_failure_case/events.log"
+jq -e '.result == "failed" and .failure_phase == "media_cleanup_validation"' "$media_cleanup_failure_case/state/deployment-receipt.json" >/dev/null
+test ! -f "$media_cleanup_failure_case/state/release-deployment-completed-at"
+
 : >"$failure_case/docker.log"
 detected_before=$(cat "$failure_case/state/release-detected-at")
 run_release "$failure_case"
@@ -521,10 +384,16 @@ if printf '%s\n' "$database_service_config" | grep -Eq 'APP_DB_|MIGRATION_DB_|^[
 	printf '%s\n' 'production database jobs must not consume duplicated host database settings' >&2
 	exit 1
 fi
-test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 5
+test "$(printf '%s\n' "$database_service_config" | grep -c '<<: \*production-config')" -eq 4
 production_config=$(sed -n '/^x-production-config:/,/^x-app:/p' "$compose_file")
 for field in APP_ENV APP_VERSION GIT_SHA AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
 	printf '%s\n' "$production_config" | grep -q "^[[:space:]]*$field:"
 done
+web_config=$(sed -n '/^x-app:/,/^services:/p' "$compose_file")
+if printf '%s\n' "$web_config" | grep -Eq 'POSTGRES_PASSWORD|MIGRATION_DB_PASSWORD|database-control|database-maintenance'; then
+	printf '%s\n' 'web containers received a privileged or maintenance database credential source' >&2
+	exit 1
+fi
+grep -q 'DATABASE_CONTROL_ENV_FILE.*database-control.env' "$compose_file"
 
 printf '%s\n' 'pull-release tests passed'

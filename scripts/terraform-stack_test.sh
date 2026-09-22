@@ -35,7 +35,7 @@ for stack in production hetzner; do
     grep -q -F -- "-backend-config=key=mycfc/$stack/terraform.tfstate" "$workspace/docker-args"
     if grep -q -F -- '-var-file=' "$workspace/docker-args"; then exit 1; fi
     tf plan -input=false -out=production.tfplan
-    [[ $(tail -n 1 "$workspace/docker-args") == '-var-file=privacy-infrastructure.tfvars' ]]
+    if grep -q -F -- '-var-file=' "$workspace/docker-args"; then exit 1; fi
     grep -q -x "$TF_PROVIDER_VARIABLE" "$workspace/docker-args"
     if [[ "$stack" == production ]]; then
       if grep -q -x HCLOUD_TOKEN "$workspace/docker-args"; then exit 1; fi
@@ -84,7 +84,7 @@ terraform_stack_select hetzner
 hetzner_hmac=$(printf '%s' '{}' | python3 "$repo/scripts/terraform-plan-hmac.py" -)
 [[ "$production_hmac" != "$hetzner_hmac" ]]
 
-# The source-controlled foundation posture must never enable later capabilities.
+# Workflow expressions must keep the two Terraform stacks' secrets isolated.
 python3 - "$repo" <<'PY'
 from pathlib import Path
 import ast
@@ -128,36 +128,5 @@ for workflow in ['terraform-production-plan.yml', 'terraform-production-apply.ym
             expected = hetzner_secret if stack == 'hetzner' else production_secret
             assert result == expected, (workflow, key, stack, 'cross-stack secret fallback')
 assert expression_count == 6
-expected_enabled = {
-    'production': {
-        'privacy_worker_infrastructure_enabled': 'true',
-        'privacy_worker_s3_deletion_enabled': 'true',
-        'privacy_worker_metadata_rewrite_enabled': 'true',
-        'privacy_worker_ledger_broker_invoke_enabled': 'true',
-        'privacy_worker_ledger_broker_function_arn':
-            '"arn:aws:lambda:eu-west-1:334960985019:function:mycfc-production-privacy-ledger-broker"',
-        'privacy_worker_monitoring_enabled': 'true',
-        'operations_observer_enabled': 'true',
-        'operations_observer_github_oidc_provider_arn':
-            '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
-        'privacy_operation_receipts_enabled': 'true',
-        'privacy_activation_exchange_enabled': 'true',
-        'privacy_activation_github_oidc_provider_arn':
-            '"arn:aws:iam::334960985019:oidc-provider/token.actions.githubusercontent.com"',
-        'privacy_activation_terraform_state_bucket_name': '"mycfcterraformstatebucket"',
-    },
-    'hetzner': {
-        'privacy_restore_infrastructure_enabled': 'true',
-        'privacy_restore_ledger_write_enabled': 'true',
-        'privacy_restore_ledger_replay_enabled': 'true',
-        'postgres_backup_cleanup_identity_enabled': 'true',
-    },
-}
-for stack, enabled in expected_enabled.items():
-    text = (root / f'infra/environments/{stack}/privacy-infrastructure.tfvars').read_text()
-    pairs = dict(re.findall(r'^(\w+)\s*=\s*(\S+)', text, re.M))
-    for key, value in enabled.items():
-        assert pairs.pop(key) == value
-    assert all(value in ('false', 'null') for value in pairs.values())
 PY
 printf '%s\n' 'Terraform stack selection, credential isolation and durable posture tests passed.'

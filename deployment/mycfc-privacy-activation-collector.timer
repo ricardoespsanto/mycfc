@@ -1,8 +1,0 @@
-[Unit]
-Description=Poll exact MyCFC privacy activation approval keys while a ceremony is armed
-
-[Timer]
-OnActiveSec=1s
-OnUnitActiveSec=30s
-AccuracySec=1s
-Unit=mycfc-privacy-activation-collector.service

@@ -39,19 +39,13 @@ terraform_stack_cleanup() {
 }
 
 tf() {
-  # Every plan (preview, approved apply, drift verification) retains the checked-in
-  # desired posture. Explicit -var-file takes precedence over secret auto.tfvars.
   local operation=${1:?}
   shift
-  local -a desired=()
-  if [[ "$operation" == plan ]]; then
-    desired=(-var-file=privacy-infrastructure.tfvars)
-  fi
   docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD:/workspace" -v "$PWD/.cache/terraform/plugin-cache:/terraform-plugin-cache" \
     -w /workspace -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
     -e AWS_REGION -e "$TF_PROVIDER_VARIABLE" -e TF_IN_AUTOMATION -e TF_PLUGIN_CACHE_DIR \
-    "$TERRAFORM_IMAGE" "-chdir=$TF_ROOT" "$operation" "$@" "${desired[@]}"
+    "$TERRAFORM_IMAGE" "-chdir=$TF_ROOT" "$operation" "$@"
 }
 
 terraform_preview_operation_select() {
