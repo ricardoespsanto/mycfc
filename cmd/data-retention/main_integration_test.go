@@ -26,6 +26,18 @@ func TestManualRunFailsClosedWhenCapabilityIsRevoked(t *testing.T) {
 	if err = activateCapabilityRole("mycfc_absent_retention_role")(t.Context(), admin); err == nil {
 		t.Fatal("missing capability role accepted")
 	}
+	if _, err = admin.Exec(t.Context(), "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Exec(t.Context(), `CREATE ROLE "mycfc_retention_test-hyphen" NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if err = activateCapabilityRole("mycfc_retention_test-hyphen")(t.Context(), admin); err == nil || !strings.Contains(err.Error(), "activate database capability") {
+		t.Fatalf("invalid capability role activation error=%v", err)
+	}
+	if _, err = admin.Exec(t.Context(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = admin.Exec(t.Context(), `GRANT EXECUTE ON FUNCTION data_retention_run(uuid,integer),
 		data_retention_status() TO mycfc_data_retention`); err != nil {
 		t.Fatal(err)
