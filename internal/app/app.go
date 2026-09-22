@@ -287,7 +287,7 @@ func New(ctx context.Context) (*Application, error) {
 	var polarVault activity.CredentialVault
 	if polarEnabled {
 		polarClient = polar.Client{ClientID: cfg.PolarClientID, ClientSecret: cfg.PolarClientSecret.Value(), RedirectURL: strings.TrimRight(cfg.BaseURL, "/") + "/oauth/polar/callback"}
-		polarVault, polarConfigErr = activity.NewAESGCMVault(polarKey, polarKeyID)
+		polarVault, _ = activity.NewAESGCMVault(polarKey, polarKeyID)
 	}
 	polarIntegration := handlers.PolarIntegration{Store: dbgen.New(pool), Vault: polarVault, Client: polarClient, Sessions: sessions, System: system, PageMeta: pageMeta}
 	login.ActivitySync = polarIntegration
