@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestAESGCMVaultRejectsInvalidConfigurationAndCiphertexts(t *testing.T) {
+	if _, err := NewAESGCMVault(make([]byte, 31), "key"); err == nil {
+		t.Fatal("short key accepted")
+	}
+	if _, err := NewAESGCMVault(make([]byte, 32), ""); err == nil {
+		t.Fatal("empty id accepted")
+	}
+	var absent *AESGCMVault
+	if _, err := absent.Seal(context.Background(), "polar", "member", NewSecret([]byte("token"))); err == nil {
+		t.Fatal("nil vault sealed")
+	}
+	if _, err := absent.Open(context.Background(), "polar", "member", SealedCredentials{}); err == nil {
+		t.Fatal("nil vault opened")
+	}
+	vault, _ := NewAESGCMVault(make([]byte, 32), "key")
+	if _, err := vault.Open(context.Background(), "polar", "member", SealedCredentials{KeyID: "other"}); err == nil {
+		t.Fatal("wrong key id opened")
+	}
+	if _, err := vault.Open(context.Background(), "polar", "member", SealedCredentials{KeyID: "key", Ciphertext: []byte("short")}); err == nil {
+		t.Fatal("short ciphertext opened")
+	}
+}
+
 func TestAESGCMVaultBindsCredentialToProviderAndMember(t *testing.T) {
 	vault, err := NewAESGCMVault(make([]byte, 32), "activity-v1")
 	if err != nil {

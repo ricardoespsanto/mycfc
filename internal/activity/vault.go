@@ -34,14 +34,8 @@ func (v *AESGCMVault) Seal(_ context.Context, provider Provider, userID string, 
 	if v == nil {
 		return SealedCredentials{}, errors.New("activity credential vault is not configured")
 	}
-	block, err := aes.NewCipher(v.key)
-	if err != nil {
-		return SealedCredentials{}, fmt.Errorf("create activity credential cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return SealedCredentials{}, fmt.Errorf("create activity credential envelope: %w", err)
-	}
+	block, _ := aes.NewCipher(v.key) // NewAESGCMVault has already checked the AES-256 key length.
+	aead, _ := cipher.NewGCM(block)  // AES always supports GCM's standard nonce and tag sizes.
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return SealedCredentials{}, fmt.Errorf("create activity credential nonce: %w", err)
@@ -54,14 +48,8 @@ func (v *AESGCMVault) Open(_ context.Context, provider Provider, userID string, 
 	if v == nil || credentials.KeyID != v.keyID {
 		return Secret{}, errors.New("activity credential key is unavailable")
 	}
-	block, err := aes.NewCipher(v.key)
-	if err != nil {
-		return Secret{}, fmt.Errorf("create activity credential cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return Secret{}, fmt.Errorf("create activity credential envelope: %w", err)
-	}
+	block, _ := aes.NewCipher(v.key) // NewAESGCMVault has already checked the AES-256 key length.
+	aead, _ := cipher.NewGCM(block)  // AES always supports GCM's standard nonce and tag sizes.
 	if len(credentials.Ciphertext) < aead.NonceSize() {
 		return Secret{}, errors.New("activity credential ciphertext is invalid")
 	}

@@ -288,11 +288,6 @@ func New(ctx context.Context) (*Application, error) {
 	if polarEnabled {
 		polarClient = polar.Client{ClientID: cfg.PolarClientID, ClientSecret: cfg.PolarClientSecret.Value(), RedirectURL: strings.TrimRight(cfg.BaseURL, "/") + "/oauth/polar/callback"}
 		polarVault, polarConfigErr = activity.NewAESGCMVault(polarKey, polarKeyID)
-		if polarConfigErr != nil {
-			sessionStore.StopCleanup()
-			pool.Close()
-			return nil, polarConfigErr
-		}
 	}
 	polarIntegration := handlers.PolarIntegration{Store: dbgen.New(pool), Vault: polarVault, Client: polarClient, Sessions: sessions, System: system, PageMeta: pageMeta}
 	login.ActivitySync = polarIntegration

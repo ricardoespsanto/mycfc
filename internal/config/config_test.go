@@ -961,4 +961,11 @@ func TestPolarCredentialsRequireACompleteOptionalConfiguration(t *testing.T) {
 	if _, _, _, err = (Config{PolarClientID: "polar-client"}).PolarCredentials(); err == nil {
 		t.Fatal("partial Polar configuration was accepted")
 	}
+	for _, keys := range []string{"not-json", `{"activity-v1":"not-base64"}`, `{"activity-v1":"AA=="}`, `{}`} {
+		invalid := complete
+		invalid.ActivityCredentialKeysJSON = Secret(keys)
+		if _, _, _, err = invalid.PolarCredentials(); err == nil {
+			t.Fatalf("invalid key ring %q accepted", keys)
+		}
+	}
 }
