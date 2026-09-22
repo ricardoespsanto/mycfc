@@ -1,6 +1,16 @@
 -- Reset-only baseline schema. Apply this file with psql to a newly created database.
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Direct baseline provisioning (including CI test databases) does not run
+-- bootstrap-db first. Production bootstrap has already created these roles.
+DO $$BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_media_cleanup') THEN
+  CREATE ROLE mycfc_media_cleanup NOLOGIN;
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='mycfc_data_retention') THEN
+  CREATE ROLE mycfc_data_retention NOLOGIN;
+ END IF;
+END$$;
 CREATE TYPE repair_status AS ENUM ('Pendente', 'Em_Analise', 'Resolvido');
 CREATE TYPE consent_type AS ENUM ('Termos_Gerais', 'Uso_Imagem', 'Responsabilidade_Menor', 'Dados_Saude', 'Foto_Perfil');
 CREATE TYPE equipment_type AS ENUM ('Boat', 'Paddle', 'Vehicle');
