@@ -53,6 +53,7 @@ templ profileContent(page ProfilePage) {
 		@components.PageHeader("Conta", "Perfil", "Mantenha os contactos e a informação relevante para uma participação segura no clube.", profileActions(page))
 		if page.Self {
  <section class="module" aria-labelledby="profile-privacy-title"><h2 id="profile-privacy-title">Privacidade e dados pessoais</h2><p>Consulte os seus direitos e acompanhe pedidos de apagamento. A apresentação de um pedido mantém o acesso à conta.</p><a class="action action--secondary" href="/perfil/privacidade">Pedidos de apagamento</a></section>
+ <section class="module" aria-labelledby="profile-integrations-title"><h2 id="profile-integrations-title">Integrações</h2><p>Ligue serviços de atividade que escolher e controle a sincronização a partir da sua conta.</p><a class="action action--secondary" href="/perfil/integracoes/polar">Polar Flow</a></section>
  }
  @components.StatusMessage(page.Success, "success")
 		@components.StatusMessage(page.Conflict, "error")

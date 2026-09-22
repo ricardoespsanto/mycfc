@@ -19,6 +19,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	legalcontent "github.com/cfcoimbra/mycfc/docs/legal"
+	"github.com/cfcoimbra/mycfc/internal/activity"
+	"github.com/cfcoimbra/mycfc/internal/activity/polar"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
@@ -275,6 +277,20 @@ func New(ctx context.Context) (*Application, error) {
 	structuredTraining := handlers.StructuredTraining{Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
+	polarKey, polarKeyID, polarEnabled, polarConfigErr := cfg.PolarCredentials()
+	if polarConfigErr != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, polarConfigErr
+	}
+	polarClient := polar.Client{}
+	var polarVault activity.CredentialVault
+	if polarEnabled {
+		polarClient = polar.Client{ClientID: cfg.PolarClientID, ClientSecret: cfg.PolarClientSecret.Value(), RedirectURL: strings.TrimRight(cfg.BaseURL, "/") + "/oauth/polar/callback"}
+		polarVault, _ = activity.NewAESGCMVault(polarKey, polarKeyID)
+	}
+	polarIntegration := handlers.PolarIntegration{Store: dbgen.New(pool), Vault: polarVault, Client: polarClient, Sessions: sessions, System: system, PageMeta: pageMeta}
+	login.ActivitySync = polarIntegration
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
@@ -298,7 +314,7 @@ func New(ctx context.Context) (*Application, error) {
 		Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL,
 		CompletionLinkKey: verificationKey, SecureCookies: cfg.IsProduction(),
 	}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, privacy))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration, privacy))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

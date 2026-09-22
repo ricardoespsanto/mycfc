@@ -121,7 +121,7 @@ func TestPasswordRecoveryRoutesRenderCSRFAndRejectCrossSitePosts(t *testing.T) {
 	sessions := scs.New()
 	auth := handlers.Auth{Sessions: sessions}
 	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
-	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{})
 	handler := httpx.SecurityHeadersMiddleware(false)(csrfProtection(make([]byte, 32), handlers.System{})(router))
 
 	response := httptest.NewRecorder()
@@ -160,7 +160,7 @@ func TestPasswordRecoveryRoutesRedirectAuthenticatedAccounts(t *testing.T) {
 	id := uuid.New()
 	auth := handlers.Auth{Sessions: sessions, Users: routerCurrentUserLookup{id: id}}
 	recovery := handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}
-	router := sessions.LoadAndSave(auth.Load(newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})))
+	router := sessions.LoadAndSave(auth.Load(newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{Sessions: sessions}, handlers.Registration{Sessions: sessions}, handlers.EmailVerification{}, recovery, auth, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{})))
 
 	seed := httptest.NewRecorder()
 	sessions.LoadAndSave(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -240,7 +240,7 @@ func TestCSRFProtectionRejectsCrossSiteBrowserRequest(t *testing.T) {
 
 func TestCompletionDetailRevealRejectsCrossSitePostBeforeConsuming(t *testing.T) {
 	sessions := scs.New()
-	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PrivacyRequests{})
+	router := newRouter(routerPinger{}, sessions, handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{}, handlers.PrivacyRequests{})
 	handler := httpx.SecurityHeadersMiddleware(false)(csrfProtection(make([]byte, 32), handlers.System{})(router))
 	request := httptest.NewRequest(http.MethodPost, "https://mycfc.example/privacidade/conclusao/consultar", nil)
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -252,7 +252,7 @@ func TestCompletionDetailRevealRejectsCrossSitePostBeforeConsuming(t *testing.T)
 }
 
 func TestLandingRedirectsAuthenticatedVisitors(t *testing.T) {
-	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})
+	router := newRouter(routerPinger{}, scs.New(), handlers.Landing{}, handlers.Login{}, handlers.Registration{}, handlers.EmailVerification{}, handlers.PasswordRecovery{}, handlers.Auth{}, handlers.Dashboard{}, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request = request.WithContext(httpx.WithUserID(request.Context(), "current-user"))
 	response := httptest.NewRecorder()
@@ -278,5 +278,5 @@ func newTestRouter(pinger routerPinger, landing handlers.Landing, login handlers
 	login.Sessions = sessions
 	registration.Sessions = sessions
 	auth.Sessions = sessions
-	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{})))
+	return sessions.LoadAndSave(auth.Load(newRouter(pinger, sessions, landing, login, registration, handlers.EmailVerification{}, handlers.PasswordRecovery{Sessions: sessions, ResponseWait: func(context.Context, time.Time) {}}, auth, dashboard, handlers.Repair{}, handlers.Events{}, handlers.Announcements{}, handlers.Training{}, handlers.StructuredTraining{}, handlers.Members{}, handlers.Profile{}, handlers.News{}, handlers.Suggestions{}, handlers.PhotoAlbums{}, handlers.Foundation{}, handlers.PolarIntegration{})))
 }

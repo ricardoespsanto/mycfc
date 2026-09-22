@@ -103,6 +103,10 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
 		cfg.AppEnv = "test"
+		cfg.PolarClientID = "polar-client"
+		cfg.PolarClientSecret = config.Secret("polar-secret")
+		cfg.ActivityCredentialKeyID = "activity-v1"
+		cfg.ActivityCredentialKeysJSON = config.Secret(`{"activity-v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`)
 		cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR, AUTH_TOKEN_DELETE, ,IDENTITY_CLEAR"
 		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
 		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
@@ -126,6 +130,16 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 		t.Fatalf("application=%#v error=%v", application, err)
 	}
 	application.Close()
+	configuredLoad := loadApplicationConfig
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PolarClientID = "partial"
+		return cfg, nil
+	}
+	if _, err = New(t.Context()); err == nil || !strings.Contains(err.Error(), "POLAR_CLIENT_ID") {
+		t.Fatalf("Polar configuration error=%v", err)
+	}
+	loadApplicationConfig = configuredLoad
 
 	newApplicationProviderRegistry = func() (*privacyrequests.ProviderExecutionRegistry, error) {
 		return nil, errors.New("invalid provider registry")
