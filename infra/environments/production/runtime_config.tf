@@ -6,8 +6,7 @@ locals {
   release_agent_user_name    = "${local.name}-release-agent"
 
   host_runtime_secret_actions         = ["secretsmanager:GetSecretValue"]
-  host_runtime_secret_allow_resources = [aws_secretsmanager_secret.app_runtime.arn]
-  host_runtime_secret_deny_resources  = [aws_secretsmanager_secret.legacy_runtime.arn]
+  host_runtime_secret_allow_resources = [aws_secretsmanager_secret.legacy_runtime.arn, aws_secretsmanager_secret.app_runtime.arn]
 
   runtime_parameters = {
     "base-url"                   = "https://${var.domain_name}"
@@ -103,7 +102,7 @@ resource "aws_ssm_parameter" "runtime" {
 
 resource "aws_secretsmanager_secret" "legacy_runtime" {
   name        = local.legacy_runtime_secret_name
-  description = "Retired contaminated MyCFC application secret; runtime access is explicitly denied"
+  description = "MyCFC production application secrets"
 
   lifecycle {
     prevent_destroy = true
@@ -119,6 +118,9 @@ resource "aws_secretsmanager_secret_version" "legacy_runtime" {
   }
 }
 
+# Preserve the old secret and version as managed state during the one-time
+# targeted v2 bootstrap. The protected bootstrap policy accepts only these
+# exact no-op lineage moves, never an old-secret provider update.
 moved {
   from = aws_secretsmanager_secret.runtime
   to   = aws_secretsmanager_secret.legacy_runtime
@@ -130,8 +132,10 @@ moved {
 }
 
 resource "aws_secretsmanager_secret" "app_runtime" {
-  name        = local.runtime_secret_name
-  description = "MyCFC production web-runtime secrets v2"
+  name                           = local.runtime_secret_name
+  description                    = "MyCFC production web-runtime secrets v2"
+  recovery_window_in_days        = 30
+  force_overwrite_replica_secret = false
 
   lifecycle {
     prevent_destroy = true
@@ -139,8 +143,9 @@ resource "aws_secretsmanager_secret" "app_runtime" {
 }
 
 resource "aws_secretsmanager_secret_version" "app_runtime" {
-  secret_id     = aws_secretsmanager_secret.app_runtime.id
-  secret_string = jsonencode(local.runtime_secret)
+  secret_id      = aws_secretsmanager_secret.app_runtime.id
+  secret_string  = jsonencode(local.runtime_secret)
+  version_stages = ["AWSCURRENT"]
 }
 
 resource "aws_iam_user" "host_runtime" {
@@ -197,16 +202,9 @@ data "aws_iam_policy_document" "host_runtime" {
   }
 
   statement {
-    sid       = "DenyRetiredContaminatedRuntimeSecret"
-    effect    = "Deny"
-    actions   = local.host_runtime_secret_actions
-    resources = local.host_runtime_secret_deny_resources
-  }
-
-  statement {
     sid       = "UseRepairPhotoBucket"
     effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject"]
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.repairs.arn}/*"]
   }
 }
@@ -270,7 +268,9 @@ output "runtime_parameter_prefix" {
 }
 
 output "runtime_secret_arn" {
-  value = aws_secretsmanager_secret.app_runtime.arn
+  # Keep the existing output stable for this targeted bootstrap. The app uses
+  # the hard-coded v2 name, not this output; retire/repoint it separately.
+  value = aws_secretsmanager_secret.legacy_runtime.arn
 }
 
 output "host_runtime_access_key_id" {

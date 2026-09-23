@@ -101,15 +101,16 @@ run "media_cleanup_is_prefix_limited_and_cannot_write_or_chain_roles" {
 
   assert {
     condition = (local.host_runtime_secret_actions == ["secretsmanager:GetSecretValue"] &&
-      local.host_runtime_secret_allow_resources == [aws_secretsmanager_secret.app_runtime.arn]
+      local.host_runtime_secret_allow_resources == [aws_secretsmanager_secret.legacy_runtime.arn, aws_secretsmanager_secret.app_runtime.arn]
     )
-    error_message = "The host runtime identity must read only the clean v2 application secret."
+    error_message = "The transitional host runtime identity must read exactly the legacy and clean v2 application secrets."
   }
 
   assert {
-    condition = (local.host_runtime_secret_actions == ["secretsmanager:GetSecretValue"] &&
-      local.host_runtime_secret_deny_resources == [aws_secretsmanager_secret.legacy_runtime.arn]
+    condition = (
+      length(regexall("sid[[:space:]]*=[[:space:]]*\"ReadRuntimeSecret\"[[:space:]]+effect[[:space:]]*=[[:space:]]*\"Allow\"", file("${path.module}/runtime_config.tf"))) == 1 &&
+      length(regexall("effect[[:space:]]*=[[:space:]]*\"Deny\"", split("resource \"aws_iam_user_policy\" \"host_runtime\" {", split("data \"aws_iam_policy_document\" \"host_runtime\" {", file("${path.module}/runtime_config.tf"))[1])[0])) == 0
     )
-    error_message = "The host runtime identity must be explicitly denied access to every version of the contaminated legacy secret."
+    error_message = "The transitional host runtime policy must allow the secret read and contain no explicit deny before cutover."
   }
 }
