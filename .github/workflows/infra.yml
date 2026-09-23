@@ -8,10 +8,14 @@ on:
       - .github/workflows/infra.yml
       - .github/workflows/terraform-production-plan.yml
       - .github/workflows/terraform-production-apply.yml
+      - .github/workflows/terraform-production-v2-bootstrap.yml
       - scripts/terraform-plan-policy.jq
       - scripts/terraform-plan-policy_test.sh
       - scripts/terraform-plan-hmac.py
       - scripts/terraform-plan-hmac_test.sh
+      - scripts/terraform-v2-bootstrap-policy.py
+      - scripts/terraform-v2-bootstrap-policy_test.py
+      - scripts/terraform-v2-bootstrap-residual.json
       - scripts/terraform-stack.sh
       - scripts/terraform-stack_test.sh
       - scripts/discover-terraform-inputs.sh
@@ -24,10 +28,14 @@ on:
       - .github/workflows/infra.yml
       - .github/workflows/terraform-production-plan.yml
       - .github/workflows/terraform-production-apply.yml
+      - .github/workflows/terraform-production-v2-bootstrap.yml
       - scripts/terraform-plan-policy.jq
       - scripts/terraform-plan-policy_test.sh
       - scripts/terraform-plan-hmac.py
       - scripts/terraform-plan-hmac_test.sh
+      - scripts/terraform-v2-bootstrap-policy.py
+      - scripts/terraform-v2-bootstrap-policy_test.py
+      - scripts/terraform-v2-bootstrap-residual.json
       - scripts/terraform-stack.sh
       - scripts/terraform-stack_test.sh
       - scripts/discover-terraform-inputs.sh
@@ -57,3 +65,5 @@ jobs:
           key: terraform-providers-${{ runner.os }}-${{ runner.arch }}-${{ steps.terraform.outputs.version }}-${{ hashFiles('infra/**/.terraform.lock.hcl') }}
       - name: Format, validate, and lint every Terraform root module
         run: make terraform-check
+      - name: Validate exact one-time v2 bootstrap plan policy
+        run: python3 scripts/terraform-v2-bootstrap-policy_test.py
