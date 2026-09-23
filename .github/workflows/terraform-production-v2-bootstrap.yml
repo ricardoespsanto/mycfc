@@ -132,12 +132,12 @@ jobs:
           {
             echo "## One-time v2 bootstrap awaiting human production approval"
             echo
-            printf -- '- Phase: `%s`; commit: `%s`\n' "$REQUESTED_PHASE" "$REQUESTED_SHA"
+            printf -- "- Phase: \`%s\`; commit: \`%s\`\n" "$REQUESTED_PHASE" "$REQUESTED_SHA"
             echo "- Exact target policy: **passed**"
-            printf -- '- Full residual address/action baseline SHA-256 (not semantic equivalence): `%s`\n' "$residual_sha"
-            printf -- '- Redacted plan fingerprint: `%s`\n' "$review_sha"
-            printf -- '- Keyed semantic plan HMAC: `%s`\n' "$semantic_hmac"
-            printf -- '- Keyed fixed-target manifest HMAC: `%s`\n' "$manifest_hmac"
+            printf -- "- Full residual address/action baseline SHA-256 (not semantic equivalence): \`%s\`\n" "$residual_sha"
+            printf -- "- Redacted plan fingerprint: \`%s\`\n" "$review_sha"
+            printf -- "- Keyed semantic plan HMAC: \`%s\`\n" "$semantic_hmac"
+            printf -- "- Keyed fixed-target manifest HMAC: \`%s\`\n" "$manifest_hmac"
             echo
             echo "### Approved external resource actions"
             jq -r '.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"]) | "- `\(.address)`: `\(.change.actions | join(" → "))`"' "$TF_ROOT/production.tfplan.json"
@@ -262,7 +262,7 @@ jobs:
           tf show -json residual.tfplan > "$TF_ROOT/residual.tfplan.json"
           test "$EXPECTED_RESIDUAL_SHA" = "$(python3 scripts/terraform-v2-bootstrap-policy.py residual "$REQUESTED_PHASE" "$TF_ROOT/residual.tfplan.json")"
           {
-            printf '## One-time v2 bootstrap phase `%s` applied\n' "$REQUESTED_PHASE"
+            printf "## One-time v2 bootstrap phase \`%s\` applied\n" "$REQUESTED_PHASE"
             echo
             echo "- Targeted plan fingerprint and keyed semantics: **matched approved plan**"
             echo "- Targeted post-plan: **no managed changes**"
