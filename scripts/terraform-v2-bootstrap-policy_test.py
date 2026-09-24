@@ -181,6 +181,61 @@ class BootstrapPolicyTest(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     policy.load(str(path), targeted=True)
 
+    def test_drift_failure_reports_only_address_and_actions(self):
+        plan = {
+            "format_version": "1.2", "errored": False,
+            "complete": True, "applyable": True,
+            "configuration": {"root_module": {"resources": []}},
+            "resource_drift": [{
+                "address": 'module.runtime["secret-instance-key"].aws_secretsmanager_secret_version.app_runtime',
+                "change": {"actions": ["update"], "before": {"secret_string": "secret-before"},
+                           "after": {"secret_string": "secret-after"}},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaises(SystemExit) as caught:
+                policy.load(str(path), targeted=False)
+        message = str(caught.exception)
+        self.assertIn('module.runtime.aws_secretsmanager_secret_version.app_runtime', message)
+        self.assertIn('"actions":["update"]', message)
+        for secret in ("secret-instance-key", "secret-before", "secret-after"):
+            self.assertNotIn(secret, message)
+
+    def test_drift_failure_rejects_log_injection(self):
+        plan = {
+            "format_version": "1.2", "errored": False,
+            "complete": True, "applyable": True,
+            "configuration": {"root_module": {"resources": []}},
+            "resource_drift": [{
+                "address": "aws_s3_bucket.other\n::warning::injected",
+                "change": {"actions": ["update"], "before": {"secret": "do-not-print"}},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaises(SystemExit) as caught:
+                policy.load(str(path), targeted=False)
+        self.assertEqual(str(caught.exception),
+                         "v2 bootstrap policy: resource drift is not permitted (invalid drift entry)")
+
+    def test_drift_failure_rejects_oversized_inventory(self):
+        plan = {
+            "format_version": "1.2", "errored": False,
+            "complete": True, "applyable": True,
+            "configuration": {"root_module": {"resources": []}},
+            "resource_drift": [change("aws_s3_bucket.other", ["update"])] * 101,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaises(SystemExit) as caught:
+                policy.load(str(path), targeted=False)
+        self.assertEqual(str(caught.exception),
+                         "v2 bootstrap policy: resource drift is not permitted (invalid drift inventory)")
+
     def test_target_manifest_is_bound_to_phase_and_backend(self):
         environment = {
             "TF_PLAN_HMAC_KEY": "a" * 64,

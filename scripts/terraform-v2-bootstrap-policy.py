@@ -79,8 +79,30 @@ def load(path: str, targeted: bool) -> dict:
         fail("configuration missing")
     if any(resource.get("provisioners") for resource in resources(configuration.get("root_module"))):
         fail("provisioners are not permitted")
-    if plan.get("resource_drift") not in (None, []):
-        fail("resource drift is not permitted")
+    drift = plan.get("resource_drift")
+    if drift not in (None, []):
+        # Drift is a hard stop. Only report the resource address without its
+        # instance key and the action names; before/after can contain secrets.
+        if not isinstance(drift, list) or len(drift) > 100:
+            fail("resource drift is not permitted (invalid drift inventory)")
+        summaries = []
+        for resource in drift:
+            if not isinstance(resource, dict):
+                fail("resource drift is not permitted (invalid drift entry)")
+            address = resource.get("address")
+            change = resource.get("change")
+            actions = change.get("actions") if isinstance(change, dict) else None
+            if not isinstance(address, str):
+                fail("resource drift is not permitted (invalid drift entry)")
+            address_without_keys = re.sub(r"\[[^\[\]\r\n]*\]", "", address)
+            if (not re.fullmatch(r"[A-Za-z0-9_.-]+", address_without_keys)
+                    or not isinstance(actions, list)
+                    or not actions or any(action not in ("no-op", "create", "read", "update", "delete")
+                                           for action in actions)):
+                fail("resource drift is not permitted (invalid drift entry)")
+            summaries.append({"address": address_without_keys, "actions": actions})
+        fail("resource drift is not permitted; address/action summary: "
+             + json.dumps(summaries, sort_keys=True, separators=(",", ":")))
     if targeted:
         for name, output in plan.get("output_changes", {}).items():
             if not isinstance(output, dict) or output.get("actions") != ["no-op"]:
