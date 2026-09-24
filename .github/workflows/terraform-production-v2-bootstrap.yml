@@ -77,6 +77,7 @@ jobs:
         run: |
           make terraform-check
           python3 scripts/terraform-v2-bootstrap-policy_test.py
+          python3 scripts/terraform-v2-bootstrap-inspect_test.py
       # aws-actions/configure-aws-credentials v6.2.4
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
@@ -101,6 +102,20 @@ jobs:
             exit 1
           fi
           tf show -json residual.tfplan > "$TF_ROOT/residual.tfplan.json"
+          if [[ "$REQUESTED_PHASE" == secret ]]; then
+            # Diagnose only the already-observed drift. The inspection emits
+            # allowlisted field names and booleans, never plan or secret values.
+            python3 scripts/terraform-v2-bootstrap-inspect.py drift "$TF_ROOT/residual.tfplan.json" |
+              tee -a "$GITHUB_STEP_SUMMARY"
+            if ! aws secretsmanager get-secret-value \
+              --secret-id /mycfc/production/app-secrets --query SecretString \
+              --output text --no-cli-pager 2>/dev/null |
+              python3 scripts/terraform-v2-bootstrap-inspect.py continuity "$TF_ROOT/residual.tfplan.json" |
+              tee -a "$GITHUB_STEP_SUMMARY"; then
+              echo '::error::Legacy-to-v2 runtime-secret continuity failed or could not be verified; no apply was attempted.' >&2
+              exit 1
+            fi
+          fi
           residual_sha=$(python3 scripts/terraform-v2-bootstrap-policy.py residual "$REQUESTED_PHASE" "$TF_ROOT/residual.tfplan.json")
           case "$REQUESTED_PHASE" in
             secret)

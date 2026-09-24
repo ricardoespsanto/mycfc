@@ -88,6 +88,8 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	sh scripts/release-upgrade_test.sh
 	sh scripts/terraform-plan-policy_test.sh
 	sh scripts/terraform-plan-hmac_test.sh
+	python3 scripts/terraform-v2-bootstrap-policy_test.py
+	python3 scripts/terraform-v2-bootstrap-inspect_test.py
 	bash scripts/terraform-stack_test.sh
 	bash scripts/discover-terraform-inputs_test.sh
 
