@@ -66,9 +66,11 @@ lint-shell: ## Lint tracked shell scripts in a pinned ShellCheck container
 lint-workflows: ## Lint GitHub Actions workflows
 	$(ACTIONLINT)
 
-lint-docker: ## Lint application and Caddy Dockerfiles
+lint-docker: ## Lint application, test storage, and Caddy Dockerfiles
 	# Alpine patch packages follow the pinned base image repository; distroless supplies the named nonroot user.
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < Dockerfile
+	# Match the upstream test image's root user so existing local MinIO volumes remain writable.
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3002 --ignore DL3018 --ignore DL3066 - < Dockerfile.minio-test
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < deployment/caddy.Dockerfile
 
 test-ci-classifier: ## Test conservative documentation-only CI routing
