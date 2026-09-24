@@ -63,7 +63,9 @@ class BootstrapInspectTest(unittest.TestCase):
         plan = plan_with_drift()
         before = plan["resource_drift"][0]["change"]["before"]
         after = plan["resource_drift"][0]["change"]["after"]
-        for field in ("inline_policy", "managed_policy_arns", "name_prefix", "role_last_used"):
+        before["inline_policy"] = [{"name": "private-old-inline-policy", "policy": "{}"}]
+        after["inline_policy"] = [{"name": "private-new-inline-policy", "policy": "{}"}]
+        for field in ("managed_policy_arns", "name_prefix", "role_last_used"):
             before[field] = "private-old-" + field
             after[field] = "private-new-" + field
         report = inspect.inspect_drift(plan)
@@ -79,6 +81,64 @@ class BootstrapInspectTest(unittest.TestCase):
         self.assertIn("`other-unclassified`", report)
         self.assertNotIn("private-injected-name", report)
         self.assertNotIn("private-value", report)
+
+    def test_inline_policy_direction_reports_only_aggregate_counts(self):
+        plan = plan_with_drift()
+        change = plan["resource_drift"][0]["change"]
+        change["before"]["inline_policy"] = [
+            {"name": "private-removed-name", "policy": '{"Statement":[{"Action":"private-removed-action"}]}'},
+            {"name": "private-changed-name", "policy": '{"Statement":[{"Action":"private-old-action"}]}'},
+            {"name": "private-unchanged-name", "policy": '{"Statement":[]}'},
+        ]
+        change["after"]["inline_policy"] = [
+            {"name": "private-changed-name", "policy": '{"Statement":[{"Action":"private-new-action"}]}'},
+            {"name": "private-unchanged-name", "policy": '{"Statement":[]}'},
+            {"name": "private-added-name", "policy": '{"Statement":[]}'},
+        ]
+        report = inspect.inspect_drift(plan)
+        self.assertIn("state 3; live 3; removed 1; added 1; "
+                      "changed on shared names 1; unchanged on shared names 1", report)
+        for private in ("private-removed-name", "private-changed-name", "private-unchanged-name",
+                        "private-added-name", "private-old-action", "private-new-action",
+                        "private-removed-action"):
+            self.assertNotIn(private, report)
+
+    def test_inline_policy_shape_failure_never_echoes_private_data(self):
+        for invalid in ([{"name": "private-name", "policy": "private-invalid-json"}],
+                        [{"name": "private-name", "policy": "{}"},
+                         {"name": "private-name", "policy": "{}"}],
+                        [{"name": "private-name", "policy": "{}", "private-extra": "private-value"}]):
+            plan = plan_with_drift()
+            plan["resource_drift"][0]["change"]["before"]["inline_policy"] = invalid
+            plan["resource_drift"][0]["change"]["after"]["inline_policy"] = []
+            with self.assertRaises(SystemExit) as caught:
+                inspect.inspect_drift(plan)
+            self.assertNotIn("private-", str(caught.exception))
+
+    def test_inline_policy_empty_and_json_format_only_difference(self):
+        self.assertIn("state 0; live 0; removed 0; added 0",
+                      inspect.inline_policy_summary(None, []))
+        before = [{"name": "private-name", "policy": '{"Version":"2012-10-17","Statement":[]}'}]
+        after = [{"name": "private-name", "policy": '{ "Statement": [], "Version": "2012-10-17" }'}]
+        self.assertIn("changed on shared names 0; unchanged on shared names 1",
+                      inspect.inline_policy_summary(before, after))
+
+    def test_secret_stages_report_only_allowlisted_labels(self):
+        plan = plan_with_drift()
+        plan["resource_drift"][-1]["change"]["before"]["version_stages"] = ["AWSCURRENT", "private-stage"]
+        plan["resource_drift"][-1]["change"]["after"]["version_stages"] = ["AWSPREVIOUS", "private-stage"]
+        report = inspect.inspect_drift(plan)
+        self.assertIn("AWSPREVIOUS stage present: state False; live True", report)
+        self.assertIn("Other stage counts (names withheld): state 1; live 1", report)
+        self.assertNotIn("private-stage", report)
+
+    def test_invalid_secret_stages_fail_without_echo(self):
+        for invalid in (["private-stage", "private-stage"], ["AWSCURRENT", 12], "private-stage"):
+            plan = plan_with_drift()
+            plan["resource_drift"][-1]["change"]["after"]["version_stages"] = invalid
+            with self.assertRaises(SystemExit) as caught:
+                inspect.inspect_drift(plan)
+            self.assertNotIn("private-stage", str(caught.exception))
 
     def test_exact_secret_continuity_reports_only_field_names(self):
         proposed = {key: "same" for key in inspect.SECRET_FIELDS}
