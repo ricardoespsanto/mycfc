@@ -59,16 +59,21 @@ jobs:
           DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
-          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$DISPATCH_REF" = refs/heads/main
-          test "$REQUESTED_SHA" = "$DISPATCH_SHA"
-          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
-          test -n "$AWS_REGION"
-          test -n "$AWS_INFRA_PLAN_ROLE_ARN"
-          test -n "$TF_BACKEND_BUCKET"
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha')"
-          test -n "$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty")"
+          fail_preflight() { printf '::error::%s\n' "$1" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail_preflight 'Requested SHA is not a lowercase 40-character commit ID.'
+          test "$DISPATCH_REF" = refs/heads/main || fail_preflight 'Workflow was not dispatched from main.'
+          test "$REQUESTED_SHA" = "$DISPATCH_SHA" || fail_preflight 'Requested SHA differs from the dispatched commit.'
+          checked_out_sha=$(git rev-parse HEAD) || fail_preflight 'Could not read the checked-out commit.'
+          test "$REQUESTED_SHA" = "$checked_out_sha" || fail_preflight 'Checked-out commit differs from the requested SHA.'
+          test -n "$AWS_REGION" || fail_preflight 'AWS_REGION is not configured.'
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail_preflight 'AWS_INFRA_PLAN_ROLE_ARN is not configured.'
+          test -n "$TF_BACKEND_BUCKET" || fail_preflight 'TF_BACKEND_BUCKET is not configured.'
+          main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha') || fail_preflight 'Could not read the current main commit.'
+          test "$REQUESTED_SHA" = "$main_sha" || fail_preflight 'Requested SHA is no longer the current main commit.'
+          verified_sha=$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha') || fail_preflight 'Could not verify the requested commit signature.'
+          test "$REQUESTED_SHA" = "$verified_sha" || fail_preflight 'Requested commit does not have a valid verified signature.'
+          ci_run_id=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty") || fail_preflight 'Could not read completed main CI runs.'
+          test -n "$ci_run_id" || fail_preflight 'No successful main-push CI run found for the requested SHA.'
       - name: Verify Terraform source and bootstrap policy
         run: |
           make terraform-check
