@@ -1,2 +1,0 @@
-aws_region               = "eu-west-1"
-github_oidc_provider_arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
