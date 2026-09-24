@@ -23,7 +23,8 @@ SECRET_FIELDS = {
 ROLE_FIELDS = {
     "assume_role_policy", "permissions_boundary", "max_session_duration",
     "description", "tags", "tags_all", "force_detach_policies", "path",
-    "name", "arn", "id", "unique_id", "create_date",
+    "name", "name_prefix", "arn", "id", "unique_id", "create_date",
+    "inline_policy", "managed_policy_arns", "role_last_used",
 }
 SECRET_VERSION_FIELDS = {
     "version_stages", "version_id", "secret_id", "arn", "id",

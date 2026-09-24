@@ -59,6 +59,27 @@ class BootstrapInspectTest(unittest.TestCase):
             inspect.inspect_drift(plan)
         self.assertNotIn("injected", str(caught.exception))
 
+    def test_additional_role_fields_report_names_without_values(self):
+        plan = plan_with_drift()
+        before = plan["resource_drift"][0]["change"]["before"]
+        after = plan["resource_drift"][0]["change"]["after"]
+        for field in ("inline_policy", "managed_policy_arns", "name_prefix", "role_last_used"):
+            before[field] = "private-old-" + field
+            after[field] = "private-new-" + field
+        report = inspect.inspect_drift(plan)
+        for field in ("inline_policy", "managed_policy_arns", "name_prefix", "role_last_used"):
+            self.assertIn(f"`{field}`", report)
+            self.assertNotIn("private-old-" + field, report)
+            self.assertNotIn("private-new-" + field, report)
+
+    def test_unknown_role_field_remains_unclassified_without_echo(self):
+        plan = plan_with_drift()
+        plan["resource_drift"][0]["change"]["after"]["private-injected-name"] = "private-value"
+        report = inspect.inspect_drift(plan)
+        self.assertIn("`other-unclassified`", report)
+        self.assertNotIn("private-injected-name", report)
+        self.assertNotIn("private-value", report)
+
     def test_exact_secret_continuity_reports_only_field_names(self):
         proposed = {key: "same" for key in inspect.SECRET_FIELDS}
         plan = {"resource_changes": [{
