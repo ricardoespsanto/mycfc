@@ -59,16 +59,20 @@ jobs:
           DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
-          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$DISPATCH_REF" = refs/heads/main
-          test "$REQUESTED_SHA" = "$DISPATCH_SHA"
-          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)"
-          test -n "$AWS_REGION"
-          test -n "$AWS_INFRA_PLAN_ROLE_ARN"
-          test -n "$TF_BACKEND_BUCKET"
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha')"
-          test -n "$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty")"
+          preflight_fail() { echo "::error::Bootstrap preflight $1 failed" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || preflight_fail sha-format
+          test "$DISPATCH_REF" = refs/heads/main || preflight_fail dispatch-ref
+          test "$REQUESTED_SHA" = "$DISPATCH_SHA" || preflight_fail dispatch-sha
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || preflight_fail checkout-sha
+          test -n "$AWS_REGION" || preflight_fail aws-region-configured
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || preflight_fail plan-role-configured
+          test -n "$TF_BACKEND_BUCKET" || preflight_fail backend-bucket-configured
+          main_sha=$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null) || preflight_fail main-ref-read
+          test "$REQUESTED_SHA" = "$main_sha" || preflight_fail current-main-sha
+          verified_sha=$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null) || preflight_fail commit-read
+          test "$verified_sha" = "$REQUESTED_SHA" || preflight_fail commit-signature
+          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty" 2>/dev/null) || preflight_fail ci-read
+          test -n "$ci_run" || preflight_fail green-main-ci
       - name: Verify Terraform source and bootstrap policy
         run: |
           make terraform-check
