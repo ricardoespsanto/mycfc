@@ -94,13 +94,52 @@ def has_assume_role_allow(value: object) -> str:
     return "no"
 
 
+def inline_policy_inventory(value: object) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, list):
+        fail("inline policy inventory is unavailable")
+    policies = {}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"name", "policy"}:
+            fail("inline policy inventory has an unexpected shape")
+        name, document = item["name"], item["policy"]
+        if not isinstance(name, str) or not name or name in policies or not isinstance(document, str):
+            fail("inline policy inventory has an unexpected shape")
+        try:
+            parsed = json.loads(document)
+        except json.JSONDecodeError:
+            fail("inline policy document is invalid")
+        if not isinstance(parsed, dict):
+            fail("inline policy document is invalid")
+        policies[name] = parsed
+    return policies
+
+
+def inline_policy_summary(before: object, after: object) -> str:
+    state = inline_policy_inventory(before)
+    live = inline_policy_inventory(after)
+    shared = state.keys() & live.keys()
+    changed = sum(state[name] != live[name] for name in shared)
+    return (f"state {len(state)}; live {len(live)}; removed {len(state.keys() - live.keys())}; "
+            f"added {len(live.keys() - state.keys())}; changed on shared names {changed}; "
+            f"unchanged on shared names {len(shared) - changed}.")
+
+
+def version_stages(value: object) -> list[str]:
+    if (not isinstance(value, list) or not all(isinstance(stage, str) for stage in value)
+            or len(set(value)) != len(value)):
+        fail("secret version stages are unavailable")
+    return value
+
+
 def inspect_drift(plan: dict) -> str:
     drift = plan.get("resource_drift")
     if drift in (None, []):
         return "### Bootstrap drift inspection\n\n- No resource drift reported."
     if not isinstance(drift, list) or len(drift) != 4:
         fail("drift inventory differs from the four expected resources")
-    lines = ["### Bootstrap drift inspection", "", "Only field names and booleans are shown; no values or instance keys."]
+    lines = ["### Bootstrap drift inspection", "", "Only fixed field names, booleans, and aggregate counts are shown; no values or instance keys."]
     seen = set()
     for resource in drift:
         if not isinstance(resource, dict):
@@ -120,12 +159,19 @@ def inspect_drift(plan: dict) -> str:
             lines.append("  - Permissions boundary present: "
                          f"state {bool(before.get('permissions_boundary'))}; "
                          f"live {bool(after.get('permissions_boundary'))}.")
+            if before.get("inline_policy") != after.get("inline_policy"):
+                lines.append("  - Inline policy inventory (names and documents withheld): "
+                             + inline_policy_summary(before.get("inline_policy"), after.get("inline_policy")))
         else:
-            old_stages, new_stages = before.get("version_stages"), after.get("version_stages")
-            if not isinstance(old_stages, list) or not isinstance(new_stages, list):
-                fail("secret version stages are unavailable")
+            old_stages = version_stages(before.get("version_stages"))
+            new_stages = version_stages(after.get("version_stages"))
             lines.append("  - AWSCURRENT stage present: "
                          f"state {'AWSCURRENT' in old_stages}; live {'AWSCURRENT' in new_stages}.")
+            lines.append("  - AWSPREVIOUS stage present: "
+                         f"state {'AWSPREVIOUS' in old_stages}; live {'AWSPREVIOUS' in new_stages}.")
+            lines.append("  - Other stage counts (names withheld): "
+                         f"state {len(set(old_stages) - {'AWSCURRENT', 'AWSPREVIOUS'})}; "
+                         f"live {len(set(new_stages) - {'AWSCURRENT', 'AWSPREVIOUS'})}.")
             lines.append(f"  - Version ID changed: {before.get('version_id') != after.get('version_id')}.")
     if seen != EXPECTED_DRIFT:
         fail("drift inventory differs from the four expected resources")
