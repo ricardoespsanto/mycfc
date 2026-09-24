@@ -65,19 +65,12 @@ class BootstrapInspectTest(unittest.TestCase):
             "address": "aws_secretsmanager_secret_version.app_runtime",
             "change": {"after": {"secret_string": json.dumps(proposed)}, "after_unknown": {}},
         }]}
-        report, matches = inspect.compare_secret(plan, json.dumps(proposed))
-        self.assertTrue(matches)
-        self.assertIn("All nine v2 runtime fields match live legacy values: **yes**", report)
-        self.assertNotIn("same", report)
+        self.assertTrue(inspect.compare_secret(plan, json.dumps(proposed)))
 
         live = proposed.copy()
         live["POLAR_CLIENT_SECRET"] = "secret-different"
         del live["ACTIVITY_CREDENTIAL_KEYS_JSON"]
-        report, matches = inspect.compare_secret(plan, json.dumps(live))
-        self.assertFalse(matches)
-        self.assertIn("`POLAR_CLIENT_SECRET`", report)
-        self.assertIn("`ACTIVITY_CREDENTIAL_KEYS_JSON`", report)
-        self.assertNotIn("secret-different", report)
+        self.assertFalse(inspect.compare_secret(plan, json.dumps(live)))
 
     def test_secret_parse_failure_never_echoes_values(self):
         plan = {"resource_changes": [{
@@ -105,7 +98,7 @@ class BootstrapInspectTest(unittest.TestCase):
                 input=json.dumps(live), text=True, capture_output=True, check=False,
             )
         self.assertEqual(result.returncode, 1)
-        self.assertIn("`APP_DB_PASSWORD`", result.stdout)
+        self.assertIn("All nine v2 runtime fields match live legacy values: **no**", result.stdout)
         self.assertNotIn("private-proposed-value", result.stdout + result.stderr)
         self.assertNotIn("private-live-value", result.stdout + result.stderr)
 

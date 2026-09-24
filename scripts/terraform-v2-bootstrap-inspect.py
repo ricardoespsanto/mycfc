@@ -131,7 +131,7 @@ def inspect_drift(plan: dict) -> str:
     return "\n".join(lines)
 
 
-def compare_secret(plan: dict, live_secret_string: str) -> tuple[str, bool]:
+def compare_secret(plan: dict, live_secret_string: str) -> bool:
     changes = plan.get("resource_changes")
     if not isinstance(changes, list):
         fail("proposed v2 secret version is unavailable")
@@ -155,15 +155,7 @@ def compare_secret(plan: dict, live_secret_string: str) -> tuple[str, bool]:
         fail("proposed or live secret is not valid JSON")
     if not isinstance(proposed, dict) or set(proposed) != SECRET_FIELDS or not isinstance(live, dict):
         fail("proposed or live secret field inventory is invalid")
-    missing = sorted(key for key in SECRET_FIELDS if key not in live)
-    mismatched = sorted(key for key in SECRET_FIELDS if key in live and live[key] != proposed[key])
-    result = not missing and not mismatched
-    lines = ["### Legacy-to-v2 runtime-secret continuity", "",
-             f"- All nine v2 runtime fields match live legacy values: **{'yes' if result else 'no'}**.",
-             f"- Missing legacy fields: {', '.join(f'`{key}`' for key in missing) or 'none'}.",
-             f"- Different values: {', '.join(f'`{key}`' for key in mismatched) or 'none'}.",
-             "- No values, hashes, or version identifiers are emitted."]
-    return "\n".join(lines), result
+    return all(key in live and live[key] == proposed[key] for key in SECRET_FIELDS)
 
 
 def main() -> None:
@@ -174,9 +166,11 @@ def main() -> None:
     if mode == "drift":
         print(inspect_drift(plan))
     else:
-        report, matches = compare_secret(plan, sys.stdin.read())
-        print(report)
-        if not matches:
+        matches = compare_secret(plan, sys.stdin.read())
+        if matches:
+            print("### Legacy-to-v2 runtime-secret continuity\n\n- All nine v2 runtime fields match live legacy values: **yes**.")
+        else:
+            print("### Legacy-to-v2 runtime-secret continuity\n\n- All nine v2 runtime fields match live legacy values: **no**.")
             raise SystemExit(1)
 
 
