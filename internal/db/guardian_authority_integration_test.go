@@ -1144,11 +1144,9 @@ func TestGuardianRenewalReminderRevalidatesRecipientAndAuthority(t *testing.T) {
 		if _, err = conn.Exec(ctx, `UPDATE users SET email=$2,email_verified_at=NULL WHERE id=$1`, fixture.guardianID, uuid.NewString()+"@example.test"); err != nil {
 			t.Fatal(err)
 		}
-		if _, claimErr := q.ClaimEmailOutbox(ctx, dbgen.ClaimEmailOutboxParams{
-			ClaimedAt: resetTimestamp(time.Now().Add(time.Second)), StaleBefore: resetTimestamp(time.Now().Add(-time.Hour)),
-		}); !errors.Is(claimErr, pgx.ErrNoRows) {
-			t.Fatalf("stale-address reminder claim error=%v, want no rows", claimErr)
-		}
+		// The outbox claim is global: unrelated deliverable mail may be queued by
+		// other integration fixtures. Assert this reminder is cancelled instead
+		// of claiming arbitrary mail and expecting ErrNoRows.
 		assertCancelled(fixture)
 	})
 	t.Run("guardian deactivation", func(t *testing.T) {

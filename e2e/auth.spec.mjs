@@ -40,6 +40,54 @@ async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 
   await page.setViewportSize({ width: viewport.width / zoom, height: viewport.height / zoom });
 }
 
+// Exercise the supported staff classification task, never the retired membership form.
+async function assignCurrentParticipation(page, programme, beforeConfirmation = async () => {}) {
+  const memberURL = page.url();
+  await page.getByRole('link', { name: 'Alterar participação e consultar histórico' }).click();
+  const classificationURL = page.url();
+  if (programme === 'Competição') {
+    const code = `E2E${Date.now()}`;
+    const categoryName = `Adultos E2E ${code}`;
+    await page.getByRole('link', { name: 'Gerir escalões da época' }).click();
+    await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
+    await page.getByLabel('Código único nesta época e programa', { exact: true }).fill(code);
+    await page.getByLabel('Nome do escalão', { exact: true }).fill(categoryName);
+    await page.getByRole('button', { name: 'Criar escalão', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Definições acessíveis' })).toContainText(`${categoryName} (${code})`);
+    await page.goto(classificationURL);
+    await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
+    await page.getByLabel('Escalão (obrigatório para Competição, opcional para Iniciação)', { exact: true }).selectOption({ label: `${categoryName} (elegível)` });
+  } else {
+    await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
+  }
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' }).format(new Date());
+  await page.getByLabel('Data de início', { exact: true }).fill(today);
+  await page.getByRole('button', { name: 'Guardar participação', exact: true }).click();
+  await expect(page.locator('#preview-heading')).toBeFocused();
+  await beforeConfirmation();
+  const [confirmation] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/equipa/classificacao/')),
+    page.getByRole('button', { name: 'Confirmar participação', exact: true }).click(),
+  ]);
+  if (confirmation.status() === 409) {
+    // A concurrent escalão/season/team change invalidates the signed preview.
+    // Explicitly review the retained proposal again; never accept a stale token.
+    await expect(page.locator('#error-summary')).toBeFocused();
+    await expect(page.locator('#error-summary')).toContainText('pré-visualização expirou ou a participação mudou');
+    await expect(page.getByLabel('Data de início', { exact: true })).toHaveValue(today);
+    await expect(page.locator('#scope option:checked')).toContainText(programme);
+    await page.getByRole('button', { name: 'Guardar participação', exact: true }).click();
+    await expect(page.locator('#preview-heading')).toBeFocused();
+    await expect(page.getByRole('region', { name: /Rever antes de confirmar/ })).toContainText(programme);
+    await page.getByRole('button', { name: 'Confirmar participação', exact: true }).click();
+  } else {
+    expect(confirmation.status()).toBe(200);
+  }
+  await expect(page.getByRole('status')).toContainText('Guardada:');
+  await expect(page.getByRole('region', { name: 'Histórico de participação' })).toContainText(programme);
+  await page.goto(memberURL);
+}
+
 async function verificationLinkFor(recipient) {
   const apiBase = process.env.MAILPIT_API_BASE || 'http://127.0.0.1:8025';
   const deadline = Date.now() + 20000;
@@ -776,7 +824,7 @@ test.describe('authentication', () => {
   test.describe('athlete operations journey', () => {
     test.describe.configure({ mode: 'serial' });
 
-  test('administrator assigns a competition membership that unlocks the athlete workspace', async ({ page }) => {
+  test('administrator assigns dated competition participation that unlocks the athlete workspace', async ({ page }) => {
     test.setTimeout(240000);
     const athleteName = `Atleta E2E ${Date.now()}`;
     const fpcAthleteNumber = String(Date.now());
@@ -802,11 +850,7 @@ test.describe('authentication', () => {
     const location = page.getByRole('navigation', { name: 'Localização atual' });
     await expect(location.getByRole('link', { name: 'Membros' })).toHaveAttribute('href', /^\/admin\/membros\?q=.+#member-[0-9a-f-]+$/);
     await expect(location.getByText('Detalhe do membro')).toHaveAttribute('aria-current', 'page');
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
-    await membershipForm.getByLabel('Competição').check();
-    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
-    await expect(membershipForm.getByLabel('Competição')).toBeChecked();
+    await assignCurrentParticipation(page, 'Competição');
 
     await page.getByRole('link', { name: 'Abrir perfil', exact: true }).click();
     await page.getByLabel('Número de atleta FPC').fill(fpcAthleteNumber);
@@ -954,12 +998,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Pesquisar membros').fill(structuredAthleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: structuredAthleteName }).click();
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    const structuredMembershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
-    await structuredMembershipForm.getByLabel('Competição').check();
-    await structuredMembershipForm.getByRole('button', { name: 'Guardar' }).click();
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    await expect(page.locator('form').filter({ has: page.getByLabel('Competição') }).getByLabel('Competição')).toBeChecked();
+    await assignCurrentParticipation(page, 'Competição');
     await page.goto('/admin/treinos/estruturados');
 
     await expect(page.getByRole('heading', { name: 'Planeamento semanal', level: 1 })).toBeVisible();
@@ -1266,10 +1305,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: athleteName }).click();
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
-    await membershipForm.getByLabel('Competição').check();
-    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+    await assignCurrentParticipation(page, 'Competição');
 
     await page.goto('/admin/treinos/estruturados');
     await page.getByRole('link', { name: 'Criar grupo' }).click();
@@ -1431,10 +1467,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Pesquisar membros').fill(waitlistedName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: waitlistedName }).click();
-    await page.locator('summary').filter({ hasText: 'Inscrições ativas' }).click();
-    const membershipForm = page.locator('form').filter({ has: page.getByLabel('Competição') });
-    await membershipForm.getByLabel('Competição').check();
-    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
+    await assignCurrentParticipation(page, 'Competição');
 
     await page.goto('/admin/eventos');
     await page.getByRole('link', { name: 'Criar evento', exact: true }).click();
@@ -1617,8 +1650,8 @@ test.describe('authentication', () => {
     await expect(page.getByRole('dialog', { name: 'Avisos' }).getByRole('link', { name: title })).toHaveCount(0);
   });
 
-  });
-
+  // This journey also creates a classification definition. Keep it serial with
+  // the training journeys so unrelated writes cannot race their preview/save.
   test('administrator publishes news and confirms member deactivation', async ({ page, browser }) => {
     test.setTimeout(120000);
     const memberName = `Lazer E2E ${Date.now()}`;
@@ -1639,13 +1672,25 @@ test.describe('authentication', () => {
     await page.getByLabel('Pesquisar membros').fill(memberName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();
-    const memberships = page.locator('details').filter({ has: page.getByText('Inscrições ativas', { exact: false }) });
-    await memberships.locator('summary').click();
-    const membershipForm = memberships.locator('form').filter({
-      has: page.getByRole('checkbox', { name: 'Lazer', exact: true }),
+    await assignCurrentParticipation(page, 'Lazer', async () => {
+      const other = await browser.newContext({ baseURL });
+      try {
+        const definitions = await other.newPage();
+        await definitions.goto('/login');
+        await definitions.getByLabel('Correio eletrónico').fill(adminEmail);
+        await definitions.getByLabel('Palavra-passe').fill(password);
+        await definitions.getByRole('button', { name: 'Iniciar sessão' }).click();
+        await definitions.goto('/equipa/escaloes');
+        await definitions.locator('#scope').selectOption(await definitions.locator('#scope option').filter({ hasText: 'Competição' }).getAttribute('value'));
+        const code = `E2E${Date.now()}`;
+        await definitions.getByLabel('Código único nesta época e programa', { exact: true }).fill(code);
+        await definitions.getByLabel('Nome do escalão', { exact: true }).fill(`Concorrente ${code}`);
+        await definitions.getByRole('button', { name: 'Criar escalão', exact: true }).click();
+        await expect(definitions.getByRole('region', { name: 'Definições acessíveis' })).toContainText(code);
+      } finally {
+        await other.close();
+      }
     });
-    await membershipForm.getByRole('checkbox', { name: 'Lazer', exact: true }).check();
-    await membershipForm.getByRole('button', { name: 'Guardar' }).click();
     await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Notícias' }).click();
     await page.getByRole('link', { name: 'Criar notícia', exact: true }).click();
     await page.locator('#news-title').fill(title);
@@ -1695,5 +1740,6 @@ test.describe('authentication', () => {
     const accountModule = interactivePage.locator('.module').filter({ has: interactivePage.getByRole('heading', { name: 'Identidade e acesso' }) });
     await expect(accountModule.getByText('Desativada', { exact: true })).toBeVisible();
     await context.close();
+  });
   });
 });

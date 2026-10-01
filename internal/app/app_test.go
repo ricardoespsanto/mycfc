@@ -62,6 +62,8 @@ func TestApplicationCloseAcceptsPartiallyConstructedApplication(t *testing.T) {
 }
 
 func TestApplicationNewReturnsConfigurationErrorsBeforeStartingResources(t *testing.T) {
+	// Explicitly invalid input is independent of the integration runner env.
+	t.Setenv("PORT", "invalid")
 	t.Setenv("APP_ENV", "")
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "parse configuration") {
 		t.Fatalf("New() error=%v", err)
@@ -169,7 +171,7 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 
 	pingApplicationPool = func(context.Context, *pgxpool.Pool) error { return errors.New("database unavailable") }
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "database ping failed") {
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "database readiness or dated participation contract failed") {
 		t.Fatalf("ping error=%v", err)
 	}
 

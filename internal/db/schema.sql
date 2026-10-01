@@ -217,9 +217,146 @@ CREATE TABLE modalities (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code var
 INSERT INTO modalities (code, name_pt) VALUES ('K1', 'Caiaque individual'), ('K2', 'Caiaque duplo'), ('K4', 'Caiaque quádruplo'), ('C1', 'Canoa individual'), ('C2', 'Canoa dupla'), ('C4', 'Canoa quádrupla'), ('SUP', 'Stand up paddle');
 CREATE TABLE competition_categories (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), season_id uuid NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT, programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT, code varchar(40) NOT NULL, name_pt varchar(120) NOT NULL, birth_date_from date NULL, birth_date_to date NULL, approved_by_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, approved_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT competition_categories_code_valid CHECK (code = btrim(code) AND code ~ '^[A-Za-z][A-Za-z0-9_]*$'), CONSTRAINT competition_categories_name_valid CHECK (name_pt = btrim(name_pt) AND char_length(name_pt) BETWEEN 2 AND 120), CONSTRAINT competition_categories_birth_range_valid CHECK (birth_date_from IS NULL OR birth_date_to IS NULL OR birth_date_from <= birth_date_to), CONSTRAINT competition_categories_season_programme_code_unique UNIQUE (season_id, programme_id, code), CONSTRAINT competition_categories_id_season_programme_unique UNIQUE (id, season_id, programme_id));
 CREATE TABLE teams (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), season_id uuid NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT, programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT, code varchar(40) NOT NULL, name varchar(120) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT teams_code_valid CHECK (code = btrim(code) AND code ~ '^[A-Za-z][A-Za-z0-9_]*$'), CONSTRAINT teams_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT teams_season_programme_code_unique UNIQUE (season_id, programme_id, code), CONSTRAINT teams_id_season_programme_unique UNIQUE (id, season_id, programme_id));
-CREATE TABLE user_memberships (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, season_id uuid NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT, programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT, team_id uuid NULL, competition_category_id uuid NULL, starts_on date NOT NULL, ends_on date NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT user_memberships_dates_valid CHECK (ends_on IS NULL OR starts_on <= ends_on), CONSTRAINT user_memberships_user_season_programme_unique UNIQUE (user_id, season_id, programme_id), CONSTRAINT user_memberships_team_same_season_programme_fk FOREIGN KEY (team_id, season_id, programme_id) REFERENCES teams(id, season_id, programme_id) ON DELETE RESTRICT, CONSTRAINT user_memberships_category_same_season_programme_fk FOREIGN KEY (competition_category_id, season_id, programme_id) REFERENCES competition_categories(id, season_id, programme_id) ON DELETE RESTRICT);
+CREATE TABLE user_memberships (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, season_id uuid NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT, programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT, team_id uuid NULL, competition_category_id uuid NULL, starts_on date NOT NULL, ends_on date NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT user_memberships_dates_valid CHECK (ends_on IS NULL OR starts_on <= ends_on), CONSTRAINT user_memberships_team_same_season_programme_fk FOREIGN KEY (team_id, season_id, programme_id) REFERENCES teams(id, season_id, programme_id) ON DELETE RESTRICT, CONSTRAINT user_memberships_category_same_season_programme_fk FOREIGN KEY (competition_category_id, season_id, programme_id) REFERENCES competition_categories(id, season_id, programme_id) ON DELETE RESTRICT);
 CREATE INDEX user_memberships_active_user_idx ON user_memberships (user_id, starts_on, ends_on); CREATE INDEX user_memberships_team_idx ON user_memberships (team_id) WHERE team_id IS NOT NULL;
+ALTER TABLE user_memberships ADD COLUMN age_exception_reason varchar(500), ADD COLUMN age_exception_by_id uuid REFERENCES users(id) ON DELETE RESTRICT, ADD COLUMN age_exception_at timestamptz,
+ ADD CONSTRAINT user_memberships_age_exception_complete CHECK (
+ (age_exception_reason IS NULL AND age_exception_by_id IS NULL AND age_exception_at IS NULL) OR
+ (age_exception_reason IS NOT NULL AND age_exception_reason=btrim(age_exception_reason)
+  AND char_length(age_exception_reason) BETWEEN 2 AND 500 AND age_exception_by_id IS NOT NULL AND age_exception_at IS NOT NULL));
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+ALTER TABLE user_memberships ADD CONSTRAINT user_memberships_one_participation_per_day
+ EXCLUDE USING gist (user_id WITH =, daterange(starts_on, coalesce(ends_on,'infinity'::date),'[]') WITH &&);
+CREATE FUNCTION validate_dated_participation() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE s seasons%ROWTYPE; code text; c competition_categories%ROWTYPE; birth date; mismatch boolean; scoped boolean;
+BEGIN
+ SELECT * INTO s FROM seasons WHERE id=NEW.season_id;
+ IF NOT FOUND THEN RAISE EXCEPTION 'participation season missing' USING ERRCODE='23514'; END IF;
+ NEW.ends_on:=coalesce(NEW.ends_on,s.ends_on);
+ IF NEW.starts_on<s.starts_on OR NEW.starts_on>s.ends_on OR NEW.ends_on>s.ends_on THEN
+  RAISE EXCEPTION 'participation dates outside season' USING ERRCODE='23514'; END IF;
+ SELECT p.code INTO code FROM programmes p WHERE p.id=NEW.programme_id;
+ IF code='Competition' AND NEW.competition_category_id IS NULL
+   OR code IN ('Leisure','Kayak_Polo') AND NEW.competition_category_id IS NOT NULL THEN
+  RAISE EXCEPTION 'invalid participation category' USING ERRCODE='23514'; END IF;
+ IF NEW.competition_category_id IS NOT NULL THEN
+  SELECT * INTO c FROM competition_categories WHERE id=NEW.competition_category_id;
+  IF NOT FOUND OR c.season_id<>NEW.season_id OR c.programme_id<>NEW.programme_id THEN
+   RAISE EXCEPTION 'category outside participation scope' USING ERRCODE='23514'; END IF;
+  SELECT date_of_birth INTO birth FROM users WHERE id=NEW.user_id;
+  mismatch:=(c.birth_date_from IS NOT NULL AND birth<c.birth_date_from)
+         OR (c.birth_date_to IS NOT NULL AND birth>c.birth_date_to);
+  IF mismatch AND NEW.age_exception_reason IS NULL THEN RAISE EXCEPTION 'age exception reason required' USING ERRCODE='23514'; END IF;
+  IF NOT mismatch AND NEW.age_exception_reason IS NOT NULL THEN RAISE EXCEPTION 'age exception without eligibility mismatch' USING ERRCODE='23514'; END IF;
+ ELSIF NEW.age_exception_reason IS NOT NULL THEN
+  RAISE EXCEPTION 'age exception without category' USING ERRCODE='23514'; END IF;
+ IF NEW.age_exception_reason IS NOT NULL THEN
+  IF NEW.age_exception_by_id IS NULL OR NEW.age_exception_at IS NULL
+    OR (TG_OP='INSERT' AND NEW.age_exception_at IS DISTINCT FROM now()) THEN
+   RAISE EXCEPTION 'exception provenance missing' USING ERRCODE='23514'; END IF;
+  IF TG_OP='INSERT' THEN
+   SELECT guardian_authority_is_administrator(NEW.age_exception_by_id) INTO scoped;
+  IF NOT scoped THEN
+   SELECT EXISTS(SELECT 1 FROM staff_grants g JOIN users actor ON actor.id=g.user_id
+    JOIN seasons current_season ON current_season.id=NEW.season_id AND current_season.is_current
+    WHERE g.user_id=NEW.age_exception_by_id AND actor.is_active AND actor.erased_at IS NULL
+     AND g.capability='COACH' AND g.revoked_at IS NULL AND g.programme_id=NEW.programme_id
+     AND g.programme_id IS NOT NULL) INTO scoped;
+  END IF;
+  IF NOT scoped THEN RAISE EXCEPTION 'exception actor outside scope' USING ERRCODE='23514'; END IF;
+  END IF;
+ ELSIF NEW.age_exception_by_id IS NOT NULL OR NEW.age_exception_at IS NOT NULL THEN
+  RAISE EXCEPTION 'exception provenance without reason' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER user_memberships_dated_participation_valid
+ BEFORE INSERT OR UPDATE OF user_id,season_id,programme_id,starts_on,ends_on,
+ competition_category_id,age_exception_reason,age_exception_by_id,age_exception_at
+ ON user_memberships FOR EACH ROW EXECUTE FUNCTION validate_dated_participation();
+CREATE FUNCTION prevent_dated_participation_rewrite() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.season_id IS DISTINCT FROM OLD.season_id
+  OR NEW.programme_id IS DISTINCT FROM OLD.programme_id OR NEW.team_id IS DISTINCT FROM OLD.team_id
+  OR NEW.competition_category_id IS DISTINCT FROM OLD.competition_category_id
+  OR NEW.starts_on IS DISTINCT FROM OLD.starts_on
+  OR NEW.age_exception_reason IS DISTINCT FROM OLD.age_exception_reason
+  OR NEW.age_exception_by_id IS DISTINCT FROM OLD.age_exception_by_id
+  OR NEW.age_exception_at IS DISTINCT FROM OLD.age_exception_at
+  OR (OLD.ends_on IS NOT NULL AND (NEW.ends_on IS NULL OR NEW.ends_on>OLD.ends_on)) THEN
+  RAISE EXCEPTION 'participation correction requires audited workflow' USING ERRCODE='23514';
+ END IF;
+ IF NEW.ends_on < OLD.ends_on THEN
+  IF EXISTS (SELECT 1 FROM training_prescriptions prescription
+   JOIN training_sessions session ON session.id=prescription.session_id
+   WHERE prescription.membership_id=OLD.id
+    AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on)
+   OR EXISTS (SELECT 1 FROM event_responses response
+    JOIN events event ON event.id=response.event_id
+    WHERE response.user_id=OLD.user_id
+     AND (event.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN OLD.starts_on AND OLD.ends_on
+     AND (event.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on
+     AND (NOT EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id=event.id)
+       OR EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id=event.id AND audience.programme_id=OLD.programme_id)))
+   OR EXISTS (SELECT 1 FROM training_session_outcomes outcome
+    JOIN training_sessions session ON session.id=outcome.session_id
+    JOIN training_plans plan ON plan.id=session.plan_id
+    JOIN training_group_members group_member ON group_member.group_id=plan.training_group_id
+    WHERE group_member.membership_id=OLD.id AND outcome.user_id=OLD.user_id
+     AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN OLD.starts_on AND OLD.ends_on
+     AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on) THEN
+   RAISE EXCEPTION 'recorded event, training or published prescription date requires audited correction'
+    USING ERRCODE='23514', CONSTRAINT='user_memberships_recorded_history_end';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER user_memberships_history_immutable
+ BEFORE UPDATE ON user_memberships FOR EACH ROW EXECUTE FUNCTION prevent_dated_participation_rewrite();
+CREATE FUNCTION prevent_category_definition_rewrite() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS (SELECT 1 FROM user_memberships WHERE competition_category_id=OLD.id) THEN
+  RAISE EXCEPTION 'referenced category definition requires versioned correction' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER competition_categories_referenced_immutable
+ BEFORE UPDATE OF season_id,programme_id,birth_date_from,birth_date_to ON competition_categories
+ FOR EACH ROW EXECUTE FUNCTION prevent_category_definition_rewrite();
+CREATE FUNCTION prevent_classified_dob_rewrite() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS (SELECT 1 FROM user_memberships WHERE user_id=OLD.id AND competition_category_id IS NOT NULL) THEN
+  RAISE EXCEPTION 'classified birth date requires audited correction' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER users_classified_dob_immutable BEFORE UPDATE OF date_of_birth ON users
+ FOR EACH ROW EXECUTE FUNCTION prevent_classified_dob_rewrite();
 CREATE TABLE membership_modalities (membership_id uuid NOT NULL REFERENCES user_memberships(id) ON DELETE CASCADE, modality_id uuid NOT NULL REFERENCES modalities(id) ON DELETE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (membership_id, modality_id));
+-- Sporting classification is independent of participation and legacy historical IDs.
+CREATE TABLE sporting_modalities (code varchar(20) PRIMARY KEY CHECK (code IN ('CANOEING','KAYAK_POLO','SUP')), name_pt varchar(120) NOT NULL);
+INSERT INTO sporting_modalities(code,name_pt) VALUES ('CANOEING','Canoagem'),('KAYAK_POLO','Kayak Polo'),('SUP','Stand up paddle');
+CREATE TABLE canoe_craft_classes (code varchar(2) PRIMARY KEY CHECK (code IN ('K1','K2','K4','C1','C2','C4')), name_pt varchar(120) NOT NULL);
+INSERT INTO canoe_craft_classes(code,name_pt) VALUES ('K1','Caiaque individual'),('K2','Caiaque duplo'),('K4','Caiaque quádruplo'),('C1','Canoa individual'),('C2','Canoa dupla'),('C4','Canoa quádrupla');
+CREATE FUNCTION prevent_sport_taxonomy_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ RAISE EXCEPTION 'sport taxonomy is a closed catalog' USING ERRCODE='23514';
+END $$;
+CREATE TRIGGER sporting_modalities_fixed BEFORE UPDATE OR DELETE ON sporting_modalities FOR EACH ROW EXECUTE FUNCTION prevent_sport_taxonomy_change();
+CREATE TRIGGER canoe_craft_classes_fixed BEFORE UPDATE OR DELETE ON canoe_craft_classes FOR EACH ROW EXECUTE FUNCTION prevent_sport_taxonomy_change();
+CREATE TABLE person_sporting_modalities (user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, modality_code varchar(20) NOT NULL REFERENCES sporting_modalities(code) ON UPDATE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id,modality_code));
+CREATE TABLE person_canoe_craft_classes (user_id uuid NOT NULL, modality_code varchar(20) NOT NULL DEFAULT 'CANOEING' CHECK (modality_code='CANOEING'), craft_code varchar(2) NOT NULL REFERENCES canoe_craft_classes(code) ON UPDATE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id,craft_code), FOREIGN KEY(user_id,modality_code) REFERENCES person_sporting_modalities(user_id,modality_code) ON DELETE CASCADE);
+CREATE FUNCTION guard_shared_kayak_polo_team() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS (SELECT 1 FROM programmes WHERE id=NEW.programme_id AND code='Kayak_Polo') THEN
+  PERFORM 1 FROM seasons WHERE id=NEW.season_id FOR UPDATE;
+  IF EXISTS (SELECT 1 FROM teams WHERE season_id=NEW.season_id AND programme_id=NEW.programme_id AND id<>NEW.id) THEN
+   RAISE EXCEPTION 'only one shared Kayak Polo team per season' USING ERRCODE='23505', CONSTRAINT='teams_shared_kayak_polo';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER teams_shared_kayak_polo BEFORE INSERT OR UPDATE OF season_id,programme_id ON teams FOR EACH ROW EXECUTE FUNCTION guard_shared_kayak_polo_team();
 CREATE TYPE event_response_status AS ENUM ('Going', 'NotGoing', 'Waitlisted');
 CREATE TABLE events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title varchar(180) NOT NULL, description varchar(4000) NOT NULL DEFAULT '', event_type varchar(20) NOT NULL DEFAULT 'GENERAL', starts_at timestamptz NOT NULL, ends_at timestamptz NOT NULL, response_deadline timestamptz NULL, capacity integer NULL, status varchar(20) NOT NULL DEFAULT 'ACTIVE', cancelled_at timestamptz NULL, cancelled_by_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, cancellation_reason varchar(500) NULL, created_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT events_title_valid CHECK (title = btrim(title) AND char_length(title) BETWEEN 2 AND 180), CONSTRAINT events_description_valid CHECK (description = btrim(description) AND char_length(description) <= 4000), CONSTRAINT events_type_valid CHECK (event_type IN ('GENERAL', 'COMPETITION')), CONSTRAINT events_times_valid CHECK (starts_at < ends_at), CONSTRAINT events_deadline_valid CHECK (response_deadline IS NULL OR response_deadline <= starts_at), CONSTRAINT events_capacity_valid CHECK (capacity IS NULL OR capacity > 0), CONSTRAINT events_status_valid CHECK (status IN ('ACTIVE', 'CANCELLED')), CONSTRAINT events_cancellation_reason_valid CHECK (cancellation_reason IS NULL OR (cancellation_reason = btrim(cancellation_reason) AND char_length(cancellation_reason) BETWEEN 2 AND 500)), CONSTRAINT events_cancellation_complete CHECK ((status = 'ACTIVE' AND cancelled_at IS NULL AND cancelled_by_id IS NULL AND cancellation_reason IS NULL) OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL AND cancelled_by_id IS NOT NULL AND cancellation_reason IS NOT NULL))); CREATE INDEX events_starts_at_idx ON events (starts_at); CREATE INDEX events_status_starts_idx ON events (status, starts_at);
 CREATE TABLE event_audiences (event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE, programme_id uuid NOT NULL REFERENCES programmes(id) ON DELETE RESTRICT, PRIMARY KEY (event_id, programme_id)); CREATE INDEX event_audiences_programme_idx ON event_audiences (programme_id, event_id);
@@ -280,7 +417,7 @@ CREATE TRIGGER water_work_steps_parent_valid BEFORE INSERT OR UPDATE OF block_id
 CREATE TYPE training_variation_group_kind AS ENUM ('SUBGROUP', 'CREW');
 CREATE TYPE training_variation_subject_kind AS ENUM ('SEGMENT', 'BLOCK', 'WATER_STEP', 'GYM_EXERCISE');
 CREATE TYPE training_variation_operation AS ENUM ('OMIT', 'REPLACE', 'ADD', 'OVERRIDE');
-CREATE TABLE training_variation_groups (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), training_group_id uuid NOT NULL REFERENCES training_groups(id) ON DELETE CASCADE, name varchar(120) NOT NULL, kind training_variation_group_kind NOT NULL, craft_modality_id uuid NULL REFERENCES modalities(id) ON DELETE RESTRICT, effective_from date NOT NULL, effective_until date NULL, competition_event_id uuid NULL REFERENCES events(id) ON DELETE RESTRICT, open_ended_exception boolean NOT NULL DEFAULT false, created_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT training_variation_groups_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT training_variation_groups_dates_valid CHECK (effective_until IS NULL OR effective_from <= effective_until), CONSTRAINT training_variation_groups_shape_valid CHECK ((kind = 'SUBGROUP' AND craft_modality_id IS NULL AND competition_event_id IS NULL AND NOT open_ended_exception) OR (kind = 'CREW' AND craft_modality_id IS NOT NULL AND (effective_until IS NOT NULL OR competition_event_id IS NOT NULL OR open_ended_exception))), CONSTRAINT training_variation_groups_scope_name_unique UNIQUE (training_group_id, name));
+CREATE TABLE training_variation_groups (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), training_group_id uuid NOT NULL REFERENCES training_groups(id) ON DELETE CASCADE, name varchar(120) NOT NULL, kind training_variation_group_kind NOT NULL, craft_code varchar(2) NULL REFERENCES canoe_craft_classes(code) ON UPDATE RESTRICT, effective_from date NOT NULL, effective_until date NULL, competition_event_id uuid NULL REFERENCES events(id) ON DELETE RESTRICT, open_ended_exception boolean NOT NULL DEFAULT false, created_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT training_variation_groups_name_valid CHECK (name = btrim(name) AND char_length(name) BETWEEN 2 AND 120), CONSTRAINT training_variation_groups_dates_valid CHECK (effective_until IS NULL OR effective_from <= effective_until), CONSTRAINT training_variation_groups_shape_valid CHECK ((kind = 'SUBGROUP' AND craft_code IS NULL AND competition_event_id IS NULL AND NOT open_ended_exception) OR (kind = 'CREW' AND craft_code IS NOT NULL AND craft_code IN ('C2','K2','K4') AND (effective_until IS NOT NULL OR competition_event_id IS NOT NULL OR open_ended_exception))), CONSTRAINT training_variation_groups_scope_name_unique UNIQUE (training_group_id, name));
 CREATE INDEX training_variation_groups_training_group_idx ON training_variation_groups (training_group_id, effective_from, effective_until);
 CREATE TABLE training_variation_group_members (variation_group_id uuid NOT NULL REFERENCES training_variation_groups(id) ON DELETE CASCADE, membership_id uuid NOT NULL REFERENCES user_memberships(id) ON DELETE RESTRICT, added_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, added_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (variation_group_id, membership_id));
 CREATE INDEX training_variation_group_members_membership_idx ON training_variation_group_members (membership_id, variation_group_id);
@@ -397,6 +534,27 @@ CREATE FUNCTION audit_staff_grant_change() RETURNS trigger LANGUAGE plpgsql AS $
 CREATE TRIGGER staff_grants_audit_trigger AFTER INSERT OR UPDATE ON staff_grants FOR EACH ROW EXECUTE FUNCTION audit_staff_grant_change();
 CREATE FUNCTION prevent_staff_grant_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'staff grant audit events are append-only'; END; $$;
 CREATE TRIGGER staff_grant_audit_events_immutable_trigger BEFORE UPDATE OR DELETE ON staff_grant_audit_events FOR EACH ROW EXECUTE FUNCTION prevent_staff_grant_audit_mutation();
+-- Attribution for ordinary person classification corrections; historical references are not rewritten.
+CREATE TABLE person_sport_assignment_events (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ operation_id uuid NOT NULL,
+ subject_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ coach_grant_id uuid REFERENCES staff_grants(id) ON DELETE RESTRICT,
+ kind varchar(5) NOT NULL CHECK (kind IN ('SPORT','CRAFT')),
+ action varchar(7) NOT NULL CHECK (action IN ('ADDED','REMOVED')),
+ code varchar(20) NOT NULL,
+ reason varchar(500) NOT NULL CHECK (length(btrim(reason)) BETWEEN 1 AND 500),
+ occurred_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT person_sport_assignment_event_code CHECK (
+  (kind='SPORT' AND code IN ('CANOEING','KAYAK_POLO','SUP')) OR
+  (kind='CRAFT' AND code IN ('K1','K2','K4','C1','C2','C4')))
+);
+CREATE INDEX person_sport_assignment_events_subject_idx ON person_sport_assignment_events(subject_user_id,occurred_at DESC,id DESC);
+CREATE FUNCTION prevent_person_sport_assignment_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'person sport assignment audit is append-only' USING ERRCODE='23514'; END $$;
+CREATE TRIGGER person_sport_assignment_events_immutable BEFORE UPDATE OR DELETE ON person_sport_assignment_events
+ FOR EACH ROW EXECUTE FUNCTION prevent_person_sport_assignment_event_mutation();
 CREATE TABLE event_team_audiences (event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE, team_id uuid NOT NULL REFERENCES teams(id) ON DELETE RESTRICT, PRIMARY KEY (event_id, team_id)); CREATE INDEX event_team_audiences_team_idx ON event_team_audiences (team_id, event_id);
 CREATE TYPE photo_album_status AS ENUM ('OPEN', 'ARCHIVED');
 CREATE TABLE photo_albums (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title varchar(180) NOT NULL, description varchar(2000) NOT NULL DEFAULT '', status photo_album_status NOT NULL DEFAULT 'OPEN', created_by_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, archived_by_id uuid NULL REFERENCES users(id) ON DELETE RESTRICT, archived_at timestamptz NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), CONSTRAINT photo_albums_title_valid CHECK (title = btrim(title) AND char_length(title) BETWEEN 2 AND 180), CONSTRAINT photo_albums_description_valid CHECK (description = btrim(description) AND char_length(description) <= 2000), CONSTRAINT photo_albums_lifecycle_valid CHECK ((status = 'OPEN' AND archived_by_id IS NULL AND archived_at IS NULL) OR (status = 'ARCHIVED' AND archived_by_id IS NOT NULL AND archived_at IS NOT NULL))); CREATE INDEX photo_albums_status_created_idx ON photo_albums (status, created_at DESC, id DESC);
@@ -10782,3 +10940,213 @@ END$$;
 
 REVOKE ALL ON FUNCTION privacy_automation_activation_retired(),
  privacy_automation_switch_retired() FROM PUBLIC;
+
+-- Manual, externally approved classification-only full deletion. No automation or ledger.
+-- Owned by the existing migration owner; never grant this schema to web/retired roles.
+CREATE SCHEMA classification_erasure;
+REVOKE ALL ON SCHEMA classification_erasure FROM PUBLIC;
+CREATE TABLE classification_erasure.erased_memberships (
+ membership_id uuid PRIMARY KEY REFERENCES public.user_memberships(id) ON DELETE CASCADE
+);
+-- Transient capability, not a case/tombstone ledger. Empty after each successful call.
+CREATE TABLE classification_erasure.fence (
+ transaction_id bigint PRIMARY KEY,
+ event_ids bigint[] NOT NULL,
+ membership_ids uuid[] NOT NULL
+);
+REVOKE ALL ON ALL TABLES IN SCHEMA classification_erasure FROM PUBLIC;
+
+CREATE FUNCTION classification_erasure.permitted_clear(old_row public.user_memberships, new_row public.user_memberships)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+ SELECT new_row.age_exception_reason IS NULL AND new_row.age_exception_by_id IS NULL
+ AND new_row.age_exception_at IS NULL AND old_row.age_exception_reason IS NOT NULL
+ AND (to_jsonb(old_row)-ARRAY['age_exception_reason','age_exception_by_id','age_exception_at'])
+   = (to_jsonb(new_row)-ARRAY['age_exception_reason','age_exception_by_id','age_exception_at'])
+ AND EXISTS(SELECT 1 FROM classification_erasure.fence f
+ WHERE f.transaction_id=txid_current() AND old_row.id=ANY(f.membership_ids))
+$$;
+
+CREATE FUNCTION classification_erasure.validate_scope(target uuid, reviewed_events jsonb, reviewed_memberships jsonb, replay boolean)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE item jsonb; eid bigint; mid uuid; subject uuid;
+BEGIN
+ IF target IS NULL OR replay IS NULL OR NOT EXISTS(SELECT 1 FROM public.users WHERE id=target) THEN
+  RAISE EXCEPTION 'invalid classification erasure target'; END IF;
+ IF reviewed_events IS NULL OR reviewed_memberships IS NULL OR jsonb_typeof(reviewed_events)<>'array'
+ OR jsonb_typeof(reviewed_memberships)<>'array' THEN RAISE EXCEPTION 'invalid reviewed scope'; END IF;
+ FOR item IN SELECT value FROM jsonb_array_elements(reviewed_events) LOOP
+  IF jsonb_typeof(item)<>'object' OR NOT item ?& ARRAY['id','subject'] OR item-ARRAY['id','subject']<>'{}'::jsonb
+  OR item->>'id' IS NULL OR item->>'subject' IS NULL THEN RAISE EXCEPTION 'invalid reviewed event'; END IF;
+  eid:=(item->>'id')::bigint; subject:=(item->>'subject')::uuid;
+  IF eid<=0 OR NOT EXISTS(SELECT 1 FROM public.users WHERE id=subject)
+   OR EXISTS(SELECT 1 FROM jsonb_array_elements(reviewed_events) other WHERE (other->>'id')::bigint=eid AND (other->>'subject')::uuid<>subject)
+   OR EXISTS(SELECT 1 FROM public.person_sport_assignment_events WHERE id=eid AND subject_user_id<>subject)
+   OR (NOT replay AND NOT EXISTS(SELECT 1 FROM public.person_sport_assignment_events WHERE id=eid)) THEN
+   RAISE EXCEPTION 'reviewed event outside supplied scope'; END IF;
+ END LOOP;
+ FOR item IN SELECT value FROM jsonb_array_elements(reviewed_memberships) LOOP
+  IF jsonb_typeof(item)<>'object' OR NOT item ?& ARRAY['id','subject'] OR item-ARRAY['id','subject']<>'{}'::jsonb
+  OR item->>'id' IS NULL OR item->>'subject' IS NULL THEN RAISE EXCEPTION 'invalid reviewed membership'; END IF;
+  mid:=(item->>'id')::uuid; subject:=(item->>'subject')::uuid;
+  IF NOT EXISTS(SELECT 1 FROM public.user_memberships WHERE id=mid AND user_id=subject
+   AND (age_exception_reason IS NOT NULL OR EXISTS(SELECT 1 FROM classification_erasure.erased_memberships WHERE membership_id=mid))) THEN
+   RAISE EXCEPTION 'reviewed membership outside supplied scope'; END IF;
+ END LOOP;
+ -- Repeated identical IDs are selected only once; conflicting event subjects fail even on replay.
+END $$;
+
+CREATE FUNCTION classification_erasure.check_remaining(target uuid, reviewed_events jsonb, reviewed_memberships jsonb)
+RETURNS TABLE(audit_events bigint, exception_reasons bigint, shared_definition_approver_links bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'read committed required'; END IF;
+ LOCK TABLE public.person_sport_assignment_events,public.user_memberships IN SHARE ROW EXCLUSIVE MODE;
+ PERFORM classification_erasure.validate_scope(target,reviewed_events,reviewed_memberships,true);
+ RETURN QUERY SELECT
+ (SELECT count(*) FROM public.person_sport_assignment_events e WHERE e.subject_user_id=target OR e.actor_user_id=target
+  OR e.id IN (SELECT (value->>'id')::bigint FROM jsonb_array_elements(reviewed_events))),
+ (SELECT count(*) FROM public.user_memberships m WHERE m.age_exception_reason IS NOT NULL AND
+  (m.user_id=target OR m.age_exception_by_id=target OR m.id IN
+   (SELECT (value->>'id')::uuid FROM jsonb_array_elements(reviewed_memberships)))),
+ (SELECT count(*) FROM public.competition_categories WHERE approved_by_user_id=target);
+END $$;
+
+CREATE FUNCTION classification_erasure.erase(target uuid, reviewed_events jsonb, reviewed_memberships jsonb, replay boolean DEFAULT false)
+RETURNS TABLE(deleted_events bigint, cleared_exceptions bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE events bigint[]; memberships uuid[]; remaining record;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'read committed required'; END IF;
+ LOCK TABLE public.person_sport_assignment_events,public.user_memberships IN SHARE ROW EXCLUSIVE MODE;
+ PERFORM classification_erasure.validate_scope(target,reviewed_events,reviewed_memberships,replay);
+ SELECT coalesce(array_agg(id),'{}'::bigint[]) INTO events FROM public.person_sport_assignment_events
+ WHERE subject_user_id=target OR actor_user_id=target
+ OR id IN (SELECT (value->>'id')::bigint FROM jsonb_array_elements(reviewed_events));
+ SELECT coalesce(array_agg(id),'{}'::uuid[]) INTO memberships FROM public.user_memberships
+ WHERE age_exception_reason IS NOT NULL AND (user_id=target OR age_exception_by_id=target
+ OR id IN (SELECT (value->>'id')::uuid FROM jsonb_array_elements(reviewed_memberships)));
+ INSERT INTO classification_erasure.fence VALUES(txid_current(),events,memberships);
+ INSERT INTO classification_erasure.erased_memberships SELECT unnest(memberships) ON CONFLICT DO NOTHING;
+ DELETE FROM public.person_sport_assignment_events WHERE id=ANY(events);
+ GET DIAGNOSTICS deleted_events=ROW_COUNT;
+ UPDATE public.user_memberships SET age_exception_reason=NULL,age_exception_by_id=NULL,age_exception_at=NULL
+ WHERE id=ANY(memberships);
+ GET DIAGNOSTICS cleared_exceptions=ROW_COUNT;
+ DELETE FROM classification_erasure.fence WHERE transaction_id=txid_current();
+ SELECT * INTO remaining FROM classification_erasure.check_remaining(target,reviewed_events,reviewed_memberships);
+ IF remaining.audit_events<>0 OR remaining.exception_reasons<>0 THEN RAISE EXCEPTION 'classification erasure postcheck failed'; END IF;
+ RETURN NEXT;
+END $$;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA classification_erasure FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION validate_dated_participation() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE s seasons%ROWTYPE; code text; c competition_categories%ROWTYPE; birth date; mismatch boolean; scoped boolean;
+BEGIN
+ IF TG_OP='UPDATE' AND classification_erasure.permitted_clear(OLD,NEW) THEN RETURN NEW; END IF;
+ IF EXISTS(SELECT 1 FROM classification_erasure.erased_memberships WHERE membership_id=NEW.id) THEN
+  IF TG_OP<>'UPDATE' THEN RAISE EXCEPTION 'erased evidence cannot authorize new exception'; END IF;
+  IF NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.season_id IS DISTINCT FROM OLD.season_id
+   OR NEW.programme_id IS DISTINCT FROM OLD.programme_id OR NEW.competition_category_id IS DISTINCT FROM OLD.competition_category_id
+   OR NEW.age_exception_reason IS NOT NULL OR NEW.age_exception_by_id IS NOT NULL OR NEW.age_exception_at IS NOT NULL THEN
+   RAISE EXCEPTION 'erased evidence cannot authorize new exception'; END IF;
+ END IF;
+ SELECT * INTO s FROM seasons WHERE id=NEW.season_id;
+ IF NOT FOUND THEN RAISE EXCEPTION 'participation season missing' USING ERRCODE='23514'; END IF;
+ NEW.ends_on:=coalesce(NEW.ends_on,s.ends_on);
+ IF NEW.starts_on<s.starts_on OR NEW.starts_on>s.ends_on OR NEW.ends_on>s.ends_on THEN
+  RAISE EXCEPTION 'participation dates outside season' USING ERRCODE='23514'; END IF;
+ SELECT p.code INTO code FROM programmes p WHERE p.id=NEW.programme_id;
+ IF code='Competition' AND NEW.competition_category_id IS NULL
+   OR code IN ('Leisure','Kayak_Polo') AND NEW.competition_category_id IS NOT NULL THEN
+  RAISE EXCEPTION 'invalid participation category' USING ERRCODE='23514'; END IF;
+ IF NEW.competition_category_id IS NOT NULL THEN
+  SELECT * INTO c FROM competition_categories WHERE id=NEW.competition_category_id;
+  IF NOT FOUND OR c.season_id<>NEW.season_id OR c.programme_id<>NEW.programme_id THEN
+   RAISE EXCEPTION 'category outside participation scope' USING ERRCODE='23514'; END IF;
+  SELECT date_of_birth INTO birth FROM users WHERE id=NEW.user_id;
+  mismatch:=(c.birth_date_from IS NOT NULL AND birth<c.birth_date_from)
+         OR (c.birth_date_to IS NOT NULL AND birth>c.birth_date_to);
+  IF mismatch AND NEW.age_exception_reason IS NULL AND NOT EXISTS(SELECT 1 FROM classification_erasure.erased_memberships WHERE membership_id=NEW.id) THEN RAISE EXCEPTION 'age exception reason required' USING ERRCODE='23514'; END IF;
+  IF NOT mismatch AND NEW.age_exception_reason IS NOT NULL THEN RAISE EXCEPTION 'age exception without eligibility mismatch' USING ERRCODE='23514'; END IF;
+ ELSIF NEW.age_exception_reason IS NOT NULL THEN
+  RAISE EXCEPTION 'age exception without category' USING ERRCODE='23514'; END IF;
+ IF NEW.age_exception_reason IS NOT NULL THEN
+  IF NEW.age_exception_by_id IS NULL OR NEW.age_exception_at IS NULL
+    OR (TG_OP='INSERT' AND NEW.age_exception_at IS DISTINCT FROM now()) THEN
+   RAISE EXCEPTION 'exception provenance missing' USING ERRCODE='23514'; END IF;
+  IF TG_OP='INSERT' THEN
+   SELECT guardian_authority_is_administrator(NEW.age_exception_by_id) INTO scoped;
+  IF NOT scoped THEN
+   SELECT EXISTS(SELECT 1 FROM staff_grants g JOIN users actor ON actor.id=g.user_id
+    JOIN seasons current_season ON current_season.id=NEW.season_id AND current_season.is_current
+    WHERE g.user_id=NEW.age_exception_by_id AND actor.is_active AND actor.erased_at IS NULL
+     AND g.capability='COACH' AND g.revoked_at IS NULL AND g.programme_id=NEW.programme_id
+     AND g.programme_id IS NOT NULL) INTO scoped;
+  END IF;
+  IF NOT scoped THEN RAISE EXCEPTION 'exception actor outside scope' USING ERRCODE='23514'; END IF;
+  END IF;
+ ELSIF NEW.age_exception_by_id IS NOT NULL OR NEW.age_exception_at IS NOT NULL THEN
+  RAISE EXCEPTION 'exception provenance without reason' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION prevent_dated_participation_rewrite() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+BEGIN
+ IF classification_erasure.permitted_clear(OLD,NEW) THEN RETURN NEW; END IF;
+ IF NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.season_id IS DISTINCT FROM OLD.season_id
+  OR NEW.programme_id IS DISTINCT FROM OLD.programme_id OR NEW.team_id IS DISTINCT FROM OLD.team_id
+  OR NEW.competition_category_id IS DISTINCT FROM OLD.competition_category_id
+  OR NEW.starts_on IS DISTINCT FROM OLD.starts_on
+  OR NEW.age_exception_reason IS DISTINCT FROM OLD.age_exception_reason
+  OR NEW.age_exception_by_id IS DISTINCT FROM OLD.age_exception_by_id
+  OR NEW.age_exception_at IS DISTINCT FROM OLD.age_exception_at
+  OR (OLD.ends_on IS NOT NULL AND (NEW.ends_on IS NULL OR NEW.ends_on>OLD.ends_on)) THEN
+  RAISE EXCEPTION 'participation correction requires audited workflow' USING ERRCODE='23514';
+ END IF;
+ IF NEW.ends_on < OLD.ends_on THEN
+  IF EXISTS (SELECT 1 FROM training_prescriptions prescription
+   JOIN training_sessions session ON session.id=prescription.session_id
+   WHERE prescription.membership_id=OLD.id
+    AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on)
+   OR EXISTS (SELECT 1 FROM event_responses response
+    JOIN events event ON event.id=response.event_id
+    WHERE response.user_id=OLD.user_id
+     AND (event.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN OLD.starts_on AND OLD.ends_on
+     AND (event.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on
+     AND (NOT EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id=event.id)
+       OR EXISTS (SELECT 1 FROM event_audiences audience WHERE audience.event_id=event.id AND audience.programme_id=OLD.programme_id)))
+   OR EXISTS (SELECT 1 FROM training_session_outcomes outcome
+    JOIN training_sessions session ON session.id=outcome.session_id
+    JOIN training_plans plan ON plan.id=session.plan_id
+    JOIN training_group_members group_member ON group_member.group_id=plan.training_group_id
+    WHERE group_member.membership_id=OLD.id AND outcome.user_id=OLD.user_id
+     AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN OLD.starts_on AND OLD.ends_on
+     AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date>NEW.ends_on) THEN
+   RAISE EXCEPTION 'recorded event, training or published prescription date requires audited correction'
+    USING ERRCODE='23514', CONSTRAINT='user_memberships_recorded_history_end';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+
+
+CREATE OR REPLACE FUNCTION public.prevent_person_sport_assignment_event_mutation() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+BEGIN
+ IF TG_OP='DELETE' AND EXISTS(SELECT 1 FROM classification_erasure.fence f
+  WHERE f.transaction_id=txid_current() AND OLD.id=ANY(f.event_ids)) THEN RETURN OLD; END IF;
+ RAISE EXCEPTION 'person sport assignment audit is append-only' USING ERRCODE='23514';
+END $$;
+
+-- Guardian invitations expire after exactly 720 elapsed hours, including DST.
+-- Future issuance only: existing invitation deadlines and lifecycle are unchanged.
+CREATE OR REPLACE FUNCTION guardian_authority_issue_invitation(p_actor_id uuid,p_email citext,p_token_digest bytea)
+RETURNS SETOF guardian_authority_invitations LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE result guardian_authority_invitations%ROWTYPE;now_at timestamptz:=clock_timestamp();
+BEGIN
+ IF NOT guardian_authority_is_administrator(p_actor_id) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='guardian_authority_administrator_required'; END IF;
+ IF p_email IS NULL OR p_email::text<>lower(btrim(p_email::text)) OR char_length(p_email::text) NOT BETWEEN 3 AND 254 OR octet_length(p_token_digest)<>32 THEN
+  RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='guardian_authority_invitation_rejected'; END IF;
+ INSERT INTO guardian_authority_invitations(invited_email,token_digest,issued_by,issued_at,expires_at)
+ VALUES(p_email,p_token_digest,p_actor_id,now_at,now_at+interval '720 hours') RETURNING * INTO result;RETURN NEXT result;
+END;$$;

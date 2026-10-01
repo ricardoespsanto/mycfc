@@ -163,7 +163,12 @@ func (s PostgresProfileStore) Update(ctx context.Context, input ProfileUpdate) e
 		if input.Identity != nil {
 			emailChanged := input.Identity.Email != nil && (current.Email == nil || !strings.EqualFold(*current.Email, *input.Identity.Email))
 			input.Identity.UserID = input.SubjectID
-			if _, err := q.UpdateMemberIdentity(ctx, *input.Identity); errors.Is(err, pgx.ErrNoRows) {
+			if input.Identity.DateOfBirth == current.DateOfBirth {
+				_, err = q.UpdateMemberIdentityKeepingBirthDate(ctx, dbgen.UpdateMemberIdentityKeepingBirthDateParams{Name: input.Identity.Name, Email: input.Identity.Email, UserID: input.SubjectID, ExpectedUpdatedAt: input.Identity.ExpectedUpdatedAt})
+			} else {
+				_, err = q.UpdateMemberIdentity(ctx, *input.Identity)
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrProfileConflict
 			} else if err != nil {
 				return err

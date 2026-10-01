@@ -225,6 +225,16 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 					break
 				}
 			}
+			// Selection URLs contain a subject identifier, including on rejected
+			// or unmatched requests. Keep ordinary operational attributes intact.
+			if strings.HasPrefix(r.URL.Path, "/equipa/classificacao/") {
+				switch route {
+				case "GET /equipa/classificacao/{id}", "POST /equipa/classificacao/{id}", "POST /equipa/classificacao/{id}/selecoes":
+					path = route
+				default:
+					path, route = "/equipa/classificacao/*", "/equipa/classificacao/*"
+				}
+			}
 			attributes := []any{
 				"method", r.Method,
 				"path", path,

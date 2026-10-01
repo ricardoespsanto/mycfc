@@ -40,6 +40,24 @@ func TestStructuredTrainingRendersAdminIntensityProfilesAndPlannedTotals(t *test
 	}
 }
 
+func TestStructuredTrainingCrewFormSubmitsCanoeCraftCode(t *testing.T) {
+	page := StructuredTrainingPage{
+		Management: true, CSRFField: templ.Raw(""),
+		CrewModalities: []StructuredTrainingChoice{{ID: "C2", Name: "C2 · Canoa de dois"}, {ID: "K4", Name: "K4 · Kayak de quatro"}},
+	}
+	var output bytes.Buffer
+	if err := structuredTrainingContent(page).Render(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	if !strings.Contains(html, `name="craft_code"`) || !strings.Contains(html, `value="C2"`) || !strings.Contains(html, `value="K4"`) {
+		t.Fatal("crew form did not render the canoe craft code choices")
+	}
+	if strings.Contains(html, `name="craft_modality_id"`) {
+		t.Fatal("crew form still submits a legacy modality identifier")
+	}
+}
+
 func TestStructuredTrainingHidesProfileAdministrationFromCoach(t *testing.T) {
 	page := StructuredTrainingPage{Management: true, CSRFField: templ.Raw("")}
 	var output bytes.Buffer

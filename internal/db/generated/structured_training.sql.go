@@ -16,7 +16,12 @@ const addStructuredTrainingGroupMember = `-- name: AddStructuredTrainingGroupMem
 INSERT INTO training_group_members (group_id, membership_id, added_by_id)
 SELECT group_row.id, membership.id, $1
 FROM training_groups group_row
-JOIN user_memberships membership ON membership.id = $2
+JOIN (
+    SELECT locked_membership.id, locked_membership.starts_on, locked_membership.ends_on,
+           locked_membership.programme_id, locked_membership.team_id
+    FROM user_memberships locked_membership WHERE locked_membership.id = $2
+    FOR SHARE OF locked_membership
+) membership ON true
 WHERE group_row.id = $3
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
@@ -109,8 +114,10 @@ JOIN training_group_members group_member ON group_member.group_id = variation_gr
 JOIN user_memberships membership ON membership.id = group_member.membership_id
 WHERE variation_group.id = $2
   AND group_member.membership_id = $3
-  AND membership.starts_on <= CURRENT_DATE
-  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+  AND membership.starts_on <= variation_group.effective_from
+  AND (membership.ends_on IS NULL OR membership.ends_on >= COALESCE(variation_group.effective_until, (SELECT (event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM events event_row WHERE event_row.id = variation_group.competition_event_id), variation_group.effective_from))
+  AND (SELECT group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
+  AND (SELECT group_row.team_id IS NULL OR group_row.team_id = membership.team_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
 ON CONFLICT (variation_group_id, membership_id) DO NOTHING
 `
 
@@ -688,13 +695,18 @@ INSERT INTO training_prescriptions (
          $2, $3
 FROM training_plan_publications publication
 JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_sessions session ON session.id = $4 AND session.plan_id = plan.id
 JOIN user_memberships membership ON membership.id = $5 AND membership.user_id = $6
 JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
-JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id AND group_member.membership_id = membership.id
+JOIN training_group_members group_member ON group_member.group_id = group_row.id AND group_member.membership_id = membership.id
 WHERE publication.id = $1
-  AND membership.starts_on <= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
-  AND (membership.ends_on IS NULL OR membership.ends_on >= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date)
+  AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
+  AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
+  AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
+  AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
+  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at
 `
 
@@ -975,20 +987,20 @@ func (q *Queries) CreateTrainingVariation(ctx context.Context, arg CreateTrainin
 }
 
 const createTrainingVariationGroup = `-- name: CreateTrainingVariationGroup :one
-INSERT INTO training_variation_groups (training_group_id, name, kind, craft_modality_id,
+INSERT INTO training_variation_groups (training_group_id, name, kind, craft_code,
                                        effective_from, effective_until, competition_event_id,
                                        open_ended_exception, created_by_id)
 VALUES ($1, $2, $3::training_variation_group_kind,
         $4, $5, $6,
         $7, $8, $9)
-RETURNING id, training_group_id, name, kind, craft_modality_id, effective_from, effective_until, competition_event_id, open_ended_exception, created_by_id, created_at, updated_at
+RETURNING id, training_group_id, name, kind, craft_code, effective_from, effective_until, competition_event_id, open_ended_exception, created_by_id, created_at, updated_at
 `
 
 type CreateTrainingVariationGroupParams struct {
 	TrainingGroupID    uuid.UUID                  `json:"training_group_id"`
 	Name               string                     `json:"name"`
 	Kind               TrainingVariationGroupKind `json:"kind"`
-	CraftModalityID    *uuid.UUID                 `json:"craft_modality_id"`
+	CraftCode          *string                    `json:"craft_code"`
 	EffectiveFrom      pgtype.Date                `json:"effective_from"`
 	EffectiveUntil     pgtype.Date                `json:"effective_until"`
 	CompetitionEventID *uuid.UUID                 `json:"competition_event_id"`
@@ -1001,7 +1013,7 @@ func (q *Queries) CreateTrainingVariationGroup(ctx context.Context, arg CreateTr
 		arg.TrainingGroupID,
 		arg.Name,
 		arg.Kind,
-		arg.CraftModalityID,
+		arg.CraftCode,
 		arg.EffectiveFrom,
 		arg.EffectiveUntil,
 		arg.CompetitionEventID,
@@ -1014,7 +1026,7 @@ func (q *Queries) CreateTrainingVariationGroup(ctx context.Context, arg CreateTr
 		&i.TrainingGroupID,
 		&i.Name,
 		&i.Kind,
-		&i.CraftModalityID,
+		&i.CraftCode,
 		&i.EffectiveFrom,
 		&i.EffectiveUntil,
 		&i.CompetitionEventID,
@@ -2200,14 +2212,13 @@ func (q *Queries) ListManagedTrainingPublicationStates(ctx context.Context, arg 
 
 const listManagedTrainingVariationGroups = `-- name: ListManagedTrainingVariationGroups :many
 SELECT variation_group.id, variation_group.training_group_id, group_row.name AS training_group_name,
-       variation_group.name, variation_group.kind, modality.code AS craft_code,
+       variation_group.name, variation_group.kind, variation_group.craft_code,
        variation_group.effective_from, variation_group.effective_until,
        event_row.id AS competition_event_id, event_row.title AS competition_event_title,
        variation_group.open_ended_exception,
        membership.id AS membership_id, subject.name AS athlete_name
 FROM training_variation_groups variation_group
 JOIN training_groups group_row ON group_row.id = variation_group.training_group_id
-LEFT JOIN modalities modality ON modality.id = variation_group.craft_modality_id
 LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
 JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
 JOIN user_memberships membership ON membership.id = variation_member.membership_id
@@ -2279,28 +2290,22 @@ func (q *Queries) ListManagedTrainingVariationGroups(ctx context.Context, arg Li
 }
 
 const listStructuredCrewModalities = `-- name: ListStructuredCrewModalities :many
-SELECT id, code, name_pt
-FROM modalities
-WHERE code ~ '^[A-Z]+[2-9][0-9]*$'
+SELECT code, name_pt
+FROM canoe_craft_classes
+WHERE code IN ('C2', 'K2', 'K4')
 ORDER BY code
 `
 
-type ListStructuredCrewModalitiesRow struct {
-	ID     uuid.UUID `json:"id"`
-	Code   string    `json:"code"`
-	NamePt string    `json:"name_pt"`
-}
-
-func (q *Queries) ListStructuredCrewModalities(ctx context.Context) ([]ListStructuredCrewModalitiesRow, error) {
+func (q *Queries) ListStructuredCrewModalities(ctx context.Context) ([]CanoeCraftClass, error) {
 	rows, err := q.db.Query(ctx, listStructuredCrewModalities)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListStructuredCrewModalitiesRow{}
+	items := []CanoeCraftClass{}
 	for rows.Next() {
-		var i ListStructuredCrewModalitiesRow
-		if err := rows.Scan(&i.ID, &i.Code, &i.NamePt); err != nil {
+		var i CanoeCraftClass
+		if err := rows.Scan(&i.Code, &i.NamePt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2889,13 +2894,18 @@ const listStructuredTrainingPublicationMembers = `-- name: ListStructuredTrainin
 SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
        subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
 FROM training_plans plan
-JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
+JOIN training_group_members group_member ON group_member.group_id = group_row.id
 JOIN user_memberships membership ON membership.id = group_member.membership_id
 JOIN users subject ON subject.id = membership.user_id AND subject.is_active
 JOIN training_sessions session ON session.plan_id = plan.id
 WHERE plan.id = $1
-  AND (session.starts_at AT TIME ZONE $2::text)::date >= membership.starts_on
-  AND (membership.ends_on IS NULL OR (session.starts_at AT TIME ZONE $2::text)::date <= membership.ends_on)
+  AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
+  AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
+  AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
+  AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
+  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND (session.starts_at AT TIME ZONE $2::text)::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id
 `
 
@@ -3432,6 +3442,36 @@ func (q *Queries) ListVisibleTrainingRoutines(ctx context.Context, arg ListVisib
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockStructuredPublicationMemberships = `-- name: LockStructuredPublicationMemberships :many
+SELECT membership.id FROM user_memberships membership
+WHERE membership.id = ANY($1::uuid[])
+ORDER BY membership.id
+FOR SHARE OF membership
+`
+
+// Lock every intended row in UUID order before any prescription insert. A
+// concurrent non-key ends_on update must finish (or abort the serializable
+// publication) before final eligibility is accepted.
+func (q *Queries) LockStructuredPublicationMemberships(ctx context.Context, membershipIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, lockStructuredPublicationMemberships, membershipIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

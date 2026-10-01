@@ -2,6 +2,12 @@
 
 Guardian-authority V2 is shipped fail closed. Migration `202609120005_guardian_authority_activation` disables every guardian policy and clears the `guardian-intake-v2` release binding; the later #318 migration also permanently fences the retired privacy automation. Every supported image release calls a separate disable-only database boundary before starting or switching to the candidate: it revokes current guardian access and binds the database to the verified candidate image and embedded migration inventory, but cannot create approval evidence or enable intake. The ordinary release, installer and migration paths do not create the guardian operator login, read an approval, run preflight or enable intake. Production activation is a later, explicit human release gate.
 
+## Invitation elapsed-time decision (local, unreleased)
+
+The owner-approved invitation lifetime is exactly **720 elapsed hours** from database issuance, not 30 Lisbon calendar days. Forward migration `202610010002_guardian_invitation_fixed_duration` replaces only the issuer deadline expression with `interval '720 hours'`; the fresh baseline includes the identical forward segment. Already-issued invitations retain their recorded deadlines unchanged (including historic DST differences). Email binding, adult/administrator eligibility, single-use consumption, revocation, expired denial, intake activation gates and retired privacy fences remain unchanged. The canonical `invitation_validity_days:30` field continues to mean 30 × 24 hours for invitation issuance; it is not a new policy-format or retention redesign. Annual authority renewal remains 12 calendar months.
+
+This source change does not approve release, migration of a live database or intake activation. Include the new migration in the ordinary reviewed candidate inventory and release-binding process; do not extend existing deadlines or reopen intake to apply it.
+
 ## Control contract
 
 One active adult platform administrator is the controller-authorized operator. The same opaque user UUID must appear in the protected operator environment and the controller approval. It is not a second-person workflow. Enabling requires all of these facts to agree atomically:
