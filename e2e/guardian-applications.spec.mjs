@@ -33,8 +33,13 @@ async function issueInvitation(page) {
 }
 
 async function logout(page) {
-  await page.context().clearCookies();
-  await page.goto('/login');
+  // ClearCookies can race the shell's in-flight responses setting session cookies.
+  // Use the supported logout action so the server invalidates the session too.
+  const fallback = page.locator('[data-mobile-navigation-fallback]');
+  if (await fallback.isVisible()) await fallback.locator('summary').click();
+  const menu = page.getByRole('button', { name: 'Menu', exact: true });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole('button', { name: 'Terminar sessão', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
 }
 

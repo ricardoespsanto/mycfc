@@ -15,6 +15,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/app"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -58,6 +59,9 @@ func main() {
 }
 
 func runServerCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "disposable-release-contract" {
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"version": releasecontract.Version, "candidate": releasecontract.Candidate, "database": releasecontract.Database, "predecessor_digest": releasecontract.PredecessorDigest, "final_digest": releasecontract.FinalDigest, "baseline_digest": releasecontract.BaselineDigest})
+	}
 	if len(args) == 1 && args[0] == "schema-digest" {
 		_, err := fmt.Fprintln(os.Stdout, db.EmbeddedMigrationDigest())
 		return err
@@ -118,10 +122,18 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		logDatabaseCommandConfiguration(command, configSource, connectionConfig.Host, databaseName, connectionConfig.User, credentials)
 		switch command {
 		case "bootstrap-db":
-			return db.BootstrapRoles(ctx, conn, databaseName, credentials)
+			return bootstrapRelease(ctx, conn, databaseName, credentials, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"))
 		case "migrate":
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+				return err
+			}
+			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
 			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
 		case "harden-db":
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+				return err
+			}
+			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
 			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, credentials)
 		}
 	}
@@ -159,12 +171,40 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	logDatabaseCommandConfiguration(command, "aws_remote", cfg.DBHost, cfg.DBName, connectionRole, credentials)
 	if command == "bootstrap-db" {
-		return db.BootstrapRoles(ctx, conn, cfg.DBName, credentials)
+		return bootstrapRelease(ctx, conn, cfg.DBName, credentials, cfg.AppVersion, cfg.GITSHA)
+	}
+	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+	if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA); err != nil {
+		return err
 	}
 	if command == "harden-db" {
 		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
 	}
 	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+}
+
+func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnection, database, version, candidate string) error {
+	if releasecontract.Version == "" && releasecontract.Candidate == "" {
+		return nil
+	}
+	if !releasecontract.Matches(version, candidate, database) {
+		return errors.New("disposable release binary/runtime identity mismatch")
+	}
+	var completed bool
+	if err := conn.QueryRow(ctx, "SELECT mycfc_disposable_release.matches($1,$2,$3,$4)", database, version, candidate, releasecontract.FinalDigest).Scan(&completed); err != nil || !completed {
+		return errors.New("disposable completion required before migration/hardening")
+	}
+	return nil
+}
+
+func bootstrapRelease(ctx context.Context, conn databaseCommandConnection, database string, credentials db.RoleCredentials, version, candidate string) error {
+	if releasecontract.Version == "" && releasecontract.Candidate == "" {
+		return db.BootstrapRoles(ctx, conn, database, credentials)
+	}
+	if !releasecontract.Matches(version, candidate, database) {
+		return errors.New("disposable release binary/runtime identity mismatch")
+	}
+	return db.BootstrapDisposableRelease(ctx, conn, database, credentials)
 }
 
 func provisionGuardianActivation(ctx context.Context, conn databaseCommandConnection, databaseName string) error {

@@ -449,6 +449,23 @@ if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$runn
 	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
 fi
+if jq -e --arg migration '202609290002_dated_participation_contract' \
+	'.schema.ordered_migrations | index($migration) != null' "$publication_manifest_file" >/dev/null; then
+	# Only the exact, attested candidate with the reviewed one-shot contract may
+	# cross this boundary. Its bootstrap fences old logins before replacement.
+	# This is not a host flag or a general bypass for contract migrations.
+	if disposable_contract=$(docker run --rm "$image" disposable-release-contract) &&
+		printf '%s' "$disposable_contract" | jq -e --arg version "$release_version" --arg candidate "$sha" --arg final "$schema_migration_digest" '
+		.version==$version and .candidate==$candidate and .database=="mycfc" and
+		.final_digest==$final and .final_digest=="41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7" and
+		.predecessor_digest=="8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e" and
+		.baseline_digest=="0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"' >/dev/null; then
+		log 'event=approved_disposable_candidate_fences_predecessor'
+	else
+		log 'event=direct_cutover_requires_separate_fenced_release old_slot_fallback_unsafe=true'
+		exit 1
+	fi
+fi
 case "$active_slot" in
 	blue) candidate_slot=green ;;
 	green|legacy) candidate_slot=blue ;;

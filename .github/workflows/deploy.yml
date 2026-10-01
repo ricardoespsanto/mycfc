@@ -106,6 +106,10 @@ jobs:
             echo "migrations=$migrations"
             echo "gates=$gates"
           } >> "$GITHUB_OUTPUT"
+      - name: Validate approved disposable predecessor reset and tagged rollback
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: python3 scripts/validate-disposable-candidate.py --release-image
       # aws-actions/configure-aws-credentials v6.2.4
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
@@ -133,6 +137,9 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.image-refs.outputs.repository }}:${{ steps.image-refs.outputs.git_tag }}
+          build-args: |
+            RELEASE_VERSION=${{ inputs.version }}
+            GIT_SHA=${{ inputs.sha }}
           labels: |
             org.opencontainers.image.revision=${{ steps.image-refs.outputs.sha }}
             org.opencontainers.image.version=${{ inputs.version }}
@@ -160,6 +167,8 @@ jobs:
           test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$SHA"
           test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.opencontainers.image.version"}}' "$IMAGE")" = "$VERSION"
           test "$(docker buildx imagetools inspect --format '{{index .Image.Config.Labels "org.mycfc.schema-migration-digest"}}' "$IMAGE")" = "$SCHEMA_DIGEST"
+          docker run --rm "$IMAGE" disposable-release-contract > disposable-release-contract.json
+          jq -e --arg version "$VERSION" --arg candidate "$SHA" --arg final "$SCHEMA_DIGEST" '.version==$version and .candidate==$candidate and .database=="mycfc" and .final_digest==$final and .predecessor_digest=="8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e"' disposable-release-contract.json
           gh attestation verify "oci://$IMAGE" --repo "${{ github.repository }}" \
             --signer-workflow "${{ github.repository }}/.github/workflows/deploy.yml" \
             --source-digest "$SHA" --deny-self-hosted-runners >/dev/null

@@ -290,6 +290,35 @@ func (q *Queries) UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIden
 	return updated_at, err
 }
 
+const updateMemberIdentityKeepingBirthDate = `-- name: UpdateMemberIdentityKeepingBirthDate :one
+UPDATE users SET name = $1, email = $2,
+    email_verified_at = CASE WHEN email IS DISTINCT FROM $2 THEN NULL ELSE email_verified_at END,
+    updated_at = clock_timestamp()
+WHERE id = $3 AND updated_at = $4 AND erased_at IS NULL
+RETURNING updated_at
+`
+
+type UpdateMemberIdentityKeepingBirthDateParams struct {
+	Name              string             `json:"name"`
+	Email             *string            `json:"email"`
+	UserID            uuid.UUID          `json:"user_id"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+// Do not target date_of_birth for non-DOB edits: classified DOBs are protected
+// even against UPDATE OF statements that submit an unchanged value.
+func (q *Queries) UpdateMemberIdentityKeepingBirthDate(ctx context.Context, arg UpdateMemberIdentityKeepingBirthDateParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, updateMemberIdentityKeepingBirthDate,
+		arg.Name,
+		arg.Email,
+		arg.UserID,
+		arg.ExpectedUpdatedAt,
+	)
+	var updated_at pgtype.Timestamptz
+	err := row.Scan(&updated_at)
+	return updated_at, err
+}
+
 const updateMemberProfile = `-- name: UpdateMemberProfile :one
 UPDATE member_profiles AS profile SET
     phone = $1, address_line1 = $2,

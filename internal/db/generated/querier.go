@@ -24,6 +24,8 @@ type Querier interface {
 	AdminTransitionGuardianAuthority(ctx context.Context, arg AdminTransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	AdoptGuardianAuthorityPolicy(ctx context.Context, arg AdoptGuardianAuthorityPolicyParams) (GuardianAuthorityPolicy, error)
 	ArchivePhotoAlbum(ctx context.Context, arg ArchivePhotoAlbumParams) (PhotoAlbum, error)
+	AssignScopedCanoeCraftClass(ctx context.Context, arg AssignScopedCanoeCraftClassParams) (int64, error)
+	AssignScopedSportingModality(ctx context.Context, arg AssignScopedSportingModalityParams) (int64, error)
 	AssignTrainingCycleChild(ctx context.Context, arg AssignTrainingCycleChildParams) (int64, error)
 	AssignTrainingWeekToCycle(ctx context.Context, arg AssignTrainingWeekToCycleParams) (int64, error)
 	AttachMediaUploadIntent(ctx context.Context, arg AttachMediaUploadIntentParams) error
@@ -65,6 +67,9 @@ type Querier interface {
 	CreateCompetitionCategory(ctx context.Context, arg CreateCompetitionCategoryParams) (CompetitionCategory, error)
 	CreateCompetitionDocument(ctx context.Context, arg CreateCompetitionDocumentParams) (CompetitionDocument, error)
 	CreateConsentForm(ctx context.Context, arg CreateConsentFormParams) (ConsentForm, error)
+	// Reserved dated writer. Exception reason remains DB-disabled until a
+	// separately authorized, audited service and privacy runbook exist.
+	CreateDatedParticipation(ctx context.Context, arg CreateDatedParticipationParams) (UserMembership, error)
 	CreateDependentUser(ctx context.Context, arg CreateDependentUserParams) (CreateDependentUserRow, error)
 	CreateEmailVerification(ctx context.Context, arg CreateEmailVerificationParams) (uuid.UUID, error)
 	CreateEquipmentWithAudit(ctx context.Context, arg CreateEquipmentWithAuditParams) (CreateEquipmentWithAuditRow, error)
@@ -190,6 +195,7 @@ type Querier interface {
 	ListAnnouncementProgrammes(ctx context.Context) ([]ListAnnouncementProgrammesRow, error)
 	ListAnnouncementTeams(ctx context.Context) ([]ListAnnouncementTeamsRow, error)
 	ListAnnouncementsForAuthor(ctx context.Context, arg ListAnnouncementsForAuthorParams) ([]ListAnnouncementsForAuthorRow, error)
+	ListCanoeCraftClasses(ctx context.Context) ([]CanoeCraftClass, error)
 	ListCompetitionDocumentsForAthlete(ctx context.Context, arg ListCompetitionDocumentsForAthleteParams) ([]ListCompetitionDocumentsForAthleteRow, error)
 	ListCompetitionDocumentsForEvent(ctx context.Context, eventID *uuid.UUID) ([]ListCompetitionDocumentsForEventRow, error)
 	ListConsentFormsForUser(ctx context.Context, arg ListConsentFormsForUserParams) ([]ConsentForm, error)
@@ -229,6 +235,8 @@ type Querier interface {
 	ListOperationalEquipment(ctx context.Context, rowLimit int32) ([]Equipment, error)
 	ListPendingGuardianAuthorityRequests(ctx context.Context, arg ListPendingGuardianAuthorityRequestsParams) ([]ListPendingGuardianAuthorityRequestsRow, error)
 	ListPendingRepairRequests(ctx context.Context, arg ListPendingRepairRequestsParams) ([]ListPendingRepairRequestsRow, error)
+	ListPersonSportAssignmentEvents(ctx context.Context, userID uuid.UUID) ([]PersonSportAssignmentEvent, error)
+	ListPersonSportingModalities(ctx context.Context, userID uuid.UUID) ([]SportingModality, error)
 	ListPhotoAlbumAuditEvents(ctx context.Context, albumID uuid.UUID) ([]ListPhotoAlbumAuditEventsRow, error)
 	ListProgrammes(ctx context.Context) ([]Programme, error)
 	ListPublishedNews(ctx context.Context, rowLimit int32) ([]NewsItem, error)
@@ -236,7 +244,10 @@ type Querier interface {
 	ListRecentSyncedActivitiesForUser(ctx context.Context, arg ListRecentSyncedActivitiesForUserParams) ([]SyncedActivity, error)
 	ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error)
 	ListRepairRequestsForMembers(ctx context.Context, arg ListRepairRequestsForMembersParams) ([]ListRepairRequestsForMembersRow, error)
-	ListStructuredCrewModalities(ctx context.Context) ([]ListStructuredCrewModalitiesRow, error)
+	// The legacy modalities table remains the read model for dated training/events and
+	// already-published prescriptions. These queries only write the new vocabulary.
+	ListSportingModalities(ctx context.Context) ([]SportingModality, error)
+	ListStructuredCrewModalities(ctx context.Context) ([]CanoeCraftClass, error)
 	ListStructuredSessionSnapshotsForDay(ctx context.Context, arg ListStructuredSessionSnapshotsForDayParams) ([]ListStructuredSessionSnapshotsForDayRow, error)
 	ListStructuredSessionSnapshotsForPlan(ctx context.Context, planID uuid.UUID) ([]ListStructuredSessionSnapshotsForPlanRow, error)
 	ListStructuredTrainingOverviewForManager(ctx context.Context, arg ListStructuredTrainingOverviewForManagerParams) ([]ListStructuredTrainingOverviewForManagerRow, error)
@@ -261,6 +272,10 @@ type Querier interface {
 	ListVisibleTrainingRoutines(ctx context.Context, arg ListVisibleTrainingRoutinesParams) ([]ListVisibleTrainingRoutinesRow, error)
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// Lock every intended row in UUID order before any prescription insert. A
+	// concurrent non-key ends_on update must finish (or abort the serializable
+	// publication) before final eligibility is accepted.
+	LockStructuredPublicationMemberships(ctx context.Context, membershipIds []uuid.UUID) ([]uuid.UUID, error)
 	LockStructuredTrainingPlanForPublication(ctx context.Context, planID uuid.UUID) (LockStructuredTrainingPlanForPublicationRow, error)
 	LockTrainingCycles(ctx context.Context, cycleIds []uuid.UUID) ([]TrainingCycle, error)
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
@@ -307,6 +322,9 @@ type Querier interface {
 	UpdateEventResultsLink(ctx context.Context, arg UpdateEventResultsLinkParams) (int64, error)
 	UpdateFeatureFlag(ctx context.Context, arg UpdateFeatureFlagParams) (int64, error)
 	UpdateMemberIdentity(ctx context.Context, arg UpdateMemberIdentityParams) (pgtype.Timestamptz, error)
+	// Do not target date_of_birth for non-DOB edits: classified DOBs are protected
+	// even against UPDATE OF statements that submit an unchanged value.
+	UpdateMemberIdentityKeepingBirthDate(ctx context.Context, arg UpdateMemberIdentityKeepingBirthDateParams) (pgtype.Timestamptz, error)
 	UpdateMemberProfile(ctx context.Context, arg UpdateMemberProfileParams) (MemberProfile, error)
 	UpdateMemberProfilePhoto(ctx context.Context, arg UpdateMemberProfilePhotoParams) (pgtype.Timestamptz, error)
 	UpdateOwnCompletedSessionFeedback(ctx context.Context, arg UpdateOwnCompletedSessionFeedbackParams) (int64, error)
@@ -317,7 +335,9 @@ type Querier interface {
 	UpdateTrainingCycle(ctx context.Context, arg UpdateTrainingCycleParams) (TrainingCycle, error)
 	UpdateTrainingSession(ctx context.Context, arg UpdateTrainingSessionParams) (TrainingSession, error)
 	UpsertActivityConnection(ctx context.Context, arg UpsertActivityConnectionParams) (ActivityConnection, error)
-	UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error)
+	// Compatibility path for the current admin toggle: repeat requests return the
+	// current identity without changing its original dates. New intervals are inserts.
+	UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UpsertCurrentSeasonMembershipRow, error)
 	UpsertSuggestedActivityMatch(ctx context.Context, arg UpsertSuggestedActivityMatchParams) (TrainingSessionActivityMatch, error)
 	UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActivityParams) (SyncedActivity, error)
 	VerifyGuardianAgeHandoffEmail(ctx context.Context, tokenDigest []byte) (uuid.UUID, error)

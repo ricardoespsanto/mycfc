@@ -84,7 +84,7 @@ services:
     working_dir: /workspace
     env_file: .env
     environment:
-      BASE_URL: http://e2e-app:8080
+      BASE_URL: http://localhost:8080
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mycfc_test?sslmode=disable
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
@@ -153,8 +153,12 @@ services:
     image: mcr.microsoft.com/playwright:v1.63.0-noble
     profiles: [e2e]
     working_dir: /workspace
+    # Share only the disposable app's network namespace. A real localhost
+    # origin emits Chromium Fetch Metadata for no-referrer form submissions,
+    # just as production HTTPS does; server CSRF protection remains unchanged.
+    network_mode: service:e2e-app
     environment:
-      E2E_BASE_URL: http://e2e-app:8080
+      E2E_BASE_URL: http://localhost:8080
       MAILPIT_API_BASE: http://mailpit:8025
       PLAYWRIGHT_WORKERS: ${PLAYWRIGHT_WORKERS:-2}
       E2E_JSON_OUTPUT: ${E2E_JSON_OUTPUT:-}
@@ -175,7 +179,6 @@ services:
       - .:/workspace
       - e2e_node_modules:/workspace/node_modules
     shm_size: 1gb
-    networks: [mycfc]
 
   ui-review-app:
     image: golang:1.26.5-bookworm

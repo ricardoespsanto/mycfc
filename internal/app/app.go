@@ -22,6 +22,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/activity"
 	"github.com/cfcoimbra/mycfc/internal/activity/polar"
 	"github.com/cfcoimbra/mycfc/internal/config"
+	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
@@ -52,8 +53,13 @@ type Application struct {
 var (
 	loadApplicationConfig = config.Load
 	openApplicationPool   = pgxpool.NewWithConfig
-	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
-	loadApplicationAWS    = awsconfig.LoadDefaultConfig
+	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error {
+		if err := pool.Ping(ctx); err != nil {
+			return err
+		}
+		return db.VerifyDatedParticipationRuntime(ctx, pool)
+	}
+	loadApplicationAWS = awsconfig.LoadDefaultConfig
 )
 
 func New(ctx context.Context) (*Application, error) {
@@ -92,7 +98,7 @@ func New(ctx context.Context) (*Application, error) {
 	defer cancelPing()
 	if err := pingApplicationPool(pingContext, pool); err != nil {
 		pool.Close()
-		return nil, errors.New("database ping failed")
+		return nil, errors.New("database readiness or dated participation contract failed")
 	}
 
 	sessions := scs.New()
@@ -255,7 +261,7 @@ func New(ctx context.Context) (*Application, error) {
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, Classification: handlers.Classification{Store: handlers.PostgresClassificationStore{Pool: pool}, Definitions: handlers.PostgresDefinitionStore{Pool: pool}}, Definitions: handlers.Definitions{Store: handlers.PostgresDefinitionStore{Pool: pool}}}
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
 	polarKey, polarKeyID, polarEnabled, polarConfigErr := cfg.PolarCredentials()
 	if polarConfigErr != nil {

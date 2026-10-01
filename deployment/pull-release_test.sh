@@ -59,16 +59,38 @@ case "$1" in
 		destination=$3
 		manifest_release_tag=${TEST_MANIFEST_RELEASE_TAG:-release-v1.25.0-20260810183743-3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4}
 		case "$manifest_release_tag" in release-v1.25.0-20260810190000-*) manifest_published_at=2026-08-10T19:00:00Z ;; *) manifest_published_at=2026-08-10T18:37:43Z ;; esac
+		manifest_migrations='["001_initial","reset-baseline-v1"]'
+		manifest_schema_digest='f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884'
+		if [ "${TEST_DIRECT_CUTOVER:-false}" = true ]; then
+			manifest_migrations='["001_initial","202609290002_dated_participation_contract","reset-baseline-v1"]'
+			manifest_schema_digest='d29fd889dfbd06a6482b5de806ee78fff39fdafac3278b66100fa7bf35eef6c3'
+		fi
+		if [ "${TEST_DISPOSABLE_RELEASE:-false}" = true ]; then
+			manifest_migrations=$TEST_DISPOSABLE_INVENTORY_JSON
+			manifest_schema_digest='41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7'
+		fi
 		cat >"$destination" <<JSON
-{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":false},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884","ordered_migrations":["001_initial","reset-baseline-v1"]},"version":"v1.25.0"}
+{"ci_run_id":123,"contract":"mycfc/release-publication/v1","expected_gates":{"guardian_intake":false,"privacy_worker":false},"git_sha":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","git_tree_sha":"dddddddddddddddddddddddddddddddddddddddd","image":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"registry.example/mycfc"},"issues":[284],"published_at":"$manifest_published_at","release_tag":"$manifest_release_tag","schema":{"migration_digest":"$manifest_schema_digest","ordered_migrations":$manifest_migrations},"version":"v1.25.0"}
 JSON
 		;;
 	rm) ;;
+	run)
+		if [ "${TEST_DISPOSABLE_RELEASE:-false}" = true ] && [ "$4" = disposable-release-contract ]; then
+			printf '%s\n' '{"database":"mycfc","version":"v1.25.0","candidate":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","predecessor_digest":"8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e","final_digest":"41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7","baseline_digest":"0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"}'
+		else exit 1; fi
+		;;
 	image)
 		case "$*" in
 			*org.opencontainers.image.revision*) printf '3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4\n' ;;
 			*org.opencontainers.image.version*) printf 'v1.25.0\n' ;;
-			*org.mycfc.schema-migration-digest*) printf 'f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884\n' ;;
+			*org.mycfc.schema-migration-digest*)
+				if [ "${TEST_DISPOSABLE_RELEASE:-false}" = true ]; then
+					printf '41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7\n'
+				elif [ "${TEST_DIRECT_CUTOVER:-false}" = true ]; then
+					printf 'd29fd889dfbd06a6482b5de806ee78fff39fdafac3278b66100fa7bf35eef6c3\n'
+				else
+					printf 'f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884\n'
+				fi ;;
 			*) printf 'registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 		esac
 		;;
@@ -215,7 +237,27 @@ if [ -s "$invalid_release_bind_case/aws.log" ]; then
 	exit 1
 fi
 
+direct_cutover_case="$work_dir/direct-cutover-rejected"
+setup_case "$direct_cutover_case"
+if run_release "$direct_cutover_case" TEST_DIRECT_CUTOVER=true; then
+	printf '%s\n' 'generic release accepted a direct-contract migration' >&2
+	exit 1
+fi
+grep -q 'event=direct_cutover_requires_separate_fenced_release old_slot_fallback_unsafe=true' "$direct_cutover_case/events.log"
+if grep -Eq 'run --rm (db-bootstrap|migrate)|up -d --no-deps --force-recreate app-' "$direct_cutover_case/docker.log"; then
+	printf '%s\n' 'direct contract executed before old writers were fenced' >&2
+	exit 1
+fi
+test "$(cat "$direct_cutover_case/state/active-slot")" = legacy
+grep -q 'reverse_proxy app:8080' "$direct_cutover_case/state/caddy-upstream.caddy"
+
 success_case="$work_dir/success"
+disposable_case="$work_dir/disposable-approved"
+setup_case "$disposable_case"
+disposable_inventory=$(go run ./cmd/server schema-inventory)
+run_release "$disposable_case" TEST_DIRECT_CUTOVER=true TEST_DISPOSABLE_RELEASE=true "TEST_DISPOSABLE_INVENTORY_JSON=$disposable_inventory"
+grep -q 'event=approved_disposable_candidate_fences_predecessor' "$disposable_case/events.log"
+
 setup_case "$success_case"
 sed 's/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' "$success_case/mycfc.env" >"$success_case/mycfc.env.current"
 mv "$success_case/mycfc.env.current" "$success_case/mycfc.env"

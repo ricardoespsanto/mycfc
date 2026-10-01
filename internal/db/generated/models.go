@@ -1495,6 +1495,21 @@ type AnnouncementTarget struct {
 	TargetID       *uuid.UUID             `json:"target_id"`
 }
 
+type CanoeCraftClass struct {
+	Code   string `json:"code"`
+	NamePt string `json:"name_pt"`
+}
+
+type ClassificationErasureErasedMembership struct {
+	MembershipID uuid.UUID `json:"membership_id"`
+}
+
+type ClassificationErasureFence struct {
+	TransactionID int64       `json:"transaction_id"`
+	EventIds      []int64     `json:"event_ids"`
+	MembershipIds []uuid.UUID `json:"membership_ids"`
+}
+
 type CompetitionCategory struct {
 	ID               uuid.UUID          `json:"id"`
 	SeasonID         uuid.UUID          `json:"season_id"`
@@ -2152,6 +2167,32 @@ type PerformanceMetric struct {
 	UnitPt     string             `json:"unit_pt"`
 	MeasuredAt pgtype.Timestamptz `json:"measured_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type PersonCanoeCraftClass struct {
+	UserID       uuid.UUID          `json:"user_id"`
+	ModalityCode string             `json:"modality_code"`
+	CraftCode    string             `json:"craft_code"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type PersonSportAssignmentEvent struct {
+	ID            int64              `json:"id"`
+	OperationID   uuid.UUID          `json:"operation_id"`
+	SubjectUserID uuid.UUID          `json:"subject_user_id"`
+	ActorUserID   uuid.UUID          `json:"actor_user_id"`
+	CoachGrantID  *uuid.UUID         `json:"coach_grant_id"`
+	Kind          string             `json:"kind"`
+	Action        string             `json:"action"`
+	Code          string             `json:"code"`
+	Reason        string             `json:"reason"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PersonSportingModality struct {
+	UserID       uuid.UUID          `json:"user_id"`
+	ModalityCode string             `json:"modality_code"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type PhotoAlbum struct {
@@ -3221,6 +3262,11 @@ type Session struct {
 	SubjectIndexed bool               `json:"subject_indexed"`
 }
 
+type SportingModality struct {
+	Code   string `json:"code"`
+	NamePt string `json:"name_pt"`
+}
+
 type StaffGrant struct {
 	ID                   uuid.UUID          `json:"id"`
 	UserID               uuid.UUID          `json:"user_id"`
@@ -3514,7 +3560,7 @@ type TrainingVariationGroup struct {
 	TrainingGroupID    uuid.UUID                  `json:"training_group_id"`
 	Name               string                     `json:"name"`
 	Kind               TrainingVariationGroupKind `json:"kind"`
-	CraftModalityID    *uuid.UUID                 `json:"craft_modality_id"`
+	CraftCode          *string                    `json:"craft_code"`
 	EffectiveFrom      pgtype.Date                `json:"effective_from"`
 	EffectiveUntil     pgtype.Date                `json:"effective_until"`
 	CompetitionEventID *uuid.UUID                 `json:"competition_event_id"`
@@ -3562,6 +3608,9 @@ type UserMembership struct {
 	EndsOn                pgtype.Date        `json:"ends_on"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	AgeExceptionReason    *string            `json:"age_exception_reason"`
+	AgeExceptionByID      *uuid.UUID         `json:"age_exception_by_id"`
+	AgeExceptionAt        pgtype.Timestamptz `json:"age_exception_at"`
 	PrincipalID           *uuid.UUID         `json:"principal_id"`
 }
 

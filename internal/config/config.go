@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/caarlos0/env/v11"
+	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 )
 
 var (
@@ -558,6 +559,32 @@ func (c Config) ObjectStorageOrigin() string {
 
 // ResolvedDatabaseURL supports local URLs and production component secrets.
 func (c Config) ResolvedDatabaseURL() (string, error) {
+	if releasecontract.Version != "" || releasecontract.Candidate != "" {
+		if c.DatabaseURL.Value() != "" {
+			u, err := url.Parse(c.DatabaseURL.Value())
+			if err != nil || u.User == nil || !releasecontract.Matches(c.AppVersion, c.GITSHA, strings.TrimPrefix(u.Path, "/")) {
+				return "", errors.New("disposable web release identity mismatch")
+			}
+			for _, key := range []string{"user", "password", "dbname", "database", "host", "port", "service"} {
+				if u.Query().Has(key) {
+					return "", errors.New("disposable web connection override rejected")
+				}
+			}
+			password, _ := u.User.Password()
+			if u.User.Username() != releasecontract.OldWebRole && u.User.Username() != releasecontract.WebRole {
+				return "", errors.New("disposable web principal rejected")
+			}
+			u.User = url.UserPassword(releasecontract.AppRole(u.User.Username()), password)
+			return u.String(), nil
+		}
+		if !releasecontract.Matches(c.AppVersion, c.GITSHA, c.DBName) {
+			return "", errors.New("disposable web release identity mismatch")
+		}
+		if c.DBUser != releasecontract.OldWebRole && c.DBUser != releasecontract.WebRole {
+			return "", errors.New("disposable web principal rejected")
+		}
+		return c.resolvedDatabaseURL(releasecontract.AppRole(c.DBUser), c.DBPassword)
+	}
 	if c.DatabaseURL.Value() != "" {
 		return c.DatabaseURL.Value(), nil
 	}

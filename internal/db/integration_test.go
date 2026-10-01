@@ -270,6 +270,19 @@ func TestCreateRepairRequestEnforcesIdempotencyKeyDuringConcurrentRetries(t *tes
 	}
 }
 
+func testCompetitionCategory(t *testing.T, ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, seasonID, programmeID, actorID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var categoryID uuid.UUID
+	err := db.QueryRow(ctx, `INSERT INTO competition_categories (season_id,programme_id,code,name_pt,approved_by_user_id,approved_at)
+	 VALUES ($1,$2,$3,'Escalão de integração',$4,now()) RETURNING id`, seasonID, programmeID, "IT_"+uuid.NewString()[:8], actorID).Scan(&categoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return categoryID
+}
+
 func TestMembershipsResolveActiveSportStructureAndRejectMismatches(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
@@ -402,6 +415,7 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 		cleanup := context.Background()
 		_, _ = pool.Exec(cleanup, `DELETE FROM user_memberships WHERE user_id = $1`, memberID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM events WHERE created_by_id = $1`, authorID)
+		_, _ = pool.Exec(cleanup, `DELETE FROM competition_categories WHERE approved_by_user_id = $1`, authorID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM seasons WHERE code LIKE 'IT_today_%'`)
 	})
 
@@ -418,7 +432,8 @@ func TestListEventsForTodayRespectsMembershipCoachGrantAndAdminVisibility(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: memberID, SeasonID: season.ID, ProgrammeID: competition.ID, StartsOn: pgtype.Date{Time: today, Valid: true}}); err != nil {
+	categoryID := testCompetitionCategory(t, ctx, pool, season.ID, competition.ID, authorID)
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,competition_category_id,starts_on) VALUES($1,$2,$3,$4,$5)`, memberID, season.ID, competition.ID, categoryID, today); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.GrantStaffCapability(ctx, dbgen.GrantStaffCapabilityParams{UserID: coachID, Capability: dbgen.StaffCapabilityCOACH, ProgrammeID: &competition.ID, GrantedByID: authorID}); err != nil {
@@ -525,10 +540,11 @@ func TestTeamScopedEventVisibilityAndResponseAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	categoryID := testCompetitionCategory(t, ctx, tx, season.ID, programme.ID, authorID)
 	for _, membership := range []dbgen.CreateUserMembershipParams{
-		{UserID: memberID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
-		{UserID: dependentID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
-		{UserID: outsiderID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &unrelatedTeam.ID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+		{UserID: memberID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, CompetitionCategoryID: &categoryID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+		{UserID: dependentID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &authorizedTeam.ID, CompetitionCategoryID: &categoryID, StartsOn: pgtype.Date{Time: today, Valid: true}},
+		{UserID: outsiderID, SeasonID: season.ID, ProgrammeID: programme.ID, TeamID: &unrelatedTeam.ID, CompetitionCategoryID: &categoryID, StartsOn: pgtype.Date{Time: today, Valid: true}},
 	} {
 		if _, err := queries.CreateUserMembership(ctx, membership); err != nil {
 			t.Fatal(err)
@@ -744,6 +760,7 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE id = $1`, planID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM competition_categories WHERE season_id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, userIDs)
 	})
@@ -761,12 +778,13 @@ func TestDistanceLeaderboardEnforcesRankingPrivacyAndOwnership(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época leaderboard', $3, $4)`, seasonID, "IT_"+uuid.NewString()[:8], today.AddDate(-1, 0, 0), today.AddDate(1, 0, 0)); err != nil {
 		t.Fatal(err)
 	}
+	categoryID := testCompetitionCategory(t, ctx, pool, seasonID, competition.ID, athleteA)
 	for _, id := range []uuid.UUID{athleteA, athleteB, currentAthlete, privateAthlete} {
-		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4)`, id, seasonID, competition.ID, today.AddDate(0, 0, -1)); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, competition_category_id, starts_on) VALUES ($1, $2, $3, $4, $5)`, id, seasonID, competition.ID, categoryID, today.AddDate(0, 0, -1)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on, ends_on) VALUES ($1, $2, $3, $4, $5)`, expiredAthlete, seasonID, competition.ID, today.AddDate(0, 0, -10), today.AddDate(0, 0, -1)); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, competition_category_id, starts_on, ends_on) VALUES ($1, $2, $3, $4, $5, $6)`, expiredAthlete, seasonID, competition.ID, categoryID, today.AddDate(0, 0, -10), today.AddDate(0, 0, -1)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO training_plans (id, title, description, programme_id, created_by_id) VALUES ($1, 'Plano leaderboard', '', $2, $3)`, planID, competition.ID, athleteA); err != nil {
@@ -856,6 +874,7 @@ func TestTrainingSessionEditingAndCancellationLifecycle(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE id = ANY($1)`, []uuid.UUID{planA, planB})
 		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM competition_categories WHERE season_id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{actorID, athleteID})
 	})
@@ -867,7 +886,8 @@ func TestTrainingSessionEditingAndCancellationLifecycle(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época lifecycle', $3, $4)`, seasonID, "IT_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4)`, athleteID, seasonID, programme.ID, today.AddDate(0, 0, -1)); err != nil {
+	categoryID := testCompetitionCategory(t, ctx, pool, seasonID, programme.ID, actorID)
+	if _, err := pool.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, competition_category_id, starts_on) VALUES ($1, $2, $3, $4, $5)`, athleteID, seasonID, programme.ID, categoryID, today.AddDate(0, 0, -1)); err != nil {
 		t.Fatal(err)
 	}
 	for id, title := range map[uuid.UUID]string{planA: "Plano lifecycle A", planB: "Plano lifecycle B"} {
@@ -960,8 +980,9 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if _, err := conn.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época estruturada', $3, $4)`, seasonID, "ST_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
 		t.Fatal(err)
 	}
+	categoryID := testCompetitionCategory(t, ctx, conn, seasonID, programme.ID, actorID)
 	var membershipID uuid.UUID
-	if err := conn.QueryRow(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on) VALUES ($1, $2, $3, $4) RETURNING id`, athleteID, seasonID, programme.ID, today.AddDate(0, 0, -1)).Scan(&membershipID); err != nil {
+	if err := conn.QueryRow(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, competition_category_id, starts_on) VALUES ($1, $2, $3, $4, $5) RETURNING id`, athleteID, seasonID, programme.ID, categoryID, today.AddDate(0, 0, -1)).Scan(&membershipID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -969,6 +990,7 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 		_, _ = conn.Exec(context.Background(), `DELETE FROM training_groups WHERE created_by_id = $1`, actorID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM water_intensity_profiles WHERE created_by_id = $1`, actorID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM competition_categories WHERE season_id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{athleteID, actorID, guardianID, unrelatedID})
 	})
@@ -1088,15 +1110,14 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("unrelated rows = %d, err = %v", len(rows), err)
 	}
-	if _, err := conn.Exec(ctx, `UPDATE users SET date_of_birth = CURRENT_DATE - INTERVAL '19 years' WHERE id = $1`, athleteID); err != nil {
-		t.Fatal(err)
+	// A classified athlete's DOB is historical classification evidence. The
+	// previous age-handoff simulation cannot rewrite it without an audited flow.
+	if _, err := conn.Exec(ctx, `UPDATE users SET date_of_birth = CURRENT_DATE - INTERVAL '19 years' WHERE id = $1`, athleteID); !sqlState(err, "23514") {
+		t.Fatalf("classified birth date rewrite should fail closed: %v", err)
 	}
 	rows, err = queries.ListStructuredTrainingOverviewForSubject(ctx, guardianID)
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("guardian rows after athlete adulthood = %d, err = %v", len(rows), err)
-	}
-	if _, err := conn.Exec(ctx, `UPDATE users SET date_of_birth = CURRENT_DATE - INTERVAL '14 years' WHERE id = $1`, athleteID); err != nil {
-		t.Fatal(err)
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("rejected DOB edit changed guardian visibility: rows=%d err=%v", len(rows), err)
 	}
 	if _, err := conn.Exec(ctx, `UPDATE user_memberships SET ends_on = CURRENT_DATE - 1 WHERE id = $1`, membershipID); err != nil {
 		t.Fatal(err)

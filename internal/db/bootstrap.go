@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202609220001_privacy_automation_retirement"
+	baselineIncludesThrough      = "202610010002_guardian_invitation_fixed_duration"
 	mediaCleanupRole             = "mycfc_media_cleanup"
 	dataRetentionRole            = "mycfc_data_retention"
 	privacyRetentionRole         = "mycfc_privacy_retention"
@@ -618,8 +618,59 @@ func commitBaseline(ctx context.Context, tx pgx.Tx, beforeCommit func(context.Co
 			return err
 		}
 	}
+	if err := VerifyDatedParticipationContract(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit baseline migration: %w", err)
+	}
+	return nil
+}
+
+// VerifyDatedParticipationContract checks both ledger and actual schema.
+// Marker presence alone is insufficient: an earlier build used the expand
+// marker with different SQL. The migration role verifies both ledger and schema.
+func VerifyDatedParticipationContract(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) error {
+	return verifyDatedParticipationSchema(ctx, db, true)
+}
+
+// VerifyDatedParticipationRuntime checks the actual schema at web startup.
+// The web role cannot read mycfc_meta, so startup checks the actual schema
+// without granting it access to the protected migration ledger.
+func VerifyDatedParticipationRuntime(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) error {
+	return verifyDatedParticipationSchema(ctx, db, false)
+}
+
+func verifyDatedParticipationSchema(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, requireMarker bool) error {
+	const schemaChecks = `EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.user_memberships'::regclass AND conname='user_memberships_one_participation_per_day' AND contype='x')
+	  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.user_memberships'::regclass AND conname='user_memberships_age_exception_complete' AND contype='c')
+	  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.user_memberships'::regclass AND tgname='user_memberships_dated_participation_valid' AND NOT tgisinternal AND tgenabled <> 'D')
+	  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.user_memberships'::regclass AND tgname='user_memberships_history_immutable' AND NOT tgisinternal AND tgenabled <> 'D')
+	  AND position('user_memberships_recorded_history_end' in pg_get_functiondef('public.prevent_dated_participation_rewrite()'::regprocedure)) > 0
+	  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.competition_categories'::regclass AND tgname='competition_categories_referenced_immutable' AND NOT tgisinternal AND tgenabled <> 'D')
+	  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.users'::regclass AND tgname='users_classified_dob_immutable' AND NOT tgisinternal AND tgenabled <> 'D')
+	  AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.user_memberships'::regclass AND conname='user_memberships_age_exception_disabled')
+	  AND position('exception actor outside scope' in pg_get_functiondef('public.validate_dated_participation()'::regprocedure)) > 0
+	  AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.user_memberships'::regclass AND conname='user_memberships_user_season_programme_unique')`
+	postcondition := "SELECT /* dated participation postcondition */ " + schemaChecks
+	if requireMarker {
+		postcondition = `SELECT /* dated participation postcondition */
+		EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version='202609290002_dated_participation_contract')
+		AND EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version='202609290003_recorded_participation_end_guard')
+		AND EXISTS (SELECT 1 FROM mycfc_meta.schema_migrations WHERE version='202609300004_age_exception_provenance') AND ` + schemaChecks
+	}
+	var valid bool
+	if err := db.QueryRow(ctx, postcondition).Scan(&valid); err != nil {
+		return fmt.Errorf("inspect dated participation postcondition: %w", err)
+	}
+	if !valid {
+		return errors.New("dated participation postcondition missing; refusing migration commit")
 	}
 	return nil
 }

@@ -116,15 +116,16 @@ func TestMembershipPostconditionMigrationIsRepresentedByFreshBaseline(t *testing
 
 type bootstrapTransactionFake struct {
 	pgx.Tx
-	versions   []string
-	legacy     map[string]bool
-	execErr    error
-	rowErr     error
-	commitErr  error
-	installed  bool
-	objects    int
-	statements []string
-	committed  bool
+	versions             []string
+	legacy               map[string]bool
+	execErr              error
+	rowErr               error
+	commitErr            error
+	installed            bool
+	objects              int
+	statements           []string
+	committed            bool
+	missingDatedContract bool
 }
 
 func (t *bootstrapTransactionFake) Exec(_ context.Context, statement string, args ...any) (pgconn.CommandTag, error) {
@@ -140,9 +141,12 @@ func (t *bootstrapTransactionFake) Exec(_ context.Context, statement string, arg
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
-func (t *bootstrapTransactionFake) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+func (t *bootstrapTransactionFake) QueryRow(_ context.Context, statement string, args ...any) pgx.Row {
 	if t.rowErr != nil {
 		return bootstrapRow{err: t.rowErr}
+	}
+	if strings.Contains(statement, "dated participation postcondition") {
+		return bootstrapRow{exists: !t.missingDatedContract}
 	}
 	if len(args) == 1 {
 		if table, ok := args[0].(string); ok && strings.HasPrefix(table, "public.") {
@@ -348,6 +352,14 @@ func TestApplyBaselineCoversTransactionAndInstalledMigrationOutcomes(t *testing.
 				t.Fatalf("error=%v want=%q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestApplyBaselineRejectsRecordedMarkerWithoutDatedContract(t *testing.T) {
+	tx := &bootstrapTransactionFake{installed: true, missingDatedContract: true}
+	err := ApplyBaseline(t.Context(), bootstrapConnectionFake{tx: tx})
+	if err == nil || !strings.Contains(err.Error(), "dated participation postcondition missing") || tx.committed {
+		t.Fatalf("error=%v committed=%v", err, tx.committed)
 	}
 }
 
@@ -834,10 +846,39 @@ func TestPrivacyAutomationRetirementMigrationMatchesBaseline(t *testing.T) {
 	if index < 0 {
 		t.Fatal("privacy automation retirement baseline segment is missing")
 	}
-	segment := strings.TrimSpace(baselineSchema[index:])
+	const nextMarker = "-- Manual, externally approved classification-only full deletion."
+	nextIndex := strings.LastIndex(baselineSchema, nextMarker)
+	if nextIndex <= index {
+		t.Fatal("manual classification erasure baseline segment is missing")
+	}
+	segment := strings.TrimSpace(baselineSchema[index:nextIndex])
 	segment = strings.TrimSpace(strings.TrimPrefix(segment, marker))
 	if segment != strings.TrimSpace(string(migration)) {
 		t.Fatal("privacy automation retirement migration is not an exact baseline segment")
+	}
+}
+
+func TestManualClassificationErasureMigrationMatchesBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202610010001_manual_classification_erasure.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "-- Manual, externally approved classification-only full deletion."
+	index := strings.LastIndex(baselineSchema, marker)
+	nextIndex := strings.LastIndex(baselineSchema, "-- Guardian invitations expire after exactly 720 elapsed hours, including DST.")
+	if index < 0 || nextIndex <= index || strings.TrimSpace(baselineSchema[index:nextIndex]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("manual classification erasure migration is not an exact baseline segment")
+	}
+}
+
+func TestGuardianInvitationFixedDurationMigrationMatchesBaseline(t *testing.T) {
+	migration, err := migrationFiles.ReadFile("migrations/202610010002_guardian_invitation_fixed_duration.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := strings.LastIndex(baselineSchema, "-- Guardian invitations expire after exactly 720 elapsed hours, including DST.")
+	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
+		t.Fatal("fixed duration migration is not an exact baseline segment")
 	}
 }
 

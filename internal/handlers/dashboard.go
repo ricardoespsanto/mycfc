@@ -1242,6 +1242,9 @@ func dashboardNavigation(user CurrentUser) []components.NavigationGroup {
 	if user.IsAdmin || user.CanManageEvents {
 		coordination = append(coordination, components.NavigationItem{Label: "Gerir eventos", Path: "/admin/eventos"}, components.NavigationItem{Label: "Planear treinos", Path: "/admin/treinos"}, components.NavigationItem{Label: "Gerir avisos", Path: "/admin/avisos"})
 	}
+	if user.IsAdmin || len(user.CoachProgrammeIDs) > 0 {
+		coordination = append(coordination, components.NavigationItem{Label: "Classificação", Path: "/equipa/classificacao"})
+	}
 	var moderation []components.NavigationItem
 	if user.IsAdmin || user.CanModerateContent {
 		moderation = append(moderation, components.NavigationItem{Label: "Gerir álbuns", Path: "/admin/albuns"})
