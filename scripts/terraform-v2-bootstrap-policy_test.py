@@ -147,6 +147,19 @@ class BootstrapPolicyTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             policy.validate("secret", plan)
 
+    def test_version_stage_known_elements_from_provider_plan(self):
+        # AWS provider 6.56.0 represents a known list element as [false]
+        # in after_unknown; the list itself is truthy in Python.
+        plan = phase_a()
+        version = plan["resource_changes"][3]["change"]
+        version["after_unknown"] = {"version_stages": [False]}
+        policy.validate("secret", plan)
+        for unknown in ([True], [False, True], True, [0], {"0": False}):
+            with self.subTest(unknown=unknown):
+                version["after_unknown"]["version_stages"] = unknown
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+
     def test_residual_ignores_only_phase_targets(self):
         manifest = json.loads(source.with_name("terraform-v2-bootstrap-residual.json").read_text())
         baseline = [change(address, actions) for address, actions in manifest["actions"]]
