@@ -230,7 +230,11 @@ def validate(phase: str, plan: dict) -> None:
             fail("v2 secret name prefix is not allowed")
         version_after = version["change"].get("after", {})
         version_unknown = version["change"].get("after_unknown", {})
-        if version_unknown.get("version_stages") or version_after.get("version_stages") != ["AWSCURRENT"]:
+        stages_unknown = version_unknown.get("version_stages", False)
+        stages_known = (stages_unknown is False or
+                        (type(stages_unknown) is list and len(stages_unknown) == 1
+                         and stages_unknown[0] is False))
+        if not stages_known or version_after.get("version_stages") != ["AWSCURRENT"]:
             fail("v2 secret version must be AWSCURRENT only")
         for attribute in ("secret_binary", "secret_string_wo", "secret_string_wo_version"):
             if version_unknown.get(attribute) or version_after.get(attribute) not in (None, ""):
