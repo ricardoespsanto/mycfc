@@ -161,7 +161,7 @@ jobs:
             echo "### Approved external resource actions"
             jq -r '.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"]) | "- `\(.address)`: `\(.change.actions | join(" → "))`"' "$TF_ROOT/production.tfplan.json"
             echo
-            echo "Phase secret also requires two exact no-op legacy secret state-lineage moves. No full residual plan or secret values are printed or uploaded."
+            echo "Phase secret requires either both exact no-op legacy secret state-lineage moves or both already-completed, identity-preserving legacy no-op addresses. Partial lineage is rejected. No full residual plan or secret values are printed or uploaded."
             echo
             echo "### Read-only un-targeted residual address/actions (not approved for apply)"
             python3 scripts/terraform-v2-bootstrap-policy.py residual-list "$REQUESTED_PHASE" "$TF_ROOT/residual.tfplan.json"
