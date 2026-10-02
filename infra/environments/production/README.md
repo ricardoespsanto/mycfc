@@ -28,6 +28,12 @@ The media-cleanup IAM user is the sole privacy-adjacent object-maintenance ident
 
 The operations observer is required by the protected production deployment workflow even though the module remains inert by default for test and bootstrap safety. Both protected Terraform plan and apply environments must explicitly keep `operations_observer_enabled=true` with the exact GitHub OIDC provider ARN. Terraform prevents accidental destruction after provisioning. The role creates no access key or IAM user and trusts only exact IAM Identity Center permission-set role ARNs (with MFA enforced in Identity Center) and/or the protected GitHub production-environment OIDC subject. A matching permissions boundary and inline policy allow deployment-log, ECR inventory, and alarm reads while denying secret, Parameter Store, state-bucket, ECR/log mutation, and role-chaining access. Configure the resulting role ARN as the protected `AWS_OPERATIONS_OBSERVER_ROLE_ARN` repository environment variable; never install it on the Hetzner host.
 
+## One-time v2 secret bootstrap recovery
+
+The separate `One-time production v2 secret bootstrap` workflow runs the `secret` phase before a separately approved `host-policy` phase. The secret phase permits only creation of the v2 container and its AWSCURRENT version, plus either both reviewed no-op moves from `runtime` to `legacy_runtime` or both already-completed managed legacy no-op addresses. A failed CreateSecret can commit the state moves even though neither v2 resource exists. Before retrying, inspect metadata-only state/resource identity and creation outcome; do not roll back state addresses or retry the old saved plan.
+
+The completed-lineage path requires known, identical before/after legacy values, the exact `/mycfc/production/app-secrets` container identity, and its matching existing version identity. Missing/partial moves, old runtime addresses, duplicate/conflicting mappings, imports, unknown values and legacy mutations fail closed. This is not recovery for a partially created v2 container or version: both v2 creates remain mandatory. Dispatch a new run against current signed, CI-green `main` to regenerate the plan and obtain separate production approval. The fixed target list (including old and new lineage addresses), target-manifest HMAC, semantic HMAC, legacy-to-v2 continuity checks, drift rejection and reviewed residual inventory are unchanged; the full residual plan is never applied.
+
 ## Amazon SES provisioning
 
 SES is provisioned in `eu-west-1` for the production `domain_name`. Terraform creates:

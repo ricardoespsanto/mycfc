@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -76,9 +77,116 @@ def phase_b():
     return {"resource_changes": [host, old, new]}
 
 
+def phase_a_resumed():
+    plan = phase_a()
+    arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:/mycfc/production/app-secrets-Ab12Cd"
+    version_id = "11111111-2222-3333-4444-555555555555"
+    identities = [
+        {"name": "/mycfc/production/app-secrets", "arn": arn, "id": arn},
+        {"secret_id": arn, "version_id": version_id, "id": f"{arn}|{version_id}",
+         "secret_string": "legacy-fixture-do-not-log", "version_stages": ["AWSCURRENT"]},
+    ]
+    for resource, identity in zip(plan["resource_changes"], identities):
+        resource.pop("previous_address")
+        resource["change"].update(before=identity.copy(), after=identity.copy())
+    return plan
+
+
 class BootstrapPolicyTest(unittest.TestCase):
     def test_phase_a_requires_two_creates_and_both_noop_moves(self):
         policy.validate("secret", phase_a())
+
+    def test_phase_a_resumes_after_both_lineage_moves_committed(self):
+        policy.validate("secret", phase_a_resumed())
+
+    def test_resume_rejects_partial_or_missing_lineage(self):
+        for index in (0, 1):
+            for partial_move in (True, False):
+                with self.subTest(index=index, partial_move=partial_move):
+                    plan = phase_a_resumed()
+                    if partial_move:
+                        resource = plan["resource_changes"][index]
+                        resource["previous_address"] = policy.MOVES[resource["address"]]
+                    else:
+                        plan["resource_changes"].pop(index)
+                    with self.assertRaises(SystemExit):
+                        policy.validate("secret", plan)
+
+    def test_resume_rejects_old_duplicate_or_conflicting_lineage(self):
+        for index in (0, 1):
+            for conflict in ("old", "duplicate", "previous", "data"):
+                with self.subTest(index=index, conflict=conflict):
+                    plan = phase_a_resumed()
+                    resource = plan["resource_changes"][index]
+                    if conflict == "old":
+                        plan["resource_changes"].append(change(policy.MOVES[resource["address"]], ["no-op"]))
+                    elif conflict == "duplicate":
+                        plan["resource_changes"].append(resource.copy())
+                    elif conflict == "previous":
+                        resource["previous_address"] = "aws_secretsmanager_secret.other"
+                    else:
+                        resource["mode"] = "data"
+                    with self.assertRaises(SystemExit):
+                        policy.validate("secret", plan)
+
+    def test_resume_rejects_legacy_mutation_or_import(self):
+        for index in (0, 1):
+            for actions in (["update"], ["delete"], ["delete", "create"], ["create"], ["read"], ["forget"]):
+                with self.subTest(index=index, actions=actions):
+                    plan = phase_a_resumed()
+                    plan["resource_changes"][index]["change"]["actions"] = actions
+                    with self.assertRaises(SystemExit):
+                        policy.validate("secret", plan)
+            plan = phase_a_resumed()
+            plan["resource_changes"][index]["change"]["importing"] = {"id": "fixture"}
+            with self.assertRaises(SystemExit):
+                policy.validate("secret", plan)
+
+    def test_resume_rejects_missing_changed_or_unknown_legacy_values_privately(self):
+        for index in (0, 1):
+            for invalid in ("before", "after", "changed", "unknown", "nested-unknown"):
+                with self.subTest(index=index, invalid=invalid):
+                    plan = phase_a_resumed()
+                    legacy = plan["resource_changes"][index]["change"]
+                    if invalid in ("before", "after"):
+                        legacy.pop(invalid)
+                    elif invalid == "changed":
+                        legacy["after"]["secret_string"] = "changed-do-not-log"
+                    else:
+                        legacy["after_unknown"] = {"identity": True if invalid == "unknown" else [False, True]}
+                    with self.assertRaises(SystemExit) as caught:
+                        policy.validate("secret", plan)
+                    for private in ("legacy-fixture-do-not-log", "changed-do-not-log", "Ab12Cd"):
+                        self.assertNotIn(private, str(caught.exception))
+
+    def test_resume_rejects_wrong_legacy_identity_even_when_unchanged(self):
+        for index, field, value in (
+            (0, "name", "/mycfc/production/app-runtime-secrets-v2"),
+            (0, "arn", "arn:aws:secretsmanager:eu-west-1:123456789012:secret:/mycfc/production/other-Ab12Cd"),
+            (0, "id", "different-container"),
+            (1, "secret_id", "different-container"),
+            (1, "version_id", ""),
+            (1, "id", "different-version"),
+        ):
+            with self.subTest(index=index, field=field):
+                plan = phase_a_resumed()
+                for side in ("before", "after"):
+                    plan["resource_changes"][index]["change"][side][field] = value
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+
+    def test_resume_accepts_provider_known_false_trees(self):
+        plan = phase_a_resumed()
+        for resource in plan["resource_changes"][:2]:
+            resource["change"]["after_unknown"] = {"id": False, "version_stages": [False], "tags": {}}
+        policy.validate("secret", plan)
+
+    def test_resume_still_requires_exact_two_v2_creates(self):
+        for index in (2, 3):
+            plan = phase_a_resumed()
+            plan["resource_changes"][index]["change"]["actions"] = ["no-op"]
+            with self.assertRaises(SystemExit):
+                policy.validate("secret", plan)
 
     def test_phase_b_requires_only_host_policy_update(self):
         policy.validate("host-policy", phase_b())
@@ -263,6 +371,15 @@ class BootstrapPolicyTest(unittest.TestCase):
                 policy.manifest_hmac("secret", policy.PHASE_TARGETS["host-policy"])
             self.assertNotEqual(digest, policy.manifest_hmac(
                 "host-policy", policy.PHASE_TARGETS["host-policy"]))
+
+    def test_workflow_plan_and_apply_keep_fixed_lineage_targets(self):
+        workflow = source.parent.parent / ".github/workflows/terraform-production-v2-bootstrap.yml"
+        text = workflow.read_text(encoding="utf-8")
+        blocks = re.findall(r"targets=\((.*?)\)", text, re.DOTALL)
+        self.assertEqual([block.split() for block in blocks], [
+            policy.PHASE_TARGETS["secret"], policy.PHASE_TARGETS["host-policy"],
+            policy.PHASE_TARGETS["secret"], policy.PHASE_TARGETS["host-policy"],
+        ])
 
     def test_v2_field_inventory_is_exact(self):
         policy.validate_secret_values(json.dumps({key: "fixture" for key in policy.SECRET_FIELDS}))

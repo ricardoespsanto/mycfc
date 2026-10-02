@@ -149,6 +149,7 @@ def validate(phase: str, plan: dict) -> None:
     expected = PHASE_CHANGES[phase]
     changed = {}
     seen_moves = {}
+    legacy = {}
     for resource in plan.get("resource_changes", []):
         if not isinstance(resource, dict):
             fail("invalid resource change")
@@ -161,6 +162,13 @@ def validate(phase: str, plan: dict) -> None:
         actions = change.get("actions")
         if not isinstance(actions, list):
             fail(f"invalid actions: {address}")
+        if phase == "secret":
+            if address in MOVES.values():
+                fail(f"old runtime address is still present: {address}")
+            if address in MOVES:
+                if address in legacy or resource.get("mode") != "managed":
+                    fail(f"duplicate or invalid legacy resource: {address}")
+                legacy[address] = change
         previous = resource.get("previous_address")
         if previous is not None:
             if phase != "secret" or MOVES.get(address) != previous:
@@ -185,8 +193,40 @@ def validate(phase: str, plan: dict) -> None:
         changed[address] = actions
     if changed != expected:
         fail(f"changed addresses/actions differ from the fixed {phase} manifest")
-    if phase == "secret" and seen_moves != MOVES:
-        fail("both exact no-op legacy secret state moves are required")
+    if phase == "secret":
+        if set(legacy) != set(MOVES) or (seen_moves and seen_moves != MOVES):
+            fail("both exact no-op legacy moves or both completed legacy addresses are required")
+        if not seen_moves:
+            # A failed CreateSecret can persist both lineage moves. Resume only
+            # from the same known legacy container/version, without a provider
+            # mutation, import, duplicate, old address or partial move.
+            def known(value):
+                if isinstance(value, dict):
+                    return all(known(item) for item in value.values())
+                if isinstance(value, list):
+                    return all(known(item) for item in value)
+                return value is False
+
+            for address, change in legacy.items():
+                legacy_before, legacy_after = change.get("before"), change.get("after")
+                if (not isinstance(legacy_before, dict) or not legacy_before
+                        or legacy_before != legacy_after
+                        or not known(change.get("after_unknown", {}))):
+                    fail(f"completed legacy identity must be known and unchanged: {address}")
+            container = legacy["aws_secretsmanager_secret.legacy_runtime"]["after"]
+            version = legacy["aws_secretsmanager_secret_version.legacy_runtime"]["after"]
+            arn = container.get("arn")
+            if (container.get("name") != "/mycfc/production/app-secrets"
+                    or not isinstance(arn, str)
+                    or not re.fullmatch(r"arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:"
+                                        r"/mycfc/production/app-secrets-[A-Za-z0-9]{6}", arn)
+                    or container.get("id") != arn):
+                fail("completed legacy container identity differs from exact legacy secret")
+            version_id = version.get("version_id")
+            if (version.get("secret_id") != arn
+                    or not isinstance(version_id, str) or not version_id
+                    or version.get("id") != f"{arn}|{version_id}"):
+                fail("completed legacy version identity must remain bound to legacy container")
     if phase == "host-policy" and seen_moves:
         fail("legacy state moves must have completed in phase A")
     if phase == "secret":

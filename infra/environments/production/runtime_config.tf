@@ -120,7 +120,8 @@ resource "aws_secretsmanager_secret_version" "legacy_runtime" {
 
 # Preserve the old secret and version as managed state during the one-time
 # targeted v2 bootstrap. The protected bootstrap policy accepts only these
-# exact no-op lineage moves, never an old-secret provider update.
+# exact no-op lineage moves or their already-completed legacy no-op addresses,
+# never an old-secret provider update.
 moved {
   from = aws_secretsmanager_secret.runtime
   to   = aws_secretsmanager_secret.legacy_runtime
