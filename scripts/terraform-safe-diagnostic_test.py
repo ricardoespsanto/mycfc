@@ -22,14 +22,16 @@ class SafeDiagnosticTest(unittest.TestCase):
     def test_never_prints_raw_diagnostic_even_on_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'diagnostic.log'
-            for raw in (b'Error: AccessDenied for private-person@example.com',
-                        b'Error: unique secret-token-plaintext private-person@example.com'):
-                path.write_bytes(raw)
-                output = subprocess.check_output([sys.executable, str(source), str(path), '1'], text=True)
-                self.assertNotIn('private-person@example.com', output)
-                self.assertNotIn('secret-token-plaintext', output)
-                self.assertNotIn('Error: ', output)
-                self.assertEqual(len(output.splitlines()), 1)
+            for stage in ('init', 'full-plan'):
+                for raw in (b'Error: AccessDenied for private-person@example.com',
+                            b'Error: unique secret-token-plaintext private-person@example.com'):
+                    path.write_bytes(raw)
+                    output = subprocess.check_output([sys.executable, str(source), str(path), stage, '1'], text=True)
+                    self.assertIn(f'stage={stage}', output)
+                    self.assertNotIn('private-person@example.com', output)
+                    self.assertNotIn('secret-token-plaintext', output)
+                    self.assertNotIn('Error: ', output)
+                    self.assertEqual(len(output.splitlines()), 1)
 
     def test_workflow_cannot_apply_and_erases_capture(self):
         text = (source.parent.parent / '.github/workflows/terraform-production-v2-diagnostic.yml').read_text()
@@ -39,8 +41,12 @@ class SafeDiagnosticTest(unittest.TestCase):
         self.assertNotIn('upload-artifact', text)
         self.assertIn('umask 077', text)
         self.assertIn('mktemp "${RUNNER_TEMP:?}/v2-full-plan.XXXXXXXX"', text)
-        self.assertIn('rm -f "$TF_ROOT/residual.tfplan" "$diagnostic_log"', text)
-        self.assertIn('scripts/terraform-safe-diagnostic.py "$diagnostic_log" "$status"', text)
+        self.assertIn('rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"; terraform_stack_cleanup', text)
+        self.assertIn('tf init -input=false', text)
+        self.assertIn('> "$diagnostic_log" 2>&1; then', text)
+        self.assertIn(': > "$diagnostic_log"', text)
+        self.assertIn('scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status"', text)
+        self.assertIn('scripts/terraform-safe-diagnostic.py "$diagnostic_log" full-plan "$status"', text)
         self.assertIn('tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan', text)
         self.assertIn('exit "$status"', text)
 

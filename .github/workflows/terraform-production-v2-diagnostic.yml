@@ -79,13 +79,19 @@ jobs:
           source scripts/terraform-stack.sh
           terraform_stack_select "$REQUESTED_STACK"
           diagnostic_log=$(mktemp "${RUNNER_TEMP:?}/v2-full-plan.XXXXXXXX")
-          trap 'terraform_stack_cleanup; rm -f "$TF_ROOT/residual.tfplan" "$diagnostic_log"' EXIT
+          trap 'rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"; terraform_stack_cleanup' EXIT
           terraform_stack_prepare
-          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
+          if tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" > "$diagnostic_log" 2>&1; then
+            : > "$diagnostic_log"
+          else
+            status=$?
+            python3 scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status"
+            exit "$status"
+          fi
           if tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan > "$diagnostic_log" 2>&1; then
             echo 'Read-only full residual Terraform plan succeeded. No plan or diagnostic content is printed or uploaded; no apply exists in this workflow.' >> "$GITHUB_STEP_SUMMARY"
           else
             status=$?
-            python3 scripts/terraform-safe-diagnostic.py "$diagnostic_log" "$status"
+            python3 scripts/terraform-safe-diagnostic.py "$diagnostic_log" full-plan "$status"
             exit "$status"
           fi

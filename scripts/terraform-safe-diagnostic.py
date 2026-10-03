@@ -31,7 +31,7 @@ def categorize(content: bytes) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 3 or not sys.argv[2].isdigit() or not 1 <= int(sys.argv[2]) <= 255:
+    if len(sys.argv) != 4 or sys.argv[2] not in {"init", "full-plan"} or not sys.argv[3].isdigit() or not 1 <= int(sys.argv[3]) <= 255:
         return 2
     path = Path(sys.argv[1])
     if not path.is_file():
@@ -40,7 +40,7 @@ def main() -> int:
     with path.open("rb") as source:
         content = source.read(MAX_BYTES + 1)
     label = categorize(content)
-    print(f"::error::Protected full residual plan failed; category={label}; terraform_exit={sys.argv[2]}. No raw diagnostics were printed or retained.")
+    print(f"::error::Protected Terraform stage={sys.argv[2]} failed; heuristic_category={label}; terraform_exit={sys.argv[3]}. No raw diagnostics were printed or retained.")
     return 0
 
 
