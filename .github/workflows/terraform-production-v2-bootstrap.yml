@@ -97,7 +97,7 @@ jobs:
           trap 'terraform_stack_cleanup; rm -f "$TF_ROOT/residual.tfplan" "$TF_ROOT/residual.tfplan.json"' EXIT
           terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual plan failed; inspect protected runner diagnostics.' >&2
             exit 1
           fi
@@ -132,7 +132,7 @@ jobs:
             *) exit 1 ;;
           esac
           manifest_hmac=$(python3 scripts/terraform-v2-bootstrap-policy.py manifest-hmac "$REQUESTED_PHASE" "${targets[@]}")
-          if ! tf plan -input=false -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Exact targeted plan failed; no apply was attempted.' >&2
             exit 1
           fi
@@ -230,7 +230,7 @@ jobs:
           trap 'terraform_stack_cleanup; rm -f "$TF_ROOT/residual.tfplan" "$TF_ROOT/residual.tfplan.json" "$TF_ROOT/after.tfplan" "$TF_ROOT/after.tfplan.json"' EXIT
           terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual plan failed; no apply was attempted.' >&2
             exit 1
           fi
@@ -251,7 +251,7 @@ jobs:
             *) exit 1 ;;
           esac
           test "$EXPECTED_MANIFEST_HMAC" = "$(python3 scripts/terraform-v2-bootstrap-policy.py manifest-hmac "$REQUESTED_PHASE" "${targets[@]}")"
-          if ! tf plan -input=false -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Exact targeted plan failed; no apply was attempted.' >&2
             exit 1
           fi
@@ -275,7 +275,7 @@ jobs:
             # values are read; even unlabeled/deprecated versions must be absent.
             python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"
           fi
-          if ! tf apply -input=false -lock-timeout=5m -auto-approve production.tfplan >/dev/null 2>&1; then
+          if ! tf apply -input=false -parallelism=1 -lock-timeout=5m -auto-approve production.tfplan >/dev/null 2>&1; then
             echo '::error::Targeted saved-plan apply failed; inspect production state before retry.' >&2
             exit 1
           fi
@@ -285,13 +285,13 @@ jobs:
               --query SecretString --output text --no-cli-pager |
               python3 scripts/terraform-v2-bootstrap-policy.py live-secret-keys
           fi
-          if ! tf plan -input=false -lock-timeout=5m -out=after.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=after.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Targeted post-apply verification plan failed.' >&2
             exit 1
           fi
           tf show -json after.tfplan > "$TF_ROOT/after.tfplan.json"
           jq -e '[.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"])] | length == 0' "$TF_ROOT/after.tfplan.json" >/dev/null
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual post-plan failed.' >&2
             exit 1
           fi
