@@ -92,7 +92,168 @@ def phase_a_resumed():
     return plan
 
 
+def phase_a_empty_container():
+    plan = phase_a_resumed()
+    container = plan["resource_changes"][2]["change"]
+    identity = container["after"] | {
+        "arn": "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n",
+        "id": "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n",
+    }
+    container.update(actions=["no-op"], before=identity.copy(), after=identity.copy())
+    plan["resource_changes"][3]["change"].update(before=None)
+    plan["resource_changes"][3]["change"]["after"]["secret_id"] = identity["id"]
+    return plan
+
+
 class BootstrapPolicyTest(unittest.TestCase):
+    def test_resume_empty_managed_v2_container_creates_only_version(self):
+        policy.validate("secret", phase_a_empty_container())
+
+    def test_empty_container_metadata_preflight_requires_complete_empty_inventory(self):
+        from types import SimpleNamespace
+        response = {"ARN": policy.V2_RECOVERY_ARN, "Name": policy.V2_NAME, "Versions": []}
+        with patch.object(policy.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(response))) as run:
+            policy.preflight_empty(phase_a_empty_container())
+        self.assertEqual(run.call_args.args[0], [
+            "aws", "secretsmanager", "list-secret-version-ids", "--secret-id", policy.V2_RECOVERY_ARN,
+            "--include-deprecated", "--no-paginate", "--output", "json", "--no-cli-pager",
+        ])
+        for invalid in (response | {"Versions": [{"VersionId": "private-version", "VersionStages": []}]},
+                        response | {"NextToken": "private-token"}, response | {"ARN": "other"},
+                        response | {"Name": "other"}, {"Versions": []}, response | {"Versions": None}):
+            with self.subTest(invalid=invalid), patch.object(policy.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(invalid))):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.preflight_empty(phase_a_empty_container())
+                self.assertNotIn("private-", str(caught.exception))
+
+    def test_empty_container_preflight_fails_closed_on_aws_or_json_failure(self):
+        from types import SimpleNamespace
+        for result in (SimpleNamespace(returncode=1, stdout="private-error"),
+                       SimpleNamespace(returncode=0, stdout="private-invalid-json"),
+                       SimpleNamespace(returncode=0, stdout="[]")):
+            with patch.object(policy.subprocess, "run", return_value=result):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.preflight_empty(phase_a_empty_container())
+                self.assertNotIn("private-", str(caught.exception))
+        with patch.object(policy.subprocess, "run", side_effect=OSError("private-os-error")):
+            with self.assertRaises(SystemExit):
+                policy.preflight_empty(phase_a_empty_container())
+
+    def test_empty_container_preflight_validates_plan_before_any_aws_read(self):
+        plan = phase_a_empty_container()
+        plan["resource_changes"][3]["change"]["actions"] = ["update"]
+        with patch.object(policy.subprocess, "run") as run:
+            with self.assertRaises(SystemExit):
+                policy.preflight_empty(plan)
+            run.assert_not_called()
+        with patch.object(policy.subprocess, "run") as run:
+            policy.preflight_empty(phase_a())
+            run.assert_not_called()
+
+    def test_empty_container_rejects_unknown_mutation_import_taint_and_wrong_identity(self):
+        for invalid in ("before", "after", "unknown", "mutation", "import", "taint", "duplicate", "name", "arn", "id"):
+            with self.subTest(invalid=invalid):
+                plan = phase_a_empty_container()
+                resource = plan["resource_changes"][2]
+                item = resource["change"]
+                if invalid in ("before", "after"):
+                    item.pop(invalid)
+                elif invalid == "unknown":
+                    item["after_unknown"] = {"tags": {"private-tag": True}}
+                elif invalid == "mutation":
+                    item["after"]["description"] = "private-mutation"
+                elif invalid == "import":
+                    item["importing"] = {"id": policy.V2_RECOVERY_ARN}
+                elif invalid == "taint":
+                    resource["action_reason"] = "replace_because_tainted"
+                elif invalid == "duplicate":
+                    plan["resource_changes"].append(resource.copy())
+                else:
+                    for side in ("before", "after"):
+                        item[side][invalid] = "private-wrong-identity"
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", plan)
+                self.assertNotIn("private-", str(caught.exception))
+
+    def test_empty_container_rejects_existing_or_unbound_version_and_extra_actions(self):
+        for invalid in ("before", "secret_id", "unknown", "no-op", "update", "replace", "extra"):
+            with self.subTest(invalid=invalid):
+                plan = phase_a_empty_container()
+                version = plan["resource_changes"][3]["change"]
+                if invalid == "before":
+                    version["before"] = {"version_id": "existing-private"}
+                elif invalid == "secret_id":
+                    version["after"]["secret_id"] = "other"
+                elif invalid == "unknown":
+                    version["after_unknown"] = {"secret_id": True}
+                elif invalid == "extra":
+                    plan["resource_changes"].append(change("aws_iam_user_policy.other", ["update"]))
+                else:
+                    version["actions"] = ["delete", "create"] if invalid == "replace" else [invalid]
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+
+    def test_empty_container_requires_completed_legacy_lineage(self):
+        plan = phase_a_empty_container()
+        for resource in plan["resource_changes"][:2]:
+            resource["previous_address"] = policy.MOVES[resource["address"]]
+        with self.assertRaises(SystemExit):
+            policy.validate("secret", plan)
+
+    def test_empty_metadata_cli_rejects_live_version_without_disclosing_response(self):
+        import os
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            aws = root / "aws"
+            aws.write_text('#!/usr/bin/env python3\nimport os, sys\nsys.stdout.write(os.environ["FIXTURE_METADATA"])\n', encoding="utf-8")
+            aws.chmod(0o700)
+            plan = phase_a_empty_container() | {
+                "format_version": "1.2", "errored": False, "complete": False, "applyable": True,
+            }
+            path = root / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            metadata = {"ARN": policy.V2_RECOVERY_ARN, "Name": policy.V2_NAME, "Versions": []}
+            env = os.environ | {"PATH": f"{directory}:{os.environ['PATH']}", "FIXTURE_METADATA": json.dumps(metadata)}
+            command = [sys.executable, str(source), "preflight-empty", "secret", str(path)]
+            success = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            self.assertIn("complete empty version inventory verified", success.stdout)
+            metadata["Versions"] = [{"VersionId": "private-unlabeled-version", "VersionStages": []}]
+            env["FIXTURE_METADATA"] = json.dumps(metadata)
+            denied = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertEqual(denied.stdout, "")
+            self.assertNotIn("private-unlabeled-version", denied.stderr)
+            self.assertNotIn(policy.V2_RECOVERY_ARN, success.stdout + denied.stderr)
+
+    def test_empty_container_keeps_version_contract_and_configuration_binding(self):
+        for invalid in ("stages", "fields", "references", "value-unknown", "kms"):
+            with self.subTest(invalid=invalid):
+                plan = phase_a_empty_container()
+                version = plan["resource_changes"][3]["change"]
+                if invalid == "stages":
+                    version["after"]["version_stages"] = ["AWSCURRENT", "AWSPREVIOUS"]
+                elif invalid == "fields":
+                    version["after"]["secret_string"] = json.dumps({"APP_DB_PASSWORD": "fixture"})
+                elif invalid == "references":
+                    plan["configuration"]["root_module"]["resources"][0]["expressions"]["secret_id"]["references"] = [
+                        "aws_secretsmanager_secret.legacy_runtime.id"]
+                elif invalid == "value-unknown":
+                    version["after_unknown"] = {"secret_string": True}
+                else:
+                    for side in ("before", "after"):
+                        plan["resource_changes"][2]["change"][side]["kms_key_id"] = "other"
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+        plan = phase_a_empty_container()
+        plan["resource_changes"][2]["change"]["after_unknown"] = {"tags": {}, "arn": False}
+        plan["resource_changes"][3]["change"]["after_unknown"] = {"version_stages": [False]}
+        policy.validate("secret", plan)
+
     def test_phase_a_requires_two_creates_and_both_noop_moves(self):
         policy.validate("secret", phase_a())
 
@@ -380,6 +541,33 @@ class BootstrapPolicyTest(unittest.TestCase):
             policy.PHASE_TARGETS["secret"], policy.PHASE_TARGETS["host-policy"],
             policy.PHASE_TARGETS["secret"], policy.PHASE_TARGETS["host-policy"],
         ])
+
+    def test_workflow_checks_empty_metadata_in_both_protected_jobs_before_apply(self):
+        text = (source.parent.parent / ".github/workflows/terraform-production-v2-bootstrap.yml").read_text()
+        plan_job, apply_job = text.split("\n  apply:", 1)
+        command = 'python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"'
+        for job in (plan_job, apply_job):
+            self.assertEqual(job.count(command), 1)
+            self.assertIn('if [[ "$REQUESTED_PHASE" == secret ]]; then', job[:job.index(command)])
+            self.assertLess(job.index('terraform-v2-bootstrap-policy.py validate'), job.index(command))
+        self.assertLess(plan_job.index(command), plan_job.index('>> "$GITHUB_OUTPUT"'))
+        self.assertLess(apply_job.index('test "$EXPECTED_SEMANTIC_HMAC"'), apply_job.index(command))
+        self.assertLess(apply_job.index(command), apply_job.index('if ! tf apply'))
+        self.assertIn('terraform-v2-bootstrap-inspect.py continuity "$TF_ROOT/production.tfplan.json"', apply_job)
+
+    def test_complete_residual_baseline_preserved_across_continuation_and_host_phase(self):
+        manifest = json.loads(source.with_name("terraform-v2-bootstrap-residual.json").read_text())
+        baseline = [change(address, actions) for address, actions in manifest["actions"]]
+        before = {"resource_changes": baseline + phase_a_empty_container()["resource_changes"]}
+        self.assertEqual(policy.residual("secret", before), policy.residual("secret", {"resource_changes": baseline}))
+        host_baseline = [item for item in baseline if item["address"] != "aws_iam_user_policy.host_runtime"]
+        host_before = {"resource_changes": host_baseline + phase_b()["resource_changes"]}
+        self.assertEqual(policy.residual("host-policy", host_before),
+                         policy.residual("host-policy", {"resource_changes": host_baseline}))
+        # A changed non-target v2 version in phase B is not silently excluded.
+        host_baseline.append(change(policy.V2_VERSION, ["update"]))
+        with self.assertRaises(SystemExit):
+            policy.residual("host-policy", {"resource_changes": host_baseline})
 
     def test_v2_field_inventory_is_exact(self):
         policy.validate_secret_values(json.dumps({key: "fixture" for key in policy.SECRET_FIELDS}))

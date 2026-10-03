@@ -138,6 +138,9 @@ jobs:
           fi
           tf show -json production.tfplan > "$TF_ROOT/production.tfplan.json"
           python3 scripts/terraform-v2-bootstrap-policy.py validate "$REQUESTED_PHASE" "$TF_ROOT/production.tfplan.json"
+          if [[ "$REQUESTED_PHASE" == secret ]]; then
+            python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"
+          fi
           tf show -no-color production.tfplan > "$TF_ROOT/production.tfplan.review.txt"
           review_sha=$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py "$TF_ROOT/production.tfplan.json")
@@ -161,7 +164,7 @@ jobs:
             echo "### Approved external resource actions"
             jq -r '.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"]) | "- `\(.address)`: `\(.change.actions | join(" → "))`"' "$TF_ROOT/production.tfplan.json"
             echo
-            echo "Phase secret requires either both exact no-op legacy secret state-lineage moves or both already-completed, identity-preserving legacy no-op addresses. Partial lineage is rejected. No full residual plan or secret values are printed or uploaded."
+            echo "Phase secret requires both exact no-op legacy moves or both completed identity-preserving legacy addresses, plus two v2 creates or the exact unchanged managed recovery container and version-only create. Recovery requires a complete empty version inventory in plan and again immediately before apply. Partial lineage is rejected. No full residual plan or secret values are printed or uploaded."
             echo
             echo "### Read-only un-targeted residual address/actions (not approved for apply)"
             python3 scripts/terraform-v2-bootstrap-policy.py residual-list "$REQUESTED_PHASE" "$TF_ROOT/residual.tfplan.json"
@@ -258,6 +261,20 @@ jobs:
           test "$EXPECTED_REVIEW_SHA" = "$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')"
           test "$EXPECTED_SEMANTIC_HMAC" = "$(python3 scripts/terraform-plan-hmac.py "$TF_ROOT/production.tfplan.json")"
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$REQUESTED_PHASE" == secret ]]; then
+            # Recheck live continuity after approval, without exposing values.
+            if ! aws secretsmanager get-secret-value \
+              --secret-id /mycfc/production/app-secrets --query SecretString \
+              --output text --no-cli-pager 2>/dev/null |
+              python3 scripts/terraform-v2-bootstrap-inspect.py continuity "$TF_ROOT/production.tfplan.json" |
+              tee -a "$GITHUB_STEP_SUMMARY"; then
+              echo '::error::Legacy-to-v2 continuity failed; no apply was attempted.' >&2
+              exit 1
+            fi
+            # Last read-only check before the saved-plan apply. No version
+            # values are read; even unlabeled/deprecated versions must be absent.
+            python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"
+          fi
           if ! tf apply -input=false -lock-timeout=5m -auto-approve production.tfplan >/dev/null 2>&1; then
             echo '::error::Targeted saved-plan apply failed; inspect production state before retry.' >&2
             exit 1
