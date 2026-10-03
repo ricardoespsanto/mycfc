@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,21 @@ MOVES = {
     "aws_secretsmanager_secret.legacy_runtime": "aws_secretsmanager_secret.runtime",
     "aws_secretsmanager_secret_version.legacy_runtime": "aws_secretsmanager_secret_version.runtime",
 }
+V2_CONTAINER = "aws_secretsmanager_secret.app_runtime"
+V2_VERSION = "aws_secretsmanager_secret_version.app_runtime"
+V2_NAME = "/mycfc/production/app-runtime-secrets-v2"
+# Exact metadata-only identity observed after the reviewed partial apply.
+V2_RECOVERY_ARN = "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n"
+
+
+def known(value):
+    if isinstance(value, dict):
+        return all(known(item) for item in value.values())
+    if isinstance(value, list):
+        return all(known(item) for item in value)
+    return value is False
+
+
 SECRET_FIELDS = {
     "APP_DB_PASSWORD", "CSRF_AUTH_KEY_B64", "EMAIL_VERIFICATION_HMAC_KEY_B64",
     "TURNSTILE_SECRET_KEY", "SMTP_USERNAME", "SMTP_PASSWORD",
@@ -150,6 +166,8 @@ def validate(phase: str, plan: dict) -> None:
     changed = {}
     seen_moves = {}
     legacy = {}
+    seen = set()
+    continuation = False
     for resource in plan.get("resource_changes", []):
         if not isinstance(resource, dict):
             fail("invalid resource change")
@@ -157,6 +175,23 @@ def validate(phase: str, plan: dict) -> None:
         change = resource.get("change")
         if not isinstance(address, str) or not isinstance(change, dict):
             fail("resource change lacks address or change")
+        if address in seen:
+            fail("duplicate resource address")
+        seen.add(address)
+        if phase == "secret" and address in (V2_CONTAINER, V2_VERSION):
+            if resource.get("mode") != "managed" or resource.get("action_reason") is not None:
+                fail("v2 resources must be managed and untainted")
+            if address == V2_VERSION and change.get("before") is not None:
+                fail("existing v2 version is forbidden")
+            if address == V2_CONTAINER and change.get("actions") == ["no-op"]:
+                before, after = change.get("before"), change.get("after")
+                if (not isinstance(before, dict) or not before or before != after
+                        or not known(change.get("after_unknown", {}))
+                        or before.get("name") != V2_NAME
+                        or before.get("id") != V2_RECOVERY_ARN
+                        or before.get("arn") != V2_RECOVERY_ARN):
+                    fail("managed v2 recovery container must be known, exact and unchanged")
+                continuation = True
         if change.get("importing") is not None:
             fail(f"import is forbidden: {address}")
         actions = change.get("actions")
@@ -191,6 +226,10 @@ def validate(phase: str, plan: dict) -> None:
         if address in changed:
             fail(f"duplicate changed address: {address}")
         changed[address] = actions
+    if continuation:
+        if seen_moves:
+            fail("v2 container continuation requires completed legacy lineage")
+        expected = {V2_VERSION: ["create"]}
     if changed != expected:
         fail(f"changed addresses/actions differ from the fixed {phase} manifest")
     if phase == "secret":
@@ -200,13 +239,6 @@ def validate(phase: str, plan: dict) -> None:
             # A failed CreateSecret can persist both lineage moves. Resume only
             # from the same known legacy container/version, without a provider
             # mutation, import, duplicate, old address or partial move.
-            def known(value):
-                if isinstance(value, dict):
-                    return all(known(item) for item in value.values())
-                if isinstance(value, list):
-                    return all(known(item) for item in value)
-                return value is False
-
             for address, change in legacy.items():
                 legacy_before, legacy_after = change.get("before"), change.get("after")
                 if (not isinstance(legacy_before, dict) or not legacy_before
@@ -270,6 +302,9 @@ def validate(phase: str, plan: dict) -> None:
             fail("v2 secret name prefix is not allowed")
         version_after = version["change"].get("after", {})
         version_unknown = version["change"].get("after_unknown", {})
+        if continuation and (version_after.get("secret_id") != V2_RECOVERY_ARN
+                             or version_unknown.get("secret_id", False) is not False):
+            fail("created v2 version must be known and bound to exact recovery container")
         stages_unknown = version_unknown.get("version_stages", False)
         stages_known = (stages_unknown is False or
                         (type(stages_unknown) is list and len(stages_unknown) == 1
@@ -331,6 +366,34 @@ def validate(phase: str, plan: dict) -> None:
             fail("host policy has unrelated changes")
 
 
+def preflight_empty(plan: dict) -> None:
+    # Validate the targeted shape before any metadata read. State contains no
+    # version yet, but only AWS's complete inventory proves live emptiness.
+    validate("secret", plan)
+    container = next(resource for resource in plan["resource_changes"]
+                     if resource["address"] == V2_CONTAINER)
+    if container["change"]["actions"] != ["no-op"]:
+        return
+    try:
+        result = subprocess.run([
+            "aws", "secretsmanager", "list-secret-version-ids", "--secret-id", V2_RECOVERY_ARN,
+            "--include-deprecated", "--no-paginate", "--output", "json", "--no-cli-pager",
+        ], capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        fail("v2 empty-version metadata preflight unavailable")
+    if result.returncode != 0:
+        fail("v2 empty-version metadata preflight unavailable")
+    try:
+        inventory = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        fail("v2 empty-version metadata inventory invalid")
+    if (not isinstance(inventory, dict) or inventory.get("ARN") != V2_RECOVERY_ARN
+            or inventory.get("Name") != V2_NAME or inventory.get("Versions") != []
+            or inventory.get("NextToken") not in (None, "")):
+        fail("v2 container must have a complete, exact, empty version inventory")
+    print("V2 recovery container metadata: complete empty version inventory verified.")
+
+
 def residual_entries(phase: str, plan: dict) -> list[tuple[str, list[str]]]:
     # The full, untargeted plan is intentionally NEVER applyable here. Compare
     # its non-target managed action/address inventory before and after each
@@ -367,6 +430,9 @@ def residual(phase: str, plan: dict) -> str:
 def main() -> None:
     if len(sys.argv) == 2 and sys.argv[1] == "live-secret-keys":
         validate_secret_values(sys.stdin.read())
+        return
+    if len(sys.argv) == 4 and sys.argv[1:3] == ["preflight-empty", "secret"]:
+        preflight_empty(load(sys.argv[3], targeted=True))
         return
     if len(sys.argv) >= 4 and sys.argv[1] == "manifest-hmac" and sys.argv[2] in PHASE_CHANGES:
         print(manifest_hmac(sys.argv[2], sys.argv[3:]))
