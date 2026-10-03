@@ -542,6 +542,14 @@ class BootstrapPolicyTest(unittest.TestCase):
             policy.PHASE_TARGETS["secret"], policy.PHASE_TARGETS["host-policy"],
         ])
 
+    def test_workflow_bounds_all_protected_terraform_plans_to_one_refresh(self):
+        text = (source.parent.parent / ".github/workflows/terraform-production-v2-bootstrap.yml").read_text()
+        commands = re.findall(r"\btf plan -input=false[^\n]+", text)
+        self.assertEqual(len(commands), 6)
+        for command in commands:
+            self.assertIn("-parallelism=1", command)
+        self.assertIn("tf apply -input=false -parallelism=1 -lock-timeout=5m -auto-approve production.tfplan", text)
+
     def test_workflow_checks_empty_metadata_in_both_protected_jobs_before_apply(self):
         text = (source.parent.parent / ".github/workflows/terraform-production-v2-bootstrap.yml").read_text()
         plan_job, apply_job = text.split("\n  apply:", 1)
