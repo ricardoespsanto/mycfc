@@ -57,7 +57,7 @@ jobs:
           test -n "$TF_BACKEND_BUCKET" || fail backend-bucket-configured
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-commit
-          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty" 2>/dev/null) || fail ci-read
+          ci_run=$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA") || fail green-main-ci
           test -n "$ci_run" || fail green-main-ci
       - name: Verify the protected source and diagnostic policy
         run: |
@@ -65,6 +65,7 @@ jobs:
           python3 scripts/terraform-v2-bootstrap-policy_test.py
           python3 scripts/terraform-v2-bootstrap-inspect_test.py
           python3 scripts/terraform-safe-diagnostic_test.py
+          python3 scripts/verify-exact-main-ci_test.py
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}

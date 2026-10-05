@@ -36,6 +36,9 @@ class SafeDiagnosticTest(unittest.TestCase):
     def test_workflow_cannot_apply_and_erases_capture(self):
         text = (source.parent.parent / '.github/workflows/terraform-production-v2-diagnostic.yml').read_text()
         self.assertIn('environment: production-plan', text)
+        self.assertIn('ci_run=$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")', text)
+        self.assertIn('test "$REQUESTED_SHA" = "$DISPATCH_SHA"', text)
+        self.assertIn('fail signed-commit', text)
         self.assertNotIn('environment: production\n', text)
         self.assertNotIn('tf apply', text)
         self.assertNotIn('upload-artifact', text)
