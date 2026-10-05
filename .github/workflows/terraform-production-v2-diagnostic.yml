@@ -1,0 +1,98 @@
+name: Protected production v2 full-plan diagnostic
+run-name: v2 full-plan diagnostic ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact signed and CI-green current main commit.
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: mycfc-production-infra
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_IMAGE: hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
+  REQUESTED_STACK: production
+  REQUESTED_SHA: ${{ inputs.sha }}
+  TF_IN_AUTOMATION: 'true'
+  TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    environment: production-plan
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_INFRA_PLAN_ROLE_ARN: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact current signed and CI-green main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Diagnostic preflight $1 failed" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
+          test "$DISPATCH_REF" = refs/heads/main || fail dispatch-ref
+          test "$REQUESTED_SHA" = "$DISPATCH_SHA" || fail dispatch-sha
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout-sha
+          test -n "$AWS_REGION" || fail aws-region-configured
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail plan-role-configured
+          test -n "$TF_BACKEND_BUCKET" || fail backend-bucket-configured
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-commit
+          ci_run=$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA") || fail green-main-ci
+          test -n "$ci_run" || fail green-main-ci
+      - name: Verify the protected source and diagnostic policy
+        run: |
+          make terraform-check
+          python3 scripts/terraform-v2-bootstrap-policy_test.py
+          python3 scripts/terraform-v2-bootstrap-inspect_test.py
+          python3 scripts/terraform-safe-diagnostic_test.py
+          python3 scripts/verify-exact-main-ci_test.py
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Diagnose read-only full residual plan without exposing output
+        env:
+          STACK_TF_VARS: ${{ secrets.TF_VARS }}
+          STACK_PROVIDER_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          diagnostic_log=$(mktemp "${RUNNER_TEMP:?}/v2-full-plan.XXXXXXXX")
+          trap 'rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"; terraform_stack_cleanup' EXIT
+          terraform_stack_prepare
+          if tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" > "$diagnostic_log" 2>&1; then
+            : > "$diagnostic_log"
+          else
+            status=$?
+            python3 scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status"
+            exit "$status"
+          fi
+          if tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan > "$diagnostic_log" 2>&1; then
+            echo 'Read-only full residual Terraform plan succeeded. No plan or diagnostic content is printed or uploaded; no apply exists in this workflow.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            status=$?
+            python3 scripts/terraform-safe-diagnostic.py "$diagnostic_log" full-plan "$status"
+            exit "$status"
+          fi
