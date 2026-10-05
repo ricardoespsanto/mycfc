@@ -96,7 +96,7 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
 	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"
 
-release: ## Resume a gated signed release (set VERSION and optional ISSUES)
+release: ## Signed tag + dispatch deploy from CI-green main (VERSION=vX.Y.Z, optional ISSUES)
 	@test -n "$(VERSION)" || { echo 'set VERSION, for example VERSION=v1.25.0'; exit 2; }
 	VERSION="$(VERSION)" ISSUES="$(ISSUES)" sh scripts/release.sh
 
