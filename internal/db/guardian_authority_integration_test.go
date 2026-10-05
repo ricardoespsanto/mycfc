@@ -987,7 +987,12 @@ func TestGuardianAuthorityAnnualRenewalAndReminderBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantExpiry := originalExpiry.AddDate(1, 0, 0)
+	
+	var wantExpiry time.Time
+	if err = conn.QueryRow(ctx, `SELECT $1::timestamptz + interval '1 year'`, originalExpiry).Scan(&wantExpiry); err != nil {
+		t.Fatal(err)
+	}
+
 	if renewed.State != "VERIFIED" || !renewed.VerifiedUntil.Time.Equal(wantExpiry) || !renewed.ReviewDueAt.Time.Equal(wantExpiry) {
 		t.Fatalf("renewal expiry=%v review=%v want=%v", renewed.VerifiedUntil.Time, renewed.ReviewDueAt.Time, wantExpiry)
 	}
@@ -1313,13 +1318,17 @@ func TestGuardianRenewalSurvivesExpiryAndSerializesAdministratorApproval(t *test
 	if successes != 1 || staleFailures != 1 {
 		t.Fatalf("concurrent renewal successes=%d stale=%d", successes, staleFailures)
 	}
-	var renewedExpiry time.Time
+	
+	var renewedExpiry, wantRenewedExpiry time.Time
 	if err = conn.QueryRow(ctx, `SELECT state,version,verified_until FROM guardian_authority_relationships WHERE public_ref=$1`, relationshipRef).
 		Scan(&state, &version, &renewedExpiry); err != nil {
 		t.Fatal(err)
 	}
-	if state != "VERIFIED" || version != 5 || !renewedExpiry.Equal(originalExpiry.AddDate(1, 0, 0)) {
-		t.Fatalf("renewed relationship state=%s version=%d expiry=%v want=%v", state, version, renewedExpiry, originalExpiry.AddDate(1, 0, 0))
+	if err = conn.QueryRow(ctx, `SELECT $1::timestamptz + interval '1 year'`, originalExpiry).Scan(&wantRenewedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if state != "VERIFIED" || version != 5 || !renewedExpiry.Equal(wantRenewedExpiry) {
+		t.Fatalf("renewed relationship state=%s version=%d expiry=%v want=%v", state, version, renewedExpiry, wantRenewedExpiry)
 	}
 
 	rows, err := conn.Query(ctx, `SELECT event.action,event.actor_role,event.actor_ref,event.relationship_version,request.public_ref
