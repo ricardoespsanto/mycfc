@@ -14,7 +14,6 @@ info() {
 }
 
 version=${VERSION:-${1:-}}
-script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 issues=${ISSUES:-}
 printf '%s' "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' || fail 'set VERSION to a canonical semantic version (for example v1.26.0)'
 if [ -n "$issues" ]; then
@@ -23,7 +22,7 @@ if [ -n "$issues" ]; then
 fi
 for command in git gh jq find sha256sum; do command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"; done
 
-git_dir=$(git rev-parse --git-dir 2>/dev/null) || fail 'not inside a Git repository'
+git rev-parse --git-dir >/dev/null 2>&1 || fail 'not inside a Git repository'
 branch=$(git branch --show-current)
 [ -n "$branch" ] || fail 'detached HEAD is not releasable'
 [ "$branch" = main ] || fail 'run release from main after the change is merged'
