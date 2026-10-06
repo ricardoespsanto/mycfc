@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cfcoimbra/mycfc/internal/featureflags"
 	"github.com/google/uuid"
 )
 
@@ -51,6 +52,38 @@ func TestClassificationNavigationAndChangePerson(t *testing.T) {
 	(Classification{Store: &classificationFake{allowed: true, name: "Ana"}}).Get(w, r)
 	if !strings.Contains(w.Body.String(), `href="/equipa/classificacao?q=Ana">Alterar pessoa</a>`) {
 		t.Fatal("missing query-retaining change person link")
+	}
+}
+
+func TestClassificationCrewContinuationMatchesTrainingRouteGate(t *testing.T) {
+	const link = `href="/admin/treinos/estruturados#training-variations">Gerir tripulações</a>`
+	for _, tc := range []struct {
+		name string
+		user CurrentUser
+		want bool
+	}{
+		{"admin default", CurrentUser{IsAdmin: true}, true},
+		{"coach enabled", CurrentUser{CanManageEvents: true, FeatureModes: map[featureflags.Key]featureflags.Mode{featureflags.StructuredTrainingPlanning: featureflags.Enabled}}, true},
+		{"coach admin only", CurrentUser{CanManageEvents: true}, false},
+		{"disabled admin", CurrentUser{IsAdmin: true, FeatureModes: map[featureflags.Key]featureflags.Mode{featureflags.StructuredTrainingPlanning: featureflags.Disabled}}, false},
+		{"revoked coach", CurrentUser{FeatureModes: map[featureflags.Key]featureflags.Mode{featureflags.StructuredTrainingPlanning: featureflags.Enabled}}, false},
+		{"member", CurrentUser{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := tc.user
+			user.ID = uuid.New()
+			r := httptest.NewRequest("GET", "/equipa/classificacao/"+uuid.NewString(), nil)
+			r.SetPathValue("id", uuid.NewString())
+			r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, user))
+			w := httptest.NewRecorder()
+			(Classification{Store: &classificationFake{allowed: true, name: "Ana"}}).Get(w, r)
+			if w.Code != 200 {
+				t.Fatalf("status %d", w.Code)
+			}
+			if got := strings.Contains(w.Body.String(), link); got != tc.want {
+				t.Fatalf("crew continuation present=%v want=%v", got, tc.want)
+			}
+		})
 	}
 }
 
