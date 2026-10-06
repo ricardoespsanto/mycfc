@@ -1,0 +1,172 @@
+name: Clear exact v2 secret-container Terraform taint
+run-name: clear v2 container taint ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current signed and CI-green main commit.
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: mycfc-production-infra
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_IMAGE: hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
+  TF_IN_AUTOMATION: 'true'
+  TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
+  REQUESTED_STACK: production
+  REQUESTED_SHA: ${{ inputs.sha }}
+  TARGET_ADDRESS: aws_secretsmanager_secret.app_runtime
+  TARGET_ARN: arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    environment: production-plan
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      state_hmac: ${{ steps.inventory.outputs.state_hmac }}
+      state_serial: ${{ steps.inventory.outputs.state_serial }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_INFRA_PLAN_ROLE_ARN: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Verify current signed CI-green main before state access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Exact v2 state preflight $1 failed" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
+          test "$GITHUB_REF" = refs/heads/main || fail dispatch-ref
+          test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail dispatch-sha
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout-sha
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
+          test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
+          test -n "$AWS_REGION" || fail configuration
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail configuration
+          test -n "$TF_BACKEND_BUCKET" || fail configuration
+      - name: Test exact state and metadata gates without credentials
+        run: |
+          python3 scripts/terraform-v2-exact-untaint_test.py
+          make terraform-check
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Inventory exact tainted state and empty live container privately
+        id: inventory
+        env:
+          TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          unset TF_LOG TF_LOG_PATH
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          mkdir -p .cache/terraform/plugin-cache
+          private=$(mktemp -d "${RUNNER_TEMP:?}/v2-untaint.XXXXXXXX")
+          trap 'rm -f "$private"/*; rmdir "$private" 2>/dev/null || true' EXIT
+          fail() {
+            case "${1:-}" in
+              init|statepull|describe|list|inspect|receipt|main) echo "::error::Exact v2 review stage=$1 refused; no state change" >&2 ;;
+              *) echo '::error::Exact v2 review preflight refused; no state change' >&2 ;;
+            esac
+            exit 1
+          }
+          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail init
+          tf state pull >"$private/before" 2>"$private/err" || fail statepull
+          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail describe
+          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail list
+          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" 2>"$private/err" || fail inspect
+          state_serial=$(jq -er '.serial | select(type == "number")' "$private/receipt" 2>"$private/err") || fail receipt
+          state_hmac=$(jq -er '.state_hmac | select(test("^[0-9a-f]{64}$"))' "$private/receipt" 2>"$private/err") || fail receipt
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail main
+          printf 'state_serial=%s\nstate_hmac=%s\n' "$state_serial" "$state_hmac" >> "$GITHUB_OUTPUT"
+          echo 'Exact tainted v2 state identity, completed legacy lineage, and complete empty live version inventory verified; state-only action awaits separate production review.' >> "$GITHUB_STEP_SUMMARY"
+
+  clear:
+    needs: review
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_INFRA_APPLY_ROLE_ARN: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+      EXPECTED_SERIAL: ${{ needs.review.outputs.state_serial }}
+      EXPECTED_HMAC: ${{ needs.review.outputs.state_hmac }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Revalidate signed CI-green main after human production approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Exact v2 write preflight $1 failed" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
+          test "$GITHUB_REF" = refs/heads/main || fail checkout
+          test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail checkout
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
+          test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
+          [[ "$EXPECTED_SERIAL" =~ ^[0-9]+$ && "$EXPECTED_HMAC" =~ ^[0-9a-f]{64}$ ]] || fail state-binding
+          test -n "$AWS_REGION" || fail configuration
+          test -n "$AWS_INFRA_APPLY_ROLE_ARN" || fail configuration
+          test -n "$TF_BACKEND_BUCKET" || fail configuration
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Recheck, untaint only exact v2 address, and prove state-only diff
+        env:
+          TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          unset TF_LOG TF_LOG_PATH
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          mkdir -p .cache/terraform/plugin-cache
+          private=$(mktemp -d "${RUNNER_TEMP:?}/v2-untaint.XXXXXXXX")
+          trap 'rm -f "$private"/*; rmdir "$private" 2>/dev/null || true' EXIT
+          fail() {
+            case "${1:-}" in
+              init|statepull|describe|list|inspect|receipt|main|untaint|after-state|postdiff) echo "::error::Exact v2 clear stage=$1 failed; inspect before retry" >&2 ;;
+              *) echo '::error::Exact v2 clear preflight failed; inspect before retry' >&2 ;;
+            esac
+            exit 1
+          }
+          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail init
+          tf state pull >"$private/before" 2>"$private/err" || fail statepull
+          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail describe
+          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail list
+          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" 2>"$private/err" || fail inspect
+          test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt" 2>"$private/err")" || fail receipt
+          test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt" 2>"$private/err")" || fail receipt
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail main
+          tf untaint -lock-timeout=5m "$TARGET_ADDRESS" >"$private/untaint" 2>"$private/err" || fail untaint
+          tf state pull >"$private/after" 2>"$private/err" || fail after-state
+          python3 scripts/terraform-v2-exact-untaint.py compare "$private/before" "$private/after" >"$private/verified" 2>"$private/err" || fail postdiff
+          echo 'Exact v2 taint marker removed in Terraform state; serial advanced by one; all other state fields unchanged. No provider apply or secret mutation was run.' >> "$GITHUB_STEP_SUMMARY"
