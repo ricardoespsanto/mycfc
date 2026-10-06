@@ -72,6 +72,7 @@ jobs:
         id: inventory
         env:
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           umask 077
@@ -142,6 +143,7 @@ jobs:
       - name: Recheck, untaint only exact v2 address, and prove state-only diff
         env:
           TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           umask 077
