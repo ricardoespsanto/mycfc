@@ -57,7 +57,9 @@ jobs:
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
           test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
-          test -n "$AWS_REGION" && test -n "$AWS_INFRA_PLAN_ROLE_ARN" && test -n "$TF_BACKEND_BUCKET" || fail configuration
+          test -n "$AWS_REGION" || fail configuration
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail configuration
+          test -n "$TF_BACKEND_BUCKET" || fail configuration
       - name: Test exact state and metadata gates without credentials
         run: |
           python3 scripts/terraform-v2-exact-untaint_test.py
@@ -117,12 +119,16 @@ jobs:
           set -Eeuo pipefail
           fail() { echo "::error::Exact v2 write preflight $1 failed" >&2; exit 1; }
           [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
-          test "$GITHUB_REF" = refs/heads/main && test "$REQUESTED_SHA" = "$GITHUB_SHA" && test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout
+          test "$GITHUB_REF" = refs/heads/main || fail checkout
+          test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail checkout
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
           test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
           [[ "$EXPECTED_SERIAL" =~ ^[0-9]+$ && "$EXPECTED_HMAC" =~ ^[0-9a-f]{64}$ ]] || fail state-binding
-          test -n "$AWS_REGION" && test -n "$AWS_INFRA_APPLY_ROLE_ARN" && test -n "$TF_BACKEND_BUCKET" || fail configuration
+          test -n "$AWS_REGION" || fail configuration
+          test -n "$AWS_INFRA_APPLY_ROLE_ARN" || fail configuration
+          test -n "$TF_BACKEND_BUCKET" || fail configuration
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
