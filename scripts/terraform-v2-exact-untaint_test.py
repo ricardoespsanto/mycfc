@@ -181,6 +181,23 @@ class ExactUntaintTest(unittest.TestCase):
         self.assertNotIn('get-secret-value', text)
         self.assertNotIn('terraform_stack_prepare', text)
 
+    def test_private_inventory_stages_are_fixed_and_fail_closed(self):
+        text = (SOURCE.parent.parent / '.github/workflows/terraform-production-v2-exact-untaint.yml').read_text()
+        self.assertEqual(text.count('|| fail init'), 2)
+        self.assertEqual(text.count('|| fail statepull'), 2)
+        self.assertEqual(text.count('|| fail describe'), 2)
+        self.assertEqual(text.count('|| fail list'), 2)
+        self.assertEqual(text.count('|| fail inspect'), 2)
+        self.assertEqual(text.count('|| fail receipt'), 4)
+        self.assertEqual(text.count('|| fail untaint'), 1)
+        self.assertEqual(text.count('|| fail after-state'), 1)
+        self.assertEqual(text.count('|| fail postdiff'), 1)
+        self.assertEqual(text.count('|| fail main\n'), 2)
+        self.assertIn('"${1:-}"', text)
+        self.assertIn('Exact v2 review stage=$1 refused; no state change', text)
+        self.assertIn('Exact v2 clear stage=$1 failed; inspect before retry', text)
+        self.assertNotIn('cat "$private/', text)
+
 
 if __name__ == '__main__':
     unittest.main()
