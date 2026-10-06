@@ -81,15 +81,21 @@ jobs:
           mkdir -p .cache/terraform/plugin-cache
           private=$(mktemp -d "${RUNNER_TEMP:?}/v2-untaint.XXXXXXXX")
           trap 'rm -f "$private"/*; rmdir "$private" 2>/dev/null || true' EXIT
-          fail() { echo "::error::Exact v2 inventory refused; no state change" >&2; exit 1; }
-          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail
-          tf state pull >"$private/before" 2>"$private/err" || fail
-          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail
-          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail
-          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" || fail
-          state_serial=$(jq -er '.serial | select(type == "number")' "$private/receipt") || fail
-          state_hmac=$(jq -er '.state_hmac | select(test("^[0-9a-f]{64}$"))' "$private/receipt") || fail
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail
+          fail() {
+            case "${1:-}" in
+              init|statepull|describe|list|inspect|receipt|main) echo "::error::Exact v2 review stage=$1 refused; no state change" >&2 ;;
+              *) echo '::error::Exact v2 review preflight refused; no state change' >&2 ;;
+            esac
+            exit 1
+          }
+          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail init
+          tf state pull >"$private/before" 2>"$private/err" || fail statepull
+          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail describe
+          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail list
+          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" 2>"$private/err" || fail inspect
+          state_serial=$(jq -er '.serial | select(type == "number")' "$private/receipt" 2>"$private/err") || fail receipt
+          state_hmac=$(jq -er '.state_hmac | select(test("^[0-9a-f]{64}$"))' "$private/receipt" 2>"$private/err") || fail receipt
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail main
           printf 'state_serial=%s\nstate_hmac=%s\n' "$state_serial" "$state_hmac" >> "$GITHUB_OUTPUT"
           echo 'Exact tainted v2 state identity, completed legacy lineage, and complete empty live version inventory verified; state-only action awaits separate production review.' >> "$GITHUB_STEP_SUMMARY"
 
@@ -145,16 +151,22 @@ jobs:
           mkdir -p .cache/terraform/plugin-cache
           private=$(mktemp -d "${RUNNER_TEMP:?}/v2-untaint.XXXXXXXX")
           trap 'rm -f "$private"/*; rmdir "$private" 2>/dev/null || true' EXIT
-          fail() { echo "::error::Exact v2 state repair refused or requires independent investigation" >&2; exit 1; }
-          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail
-          tf state pull >"$private/before" 2>"$private/err" || fail
-          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail
-          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail
-          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" || fail
-          test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt")" || fail
-          test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt")" || fail
-          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail
-          tf untaint -lock-timeout=5m "$TARGET_ADDRESS" >"$private/untaint" 2>"$private/err" || fail
-          tf state pull >"$private/after" 2>"$private/err" || fail
-          python3 scripts/terraform-v2-exact-untaint.py compare "$private/before" "$private/after" >"$private/verified" || fail
+          fail() {
+            case "${1:-}" in
+              init|statepull|describe|list|inspect|receipt|main|untaint|after-state|postdiff) echo "::error::Exact v2 clear stage=$1 failed; inspect before retry" >&2 ;;
+              *) echo '::error::Exact v2 clear preflight failed; inspect before retry' >&2 ;;
+            esac
+            exit 1
+          }
+          tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" >"$private/init" 2>&1 || fail init
+          tf state pull >"$private/before" 2>"$private/err" || fail statepull
+          aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail describe
+          aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail list
+          python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" 2>"$private/err" || fail inspect
+          test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt" 2>"$private/err")" || fail receipt
+          test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt" 2>"$private/err")" || fail receipt
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail main
+          tf untaint -lock-timeout=5m "$TARGET_ADDRESS" >"$private/untaint" 2>"$private/err" || fail untaint
+          tf state pull >"$private/after" 2>"$private/err" || fail after-state
+          python3 scripts/terraform-v2-exact-untaint.py compare "$private/before" "$private/after" >"$private/verified" 2>"$private/err" || fail postdiff
           echo 'Exact v2 taint marker removed in Terraform state; serial advanced by one; all other state fields unchanged. No provider apply or secret mutation was run.' >> "$GITHUB_STEP_SUMMARY"
