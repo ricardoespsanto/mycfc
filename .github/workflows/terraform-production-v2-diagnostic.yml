@@ -46,7 +46,12 @@ jobs:
           ref: 5af45505cefa86aa0b22ad563d0228140fda2892
           path: diagnostic-source
           persist-credentials: false
-      - name: Verify exception identity and both signed fixed sources
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-runtime
+          persist-credentials: false
+      - name: Verify exception identity and signed fixed sources
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCH_REF: ${{ github.ref }}
@@ -64,6 +69,8 @@ jobs:
           done
           test "$PRODUCTION_SOURCE_SHA" = "$(git -C production-source rev-parse HEAD)" || fail production-source
           test "$APPROVED_DIAGNOSTIC_SOURCE_SHA" = "$(git -C diagnostic-source rev-parse HEAD)" || fail diagnostic-source
+          test "$DISPATCH_SHA" = "$(git -C diagnostic-runtime rev-parse HEAD)" || fail diagnostic-runtime
+          printf '%s  %s\n' '3c30518354576b7491240675c3cc0d00fb1cd044ba6873905d72cf644c71776d' 'diagnostic-runtime/scripts/terraform-structured-diagnostic.py' | sha256sum --check --status >/dev/null 2>&1 || fail diagnostic-classifier-content
           test -n "$AWS_REGION" || fail aws-region-configured
           test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail plan-role-configured
           test -n "$TF_BACKEND_BUCKET" || fail backend-bucket-configured
@@ -77,6 +84,7 @@ jobs:
           set -Eeuo pipefail
           (cd production-source && make terraform-check && python3 scripts/terraform-v2-bootstrap-policy_test.py && python3 scripts/terraform-v2-bootstrap-inspect_test.py && python3 scripts/verify-exact-main-ci_test.py)
           python3 diagnostic-source/scripts/terraform-safe-diagnostic_test.py
+          python3 diagnostic-runtime/scripts/terraform-structured-diagnostic_test.py
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
@@ -88,6 +96,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
+          unset TF_LOG TF_LOG_PATH
           cd production-source
           source scripts/terraform-stack.sh
           terraform_stack_select "$REQUESTED_STACK"
@@ -98,13 +107,20 @@ jobs:
             : > "$diagnostic_log"
           else
             status=$?
-            python3 ../diagnostic-source/scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status"
+            report=$(python3 ../diagnostic-source/scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status") || report='::error::Protected Terraform stage=init heuristic_category=unclassified'
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
+            printf '%s\n' "$report"
             exit "$status"
           fi
-          if tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan > "$diagnostic_log" 2>&1; then
+          if report=$(python3 ../diagnostic-runtime/scripts/terraform-structured-diagnostic.py run); then
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
             echo 'Read-only full residual Terraform plan succeeded. No plan or diagnostic content is printed or uploaded; no apply exists in this workflow.' >> "$GITHUB_STEP_SUMMARY"
           else
             status=$?
-            python3 ../diagnostic-source/scripts/terraform-safe-diagnostic.py "$diagnostic_log" full-plan "$status"
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
+            printf '%s\n' "$report"
             exit "$status"
           fi
