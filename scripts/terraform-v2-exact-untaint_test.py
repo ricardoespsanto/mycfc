@@ -197,6 +197,10 @@ class ExactUntaintTest(unittest.TestCase):
         self.assertIn('Exact v2 review stage=$1 refused; no state change', text)
         self.assertIn('Exact v2 clear stage=$1 failed; inspect before retry', text)
         self.assertNotIn('cat "$private/', text)
+        self.assertEqual(text.count('GH_TOKEN: ${{ github.token }}'), 4)
+        for step in ('Inventory exact tainted state and empty live container privately',
+                     'Recheck, untaint only exact v2 address, and prove state-only diff'):
+            self.assertIn('GH_TOKEN: ${{ github.token }}', text.split('- name: ' + step, 1)[1].split('run: |', 1)[0])
 
 
 if __name__ == '__main__':
