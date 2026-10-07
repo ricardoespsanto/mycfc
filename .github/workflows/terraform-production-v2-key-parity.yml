@@ -1,0 +1,91 @@
+name: Diagnose protected v2 state-HMAC key parity
+run-name: v2 key parity ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current signed and CI-green main commit.
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: mycfc-production-infra
+  cancel-in-progress: false
+
+env:
+  REQUESTED_SHA: ${{ inputs.sha }}
+
+jobs:
+  production_plan:
+    runs-on: ubuntu-24.04
+    environment: production-plan
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      parity_probe: ${{ steps.probe.outputs.parity_probe }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Verify current signed CI-green main before protected diagnostic
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Key parity preflight $1 refused" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
+          test "$GITHUB_REF" = refs/heads/main || fail dispatch-ref
+          test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail dispatch-sha
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout-sha
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
+          test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
+      - name: Compute private domain-separated parity probe
+        id: probe
+        env:
+          TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          set +x
+          probe=$(python3 scripts/terraform-v2-key-parity.py fingerprint "$REQUESTED_SHA")
+          printf 'parity_probe=%s\n' "$probe" >> "$GITHUB_OUTPUT"
+          echo 'Protected production-plan key probe captured privately; awaiting separate production approval.' >> "$GITHUB_STEP_SUMMARY"
+
+  production:
+    needs: production_plan
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Revalidate current signed CI-green main after production approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Key parity preflight $1 refused" >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format
+          test "$GITHUB_REF" = refs/heads/main || fail dispatch-ref
+          test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail dispatch-sha
+          test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout-sha
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail current-main
+          test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-main
+          test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci
+      - name: Compare protected keys without displaying probes or values
+        env:
+          TF_PLAN_HMAC_KEY: ${{ secrets.TF_PLAN_HMAC_KEY }}
+          EXPECTED_PARITY_PROBE: ${{ needs.production_plan.outputs.parity_probe }}
+        run: |
+          set -Eeuo pipefail
+          set +x
+          python3 scripts/terraform-v2-key-parity.py compare "$REQUESTED_SHA"
