@@ -188,7 +188,10 @@ class ExactUntaintTest(unittest.TestCase):
         self.assertEqual(text.count('|| fail describe'), 2)
         self.assertEqual(text.count('|| fail list'), 2)
         self.assertEqual(text.count('|| fail inspect'), 2)
-        self.assertEqual(text.count('|| fail receipt'), 4)
+        self.assertEqual(text.count('|| fail receipt'), 2)
+        self.assertEqual(text.count('|| fail serial-binding'), 1)
+        self.assertEqual(text.count('|| fail hmac-binding'), 1)
+        self.assertIn('init|statepull|describe|list|inspect|serial-binding|hmac-binding|main|untaint|after-state|postdiff)', text)
         self.assertEqual(text.count('|| fail untaint'), 1)
         self.assertEqual(text.count('|| fail after-state'), 1)
         self.assertEqual(text.count('|| fail postdiff'), 1)
@@ -201,6 +204,27 @@ class ExactUntaintTest(unittest.TestCase):
         for step in ('Inventory exact tainted state and empty live container privately',
                      'Recheck, untaint only exact v2 address, and prove state-only diff'):
             self.assertIn('GH_TOKEN: ${{ github.token }}', text.split('- name: ' + step, 1)[1].split('run: |', 1)[0])
+
+    def test_clear_binding_labels_match_exact_predicates_and_order(self):
+        workflow = (SOURCE.parent.parent / '.github/workflows/terraform-production-v2-exact-untaint.yml').read_text()
+        clear = workflow.split('- name: Recheck, untaint only exact v2 address, and prove state-only diff', 1)[1]
+        serial = """test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt" 2>"$private/err")" || fail serial-binding"""
+        hmac = """test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt" 2>"$private/err")" || fail hmac-binding"""
+        main = '|| fail main\n'
+        untaint = 'tf untaint -lock-timeout=5m "$TARGET_ADDRESS"'
+
+        def correct_bindings(script):
+            return (script.count(serial) == 1 and script.count(hmac) == 1 and
+                    script.index(serial) < script.index(hmac) < script.index(main) < script.index(untaint))
+
+        self.assertTrue(correct_bindings(clear))
+        swapped = clear.replace('|| fail serial-binding', '|| fail temporary-binding').replace(
+            '|| fail hmac-binding', '|| fail serial-binding').replace(
+            '|| fail temporary-binding', '|| fail hmac-binding')
+        self.assertFalse(correct_bindings(swapped))
+        reordered = clear.replace(serial, 'temporary-binding-line').replace(hmac, serial).replace(
+            'temporary-binding-line', hmac)
+        self.assertFalse(correct_bindings(reordered))
 
 
 if __name__ == '__main__':

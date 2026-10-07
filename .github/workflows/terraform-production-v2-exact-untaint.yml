@@ -155,7 +155,7 @@ jobs:
           trap 'rm -f "$private"/*; rmdir "$private" 2>/dev/null || true' EXIT
           fail() {
             case "${1:-}" in
-              init|statepull|describe|list|inspect|receipt|main|untaint|after-state|postdiff) echo "::error::Exact v2 clear stage=$1 failed; inspect before retry" >&2 ;;
+              init|statepull|describe|list|inspect|serial-binding|hmac-binding|main|untaint|after-state|postdiff) echo "::error::Exact v2 clear stage=$1 failed; inspect before retry" >&2 ;;
               *) echo '::error::Exact v2 clear preflight failed; inspect before retry' >&2 ;;
             esac
             exit 1
@@ -165,8 +165,8 @@ jobs:
           aws secretsmanager describe-secret --secret-id "$TARGET_ARN" --output json --no-cli-pager >"$private/describe" 2>"$private/err" || fail describe
           aws secretsmanager list-secret-version-ids --secret-id "$TARGET_ARN" --include-deprecated --no-paginate --output json --no-cli-pager >"$private/versions" 2>"$private/err" || fail list
           python3 scripts/terraform-v2-exact-untaint.py inspect "$private/before" "$private/describe" "$private/versions" >"$private/receipt" 2>"$private/err" || fail inspect
-          test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt" 2>"$private/err")" || fail receipt
-          test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt" 2>"$private/err")" || fail receipt
+          test "$EXPECTED_SERIAL" = "$(jq -er '.serial' "$private/receipt" 2>"$private/err")" || fail serial-binding
+          test "$EXPECTED_HMAC" = "$(jq -er '.state_hmac' "$private/receipt" 2>"$private/err")" || fail hmac-binding
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null)" || fail main
           tf untaint -lock-timeout=5m "$TARGET_ADDRESS" >"$private/untaint" 2>"$private/err" || fail untaint
           tf state pull >"$private/after" 2>"$private/err" || fail after-state
