@@ -5,7 +5,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
-import subprocess
+import re
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -24,6 +24,27 @@ KEY_B = "b" * 64
 
 
 class ParityTest(unittest.TestCase):
+    def assert_protected_jobs(self, text):
+        # Parse only active YAML job blocks and active run lines. Comments must
+        # never satisfy a protected environment or preflight assertion.
+        jobs = re.findall(r"(?ms)^  (production_plan|production):\n(.*?)(?=^  [a-z_]+:|\Z)", text)
+        self.assertEqual(["production_plan", "production"], [name for name, _ in jobs])
+        for name, body in jobs:
+            expected = "production-plan" if name == "production_plan" else "production"
+            environments = re.findall(r"(?m)^    environment: ([a-z-]+)\s*$", body)
+            self.assertEqual([expected], environments)
+            runs = re.findall(r"(?ms)^        run: \|\n(.*?)(?=^      - |\Z)", body)
+            active = "\n".join(
+                line.strip() for run in runs for line in run.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            )
+            self.assertEqual(1, active.count('python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA"'))
+            self.assertIn('test "$REQUESTED_SHA" = "$GITHUB_SHA"', active)
+            self.assertIn('git/ref/heads/main', active)
+            self.assertIn('commit.verification.verified == true', active)
+            self.assertIn('fail main-ci', active)
+        self.assertRegex(jobs[1][1], r"(?m)^    needs: production_plan$")
+
     def invoke(self, mode, key, expected=None):
         env = {"TF_PLAN_HMAC_KEY": key}
         if expected is not None:
@@ -53,9 +74,7 @@ class ParityTest(unittest.TestCase):
 
     def test_workflow_is_diagnostic_only_with_distinct_human_gates(self):
         text = WORKFLOW.read_text()
-        self.assertIn("environment: production-plan", text)
-        self.assertIn("environment: production\n", text)
-        self.assertIn("needs: production_plan", text)
+        self.assert_protected_jobs(text)
         self.assertIn("group: mycfc-production-infra", text)
         self.assertEqual(2, text.count("verify-exact-main-ci.py"))
         self.assertEqual(2, text.count("secrets.TF_PLAN_HMAC_KEY"))
@@ -64,6 +83,18 @@ class ParityTest(unittest.TestCase):
         self.assertIn("persist-credentials: false", text)
         for forbidden in ("id-token: write", "configure-aws-credentials", "terraform-stack.sh", "tf state", "tf untaint", "tf apply", "aws secretsmanager", "TF_VARS", "CLOUDFLARE_API_TOKEN", "pull_request", "upload-artifact", "contents: write"):
             self.assertNotIn(forbidden, text)
+
+    def test_negative_controls_reject_removed_preflights_and_wrong_gate(self):
+        text = WORKFLOW.read_text()
+        no_ci = text.replace('test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")"',
+                             '# test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")"')
+        self.assertNotEqual(text, no_ci)
+        with self.assertRaises(AssertionError):
+            self.assert_protected_jobs(no_ci)
+        wrong_gate = text.replace("    environment: production\n", "    environment: production-plan\n    # environment: production\n")
+        self.assertNotEqual(text, wrong_gate)
+        with self.assertRaises(AssertionError):
+            self.assert_protected_jobs(wrong_gate)
 
 
 if __name__ == "__main__":
