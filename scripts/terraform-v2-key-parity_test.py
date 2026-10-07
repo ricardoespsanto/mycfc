@@ -26,7 +26,9 @@ KEY_B = "b" * 64
 class ParityTest(unittest.TestCase):
     def assert_protected_jobs(self, text):
         # Parse only active YAML job blocks and active run lines. Comments must
-        # never satisfy a protected environment or preflight assertion.
+        # never satisfy a protected environment or preflight assertion. The
+        # preflight is intentionally checked as a complete ordered shell block:
+        # a mentioned command is not evidence that it will execute.
         jobs = re.findall(r"(?ms)^  (production_plan|production):\n(.*?)(?=^  [a-z_]+:|\Z)", text)
         self.assertEqual(["production_plan", "production"], [name for name, _ in jobs])
         for name, body in jobs:
@@ -34,15 +36,20 @@ class ParityTest(unittest.TestCase):
             environments = re.findall(r"(?m)^    environment: ([a-z-]+)\s*$", body)
             self.assertEqual([expected], environments)
             runs = re.findall(r"(?ms)^        run: \|\n(.*?)(?=^      - |\Z)", body)
-            active = "\n".join(
-                line.strip() for run in runs for line in run.splitlines()
-                if line.strip() and not line.lstrip().startswith("#")
-            )
-            self.assertEqual(1, active.count('python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA"'))
-            self.assertIn('test "$REQUESTED_SHA" = "$GITHUB_SHA"', active)
-            self.assertIn('git/ref/heads/main', active)
-            self.assertIn('commit.verification.verified == true', active)
-            self.assertIn('fail main-ci', active)
+            self.assertEqual(2, len(runs))
+            preflight = [line.strip() for line in runs[0].splitlines()
+                         if line.strip() and not line.lstrip().startswith("#")]
+            self.assertEqual([
+                "set -Eeuo pipefail",
+                'fail() { echo "::error::Key parity preflight $1 refused" >&2; exit 1; }',
+                '[[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha-format',
+                'test "$GITHUB_REF" = refs/heads/main || fail dispatch-ref',
+                'test "$REQUESTED_SHA" = "$GITHUB_SHA" || fail dispatch-sha',
+                'test "$REQUESTED_SHA" = "$(git rev-parse HEAD)" || fail checkout-sha',
+                'test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq \'.object.sha\' 2>/dev/null)" || fail current-main',
+                'test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq \'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha\' 2>/dev/null)" || fail signed-main',
+                'test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci',
+            ], preflight)
         self.assertRegex(jobs[1][1], r"(?m)^    needs: production_plan$")
 
     def invoke(self, mode, key, expected=None):
@@ -91,6 +98,16 @@ class ParityTest(unittest.TestCase):
         self.assertNotEqual(text, no_ci)
         with self.assertRaises(AssertionError):
             self.assert_protected_jobs(no_ci)
+        mentioned_but_bypassed = text.replace(
+            'test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci',
+            'true # test -n "$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA")" || fail main-ci')
+        self.assertNotEqual(text, mentioned_but_bypassed)
+        with self.assertRaises(AssertionError):
+            self.assert_protected_jobs(mentioned_but_bypassed)
+        early_success = text.replace('          set -Eeuo pipefail\n', '          set -Eeuo pipefail\n          exit 0\n')
+        self.assertNotEqual(text, early_success)
+        with self.assertRaises(AssertionError):
+            self.assert_protected_jobs(early_success)
         wrong_gate = text.replace("    environment: production\n", "    environment: production-plan\n    # environment: production\n")
         self.assertNotEqual(text, wrong_gate)
         with self.assertRaises(AssertionError):
