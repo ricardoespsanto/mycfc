@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -46,7 +47,103 @@ def metadata():
             {'Name': MODULE.NAME, 'ARN': MODULE.ARN, 'Versions': []})
 
 
+def checked_state():
+    doc = state()
+    doc['check_results'] = [
+        {'object_kind': 'resource', 'config_addr': f'aws_secretsmanager_secret.synthetic_{i}',
+         'status': 'fail', 'objects': [
+             {'object_addr': f'aws_secretsmanager_secret.synthetic_{i}[{j}]',
+              'status': 'fail', 'failure_messages': ['synthetic-first', 'synthetic-second']}
+             for j in (0, 1)]}
+        for i in range(4)
+    ]
+    return doc
+
+
+def untainted(doc):
+    result = copy.deepcopy(doc)
+    result['serial'] += 1
+    del MODULE.instance(result, 'aws_secretsmanager_secret', 'app_runtime')['status']
+    return result
+
+
 class ExactUntaintTest(unittest.TestCase):
+    def test_check_result_identity_order_only_is_stable_across_24_pulls(self):
+        before = checked_state()
+        original = copy.deepcopy(before)
+        digest = MODULE.state_hmac(before, b'k' * 32)
+        for order in itertools.permutations(range(4)):
+            pulled = copy.deepcopy(before)
+            pulled['check_results'] = [pulled['check_results'][index] for index in order]
+            for check in pulled['check_results']:
+                check['objects'].reverse()
+            self.assertEqual(digest, MODULE.state_hmac(pulled, b'k' * 32))
+            MODULE.compare(before, untainted(pulled))
+        self.assertEqual(original, before)  # Neither gate mutates its input.
+
+    def test_check_result_changes_and_unrelated_order_still_refuse(self):
+        before = checked_state()
+        for label in ('status', 'message', 'message-order', 'missing-field', 'extra-field',
+                      'missing-object', 'missing-check', 'resources-order', 'dependencies-order'):
+            with self.subTest(label=label):
+                changed = copy.deepcopy(before)
+                check = changed['check_results'][0]
+                obj = check['objects'][0]
+                if label == 'status': obj['status'] = 'pass'
+                elif label == 'message': obj['failure_messages'][0] = 'other'
+                elif label == 'message-order': obj['failure_messages'].reverse()
+                elif label == 'missing-field': del obj['failure_messages']
+                elif label == 'extra-field': obj['extra'] = 'synthetic'
+                elif label == 'missing-object': check['objects'].pop()
+                elif label == 'missing-check': changed['check_results'].pop()
+                elif label == 'resources-order': changed['resources'].reverse()
+                elif label == 'dependencies-order':
+                    changed['resources'][0]['instances'][0]['dependencies'] = ['one', 'two']
+                    before_with_deps = copy.deepcopy(before)
+                    before_with_deps['resources'][0]['instances'][0]['dependencies'] = ['two', 'one']
+                    with self.assertRaises(MODULE.Refused):
+                        MODULE.compare(before_with_deps, untainted(changed))
+                    continue
+                self.assertNotEqual(MODULE.state_hmac(before, b'k' * 32),
+                                    MODULE.state_hmac(changed, b'k' * 32))
+                with self.assertRaises(MODULE.Refused):
+                    MODULE.compare(before, untainted(changed))
+
+    def test_duplicate_or_malformed_check_identities_refuse_both_gates(self):
+        before = checked_state()
+        for label in ('duplicate-check', 'duplicate-object', 'missing-kind', 'invalid-kind',
+                      'empty-address', 'missing-object-address', 'wrong-objects-type',
+                      'wrong-checks-type'):
+            with self.subTest(label=label):
+                changed = copy.deepcopy(before)
+                check = changed['check_results'][0]
+                if label == 'duplicate-check': changed['check_results'].append(copy.deepcopy(check))
+                elif label == 'duplicate-object': check['objects'].append(copy.deepcopy(check['objects'][0]))
+                elif label == 'missing-kind': del check['object_kind']
+                elif label == 'invalid-kind': check['object_kind'] = 'invalid'
+                elif label == 'empty-address': check['config_addr'] = ' '
+                elif label == 'missing-object-address': del check['objects'][0]['object_addr']
+                elif label == 'wrong-objects-type': check['objects'] = {}
+                elif label == 'wrong-checks-type': changed['check_results'] = {}
+                with self.assertRaises(MODULE.Refused):
+                    MODULE.state_hmac(changed, b'k' * 32)
+                with self.assertRaises(MODULE.Refused):
+                    MODULE.compare(before, untainted(changed))
+
+    def test_duplicate_json_keys_refuse_privately_at_any_depth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'private'
+            for payload in ('{"serial":1,"serial":2}',
+                            '{"check_results":[{"object_kind":"resource","object_kind":"output"}]}'):
+                path.write_text(payload + 'PRIVATE-SYNTHETIC')
+                result = subprocess.run([sys.executable, str(SOURCE), 'compare', str(path), str(path)],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('PRIVATE', result.stdout + result.stderr)
+                path.write_text(payload)
+                with self.assertRaises(MODULE.Refused):
+                    MODULE.read_private(str(path))
+
     def test_valid_state_metadata_hmac_and_only_taint_removed(self):
         before = state()
         desc, versions = metadata()

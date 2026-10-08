@@ -36,7 +36,14 @@ def read_private(path: str) -> dict:
     require(source.stat().st_size <= MAX_FILE)
     data = source.read_bytes()
     require(len(data) <= MAX_FILE)
-    parsed = json.loads(data)
+    def unique_object(pairs: list[tuple[str, object]]) -> dict:
+        result = {}
+        for name, value in pairs:
+            require(name not in result)
+            result[name] = value
+        return result
+
+    parsed = json.loads(data, object_pairs_hook=unique_object)
     require(isinstance(parsed, dict))
     return parsed
 
@@ -106,9 +113,43 @@ def live_identity(description: dict, versions: dict) -> None:
     require(versions.get("Versions") == [] and "NextToken" not in versions)
 
 
+def canonical_state(state: dict) -> dict:
+    """Normalize only Terraform's unordered check-result identity maps.
+
+    Preserve all fields, other arrays, and the difference between absent and
+    empty check results. Duplicate or malformed identities must fail closed.
+    """
+    result = copy.deepcopy(state)
+    if "check_results" not in result:
+        return result
+    checks = result["check_results"]
+    require(isinstance(checks, list))
+    seen_checks = set()
+    for check in checks:
+        require(isinstance(check, dict))
+        kind, address = check.get("object_kind"), check.get("config_addr")
+        require(kind in ("resource", "output", "check", "var") and
+                isinstance(address, str) and bool(address.strip()))
+        identity = (kind, address)
+        require(identity not in seen_checks)
+        seen_checks.add(identity)
+        objects = check.get("objects")
+        require(isinstance(objects, list))
+        seen_objects = set()
+        for item in objects:
+            require(isinstance(item, dict))
+            object_address = item.get("object_addr")
+            require(isinstance(object_address, str) and bool(object_address.strip()) and
+                    object_address not in seen_objects)
+            seen_objects.add(object_address)
+        check["objects"] = sorted(objects, key=lambda item: item["object_addr"])
+    result["check_results"] = sorted(checks, key=lambda check: (check["object_kind"], check["config_addr"]))
+    return result
+
+
 def state_hmac(state: dict, key: bytes) -> str:
     require(len(key) == 32)
-    payload = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    payload = json.dumps(canonical_state(state), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 
@@ -125,7 +166,7 @@ def compare(before: dict, after: dict) -> None:
     require(target_after is not None)
     if target_after.get("status") == "ready":
         target_after.pop("status")
-    require(actual == expected)
+    require(canonical_state(actual) == canonical_state(expected))
 
 
 def main() -> int:
