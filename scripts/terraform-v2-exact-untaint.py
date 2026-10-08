@@ -147,10 +147,14 @@ def canonical_state(state: dict) -> dict:
     return result
 
 
+def canonical_bytes(state: dict) -> bytes:
+    return json.dumps(canonical_state(state), sort_keys=True,
+                      separators=(",", ":"), ensure_ascii=False).encode()
+
+
 def state_hmac(state: dict, key: bytes) -> str:
     require(len(key) == 32)
-    payload = json.dumps(canonical_state(state), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+    return hmac.new(key, canonical_bytes(state), hashlib.sha256).hexdigest()
 
 
 def compare(before: dict, after: dict) -> None:
@@ -166,7 +170,7 @@ def compare(before: dict, after: dict) -> None:
     require(target_after is not None)
     if target_after.get("status") == "ready":
         target_after.pop("status")
-    require(canonical_state(actual) == canonical_state(expected))
+    require(canonical_bytes(actual) == canonical_bytes(expected))
 
 
 def main() -> int:

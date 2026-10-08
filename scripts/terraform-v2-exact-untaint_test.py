@@ -68,6 +68,18 @@ def untainted(doc):
 
 
 class ExactUntaintTest(unittest.TestCase):
+    def test_postdiff_rejects_json_type_coercions_in_retained_state(self):
+        for original, changed in ((0, False), (1, True), (1, 1.0)):
+            with self.subTest(original=original, changed=changed):
+                before = checked_state()
+                before['resources'][1]['instances'][0]['attributes']['synthetic_value'] = original
+                after = untainted(before)
+                after['resources'][1]['instances'][0]['attributes']['synthetic_value'] = changed
+                self.assertNotEqual(MODULE.state_hmac(before, b'k' * 32),
+                                    MODULE.state_hmac(after, b'k' * 32))
+                with self.assertRaises(MODULE.Refused):
+                    MODULE.compare(before, after)
+
     def test_check_result_identity_order_only_is_stable_across_24_pulls(self):
         before = checked_state()
         original = copy.deepcopy(before)
