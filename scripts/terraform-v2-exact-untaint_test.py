@@ -68,6 +68,69 @@ def untainted(doc):
 
 
 class ExactUntaintTest(unittest.TestCase):
+    def test_terraform_1158_pulled_null_shapes_inspect_full_synthetic_target(self):
+        # Mirrors pinned 1.15.8 state-pull shapes: no checks -> null, and a
+        # check aggregate with zero instances -> objects:null. No live data.
+        for shape in ('no-checks', 'zero-instances'):
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as directory:
+                doc = state()
+                doc['outputs'] = {}
+                if shape == 'no-checks':
+                    doc['check_results'] = None
+                else:
+                    doc['check_results'] = [{
+                        'object_kind': 'resource',
+                        'config_addr': 'aws_secretsmanager_secret.synthetic',
+                        'status': 'unknown', 'objects': None}]
+                self.assertEqual({'version', 'terraform_version', 'serial', 'lineage',
+                                  'outputs', 'resources', 'check_results'}, set(doc))
+                root = Path(directory)
+                desc, versions = metadata()
+                for name, value in (('before', doc), ('describe', desc), ('versions', versions)):
+                    (root / name).write_text(json.dumps(value))
+                env = {**os.environ, 'TF_PLAN_HMAC_KEY': '11' * 32}
+                args = [sys.executable, str(SOURCE), 'inspect',
+                        *(str(root / name) for name in ('before', 'describe', 'versions'))]
+                result = subprocess.run(args, capture_output=True, text=True, env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(doc['serial'], receipt['serial'])
+                self.assertEqual(MODULE.state_hmac(doc, bytes.fromhex('11' * 32)), receipt['state_hmac'])
+                self.assertNotIn('PRIVATE', result.stdout + result.stderr)
+                MODULE.compare(doc, untainted(doc))
+
+    def test_null_absent_and_empty_collections_remain_distinct(self):
+        no_checks = state()
+        with_null = copy.deepcopy(no_checks)
+        with_null['check_results'] = None
+        with_empty = copy.deepcopy(no_checks)
+        with_empty['check_results'] = []
+        for left, right in ((no_checks, with_null), (no_checks, with_empty),
+                            (with_null, with_empty)):
+            self.assertNotEqual(MODULE.state_hmac(left, b'k' * 32),
+                                MODULE.state_hmac(right, b'k' * 32))
+            with self.assertRaises(MODULE.Refused):
+                MODULE.compare(left, untainted(right))
+
+        with_objects_null = checked_state()
+        with_objects_null['check_results'][0]['objects'] = None
+        without_objects = copy.deepcopy(with_objects_null)
+        del without_objects['check_results'][0]['objects']
+        with_objects_empty = copy.deepcopy(with_objects_null)
+        with_objects_empty['check_results'][0]['objects'] = []
+        self.assertEqual(None, MODULE.canonical_state(with_objects_null)['check_results'][0]['objects'])
+        reordered = copy.deepcopy(with_objects_null)
+        reordered['check_results'].reverse()
+        self.assertEqual(MODULE.state_hmac(with_objects_null, b'k' * 32),
+                         MODULE.state_hmac(reordered, b'k' * 32))
+        MODULE.compare(with_objects_null, untainted(reordered))
+        with self.assertRaises(MODULE.Refused):
+            MODULE.state_hmac(without_objects, b'k' * 32)
+        self.assertNotEqual(MODULE.state_hmac(with_objects_null, b'k' * 32),
+                            MODULE.state_hmac(with_objects_empty, b'k' * 32))
+        with self.assertRaises(MODULE.Refused):
+            MODULE.compare(with_objects_null, untainted(with_objects_empty))
+
     def test_postdiff_rejects_json_type_coercions_in_retained_state(self):
         for original, changed in ((0, False), (1, True), (1, 1.0)):
             with self.subTest(original=original, changed=changed):
@@ -124,7 +187,7 @@ class ExactUntaintTest(unittest.TestCase):
     def test_duplicate_or_malformed_check_identities_refuse_both_gates(self):
         before = checked_state()
         for label in ('duplicate-check', 'duplicate-object', 'missing-kind', 'invalid-kind',
-                      'empty-address', 'missing-object-address', 'wrong-objects-type',
+                      'empty-address', 'missing-object-address', 'missing-objects', 'wrong-objects-type',
                       'wrong-checks-type'):
             with self.subTest(label=label):
                 changed = copy.deepcopy(before)
@@ -135,6 +198,7 @@ class ExactUntaintTest(unittest.TestCase):
                 elif label == 'invalid-kind': check['object_kind'] = 'invalid'
                 elif label == 'empty-address': check['config_addr'] = ' '
                 elif label == 'missing-object-address': del check['objects'][0]['object_addr']
+                elif label == 'missing-objects': del check['objects']
                 elif label == 'wrong-objects-type': check['objects'] = {}
                 elif label == 'wrong-checks-type': changed['check_results'] = {}
                 with self.assertRaises(MODULE.Refused):

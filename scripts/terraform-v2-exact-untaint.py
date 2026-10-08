@@ -123,6 +123,8 @@ def canonical_state(state: dict) -> dict:
     if "check_results" not in result:
         return result
     checks = result["check_results"]
+    if checks is None:  # Terraform 1.15.8 writes null when there are no checks.
+        return result
     require(isinstance(checks, list))
     seen_checks = set()
     for check in checks:
@@ -133,7 +135,10 @@ def canonical_state(state: dict) -> dict:
         identity = (kind, address)
         require(identity not in seen_checks)
         seen_checks.add(identity)
-        objects = check.get("objects")
+        require("objects" in check)
+        objects = check["objects"]
+        if objects is None:  # Terraform 1.15.8 writes null for zero instances.
+            continue
         require(isinstance(objects, list))
         seen_objects = set()
         for item in objects:
