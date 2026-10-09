@@ -6,6 +6,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 
 ROLE_ADDRESSES = {
@@ -32,7 +33,7 @@ SECRET_VERSION_FIELDS = {
 }
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"v2 bootstrap inspection: {message}")
 
 
@@ -133,21 +134,71 @@ def version_stages(value: object) -> list[str]:
     return value
 
 
+def drift_refusal(category: str, drift: object) -> NoReturn:
+    """Report bounded metadata without echoing unexpected plan addresses or values."""
+    if not isinstance(drift, list):
+        fail(f"drift inventory differs from the four expected resources; category={category}; entries=unavailable")
+    counts = {address: {} for address in EXPECTED_DRIFT}
+    for resource in drift:
+        if not isinstance(resource, dict):
+            continue
+        try:
+            address = base_address(resource.get("address"))
+        except SystemExit:
+            continue
+        if address not in counts:
+            continue
+        change = resource.get("change")
+        actions = change.get("actions") if isinstance(change, dict) else None
+        if actions == ["update"]:
+            action_class = "update"
+        elif actions == ["no-op"]:
+            action_class = "no-op"
+        elif actions == ["delete"]:
+            action_class = "delete"
+        elif actions == ["create"]:
+            action_class = "create"
+        elif isinstance(actions, list):
+            action_class = "other"
+        else:
+            action_class = "invalid"
+        counts[address][action_class] = counts[address].get(action_class, 0) + 1
+    # Every printed address and action label is a constant, never plan content.
+    presence = ",".join(
+        f"{address}:{sum(counts[address].values())}:"
+        + "/".join(f"{action}={counts[address][action]}" for action in sorted(counts[address]))
+        for address in sorted(EXPECTED_DRIFT)
+    )
+    fail(f"drift inventory differs from the four expected resources; category={category}; "
+         f"entries={len(drift)}; expected={presence}")
+
+
 def inspect_drift(plan: dict) -> str:
     drift = plan.get("resource_drift")
     if drift in (None, []):
         return "### Bootstrap drift inspection\n\n- No resource drift reported."
-    if not isinstance(drift, list) or len(drift) != 4:
-        fail("drift inventory differs from the four expected resources")
+    if not isinstance(drift, list):
+        drift_refusal("inventory-shape", drift)
+    if len(drift) != 4:
+        drift_refusal("count", drift)
     lines = ["### Bootstrap drift inspection", "", "Only fixed field names, booleans, and aggregate counts are shown; no values or instance keys."]
     seen = set()
     for resource in drift:
         if not isinstance(resource, dict):
-            fail("invalid drift entry")
-        address = base_address(resource.get("address"))
+            drift_refusal("entry-shape", drift)
+        try:
+            address = base_address(resource.get("address"))
+        except SystemExit:
+            drift_refusal("address-shape", drift)
         change = resource.get("change")
-        if address not in EXPECTED_DRIFT or address in seen or not isinstance(change, dict) or change.get("actions") != ["update"]:
-            fail("drift inventory differs from the four expected resources")
+        if address not in EXPECTED_DRIFT:
+            drift_refusal("unexpected-address", drift)
+        if address in seen:
+            drift_refusal("duplicate-expected", drift)
+        if not isinstance(change, dict):
+            drift_refusal("change-shape", drift)
+        if change.get("actions") != ["update"]:
+            drift_refusal("action-class", drift)
         seen.add(address)
         before, after = change.get("before"), change.get("after")
         allowed = ROLE_FIELDS if address in ROLE_ADDRESSES else SECRET_VERSION_FIELDS
@@ -174,7 +225,7 @@ def inspect_drift(plan: dict) -> str:
                          f"live {len(set(new_stages) - {'AWSCURRENT', 'AWSPREVIOUS'})}.")
             lines.append(f"  - Version ID changed: {before.get('version_id') != after.get('version_id')}.")
     if seen != EXPECTED_DRIFT:
-        fail("drift inventory differs from the four expected resources")
+        drift_refusal("missing-expected", drift)
     return "\n".join(lines)
 
 

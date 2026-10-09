@@ -91,6 +91,8 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	python3 scripts/terraform-v2-bootstrap-policy_test.py
 	python3 scripts/terraform-v2-bootstrap-inspect_test.py
 	python3 scripts/verify-exact-main-ci_test.py
+	python3 scripts/terraform-diagnostic-exception_test.py
+	python3 scripts/terraform-structured-diagnostic_test.py
 	bash scripts/terraform-stack_test.sh
 	bash scripts/discover-terraform-inputs_test.sh
 
