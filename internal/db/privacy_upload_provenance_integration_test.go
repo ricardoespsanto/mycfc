@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestPrivacyUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) {
+func TestMediaUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {
@@ -47,16 +47,16 @@ func TestPrivacyUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) 
 	if err != nil || equipment.ImageUploadIntentID == nil || *equipment.ImageUploadIntentID != firstIntent {
 		t.Fatalf("equipment create=%#v err=%v", equipment, err)
 	}
-	if err = q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{IntentID: firstIntent, HoldToken: randomBytes(t, 32), SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err == nil {
+	if err = q.AttachMediaUploadIntent(ctx, dbgen.AttachMediaUploadIntentParams{IntentID: firstIntent, HoldToken: randomBytes(t, 32), SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err == nil {
 		t.Fatal("attached intent accepted a mismatched replay token")
 	}
-	if err = q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{IntentID: firstIntent, HoldToken: firstToken, SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err != nil {
+	if err = q.AttachMediaUploadIntent(ctx, dbgen.AttachMediaUploadIntentParams{IntentID: firstIntent, HoldToken: firstToken, SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err != nil {
 		t.Fatalf("exact attached replay failed: %v", err)
 	}
-	if err = q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{IntentID: firstIntent, SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err == nil {
+	if err = q.AttachMediaUploadIntent(ctx, dbgen.AttachMediaUploadIntentParams{IntentID: firstIntent, SourceKind: "EQUIPMENT_PHOTO", SourceRef: equipmentID, ObjectKey: "equipment/first.png", ContentType: "image/png", SizeBytes: 5}); err == nil {
 		t.Fatal("attached intent accepted a null replay token")
 	}
-	if err = q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: firstIntent, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: equipmentID}); err == nil {
+	if err = q.RemoveMediaUploadIntent(ctx, dbgen.RemoveMediaUploadIntentParams{IntentID: firstIntent, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: equipmentID}); err == nil {
 		t.Fatal("still-referenced intent was queued for permanent cleanup")
 	}
 	assertUploadStatus(t, ctx, conn, firstIntent, "ATTACHED")
@@ -123,7 +123,7 @@ func TestPrivacyUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) 
 	}
 
 	profileIntent, profileToken := seedConfirmedUploadIntent(t, ctx, conn, actorID, &actorID, "MEMBER_PROFILE_PHOTO", actorID, "profiles/profile.png", 5)
-	err = q.AttachPrivacyUploadIntent(ctx, dbgen.AttachPrivacyUploadIntentParams{IntentID: profileIntent, HoldToken: profileToken, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: uuid.New(), ObjectKey: "profiles/profile.png", ContentType: "image/png", SizeBytes: 5})
+	err = q.AttachMediaUploadIntent(ctx, dbgen.AttachMediaUploadIntentParams{IntentID: profileIntent, HoldToken: profileToken, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: uuid.New(), ObjectKey: "profiles/profile.png", ContentType: "image/png", SizeBytes: 5})
 	if err == nil {
 		t.Fatal("mismatched profile source unexpectedly attached")
 	}
@@ -161,13 +161,13 @@ func TestPrivacyUploadPointersAttachAtomicallyForEveryMediaFamily(t *testing.T) 
 	if _, err = conn.Exec(ctx, `UPDATE member_profiles SET user_id=$2 WHERE user_id=$1`, actorID, reboundProfileID); err == nil || (!strings.Contains(err.Error(), "upload pointer invariant rejected") && !strings.Contains(err.Error(), "profile_photo_active_consent_required")) {
 		t.Fatalf("profile source identity rebinding error=%v", err)
 	}
-	if err = q.RemovePrivacyUploadIntent(ctx, dbgen.RemovePrivacyUploadIntentParams{IntentID: profileIntent, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: actorID}); err == nil {
+	if err = q.RemoveMediaUploadIntent(ctx, dbgen.RemoveMediaUploadIntentParams{IntentID: profileIntent, ActorUserID: actorID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: actorID}); err == nil {
 		t.Fatal("still-referenced profile intent was queued for permanent cleanup")
 	}
 	assertUploadStatus(t, ctx, conn, profileIntent, "ATTACHED")
 }
 
-func TestPrivacyUploadLifecycleRejectsMissingTokensAndUnboundPointers(t *testing.T) {
+func TestMediaUploadLifecycleRejectsMissingTokensAndUnboundPointers(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {
@@ -193,26 +193,26 @@ func TestPrivacyUploadLifecycleRejectsMissingTokensAndUnboundPointers(t *testing
 	if _, err = conn.Exec(ctx, `SELECT privacy_upload_confirm_put($1,$2)`, intentID, token); err != nil {
 		t.Fatal(err)
 	}
-	base := dbgen.AttachPrivacyUploadIntentParams{IntentID: intentID, HoldToken: token, SourceKind: "EQUIPMENT_PHOTO", SourceRef: sourceRef, ObjectKey: "equipment/invariant.png", ContentType: "image/png", SizeBytes: 9}
-	for name, mutate := range map[string]func(*dbgen.AttachPrivacyUploadIntentParams){
-		"key":  func(input *dbgen.AttachPrivacyUploadIntentParams) { input.ObjectKey = "equipment/swapped.png" },
-		"type": func(input *dbgen.AttachPrivacyUploadIntentParams) { input.ContentType = "image/webp" },
-		"size": func(input *dbgen.AttachPrivacyUploadIntentParams) { input.SizeBytes++ },
+	base := dbgen.AttachMediaUploadIntentParams{IntentID: intentID, HoldToken: token, SourceKind: "EQUIPMENT_PHOTO", SourceRef: sourceRef, ObjectKey: "equipment/invariant.png", ContentType: "image/png", SizeBytes: 9}
+	for name, mutate := range map[string]func(*dbgen.AttachMediaUploadIntentParams){
+		"key":  func(input *dbgen.AttachMediaUploadIntentParams) { input.ObjectKey = "equipment/swapped.png" },
+		"type": func(input *dbgen.AttachMediaUploadIntentParams) { input.ContentType = "image/webp" },
+		"size": func(input *dbgen.AttachMediaUploadIntentParams) { input.SizeBytes++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			input := base
 			mutate(&input)
-			if err := q.AttachPrivacyUploadIntent(ctx, input); err == nil {
+			if err := q.AttachMediaUploadIntent(ctx, input); err == nil {
 				t.Fatalf("attachment accepted mismatched %s", name)
 			}
 		})
 	}
 	missingToken := base
 	missingToken.HoldToken = nil
-	if err = q.AttachPrivacyUploadIntent(ctx, missingToken); err == nil {
+	if err = q.AttachMediaUploadIntent(ctx, missingToken); err == nil {
 		t.Fatal("attachment accepted a null token")
 	}
-	if err = q.AttachPrivacyUploadIntent(ctx, base); err == nil {
+	if err = q.AttachMediaUploadIntent(ctx, base); err == nil {
 		t.Fatal("standalone attachment committed without its source pointer")
 	}
 	assertUploadStatus(t, ctx, conn, intentID, "PUT_CONFIRMED")

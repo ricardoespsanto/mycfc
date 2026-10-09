@@ -49,11 +49,12 @@ func TestPhotoAlbumIntegrationScopesLifecycleAndAudit(t *testing.T) {
 	if _, err := tx.Exec(ctx, `INSERT INTO teams (id, season_id, programme_id, code, name) VALUES ($1, $2, $3, $4, 'Equipa de integração')`, teamID, seasonID, programmeID, "Album"+uuid.NewString()[:8]); err != nil {
 		t.Fatal(err)
 	}
+	categoryID := testCompetitionCategory(t, ctx, tx, seasonID, programmeID, creatorID)
 	for _, membership := range []struct {
 		userID uuid.UUID
 		teamID *uuid.UUID
 	}{{memberID, nil}, {dependentID, &teamID}} {
-		if _, err := tx.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, team_id, starts_on) VALUES ($1, $2, $3, $4, $5)`, membership.userID, seasonID, programmeID, membership.teamID, today.AddDate(0, 0, -1)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, team_id, competition_category_id, starts_on) VALUES ($1, $2, $3, $4, $5, $6)`, membership.userID, seasonID, programmeID, membership.teamID, categoryID, today.AddDate(0, 0, -1)); err != nil {
 			t.Fatal(err)
 		}
 	}

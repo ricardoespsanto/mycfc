@@ -441,6 +441,23 @@ func TestMemberMutationsRejectInvalidTargetsAndSelfDeactivation(t *testing.T) {
 	})
 }
 
+func TestMemberMembershipExplainsRecordedDateConflict(t *testing.T) {
+	memberID, programmeID := uuid.New(), uuid.New()
+	store := &memberWorkflowStore{
+		season:     dbgen.Season{ID: uuid.New()},
+		programmes: []dbgen.Programme{{ID: programmeID}},
+		endErr:     &pgconn.PgError{Code: "23514", ConstraintName: "user_memberships_recorded_history_end"},
+	}
+	r := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/inscricao", strings.NewReader("programme_id="+programmeID.String()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("id", memberID.String())
+	w := httptest.NewRecorder()
+	(Members{Store: store, Location: time.UTC}).Membership(w, r)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "correção auditada") || !strings.Contains(w.Body.String(), "prescrições publicadas") {
+		t.Fatalf("missing recorded-history explanation: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestMemberMembershipMapsSeasonProgrammeAndWriteFailures(t *testing.T) {
 	memberID, programmeID := uuid.New(), uuid.New()
 	for _, tc := range []struct {
@@ -467,7 +484,7 @@ func TestMemberMembershipMapsSeasonProgrammeAndWriteFailures(t *testing.T) {
 	}
 }
 
-func TestMemberMembershipEndingMissingRowIsNotFound(t *testing.T) {
+func TestMemberMembershipEndingMissingRowExplainsNoSameDayReversal(t *testing.T) {
 	memberID, programmeID := uuid.New(), uuid.New()
 	store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New()}, programmes: []dbgen.Programme{{ID: programmeID}}, endAffected: 0}
 	request := httptest.NewRequest(http.MethodPost, "/admin/membros/"+memberID.String()+"/inscricao", strings.NewReader("programme_id="+programmeID.String()))
@@ -475,8 +492,8 @@ func TestMemberMembershipEndingMissingRowIsNotFound(t *testing.T) {
 	request.SetPathValue("id", memberID.String())
 	response := httptest.NewRecorder()
 	(Members{Store: store, Location: time.UTC}).Membership(response, request)
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d", response.Code)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "mesmo dia") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -500,6 +517,8 @@ type memberWorkflowStore struct {
 	createdSeason      dbgen.CreateSeasonParams
 	programmesErr      error
 	membershipErr      error
+	membershipErrors   []error
+	membershipCalls    int
 	endAffected        int64
 	endErr             error
 }
@@ -521,9 +540,15 @@ func (s *memberWorkflowStore) CreateDependentUser(_ context.Context, params dbge
 func (s *memberWorkflowStore) ListMembershipProgrammes(context.Context) ([]dbgen.Programme, error) {
 	return s.programmes, s.programmesErr
 }
-func (s *memberWorkflowStore) UpsertCurrentSeasonMembership(_ context.Context, params dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UserMembership, error) {
+func (s *memberWorkflowStore) UpsertCurrentSeasonMembership(_ context.Context, params dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UpsertCurrentSeasonMembershipRow, error) {
 	s.membership = params
-	return dbgen.UserMembership{}, s.membershipErr
+	s.membershipCalls++
+	if len(s.membershipErrors) > 0 {
+		next := s.membershipErrors[0]
+		s.membershipErrors = s.membershipErrors[1:]
+		return dbgen.UpsertCurrentSeasonMembershipRow{}, next
+	}
+	return dbgen.UpsertCurrentSeasonMembershipRow{}, s.membershipErr
 }
 func (s *memberWorkflowStore) EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error) {
 	return s.endAffected, s.endErr
@@ -585,8 +610,8 @@ func (memberStoreFake) ListMembershipProgrammes(context.Context) ([]dbgen.Progra
 func (memberStoreFake) ListActiveMembershipsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveMembershipsForUserRow, error) {
 	return nil, nil
 }
-func (memberStoreFake) UpsertCurrentSeasonMembership(context.Context, dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UserMembership, error) {
-	return dbgen.UserMembership{}, nil
+func (memberStoreFake) UpsertCurrentSeasonMembership(context.Context, dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UpsertCurrentSeasonMembershipRow, error) {
+	return dbgen.UpsertCurrentSeasonMembershipRow{}, nil
 }
 func (memberStoreFake) EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error) {
 	return 1, nil

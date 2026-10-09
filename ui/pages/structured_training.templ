@@ -855,7 +855,7 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 				@components.FieldLabel("variation-group-kind", "Tipo", true)<select id="variation-group-kind" name="kind" required><option value="SUBGROUP">Subgrupo</option><option value="CREW">Tripulação temporária</option></select>
 				@components.FieldLabel("variation-group-name", "Nome", true)<input id="variation-group-name" name="name" required minlength="2" maxlength="120" placeholder="Ex.: Canoas ou C2 para a Taça"/>
 				@components.FieldLabel("variation-group-craft", "Embarcação da tripulação", false)
-				<select id="variation-group-craft" name="craft_modality_id"><option value="">Não se aplica</option>
+				<select id="variation-group-craft" name="craft_code"><option value="">Não se aplica</option>
 					for _, choice := range page.CrewModalities {
 						<option value={ choice.ID }>{ choice.Name }</option>
 					}

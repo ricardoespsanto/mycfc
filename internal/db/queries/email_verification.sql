@@ -41,8 +41,7 @@ WITH candidate AS (
     handoff_delivery(deliverable,user_id,email,expires_at) ON true
   WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= sqlc.arg(claimed_at))
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < sqlc.arg(stale_before)))
-    AND (outbox.message_type IN ('PRIVACY_ACKNOWLEDGEMENT', 'PRIVACY_DECISION', 'PRIVACY_PROCESSING_STARTED', 'PRIVACY_COMPLETED') OR (
-      COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
+    AND ((COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > sqlc.arg(claimed_at)
     AND account.is_active = true AND account.is_dependent = false
     AND account.email = COALESCE(verification.email, reset.email)) OR (
@@ -68,7 +67,6 @@ WITH candidate AS (
       outbox.message_type IN ('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY','GUARDIAN_AGE_18_EMAIL_VERIFY')
       AND handoff_delivery.deliverable
     ))
-    AND (outbox.message_type <> 'PRIVACY_COMPLETED' OR privacy_completion_notice_deliverable(outbox.privacy_request_id,sqlc.arg(claimed_at)))
   ORDER BY outbox.next_attempt_at, outbox.created_at, outbox.id
   FOR UPDATE OF outbox SKIP LOCKED
   LIMIT 1
@@ -140,6 +138,4 @@ WHERE outbox.status IN ('PENDING', 'SENDING')
     OR
     (outbox.message_type IN ('GUARDIAN_AGE_18_30_DAY','GUARDIAN_AGE_18_7_DAY','GUARDIAN_AGE_18_EMAIL_VERIFY')
       AND NOT COALESCE((SELECT delivery.deliverable FROM guardian_age_handoff_outbox_delivery(outbox.id,sqlc.arg(cancelled_at)) delivery),false))
-    OR
-    (outbox.message_type = 'PRIVACY_COMPLETED' AND NOT privacy_completion_notice_deliverable(outbox.privacy_request_id,sqlc.arg(cancelled_at)))
   );

@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestPrivacyUploadFinalizeFenceForwardMigrationClosesBothCaptureRaces(t *testing.T) {
+func TestMediaUploadFinalizeFenceForwardMigrationClosesBothCaptureRaces(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {

@@ -28,7 +28,12 @@ RETURNING id, name, programme_id, team_id, created_by_id, created_at, updated_at
 INSERT INTO training_group_members (group_id, membership_id, added_by_id)
 SELECT group_row.id, membership.id, sqlc.arg(added_by_id)
 FROM training_groups group_row
-JOIN user_memberships membership ON membership.id = sqlc.arg(membership_id)
+JOIN (
+    SELECT locked_membership.id, locked_membership.starts_on, locked_membership.ends_on,
+           locked_membership.programme_id, locked_membership.team_id
+    FROM user_memberships locked_membership WHERE locked_membership.id = sqlc.arg(membership_id)
+    FOR SHARE OF locked_membership
+) membership ON true
 WHERE group_row.id = sqlc.arg(group_id)
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
@@ -61,7 +66,15 @@ JOIN LATERAL (
     SELECT season_row.id
     FROM seasons season_row
     WHERE sqlc.arg(week_start) BETWEEN season_row.starts_on AND season_row.ends_on
-    ORDER BY season_row.is_current DESC, season_row.starts_on DESC, season_row.id
+    ORDER BY EXISTS (
+        SELECT 1
+        FROM training_group_members group_member
+        JOIN user_memberships membership ON membership.id = group_member.membership_id
+        WHERE group_member.group_id = group_row.id
+          AND membership.season_id = season_row.id
+          AND membership.starts_on <= sqlc.arg(week_start)
+          AND (membership.ends_on IS NULL OR membership.ends_on >= sqlc.arg(week_start))
+    ) DESC, season_row.is_current DESC, season_row.starts_on DESC, season_row.id
     LIMIT 1
 ) season ON true
 WHERE group_row.id = sqlc.arg(group_id)
@@ -770,9 +783,9 @@ WHERE membership.starts_on <= CURRENT_DATE
 ORDER BY group_row.name, subject.name, membership.id;
 
 -- name: ListStructuredCrewModalities :many
-SELECT id, code, name_pt
-FROM modalities
-WHERE code ~ '^[A-Z]+[2-9][0-9]*$'
+SELECT code, name_pt
+FROM canoe_craft_classes
+WHERE code IN ('C2', 'K2', 'K4')
 ORDER BY code;
 
 -- name: ListManagedStructuredCompetitionEvents :many
@@ -809,11 +822,11 @@ WHERE event_row.event_type = 'COMPETITION'
 ORDER BY event_row.starts_at, event_row.id;
 
 -- name: CreateTrainingVariationGroup :one
-INSERT INTO training_variation_groups (training_group_id, name, kind, craft_modality_id,
+INSERT INTO training_variation_groups (training_group_id, name, kind, craft_code,
                                        effective_from, effective_until, competition_event_id,
                                        open_ended_exception, created_by_id)
 VALUES (sqlc.arg(training_group_id), sqlc.arg(name), sqlc.arg(kind)::training_variation_group_kind,
-        sqlc.narg(craft_modality_id), sqlc.arg(effective_from), sqlc.narg(effective_until),
+        sqlc.narg(craft_code), sqlc.arg(effective_from), sqlc.narg(effective_until),
         sqlc.narg(competition_event_id), sqlc.arg(open_ended_exception), sqlc.arg(created_by_id))
 RETURNING *;
 
@@ -825,20 +838,21 @@ JOIN training_group_members group_member ON group_member.group_id = variation_gr
 JOIN user_memberships membership ON membership.id = group_member.membership_id
 WHERE variation_group.id = sqlc.arg(variation_group_id)
   AND group_member.membership_id = sqlc.arg(membership_id)
-  AND membership.starts_on <= CURRENT_DATE
-  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
+  AND membership.starts_on <= variation_group.effective_from
+  AND (membership.ends_on IS NULL OR membership.ends_on >= COALESCE(variation_group.effective_until, (SELECT (event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM events event_row WHERE event_row.id = variation_group.competition_event_id), variation_group.effective_from))
+  AND (SELECT group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
+  AND (SELECT group_row.team_id IS NULL OR group_row.team_id = membership.team_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
 ON CONFLICT (variation_group_id, membership_id) DO NOTHING;
 
 -- name: ListManagedTrainingVariationGroups :many
 SELECT variation_group.id, variation_group.training_group_id, group_row.name AS training_group_name,
-       variation_group.name, variation_group.kind, modality.code AS craft_code,
+       variation_group.name, variation_group.kind, variation_group.craft_code,
        variation_group.effective_from, variation_group.effective_until,
        event_row.id AS competition_event_id, event_row.title AS competition_event_title,
        variation_group.open_ended_exception,
        membership.id AS membership_id, subject.name AS athlete_name
 FROM training_variation_groups variation_group
 JOIN training_groups group_row ON group_row.id = variation_group.training_group_id
-LEFT JOIN modalities modality ON modality.id = variation_group.craft_modality_id
 LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
 JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
 JOIN user_memberships membership ON membership.id = variation_member.membership_id
@@ -1034,13 +1048,18 @@ ORDER BY plan.week_start DESC, plan.id;
 SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
        subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
 FROM training_plans plan
-JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
+JOIN training_group_members group_member ON group_member.group_id = group_row.id
 JOIN user_memberships membership ON membership.id = group_member.membership_id
 JOIN users subject ON subject.id = membership.user_id AND subject.is_active
 JOIN training_sessions session ON session.plan_id = plan.id
 WHERE plan.id = sqlc.arg(plan_id)
-  AND (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date >= membership.starts_on
-  AND (membership.ends_on IS NULL OR (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date <= membership.ends_on)
+  AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
+  AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
+  AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
+  AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
+  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id;
 
 -- name: LockStructuredTrainingPlanForPublication :one
@@ -1058,6 +1077,15 @@ LEFT JOIN LATERAL (
 WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL
 FOR UPDATE OF plan;
 
+-- name: LockStructuredPublicationMemberships :many
+-- Lock every intended row in UUID order before any prescription insert. A
+-- concurrent non-key ends_on update must finish (or abort the serializable
+-- publication) before final eligibility is accepted.
+SELECT membership.id FROM user_memberships membership
+WHERE membership.id = ANY(sqlc.arg(membership_ids)::uuid[])
+ORDER BY membership.id
+FOR SHARE OF membership;
+
 -- name: CreateTrainingPlanPublication :one
 INSERT INTO training_plan_publications (
  plan_id, revision, source_updated_at, change_summary, supersedes_id, published_by_id
@@ -1074,13 +1102,18 @@ INSERT INTO training_prescriptions (
          sqlc.arg(snapshot), sqlc.arg(snapshot_sha256)
 FROM training_plan_publications publication
 JOIN training_plans plan ON plan.id = publication.plan_id
+JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_sessions session ON session.id = sqlc.arg(session_id) AND session.plan_id = plan.id
 JOIN user_memberships membership ON membership.id = sqlc.arg(membership_id) AND membership.user_id = sqlc.arg(athlete_user_id)
 JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
-JOIN training_group_members group_member ON group_member.group_id = plan.training_group_id AND group_member.membership_id = membership.id
+JOIN training_group_members group_member ON group_member.group_id = group_row.id AND group_member.membership_id = membership.id
 WHERE publication.id = sqlc.arg(publication_id)
-  AND membership.starts_on <= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
-  AND (membership.ends_on IS NULL OR membership.ends_on >= (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date)
+  AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
+  AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
+  AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
+  AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
+  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at;
 
 -- name: ListTrainingPrescriptionsForViewer :many

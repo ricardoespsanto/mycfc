@@ -1198,7 +1198,9 @@ func (h Events) resolveEventSubject(ctx context.Context, actor CurrentUser, even
 	}
 	authorized := make([]eventSubject, 0, len(candidates))
 	for _, candidate := range candidates {
-		_, err := h.Store.GetRespondableEvent(ctx, dbgen.GetRespondableEventParams{SubjectUserID: candidate.ID, EventID: eventID, ActorUserID: actor.ID})
+		// Detail visibility follows the event's historical audience; response
+		// eligibility deliberately remains current and is checked by Respond.
+		_, err := h.Store.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: candidate.ID, EventID: eventID})
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}

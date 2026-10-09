@@ -1745,10 +1745,14 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 		}
 		effectiveUntil = pgtype.Date{Time: parsed, Valid: true}
 	}
-	craftID, craftErr := optionalUUID(r.PostForm.Get("craft_modality_id"))
+	craftCode := strings.TrimSpace(r.PostForm.Get("craft_code"))
+	var selectedCraft *string
+	if craftCode != "" {
+		selectedCraft = &craftCode
+	}
 	competitionID, competitionErr := optionalUUID(r.PostForm.Get("competition_event_id"))
 	openEnded := r.PostForm.Get("open_ended_exception") == "true"
-	if groupErr != nil || fromErr != nil || craftErr != nil || competitionErr != nil || !validTrainingText(name, 2, 120) || (effectiveUntil.Valid && effectiveUntil.Time.Before(effectiveFrom)) {
+	if groupErr != nil || fromErr != nil || competitionErr != nil || !validTrainingText(name, 2, 120) || (effectiveUntil.Valid && effectiveUntil.Time.Before(effectiveFrom)) {
 		h.System.RequestRejected(w, r)
 		return
 	}
@@ -1777,10 +1781,10 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 		h.System.InternalError(w, r)
 		return
 	}
-	crewSize, craftAllowed := structuredCrewSize(modalities, craftID)
+	crewSize, craftAllowed := structuredCrewSize(modalities, selectedCraft)
 	switch kind {
 	case dbgen.TrainingVariationGroupKindSUBGROUP:
-		if craftID != nil || competitionID != nil || openEnded {
+		if selectedCraft != nil || competitionID != nil || openEnded {
 			h.System.RequestRejected(w, r)
 			return
 		}
@@ -1812,7 +1816,7 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 		}
 	}
 	_, err = h.Store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{
-		TrainingGroupID: trainingGroupID, Name: name, Kind: kind, CraftModalityID: craftID,
+		TrainingGroupID: trainingGroupID, Name: name, Kind: kind, CraftCode: selectedCraft,
 		EffectiveFrom: pgtype.Date{Time: effectiveFrom, Valid: true}, EffectiveUntil: effectiveUntil,
 		CompetitionEventID: competitionID, OpenEndedException: openEnded, CreatedByID: user.ID,
 	}, MembershipIDs: membershipIDs})
@@ -2607,28 +2611,28 @@ func structuredVariationMembers(rows []dbgen.ListManagedTrainingGroupMembersRow)
 	return result
 }
 
-func structuredCrewModalities(rows []dbgen.ListStructuredCrewModalitiesRow) []pages.StructuredTrainingChoice {
+func structuredCrewModalities(rows []dbgen.CanoeCraftClass) []pages.StructuredTrainingChoice {
 	result := make([]pages.StructuredTrainingChoice, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, pages.StructuredTrainingChoice{ID: row.ID.String(), Name: row.Code + " · " + row.NamePt})
+		result = append(result, pages.StructuredTrainingChoice{ID: row.Code, Name: row.Code + " · " + row.NamePt})
 	}
 	return result
 }
 
-func structuredCrewSize(rows []dbgen.ListStructuredCrewModalitiesRow, craftID *uuid.UUID) (int, bool) {
-	if craftID == nil {
+func structuredCrewSize(rows []dbgen.CanoeCraftClass, craftCode *string) (int, bool) {
+	if craftCode == nil {
 		return 0, false
 	}
 	for _, row := range rows {
-		if row.ID != *craftID {
+		if row.Code != *craftCode {
 			continue
 		}
-		index := len(row.Code)
-		for index > 0 && row.Code[index-1] >= '0' && row.Code[index-1] <= '9' {
-			index--
+		switch row.Code {
+		case "C2", "K2":
+			return 2, true
+		case "K4":
+			return 4, true
 		}
-		size, err := strconv.Atoi(row.Code[index:])
-		return size, err == nil && size >= 2
 	}
 	return 0, false
 }

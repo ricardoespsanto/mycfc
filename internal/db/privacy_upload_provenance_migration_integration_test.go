@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestPrivacyUploadProvenanceForwardMigrationAppliesToFoundationSchema(t *testing.T) {
+func TestMediaUploadProvenanceForwardMigrationAppliesToFoundationSchema(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {

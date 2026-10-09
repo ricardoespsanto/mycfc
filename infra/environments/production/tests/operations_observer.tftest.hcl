@@ -6,36 +6,38 @@ mock_provider "cloudflare" {}
 mock_provider "random" {}
 
 variables {
-  route53_zone_id         = "ZAAAAAAAAAAAAA"
-  github_org              = "ricardoespsanto"
-  github_repo             = "mycfc"
-  calendar_competition_id = "competition@example.com"
-  calendar_training_id    = "training@example.com"
-  calendar_social_id      = "social@example.com"
-  calendar_cleanups_id    = "cleanups@example.com"
-  google_calendar_api_key = "test-key"
-  gallery_url             = "https://mycfcoimbra.com/gallery"
-  consent_terms_version   = "test"
-  consent_terms_sha256    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  consent_image_version   = "test"
-  consent_image_sha256    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  consent_minor_version   = "test"
-  consent_minor_sha256    = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  image_digest            = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-  consent_terms_url       = "https://mycfcoimbra.com/legal/terms"
-  consent_image_url       = "https://mycfcoimbra.com/legal/image"
-  consent_minor_url       = "https://mycfcoimbra.com/legal/minor"
-  privacy_notice_url      = "https://mycfcoimbra.com/legal/privacy"
-  cookie_notice_url       = "https://mycfcoimbra.com/legal/cookies"
-  data_rights_contact     = "privacy@example.com"
-  image_git_sha           = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  postgres_password       = "test-bootstrap"
-  app_db_username         = "mycfc_app"
-  app_db_password         = "test-app"
-  migration_db_username   = "mycfc_migrator"
-  migration_db_password   = "test-migrator"
-  turnstile_site_key      = "test-site-key"
-  turnstile_secret_key    = "test-secret-key"
+  route53_zone_id               = "ZAAAAAAAAAAAAA"
+  github_org                    = "ricardoespsanto"
+  github_repo                   = "mycfc"
+  calendar_competition_id       = "competition@example.com"
+  calendar_training_id          = "training@example.com"
+  calendar_social_id            = "social@example.com"
+  calendar_cleanups_id          = "cleanups@example.com"
+  google_calendar_api_key       = "test-key"
+  polar_client_id               = ""
+  polar_client_secret           = ""
+  activity_credential_key_id    = ""
+  activity_credential_keys_json = ""
+  gallery_url                   = "https://mycfcoimbra.com/gallery"
+  consent_terms_version         = "test"
+  consent_terms_sha256          = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  consent_image_version         = "test"
+  consent_image_sha256          = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  consent_minor_version         = "test"
+  consent_minor_sha256          = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  image_digest                  = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  consent_terms_url             = "https://mycfcoimbra.com/legal/terms"
+  consent_image_url             = "https://mycfcoimbra.com/legal/image"
+  consent_minor_url             = "https://mycfcoimbra.com/legal/minor"
+  privacy_notice_url            = "https://mycfcoimbra.com/legal/privacy"
+  cookie_notice_url             = "https://mycfcoimbra.com/legal/cookies"
+  data_rights_contact           = "privacy@example.com"
+  image_git_sha                 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  app_db_username               = "mycfc_app"
+  app_db_password               = "test-app"
+  migration_db_username         = "mycfc_migrator"
+  turnstile_site_key            = "test-site-key"
+  turnstile_secret_key          = "test-secret-key"
 }
 
 run "observer_is_inert_by_default" {
@@ -91,14 +93,14 @@ run "observer_is_short_lived_and_denies_sensitive_reads_and_mutation" {
   }
   assert {
     condition = alltrue([
-      for action in ["s3:GetObject*", "s3:ListBucket*", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "logs:PutLogEvents", "ecr:PutImage", "sts:AssumeRole"] :
+      for action in ["s3:DeleteObject*", "s3:ListBucket*", "s3:PutObject", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "logs:PutLogEvents", "ecr:PutImage", "sts:AssumeRole"] :
       contains(local.operations_observer_deny_actions, action)
     ])
     error_message = "Observer policy must explicitly deny state, secret, write, and role-chaining capability."
   }
   assert {
     condition = alltrue([
-      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarms"] :
+      for action in ["logs:FilterLogEvents", "logs:GetLogEvents", "ecr:DescribeImages", "cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms"] :
       contains(concat(local.operations_observer_log_actions, local.operations_observer_ecr_actions, local.operations_observer_alarm_actions), action)
     ])
     error_message = "Observer policy must contain only the required operational read paths."

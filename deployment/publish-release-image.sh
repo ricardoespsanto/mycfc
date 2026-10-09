@@ -6,6 +6,18 @@ set -eu
 : "${ECR_REPOSITORY_NAME:?ECR_REPOSITORY_NAME is required}"
 : "${GIT_SHA:?GIT_SHA is required}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
+: "${RELEASE_VERSION:?RELEASE_VERSION is required}"
+
+is_semantic_version() {
+	# A release version is the authority for production promotion. Build tags
+	# identify artifacts, but can never make one eligible for production.
+	printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+}
+
+is_semantic_version "$RELEASE_VERSION" || {
+	printf '%s\n' 'RELEASE_VERSION must be a canonical semantic version' >&2
+	exit 1
+}
 
 case "$GIT_SHA" in
 	[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
@@ -32,7 +44,7 @@ write_output() {
 
 prepare() {
 	git_tag="git-$GIT_SHA"
-	release_tag="release-$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
+	release_tag="release-$RELEASE_VERSION-$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
 
 	write_output "repository=$ECR_REPOSITORY"
 	write_output "git_tag=$git_tag"
@@ -55,6 +67,24 @@ verify_image_revision() {
 		printf '%s\n' "refusing to promote $image: revision label is $revision, expected $GIT_SHA" >&2
 		exit 1
 	fi
+}
+
+verify_release_manifest() {
+	: "${RELEASE_PUBLICATION_MANIFEST:?RELEASE_PUBLICATION_MANIFEST is required for production promotion}"
+	: "${RELEASE_TAG:?RELEASE_TAG is required for production promotion}"
+	[ -f "$RELEASE_PUBLICATION_MANIFEST" ] || {
+		printf '%s\n' 'release publication manifest is missing' >&2
+		exit 1
+	}
+	jq -e --arg version "$RELEASE_VERSION" --arg sha "$GIT_SHA" \
+		--arg repository "$ECR_REPOSITORY" --arg digest "$IMAGE_DIGEST" --arg tag "$RELEASE_TAG" '
+		.contract == "mycfc/release-publication/v1" and .version == $version and
+		.git_sha == $sha and .image == {repository:$repository,digest:$digest} and
+		.release_tag == $tag
+	' "$RELEASE_PUBLICATION_MANIFEST" >/dev/null || {
+		printf '%s\n' 'release publication manifest does not authorize this production promotion' >&2
+		exit 1
+	}
 }
 
 promote_release_tag() {
@@ -98,6 +128,11 @@ esac
 
 git_tag="git-$GIT_SHA"
 release_tag=$RELEASE_TAG
+case "$release_tag" in
+	"release-$RELEASE_VERSION"-??????????????-"$GIT_SHA") ;;
+	*) printf '%s\n' 'RELEASE_TAG must bind the semantic release version, tag timestamp, and Git SHA' >&2; exit 1 ;;
+esac
+verify_release_manifest
 if git_digest=$(image_digest_for_tag "$git_tag"); then
 	if [ "$git_digest" != "$IMAGE_DIGEST" ]; then
 		printf '%s\n' "refusing to promote $ECR_REPOSITORY:$git_tag: digest is $git_digest, expected $IMAGE_DIGEST" >&2

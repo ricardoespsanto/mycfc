@@ -52,6 +52,15 @@ UPDATE users SET name = sqlc.arg(name), email = sqlc.narg(email),
 WHERE id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at) AND erased_at IS NULL
 RETURNING updated_at;
 
+-- name: UpdateMemberIdentityKeepingBirthDate :one
+-- Do not target date_of_birth for non-DOB edits: classified DOBs are protected
+-- even against UPDATE OF statements that submit an unchanged value.
+UPDATE users SET name = sqlc.arg(name), email = sqlc.narg(email),
+    email_verified_at = CASE WHEN email IS DISTINCT FROM sqlc.narg(email) THEN NULL ELSE email_verified_at END,
+    updated_at = clock_timestamp()
+WHERE id = sqlc.arg(user_id) AND updated_at = sqlc.arg(expected_updated_at) AND erased_at IS NULL
+RETURNING updated_at;
+
 -- name: CreateMemberProfileAudit :one
 INSERT INTO member_profile_audit_events (actor_user_id, subject_user_id, action, changed_fields)
 VALUES (sqlc.arg(actor_user_id), sqlc.arg(subject_user_id), sqlc.arg(action), sqlc.arg(changed_fields))

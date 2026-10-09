@@ -15,6 +15,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/app"
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -31,7 +32,6 @@ var (
 		return pgx.Connect(ctx, databaseURL)
 	}
 	loadDatabaseCommandConfig = config.Load
-	executePrivacyCommand     = runPrivacyCommand
 )
 
 const legacyProductionAppDatabaseRole = "mycfc_app"
@@ -59,6 +59,9 @@ func main() {
 }
 
 func runServerCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "disposable-release-contract" {
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"version": releasecontract.Version, "candidate": releasecontract.Candidate, "database": releasecontract.Database, "predecessor_digest": releasecontract.PredecessorDigest, "final_digest": releasecontract.FinalDigest, "baseline_digest": releasecontract.BaselineDigest})
+	}
 	if len(args) == 1 && args[0] == "schema-digest" {
 		_, err := fmt.Fprintln(os.Stdout, db.EmbeddedMigrationDigest())
 		return err
@@ -69,17 +72,11 @@ func runServerCommand(ctx context.Context, args []string) error {
 	if len(args) == 1 && args[0] == "guardian-release-status" {
 		return guardianReleaseStatus(ctx)
 	}
-	if args[0] == "privacy" {
-		if err := executePrivacyCommand(ctx, args[1:]); err != nil {
-			return errors.New("privacy operator command failed")
-		}
-		return nil
-	}
 	return runDatabaseCommand(ctx, args[0])
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
-	if command != "bootstrap-db" && command != "migrate" && command != "harden-db" && command != "bind-guardian-release" && command != "provision-privacy-activation-disable" && command != "provision-guardian-activation" && command != "provision-guardian-release-bind" {
+	if command != "bootstrap-db" && command != "migrate" && command != "harden-db" && command != "bind-guardian-release" && command != "provision-guardian-activation" && command != "provision-guardian-release-bind" {
 		return fmt.Errorf("unknown command %q", command)
 	}
 	if command == "bind-guardian-release" {
@@ -98,9 +95,6 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		}
 		defer conn.Close(ctx)
 		databaseName := connectionConfig.Database
-		if command == "provision-privacy-activation-disable" {
-			return provisionPrivacyActivationDisable(ctx, conn, databaseName)
-		}
 		if command == "provision-guardian-activation" {
 			return provisionGuardianActivation(ctx, conn, databaseName)
 		}
@@ -128,10 +122,18 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		logDatabaseCommandConfiguration(command, configSource, connectionConfig.Host, databaseName, connectionConfig.User, credentials)
 		switch command {
 		case "bootstrap-db":
-			return db.BootstrapRoles(ctx, conn, databaseName, credentials)
+			return bootstrapRelease(ctx, conn, databaseName, credentials, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"))
 		case "migrate":
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+				return err
+			}
+			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
 			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
 		case "harden-db":
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+				return err
+			}
+			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
 			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, credentials)
 		}
 	}
@@ -142,7 +144,7 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	var databaseURL string
 	switch command {
-	case "bootstrap-db", "harden-db", "provision-privacy-activation-disable", "provision-guardian-activation", "provision-guardian-release-bind":
+	case "bootstrap-db", "harden-db", "provision-guardian-activation", "provision-guardian-release-bind":
 		databaseURL, err = cfg.BootstrapDatabaseURL()
 	case "migrate":
 		databaseURL, err = cfg.MigrationDatabaseURL()
@@ -155,9 +157,6 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 	defer conn.Close(ctx)
-	if command == "provision-privacy-activation-disable" {
-		return provisionPrivacyActivationDisable(ctx, conn, cfg.DBName)
-	}
 	if command == "provision-guardian-activation" {
 		return provisionGuardianActivation(ctx, conn, cfg.DBName)
 	}
@@ -172,7 +171,11 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	logDatabaseCommandConfiguration(command, "aws_remote", cfg.DBHost, cfg.DBName, connectionRole, credentials)
 	if command == "bootstrap-db" {
-		return db.BootstrapRoles(ctx, conn, cfg.DBName, credentials)
+		return bootstrapRelease(ctx, conn, cfg.DBName, credentials, cfg.AppVersion, cfg.GITSHA)
+	}
+	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+	if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA); err != nil {
+		return err
 	}
 	if command == "harden-db" {
 		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
@@ -180,14 +183,28 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
 }
 
-func provisionPrivacyActivationDisable(ctx context.Context, conn databaseCommandConnection, databaseName string) error {
-	disableURL := strings.TrimSpace(os.Getenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL"))
-	config, err := pgx.ParseConfig(disableURL)
-	if err != nil || config.Database != databaseName || config.User != "mycfc_privacy_activation_disable" || strings.TrimSpace(config.Password) == "" {
-		return errors.New("privacy activation disable provisioning credential rejected")
+func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnection, database, version, candidate string) error {
+	if releasecontract.Version == "" && releasecontract.Candidate == "" {
+		return nil
 	}
-	logDatabaseCommandConfiguration("provision-privacy-activation-disable", "dedicated_break_glass_file", config.Host, databaseName, "bootstrap administrator", db.RoleCredentials{})
-	return db.ProvisionPrivacyActivationDisableRole(ctx, conn, databaseName, config.User, config.Password)
+	if !releasecontract.Matches(version, candidate, database) {
+		return errors.New("disposable release binary/runtime identity mismatch")
+	}
+	var completed bool
+	if err := conn.QueryRow(ctx, "SELECT mycfc_disposable_release.matches($1,$2,$3,$4)", database, version, candidate, releasecontract.FinalDigest).Scan(&completed); err != nil || !completed {
+		return errors.New("disposable completion required before migration/hardening")
+	}
+	return nil
+}
+
+func bootstrapRelease(ctx context.Context, conn databaseCommandConnection, database string, credentials db.RoleCredentials, version, candidate string) error {
+	if releasecontract.Version == "" && releasecontract.Candidate == "" {
+		return db.BootstrapRoles(ctx, conn, database, credentials)
+	}
+	if !releasecontract.Matches(version, candidate, database) {
+		return errors.New("disposable release binary/runtime identity mismatch")
+	}
+	return db.BootstrapDisposableRelease(ctx, conn, database, credentials)
 }
 
 func provisionGuardianActivation(ctx context.Context, conn databaseCommandConnection, databaseName string) error {
@@ -253,16 +270,14 @@ func guardianReleaseStatus(ctx context.Context) error {
 
 func databaseRoleCredentialsFromConfig(cfg config.Config) db.RoleCredentials {
 	return db.RoleCredentials{
-		AppUsername:                     cfg.DBUser,
-		AppPassword:                     cfg.DBPassword.Value(),
-		MigrationUsername:               cfg.MigrationDBUser,
-		MigrationPassword:               cfg.MigrationDBPassword.Value(),
-		PrivacyExecutorUsername:         os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
-		PrivacyExecutorPassword:         os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
-		PrivacyActivationBrokerUsername: os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_USER"),
-		PrivacyActivationBrokerPassword: os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_PASSWORD"),
-		PrivacyRestoreObserverUsername:  os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_USER"),
-		PrivacyRestoreObserverPassword:  os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD"),
+		AppUsername:           cfg.DBUser,
+		AppPassword:           cfg.DBPassword.Value(),
+		MigrationUsername:     cfg.MigrationDBUser,
+		MigrationPassword:     cfg.MigrationDBPassword.Value(),
+		MediaCleanupUsername:  cfg.MediaCleanupDBUser,
+		MediaCleanupPassword:  cfg.MediaCleanupDBPassword.Value(),
+		DataRetentionUsername: cfg.DataRetentionDBUser,
+		DataRetentionPassword: cfg.DataRetentionDBPassword.Value(),
 	}
 }
 
@@ -287,24 +302,21 @@ func logDatabaseCommandConfiguration(command, source, host, databaseName, connec
 		"connection_role", connectionRole,
 		"app_role", credentials.AppUsername,
 		"migration_role", credentials.MigrationUsername,
-		"privacy_executor_configured", credentials.PrivacyExecutorUsername != "",
-		"privacy_activation_broker_configured", credentials.PrivacyActivationBrokerUsername != "",
-		"privacy_restore_observer_configured", credentials.PrivacyRestoreObserverUsername != "",
+		"media_cleanup_configured", credentials.MediaCleanupUsername != "",
+		"data_retention_configured", credentials.DataRetentionUsername != "",
 	)
 }
 
 func databaseRoleCredentialsFromEnvironment() db.RoleCredentials {
 	return db.RoleCredentials{
-		AppUsername:                     os.Getenv("APP_DB_USER"),
-		AppPassword:                     os.Getenv("APP_DB_PASSWORD"),
-		MigrationUsername:               os.Getenv("MIGRATION_DB_USER"),
-		MigrationPassword:               os.Getenv("MIGRATION_DB_PASSWORD"),
-		PrivacyExecutorUsername:         os.Getenv("PRIVACY_EXECUTOR_DB_USER"),
-		PrivacyExecutorPassword:         os.Getenv("PRIVACY_EXECUTOR_DB_PASSWORD"),
-		PrivacyActivationBrokerUsername: os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_USER"),
-		PrivacyActivationBrokerPassword: os.Getenv("PRIVACY_ACTIVATION_BROKER_DB_PASSWORD"),
-		PrivacyRestoreObserverUsername:  os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_USER"),
-		PrivacyRestoreObserverPassword:  os.Getenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD"),
+		AppUsername:           os.Getenv("APP_DB_USER"),
+		AppPassword:           os.Getenv("APP_DB_PASSWORD"),
+		MigrationUsername:     os.Getenv("MIGRATION_DB_USER"),
+		MigrationPassword:     os.Getenv("MIGRATION_DB_PASSWORD"),
+		MediaCleanupUsername:  os.Getenv("MEDIA_CLEANUP_DB_USER"),
+		MediaCleanupPassword:  os.Getenv("MEDIA_CLEANUP_DB_PASSWORD"),
+		DataRetentionUsername: os.Getenv("DATA_RETENTION_DB_USER"),
+		DataRetentionPassword: os.Getenv("DATA_RETENTION_DB_PASSWORD"),
 	}
 }
 

@@ -4,6 +4,14 @@ def permitted_resource_actions:
   . == ["read"] or
   . == ["update"];
 
+def permitted_resource_change:
+  (.change.actions | permitted_resource_actions) or
+  (
+    .address == "aws_ecr_lifecycle_policy.app" and
+    .type == "aws_ecr_lifecycle_policy" and
+    .change.actions == ["delete", "create"]
+  );
+
 .format_version == "1.2" and
 .errored == false and
 .complete == true and
@@ -13,7 +21,7 @@ def permitted_resource_actions:
 ((.deferred_action_invocations // []) | length == 0) and
 all(.resource_changes[]?;
   (.change.importing? == null) and
-  (.change.actions | permitted_resource_actions)
+  permitted_resource_change
 ) and
 ([
   .configuration.root_module |
