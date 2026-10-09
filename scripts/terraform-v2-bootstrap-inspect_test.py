@@ -59,6 +59,56 @@ class BootstrapInspectTest(unittest.TestCase):
             inspect.inspect_drift(plan)
         self.assertNotIn("injected", str(caught.exception))
 
+    def test_refusal_categories_and_expected_only_inventory_never_echo_private_data(self):
+        cases = (
+            ("count", lambda p: p["resource_drift"].append({
+                "address": "private-extra-address", "change": {"actions": ["private-action"]}})),
+            ("inventory-shape", lambda p: p.update(resource_drift={"private-key": "private-value"})),
+            ("entry-shape", lambda p: p["resource_drift"].__setitem__(0, "private-entry")),
+            ("address-shape", lambda p: p["resource_drift"][0].update(address="private\n::warning::injected")),
+            ("unexpected-address", lambda p: p["resource_drift"][0].update(address="private-extra-address")),
+            ("duplicate-expected", lambda p: p["resource_drift"][1].update(
+                address=p["resource_drift"][0]["address"])),
+            ("change-shape", lambda p: p["resource_drift"][0].update(change="private-change")),
+            ("action-class", lambda p: p["resource_drift"][0]["change"].update(actions=["private-action"])),
+        )
+        for category, mutate in cases:
+            with self.subTest(category=category):
+                plan = plan_with_drift()
+                mutate(plan)
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("drift inventory differs from the four expected resources", message)
+                self.assertIn(f"category={category}", message)
+                for private in ("private-", "secret-principal", "secret-boundary", "secret-old-value",
+                                "secret-new-value", "injected", "::warning::"):
+                    self.assertNotIn(private, message)
+                if category != "inventory-shape":
+                    self.assertIn("entries=", message)
+                    self.assertIn("expected=", message)
+                    for address in inspect.EXPECTED_DRIFT:
+                        self.assertIn(address + ":", message)
+        plan = plan_with_drift()
+        plan["resource_drift"][0]["change"]["actions"] = ["delete", "create"]
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        self.assertIn("category=action-class", str(caught.exception))
+        self.assertIn("other=1", str(caught.exception))
+        self.assertNotIn("secret-principal", str(caught.exception))
+
+    def test_count_refusal_distinguishes_missing_expected_and_known_action_classes(self):
+        plan = plan_with_drift()
+        removed = plan["resource_drift"].pop()
+        plan["resource_drift"][0]["change"]["actions"] = ["delete"]
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        message = str(caught.exception)
+        self.assertIn("category=count; entries=3", message)
+        self.assertIn(removed["address"] + ":0:", message)
+        self.assertIn("delete=1", message)
+        self.assertNotIn("secret-old-value", message)
+
     def test_additional_role_fields_report_names_without_values(self):
         plan = plan_with_drift()
         before = plan["resource_drift"][0]["change"]["before"]
