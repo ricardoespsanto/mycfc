@@ -22,7 +22,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -64,8 +64,8 @@ type Profile struct {
 }
 
 type UploadService interface {
-	Upload(context.Context, privacyrequests.UploadInput, storage.ValidatedPhoto) (privacyrequests.PreparedUpload, error)
-	AttachmentFailed(context.Context, privacyrequests.PreparedUpload) error
+	Upload(context.Context, mediauploads.UploadInput, storage.ValidatedPhoto) (mediauploads.PreparedUpload, error)
+	AttachmentFailed(context.Context, mediauploads.PreparedUpload) error
 }
 
 func (h Profile) Get(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +185,7 @@ func (h Profile) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 		h.System.InternalError(w, r)
 		return
 	}
-	upload, err := uploader.Upload(r.Context(), privacyrequests.UploadInput{SubjectUserID: &subjectID, ActorUserID: actor.ID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}, photo)
+	upload, err := uploader.Upload(r.Context(), mediauploads.UploadInput{SubjectUserID: &subjectID, ActorUserID: actor.ID, SourceKind: "MEMBER_PROFILE_PHOTO", SourceRef: subjectID}, photo)
 	if err != nil {
 		h.System.InternalError(w, r)
 		return

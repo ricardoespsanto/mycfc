@@ -185,11 +185,28 @@ func TestGuardianReleaseBindLoginHasOnlyDestructiveReleaseCutoff(t *testing.T) {
 
 func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *testing.T) {
 	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	control, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close(context.Background()) })
+	database := "guardian_first_rollout_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err = control.Exec(ctx, `CREATE DATABASE `+quoteIdentifier(database)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = control.Exec(context.Background(), `DROP DATABASE `+quoteIdentifier(database)+` WITH (FORCE)`)
+	})
+	adminConfig := control.Config().Copy()
+	adminConfig.Database = database
+	admin, err := pgx.ConnectConfig(ctx, adminConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	if _, err = admin.Exec(ctx, baselineSchema); err != nil {
+		t.Fatal(err)
+	}
 
 	rewind, err := admin.Begin(ctx)
 	if err != nil {
@@ -305,18 +322,13 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *test
 		_ = upgrade.Rollback(ctx)
 		t.Fatal(err)
 	}
-	// Restore every later release before testing the current binary's binding.
-	// Leaving shared test storage at 007 would poison subsequent evidence tests.
+	// The isolated database started from the current baseline, so unrelated later
+	// objects were never removed by the guardian-only rewind. Restore their
+	// inventory records without replaying non-idempotent migrations. The database
+	// is dropped at cleanup, so the staged boundary cannot leak to another test.
 	for _, version := range EmbeddedMigrationInventory() {
 		if version == baselineVersion || version <= "202609120007_guardian_release_status" {
 			continue
-		}
-		migration, readErr := migrationFiles.ReadFile("migrations/" + version + ".sql")
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if _, err = upgrade.Exec(ctx, string(migration)); err != nil {
-			t.Fatal(err)
 		}
 		if _, err = upgrade.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
 			t.Fatal(err)
@@ -326,30 +338,11 @@ func TestGuardianReleaseBindFirstRolloutStagesOn004AndAdvancesThrough007(t *test
 		t.Fatal(err)
 	}
 
-	// The production release sequence runs db-bootstrap before migrations and
-	// hardening. Recreate its fixed retention capability role here because this
-	// test deliberately reconstructed schema 004 without invoking BootstrapRoles.
-	if _, err = admin.Exec(ctx, noLoginRoleStatement(privacyRetentionRole)); err != nil {
-		t.Fatalf("recreate pre-migration bootstrap role: %v", err)
-	}
-
-	appRole := "guardian_first_rollout_web_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
-	if _, err = admin.Exec(ctx, `CREATE ROLE `+quoteIdentifier(appRole)+` NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), `DROP OWNED BY `+quoteIdentifier(appRole))
-		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(appRole))
-	})
-	var migrationRole string
-	if err = admin.QueryRow(ctx, `SELECT current_user`).Scan(&migrationRole); err != nil {
-		t.Fatal(err)
-	}
-	if err = HardenPrivacyExecutionRoles(ctx, admin, admin.Config().Database, RoleCredentials{
-		AppUsername: appRole, AppPassword: "unused",
-		MigrationUsername: migrationRole, MigrationPassword: "unused",
-	}); err != nil {
-		t.Fatalf("harden after staged 005 and 006: %v", err)
+	// Re-run the dedicated release-role setup after the guardian API appears,
+	// just as the release workflow does after migrations. This fixture is scoped
+	// to that role and does not need to provision unrelated current privacy roles.
+	if err = ProvisionGuardianReleaseBindRole(ctx, admin, admin.Config().Database, guardianReleaseBindRole, password); err != nil {
+		t.Fatalf("harden release role after staged 005 through 007: %v", err)
 	}
 
 	var bind, releaseStatus, status, preflight, enable, disable, runtimeRead, approvalRead, opsCreate bool

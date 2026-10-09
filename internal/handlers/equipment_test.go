@@ -14,7 +14,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -173,7 +173,7 @@ func TestEquipmentUploadHelperFailsClosedAndSchedulesAttachmentCleanup(t *testin
 	if successful.deletes != 1 {
 		t.Fatalf("attachment cleanup calls=%d", successful.deletes)
 	}
-	handler.failEquipmentAttachment(request, (*privacyrequests.PreparedUpload)(nil))
+	handler.failEquipmentAttachment(request, (*mediauploads.PreparedUpload)(nil))
 }
 
 func TestEquipmentPhotoValidationRendersRecoverableCreateAndEditErrors(t *testing.T) {

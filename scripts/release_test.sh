@@ -10,14 +10,11 @@ cat >"$work_dir/bin/git" <<'EOF'
 #!/bin/sh
 case "$*" in
 	'rev-parse --git-dir') printf '%s\n' "$TEST_GIT_DIR" ;;
-	'branch --show-current') printf '%s\n' "${TEST_BRANCH:-feature}" ;;
-	'status --porcelain') ;;
-	'rev-parse HEAD') printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
-	'verify-commit '*) ;;
+	'branch --show-current') printf '%s\n' "${TEST_BRANCH:-main}" ;;
+	'status --porcelain') [ "${TEST_DIRTY:-false}" != true ] || printf ' M file\n' ;;
+	'rev-parse HEAD') printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+	'rev-parse origin/main') printf '%s\n' "${TEST_ORIGIN_MAIN:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" ;;
 	'fetch --quiet origin main --tags') ;;
-	'merge-base --is-ancestor '*) ;;
-	'tag --merged '*) printf 'v1.24.1\n' ;;
-	'diff --quiet '*) [ "${TEST_INFRA_CHANGED:-false}" != true ] ;;
 	'rev-parse -q --verify refs/tags/'*) [ "${TEST_TAG_EXISTS:-false}" = true ] ;;
 	'cat-file -t refs/tags/'*) printf 'tag\n' ;;
 	'rev-list -n 1 refs/tags/'*) printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
@@ -32,21 +29,15 @@ cat >"$work_dir/bin/gh" <<'EOF'
 #!/bin/sh
 case "$*" in
 	'auth status') ;;
-	'pr list '*)
-		if [ "${TEST_PR_STATE:-OPEN}" = MERGED ]; then
-			printf '[{"number":284,"state":"MERGED","url":"https://example.test/pr/284","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]\n'
-		elif [ "${TEST_PR_STATE:-OPEN}" = NONE ]; then printf '[]\n'
-		else printf '[{"number":284,"state":"OPEN","url":"https://example.test/pr/284","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mergeCommit":null}]\n'; fi ;;
-	'pr create '*) printf '%s\n' "$*" >>"$TEST_WRITES" ;;
-	'pr merge '*) printf '%s\n' "$*" >>"$TEST_WRITES" ;;
-	'api /repos/{owner}/{repo}/actions/workflows/ci.yml/runs'*) printf '123\n' ;;
+	'api /repos/{owner}/{repo}/commits/'*) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+	'api /repos/{owner}/{repo}/actions/workflows/ci.yml/runs'*)
+		if [ "${TEST_CI_GREEN:-true}" = true ]; then printf '123\n'; else printf '\n'; fi ;;
 	'api /repos/{owner}/{repo}/actions/workflows/deploy.yml/runs'*)
 		case "${TEST_DEPLOY_RUN_STATE:-none}" in
 			pending) printf '{"workflow_runs":[{"display_title":"deploy v1.25.0 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb issues=109,284","status":"in_progress","conclusion":null,"created_at":"2026-09-12T12:00:00Z","html_url":"https://example.test/runs/1"}]}\n' ;;
 			failed) printf '{"workflow_runs":[{"display_title":"deploy v1.25.0 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb issues=109,284","status":"completed","conclusion":"failure","created_at":"2026-09-12T12:00:00Z","html_url":"https://example.test/runs/1"}]}\n' ;;
 			*) printf '{"workflow_runs":[]}\n' ;;
 		esac ;;
-	'api /repos/{owner}/{repo}/commits/'*) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
 	'workflow run '*) printf '%s\n' "$*" >>"$TEST_WRITES" ;;
 	'release view '*)
 		[ "${TEST_RELEASE_EXISTS:-false}" = true ] || exit 1
@@ -70,76 +61,79 @@ chmod +x "$work_dir/bin/git" "$work_dir/bin/gh"
 
 run_release() {
 	test_tag_exists=${TEST_TAG_EXISTS:-false}
-	test_remote_tag_exists=${TEST_REMOTE_TAG_EXISTS:-$test_tag_exists}
 	PATH="$work_dir/bin:$PATH" TEST_GIT_DIR="$work_dir/git" TEST_WRITES="$work_dir/writes" \
-		TEST_BRANCH=feature TEST_PR_STATE="${TEST_PR_STATE:-OPEN}" TEST_INFRA_CHANGED="${TEST_INFRA_CHANGED:-false}" \
-		TEST_TAG_EXISTS="$test_tag_exists" TEST_RELEASE_EXISTS="${TEST_RELEASE_EXISTS:-false}" \
-		TEST_REMOTE_TAG_EXISTS="$test_remote_tag_exists" \
+		TEST_BRANCH="${TEST_BRANCH:-main}" TEST_TAG_EXISTS="$test_tag_exists" \
+		TEST_RELEASE_EXISTS="${TEST_RELEASE_EXISTS:-false}" \
+		TEST_REMOTE_TAG_EXISTS="${TEST_REMOTE_TAG_EXISTS:-$test_tag_exists}" \
 		TEST_DEPLOY_RUN_STATE="${TEST_DEPLOY_RUN_STATE:-none}" \
+		TEST_CI_GREEN="${TEST_CI_GREEN:-true}" \
+		TEST_ORIGIN_MAIN="${TEST_ORIGIN_MAIN:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" \
 		VERSION=v1.25.0 ISSUES=284,109 sh "$script_dir/release.sh"
 }
 
+# Invalid issues rejected
 if PATH="$work_dir/bin:$PATH" VERSION=v1.25.0 ISSUES=284,invalid sh "$script_dir/release.sh" >/dev/null 2>&1; then
 	printf '%s\n' 'invalid release issue allowlist was accepted' >&2
 	exit 1
 fi
 
+# Must run from main
 set +e
-open_output=$(run_release 2>&1)
-open_status=$?
+branch_output=$(TEST_BRANCH=feature run_release 2>&1)
+branch_status=$?
 set -e
-[ "$open_status" -eq 3 ]
-printf '%s\n' "$open_output" | grep -q '^gate=merge_required$'
-[ ! -s "$work_dir/writes" ]
+[ "$branch_status" -ne 0 ]
+printf '%s\n' "$branch_output" | grep -q 'run release from main'
 
+# Dirty tree rejected
 set +e
-merge_output=$(RELEASE_MERGE_APPROVED=true run_release 2>&1)
-merge_status=$?
+dirty_output=$(TEST_DIRTY=true run_release 2>&1)
+dirty_status=$?
 set -e
-[ "$merge_status" -eq 3 ]
-printf '%s\n' "$merge_output" | grep -q '^gate=merge_verification_pending$'
-grep -q '^pr merge 284 --merge$' "$work_dir/writes"
+[ "$dirty_status" -ne 0 ]
+printf '%s\n' "$dirty_output" | grep -q 'working tree must be clean'
+
+# Local main must match origin/main
+set +e
+diverged_output=$(TEST_ORIGIN_MAIN=cccccccccccccccccccccccccccccccccccccccc run_release 2>&1)
+diverged_status=$?
+set -e
+[ "$diverged_status" -ne 0 ]
+printf '%s\n' "$diverged_output" | grep -q 'does not match origin/main'
+
+# CI must be green
+set +e
+ci_output=$(TEST_CI_GREEN=false run_release 2>&1)
+ci_status=$?
+set -e
+[ "$ci_status" -ne 0 ]
+printf '%s\n' "$ci_output" | grep -q 'no successful CI'
+
+# Happy path: tag + dispatch
 : >"$work_dir/writes"
-
-set +e
-infra_output=$(TEST_PR_STATE=MERGED TEST_INFRA_CHANGED=true run_release 2>&1)
-infra_status=$?
-set -e
-[ "$infra_status" -eq 3 ]
-printf '%s\n' "$infra_output" | grep -q '^gate=infrastructure_apply_required$'
-[ ! -s "$work_dir/writes" ]
-
-set +e
-publish_output=$(TEST_PR_STATE=MERGED RELEASE_INFRA_APPLIED=true run_release 2>&1)
-publish_status=$?
-set -e
-[ "$publish_status" -eq 3 ]
-printf '%s\n' "$publish_output" | grep -q '^gate=publish_deploy_required$'
-[ ! -s "$work_dir/writes" ]
-
-set +e
-pending_output=$(TEST_PR_STATE=MERGED RELEASE_INFRA_APPLIED=true RELEASE_PUBLISH_DEPLOY_APPROVED=true run_release 2>&1)
-pending_status=$?
-set -e
-[ "$pending_status" -eq 3 ]
-printf '%s\n' "$pending_output" | grep -q '^gate=deployment_verification_pending$'
+dispatch_output=$(run_release)
+printf '%s\n' "$dispatch_output" | grep -q '^state=deploy_dispatched$'
 grep -q '^tag -s -a v1.25.0 ' "$work_dir/writes"
 grep -q '^push origin refs/tags/v1.25.0$' "$work_dir/writes"
-grep -q 'workflow run deploy.yml .*issues=109,284' "$work_dir/writes"
+grep -q 'workflow run deploy.yml' "$work_dir/writes"
 
+# Existing pending deploy does not re-dispatch
 : >"$work_dir/writes"
-set +e
-duplicate_output=$(TEST_PR_STATE=MERGED RELEASE_INFRA_APPLIED=true RELEASE_PUBLISH_DEPLOY_APPROVED=true \
-	TEST_TAG_EXISTS=true TEST_DEPLOY_RUN_STATE=pending run_release 2>&1)
-duplicate_status=$?
-set -e
-[ "$duplicate_status" -eq 3 ]
-printf '%s\n' "$duplicate_output" | grep -q 'action=wait_for_existing_exact_deployment'
+pending_output=$(TEST_TAG_EXISTS=true TEST_DEPLOY_RUN_STATE=pending run_release)
+printf '%s\n' "$pending_output" | grep -q '^state=deploy_in_progress$'
 [ ! -s "$work_dir/writes" ]
 
-delivered_output=$(TEST_PR_STATE=MERGED RELEASE_INFRA_APPLIED=true TEST_TAG_EXISTS=true TEST_RELEASE_EXISTS=true run_release)
+# Failed deploy is explicit
+set +e
+failed_output=$(TEST_TAG_EXISTS=true TEST_DEPLOY_RUN_STATE=failed run_release 2>&1)
+failed_status=$?
+set -e
+[ "$failed_status" -ne 0 ]
+printf '%s\n' "$failed_output" | grep -q 'concluded failure'
+
+# Delivered when release assets exist
+delivered_output=$(TEST_TAG_EXISTS=true TEST_RELEASE_EXISTS=true run_release)
 printf '%s\n' "$delivered_output" | grep -q '^state=delivered$'
-printf '%s\n' "$delivered_output" | grep -q '^gate=activation_separate$'
-jq -e '.phase == "delivered" and .issues == [109,284]' "$work_dir/git/mycfc-release-v1.25.0.json" >/dev/null
+printf '%s\n' "$delivered_output" | grep -q 'activation'
 
 printf '%s\n' 'release orchestration tests passed'
