@@ -21,10 +21,6 @@ deployment_receipt_file="$state_dir/deployment-receipt.json"
 publication_manifest_file="$state_dir/release-publication.json"
 upstream_file="$state_dir/caddy-upstream.caddy"
 lock_file="$runtime_dir/mycfc-pull-release.lock"
-restore_drill_command=${MYCFC_RESTORE_DRILL_COMMAND:-$deployment_dir/postgres-restore-drill.sh}
-restore_attestation_verify_command=${MYCFC_RESTORE_ATTESTATION_VERIFY_COMMAND:-$deployment_dir/verify-privacy-restore-attestation.sh}
-privacy_worker_command=${MYCFC_PRIVACY_WORKER_COMMAND:-$deployment_dir/privacy-worker.sh}
-privacy_worker_activation_required_status=3
 agent_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 backup_file=
 route_backup=
@@ -39,7 +35,6 @@ route_switched=false
 traffic_switched=false
 rollback_performed=false
 release_updated=false
-privacy_worker_stopped=false
 guardian_intake_active=false
 privacy_worker_active=false
 privacy_worker_activation_required=false
@@ -190,21 +185,6 @@ check_caddy_path() {
 	return 1
 }
 
-verify_privacy_worker_active() {
-	for _ in $(seq 1 10); do
-		if ! systemctl is-active --quiet mycfc-privacy-worker.service; then
-			return 1
-		fi
-		sleep 1
-	done
-}
-
-verify_privacy_worker_inactive() {
-	if systemctl is-active --quiet mycfc-privacy-worker.service; then
-		return 1
-	fi
-}
-
 observe_guardian_intake() {
 	status=$(docker compose --env-file "$env_file" -f "$compose_file" --profile release \
 		run --rm --no-deps guardian-release-bind guardian-release-status)
@@ -244,9 +224,6 @@ rollback() {
 			docker logs --tail 100 "mycfc-production-app-$candidate_slot-1" >&2 2>/dev/null || true
 		fi
 		cp "$backup_file" "$env_file"
-		if [ "$privacy_worker_stopped" = true ]; then
-			systemctl restart mycfc-privacy-worker.service || log 'privacy worker rollback restart failed'
-		fi
 		if [ -n "$release_digest" ]; then
 			write_state_value "$failed_digest_file" "$release_digest"
 			log "quarantined failed release digest $release_digest"
@@ -309,20 +286,6 @@ set +a
 : "${ECR_REPOSITORY_URL:?}"
 : "${MYCFC_DOMAIN:?}"
 
-case "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" in
-	true)
-		if [ "${PRIVACY_RESTORE_DRILL_ENABLED:-false}" != true ] || [ "${BACKUP_MANIFEST_AUTH_ENABLED:-false}" != true ]; then
-			log 'privacy restore promotion gate requires the authenticated restore drill'
-			exit 1
-		fi
-		;;
-	false) ;;
-	*) log 'invalid privacy restore promotion gate setting'; exit 1 ;;
-esac
-case "${PRIVACY_WORKER_ENABLED:-false}" in
-	true|false) ;;
-	*) log 'invalid privacy worker setting'; exit 1 ;;
-esac
 
 # AWS environment credentials belong to the application runtime. All AWS CLI
 # calls made by the deployment agent must use its narrower, root-owned profile.
@@ -354,21 +317,38 @@ ecr_password=$(aws ecr get-login-password --region "$AWS_REGION")
 printf '%s' "$ecr_password" | docker login --username AWS --password-stdin "$registry"
 
 tags=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --query 'imageDetails[].imageTags[]' --output text)
-release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-/')
-release_tag=$(printf '%s\n' "$release_tags" | sort | tail -n 1)
+release_tags=$(printf '%s\n' "$tags" | tr '\t' '\n' | awk '/^release-v/ { print }')
+release_tag=$(
+	for candidate in $release_tags; do
+		candidate_without_prefix=${candidate#release-}
+		candidate_sha=${candidate_without_prefix##*-}
+		candidate_without_sha=${candidate_without_prefix%-"$candidate_sha"}
+		candidate_stamp=${candidate_without_sha##*-}
+		candidate_version=${candidate_without_sha%-"$candidate_stamp"}
+		case "$candidate_stamp:$candidate_sha" in
+			??????????????:????????????????????????????????????????) ;;
+			*) continue ;;
+		esac
+		printf '%s\n' "$candidate_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || continue
+		printf '%s\t%s\n' "$candidate_stamp" "$candidate"
+	done | sort | tail -n 1 | cut -f2-
+)
 case "$release_tag" in
-	release-??????????????-????????????????????????????????????????) ;;
+	release-v*-??????????????-????????????????????????????????????????) ;;
 	*) log 'ECR has no valid release tag'; exit 1 ;;
 esac
-stamp=${release_tag#release-}
-stamp=${stamp%%-*}
+release_without_prefix=${release_tag#release-}
+sha=${release_without_prefix##*-}
+release_without_sha=${release_without_prefix%-"$sha"}
+stamp=${release_without_sha##*-}
+release_version=${release_without_sha%-"$stamp"}
+printf '%s\n' "$release_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$' || { log 'release tag has no canonical semantic version'; exit 1; }
 released_at="$(printf '%s-%s-%sT%s:%s:%sZ' "$(printf '%s' "$stamp" | cut -c1-4)" "$(printf '%s' "$stamp" | cut -c5-6)" "$(printf '%s' "$stamp" | cut -c7-8)" "$(printf '%s' "$stamp" | cut -c9-10)" "$(printf '%s' "$stamp" | cut -c11-12)" "$(printf '%s' "$stamp" | cut -c13-14)")"
 
 release_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository_name" --image-ids imageTag="$release_tag" --query 'imageDetails[0].imageDigest' --output text)
 printf '%s' "$release_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { log 'release has no valid digest'; exit 1; }
-sha=${release_tag##*-}
 printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || { log 'release tag has no valid lowercase git SHA'; exit 1; }
-case "$release_tag" in release-??????????????-"$sha") ;; *) log 'release tag does not bind its SHA'; exit 1 ;; esac
+case "$release_tag" in "release-$release_version-$stamp-$sha") ;; *) log 'release tag does not bind its semantic version, timestamp, and SHA'; exit 1 ;; esac
 
 # A signed manifest image is published before the application release tag. The
 # host verifies both immutable subjects before it executes any candidate code.
@@ -403,11 +383,11 @@ if ! docker cp "$manifest_container:/release-publication.json" "$manifest_tempor
 fi
 docker rm "$manifest_container" >/dev/null
 expected_gates=$(jq -cS . "$deployment_dir/release-gates.json")
-if ! jq -e --arg version "$(jq -r .version "$manifest_temporary")" \
+if ! jq -e --arg version "$(jq -r .version "$manifest_temporary")" --arg release_version "$release_version" \
 	--arg sha "$sha" --arg repository "$ECR_REPOSITORY_URL" --arg digest "$release_digest" \
 	--arg tag "$release_tag" --arg published "$released_at" --argjson gates "$expected_gates" '
 	(keys | sort) == ["ci_run_id","contract","expected_gates","git_sha","git_tree_sha","image","issues","published_at","release_tag","schema","version"] and
-	.contract == "mycfc/release-publication/v1" and .version == $version and
+	.contract == "mycfc/release-publication/v1" and .version == $version and .version == $release_version and
 	($version | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")) and
 	.git_sha == $sha and (.git_tree_sha | test("^[0-9a-f]{40}$")) and
 	.image == {repository:$repository,digest:$digest} and .release_tag == $tag and
@@ -461,29 +441,30 @@ case "$active_slot" in
 	legacy) active_container='mycfc-production-app-1' ;;
 esac
 running_image=$(docker inspect --format '{{.Config.Image}}' "$active_container" 2>/dev/null || true)
-privacy_worker_image_current=true
-if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-	running_worker_image=$(docker inspect --format '{{.Config.Image}}' mycfc-production-privacy-worker-1 2>/dev/null || true)
-	[ "$running_worker_image" = "$image" ] || privacy_worker_image_current=false
-fi
-if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ] && [ "$privacy_worker_image_current" = true ]; then
+if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$running_image" = "$image" ]; then
 	candidate_slot=$active_slot
 	run_phase guardian_release_status observe_guardian_intake
-	if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-		if [ -f "$deployment_receipt_file" ] && jq -e --arg digest "$release_digest" --arg tag "$release_tag" '
-			.image.digest == $digest and .release_tag == $tag and .privacy_worker_activation_required == true
-		' "$deployment_receipt_file" >/dev/null 2>&1; then
-			verify_privacy_worker_inactive
-			privacy_worker_activation_required=true
-		else
-			verify_privacy_worker_active
-			privacy_worker_active=true
-		fi
-	fi
 	record_attempt succeeded
 	write_deployment_receipt succeeded
 	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
+fi
+if jq -e --arg migration '202609290002_dated_participation_contract' \
+	'.schema.ordered_migrations | index($migration) != null' "$publication_manifest_file" >/dev/null; then
+	# Only the exact, attested candidate with the reviewed one-shot contract may
+	# cross this boundary. Its bootstrap fences old logins before replacement.
+	# This is not a host flag or a general bypass for contract migrations.
+	if disposable_contract=$(docker run --rm "$image" disposable-release-contract) &&
+		printf '%s' "$disposable_contract" | jq -e --arg version "$release_version" --arg candidate "$sha" --arg final "$schema_migration_digest" '
+		.version==$version and .candidate==$candidate and .database=="mycfc" and
+		.final_digest==$final and .final_digest=="41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7" and
+		.predecessor_digest=="8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e" and
+		.baseline_digest=="0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"' >/dev/null; then
+		log 'event=approved_disposable_candidate_fences_predecessor'
+	else
+		log 'event=direct_cutover_requires_separate_fenced_release old_slot_fallback_unsafe=true'
+		exit 1
+	fi
 fi
 case "$active_slot" in
 	blue) candidate_slot=green ;;
@@ -523,16 +504,6 @@ export GIT_SHA="$sha"
 release_updated=true
 
 log "event=release_preparing sha=$sha digest=$release_digest candidate_slot=$candidate_slot active_slot=$active_slot"
-if [ "${PRIVACY_RESTORE_PROMOTION_GATE_ENABLED:-false}" = true ]; then
-	# The candidate image proves it can migrate and replay the oldest valid
-	# retained backup before any production migration or traffic change.
-	run_phase privacy_restore_drill "$restore_drill_command" "$image"
-	run_phase privacy_restore_attestation "$restore_attestation_verify_command" "$image"
-fi
-if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-	run_phase privacy_worker_stop systemctl stop mycfc-privacy-worker.service
-	privacy_worker_stopped=true
-fi
 run_phase postgres_ready docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 run_phase database_bootstrap docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 run_phase database_migrate docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
@@ -613,32 +584,40 @@ done
 post_switch_duration_seconds=$(($(date +%s) - post_switch_started_epoch))
 log "event=deployment_phase_completed phase=$current_phase duration_seconds=$post_switch_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
 
-if [ "${PRIVACY_WORKER_ENABLED:-false}" = true ]; then
-	current_phase=privacy_worker_readiness
-	privacy_worker_readiness_started_epoch=$(date +%s)
-	log "event=deployment_phase_started phase=$current_phase sha=$sha digest=$release_digest slot=$candidate_slot"
-	if "$privacy_worker_command" readiness; then
-		privacy_worker_readiness_duration_seconds=$(($(date +%s) - privacy_worker_readiness_started_epoch))
-		log "event=deployment_phase_completed phase=$current_phase outcome=ready duration_seconds=$privacy_worker_readiness_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
-		run_phase privacy_worker_restart systemctl restart mycfc-privacy-worker.service
-		run_phase privacy_worker_verify verify_privacy_worker_active
-		privacy_worker_active=true
-		privacy_worker_activation_required=false
-	else
-		privacy_worker_readiness_status=$?
-		if [ "$privacy_worker_readiness_status" -ne "$privacy_worker_activation_required_status" ]; then
-			exit "$privacy_worker_readiness_status"
-		fi
-		privacy_worker_readiness_duration_seconds=$(($(date +%s) - privacy_worker_readiness_started_epoch))
-		log "event=deployment_phase_completed phase=$current_phase outcome=activation-required duration_seconds=$privacy_worker_readiness_duration_seconds sha=$sha digest=$release_digest slot=$candidate_slot"
-		run_phase privacy_worker_stage_inactive docker compose --env-file "$env_file" -f "$compose_file" --profile privacy-worker \
-			create --no-build --no-deps --force-recreate privacy-worker
-		run_phase privacy_worker_verify_inactive verify_privacy_worker_inactive
-		privacy_worker_active=false
-		privacy_worker_activation_required=true
-		log "event=privacy_worker_activation_required worker_state=stopped readiness_exit_status=$privacy_worker_readiness_status sha=$sha digest=$release_digest slot=$candidate_slot"
-	fi
-fi
+case "${MEDIA_CLEANUP_ENABLED:-false}" in
+	true)
+		systemctl is-enabled --quiet mycfc-media-cleanup.service || {
+			log 'media cleanup is configured but its service is not enabled'
+			exit 1
+		}
+		run_phase media_cleanup_restart systemctl restart mycfc-media-cleanup.service
+		current_phase=media_cleanup_validation
+		media_cleanup_container=mycfc-production-media-cleanup-1
+		media_cleanup_expected_image="$ECR_REPOSITORY_URL@$release_digest"
+		media_cleanup_stable=false
+		for _ in $(seq 1 15); do
+			if systemctl is-active --quiet mycfc-media-cleanup.service; then
+				media_cleanup_state=$(docker inspect --format '{{.State.Running}} {{.State.Restarting}} {{.Config.Image}}' "$media_cleanup_container" 2>/dev/null || true)
+				if [ "$media_cleanup_state" = "true false $media_cleanup_expected_image" ]; then
+					sleep 2
+					media_cleanup_state=$(docker inspect --format '{{.State.Running}} {{.State.Restarting}} {{.Config.Image}}' "$media_cleanup_container" 2>/dev/null || true)
+					if [ "$media_cleanup_state" = "true false $media_cleanup_expected_image" ] && systemctl is-active --quiet mycfc-media-cleanup.service; then
+						media_cleanup_stable=true
+						break
+					fi
+				fi
+			fi
+			sleep 1
+		done
+		[ "$media_cleanup_stable" = true ] || {
+			log 'media cleanup did not reach a stable exact-image running state'
+			exit 1
+		}
+		log "event=media_cleanup_validated digest=$release_digest"
+		;;
+	false) ;;
+	*) log 'MEDIA_CLEANUP_ENABLED must be true or false'; exit 1 ;;
+esac
 
 write_state_value "$active_slot_file" "$candidate_slot"
 rm -f "$failed_digest_file" "$route_backup"

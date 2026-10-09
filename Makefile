@@ -16,7 +16,7 @@ TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c
 TERRAFORM_PLUGIN_CACHE_DIR ?= $(CURDIR)/.cache/terraform/plugin-cache
 INTEGRATION_TEST_FLAGS ?= -count=1
 
-.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-release-tooling test-release-upgrade test-privacy-ledger-broker legacy-media-purge-dry-run-artifact legacy-media-purge-execution-artifact legacy-media-purge-gates legacy-media-purge-image-test release approval-packet dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-release-tooling test-release-upgrade release approval-packet dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -66,10 +66,11 @@ lint-shell: ## Lint tracked shell scripts in a pinned ShellCheck container
 lint-workflows: ## Lint GitHub Actions workflows
 	$(ACTIONLINT)
 
-lint-docker: ## Lint application and Caddy Dockerfiles
+lint-docker: ## Lint application, test storage, and Caddy Dockerfiles
 	# Alpine patch packages follow the pinned base image repository; distroless supplies the named nonroot user.
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < Dockerfile
-	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < Dockerfile.legacy-media-purge
+	# Match the upstream test image's root user so existing local MinIO volumes remain writable.
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3002 --ignore DL3018 --ignore DL3066 - < Dockerfile.minio-test
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint --ignore DL3018 --ignore DL3066 - < deployment/caddy.Dockerfile
 
 test-ci-classifier: ## Test conservative documentation-only CI routing
@@ -87,34 +88,23 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	sh scripts/release-upgrade_test.sh
 	sh scripts/terraform-plan-policy_test.sh
 	sh scripts/terraform-plan-hmac_test.sh
+	python3 scripts/terraform-v2-bootstrap-policy_test.py
+	python3 scripts/terraform-v2-bootstrap-inspect_test.py
+	python3 scripts/verify-exact-main-ci_test.py
+	python3 scripts/terraform-diagnostic-exception_test.py
+	python3 scripts/terraform-structured-diagnostic_test.py
+	bash scripts/terraform-stack_test.sh
+	bash scripts/discover-terraform-inputs_test.sh
 
 test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
 	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"
 
-release: ## Resume a gated signed release (set VERSION and optional ISSUES)
+release: ## Signed tag + dispatch deploy from CI-green main (VERSION=vX.Y.Z, optional ISSUES)
 	@test -n "$(VERSION)" || { echo 'set VERSION, for example VERSION=v1.25.0'; exit 2; }
 	VERSION="$(VERSION)" ISSUES="$(ISSUES)" sh scripts/release.sh
 
 approval-packet: ## Generate a short human approval packet (set APPROVAL_KIND and OUTPUT)
 	sh scripts/approval-packet.sh "$(APPROVAL_KIND)" "$(OUTPUT)"
-
-test-privacy-ledger-broker: ## Test the one-shot encrypted ledger append broker
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest infra/environments/hetzner/privacy_ledger_broker/test_handler.py
-
-legacy-media-purge-dry-run-artifact: ## Build the source-disabled Linux purge inventory artifact
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(BIN_DIR)/legacy-media-purge-dry-run ./cmd/legacy-media-purge
-
-legacy-media-purge-execution-artifact: ## Build the separately reviewed one-time Linux purge artifact
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -tags=legacy_media_purge_execute -o $(BIN_DIR)/legacy-media-purge-execute ./cmd/legacy-media-purge
-
-legacy-media-purge-gates: ## Prove ordinary and one-time purge build gates
-	go test ./cmd/legacy-media-purge
-	go test -tags=legacy_media_purge_execute ./cmd/legacy-media-purge
-
-legacy-media-purge-image-test: ## Build and inspect the dedicated purge-only container
-	./scripts/legacy-media-purge-image_test.sh
 
 dev-infra: ## Start local PostgreSQL, MinIO, and Mailpit
 	docker compose up -d --wait postgres minio mailpit
@@ -172,21 +162,15 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/release-status_test.sh
 	sh deployment/publish-release-image_test.sh
 	sh deployment/postgres-backup_test.sh
+	sh deployment/postgres-restore-verification_test.sh
 	sh deployment/postgres-backup-version-cleanup_test.sh
-	sh deployment/postgres-restore-drill_test.sh
-	sh deployment/privacy-restore-observer_test.sh
-	sh deployment/verify-privacy-restore-attestation_test.sh
 	sh deployment/hetzner-backup-posture_test.sh
-	sh deployment/privacy-retention_test.sh
-	sh deployment/privacy-worker_test.sh
-	sh deployment/privacy-activation_test.sh
 	sh deployment/guardian-activation_test.sh
 	sh deployment/guardian-release-bind_test.sh
-	sh deployment/legacy-media-purge_test.sh
-	$(MAKE) test-privacy-ledger-broker
+	sh deployment/retire-privacy-automation_test.sh
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/privacyrequests/... ./cmd/privacy-restore-replay/... ./cmd/privacy-retention/... ./cmd/privacy-worker/... ./cmd/privacy-activation/... ./cmd/guardian-activation/...
+	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/app/... ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/mediauploads/... ./cmd/media-cleanup/... ./cmd/data-retention/... ./cmd/guardian-activation/...
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
@@ -220,7 +204,7 @@ terraform-check: terraform-fmt terraform-validate terraform-test terraform-lint 
 fmt-check: ## Check Go formatting
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'))" || { gofmt -l $$(find . -name '*.go' -not -path './internal/db/generated/*'); exit 1; }
 
-verify-foundation: fmt-check test-deployment legacy-media-purge-gates legacy-media-purge-image-test ## Run fast focused checks and build browser assets
+verify-foundation: fmt-check test-deployment ## Run fast focused checks and build browser assets
 	go vet ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	go test ./internal/config/... ./internal/httpx/... ./internal/locale/... ./internal/storage/... ./internal/validation/...
 	npm ci

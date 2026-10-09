@@ -1,0 +1,37 @@
+import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+
+test.skip(process.env.E2E_CLASSIFICATION_338 !== '1', 'Disposable classification fixture required.');
+const route = '/equipa/classificacao/33800000-0000-0000-0000-000000000006';
+test('admin records mismatched age with reason; invalid focus and no history disclosure', async ({page}) => {
+ await page.goto('/login');
+ await page.getByLabel('Correio eletrónico ou identificador CFC').fill('classification-admin@example.test');
+ await page.getByLabel('Palavra-passe').fill('correct horse 7');
+ await page.getByRole('button',{name:'Iniciar sessão'}).click();
+ await expect(page).toHaveURL(/\/today$/);
+ const response=await page.goto(route);expect(response?.status()).toBe(200);
+ await expect(page.locator('#task-heading')).toBeFocused();
+ await expect(page.locator('script:not([src])')).toHaveCount(0);
+ const form=page.locator('form').first();
+ await expect(page.locator('#age-reason-group')).toBeHidden();
+ await form.locator('#scope').selectOption(await form.locator('#scope option').filter({hasText:'Competição'}).getAttribute('value'));
+ await form.locator('#category_id').selectOption('33800000-0000-0000-0000-000000000040');
+ await expect(form.locator('#category_id option:checked')).toContainText('fora da elegibilidade; exige motivo');
+ await expect(page.locator('#age-reason-group')).toBeVisible();
+ const today=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Lisbon'});
+ await form.locator('#starts_on').fill(today);
+ await form.getByRole('button',{name:'Guardar participação'}).click();
+ await expect(page.locator('#error-summary')).toBeFocused();
+ await expect(page.locator('#age_exception_reason')).toHaveAttribute('aria-invalid','true');
+ await expect(page.locator('#error-summary a')).toHaveAttribute('href','#age_exception_reason');
+ const violations=(await new AxeBuilder({page}).analyze()).violations.filter(({impact})=>impact==='serious'||impact==='critical');
+ expect(violations).toEqual([]);
+ await page.locator('#age_exception_reason').fill('Diferença verificada pela equipa');
+ await page.getByRole('button',{name:'Guardar participação'}).click();
+ await expect(page.locator('#preview-heading')).toBeFocused();
+ await page.getByRole('button',{name:'Confirmar participação',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('Guardada');
+ await expect(page.locator('#task-heading')).toBeFocused();
+ await expect(page.getByRole('region',{name:'Histórico de participação'})).not.toContainText('Diferença verificada pela equipa');
+ await expect(page.locator('#age_exception_reason')).toBeEmpty();
+});

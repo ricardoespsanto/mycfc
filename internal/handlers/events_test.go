@@ -1157,6 +1157,9 @@ func (s *eventSubjectStore) GetRespondableEvent(_ context.Context, params dbgen.
 
 func (s *eventSubjectStore) GetEventDetailForMember(_ context.Context, params dbgen.GetEventDetailForMemberParams) (dbgen.GetEventDetailForMemberRow, error) {
 	s.detailParams = params
+	if !s.authorized[params.UserID] {
+		return dbgen.GetEventDetailForMemberRow{}, pgx.ErrNoRows
+	}
 	return s.detail, nil
 }
 

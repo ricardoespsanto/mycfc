@@ -19,14 +19,17 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	legalcontent "github.com/cfcoimbra/mycfc/docs/legal"
+	"github.com/cfcoimbra/mycfc/internal/activity"
+	"github.com/cfcoimbra/mycfc/internal/activity/polar"
 	"github.com/cfcoimbra/mycfc/internal/config"
+	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/emailverification"
 	"github.com/cfcoimbra/mycfc/internal/guardianauthority"
 	"github.com/cfcoimbra/mycfc/internal/handlers"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/mediauploads"
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
-	"github.com/cfcoimbra/mycfc/internal/privacyrequests"
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/sessionstore"
 	"github.com/cfcoimbra/mycfc/internal/storage"
@@ -50,8 +53,13 @@ type Application struct {
 var (
 	loadApplicationConfig = config.Load
 	openApplicationPool   = pgxpool.NewWithConfig
-	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error { return pool.Ping(ctx) }
-	loadApplicationAWS    = awsconfig.LoadDefaultConfig
+	pingApplicationPool   = func(ctx context.Context, pool *pgxpool.Pool) error {
+		if err := pool.Ping(ctx); err != nil {
+			return err
+		}
+		return db.VerifyDatedParticipationRuntime(ctx, pool)
+	}
+	loadApplicationAWS = awsconfig.LoadDefaultConfig
 )
 
 func New(ctx context.Context) (*Application, error) {
@@ -90,7 +98,7 @@ func New(ctx context.Context) (*Application, error) {
 	defer cancelPing()
 	if err := pingApplicationPool(pingContext, pool); err != nil {
 		pool.Close()
-		return nil, errors.New("database ping failed")
+		return nil, errors.New("database readiness or dated participation contract failed")
 	}
 
 	sessions := scs.New()
@@ -118,39 +126,22 @@ func New(ctx context.Context) (*Application, error) {
 		}
 	})
 	objectStore := storage.NewS3Store(s3Client, cfg.S3BucketName)
-	var uploadCoordinator *privacyrequests.UploadCoordinator
-	uploadPublicKey, uploadDigestKey, uploadConfigured, err := cfg.PrivacyUploadKeys()
+	var uploadCoordinator *mediauploads.UploadCoordinator
+	uploadPublicKey, uploadDigestKey, uploadConfigured, err := cfg.MediaUploadKeys()
 	if err != nil {
 		sessionStore.StopCleanup()
 		pool.Close()
 		return nil, err
 	}
 	if uploadConfigured {
-		protector, protectorErr := privacyrequests.NewX25519UploadIntentProtector(cfg.PrivacyUploadEncryptionKeyID, uploadPublicKey, cfg.PrivacyUploadDigestKeyID, uploadDigestKey)
+		protector, protectorErr := mediauploads.NewX25519UploadIntentProtector(cfg.MediaUploadEncryptionKeyID, uploadPublicKey, cfg.MediaUploadDigestKeyID, uploadDigestKey)
 		if protectorErr != nil {
 			sessionStore.StopCleanup()
 			pool.Close()
 			return nil, fmt.Errorf("configure privacy upload protection: %w", protectorErr)
 		}
-		uploadCoordinator = &privacyrequests.UploadCoordinator{Store: privacyrequests.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
+		uploadCoordinator = &mediauploads.UploadCoordinator{Store: mediauploads.PostgresUploadIntentStore{Queries: dbgen.New(pool)}, Objects: objectStore, Protector: protector}
 	}
-	var objectTargetProtector privacyrequests.ObjectTargetProtector
-	objectTargetPublicKey, objectTargetDigestKey, objectTargetConfigured, err := cfg.PrivacyObjectTargetKeys()
-	if err != nil {
-		sessionStore.StopCleanup()
-		pool.Close()
-		return nil, err
-	}
-	if objectTargetConfigured {
-		protector, protectorErr := privacyrequests.NewX25519ObjectTargetProtector(cfg.PrivacyObjectTargetEncryptionKeyID, objectTargetPublicKey, cfg.PrivacyObjectTargetDigestKeyID, objectTargetDigestKey)
-		if protectorErr != nil {
-			sessionStore.StopCleanup()
-			pool.Close()
-			return nil, fmt.Errorf("configure privacy object target protection: %w", protectorErr)
-		}
-		objectTargetProtector = protector
-	}
-
 	csrfKey, err := cfg.CSRFAuthKey()
 	if err != nil {
 		sessionStore.StopCleanup()
@@ -224,7 +215,7 @@ func New(ctx context.Context) (*Application, error) {
 	passwordResetService := passwordreset.Service{Store: dbgen.New(pool), BaseURL: cfg.BaseURL, Key: verificationKey}
 	emailVerification := handlers.EmailVerification{Service: verificationService, Sessions: sessions, PageMeta: pageMeta, System: system}
 	passwordRecovery := handlers.PasswordRecovery{Service: passwordResetService, Sessions: sessions, PageMeta: pageMeta, System: system, Limiter: handlers.NewPasswordRecoveryLimiter(), Logger: logger}
-	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, PrivacyKey: verificationKey, GuardianKey: verificationKey, Logger: logger}
+	emailWorker := &emailverification.Worker{Store: dbgen.New(pool), Sender: smtpSender, Service: verificationService, PasswordReset: passwordResetService, GuardianKey: verificationKey, Logger: logger}
 	guardianAuthorityWorker := &guardianauthority.Worker{Store: dbgen.New(pool), Logger: logger, Key: verificationKey, BaseURL: cfg.BaseURL}
 	var appReleasedAt time.Time
 	if cfg.AppReleasedAt != "" {
@@ -270,28 +261,27 @@ func New(ctx context.Context) (*Application, error) {
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	members := handlers.Members{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, Classification: handlers.Classification{Store: handlers.PostgresClassificationStore{Pool: pool}, Definitions: handlers.PostgresDefinitionStore{Pool: pool}}, Definitions: handlers.Definitions{Store: handlers.PostgresDefinitionStore{Pool: pool}}}
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
+	polarKey, polarKeyID, polarEnabled, polarConfigErr := cfg.PolarCredentials()
+	if polarConfigErr != nil {
+		sessionStore.StopCleanup()
+		pool.Close()
+		return nil, polarConfigErr
+	}
+	polarClient := polar.Client{}
+	var polarVault activity.CredentialVault
+	if polarEnabled {
+		polarClient = polar.Client{ClientID: cfg.PolarClientID, ClientSecret: cfg.PolarClientSecret.Value(), RedirectURL: strings.TrimRight(cfg.BaseURL, "/") + "/oauth/polar/callback"}
+		polarVault, _ = activity.NewAESGCMVault(polarKey, polarKeyID)
+	}
+	polarIntegration := handlers.PolarIntegration{Store: dbgen.New(pool), Vault: polarVault, Client: polarClient, Sessions: sessions, System: system, PageMeta: pageMeta}
+	login.ActivitySync = polarIntegration
 	news := handlers.News{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	privacyService := privacyrequests.Service{Pool: pool, Enabled: cfg.PrivacyRequestsEnabled, Key: verificationKey, ContactURL: strings.TrimRight(cfg.BaseURL, "/") + "/legal/direitos", ObjectTargets: objectTargetProtector}
-	if cfg.AppEnv == "test" {
-		privacyService.ExecutionCapabilities = map[string]bool{}
-		for _, capability := range strings.Split(cfg.PrivacyExecutionTestCapabilities, ",") {
-			if capability = strings.TrimSpace(capability); capability != "" {
-				privacyService.ExecutionCapabilities[capability] = true
-			}
-		}
-	}
-	auth.Privacy = privacyService
-	auth.PrivacyExecution = privacyService
-	privacy := handlers.PrivacyRequests{
-		Service: privacyService, Sessions: sessions, System: system, PageMeta: pageMeta, ContactURL: privacyService.ContactURL,
-		CompletionLinkKey: verificationKey, SecureCookies: cfg.IsProduction(),
-	}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, privacy))
+	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()

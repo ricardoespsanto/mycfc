@@ -177,7 +177,9 @@ jobs:
       - run: cp .env.example .env
       - name: Capture PostgreSQL integration coverage
         env:
-          INTEGRATION_TEST_FLAGS: -covermode=atomic -coverprofile=artifacts/coverage/integration.raw.out
+          # Startup/DB behavior is exercised through handler and command tests;
+          # attribute those executions to every hand-written Go package.
+          INTEGRATION_TEST_FLAGS: -covermode=atomic -coverpkg=./internal/...,./cmd/... -coverprofile=artifacts/coverage/integration.raw.out
         run: |
           mkdir -p artifacts/coverage
           CI=true make test-integration

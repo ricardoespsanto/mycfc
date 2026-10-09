@@ -26,6 +26,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/passwordreset"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -436,7 +437,11 @@ func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testi
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época variações', $3, $4)`, seasonID, "VR_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
 		t.Fatal(err)
 	}
-	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
+	categoryID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO competition_categories(id,season_id,programme_id,code,name_pt,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'Escalão de teste',$5,now())`, categoryID, seasonID, programme.ID, "IT_"+uuid.NewString()[:8], actorID); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, CompetitionCategoryID: &categoryID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,6 +453,7 @@ func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testi
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id = $1`, group.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM training_groups WHERE id = $1`, group.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM user_memberships WHERE id = $1`, membership.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM competition_categories WHERE id = $1`, categoryID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{actorID, athleteID})
 	})
@@ -464,7 +470,7 @@ func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	crew, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{TrainingGroupID: group.ID, Name: "Tripulação teste", Kind: dbgen.TrainingVariationGroupKindCREW, CraftModalityID: nil, EffectiveFrom: pgtype.Date{Time: weekStart, Valid: true}, EffectiveUntil: pgtype.Date{Time: weekStart.AddDate(0, 0, 6), Valid: true}, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
+	crew, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{TrainingGroupID: group.ID, Name: "Tripulação teste", Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: nil, EffectiveFrom: pgtype.Date{Time: weekStart, Valid: true}, EffectiveUntil: pgtype.Date{Time: weekStart.AddDate(0, 0, 6), Valid: true}, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
 	if err == nil {
 		t.Fatal("crew without craft modality unexpectedly persisted")
 	}
@@ -1341,7 +1347,11 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época publicação', $3, $4)`, seasonID, "PUB_"+uuid.NewString()[:8], weekStart.AddDate(0, -1, 0), weekStart.AddDate(0, 2, 0)); err != nil {
 		t.Fatal(err)
 	}
-	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
+	categoryID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO competition_categories(id,season_id,programme_id,code,name_pt,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'Escalão de teste',$5,now())`, categoryID, seasonID, programme.ID, "IT_"+uuid.NewString()[:8], actorID); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := queries.CreateUserMembership(ctx, dbgen.CreateUserMembershipParams{UserID: athleteID, SeasonID: seasonID, ProgrammeID: programme.ID, CompetitionCategoryID: &categoryID, StartsOn: pgtype.Date{Time: weekStart.AddDate(0, -1, 0), Valid: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1457,16 +1467,22 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 		t.Fatal("immutable prescription accepted an update")
 	}
 	beforeMembershipChange := readSource()
-	if _, err := pool.Exec(ctx, `UPDATE user_memberships SET ends_on = $2 WHERE id = $1`, membership.ID, weekStart.AddDate(0, 0, -1)); err != nil {
-		t.Fatal(err)
+	var endError *pgconn.PgError
+	if _, err := pool.Exec(ctx, `UPDATE user_memberships SET ends_on = $2 WHERE id = $1`, membership.ID, weekStart.AddDate(0, 0, -1)); !errors.As(err, &endError) || endError.Code != "23514" || endError.ConstraintName != "user_memberships_recorded_history_end" {
+		t.Fatalf("published prescription date was excluded: %v", err)
 	}
-	afterMembershipChange := readSource()
-	if !afterMembershipChange.Time.After(beforeMembershipChange.Time) {
-		t.Fatal("membership eligibility change did not invalidate the publication source version")
+	if after := readSource(); !after.Time.Equal(beforeMembershipChange.Time) {
+		t.Fatal("rejected membership change altered publication source version")
 	}
-	sum := sha256.Sum256(snapshot2)
-	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: afterMembershipChange, ChangeSummary: "Destinatário já inelegível", PublishedByID: actorID, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership.ID, AthleteUserID: athleteID, Snapshot: snapshot2, SnapshotSHA256: hex.EncodeToString(sum[:])}}}); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("ineligible prescription publication err=%v", err)
+	var publishedMembership uuid.UUID
+	var publishedHash string
+	var publishedSnapshot []byte
+	expectedHash := sha256.Sum256(snapshot1)
+	if err := pool.QueryRow(ctx, `SELECT membership_id,snapshot_sha256,snapshot FROM training_prescriptions WHERE id=$1`, firstPrescriptionID).Scan(&publishedMembership, &publishedHash, &publishedSnapshot); err != nil || publishedMembership != membership.ID || publishedHash != hex.EncodeToString(expectedHash[:]) {
+		t.Fatalf("published prescription context changed: membership=%s hash=%s err=%v", publishedMembership, publishedHash, err)
+	}
+	if !strings.Contains(string(publishedSnapshot), `"Versão um"`) {
+		t.Fatalf("published snapshot changed: %s", publishedSnapshot)
 	}
 	var publicationCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM training_plan_publications WHERE plan_id = $1`, week.ID).Scan(&publicationCount); err != nil || publicationCount != 2 {
@@ -1486,6 +1502,26 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	}
 	if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("former guardian retained feedback access: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE staff_grants SET revoked_at=clock_timestamp(),revoked_by_id=$1,revoke_reason='Fim da concessão de teste' WHERE user_id=$1 AND capability='COACH' AND programme_id=$2 AND revoked_at IS NULL`, actorID, programme.ID); err != nil {
+		t.Fatal(err)
+	}
+	coachRows, err := queries.ListTrainingPrescriptionsForViewer(ctx, dbgen.ListTrainingPrescriptionsForViewerParams{UserID: actorID, IsAdmin: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range coachRows {
+		if row.PlanID == week.ID {
+			t.Fatal("revoked coach retained historical publication in list")
+		}
+	}
+	for _, prescriptionID := range []uuid.UUID{firstPrescriptionID, currentPrescriptionID} {
+		if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: prescriptionID, UserID: actorID, IsAdmin: false}); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("revoked coach retained direct prescription %s: %v", prescriptionID, err)
+		}
+		if _, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: prescriptionID, UserID: athleteID, IsAdmin: false}); err != nil {
+			t.Fatalf("coach revocation hid athlete's own prescription %s: %v", prescriptionID, err)
+		}
 	}
 }
 

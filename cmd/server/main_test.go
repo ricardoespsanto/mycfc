@@ -98,43 +98,9 @@ func TestConfigDatabaseURLEscapesCredentials(t *testing.T) {
 	}
 }
 
-func TestMainDispatchesPrivacyCommand(t *testing.T) {
-	previousArgs := os.Args
-	previousCommand := executePrivacyCommand
-	t.Cleanup(func() {
-		os.Args = previousArgs
-		executePrivacyCommand = previousCommand
-	})
-	os.Args = []string{"mycfc", "privacy", "expire", "--actor", "test-actor"}
-	var got []string
-	executePrivacyCommand = func(_ context.Context, args []string) error {
-		got = append(got, args...)
-		return nil
-	}
-
-	main()
-
-	if strings.Join(got, " ") != "expire --actor test-actor" {
-		t.Fatalf("privacy arguments = %q", got)
-	}
-}
-
 func TestRunServerCommandDispatchesDatabaseCommand(t *testing.T) {
 	if err := runServerCommand(context.Background(), []string{"not-a-command"}); err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("database command error = %v", err)
-	}
-}
-
-func TestRunServerCommandRedactsPrivacyErrors(t *testing.T) {
-	previousCommand := executePrivacyCommand
-	t.Cleanup(func() { executePrivacyCommand = previousCommand })
-	executePrivacyCommand = func(context.Context, []string) error {
-		return errors.New("private database detail")
-	}
-
-	err := runServerCommand(context.Background(), []string{"privacy", "expire"})
-	if err == nil || err.Error() != "privacy operator command failed" {
-		t.Fatalf("privacy command error = %v", err)
 	}
 }
 
@@ -374,28 +340,6 @@ func TestGuardianReleaseStatusReturnsStatusQueryFailure(t *testing.T) {
 	}
 }
 
-func TestRunDatabaseCommandExplicitlyProvisionsBreakGlassDisableRole(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
-	t.Setenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL", "postgres://mycfc_privacy_activation_disable:independent@postgres:5432/mycfc?sslmode=disable")
-	original := connectDatabaseCommand
-	t.Cleanup(func() { connectDatabaseCommand = original })
-	connection := &databaseCommandConnectionFake{}
-	connectDatabaseCommand = func(context.Context, string) (databaseCommandConnection, error) { return connection, nil }
-	if err := runDatabaseCommand(t.Context(), "provision-privacy-activation-disable"); err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(connection.sql, "\n")
-	if !strings.Contains(joined, `CREATE ROLE "mycfc_privacy_activation_disable" LOGIN`) ||
-		!strings.Contains(joined, `GRANT EXECUTE ON FUNCTION privacy_disable.privacy_activation_disable(uuid,text)`) {
-		t.Fatalf("provisioning statements=%#v", connection.sql)
-	}
-
-	t.Setenv("PRIVACY_ACTIVATION_DISABLE_DATABASE_URL", "postgres://wrong:independent@postgres:5432/mycfc?sslmode=disable")
-	if err := runDatabaseCommand(t.Context(), "provision-privacy-activation-disable"); err == nil {
-		t.Fatal("wrong break-glass role was accepted")
-	}
-}
-
 func TestRunDatabaseCommandExplicitlyProvisionsGuardianActivationRole(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_ACTIVATION_DATABASE_URL", "postgres://mycfc_guardian_activation_operator:independent@postgres:5432/mycfc?sslmode=disable")
@@ -521,17 +465,17 @@ func TestProvisionGuardianReleaseBindEmitsSuccessOnlyAfterCommit(t *testing.T) {
 	}
 }
 
-func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T) {
+func TestRunDatabaseCommandHardensUsingNarrowMaintenanceCredentials(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("DB_NAME", "mycfc")
 	t.Setenv("APP_DB_USER", "mycfc_app")
 	t.Setenv("APP_DB_PASSWORD", "app-password")
 	t.Setenv("MIGRATION_DB_USER", "mycfc_migrate")
 	t.Setenv("MIGRATION_DB_PASSWORD", "migration-password")
-	t.Setenv("PRIVACY_EXECUTOR_DB_USER", "mycfc_privacy_executor")
-	t.Setenv("PRIVACY_EXECUTOR_DB_PASSWORD", "executor-password")
-	t.Setenv("PRIVACY_RESTORE_OBSERVER_DB_USER", "mycfc_privacy_restore_observer")
-	t.Setenv("PRIVACY_RESTORE_OBSERVER_DB_PASSWORD", "observer-password")
+	t.Setenv("MEDIA_CLEANUP_DB_USER", "mycfc_media_cleanup_runtime")
+	t.Setenv("MEDIA_CLEANUP_DB_PASSWORD", "cleanup-password")
+	t.Setenv("DATA_RETENTION_DB_USER", "mycfc_data_retention_operator")
+	t.Setenv("DATA_RETENTION_DB_PASSWORD", "retention-password")
 	original := connectDatabaseCommand
 	t.Cleanup(func() { connectDatabaseCommand = original })
 	connection := &databaseCommandConnectionFake{}
@@ -540,9 +484,9 @@ func TestRunDatabaseCommandHardensUsingOptionalExecutorCredentials(t *testing.T)
 		t.Fatal(err)
 	}
 	joined := strings.Join(connection.sql, "\n")
-	if !strings.Contains(joined, `REVOKE ALL PRIVILEGES ON TABLE privacy_pseudonymous_principals, privacy_erasure_executions`) ||
-		!strings.Contains(joined, `TO "mycfc_privacy_executor"`) ||
-		!strings.Contains(joined, `privacy_restore_observe_inventory(text,bytea,bytea,text,text,text,text) TO "mycfc_privacy_restore_observer"`) {
+	if !strings.Contains(joined, `media_upload_cleanup_claim(bigint,uuid)`) ||
+		!strings.Contains(joined, `TO "mycfc_media_cleanup"`) ||
+		!strings.Contains(joined, `data_retention_run(uuid,integer)`) {
 		t.Fatalf("hardening statements=%#v", connection.sql)
 	}
 }

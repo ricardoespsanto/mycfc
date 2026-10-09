@@ -76,14 +76,6 @@ func TestSMTPSenderDeliversVerificationAndPasswordResetMessages(t *testing.T) {
 			body:    []string{"https://mycfc.example/reset?token=opaque", "válido durante 60 minutos"},
 		},
 		{
-			name: "privacy notification",
-			send: func(sender *SMTPSender) error {
-				return sender.SendPrivacyNotification(context.Background(), "member@example.test", "https://mycfc.example/legal/direitos?source=email", "PRIVACY_DECISION")
-			},
-			headers: []string{"To: <member@example.test>", "Subject:"},
-			body:    []string{"https://mycfc.example/legal/direitos?source=email", "não confirma que os dados foram apagados"},
-		},
-		{
 			name: "guardian renewal reminder",
 			send: func(sender *SMTPSender) error {
 				return sender.SendGuardianRenewalReminder(context.Background(), "guardian@example.test", "https://mycfc.example/dashboard/guardian", "GUARDIAN_RENEWAL_30_DAY", time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC))
@@ -140,33 +132,6 @@ func TestGuardianSMTPRejectsUnsupportedKindsBeforeDelivery(t *testing.T) {
 	invalidFrom.FromAddress = "invalid\nfrom@example.test"
 	if err := invalidFrom.SendGuardianRenewalReminder(t.Context(), "guardian@example.test", "https://mycfc.example/dashboard/guardian", "GUARDIAN_RENEWAL_7_DAY", time.Now()); err == nil {
 		t.Fatal("invalid sender was accepted for guardian reminder")
-	}
-}
-
-func TestPrivacySMTPRejectsMessageConstructionBeforeDelivery(t *testing.T) {
-	sender, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: 1, Timeout: time.Millisecond, TLSMode: "none", FromAddress: "no-reply@example.test", FromName: "MyCFCoimbra"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name      string
-		recipient string
-		kind      string
-		configure func(*SMTPSender)
-	}{
-		{name: "unsupported kind", recipient: "member@example.test", kind: "UNKNOWN"},
-		{name: "invalid from", recipient: "member@example.test", kind: "PRIVACY_DECISION", configure: func(s *SMTPSender) { s.FromAddress = "invalid\nfrom@example.test" }},
-		{name: "invalid recipient", recipient: "invalid\nrecipient@example.test", kind: "PRIVACY_DECISION"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			candidate := *sender
-			if tc.configure != nil {
-				tc.configure(&candidate)
-			}
-			if err := candidate.SendPrivacyNotification(context.Background(), tc.recipient, "https://mycfc.example/legal/direitos", tc.kind); err == nil {
-				t.Fatal("invalid privacy email was accepted")
-			}
-		})
 	}
 }
 

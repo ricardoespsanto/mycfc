@@ -311,13 +311,13 @@ WHERE e.id = $2
            SELECT 1 FROM user_memberships m JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
           WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
-             AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+             AND m.starts_on <= CASE WHEN e.ends_at <= now() THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE (now() AT TIME ZONE 'Europe/Lisbon')::date END AND (m.ends_on IS NULL OR m.ends_on >= CASE WHEN e.ends_at <= now() THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE (now() AT TIME ZONE 'Europe/Lisbon')::date END)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
            WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
-             AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+             AND m.starts_on <= CASE WHEN e.ends_at <= now() THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE (now() AT TIME ZONE 'Europe/Lisbon')::date END AND (m.ends_on IS NULL OR m.ends_on >= CASE WHEN e.ends_at <= now() THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE (now() AT TIME ZONE 'Europe/Lisbon')::date END)
        )
   )
 `
@@ -850,14 +850,14 @@ WHERE (($2::boolean AND e.ends_at <= $3)
            JOIN event_audiences a ON a.programme_id = m.programme_id
           JOIN users subject ON subject.id = m.user_id
           WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
-             AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+             AND m.starts_on <= CASE WHEN e.ends_at <= $3 THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE ($3 AT TIME ZONE 'Europe/Lisbon')::date END AND (m.ends_on IS NULL OR m.ends_on >= CASE WHEN e.ends_at <= $3 THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE ($3 AT TIME ZONE 'Europe/Lisbon')::date END)
        )
        OR EXISTS (
            SELECT 1 FROM user_memberships m
            JOIN event_team_audiences a ON a.team_id = m.team_id
            JOIN users subject ON subject.id = m.user_id
            WHERE a.event_id = e.id AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
-             AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
+             AND m.starts_on <= CASE WHEN e.ends_at <= $3 THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE ($3 AT TIME ZONE 'Europe/Lisbon')::date END AND (m.ends_on IS NULL OR m.ends_on >= CASE WHEN e.ends_at <= $3 THEN (e.starts_at AT TIME ZONE 'Europe/Lisbon')::date ELSE ($3 AT TIME ZONE 'Europe/Lisbon')::date END)
        )
   )
 ORDER BY CASE WHEN $2::boolean THEN e.starts_at END DESC,

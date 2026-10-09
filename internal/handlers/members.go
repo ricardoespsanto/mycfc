@@ -20,6 +20,7 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -37,18 +38,20 @@ type MemberStore interface {
 	CreateSeason(context.Context, dbgen.CreateSeasonParams) (dbgen.Season, error)
 	ListMembershipProgrammes(context.Context) ([]dbgen.Programme, error)
 	ListActiveMembershipsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveMembershipsForUserRow, error)
-	UpsertCurrentSeasonMembership(context.Context, dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UserMembership, error)
+	UpsertCurrentSeasonMembership(context.Context, dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UpsertCurrentSeasonMembershipRow, error)
 	EndCurrentSeasonMembership(context.Context, dbgen.EndCurrentSeasonMembershipParams) (int64, error)
 	IssueMinorCredential(context.Context, dbgen.IssueMinorCredentialParams) (uuid.UUID, error)
 }
 
 type Members struct {
-	Store    MemberStore
-	System   System
-	PageMeta components.PageMeta
-	Location *time.Location
-	Now      func() time.Time
-	Sessions *scs.SessionManager
+	Store          MemberStore
+	System         System
+	PageMeta       components.PageMeta
+	Location       *time.Location
+	Now            func() time.Time
+	Sessions       *scs.SessionManager
+	Classification Classification
+	Definitions    Definitions
 }
 
 type memberForm struct {
@@ -206,9 +209,11 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	valid := false
+	competition := false
 	for _, programme := range programmes {
 		if programme.ID == programmeID {
 			valid = true
+			competition = programme.Code == "Competition"
 		}
 	}
 	if !valid {
@@ -216,12 +221,23 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.PostForm.Get("active") == "on" {
+		if competition {
+			h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"membership": "A classificação de competição exige um escalão e não está disponível neste formulário."}, "")
+			return
+		}
 		_, err = h.Store.UpsertCurrentSeasonMembership(ctx, dbgen.UpsertCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID, StartsOn: pgtype.Date{Time: h.today(), Valid: true}})
+		var concurrencyError *pgconn.PgError
+		if errors.As(err, &concurrencyError) && (concurrencyError.Code == "23505" || concurrencyError.Code == "23P01") {
+			// A concurrent same-programme insert may win after the CTE snapshot.
+			// Re-read in a new statement; the second conflict remains a real overlap.
+			_, err = h.Store.UpsertCurrentSeasonMembership(ctx, dbgen.UpsertCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID, StartsOn: pgtype.Date{Time: h.today(), Valid: true}})
+		}
 	} else {
 		var affected int64
 		affected, err = h.Store.EndCurrentSeasonMembership(ctx, dbgen.EndCurrentSeasonMembershipParams{UserID: id, SeasonID: season.ID, ProgrammeID: programmeID})
 		if err == nil && affected == 0 {
-			err = pgx.ErrNoRows
+			h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"membership": "Não há participação anterior elegível para terminar. Atribuições iniciadas hoje não podem ser anuladas no mesmo dia."}, "")
+			return
 		}
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -229,6 +245,15 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.ConstraintName == "user_memberships_recorded_history_end" {
+			h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"membership": "Não é possível antecipar o fim desta participação: já existem eventos, treinos ou prescrições publicadas nessa data. Peça uma correção auditada; os registos históricos não serão alterados."}, "")
+			return
+		}
+		if errors.As(err, &databaseError) && (databaseError.Code == "23P01" || databaseError.Code == "23505" || databaseError.Code == "23514") {
+			h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"membership": "A classificação sobrepõe-se a outra data ou não pertence à época. Reveja as datas e o escalão."}, "")
+			return
+		}
 		h.System.InternalError(w, r)
 		return
 	}
