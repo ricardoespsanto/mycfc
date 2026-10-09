@@ -10,7 +10,8 @@ mkdir -p "$fake_bin"
 sha=0123456789012345678901234567890123456789
 digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 other_digest=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-release_tag="release-20260817123456-$sha"
+release_version=v1.25.0
+release_tag="release-$release_version-20260817123456-$sha"
 
 cat >"$fake_bin/aws" <<'EOF'
 #!/bin/sh
@@ -50,8 +51,11 @@ EOF
 cat >"$fake_bin/docker" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$TEST_LOG"
-case "$1 $2 $3" in
-"buildx imagetools inspect") printf '%s\n' "$TEST_REVISION" ;;
+case "$*" in
+*org.opencontainers.image.revision*) printf '%s\n' "$TEST_REVISION" ;;
+*org.opencontainers.image.version*) printf '%s\n' "$TEST_IMAGE_VERSION" ;;
+*org.mycfc.schema-migration-digest*) printf '%s\n' "$TEST_SCHEMA_DIGEST" ;;
+buildx\ imagetools\ inspect*) printf '%s\n' "$TEST_REVISION" ;;
 *) printf '%s\n' "unexpected docker command: $*" >&2; exit 1 ;;
 esac
 EOF
@@ -75,10 +79,25 @@ run_case() {
 	: >"$case_dir/output"
 	: >"$case_dir/git-state"
 	rm -f "$case_dir/release-state"
+	manifest_version=$release_version
+	manifest_enabled=true
+	for argument in "$@"; do
+		case "$argument" in
+			TEST_MANIFEST=false) manifest_enabled=false ;;
+			TEST_MANIFEST_VERSION=*) manifest_version=${argument#TEST_MANIFEST_VERSION=} ;;
+		esac
+	done
+	if [ "$manifest_enabled" = true ]; then
+		cat >"$case_dir/release-publication.json" <<JSON
+{"contract":"mycfc/release-publication/v1","version":"$manifest_version","git_sha":"$sha","image":{"repository":"registry.example/mycfc","digest":"$digest"},"release_tag":"$release_tag"}
+JSON
+	else
+		rm -f "$case_dir/release-publication.json"
+	fi
 	if [ "${1:-}" = TEST_GIT_EXISTS=false ]; then
 		rm "$case_dir/git-state"
 	fi
-	env PATH="$fake_bin:$PATH" TEST_LOG="$case_dir/log" TEST_GIT_STATE_FILE="$case_dir/git-state" TEST_RELEASE_STATE_FILE="$case_dir/release-state" TEST_GIT_DIGEST="$digest" TEST_OTHER_DIGEST="$other_digest" TEST_REVISION="$sha" AWS_REGION=eu-west-1 ECR_REPOSITORY=registry.example/mycfc ECR_REPOSITORY_NAME=mycfc-production GIT_SHA="$sha" GITHUB_OUTPUT="$case_dir/output" RELEASE_TAG="$release_tag" IMAGE_DIGEST="$digest" "$@" sh "$deployment_dir/publish-release-image.sh" "$mode"
+	env PATH="$fake_bin:$PATH" TEST_LOG="$case_dir/log" TEST_GIT_STATE_FILE="$case_dir/git-state" TEST_RELEASE_STATE_FILE="$case_dir/release-state" TEST_GIT_DIGEST="$digest" TEST_OTHER_DIGEST="$other_digest" TEST_REVISION="$sha" TEST_IMAGE_VERSION="$release_version" TEST_SCHEMA_DIGEST=unused AWS_REGION=eu-west-1 ECR_REPOSITORY=registry.example/mycfc ECR_REPOSITORY_NAME=mycfc-production GIT_SHA="$sha" GITHUB_OUTPUT="$case_dir/output" RELEASE_VERSION="$release_version" RELEASE_TAG="$release_tag" RELEASE_PUBLICATION_MANIFEST="$case_dir/release-publication.json" IMAGE_DIGEST="$digest" "$@" sh "$deployment_dir/publish-release-image.sh" "$mode"
 }
 
 prepare_fresh_case="$work_dir/prepare-fresh"
@@ -132,6 +151,36 @@ if run_case "$collision_case" TEST_RELEASE_STATE=other; then
 fi
 if grep -q '^ecr put-image ' "$collision_case/log"; then
 	printf '%s\n' 'release collision attempted to overwrite the tag' >&2
+	exit 1
+fi
+
+missing_manifest_case="$work_dir/missing-manifest"
+if run_case "$missing_manifest_case" TEST_MANIFEST=false; then
+	printf '%s\n' 'missing release manifest unexpectedly promoted an image' >&2
+	exit 1
+fi
+if grep -q '^ecr put-image ' "$missing_manifest_case/log"; then
+	printf '%s\n' 'missing release manifest reached production promotion' >&2
+	exit 1
+fi
+
+mismatched_manifest_case="$work_dir/mismatched-manifest"
+if run_case "$mismatched_manifest_case" TEST_MANIFEST_VERSION=v1.25.1; then
+	printf '%s\n' 'mismatched release manifest unexpectedly promoted an image' >&2
+	exit 1
+fi
+if grep -q '^ecr put-image ' "$mismatched_manifest_case/log"; then
+	printf '%s\n' 'mismatched release manifest reached production promotion' >&2
+	exit 1
+fi
+
+invalid_version_case="$work_dir/invalid-version"
+if run_case "$invalid_version_case" RELEASE_VERSION=v1.25.0-01; then
+	printf '%s\n' 'invalid semantic version unexpectedly promoted an image' >&2
+	exit 1
+fi
+if grep -q '^ecr put-image ' "$invalid_version_case/log"; then
+	printf '%s\n' 'invalid semantic version reached production promotion' >&2
 	exit 1
 fi
 

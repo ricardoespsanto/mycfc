@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/cfcoimbra/mycfc/internal/db/generated"
@@ -23,6 +24,10 @@ type loginLookup struct {
 	err   error
 	email string
 }
+
+type loginActivitySync struct{ called chan uuid.UUID }
+
+func (s loginActivitySync) StartRecentSync(_ context.Context, id uuid.UUID) { s.called <- id }
 
 func (l *loginLookup) GetActiveUserByEmail(_ context.Context, email *string) (dbgen.GetActiveUserByEmailRow, error) {
 	if email != nil {
@@ -141,11 +146,13 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 		PasswordHash: &passwordHash,
 	}}
 	sessions := scs.New()
+	sync := loginActivitySync{called: make(chan uuid.UUID, 1)}
 	handler := Login{
-		Users:       lookup,
-		Sessions:    sessions,
-		PageMeta:    loginTestPageMeta(),
-		FailureWait: func(context.Context) {},
+		Users:        lookup,
+		Sessions:     sessions,
+		PageMeta:     loginTestPageMeta(),
+		FailureWait:  func(context.Context) {},
+		ActivitySync: sync,
 	}
 	form := url.Values{
 		"identifier": {" MEMBER@EXAMPLE.COM "},
@@ -184,6 +191,14 @@ func TestLoginPostRedirectsAndNormalizesEmail(t *testing.T) {
 	}
 	if sessions.GetString(ctx, "authenticated_at") == "" {
 		t.Fatal("session authenticated_at is empty")
+	}
+	select {
+	case got := <-sync.called:
+		if got != lookup.user.ID {
+			t.Fatalf("sync user=%s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("activity sync was not started")
 	}
 }
 

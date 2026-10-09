@@ -10,6 +10,7 @@ locals {
     "ecr:ListImages",
   ]
   operations_observer_alarm_actions = [
+    "cloudwatch:DescribeAlarmHistory",
     "cloudwatch:DescribeAlarms",
     "cloudwatch:GetMetricData",
     "cloudwatch:GetMetricStatistics",
@@ -18,7 +19,7 @@ locals {
   operations_observer_deny_actions = [
     "ecr:BatchDeleteImage", "ecr:CompleteLayerUpload", "ecr:DeleteRepository*", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:PutImageTagMutability", "ecr:UploadLayerPart",
     "logs:CreateLogGroup", "logs:CreateLogStream", "logs:Delete*", "logs:PutLogEvents", "logs:PutMetricFilter",
-    "s3:GetObject*", "s3:ListBucket*", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "sts:AssumeRole",
+    "s3:DeleteObject*", "s3:ListBucket*", "s3:PutObject", "secretsmanager:GetSecretValue", "ssm:GetParameter*", "sts:AssumeRole",
   ]
   operations_observer_trust_statements = concat(
     length(var.operations_observer_principal_arns) == 0 ? [] : [{
@@ -80,6 +81,10 @@ resource "aws_iam_role" "operations_observer" {
   permissions_boundary = aws_iam_policy.operations_observer_boundary[0].arn
   max_session_duration = 3600
   tags                 = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_iam_policy" "operations_observer_boundary" {
@@ -89,6 +94,10 @@ resource "aws_iam_policy" "operations_observer_boundary" {
   description = "Maximum read-only deployment evidence permissions for the short-lived MyCFC observer."
   policy      = local.operations_observer_policy
   tags        = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy" "operations_observer" {

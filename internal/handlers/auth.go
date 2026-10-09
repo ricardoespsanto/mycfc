@@ -28,8 +28,6 @@ type FeatureFlagLookup interface {
 }
 
 type CurrentUser struct {
-	CanReviewPrivacy             bool
-	CanExecutePrivacy            bool
 	CanVerifyGuardianAuthority   bool
 	HasVerifiedGuardianAuthority bool
 	HasAgeHandoff                bool
@@ -49,19 +47,11 @@ type CurrentUser struct {
 	FeatureModes                 map[featureflags.Key]featureflags.Mode
 }
 
-type PrivacyReviewLookup interface {
-	CanReview(context.Context, uuid.UUID) (bool, error)
-}
-type PrivacyExecutionLookup interface {
-	CanExecute(context.Context, uuid.UUID) (bool, error)
-}
 type GuardianAuthorityVerifierLookup interface {
 	CanVerifyGuardianAuthority(context.Context, uuid.UUID) (bool, error)
 	HasVerifiedGuardianAuthority(context.Context, uuid.UUID) (bool, error)
 }
 type Auth struct {
-	Privacy           PrivacyReviewLookup
-	PrivacyExecution  PrivacyExecutionLookup
 	GuardianAuthority GuardianAuthorityVerifierLookup
 	Users             CurrentUserLookup
 	Features          FeatureFlagLookup
@@ -162,22 +152,6 @@ func (a Auth) Load(next http.Handler) http.Handler {
 					current.FeatureModes[key] = featureflags.Mode(flag.Mode)
 				}
 			}
-		}
-		if a.Privacy != nil {
-			allowed, err := a.Privacy.CanReview(r.Context(), current.ID)
-			if err != nil {
-				a.System.InternalError(w, r)
-				return
-			}
-			current.CanReviewPrivacy = allowed
-		}
-		if a.PrivacyExecution != nil {
-			allowed, err := a.PrivacyExecution.CanExecute(r.Context(), current.ID)
-			if err != nil {
-				a.System.InternalError(w, r)
-				return
-			}
-			current.CanExecutePrivacy = allowed
 		}
 		if a.GuardianAuthority != nil {
 			// Guardian reviews are an administrator responsibility; legacy
