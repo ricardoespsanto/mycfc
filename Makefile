@@ -90,13 +90,16 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	sh scripts/terraform-plan-hmac_test.sh
 	python3 scripts/terraform-v2-bootstrap-policy_test.py
 	python3 scripts/terraform-v2-bootstrap-inspect_test.py
+	python3 scripts/verify-exact-main-ci_test.py
+	python3 scripts/terraform-diagnostic-exception_test.py
+	python3 scripts/terraform-structured-diagnostic_test.py
 	bash scripts/terraform-stack_test.sh
 	bash scripts/discover-terraform-inputs_test.sh
 
 test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
 	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"
 
-release: ## Resume a gated signed release (set VERSION and optional ISSUES)
+release: ## Signed tag + dispatch deploy from CI-green main (VERSION=vX.Y.Z, optional ISSUES)
 	@test -n "$(VERSION)" || { echo 'set VERSION, for example VERSION=v1.25.0'; exit 2; }
 	VERSION="$(VERSION)" ISSUES="$(ISSUES)" sh scripts/release.sh
 

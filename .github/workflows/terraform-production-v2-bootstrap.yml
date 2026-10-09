@@ -71,13 +71,14 @@ jobs:
           test "$REQUESTED_SHA" = "$main_sha" || preflight_fail current-main-sha
           verified_sha=$(gh api "/repos/${{ github.repository }}/commits/$REQUESTED_SHA" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null) || preflight_fail commit-read
           test "$verified_sha" = "$REQUESTED_SHA" || preflight_fail commit-signature
-          ci_run=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&per_page=100" --jq "([.workflow_runs[] | select(.head_sha == \"$REQUESTED_SHA\" and .head_branch == \"main\" and .event == \"push\" and .conclusion == \"success\")][0].id) // empty" 2>/dev/null) || preflight_fail ci-read
+          ci_run=$(python3 scripts/verify-exact-main-ci.py "$REQUESTED_SHA") || preflight_fail green-main-ci
           test -n "$ci_run" || preflight_fail green-main-ci
       - name: Verify Terraform source and bootstrap policy
         run: |
           make terraform-check
           python3 scripts/terraform-v2-bootstrap-policy_test.py
           python3 scripts/terraform-v2-bootstrap-inspect_test.py
+          python3 scripts/verify-exact-main-ci_test.py
       # aws-actions/configure-aws-credentials v6.2.4
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
@@ -97,7 +98,7 @@ jobs:
           trap 'terraform_stack_cleanup; rm -f "$TF_ROOT/residual.tfplan" "$TF_ROOT/residual.tfplan.json"' EXIT
           terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual plan failed; inspect protected runner diagnostics.' >&2
             exit 1
           fi
@@ -132,12 +133,15 @@ jobs:
             *) exit 1 ;;
           esac
           manifest_hmac=$(python3 scripts/terraform-v2-bootstrap-policy.py manifest-hmac "$REQUESTED_PHASE" "${targets[@]}")
-          if ! tf plan -input=false -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Exact targeted plan failed; no apply was attempted.' >&2
             exit 1
           fi
           tf show -json production.tfplan > "$TF_ROOT/production.tfplan.json"
           python3 scripts/terraform-v2-bootstrap-policy.py validate "$REQUESTED_PHASE" "$TF_ROOT/production.tfplan.json"
+          if [[ "$REQUESTED_PHASE" == secret ]]; then
+            python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"
+          fi
           tf show -no-color production.tfplan > "$TF_ROOT/production.tfplan.review.txt"
           review_sha=$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')
           semantic_hmac=$(python3 scripts/terraform-plan-hmac.py "$TF_ROOT/production.tfplan.json")
@@ -161,7 +165,7 @@ jobs:
             echo "### Approved external resource actions"
             jq -r '.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"]) | "- `\(.address)`: `\(.change.actions | join(" → "))`"' "$TF_ROOT/production.tfplan.json"
             echo
-            echo "Phase secret also requires two exact no-op legacy secret state-lineage moves. No full residual plan or secret values are printed or uploaded."
+            echo "Phase secret requires both exact no-op legacy moves or both completed identity-preserving legacy addresses, plus two v2 creates or the exact unchanged managed recovery container and version-only create. Recovery requires a complete empty version inventory in plan and again immediately before apply. Partial lineage is rejected. No full residual plan or secret values are printed or uploaded."
             echo
             echo "### Read-only un-targeted residual address/actions (not approved for apply)"
             python3 scripts/terraform-v2-bootstrap-policy.py residual-list "$REQUESTED_PHASE" "$TF_ROOT/residual.tfplan.json"
@@ -227,7 +231,7 @@ jobs:
           trap 'terraform_stack_cleanup; rm -f "$TF_ROOT/residual.tfplan" "$TF_ROOT/residual.tfplan.json" "$TF_ROOT/after.tfplan" "$TF_ROOT/after.tfplan.json"' EXIT
           terraform_stack_prepare
           tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION"
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual plan failed; no apply was attempted.' >&2
             exit 1
           fi
@@ -248,7 +252,7 @@ jobs:
             *) exit 1 ;;
           esac
           test "$EXPECTED_MANIFEST_HMAC" = "$(python3 scripts/terraform-v2-bootstrap-policy.py manifest-hmac "$REQUESTED_PHASE" "${targets[@]}")"
-          if ! tf plan -input=false -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=production.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Exact targeted plan failed; no apply was attempted.' >&2
             exit 1
           fi
@@ -258,7 +262,21 @@ jobs:
           test "$EXPECTED_REVIEW_SHA" = "$(sha256sum "$TF_ROOT/production.tfplan.review.txt" | awk '{print $1}')"
           test "$EXPECTED_SEMANTIC_HMAC" = "$(python3 scripts/terraform-plan-hmac.py "$TF_ROOT/production.tfplan.json")"
           test "$REQUESTED_SHA" = "$(gh api "/repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
-          if ! tf apply -input=false -lock-timeout=5m -auto-approve production.tfplan >/dev/null 2>&1; then
+          if [[ "$REQUESTED_PHASE" == secret ]]; then
+            # Recheck live continuity after approval, without exposing values.
+            if ! aws secretsmanager get-secret-value \
+              --secret-id /mycfc/production/app-secrets --query SecretString \
+              --output text --no-cli-pager 2>/dev/null |
+              python3 scripts/terraform-v2-bootstrap-inspect.py continuity "$TF_ROOT/production.tfplan.json" |
+              tee -a "$GITHUB_STEP_SUMMARY"; then
+              echo '::error::Legacy-to-v2 continuity failed; no apply was attempted.' >&2
+              exit 1
+            fi
+            # Last read-only check before the saved-plan apply. No version
+            # values are read; even unlabeled/deprecated versions must be absent.
+            python3 scripts/terraform-v2-bootstrap-policy.py preflight-empty secret "$TF_ROOT/production.tfplan.json"
+          fi
+          if ! tf apply -input=false -parallelism=1 -lock-timeout=5m -auto-approve production.tfplan >/dev/null 2>&1; then
             echo '::error::Targeted saved-plan apply failed; inspect production state before retry.' >&2
             exit 1
           fi
@@ -268,13 +286,13 @@ jobs:
               --query SecretString --output text --no-cli-pager |
               python3 scripts/terraform-v2-bootstrap-policy.py live-secret-keys
           fi
-          if ! tf plan -input=false -lock-timeout=5m -out=after.tfplan "${targets[@]}" >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=after.tfplan "${targets[@]}" >/dev/null 2>&1; then
             echo '::error::Targeted post-apply verification plan failed.' >&2
             exit 1
           fi
           tf show -json after.tfplan > "$TF_ROOT/after.tfplan.json"
           jq -e '[.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"])] | length == 0' "$TF_ROOT/after.tfplan.json" >/dev/null
-          if ! tf plan -input=false -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
+          if ! tf plan -input=false -parallelism=1 -lock-timeout=5m -out=residual.tfplan >/dev/null 2>&1; then
             echo '::error::Read-only full residual post-plan failed.' >&2
             exit 1
           fi
