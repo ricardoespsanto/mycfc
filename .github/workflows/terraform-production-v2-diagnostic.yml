@@ -1,0 +1,126 @@
+# One-time diagnostic registration exception. It does not change any release,
+# bootstrap, or application CI gate. Merge and dispatch require separate review.
+name: Protected production v2 full-plan diagnostic
+run-name: v2 fixed-source full-plan diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mycfc-production-infra
+  cancel-in-progress: false
+
+env:
+  # Only the classifier is taken from the previously reviewed diagnostic PR.
+  APPROVED_DIAGNOSTIC_SOURCE_SHA: 5af45505cefa86aa0b22ad563d0228140fda2892
+  # The Terraform configuration, provider lock, backend selector and variables
+  # are bound to the signed CI-green production main that failed its full plan.
+  PRODUCTION_SOURCE_SHA: 6edbe46244207f21aad446d645752a8b15e5a7f1
+  TERRAFORM_IMAGE: hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
+  REQUESTED_STACK: production
+  TF_IN_AUTOMATION: 'true'
+  TF_PLUGIN_CACHE_DIR: /terraform-plugin-cache
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    environment: production-plan
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_INFRA_PLAN_ROLE_ARN: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+      TF_BACKEND_BUCKET: ${{ vars.TF_BACKEND_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6edbe46244207f21aad446d645752a8b15e5a7f1
+          path: production-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 5af45505cefa86aa0b22ad563d0228140fda2892
+          path: diagnostic-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-runtime
+          persist-credentials: false
+      - name: Verify exception identity and signed fixed sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "::error::Diagnostic exception preflight $1 failed" >&2; exit 1; }
+          test "$SOURCE_REPOSITORY" = ricardoespsanto/mycfc || fail repository
+          test "$DISPATCH_REF" = refs/heads/main || fail dispatch-ref
+          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]] || fail dispatch-sha-format
+          test "$DISPATCH_SHA" = "$(gh api '/repos/ricardoespsanto/mycfc/git/ref/heads/main' --jq '.object.sha' 2>/dev/null)" || fail current-main
+          for sha in "$DISPATCH_SHA" "$PRODUCTION_SOURCE_SHA" "$APPROVED_DIAGNOSTIC_SOURCE_SHA"; do
+            test "$sha" = "$(gh api "/repos/ricardoespsanto/mycfc/commits/$sha" --jq 'select(.commit.verification.verified == true and .commit.verification.reason == "valid") | .sha' 2>/dev/null)" || fail signed-source
+          done
+          test "$PRODUCTION_SOURCE_SHA" = "$(git -C production-source rev-parse HEAD)" || fail production-source
+          test "$APPROVED_DIAGNOSTIC_SOURCE_SHA" = "$(git -C diagnostic-source rev-parse HEAD)" || fail diagnostic-source
+          test "$DISPATCH_SHA" = "$(git -C diagnostic-runtime rev-parse HEAD)" || fail diagnostic-runtime
+          printf '%s  %s\n' '3c30518354576b7491240675c3cc0d00fb1cd044ba6873905d72cf644c71776d' 'diagnostic-runtime/scripts/terraform-structured-diagnostic.py' | sha256sum --check --status >/dev/null 2>&1 || fail diagnostic-classifier-content
+          test -n "$AWS_REGION" || fail aws-region-configured
+          test -n "$AWS_INFRA_PLAN_ROLE_ARN" || fail plan-role-configured
+          test -n "$TF_BACKEND_BUCKET" || fail backend-bucket-configured
+          # The exception applies only to this diagnostic. Require the already
+          # successful main-push CI of the *fixed Terraform source*, not of the
+          # registration commit; no release/bootstrap/app CI gate is changed.
+          ci_run=$(python3 production-source/scripts/verify-exact-main-ci.py "$PRODUCTION_SOURCE_SHA") || fail production-source-ci
+          test -n "$ci_run" || fail production-source-ci
+      - name: Verify fixed Terraform and diagnostic source before AWS credentials
+        run: |
+          set -Eeuo pipefail
+          (cd production-source && make terraform-check && python3 scripts/terraform-v2-bootstrap-policy_test.py && python3 scripts/terraform-v2-bootstrap-inspect_test.py && python3 scripts/verify-exact-main-ci_test.py)
+          python3 diagnostic-source/scripts/terraform-safe-diagnostic_test.py
+          python3 diagnostic-runtime/scripts/terraform-structured-diagnostic_test.py
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Diagnose read-only full residual plan without exposing output
+        env:
+          STACK_TF_VARS: ${{ secrets.TF_VARS }}
+          STACK_PROVIDER_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          unset TF_LOG TF_LOG_PATH
+          cd production-source
+          source scripts/terraform-stack.sh
+          terraform_stack_select "$REQUESTED_STACK"
+          diagnostic_log=$(mktemp "${RUNNER_TEMP:?}/v2-full-plan.XXXXXXXX")
+          trap 'rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"; terraform_stack_cleanup' EXIT
+          terraform_stack_prepare
+          if tf init -input=false -backend-config="bucket=$TF_BACKEND_BUCKET" -backend-config="key=$TF_BACKEND_KEY" -backend-config="region=$AWS_REGION" > "$diagnostic_log" 2>&1; then
+            : > "$diagnostic_log"
+          else
+            status=$?
+            report=$(python3 ../diagnostic-source/scripts/terraform-safe-diagnostic.py "$diagnostic_log" init "$status") || report='::error::Protected Terraform stage=init heuristic_category=unclassified'
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
+            printf '%s\n' "$report"
+            exit "$status"
+          fi
+          if report=$(python3 ../diagnostic-runtime/scripts/terraform-structured-diagnostic.py run); then
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
+            echo 'Read-only full residual Terraform plan succeeded. No plan or diagnostic content is printed or uploaded; no apply exists in this workflow.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            status=$?
+            rm -f "$diagnostic_log" "$TF_ROOT/residual.tfplan"
+            terraform_stack_cleanup
+            printf '%s\n' "$report"
+            exit "$status"
+          fi
