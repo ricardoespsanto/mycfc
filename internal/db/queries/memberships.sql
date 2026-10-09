@@ -48,31 +48,55 @@ INSERT INTO user_memberships (
     sqlc.narg(competition_category_id), sqlc.arg(starts_on), sqlc.narg(ends_on)
 )
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at, principal_id;
+          starts_on, ends_on, created_at, updated_at, age_exception_reason, age_exception_by_id, age_exception_at, principal_id;
 
 -- name: AddMembershipModality :exec
 INSERT INTO membership_modalities (membership_id, modality_id)
 VALUES (sqlc.arg(membership_id), sqlc.arg(modality_id));
 
 -- name: UpsertCurrentSeasonMembership :one
-INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-SELECT member.id,sqlc.arg(season_id),sqlc.arg(programme_id),sqlc.arg(starts_on)
-FROM users member
-WHERE member.id=sqlc.arg(user_id)::uuid AND member.is_active AND member.erased_at IS NULL
- AND (NOT member.is_dependent OR EXISTS(
-  SELECT 1 FROM guardian_authority_relationships relationship
-  WHERE relationship.subject_user_id=member.id
-   AND guardian_authority_current(relationship.guardian_user_id,member.id)))
-ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
-SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
-RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at, principal_id;
+-- Compatibility path for the current admin toggle: repeat requests return the
+-- current identity without changing its original dates. New intervals are inserts.
+WITH eligible AS (
+ SELECT member.id FROM users member
+ WHERE member.id=sqlc.arg(user_id)::uuid AND member.is_active AND member.erased_at IS NULL
+  AND (NOT member.is_dependent OR EXISTS (
+   SELECT 1 FROM guardian_authority_relationships relationship
+   WHERE relationship.subject_user_id=member.id
+    AND guardian_authority_current(relationship.guardian_user_id,member.id)))
+), existing AS MATERIALIZED (
+ SELECT membership.* FROM user_memberships membership JOIN eligible ON eligible.id=membership.user_id
+ WHERE membership.season_id=sqlc.arg(season_id) AND membership.programme_id=sqlc.arg(programme_id)
+  AND membership.starts_on<=sqlc.arg(starts_on)::date
+  AND (membership.ends_on IS NULL OR membership.ends_on>=sqlc.arg(starts_on)::date)
+), inserted AS (
+ INSERT INTO user_memberships (user_id,season_id,programme_id,starts_on)
+ SELECT eligible.id,sqlc.arg(season_id),sqlc.arg(programme_id),sqlc.arg(starts_on) FROM eligible
+ WHERE NOT EXISTS (SELECT 1 FROM existing)
+ RETURNING *
+)
+SELECT id,user_id,season_id,programme_id,team_id,competition_category_id,starts_on,ends_on,created_at,updated_at,age_exception_reason,age_exception_by_id,age_exception_at,principal_id
+FROM inserted
+UNION ALL
+SELECT id,user_id,season_id,programme_id,team_id,competition_category_id,starts_on,ends_on,created_at,updated_at,age_exception_reason,age_exception_by_id,age_exception_at,principal_id
+FROM existing
+LIMIT 1;
+
+-- name: CreateDatedParticipation :one
+-- Reserved dated writer. Exception reason remains DB-disabled until a
+-- separately authorized, audited service and privacy runbook exist.
+INSERT INTO user_memberships (user_id,season_id,programme_id,team_id,competition_category_id,
+ starts_on,ends_on,age_exception_reason)
+VALUES (sqlc.arg(user_id),sqlc.arg(season_id),sqlc.arg(programme_id),
+ sqlc.narg(team_id),sqlc.narg(competition_category_id),sqlc.arg(starts_on),
+ sqlc.narg(ends_on),sqlc.narg(age_exception_reason))
+RETURNING *;
 
 -- name: EndCurrentSeasonMembership :execrows
-UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
+UPDATE user_memberships SET ends_on = (now() AT TIME ZONE 'Europe/Lisbon')::date - 1, updated_at = now()
 WHERE user_id = sqlc.arg(user_id)::uuid AND season_id = sqlc.arg(season_id)
-  AND programme_id = sqlc.arg(programme_id) AND starts_on <= CURRENT_DATE
-  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
+  AND programme_id = sqlc.arg(programme_id) AND starts_on < (now() AT TIME ZONE 'Europe/Lisbon')::date
+  AND (ends_on IS NULL OR ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)
   AND EXISTS(SELECT 1 FROM users member WHERE member.id=user_memberships.user_id
    AND (NOT member.is_dependent OR EXISTS(
     SELECT 1 FROM guardian_authority_relationships relationship

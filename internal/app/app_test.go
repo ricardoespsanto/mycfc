@@ -62,6 +62,8 @@ func TestApplicationCloseAcceptsPartiallyConstructedApplication(t *testing.T) {
 }
 
 func TestApplicationNewReturnsConfigurationErrorsBeforeStartingResources(t *testing.T) {
+	// Explicitly invalid input is independent of the integration runner env.
+	t.Setenv("PORT", "invalid")
 	t.Setenv("APP_ENV", "")
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "parse configuration") {
 		t.Fatalf("New() error=%v", err)
@@ -101,15 +103,14 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
 		cfg.AppEnv = "test"
-		cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR, AUTH_TOKEN_DELETE, ,IDENTITY_CLEAR"
-		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
-		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
-		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
-		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
-		cfg.PrivacyObjectTargetEncryptionKeyID = "object-target-key-v1"
-		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
-		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
+		cfg.PolarClientID = "polar-client"
+		cfg.PolarClientSecret = config.Secret("polar-secret")
+		cfg.ActivityCredentialKeyID = "activity-v1"
+		cfg.ActivityCredentialKeysJSON = config.Secret(`{"activity-v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`)
+		cfg.MediaUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.MediaUploadEncryptionKeyID = "upload-key-v1"
+		cfg.MediaUploadDigestKeyID = "upload-digest-v1"
+		cfg.MediaUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 		return cfg, nil
 	}
 	openApplicationPool = func(ctx context.Context, poolConfig *pgxpool.Config) (*pgxpool.Pool, error) {
@@ -123,6 +124,17 @@ func TestApplicationNewAssemblesConfiguredServerWithoutExternalConnections(t *te
 	if err != nil || application.Server == nil || application.EmailWorker == nil || application.Server.Addr != ":8080" || application.Sessions.Cookie.Name != "mycfc_session" {
 		t.Fatalf("application=%#v error=%v", application, err)
 	}
+	application.Close()
+	configuredLoad := loadApplicationConfig
+	loadApplicationConfig = func(context.Context) (config.Config, error) {
+		cfg := applicationStartupTestConfig()
+		cfg.PolarClientID = "partial"
+		return cfg, nil
+	}
+	if _, err = New(t.Context()); err == nil || !strings.Contains(err.Error(), "POLAR_CLIENT_ID") {
+		t.Fatalf("Polar configuration error=%v", err)
+	}
+	loadApplicationConfig = configuredLoad
 }
 
 func TestApplicationNewPropagatesConfigurationAndPoolStartupFailures(t *testing.T) {
@@ -159,7 +171,7 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 
 	pingApplicationPool = func(context.Context, *pgxpool.Pool) error { return errors.New("database unavailable") }
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "database ping failed") {
+	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "database readiness or dated participation contract failed") {
 		t.Fatalf("ping error=%v", err)
 	}
 
@@ -176,7 +188,7 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
-		cfg.PrivacyUploadEncryptionKeyID = "upload-key-v1"
+		cfg.MediaUploadEncryptionKeyID = "upload-key-v1"
 		return cfg, nil
 	}
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy upload key configuration") {
@@ -189,35 +201,14 @@ func TestApplicationNewCleansUpAfterPostPoolStartupFailures(t *testing.T) {
 	}
 	loadApplicationConfig = func(context.Context) (config.Config, error) {
 		cfg := applicationStartupTestConfig()
-		cfg.PrivacyUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyUploadEncryptionKeyID = "invalid key id"
-		cfg.PrivacyUploadDigestKeyID = "upload-digest-v1"
-		cfg.PrivacyUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+		cfg.MediaUploadPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+		cfg.MediaUploadEncryptionKeyID = "invalid key id"
+		cfg.MediaUploadDigestKeyID = "upload-digest-v1"
+		cfg.MediaUploadDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 		return cfg, nil
 	}
 	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy upload protection") {
 		t.Fatalf("privacy upload protector error=%v", err)
-	}
-
-	loadApplicationConfig = func(context.Context) (config.Config, error) {
-		cfg := applicationStartupTestConfig()
-		cfg.PrivacyObjectTargetEncryptionKeyID = "partial"
-		return cfg, nil
-	}
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "privacy object target key configuration") {
-		t.Fatalf("privacy object target key error=%v", err)
-	}
-
-	loadApplicationConfig = func(context.Context) (config.Config, error) {
-		cfg := applicationStartupTestConfig()
-		cfg.PrivacyObjectTargetPublicKeyB64 = base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes())
-		cfg.PrivacyObjectTargetEncryptionKeyID = "invalid key id"
-		cfg.PrivacyObjectTargetDigestKeyID = "object-target-digest-v1"
-		cfg.PrivacyObjectTargetDigestKeyB64 = config.Secret(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{10}, 32)))
-		return cfg, nil
-	}
-	if _, err := New(t.Context()); err == nil || !strings.Contains(err.Error(), "configure privacy object target protection") {
-		t.Fatalf("privacy object target protector error=%v", err)
 	}
 
 	loadApplicationConfig = func(context.Context) (config.Config, error) {

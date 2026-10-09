@@ -9,6 +9,7 @@ import (
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -159,7 +160,7 @@ type StructuredTrainingStore interface {
 	CopyStructuredTrainingWeek(context.Context, StructuredWeekCopyInput) (dbgen.TrainingPlan, error)
 	GetStructuredPlanCopySource(context.Context, uuid.UUID) (dbgen.GetStructuredPlanCopySourceRow, error)
 	ListManagedTrainingGroupMembers(context.Context, dbgen.ListManagedTrainingGroupMembersParams) ([]dbgen.ListManagedTrainingGroupMembersRow, error)
-	ListStructuredCrewModalities(context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error)
+	ListStructuredCrewModalities(context.Context) ([]dbgen.CanoeCraftClass, error)
 	ListManagedStructuredCompetitionEvents(context.Context, dbgen.ListManagedStructuredCompetitionEventsParams) ([]dbgen.ListManagedStructuredCompetitionEventsRow, error)
 	CreateTrainingVariationGroup(context.Context, StructuredVariationGroupInput) (dbgen.TrainingVariationGroup, error)
 	ListManagedTrainingVariationGroups(context.Context, dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error)
@@ -259,8 +260,17 @@ func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionLinksForSession
 	return s.queries().ListTrainingPrescriptionLinksForSessionViewer(ctx, params)
 }
 
+func structuredPublicationConcurrencyError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "40001") {
+		return errStructuredTrainingPublicationConflict
+	}
+	return err
+}
+
 func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx context.Context, input StructuredPublicationInput) (publication dbgen.TrainingPlanPublication, err error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
+	defer func() { err = structuredPublicationConcurrencyError(err) }()
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return publication, err
 	}
@@ -272,6 +282,23 @@ func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx conte
 	}
 	if !state.UpdatedAt.Valid || !input.SourceUpdatedAt.Valid || !state.UpdatedAt.Time.Equal(input.SourceUpdatedAt.Time) {
 		return publication, errStructuredTrainingPublicationConflict
+	}
+	lockedIDs := make([]uuid.UUID, 0, len(input.Prescriptions))
+	seen := make(map[uuid.UUID]bool, len(input.Prescriptions))
+	for _, prescription := range input.Prescriptions {
+		if !seen[prescription.MembershipID] {
+			seen[prescription.MembershipID] = true
+			lockedIDs = append(lockedIDs, prescription.MembershipID)
+		}
+	}
+	if len(lockedIDs) > 0 {
+		rows, lockErr := queries.LockStructuredPublicationMemberships(ctx, lockedIDs)
+		if lockErr != nil {
+			return publication, structuredPublicationConcurrencyError(lockErr)
+		}
+		if len(rows) != len(lockedIDs) {
+			return publication, errStructuredTrainingPublicationConflict
+		}
 	}
 	var supersedesID *uuid.UUID
 	if state.LatestPublicationID != uuid.Nil {
@@ -289,6 +316,9 @@ func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx conte
 			PublicationID: publication.ID, SessionID: prescription.SessionID, MembershipID: prescription.MembershipID,
 			AthleteUserID: &prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
 		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return publication, errStructuredTrainingPublicationConflict
+			}
 			return publication, err
 		}
 	}
@@ -895,7 +925,7 @@ func (s PostgresStructuredTrainingStore) ListManagedTrainingGroupMembers(ctx con
 	return s.queries().ListManagedTrainingGroupMembers(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) ListStructuredCrewModalities(ctx context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error) {
+func (s PostgresStructuredTrainingStore) ListStructuredCrewModalities(ctx context.Context) ([]dbgen.CanoeCraftClass, error) {
 	return s.queries().ListStructuredCrewModalities(ctx)
 }
 
@@ -911,11 +941,50 @@ func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx contex
 	defer func() { _ = tx.Rollback(ctx) }()
 	queries := dbgen.New(tx)
 	if input.Params.Kind == dbgen.TrainingVariationGroupKindCREW {
+		var programmeID, teamID *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT programme_id, team_id FROM training_groups WHERE id=$1 FOR SHARE`, input.Params.TrainingGroupID).Scan(&programmeID, &teamID); err != nil {
+			return group, err
+		}
+		var grantID uuid.UUID
+		grantErr := tx.QueryRow(ctx, `SELECT id FROM staff_grants WHERE user_id=$1 AND capability='COACH' AND revoked_at IS NULL
+			AND (programme_id=$2 OR team_id=$3) LIMIT 1 FOR SHARE`, input.Params.CreatedByID, programmeID, teamID).Scan(&grantID)
+		if grantErr != nil {
+			var admin bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_platform_roles role JOIN platform_roles definition ON definition.id=role.role_id WHERE role.user_id=$1 AND definition.code='ADMIN')`, input.Params.CreatedByID).Scan(&admin); err != nil {
+				return group, err
+			}
+			if !admin {
+				return group, errStructuredVariationMemberScope
+			}
+		}
+		seenMemberships := make(map[uuid.UUID]bool, len(input.MembershipIDs))
+		seenAthletes := make(map[uuid.UUID]bool, len(input.MembershipIDs))
+		orderedMembers := append([]uuid.UUID(nil), input.MembershipIDs...)
+		sort.Slice(orderedMembers, func(i, j int) bool { return orderedMembers[i].String() < orderedMembers[j].String() })
+		for _, membershipID := range orderedMembers {
+			if seenMemberships[membershipID] {
+				return group, errStructuredVariationMemberScope
+			}
+			seenMemberships[membershipID] = true
+			var athleteID uuid.UUID
+			if err := tx.QueryRow(ctx, `SELECT membership.user_id FROM training_group_members group_member
+				JOIN user_memberships membership ON membership.id=group_member.membership_id
+				WHERE group_member.group_id=$1 AND membership.id=$2 FOR SHARE OF group_member, membership`, input.Params.TrainingGroupID, membershipID).Scan(&athleteID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return group, errStructuredVariationMemberScope
+				}
+				return group, err
+			}
+			if seenAthletes[athleteID] {
+				return group, errStructuredVariationMemberScope
+			}
+			seenAthletes[athleteID] = true
+		}
 		modalities, listErr := queries.ListStructuredCrewModalities(ctx)
 		if listErr != nil {
 			return group, listErr
 		}
-		capacity, valid := structuredCrewSize(modalities, input.Params.CraftModalityID)
+		capacity, valid := structuredCrewSize(modalities, input.Params.CraftCode)
 		if !valid || capacity != len(input.MembershipIDs) {
 			return group, errStructuredVariationCrewCapacity
 		}

@@ -76,6 +76,59 @@ func (q *Queries) CreateCompetitionCategory(ctx context.Context, arg CreateCompe
 	return i, err
 }
 
+const createDatedParticipation = `-- name: CreateDatedParticipation :one
+INSERT INTO user_memberships (user_id,season_id,programme_id,team_id,competition_category_id,
+ starts_on,ends_on,age_exception_reason)
+VALUES ($1,$2,$3,
+ $4,$5,$6,
+ $7,$8)
+RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id, starts_on, ends_on, created_at, updated_at, age_exception_reason, age_exception_by_id, age_exception_at, principal_id
+`
+
+type CreateDatedParticipationParams struct {
+	UserID                *uuid.UUID  `json:"user_id"`
+	SeasonID              uuid.UUID   `json:"season_id"`
+	ProgrammeID           uuid.UUID   `json:"programme_id"`
+	TeamID                *uuid.UUID  `json:"team_id"`
+	CompetitionCategoryID *uuid.UUID  `json:"competition_category_id"`
+	StartsOn              pgtype.Date `json:"starts_on"`
+	EndsOn                pgtype.Date `json:"ends_on"`
+	AgeExceptionReason    *string     `json:"age_exception_reason"`
+}
+
+// Reserved dated writer. Exception reason remains DB-disabled until a
+// separately authorized, audited service and privacy runbook exist.
+func (q *Queries) CreateDatedParticipation(ctx context.Context, arg CreateDatedParticipationParams) (UserMembership, error) {
+	row := q.db.QueryRow(ctx, createDatedParticipation,
+		arg.UserID,
+		arg.SeasonID,
+		arg.ProgrammeID,
+		arg.TeamID,
+		arg.CompetitionCategoryID,
+		arg.StartsOn,
+		arg.EndsOn,
+		arg.AgeExceptionReason,
+	)
+	var i UserMembership
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.SeasonID,
+		&i.ProgrammeID,
+		&i.TeamID,
+		&i.CompetitionCategoryID,
+		&i.StartsOn,
+		&i.EndsOn,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AgeExceptionReason,
+		&i.AgeExceptionByID,
+		&i.AgeExceptionAt,
+		&i.PrincipalID,
+	)
+	return i, err
+}
+
 const createSeason = `-- name: CreateSeason :one
 INSERT INTO seasons (code, name, starts_on, ends_on, is_current)
 VALUES ($1, $2, $3, $4, $5)
@@ -151,7 +204,7 @@ INSERT INTO user_memberships (
     $5, $6, $7
 )
 RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at, principal_id
+          starts_on, ends_on, created_at, updated_at, age_exception_reason, age_exception_by_id, age_exception_at, principal_id
 `
 
 type CreateUserMembershipParams struct {
@@ -186,16 +239,19 @@ func (q *Queries) CreateUserMembership(ctx context.Context, arg CreateUserMember
 		&i.EndsOn,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AgeExceptionReason,
+		&i.AgeExceptionByID,
+		&i.AgeExceptionAt,
 		&i.PrincipalID,
 	)
 	return i, err
 }
 
 const endCurrentSeasonMembership = `-- name: EndCurrentSeasonMembership :execrows
-UPDATE user_memberships SET ends_on = CURRENT_DATE - 1, updated_at = now()
+UPDATE user_memberships SET ends_on = (now() AT TIME ZONE 'Europe/Lisbon')::date - 1, updated_at = now()
 WHERE user_id = $1::uuid AND season_id = $2
-  AND programme_id = $3 AND starts_on <= CURRENT_DATE
-  AND (ends_on IS NULL OR ends_on >= CURRENT_DATE)
+  AND programme_id = $3 AND starts_on < (now() AT TIME ZONE 'Europe/Lisbon')::date
+  AND (ends_on IS NULL OR ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)
   AND EXISTS(SELECT 1 FROM users member WHERE member.id=user_memberships.user_id
    AND (NOT member.is_dependent OR EXISTS(
     SELECT 1 FROM guardian_authority_relationships relationship
@@ -465,35 +521,66 @@ func (q *Queries) ListModalitiesForMembership(ctx context.Context, membershipID 
 }
 
 const upsertCurrentSeasonMembership = `-- name: UpsertCurrentSeasonMembership :one
-INSERT INTO user_memberships (user_id, season_id, programme_id, starts_on)
-SELECT member.id,$1,$2,$3
-FROM users member
-WHERE member.id=$4::uuid AND member.is_active AND member.erased_at IS NULL
- AND (NOT member.is_dependent OR EXISTS(
-  SELECT 1 FROM guardian_authority_relationships relationship
-  WHERE relationship.subject_user_id=member.id
-   AND guardian_authority_current(relationship.guardian_user_id,member.id)))
-ON CONFLICT (user_id, season_id, programme_id) DO UPDATE
-SET starts_on = EXCLUDED.starts_on, ends_on = NULL, updated_at = now()
-RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id,
-          starts_on, ends_on, created_at, updated_at, principal_id
+WITH eligible AS (
+ SELECT member.id FROM users member
+ WHERE member.id=$1::uuid AND member.is_active AND member.erased_at IS NULL
+  AND (NOT member.is_dependent OR EXISTS (
+   SELECT 1 FROM guardian_authority_relationships relationship
+   WHERE relationship.subject_user_id=member.id
+    AND guardian_authority_current(relationship.guardian_user_id,member.id)))
+), existing AS MATERIALIZED (
+ SELECT membership.id, membership.user_id, membership.season_id, membership.programme_id, membership.team_id, membership.competition_category_id, membership.starts_on, membership.ends_on, membership.created_at, membership.updated_at, membership.age_exception_reason, membership.age_exception_by_id, membership.age_exception_at, membership.principal_id FROM user_memberships membership JOIN eligible ON eligible.id=membership.user_id
+ WHERE membership.season_id=$2 AND membership.programme_id=$3
+  AND membership.starts_on<=$4::date
+  AND (membership.ends_on IS NULL OR membership.ends_on>=$4::date)
+), inserted AS (
+ INSERT INTO user_memberships (user_id,season_id,programme_id,starts_on)
+ SELECT eligible.id,$2,$3,$4 FROM eligible
+ WHERE NOT EXISTS (SELECT 1 FROM existing)
+ RETURNING id, user_id, season_id, programme_id, team_id, competition_category_id, starts_on, ends_on, created_at, updated_at, age_exception_reason, age_exception_by_id, age_exception_at, principal_id
+)
+SELECT id,user_id,season_id,programme_id,team_id,competition_category_id,starts_on,ends_on,created_at,updated_at,age_exception_reason,age_exception_by_id,age_exception_at,principal_id
+FROM inserted
+UNION ALL
+SELECT id,user_id,season_id,programme_id,team_id,competition_category_id,starts_on,ends_on,created_at,updated_at,age_exception_reason,age_exception_by_id,age_exception_at,principal_id
+FROM existing
+LIMIT 1
 `
 
 type UpsertCurrentSeasonMembershipParams struct {
+	UserID      uuid.UUID   `json:"user_id"`
 	SeasonID    uuid.UUID   `json:"season_id"`
 	ProgrammeID uuid.UUID   `json:"programme_id"`
 	StartsOn    pgtype.Date `json:"starts_on"`
-	UserID      uuid.UUID   `json:"user_id"`
 }
 
-func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UserMembership, error) {
+type UpsertCurrentSeasonMembershipRow struct {
+	ID                    uuid.UUID          `json:"id"`
+	UserID                *uuid.UUID         `json:"user_id"`
+	SeasonID              uuid.UUID          `json:"season_id"`
+	ProgrammeID           uuid.UUID          `json:"programme_id"`
+	TeamID                *uuid.UUID         `json:"team_id"`
+	CompetitionCategoryID *uuid.UUID         `json:"competition_category_id"`
+	StartsOn              pgtype.Date        `json:"starts_on"`
+	EndsOn                pgtype.Date        `json:"ends_on"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	AgeExceptionReason    *string            `json:"age_exception_reason"`
+	AgeExceptionByID      *uuid.UUID         `json:"age_exception_by_id"`
+	AgeExceptionAt        pgtype.Timestamptz `json:"age_exception_at"`
+	PrincipalID           *uuid.UUID         `json:"principal_id"`
+}
+
+// Compatibility path for the current admin toggle: repeat requests return the
+// current identity without changing its original dates. New intervals are inserts.
+func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UpsertCurrentSeasonMembershipRow, error) {
 	row := q.db.QueryRow(ctx, upsertCurrentSeasonMembership,
+		arg.UserID,
 		arg.SeasonID,
 		arg.ProgrammeID,
 		arg.StartsOn,
-		arg.UserID,
 	)
-	var i UserMembership
+	var i UpsertCurrentSeasonMembershipRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -505,6 +592,9 @@ func (q *Queries) UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertC
 		&i.EndsOn,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AgeExceptionReason,
+		&i.AgeExceptionByID,
+		&i.AgeExceptionAt,
 		&i.PrincipalID,
 	)
 	return i, err

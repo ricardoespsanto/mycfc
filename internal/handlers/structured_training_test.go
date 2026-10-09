@@ -119,7 +119,7 @@ type structuredTrainingStoreStub struct {
 	competitionEventsErr    error
 	publicationMembersErr   error
 	publicationHashesErr    error
-	crewModalities          []dbgen.ListStructuredCrewModalitiesRow
+	crewModalities          []dbgen.CanoeCraftClass
 	competitionEvents       []dbgen.ListManagedStructuredCompetitionEventsRow
 	variationGroupsErr      error
 	variationMatchesErr     error
@@ -897,26 +897,26 @@ func TestCreateStructuredVariationGroupPersistsManagedSubgroup(t *testing.T) {
 }
 
 func TestCreateStructuredVariationGroupPersistsCompetitionBoundCrew(t *testing.T) {
-	groupID, craftID, competitionID, firstMember, secondMember, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	store := &structuredTrainingStoreStub{manageable: true, crewModalities: []dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: "K2", NamePt: "Kayak duplo"}}, competitionEvents: []dbgen.ListManagedStructuredCompetitionEventsRow{{ID: competitionID, Title: "Regata", StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), Valid: true}}}}
-	values := url.Values{"training_group_id": {groupID.String()}, "kind": {"CREW"}, "name": {"K2 regata"}, "effective_from": {"2026-09-07"}, "craft_modality_id": {craftID.String()}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String(), secondMember.String()}}
+	groupID, competitionID, firstMember, secondMember, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	store := &structuredTrainingStoreStub{manageable: true, crewModalities: []dbgen.CanoeCraftClass{{Code: "K2", NamePt: "Kayak duplo"}}, competitionEvents: []dbgen.ListManagedStructuredCompetitionEventsRow{{ID: competitionID, Title: "Regata", StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), Valid: true}}}}
+	values := url.Values{"training_group_id": {groupID.String()}, "kind": {"CREW"}, "name": {"K2 regata"}, "effective_from": {"2026-09-07"}, "craft_code": {"K2"}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String(), secondMember.String()}}
 	response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/estruturados/grupos-variacao", values, "", "", (StructuredTraining{Store: store, Location: time.UTC}).CreateVariationGroup)
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d", response.Code)
 	}
 	input := store.variationGroup
-	if input.Params.Kind != dbgen.TrainingVariationGroupKindCREW || input.Params.CraftModalityID == nil || *input.Params.CraftModalityID != craftID || input.Params.CompetitionEventID == nil || *input.Params.CompetitionEventID != competitionID || len(input.MembershipIDs) != 2 {
+	if input.Params.Kind != dbgen.TrainingVariationGroupKindCREW || input.Params.CraftCode == nil || *input.Params.CraftCode != "K2" || input.Params.CompetitionEventID == nil || *input.Params.CompetitionEventID != competitionID || len(input.MembershipIDs) != 2 {
 		t.Fatalf("crew input=%#v", input)
 	}
 }
 
 func TestCreateStructuredVariationGroupRejectsInvalidCrewAndSurfacesLookupFailures(t *testing.T) {
-	groupID, craftID, competitionID, firstMember, secondMember, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	groupID, competitionID, firstMember, secondMember, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	base := url.Values{
 		"training_group_id": {groupID.String()}, "kind": {"CREW"}, "name": {"K2 regata"}, "effective_from": {"2026-09-07"},
-		"craft_modality_id": {craftID.String()}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String(), secondMember.String()},
+		"craft_code": {"K2"}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String(), secondMember.String()},
 	}
-	allowedCraft := []dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: "K2", NamePt: "Kayak duplo"}}
+	allowedCraft := []dbgen.CanoeCraftClass{{Code: "K2", NamePt: "Kayak duplo"}}
 	allowedEvent := []dbgen.ListManagedStructuredCompetitionEventsRow{{ID: competitionID, Title: "Regata", StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), Valid: true}}}
 	for _, tc := range []struct {
 		name   string
@@ -924,7 +924,7 @@ func TestCreateStructuredVariationGroupRejectsInvalidCrewAndSurfacesLookupFailur
 		store  structuredTrainingStoreStub
 		want   int
 	}{
-		{name: "crew capacity mismatch", values: url.Values{"training_group_id": {groupID.String()}, "kind": {"CREW"}, "name": {"K2 regata"}, "effective_from": {"2026-09-07"}, "craft_modality_id": {craftID.String()}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String()}}, store: structuredTrainingStoreStub{manageable: true, crewModalities: allowedCraft}, want: http.StatusForbidden},
+		{name: "crew capacity mismatch", values: url.Values{"training_group_id": {groupID.String()}, "kind": {"CREW"}, "name": {"K2 regata"}, "effective_from": {"2026-09-07"}, "craft_code": {"K2"}, "competition_event_id": {competitionID.String()}, "membership_id": {firstMember.String()}}, store: structuredTrainingStoreStub{manageable: true, crewModalities: allowedCraft}, want: http.StatusForbidden},
 		{name: "crew modality lookup failure", values: base, store: structuredTrainingStoreStub{manageable: true, crewModalitiesErr: errors.New("database unavailable")}, want: http.StatusInternalServerError},
 		{name: "competition lookup failure", values: base, store: structuredTrainingStoreStub{manageable: true, crewModalities: allowedCraft, competitionEventsErr: errors.New("database unavailable")}, want: http.StatusInternalServerError},
 		{name: "competition before effective date", values: base, store: structuredTrainingStoreStub{manageable: true, crewModalities: allowedCraft, competitionEvents: []dbgen.ListManagedStructuredCompetitionEventsRow{{ID: competitionID, StartsAt: pgtype.Timestamptz{Time: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), Valid: true}}}}, want: http.StatusForbidden},
@@ -1583,7 +1583,7 @@ func (s *structuredTrainingStoreStub) ListManagedTrainingGroupMembers(context.Co
 	return nil, s.variationMembersErr
 }
 
-func (s *structuredTrainingStoreStub) ListStructuredCrewModalities(context.Context) ([]dbgen.ListStructuredCrewModalitiesRow, error) {
+func (s *structuredTrainingStoreStub) ListStructuredCrewModalities(context.Context) ([]dbgen.CanoeCraftClass, error) {
 	return s.crewModalities, s.crewModalitiesErr
 }
 
@@ -1762,20 +1762,20 @@ func TestParseTrainingVariationPatchKeepsSubjectFieldsBounded(t *testing.T) {
 }
 
 func TestStructuredCrewSizeUsesConfiguredCraftCapacity(t *testing.T) {
-	craftID := uuid.New()
-	rows := []dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: "C4", NamePt: "Canoa de quatro"}}
-	if size, valid := structuredCrewSize(rows, &craftID); !valid || size != 4 {
+	rows := []dbgen.CanoeCraftClass{{Code: "K4", NamePt: "Kayak de quatro"}}
+	code := "K4"
+	if size, valid := structuredCrewSize(rows, &code); !valid || size != 4 {
 		t.Fatalf("size = %d, valid = %t", size, valid)
 	}
-	unknown := uuid.New()
+	unknown := "C4"
 	if _, valid := structuredCrewSize(rows, &unknown); valid {
-		t.Fatal("unknown craft was accepted")
+		t.Fatal("unsupported craft was accepted")
 	}
 }
 
 func TestStructuredVariationChoicesDescribeTargetsGroupsAndSubjects(t *testing.T) {
 	groupID, membershipID, variationGroupID := uuid.New(), uuid.New(), uuid.New()
-	craftID, competitionID := uuid.New(), uuid.New()
+	competitionID := uuid.New()
 	craftCode, competitionTitle := "C2", "Taça de Portugal"
 	members := []dbgen.ListManagedTrainingGroupMembersRow{{
 		TrainingGroupID: groupID, TrainingGroupName: "Seniores", MembershipID: membershipID, AthleteName: "Ana",
@@ -1801,7 +1801,7 @@ func TestStructuredVariationChoicesDescribeTargetsGroupsAndSubjects(t *testing.T
 	if len(memberChoices) != 1 || memberChoices[0].ID != membershipID.String() || memberChoices[0].Athlete != "Ana" {
 		t.Fatalf("member choices = %#v", memberChoices)
 	}
-	crewChoices := structuredCrewModalities([]dbgen.ListStructuredCrewModalitiesRow{{ID: craftID, Code: craftCode, NamePt: "Canoa de dois"}})
+	crewChoices := structuredCrewModalities([]dbgen.CanoeCraftClass{{Code: craftCode, NamePt: "Canoa de dois"}})
 	if len(crewChoices) != 1 || crewChoices[0].Name != "C2 · Canoa de dois" {
 		t.Fatalf("crew choices = %#v", crewChoices)
 	}

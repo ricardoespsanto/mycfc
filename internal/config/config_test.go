@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	urlpkg "net/url"
 	"strings"
@@ -24,129 +25,34 @@ type recordingParameterGetter struct {
 	empty   bool
 }
 
-func TestPrivacyUploadKeysAreOptionalButAtomic(t *testing.T) {
-	if _, _, configured, err := (Config{}).PrivacyUploadKeys(); err != nil || configured {
+func TestMediaUploadKeysAreOptionalButAtomic(t *testing.T) {
+	if _, _, configured, err := (Config{}).MediaUploadKeys(); err != nil || configured {
 		t.Fatalf("empty configuration configured=%t err=%v", configured, err)
 	}
-	partial := Config{PrivacyUploadEncryptionKeyID: "upload-key-v1"}
-	if _, _, configured, err := partial.PrivacyUploadKeys(); err == nil || !configured {
+	partial := Config{MediaUploadEncryptionKeyID: "upload-key-v1"}
+	if _, _, configured, err := partial.MediaUploadKeys(); err == nil || !configured {
 		t.Fatalf("partial configuration configured=%t err=%v", configured, err)
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
-	complete := Config{PrivacyUploadPublicKeyB64: encoded, PrivacyUploadEncryptionKeyID: "upload-key-v1", PrivacyUploadDigestKeyID: "upload-digest-v1", PrivacyUploadDigestKeyB64: Secret(encoded)}
-	publicKey, digestKey, configured, err := complete.PrivacyUploadKeys()
+	complete := Config{MediaUploadPublicKeyB64: encoded, MediaUploadEncryptionKeyID: "upload-key-v1", MediaUploadDigestKeyID: "upload-digest-v1", MediaUploadDigestKeyB64: Secret(encoded)}
+	publicKey, digestKey, configured, err := complete.MediaUploadKeys()
 	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
 		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
 	}
 	invalidPublic := complete
-	invalidPublic.PrivacyUploadPublicKeyB64 = "not-base64"
-	if _, _, _, err = invalidPublic.PrivacyUploadKeys(); err == nil || !strings.Contains(err.Error(), "PUBLIC_KEY") {
+	invalidPublic.MediaUploadPublicKeyB64 = "not-base64"
+	if _, _, _, err = invalidPublic.MediaUploadKeys(); err == nil || !strings.Contains(err.Error(), "PUBLIC_KEY") {
 		t.Fatalf("invalid public key error=%v", err)
 	}
 	invalidDigest := complete
-	invalidDigest.PrivacyUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
-	if _, _, _, err = invalidDigest.PrivacyUploadKeys(); err == nil || !strings.Contains(err.Error(), "DIGEST_KEY") {
+	invalidDigest.MediaUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
+	if _, _, _, err = invalidDigest.MediaUploadKeys(); err == nil || !strings.Contains(err.Error(), "DIGEST_KEY") {
 		t.Fatalf("invalid digest key error=%v", err)
 	}
 	cfg := validConfig()
-	cfg.PrivacyUploadEncryptionKeyID = "partial"
-	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_UPLOAD_KEYS") {
+	cfg.MediaUploadEncryptionKeyID = "partial"
+	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MEDIA_UPLOAD_KEYS") {
 		t.Fatalf("validation error=%v", err)
-	}
-}
-
-func TestPrivacyObjectTargetKeysAreOptionalDistinctAndAtomic(t *testing.T) {
-	if _, _, configured, err := (Config{}).PrivacyObjectTargetKeys(); err != nil || configured {
-		t.Fatalf("empty configuration configured=%t err=%v", configured, err)
-	}
-	partial := Config{PrivacyObjectTargetEncryptionKeyID: "target-key-v1"}
-	if _, _, configured, err := partial.PrivacyObjectTargetKeys(); err == nil || !configured {
-		t.Fatalf("partial configuration configured=%t err=%v", configured, err)
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
-	complete := Config{
-		PrivacyObjectTargetPublicKeyB64: encoded, PrivacyObjectTargetEncryptionKeyID: "target-key-v1",
-		PrivacyObjectTargetDigestKeyID: "target-digest-v1", PrivacyObjectTargetDigestKeyB64: Secret(encoded),
-	}
-	publicKey, digestKey, configured, err := complete.PrivacyObjectTargetKeys()
-	if err != nil || !configured || len(publicKey) != 32 || len(digestKey) != 32 {
-		t.Fatalf("complete configuration configured=%t public=%d digest=%d err=%v", configured, len(publicKey), len(digestKey), err)
-	}
-	complete.PrivacyUploadPublicKeyB64 = complete.PrivacyObjectTargetPublicKeyB64
-	complete.PrivacyUploadEncryptionKeyID = "upload-key-v1"
-	complete.PrivacyUploadDigestKeyID = "upload-digest-v1"
-	complete.PrivacyUploadDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("u", 32))))
-	if _, _, configured, err = complete.PrivacyObjectTargetKeys(); err == nil || !configured || !strings.Contains(err.Error(), "distinct") {
-		t.Fatalf("shared upload public key configured=%t err=%v", configured, err)
-	}
-	for name, mutate := range map[string]func(*Config){
-		"invalid public": func(c *Config) { c.PrivacyObjectTargetPublicKeyB64 = "not-base64" },
-		"short digest": func(c *Config) {
-			c.PrivacyObjectTargetDigestKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
-		},
-		"shared encryption id": func(c *Config) {
-			c.PrivacyObjectTargetEncryptionKeyID = c.PrivacyUploadEncryptionKeyID
-			c.PrivacyObjectTargetPublicKeyB64 = encoded
-		},
-		"shared digest id": func(c *Config) {
-			c.PrivacyObjectTargetDigestKeyID = c.PrivacyUploadDigestKeyID
-			c.PrivacyObjectTargetPublicKeyB64 = encoded
-		},
-		"shared digest bytes": func(c *Config) {
-			c.PrivacyObjectTargetDigestKeyB64 = c.PrivacyUploadDigestKeyB64
-			c.PrivacyObjectTargetPublicKeyB64 = encoded
-		},
-	} {
-		candidate := complete
-		mutate(&candidate)
-		if _, _, configured, err = candidate.PrivacyObjectTargetKeys(); err == nil || !configured {
-			t.Errorf("%s configuration was accepted", name)
-		}
-	}
-	cfg := validConfig()
-	cfg.PrivacyObjectTargetDigestKeyID = "partial"
-	if err = cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_OBJECT_TARGET_KEYS") {
-		t.Fatalf("validation error=%v", err)
-	}
-}
-
-func TestPrivacyTombstoneKeysAreDisabledByDefaultAndAtomic(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32)))
-	if _, _, enabled, err := (Config{}).PrivacyTombstoneKeys(); err != nil || enabled {
-		t.Fatalf("empty configuration enabled=%t err=%v", enabled, err)
-	}
-	partial := Config{PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker"}
-	if _, _, enabled, err := partial.PrivacyTombstoneKeys(); err == nil || enabled {
-		t.Fatalf("disabled partial configuration enabled=%t err=%v", enabled, err)
-	}
-	complete := Config{
-		PrivacyTombstoneEnabled: true, PrivacyTombstoneBrokerFunctionName: "mycfc-tombstone-broker",
-		PrivacyTombstonePublicKeyB64: encoded, PrivacyTombstoneEncryptionKeyID: "tombstone-key-v1",
-		PrivacyTombstoneLocatorKeyID: "locator-key-v1", PrivacyTombstoneLocatorKeyB64: Secret(encoded),
-	}
-	publicKey, locatorKey, enabled, err := complete.PrivacyTombstoneKeys()
-	if err != nil || !enabled || len(publicKey) != 32 || len(locatorKey) != 32 {
-		t.Fatalf("complete configuration enabled=%t public=%d locator=%d err=%v", enabled, len(publicKey), len(locatorKey), err)
-	}
-	invalid := complete
-	invalid.PrivacyTombstoneBrokerFunctionName = "*"
-	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "BROKER_FUNCTION_NAME") {
-		t.Fatalf("invalid broker function error=%v", err)
-	}
-	invalid = complete
-	invalid.PrivacyTombstoneLocatorKeyB64 = Secret(base64.StdEncoding.EncodeToString([]byte("short")))
-	if _, _, _, err = invalid.PrivacyTombstoneKeys(); err == nil || !strings.Contains(err.Error(), "LOCATOR_KEY") {
-		t.Fatalf("invalid locator key error=%v", err)
-	}
-	invalid = complete
-	invalid.PrivacyTombstonePublicKeyB64 = "not-base64"
-	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "PUBLIC_KEY") {
-		t.Fatalf("invalid public key enabled=%t err=%v", enabled, err)
-	}
-	invalid = complete
-	invalid.PrivacyTombstoneLocatorKeyB64 = ""
-	if _, _, enabled, err = invalid.PrivacyTombstoneKeys(); err == nil || !enabled || !strings.Contains(err.Error(), "complete") {
-		t.Fatalf("partial enabled configuration enabled=%t err=%v", enabled, err)
 	}
 }
 
@@ -277,6 +183,7 @@ func TestLoadParsesAndValidatesCompleteLocalEnvironment(t *testing.T) {
 		"APP_ENV": "local", "APP_VERSION": "test", "GIT_SHA": strings.Repeat("0", 40), "BASE_URL": "http://localhost:8080",
 		"DATABASE_URL": "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable", "DB_HOST": "", "DB_PORT": "", "DB_NAME": "", "DB_USER": "", "DB_PASSWORD": "", "DB_SSLMODE": "",
 		"CSRF_AUTH_KEY_B64": base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")), "EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
+		"POLAR_CLIENT_ID": "", "POLAR_CLIENT_SECRET": "", "ACTIVITY_CREDENTIAL_KEY_ID": "", "ACTIVITY_CREDENTIAL_KEYS_JSON": "",
 		"SMTP_HOST": "localhost", "SMTP_PORT": "1025", "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM_ADDRESS": "mycfc@example.test", "SMTP_FROM_NAME": "MyCFCoimbra", "SMTP_TLS_MODE": "none",
 		"AWS_REGION": "eu-west-1", "S3_BUCKET_NAME": "mycfc-local", "S3_ENDPOINT": "http://localhost:9000", "S3_FORCE_PATH_STYLE": "true", "GALLERY_URL": "https://example.invalid/gallery",
 		"CONSENT_TERMS_VERSION": "dev-v1", "CONSENT_TERMS_SHA256": strings.Repeat("0", 64), "CONSENT_TERMS_URL": "http://localhost:8080/legal/termos",
@@ -344,18 +251,6 @@ func validConfig() Config {
 		ReleaseCheckTimeout:         3 * time.Second,
 		ReleaseCheckCacheTTL:        15 * time.Minute,
 		TrustedProxyCIDRValues:      nil,
-	}
-}
-
-func TestPrivacyExecutionTestCapabilitiesAreTestOnly(t *testing.T) {
-	cfg := validConfig()
-	cfg.PrivacyExecutionTestCapabilities = "IDENTITY_CLEAR"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PRIVACY_EXECUTION_TEST_CAPABILITIES") {
-		t.Fatalf("non-test capability configuration error=%v", err)
-	}
-	cfg.AppEnv = "test"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("test capability configuration error=%v", err)
 	}
 }
 
@@ -509,6 +404,12 @@ func TestApplyProductionRemoteConfigOverwritesEnvironmentValues(t *testing.T) {
 	cfg.SMTPTimeout = time.Second
 	cfg.S3Endpoint = "http://minio:9000"
 	cfg.S3ForcePathStyle = true
+	cfg.MediaCleanupDBUser = "isolated-cleanup-user"
+	cfg.MediaCleanupDBPassword = Secret("isolated-cleanup-password")
+	cfg.DataRetentionDBUser = "isolated-retention-user"
+	cfg.DataRetentionDBPassword = Secret("isolated-retention-password")
+	cfg.PostgresPassword = Secret("isolated-bootstrap-password")
+	cfg.MigrationDBPassword = Secret("isolated-migration-password")
 
 	parameters := validProductionParameters()
 	secrets := validProductionSecrets()
@@ -519,11 +420,15 @@ func TestApplyProductionRemoteConfigOverwritesEnvironmentValues(t *testing.T) {
 	if cfg.BaseURL != parameters["BASE_URL"] || cfg.DBHost != parameters["DB_HOST"] || cfg.DBPassword.Value() != secrets["APP_DB_PASSWORD"] {
 		t.Fatal("database/base config was not loaded from AWS values")
 	}
-	if cfg.PostgresUser != parameters["POSTGRES_USER"] || cfg.PostgresPassword.Value() != secrets["POSTGRES_PASSWORD"] {
-		t.Fatal("bootstrap database config was not loaded from AWS values")
+	if cfg.PostgresUser != parameters["POSTGRES_USER"] || cfg.PostgresPassword.Value() != "isolated-bootstrap-password" {
+		t.Fatal("application secret overwrote the separately custodied bootstrap password")
 	}
-	if cfg.MigrationDBUser != parameters["MIGRATION_DB_USER"] || cfg.MigrationDBPassword.Value() != secrets["MIGRATION_DB_PASSWORD"] {
-		t.Fatal("migration database config was not loaded from AWS values")
+	if cfg.MigrationDBUser != parameters["MIGRATION_DB_USER"] || cfg.MigrationDBPassword.Value() != "isolated-migration-password" {
+		t.Fatal("application secret overwrote the separately custodied migration password")
+	}
+	if cfg.MediaCleanupDBUser != "isolated-cleanup-user" || cfg.MediaCleanupDBPassword.Value() != "isolated-cleanup-password" ||
+		cfg.DataRetentionDBUser != "isolated-retention-user" || cfg.DataRetentionDBPassword.Value() != "isolated-retention-password" {
+		t.Fatal("application secret overwrote separately custodied maintenance database config")
 	}
 	if cfg.CSRFAuthKeyB64.Value() != secrets["CSRF_AUTH_KEY_B64"] || cfg.EmailVerificationHMACKeyB64.Value() != secrets["EMAIL_VERIFICATION_HMAC_KEY_B64"] {
 		t.Fatal("signing keys were not loaded from Secrets Manager values")
@@ -721,9 +626,7 @@ func validProductionParameters() map[string]string {
 
 func validProductionSecrets() map[string]string {
 	return map[string]string{
-		"POSTGRES_PASSWORD":               "postgres-pass",
 		"APP_DB_PASSWORD":                 "app-db-pass",
-		"MIGRATION_DB_PASSWORD":           "migration-db-pass",
 		"CSRF_AUTH_KEY_B64":               base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
 		"EMAIL_VERIFICATION_HMAC_KEY_B64": base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789")),
 		"TURNSTILE_SECRET_KEY":            "secret-key",
@@ -942,5 +845,28 @@ func TestConfigurationValueHelpersValidateBoundaryCases(t *testing.T) {
 	}
 	if _, err := (Config{TrustedProxyCIDRValues: []string{"not-a-cidr"}}).TrustedProxyCIDRs(); err == nil {
 		t.Fatal("TrustedProxyCIDRs() accepted invalid CIDR")
+	}
+}
+
+func TestPolarCredentialsRequireACompleteOptionalConfiguration(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	keys, _ := json.Marshal(map[string]string{"activity-v1": key})
+	complete := Config{PolarClientID: "polar-client", PolarClientSecret: Secret("polar-secret"), ActivityCredentialKeyID: "activity-v1", ActivityCredentialKeysJSON: Secret(keys)}
+	decoded, keyID, enabled, err := complete.PolarCredentials()
+	if err != nil || !enabled || keyID != "activity-v1" || len(decoded) != 32 {
+		t.Fatalf("credentials = %d bytes, key=%q enabled=%t, err=%v", len(decoded), keyID, enabled, err)
+	}
+	if _, _, enabled, err = (Config{}).PolarCredentials(); err != nil || enabled {
+		t.Fatalf("empty optional configuration enabled=%t err=%v", enabled, err)
+	}
+	if _, _, _, err = (Config{PolarClientID: "polar-client"}).PolarCredentials(); err == nil {
+		t.Fatal("partial Polar configuration was accepted")
+	}
+	for _, keys := range []string{"not-json", `{"activity-v1":"not-base64"}`, `{"activity-v1":"AA=="}`, `{}`} {
+		invalid := complete
+		invalid.ActivityCredentialKeysJSON = Secret(keys)
+		if _, _, _, err = invalid.PolarCredentials(); err == nil {
+			t.Fatalf("invalid key ring %q accepted", keys)
+		}
 	}
 }
