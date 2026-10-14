@@ -71,7 +71,8 @@ def prove_existing_default_kms_key(value: str) -> None:
             or key.get("KeySpec") != "SYMMETRIC_DEFAULT"):
         fail(refusal)
     aliases = aws_json("kms", "list-aliases", "--key-id", key_id, "--no-paginate")
-    if (aliases.get("Truncated") is True or aliases.get("NextMarker") is not None
+    if (("Truncated" in aliases and aliases["Truncated"] is not False)
+            or aliases.get("NextMarker") is not None
             or not isinstance(aliases.get("Aliases"), list)
             or not any(isinstance(alias, dict)
                        and alias.get("AliasName") == V2_KMS_ALIAS

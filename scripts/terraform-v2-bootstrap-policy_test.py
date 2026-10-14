@@ -204,6 +204,9 @@ class BootstrapPolicyTest(unittest.TestCase):
             lambda r: r[2]["Aliases"][0].update(AliasName="private-other-alias"),
             lambda r: r[2]["Aliases"][0].update(TargetKeyId="private-other-key"),
             lambda r: r[2].update(Truncated=True),
+            lambda r: r[2].update(Truncated=None),
+            lambda r: r[2].update(Truncated=1),
+            lambda r: r[2].update(Truncated="true"),
         )
         for change in changes:
             responses = list(default_key_metadata())
@@ -441,9 +444,16 @@ class BootstrapPolicyTest(unittest.TestCase):
                     version["after_unknown"] = {"secret_string": True}
                 else:
                     for side in ("before", "after"):
-                        plan["resource_changes"][2]["change"][side]["kms_key_id"] = "other"
-                with self.assertRaises(SystemExit):
-                    policy.validate("secret", plan)
+                        plan["resource_changes"][2]["change"][side]["kms_key_id"] = "private-other-key"
+                with patch.object(policy.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=1, stdout="private-error")) as run:
+                    with self.assertRaises(SystemExit) as caught:
+                        policy.validate("secret", plan)
+                    self.assertNotIn("private-", str(caught.exception))
+                    if invalid == "kms":
+                        run.assert_called_once()
+                    else:
+                        run.assert_not_called()
         plan = phase_a_empty_container()
         plan["resource_changes"][2]["change"]["after_unknown"] = {"tags": {}, "arn": False}
         plan["resource_changes"][3]["change"]["after_unknown"] = {"version_stages": [False]}
