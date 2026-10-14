@@ -186,6 +186,24 @@ class BootstrapPolicyTest(unittest.TestCase):
                     policy.validate("secret", policy.load(str(path), targeted=True, phase="secret"))
                 self.assertNotIn("private-", str(caught.exception))
 
+    def test_kms_refusals_are_distinct_fixed_labels_without_value(self):
+        for unknown, value, label in (
+            (True, None, "v2 secret kms_key_id unknown"),
+            (False, "private-customer-key", "v2 secret kms_key_id known-non-null"),
+            (True, "private-customer-key", "v2 secret kms_key_id unknown"),
+        ):
+            with self.subTest(unknown=unknown, value_present=value is not None):
+                plan = phase_a_empty_container()
+                container = plan["resource_changes"][2]["change"]
+                container["after"]["kms_key_id"] = value
+                container["before"]["kms_key_id"] = value
+                container["after_unknown"] = {"kms_key_id": unknown}
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", plan)
+                self.assertEqual(str(caught.exception), "v2 bootstrap policy: " + label)
+                self.assertNotIn("private-customer-key", str(caught.exception))
+        policy.validate("secret", phase_a_empty_container())
+
     def test_resume_empty_managed_v2_container_creates_only_version(self):
         policy.validate("secret", phase_a_empty_container())
 

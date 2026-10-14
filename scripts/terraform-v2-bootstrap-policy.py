@@ -193,6 +193,9 @@ def validate(phase: str, plan: dict) -> None:
                 fail("existing v2 version is forbidden")
             if address == V2_CONTAINER and change.get("actions") == ["no-op"]:
                 before, after = change.get("before"), change.get("after")
+                unknown = change.get("after_unknown", {}) if isinstance(change, dict) else None
+                if isinstance(unknown, dict) and unknown.get("kms_key_id"):
+                    fail("v2 secret kms_key_id unknown")
                 if (not isinstance(before, dict) or not before or before != after
                         or not known(change.get("after_unknown", {}))
                         or before.get("name") != V2_NAME
@@ -295,10 +298,15 @@ def validate(phase: str, plan: dict) -> None:
             fail("unexpected v2 secret name")
         container_after = container["change"].get("after", {})
         container_unknown = container["change"].get("after_unknown", {})
+        # Preserve both refusals; distinguish missing proof from a known key
+        # without logging a KMS identifier or changing the accepted shape.
+        if container_unknown.get("kms_key_id"):
+            fail("v2 secret kms_key_id unknown")
+        if container_after.get("kms_key_id") is not None:
+            fail("v2 secret kms_key_id known-non-null")
         expected_container = {
             "description": "MyCFC production web-runtime secrets v2",
             "recovery_window_in_days": 30,
-            "kms_key_id": None,
             "force_overwrite_replica_secret": False,
         }
         for attribute, expected_value in expected_container.items():
