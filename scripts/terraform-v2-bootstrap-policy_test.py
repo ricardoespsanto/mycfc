@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
+
 source = pathlib.Path(__file__).with_name("terraform-v2-bootstrap-policy.py")
 spec = importlib.util.spec_from_file_location("bootstrap_policy", source)
 policy = importlib.util.module_from_spec(spec)
@@ -105,7 +107,61 @@ def phase_a_empty_container():
     return plan
 
 
+def guarded_container_plan():
+    plan = phase_a_empty_container()
+    plan.update(format_version="1.2", errored=False, complete=True, applyable=True,
+                variables={"project_name": {"value": "mycfc"}, "environment": {"value": "production"}})
+    tags = {"Project": "mycfc", "Environment": "production", "ManagedBy": "terraform",
+            "Repository": "ricardoespsanto/mycfc"}
+    container = plan["resource_changes"][2]["change"]
+    live = container["after"] | {"policy": None, "tags": {}, "tags_all": tags}
+    container.update(before=live.copy(), after=live.copy())
+    stale = live | {"policy": "private-old-policy", "tags": {"private": "old-value"}}
+    plan["resource_drift"] = [{"address": policy.V2_CONTAINER, "type": "aws_secretsmanager_secret",
+                                "mode": "managed", "change": {"actions": ["update"],
+                                                              "before": stale, "after": live.copy()}}]
+    return plan
+
+
 class BootstrapPolicyTest(unittest.TestCase):
+    def test_exact_private_container_comparison_allows_only_noop_version_create(self):
+        plan = guarded_container_plan()
+        self.assertTrue(guarded_v2_drift(plan))
+        policy.validate("secret", plan)
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            self.assertEqual(policy.load(str(path), targeted=False), plan)
+            plan["complete"] = False
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            self.assertEqual(policy.load(str(path), targeted=True), plan)
+            with self.assertRaises(SystemExit):
+                policy.load(str(path), targeted=True, phase="host-policy")
+
+    def test_private_container_comparison_refuses_every_boundary_without_values(self):
+        cases = (
+            lambda p: p["resource_drift"].append(p["resource_drift"][0]),
+            lambda p: p["resource_drift"][0].update(address="aws_secretsmanager_secret.other"),
+            lambda p: p["resource_drift"][0].update(mode="data"),
+            lambda p: p["resource_drift"][0]["change"].update(actions=["delete", "create"]),
+            lambda p: p["resource_drift"][0]["change"]["after"].update(policy="private-live-policy"),
+            lambda p: p["resource_drift"][0]["change"]["after"].update(tags={"private": "new"}),
+            lambda p: p["resource_drift"][0]["change"]["after"]["tags_all"].update(ManagedBy="private"),
+            lambda p: p["resource_drift"][0]["change"]["after"].update(description="private-drift"),
+            lambda p: p["resource_drift"][0]["change"]["after"].update(id="private-id"),
+            lambda p: p["resource_changes"][2]["change"].update(actions=["update"]),
+            lambda p: p["resource_changes"][3]["change"].update(actions=["no-op"]),
+            lambda p: p["resource_changes"][2]["change"]["after"].update(policy="private-proposal"),
+            lambda p: p["variables"]["environment"].update(value="private-environment"),
+        )
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                plan = guarded_container_plan()
+                mutate(plan)
+                with self.assertRaises(DriftRefusal) as caught:
+                    guarded_v2_drift(plan)
+                self.assertNotIn("private-", str(caught.exception))
+
     def test_resume_empty_managed_v2_container_creates_only_version(self):
         policy.validate("secret", phase_a_empty_container())
 
