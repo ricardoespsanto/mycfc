@@ -147,6 +147,57 @@ class BootstrapInspectTest(unittest.TestCase):
         for private in ("private-instance", "sensitive-key", "private-before"):
             self.assertNotIn(private, result.stdout + result.stderr)
 
+    def test_container_drift_refusal_reports_only_known_identity_and_field_names(self):
+        for address, identity in (
+            ("aws_secretsmanager_secret.app_runtime", "v2-container"),
+            ("aws_secretsmanager_secret.legacy_runtime", "legacy-container"),
+            ("aws_secretsmanager_secret.runtime", "pre-move-legacy-container"),
+            ("aws_secretsmanager_secret.private-name[\"private-key\"]", "other-container"),
+        ):
+            with self.subTest(identity=identity):
+                plan = {"resource_drift": [{"type": "aws_secretsmanager_secret", "address": address,
+                    "change": {"actions": ["update"],
+                        "before": {"description": "private-before", "rotation_enabled": 1,
+                                   "private-field": "private-value"},
+                        "after": {"description": "private-after", "rotation_enabled": True,
+                                  "private-field": "private-new-value"}}}]}
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("unexpected-types-actions=aws_secretsmanager_secret/update=1", message)
+                self.assertIn(f"container-identity-fields={identity}:description/rotation_enabled/other-unclassified=1", message)
+                for private in ("private-", "private-key", "private-field"):
+                    self.assertNotIn(private, message)
+
+    def test_container_drift_missing_metadata_is_unavailable_and_no_values_leak(self):
+        for change in ("private-change", {"actions": ["update"], "before": "private-before", "after": {}}):
+            resource = {"type": "aws_secretsmanager_secret", "address": "aws_secretsmanager_secret.app_runtime",
+                        "change": change}
+            with self.assertRaises(SystemExit) as caught:
+                inspect.inspect_drift({"resource_drift": [resource]})
+            message = str(caught.exception)
+            if isinstance(change, dict):
+                self.assertIn("container-identity-fields=v2-container:unavailable=1", message)
+            else:
+                self.assertIn("container-identity-fields=none", message)
+            self.assertNotIn("private-", message)
+
+    def test_container_cli_refusal_stdout_empty_and_no_sensitive_value(self):
+        plan = {"format_version": "1.2", "errored": False, "resource_drift": [{
+            "type": "aws_secretsmanager_secret", "address": "aws_secretsmanager_secret.app_runtime",
+            "change": {"actions": ["update"], "before": {"tags": {"private": "private-before"}},
+                       "after": {"tags": {"private": "private-after"}}},
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run(["python3", str(source), "drift", str(path)],
+                                    text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("container-identity-fields=v2-container:tags=1", result.stderr)
+        self.assertNotIn("private-", result.stderr)
+
     def test_additional_role_fields_report_names_without_values(self):
         plan = plan_with_drift()
         before = plan["resource_drift"][0]["change"]["before"]

@@ -44,6 +44,17 @@ SECRET_VERSION_FIELDS = {
     "version_stages", "version_id", "secret_id", "arn", "id",
     "secret_string", "secret_binary",
 }
+# Only source-known container identities and Terraform provider metadata keys may be reported.
+CONTAINER_IDENTITIES = {
+    "aws_secretsmanager_secret.app_runtime": "v2-container",
+    "aws_secretsmanager_secret.legacy_runtime": "legacy-container",
+    "aws_secretsmanager_secret.runtime": "pre-move-legacy-container",
+}
+CONTAINER_FIELDS = {
+    "arn", "description", "force_overwrite_replica_secret", "id", "kms_key_id", "name",
+    "name_prefix", "policy", "recovery_window_in_days", "replica", "rotation_enabled",
+    "rotation_lambda_arn", "rotation_rules", "tags", "tags_all",
+}
 
 
 def fail(message: str) -> NoReturn:
@@ -160,12 +171,33 @@ def drift_action_class(change: object) -> str:
     return "other" if isinstance(actions, list) else "invalid"
 
 
+def container_drift_class(resource: dict) -> str:
+    """Return only closed identity and metadata-field labels, never plan values."""
+    address = resource.get("address")
+    identity = CONTAINER_IDENTITIES.get(address, "other-container") if isinstance(address, str) else "other-container"
+    change = resource.get("change")
+    before = change.get("before") if isinstance(change, dict) else None
+    after = change.get("after") if isinstance(change, dict) else None
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        fields = "unavailable"
+    else:
+        changed = {key for key in before.keys() | after.keys()
+                   if json.dumps(before.get(key), sort_keys=True, separators=(",", ":")) !=
+                   json.dumps(after.get(key), sort_keys=True, separators=(",", ":"))}
+        known = sorted(changed & CONTAINER_FIELDS)
+        if changed - CONTAINER_FIELDS:
+            known.append("other-unclassified")
+        fields = "/".join(known) or "none"
+    return f"{identity}:{fields}"
+
+
 def drift_refusal(category: str, drift: object) -> NoReturn:
     """Report bounded metadata without echoing unexpected plan addresses or values."""
     if not isinstance(drift, list):
         fail(f"drift inventory differs from the four expected resources; category={category}; entries=unavailable")
     counts = {address: {} for address in EXPECTED_DRIFT}
     unexpected = {}
+    containers = {}
     for resource in drift:
         if not isinstance(resource, dict):
             continue
@@ -179,6 +211,9 @@ def drift_refusal(category: str, drift: object) -> NoReturn:
             type_label = resource_type if isinstance(resource_type, str) and resource_type in DRIFT_TYPE_LABELS else "other"
             key = (type_label, action_class)
             unexpected[key] = unexpected.get(key, 0) + 1
+            if type_label == "aws_secretsmanager_secret" and action_class == "update":
+                label = container_drift_class(resource)
+                containers[label] = containers.get(label, 0) + 1
             continue
         counts[address][action_class] = counts[address].get(action_class, 0) + 1
     # Every printed address, type and action label is a source constant, never arbitrary plan content.
@@ -189,8 +224,10 @@ def drift_refusal(category: str, drift: object) -> NoReturn:
     )
     classes = ",".join(f"{kind}/{action}={unexpected[kind, action]}"
                        for kind, action in sorted(unexpected)) or "none"
+    container_classes = ",".join(f"{label}={containers[label]}" for label in sorted(containers)) or "none"
     fail(f"drift inventory differs from the four expected resources; category={category}; "
-         f"entries={len(drift)}; expected={presence}; unexpected-types-actions={classes}")
+         f"entries={len(drift)}; expected={presence}; unexpected-types-actions={classes}; "
+         f"container-identity-fields={container_classes}")
 
 
 def inspect_drift(plan: dict) -> str:
