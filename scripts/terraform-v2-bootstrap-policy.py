@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
+
 MOVES = {
     "aws_secretsmanager_secret.legacy_runtime": "aws_secretsmanager_secret.runtime",
     "aws_secretsmanager_secret_version.legacy_runtime": "aws_secretsmanager_secret_version.runtime",
@@ -76,7 +78,7 @@ def resources(module: object):
         yield from resources(child.get("module"))
 
 
-def load(path: str, targeted: bool) -> dict:
+def load(path: str, targeted: bool, phase: str = "secret") -> dict:
     with Path(path).open(encoding="utf-8") as source:
         plan = json.load(source)
     if not isinstance(plan, dict):
@@ -96,7 +98,13 @@ def load(path: str, targeted: bool) -> dict:
     if any(resource.get("provisioners") for resource in resources(configuration.get("root_module"))):
         fail("provisioners are not permitted")
     drift = plan.get("resource_drift")
-    if drift not in (None, []):
+    guarded = False
+    if drift not in (None, []) and phase == "secret":
+        try:
+            guarded = guarded_v2_drift(plan)
+        except DriftRefusal:
+            pass
+    if drift not in (None, []) and not guarded:
         # Drift is a hard stop. Only report the resource address without its
         # instance key and the action names; before/after can contain secrets.
         if not isinstance(drift, list) or len(drift) > 100:
@@ -440,7 +448,7 @@ def main() -> None:
     if len(sys.argv) != 4 or sys.argv[1] not in ("validate", "residual", "residual-list") or sys.argv[2] not in PHASE_CHANGES:
         fail("usage: terraform-v2-bootstrap-policy.py validate|residual|manifest-hmac PHASE PLAN_JSON|TARGETS")
     command, phase, path = sys.argv[1:]
-    plan = load(path, command == "validate")
+    plan = load(path, command == "validate", phase=phase)
     if command == "validate":
         validate(phase, plan)
     elif command == "residual-list":

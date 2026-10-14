@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
+
 
 ROLE_ADDRESSES = {
     "aws_iam_role.privacy_activation_admin",
@@ -235,6 +237,11 @@ def inspect_drift(plan: dict) -> str:
     drift = plan.get("resource_drift")
     if drift in (None, []):
         return "### Bootstrap drift inspection\n\n- No resource drift reported."
+    try:
+        if guarded_v2_drift(plan):
+            return "### Bootstrap drift inspection\n\n- Exact v2 container policy/tag continuity: **passed privately**; targeted plan remains separately guarded."
+    except DriftRefusal:
+        pass  # Keep the existing closed refusal classifications below.
     if not isinstance(drift, list):
         drift_refusal("inventory-shape", drift)
     if len(drift) != 4:

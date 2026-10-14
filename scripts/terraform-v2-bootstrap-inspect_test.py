@@ -38,6 +38,23 @@ def plan_with_drift():
 
 
 class BootstrapInspectTest(unittest.TestCase):
+    def test_exact_private_container_continuation_is_not_a_drift_refusal(self):
+        from importlib.util import module_from_spec, spec_from_file_location
+        fixture_source = pathlib.Path(__file__).with_name("terraform-v2-bootstrap-policy_test.py")
+        fixture_spec = spec_from_file_location("bootstrap_policy_fixtures", fixture_source)
+        assert fixture_spec is not None and fixture_spec.loader is not None
+        fixtures = module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixtures)
+        report = inspect.inspect_drift(fixtures.guarded_container_plan())
+        self.assertIn("policy/tag continuity: **passed privately**", report)
+        self.assertNotIn("private-old-policy", report)
+        plan = fixtures.guarded_container_plan()
+        plan["resource_drift"][0]["change"]["after"]["policy"] = "private-live-policy"
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        self.assertIn("container-identity-fields=v2-container:policy/tags=1", str(caught.exception))
+        self.assertNotIn("private-live-policy", str(caught.exception))
+
     def test_drift_reports_only_allowlisted_metadata(self):
         report = inspect.inspect_drift(plan_with_drift())
         self.assertIn("`assume_role_policy`", report)
