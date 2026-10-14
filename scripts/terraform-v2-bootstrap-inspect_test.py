@@ -169,6 +169,21 @@ class BootstrapInspectTest(unittest.TestCase):
                 for private in ("private-", "private-key", "private-field"):
                     self.assertNotIn(private, message)
 
+    def test_null_and_absent_field_transitions_are_changed_in_both_directions(self):
+        for field, label in (("description", "description"),
+                             ("private-injected-field", "other-unclassified")):
+            for before, after in (({}, {field: None}), ({field: None}, {})):
+                with self.subTest(field=field, before=before):
+                    plan = {"resource_drift": [{"type": "aws_secretsmanager_secret",
+                        "address": "aws_secretsmanager_secret.app_runtime",
+                        "change": {"actions": ["update"], "before": before, "after": after}}]}
+                    with self.assertRaises(SystemExit) as caught:
+                        inspect.inspect_drift(plan)
+                    message = str(caught.exception)
+                    self.assertIn(f"container-identity-fields=v2-container:{label}=1", message)
+                    self.assertNotIn("private-injected-field", message)
+                    self.assertNotIn("container-identity-fields=v2-container:none", message)
+
     def test_container_drift_missing_metadata_is_unavailable_and_no_values_leak(self):
         for change in ("private-change", {"actions": ["update"], "before": "private-before", "after": {}}):
             resource = {"type": "aws_secretsmanager_secret", "address": "aws_secretsmanager_secret.app_runtime",

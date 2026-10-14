@@ -182,7 +182,8 @@ def container_drift_class(resource: dict) -> str:
         fields = "unavailable"
     else:
         changed = {key for key in before.keys() | after.keys()
-                   if json.dumps(before.get(key), sort_keys=True, separators=(",", ":")) !=
+                   if (key in before) != (key in after) or
+                   json.dumps(before.get(key), sort_keys=True, separators=(",", ":")) !=
                    json.dumps(after.get(key), sort_keys=True, separators=(",", ":"))}
         known = sorted(changed & CONTAINER_FIELDS)
         if changed - CONTAINER_FIELDS:
