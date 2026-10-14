@@ -188,6 +188,83 @@ class BootstrapPolicyTest(unittest.TestCase):
             with patch.object(policy.subprocess, "run", side_effect=metadata_reader(default_key_metadata())):
                 policy.validate("secret", policy.load(str(path), targeted=True, phase="secret"))
 
+    def test_empty_known_default_requires_exact_live_omission_and_managed_alias(self):
+        responses = list(default_key_metadata())
+        responses[0].pop("KmsKeyId")
+        with patch.object(policy.subprocess, "run", side_effect=metadata_reader(responses)) as run:
+            policy.validate("secret", default_key_plan(""))
+            self.assertEqual([call.args[0][1:3] for call in run.call_args_list], [
+                ["secretsmanager", "describe-secret"], ["kms", "describe-key"],
+                ["kms", "list-aliases"],
+            ])
+            self.assertEqual(run.call_args_list[1].args[0][4], policy.V2_KMS_ALIAS)
+        plan = guarded_container_plan()
+        container = plan["resource_changes"][2]["change"]
+        for side in ("before", "after"):
+            container[side]["kms_key_id"] = ""
+            plan["resource_drift"][0]["change"][side]["kms_key_id"] = ""
+        plan["complete"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with patch.object(policy.subprocess, "run", side_effect=metadata_reader(responses)):
+                policy.validate("secret", policy.load(str(path), targeted=True, phase="secret"))
+
+    def test_empty_default_rejects_live_key_presence_wrong_identity_or_unverified_alias(self):
+        changes = (
+            lambda r: r[0].update(KmsKeyId="private-other-key"),
+            lambda r: r[0].update(KmsKeyId=None),
+            lambda r: r[0].update(ARN="private-other-secret"),
+            lambda r: r[1]["KeyMetadata"].update(KeyManager="CUSTOMER"),
+            lambda r: r[1]["KeyMetadata"].update(KeyState="Disabled"),
+            lambda r: r[2]["Aliases"][0].update(AliasName="private-other-alias"),
+        )
+        for change in changes:
+            responses = list(default_key_metadata())
+            responses[0].pop("KmsKeyId")
+            change(responses)
+            with self.subTest(change=change), patch.object(policy.subprocess, "run",
+                                                     side_effect=metadata_reader(responses)):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", default_key_plan(""))
+                self.assertNotIn("private-", str(caught.exception))
+        with patch.object(policy.subprocess, "run", return_value=SimpleNamespace(
+                returncode=1, stdout="private-error")) as run:
+            with self.assertRaises(SystemExit) as caught:
+                policy.validate("secret", default_key_plan(""))
+            run.assert_called_once()
+            self.assertNotIn("private-", str(caught.exception))
+        for failed_call in (1, 2, 3):
+            responses = list(default_key_metadata())
+            responses[0].pop("KmsKeyId")
+            read = metadata_reader(responses)
+            calls = 0
+            def deny_one(argv, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == failed_call:
+                    return SimpleNamespace(returncode=1, stdout="private-error", stderr="private-denial")
+                return read(argv, **kwargs)
+            with self.subTest(failed_call=failed_call), patch.object(
+                    policy.subprocess, "run", side_effect=deny_one):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", default_key_plan(""))
+                self.assertEqual(calls, failed_call)
+                self.assertNotIn("private-", str(caught.exception))
+
+    def test_empty_key_cannot_bypass_changed_container_or_unknown(self):
+        for mutate in (
+            lambda p: p["resource_changes"][2]["change"]["after"].update(description="private-changed"),
+            lambda p: p["resource_changes"][2]["change"].update(after_unknown={"kms_key_id": True}),
+            lambda p: p["resource_changes"][2]["change"].update(actions=["create"]),
+        ):
+            plan = default_key_plan("")
+            mutate(plan)
+            with self.subTest(mutate=mutate), patch.object(policy.subprocess, "run") as run:
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+                run.assert_not_called()
+
     def test_default_key_proof_refuses_mismatch_and_failures_without_identifiers(self):
         changes = (
             lambda r: r[0].update(KmsKeyId="private-other-key"),
