@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
 
@@ -21,6 +22,62 @@ V2_VERSION = "aws_secretsmanager_secret_version.app_runtime"
 V2_NAME = "/mycfc/production/app-runtime-secrets-v2"
 # Exact metadata-only identity observed after the reviewed partial apply.
 V2_RECOVERY_ARN = "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n"
+V2_KMS_REGION = "eu-west-1"
+V2_KMS_ACCOUNT = "334960985019"
+V2_KMS_ALIAS = "alias/aws/secretsmanager"
+
+def prove_existing_default_kms_key(value: str) -> None:
+    """Bind a non-null plan representation to the live, enabled AWS-managed key.
+
+    This is metadata-only and runs under both protected plan and apply roles.
+    Never include CLI output, errors, or identifiers in refusal messages.
+    """
+    refusal = "v2 secret KMS default-key proof unavailable or mismatched"
+    if not isinstance(value, str) or not value or len(value) > 2048 or not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value):
+        fail(refusal)
+
+    def aws_json(*args):
+        try:
+            result = subprocess.run(
+                ["aws", *args, "--region", V2_KMS_REGION, "--output", "json", "--no-cli-pager"],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if result.returncode != 0:
+                fail(refusal)
+            response = json.loads(result.stdout)
+            if not isinstance(response, dict):
+                fail(refusal)
+            return response
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            fail(refusal)
+
+    secret = aws_json("secretsmanager", "describe-secret", "--secret-id", V2_RECOVERY_ARN)
+    # AWS documents that DescribeSecret omits KmsKeyId for aws/secretsmanager.
+    # A retained plan representation may be non-null: independently bind that
+    # representation to the sole service alias, never to an arbitrary KMS key.
+    if (secret.get("ARN") != V2_RECOVERY_ARN or secret.get("Name") != V2_NAME
+            or secret.get("DeletedDate") is not None
+            or secret.get("KmsKeyId") not in (None, value)):
+        fail(refusal)
+    key = aws_json("kms", "describe-key", "--key-id", value).get("KeyMetadata")
+    if not isinstance(key, dict):
+        fail(refusal)
+    key_id, arn = key.get("KeyId"), key.get("Arn")
+    if (not isinstance(key_id, str) or not key_id
+            or arn != f"arn:aws:kms:{V2_KMS_REGION}:{V2_KMS_ACCOUNT}:key/{key_id}"
+            or key.get("AWSAccountId") != V2_KMS_ACCOUNT
+            or key.get("KeyManager") != "AWS" or key.get("KeyState") != "Enabled"
+            or key.get("Enabled") is not True or key.get("KeyUsage") != "ENCRYPT_DECRYPT"
+            or key.get("KeySpec") != "SYMMETRIC_DEFAULT"):
+        fail(refusal)
+    aliases = aws_json("kms", "list-aliases", "--key-id", key_id, "--no-paginate")
+    if (aliases.get("Truncated") is True or aliases.get("NextMarker") is not None
+            or not isinstance(aliases.get("Aliases"), list)
+            or not any(isinstance(alias, dict)
+                       and alias.get("AliasName") == V2_KMS_ALIAS
+                       and alias.get("TargetKeyId") == key_id
+                       for alias in aliases["Aliases"])):
+        fail(refusal)
 
 
 def known(value):
@@ -61,7 +118,7 @@ PHASE_TARGETS = {
 }
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"v2 bootstrap policy: {message}")
 
 
@@ -295,15 +352,21 @@ def validate(phase: str, plan: dict) -> None:
             fail("unexpected v2 secret name")
         container_after = container["change"].get("after", {})
         container_unknown = container["change"].get("after_unknown", {})
+        if container_unknown.get("kms_key_id"):
+            fail("v2 secret kms_key_id is unknown")
         expected_container = {
             "description": "MyCFC production web-runtime secrets v2",
             "recovery_window_in_days": 30,
-            "kms_key_id": None,
             "force_overwrite_replica_secret": False,
         }
         for attribute, expected_value in expected_container.items():
             if container_unknown.get(attribute) or container_after.get(attribute) != expected_value:
                 fail(f"unexpected v2 secret {attribute}")
+        kms_key_id = container_after.get("kms_key_id")
+        if kms_key_id is not None:
+            if not continuation or container["change"].get("actions") != ["no-op"]:
+                fail("v2 secret kms_key_id requires unchanged existing container")
+            prove_existing_default_kms_key(kms_key_id)
         if container_after.get("replica") not in (None, []):
             fail("v2 secret replicas are not allowed in bootstrap")
         if container_after.get("name_prefix") not in (None, ""):
