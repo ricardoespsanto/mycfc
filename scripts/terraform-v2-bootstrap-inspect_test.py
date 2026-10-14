@@ -109,6 +109,44 @@ class BootstrapInspectTest(unittest.TestCase):
         self.assertIn("delete=1", message)
         self.assertNotIn("secret-old-value", message)
 
+    def test_unexpected_drift_reports_closed_type_action_without_address_or_values(self):
+        for resource_type, actions, expected in (
+            ("aws_secretsmanager_secret_version", ["update"], "aws_secretsmanager_secret_version/update=1"),
+            ("aws_iam_role", ["delete", "create"], "aws_iam_role/other=1"),
+            ("aws_s3_bucket", ["no-op"], "aws_s3_bucket/no-op=1"),
+            ("private-type\n::warning::injected", ["private-action"], "other/other=1"),
+            (None, "private-actions", "other/invalid=1"),
+        ):
+            with self.subTest(expected=expected):
+                plan = {"resource_drift": [{
+                    "address": "private-address[\"private-key\"]", "type": resource_type,
+                    "change": {"actions": actions, "before": {"secret_string": "private-before"},
+                               "after": {"secret_string": "private-after"}},
+                }]}
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("category=count; entries=1", message)
+                self.assertIn("unexpected-types-actions=" + expected, message)
+                for private in ("private-", "injected", "::warning::"):
+                    self.assertNotIn(private, message)
+
+    def test_unexpected_entry_cli_refuses_without_leaking_address_or_value(self):
+        plan = {"format_version": "1.2", "errored": False, "resource_drift": [{
+            "address": "aws_iam_role.private-instance[\"sensitive-key\"]", "type": "aws_iam_role",
+            "change": {"actions": ["delete"], "before": {"secret": "private-before"}, "after": None},
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run(["python3", str(source), "drift", str(path)],
+                                    text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("unexpected-types-actions=aws_iam_role/delete=1", result.stderr)
+        for private in ("private-instance", "sensitive-key", "private-before"):
+            self.assertNotIn(private, result.stdout + result.stderr)
+
     def test_additional_role_fields_report_names_without_values(self):
         plan = plan_with_drift()
         before = plan["resource_drift"][0]["change"]["before"]
