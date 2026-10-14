@@ -7,6 +7,7 @@ import pathlib
 import re
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
@@ -122,8 +123,125 @@ def guarded_container_plan():
                                                               "before": stale, "after": live.copy()}}]
     return plan
 
+def default_key_plan(value):
+    plan = phase_a_empty_container()
+    container = plan["resource_changes"][2]["change"]
+    container["before"]["kms_key_id"] = value
+    container["after"]["kms_key_id"] = value
+    return plan
+
+def default_key_metadata(value="private-key-id"):
+    return (
+        {"ARN": policy.V2_RECOVERY_ARN, "Name": policy.V2_NAME, "KmsKeyId": value},
+        {"KeyMetadata": {"KeyId": "private-key-id",
+                         "Arn": f"arn:aws:kms:{policy.V2_KMS_REGION}:{policy.V2_KMS_ACCOUNT}:key/private-key-id",
+                         "AWSAccountId": policy.V2_KMS_ACCOUNT, "KeyManager": "AWS",
+                         "KeyState": "Enabled", "Enabled": True,
+                         "KeyUsage": "ENCRYPT_DECRYPT", "KeySpec": "SYMMETRIC_DEFAULT"}},
+        {"Aliases": [{"AliasName": policy.V2_KMS_ALIAS, "TargetKeyId": "private-key-id"}]},
+    )
+
+def metadata_reader(responses):
+    def read(argv, **kwargs):
+        assert kwargs["capture_output"] is True
+        assert kwargs["timeout"] == 30
+        operation = tuple(argv[1:3])
+        index = {("secretsmanager", "describe-secret"): 0,
+                 ("kms", "describe-key"): 1,
+                 ("kms", "list-aliases"): 2}[operation]
+        return SimpleNamespace(returncode=0, stdout=json.dumps(responses[index]))
+    return read
 
 class BootstrapPolicyTest(unittest.TestCase):
+    def test_default_key_representation_requires_exact_private_live_proof(self):
+        with patch.object(policy.subprocess, "run") as run:
+            policy.validate("secret", default_key_plan(None))
+            run.assert_not_called()
+        for value in ("alias/aws/secretsmanager",
+                      f"arn:aws:kms:{policy.V2_KMS_REGION}:{policy.V2_KMS_ACCOUNT}:alias/aws/secretsmanager",
+                      "private-key-id"):
+            with self.subTest(value=value), patch.object(
+                    policy.subprocess, "run", side_effect=metadata_reader(default_key_metadata(value))) as run:
+                policy.validate("secret", default_key_plan(value))
+                self.assertEqual([call.args[0][1:3] for call in run.call_args_list], [
+                    ["secretsmanager", "describe-secret"], ["kms", "describe-key"],
+                    ["kms", "list-aliases"],
+                ])
+        # The API documents omission of KmsKeyId for the AWS-managed default.
+        responses = list(default_key_metadata())
+        responses[0].pop("KmsKeyId")
+        with patch.object(policy.subprocess, "run", side_effect=metadata_reader(responses)):
+            policy.validate("secret", default_key_plan("private-key-id"))
+
+    def test_guarded_drift_with_existing_default_key_passes_load_and_validate(self):
+        plan = guarded_container_plan()
+        container = plan["resource_changes"][2]["change"]
+        container["before"]["kms_key_id"] = "private-key-id"
+        container["after"]["kms_key_id"] = "private-key-id"
+        drift = plan["resource_drift"][0]["change"]
+        drift["before"]["kms_key_id"] = "private-key-id"
+        drift["after"]["kms_key_id"] = "private-key-id"
+        plan["complete"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with patch.object(policy.subprocess, "run", side_effect=metadata_reader(default_key_metadata())):
+                policy.validate("secret", policy.load(str(path), targeted=True, phase="secret"))
+
+    def test_default_key_proof_refuses_mismatch_and_failures_without_identifiers(self):
+        changes = (
+            lambda r: r[0].update(KmsKeyId="private-other-key"),
+            lambda r: r[0].update(ARN="private-other-secret"),
+            lambda r: r[0].update(Name="private-other-secret"),
+            lambda r: r[0].update(DeletedDate="private-date"),
+            lambda r: r[1]["KeyMetadata"].update(KeyManager="CUSTOMER"),
+            lambda r: r[1]["KeyMetadata"].update(KeyState="Disabled"),
+            lambda r: r[1]["KeyMetadata"].update(Enabled=False),
+            lambda r: r[1]["KeyMetadata"].update(AWSAccountId="private-other-account"),
+            lambda r: r[1]["KeyMetadata"].update(Arn="private-other-arn"),
+            lambda r: r[1]["KeyMetadata"].update(KeyUsage="SIGN_VERIFY"),
+            lambda r: r[1]["KeyMetadata"].update(KeySpec="RSA_2048"),
+            lambda r: r[2]["Aliases"][0].update(AliasName="private-other-alias"),
+            lambda r: r[2]["Aliases"][0].update(TargetKeyId="private-other-key"),
+            lambda r: r[2].update(Truncated=True),
+            lambda r: r[2].update(Truncated=None),
+            lambda r: r[2].update(Truncated=1),
+            lambda r: r[2].update(Truncated="true"),
+        )
+        for change in changes:
+            responses = list(default_key_metadata())
+            change(responses)
+            with self.subTest(change=change), patch.object(
+                    policy.subprocess, "run", side_effect=metadata_reader(responses)):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", default_key_plan("private-key-id"))
+                self.assertNotIn("private-", str(caught.exception))
+        for failure in (SimpleNamespace(returncode=1, stdout="private-error"),
+                        SimpleNamespace(returncode=0, stdout="private-invalid-json"),
+                        SimpleNamespace(returncode=0, stdout="[]")):
+            with patch.object(policy.subprocess, "run", return_value=failure):
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", default_key_plan("private-key-id"))
+                self.assertNotIn("private-", str(caught.exception))
+        with patch.object(policy.subprocess, "run", side_effect=OSError("private-error")):
+            with self.assertRaises(SystemExit) as caught:
+                policy.validate("secret", default_key_plan("private-key-id"))
+            self.assertNotIn("private-", str(caught.exception))
+
+    def test_non_null_key_never_allows_new_changed_or_unknown_container(self):
+        for mutation in (
+            lambda p: p["resource_changes"][2]["change"].update(actions=["create"]),
+            lambda p: p["resource_changes"][2]["change"]["after"].update(kms_key_id="private-other-key"),
+            lambda p: p["resource_changes"][2]["change"].update(after_unknown={"kms_key_id": True}),
+            lambda p: p["resource_changes"][2]["change"]["after"].update(name="private-other-secret"),
+        ):
+            plan = default_key_plan("private-key-id")
+            mutation(plan)
+            with self.subTest(mutation=mutation), patch.object(policy.subprocess, "run") as run:
+                with self.assertRaises(SystemExit):
+                    policy.validate("secret", plan)
+                run.assert_not_called()
+
     def test_exact_private_container_comparison_allows_only_noop_version_create(self):
         plan = guarded_container_plan()
         self.assertTrue(guarded_v2_drift(plan))
@@ -326,9 +444,16 @@ class BootstrapPolicyTest(unittest.TestCase):
                     version["after_unknown"] = {"secret_string": True}
                 else:
                     for side in ("before", "after"):
-                        plan["resource_changes"][2]["change"][side]["kms_key_id"] = "other"
-                with self.assertRaises(SystemExit):
-                    policy.validate("secret", plan)
+                        plan["resource_changes"][2]["change"][side]["kms_key_id"] = "private-other-key"
+                with patch.object(policy.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=1, stdout="private-error")) as run:
+                    with self.assertRaises(SystemExit) as caught:
+                        policy.validate("secret", plan)
+                    self.assertNotIn("private-", str(caught.exception))
+                    if invalid == "kms":
+                        run.assert_called_once()
+                    else:
+                        run.assert_not_called()
         plan = phase_a_empty_container()
         plan["resource_changes"][2]["change"]["after_unknown"] = {"tags": {}, "arn": False}
         plan["resource_changes"][3]["change"]["after_unknown"] = {"version_stages": [False]}
