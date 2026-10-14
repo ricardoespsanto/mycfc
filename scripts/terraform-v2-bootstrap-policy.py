@@ -33,7 +33,8 @@ def prove_existing_default_kms_key(value: str) -> None:
     Never include CLI output, errors, or identifiers in refusal messages.
     """
     refusal = "v2 secret KMS default-key proof unavailable or mismatched"
-    if not isinstance(value, str) or not value or len(value) > 2048 or not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value):
+    if (not isinstance(value, str) or len(value) > 2048
+            or (value and not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value))):
         fail(refusal)
 
     def aws_json(*args):
@@ -56,10 +57,17 @@ def prove_existing_default_kms_key(value: str) -> None:
     # A retained plan representation may be non-null: independently bind that
     # representation to the sole service alias, never to an arbitrary KMS key.
     if (secret.get("ARN") != V2_RECOVERY_ARN or secret.get("Name") != V2_NAME
-            or secret.get("DeletedDate") is not None
-            or secret.get("KmsKeyId") not in (None, value)):
+            or secret.get("DeletedDate") is not None):
         fail(refusal)
-    key = aws_json("kms", "describe-key", "--key-id", value).get("KeyMetadata")
+    if value == "" and "KmsKeyId" in secret:
+        fail(refusal)
+    if value != "" and secret.get("KmsKeyId") not in (None, value):
+        fail(refusal)
+    # The pinned SDK can retain a known empty string for a missing API field.
+    # Only for that representation, resolve the exact service alias instead
+    # of passing an empty KeyId to KMS. All other representations keep their
+    # original live-field binding and resolve the planned value itself.
+    key = aws_json("kms", "describe-key", "--key-id", value or V2_KMS_ALIAS).get("KeyMetadata")
     if not isinstance(key, dict):
         fail(refusal)
     key_id, arn = key.get("KeyId"), key.get("Arn")
