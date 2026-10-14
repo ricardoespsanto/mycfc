@@ -162,6 +162,30 @@ class BootstrapPolicyTest(unittest.TestCase):
                     guarded_v2_drift(plan)
                 self.assertNotIn("private-", str(caught.exception))
 
+    def test_missing_comparison_evidence_and_non_my_cfc_project_fail_through_load(self):
+        cases = (
+            lambda p: p["resource_drift"][0]["change"]["before"].pop("policy"),
+            lambda p: p["resource_drift"][0]["change"]["before"].pop("tags"),
+            lambda p: p["resource_drift"][0]["change"]["after"].pop("policy"),
+            lambda p: (p["resource_drift"][0]["change"]["after"].pop("tags"),
+                       p["resource_changes"][2]["change"]["after"].pop("tags")),
+            lambda p: (p["variables"]["project_name"].update(value="other"),
+                       p["resource_drift"][0]["change"]["after"]["tags_all"].update(Project="other"),
+                       p["resource_changes"][2]["change"]["after"]["tags_all"].update(Project="other")),
+        )
+        for mutate in cases:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as directory:
+                plan = guarded_container_plan()
+                mutate(plan)
+                with self.assertRaises(DriftRefusal):
+                    guarded_v2_drift(plan)
+                plan["complete"] = False
+                path = pathlib.Path(directory) / "plan.json"
+                path.write_text(json.dumps(plan), encoding="utf-8")
+                with self.assertRaises(SystemExit) as caught:
+                    policy.validate("secret", policy.load(str(path), targeted=True, phase="secret"))
+                self.assertNotIn("private-", str(caught.exception))
+
     def test_resume_empty_managed_v2_container_creates_only_version(self):
         policy.validate("secret", phase_a_empty_container())
 

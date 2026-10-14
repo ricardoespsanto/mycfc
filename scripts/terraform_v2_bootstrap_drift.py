@@ -48,6 +48,8 @@ def guarded_v2_drift(plan: dict) -> bool:
     before, after = change.get("before"), change.get("after")
     if not isinstance(before, dict) or not isinstance(after, dict):
         refuse()
+    if not {"policy", "tags"} <= before.keys() or not {"policy", "tags"} <= after.keys():
+        refuse()
     changed = {key for key in before.keys() | after.keys()
                if (key in before) != (key in after) or canonical(before.get(key)) != canonical(after.get(key))}
     if changed != {"policy", "tags"}:
@@ -62,7 +64,7 @@ def guarded_v2_drift(plan: dict) -> bool:
     if not isinstance(project, dict) or not isinstance(environment, dict):
         refuse()
     project, environment = project.get("value"), environment.get("value")
-    if (not isinstance(project, str) or not project or environment != "production"):
+    if project != "mycfc" or environment != "production":
         refuse()
     expected_tags = {"Project": project, "Environment": environment,
                      "ManagedBy": "terraform", "Repository": "ricardoespsanto/mycfc"}
