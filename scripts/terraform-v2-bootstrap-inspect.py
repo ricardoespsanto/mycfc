@@ -16,6 +16,19 @@ ROLE_ADDRESSES = {
 }
 SECRET_VERSION_ADDRESS = "aws_secretsmanager_secret_version.legacy_runtime"
 EXPECTED_DRIFT = ROLE_ADDRESSES | {SECRET_VERSION_ADDRESS}
+# Closed type labels from this production stack; unknown plan types are never echoed.
+DRIFT_TYPE_LABELS = {
+    "aws_cloudwatch_log_group", "aws_cloudwatch_log_metric_filter", "aws_cloudwatch_metric_alarm",
+    "aws_ecr_lifecycle_policy", "aws_ecr_repository", "aws_iam_access_key", "aws_iam_policy",
+    "aws_iam_role", "aws_iam_role_policy", "aws_iam_user", "aws_iam_user_policy",
+    "aws_s3_bucket", "aws_s3_bucket_lifecycle_configuration", "aws_s3_bucket_ownership_controls",
+    "aws_s3_bucket_policy", "aws_s3_bucket_public_access_block",
+    "aws_s3_bucket_server_side_encryption_configuration", "aws_s3_bucket_versioning",
+    "aws_secretsmanager_secret", "aws_secretsmanager_secret_version",
+    "aws_sesv2_account_suppression_attributes", "aws_sesv2_email_identity",
+    "aws_sesv2_email_identity_mail_from_attributes", "aws_sns_topic",
+    "aws_sns_topic_subscription", "aws_ssm_parameter", "cloudflare_dns_record", "random_id",
+}
 SECRET_FIELDS = {
     "APP_DB_PASSWORD", "CSRF_AUTH_KEY_B64", "EMAIL_VERIFICATION_HMAC_KEY_B64",
     "TURNSTILE_SECRET_KEY", "SMTP_USERNAME", "SMTP_PASSWORD",
@@ -134,43 +147,50 @@ def version_stages(value: object) -> list[str]:
     return value
 
 
+def drift_action_class(change: object) -> str:
+    actions = change.get("actions") if isinstance(change, dict) else None
+    if actions == ["update"]:
+        return "update"
+    if actions == ["no-op"]:
+        return "no-op"
+    if actions == ["delete"]:
+        return "delete"
+    if actions == ["create"]:
+        return "create"
+    return "other" if isinstance(actions, list) else "invalid"
+
+
 def drift_refusal(category: str, drift: object) -> NoReturn:
     """Report bounded metadata without echoing unexpected plan addresses or values."""
     if not isinstance(drift, list):
         fail(f"drift inventory differs from the four expected resources; category={category}; entries=unavailable")
     counts = {address: {} for address in EXPECTED_DRIFT}
+    unexpected = {}
     for resource in drift:
         if not isinstance(resource, dict):
             continue
         try:
             address = base_address(resource.get("address"))
         except SystemExit:
-            continue
+            address = None
+        action_class = drift_action_class(resource.get("change"))
         if address not in counts:
+            resource_type = resource.get("type")
+            type_label = resource_type if isinstance(resource_type, str) and resource_type in DRIFT_TYPE_LABELS else "other"
+            key = (type_label, action_class)
+            unexpected[key] = unexpected.get(key, 0) + 1
             continue
-        change = resource.get("change")
-        actions = change.get("actions") if isinstance(change, dict) else None
-        if actions == ["update"]:
-            action_class = "update"
-        elif actions == ["no-op"]:
-            action_class = "no-op"
-        elif actions == ["delete"]:
-            action_class = "delete"
-        elif actions == ["create"]:
-            action_class = "create"
-        elif isinstance(actions, list):
-            action_class = "other"
-        else:
-            action_class = "invalid"
         counts[address][action_class] = counts[address].get(action_class, 0) + 1
-    # Every printed address and action label is a constant, never plan content.
+    # Every printed address, type and action label is a source constant, never arbitrary plan content.
     presence = ",".join(
         f"{address}:{sum(counts[address].values())}:"
         + "/".join(f"{action}={counts[address][action]}" for action in sorted(counts[address]))
         for address in sorted(EXPECTED_DRIFT)
     )
+    classes = ",".join(f"{kind}/{action}={unexpected[kind, action]}"
+                       for kind, action in sorted(unexpected)) or "none"
     fail(f"drift inventory differs from the four expected resources; category={category}; "
-         f"entries={len(drift)}; expected={presence}")
+         f"entries={len(drift)}; expected={presence}; unexpected-types-actions={classes}")
 
 
 def inspect_drift(plan: dict) -> str:
