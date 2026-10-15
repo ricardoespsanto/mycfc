@@ -21,7 +21,7 @@ COPY --from=assets /src/ui/static/dist ./ui/static/dist
 ARG RELEASE_VERSION
 ARG GIT_SHA
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/cfcoimbra/mycfc/internal/releasecontract.Version=${RELEASE_VERSION} -X github.com/cfcoimbra/mycfc/internal/releasecontract.Candidate=${GIT_SHA}" -o /out/mycfc ./cmd/server \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/admin ./cmd/admin \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/cfcoimbra/mycfc/internal/releasecontract.Version=${RELEASE_VERSION} -X github.com/cfcoimbra/mycfc/internal/releasecontract.Candidate=${GIT_SHA}" -o /out/admin ./cmd/admin \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/media-cleanup ./cmd/media-cleanup \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/data-retention ./cmd/data-retention \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/guardian-activation ./cmd/guardian-activation
