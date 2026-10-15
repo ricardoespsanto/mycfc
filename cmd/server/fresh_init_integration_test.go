@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	urlpkg "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -14,18 +15,47 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TEST_FRESH_INIT_URL must point to a dedicated disposable, empty PostgreSQL
-// database. Never reuse the normal test DB: this test installs roles and ACLs.
+// TEST_FRESH_INIT_URL can point to a dedicated disposable empty database.
+// In the normal integration suite, create a uniquely named throwaway database
+// using the existing PostgreSQL test superuser; never reuse mycfc_test.
 func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	url := os.Getenv("TEST_FRESH_INIT_URL")
+	ctx := context.Background()
 	if url == "" {
-		t.Skip("requires a dedicated disposable empty PostgreSQL database")
+		base := os.Getenv("TEST_DATABASE_URL")
+		if base == "" {
+			t.Skip("requires a dedicated disposable PostgreSQL test database")
+		}
+		parsedBase, err := urlpkg.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsedBase.Path = "/postgres"
+		admin, err := pgx.Connect(ctx, parsedBase.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = admin.Close(context.Background()) })
+		var superuser bool
+		if err := admin.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user").Scan(&superuser); err != nil || !superuser {
+			t.Fatalf("fresh test requires existing test superuser: %v", err)
+		}
+		name := "fresh_contract_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+		if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := admin.Exec(context.Background(), "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)"); err != nil {
+				t.Errorf("remove disposable fresh test database: %v", err)
+			}
+		})
+		parsedBase.Path = "/" + name
+		url = parsedBase.String()
 	}
 	parsed, err := pgx.ParseConfig(url)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		t.Fatal(err)
