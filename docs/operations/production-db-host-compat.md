@@ -133,26 +133,41 @@ poller can run `bootstrap-db`/`migrate`; a matching signed image and tested
 host receipt still do not alone prove traffic cutover.
 
 A real adult administrator must be created with the existing `cmd/admin create`
-using owner-supplied identity and protected password file/interactive input,
-then authenticate before traffic cutover. The app branch now packages
-`/app/admin` in the new image, but at `feb143f` the admin binary is **not
-stamped** with the release identity like `/app/mycfc`. Its production
-`ResolvedDatabaseURL` consequently does not remap the old web principal to
-the fresh candidate role. This is a known blocker pending the engineer's
-matching stamp and production-mode regression test; do not treat packaging
-alone as working admin access. Once fixed and independently verified, the
-one-shot form is:
+using the owner-supplied identity and privately entered password, then
+authenticate before traffic cutover. The app branch at `2688394` packages
+`/app/admin` stamped with the same release identity as `/app/mycfc`, so its
+production `ResolvedDatabaseURL` maps the old remote `DB_USER` to the new
+candidate web role. **Execution proof remains pending:** the committed
+real-PostgreSQL/image test harness used a literal redacted password in its
+connection URL and must be fixed and rerun from committed source before this
+admin path is accepted. The owner provided the real adult name, email and DOB
+privately to delivery; none is recorded in this repository. The password has
+not been supplied, and must never be requested or passed in chat.
+
+Preferred custody, if an authorized private interactive host terminal is
+available: run the one-shot admin CLI with Compose's TTY/interactive input
+enabled, **without** `-T` or `MYCFC_ADMIN_PASSWORD_FILE`. The owner enters the
+password twice at the CLI's `term.ReadPassword` prompts; input is not echoed,
+put in shell history, or conveyed to this agent. The command structure is:
+
+    docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile blue run --rm --no-deps --entrypoint /app/admin app-blue create --email OWNER_EMAIL --name OWNER_NAME --date-of-birth OWNER_DOB
+
+If the sanctioned execution channel cannot provide an interactive TTY, the
+owner can stage a private password file directly on the host without exposing
+its contents in commands/logs/chat. The container's `USER nonroot:nonroot` must
+be able to read it: use a dedicated root:65532 directory mode `0750` and an
+exact root:65532 regular file mode `0640`, no symlink, owned and managed under
+the owner's private custody. Check only UID/GID/mode and regular-file status,
+not contents. Bind only that file read-only into the one-shot container:
 
     docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile blue run --rm --no-deps --entrypoint /app/admin -v OWNER_PASSWORD_FILE:/run/mycfc/admin.password:ro -e MYCFC_ADMIN_PASSWORD_FILE=/run/mycfc/admin.password app-blue create --email OWNER_EMAIL --name OWNER_NAME --date-of-birth OWNER_DOB
 
-These are operator-supplied placeholders, **not** values to paste into chat
-or a shared shell history. The password file must be privately supplied and
-readable by the image's unprivileged UID through a protected read-only bind
-mount; do not pass a password value in flags/environment. The stamped admin
-binary must use the candidate web role (not PostgreSQL superuser, migration
-role, or old web principal). A future host operator must verify actual admin
-login on the candidate before any route switch. The owner has not supplied
-real identity/password custody to this workstream; none is invented.
+Placeholders must be filled privately; do not put the password itself in a
+flag/environment, a shared shell history, image layer, or a Compose log. The
+admin uses the candidate web role (never superuser, migration, or old web
+principal). A future operator must verify the actual login and authorized
+page before any route switch. Neither TTY nor file path is proven usable via
+the current noninteractive tool approval control; do not bypass it.
 
 Rollback **before** database work is to restore the exact backed-up Compose
 file and remove only the newly staged maintenance file if it was newly created
