@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import sys
 
 TARGET = Path('/etc/mycfc/database-maintenance.env')
@@ -45,8 +46,14 @@ def main() -> int:
     if sys.argv[1:] != ['--create']:
         print('usage: stage-fresh-db-maintenance-env.py --create', file=sys.stderr)
         return 2
-    if os.geteuid() != 0 or TARGET.parent.is_symlink() or not TARGET.parent.is_dir():
-        print('refused: root and established /etc/mycfc directory required', file=sys.stderr)
+    try:
+        parent = TARGET.parent.stat(follow_symlinks=False)
+        protected_parent = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0 and
+                            stat.S_IMODE(parent.st_mode) & 0o022 == 0)
+    except OSError:
+        protected_parent = False
+    if os.geteuid() != 0 or not protected_parent:
+        print('refused: root-owned non-writable /etc/mycfc directory required', file=sys.stderr)
         return 1
     try:
         create(TARGET, content())

@@ -62,7 +62,8 @@ The signed source install contract requires one root-owned, non-symlink `0600`
 `DATA_RETENTION_DB_USER`, `DATA_RETENTION_DB_PASSWORD`. The observed legacy env
 has none; the dedicated file is absent. For a newly initialized database,
 `scripts/stage-fresh-db-maintenance-env.py --create` is a bounded *future*
-on-host generator: it runs only as root with an existing `/etc/mycfc` directory,
+on-host generator: it runs only as root with a root-owned,
+group/other-non-writable `/etc/mycfc` directory,
 creates only that exact file exclusively with `0600` and no symlink follow,
 and never prints either new password. The technical login names are the
 repository's tested `mycfc_media_cleanup_login` and
