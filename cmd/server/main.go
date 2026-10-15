@@ -72,7 +72,52 @@ func runServerCommand(ctx context.Context, args []string) error {
 	if len(args) == 1 && args[0] == "guardian-release-status" {
 		return guardianReleaseStatus(ctx)
 	}
+	if len(args) > 0 && args[0] == "fresh-init-db" {
+		if len(args) != 2 || args[1] != "--confirm-empty" {
+			return errors.New("fresh-init-db requires exactly --confirm-empty; it never resets an existing database")
+		}
+		return runFreshInitCommand(ctx)
+	}
 	return runDatabaseCommand(ctx, args[0])
+}
+
+func runFreshInitCommand(ctx context.Context) error {
+	var databaseURL, databaseName string
+	var credentials db.RoleCredentials
+	if raw, ok, err := databaseURLFromEnvironment(); err != nil {
+		return err
+	} else if ok {
+		databaseURL = raw
+		parsed, err := pgx.ParseConfig(databaseURL)
+		if err != nil {
+			return fmt.Errorf("parse fresh initialization URL: %w", err)
+		}
+		databaseName = parsed.Database
+		credentials = databaseRoleCredentialsFromEnvironment()
+	} else {
+		cfg, err := loadDatabaseCommandConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("load fresh initialization configuration: %w", err)
+		}
+		databaseURL, err = cfg.BootstrapDatabaseURL()
+		if err != nil {
+			return err
+		}
+		databaseName = cfg.DBName
+		credentials = databaseRoleCredentialsFromConfig(cfg)
+	}
+	if releasecontract.Version != "" || releasecontract.Candidate != "" {
+		if !releasecontract.Matches(os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), databaseName) {
+			return errors.New("fresh initialization binary/runtime identity mismatch")
+		}
+	}
+	conn, err := connectDatabaseCommand(ctx, databaseURL)
+	if err != nil {
+		return fmt.Errorf("connect fresh initialization database: %w", err)
+	}
+	defer conn.Close(ctx)
+	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+	return db.FreshInitializeDatabase(ctx, conn, databaseName, credentials)
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
@@ -190,6 +235,11 @@ func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnec
 	if !releasecontract.Matches(version, candidate, database) {
 		return errors.New("disposable release binary/runtime identity mismatch")
 	}
+	if fresh, err := db.FreshInitializationMatches(ctx, conn, database, version, candidate); err != nil {
+		return errors.New("fresh initialization receipt inspection failed")
+	} else if fresh {
+		return nil
+	}
 	var completed bool
 	if err := conn.QueryRow(ctx, "SELECT mycfc_disposable_release.matches($1,$2,$3,$4)", database, version, candidate, releasecontract.FinalDigest).Scan(&completed); err != nil || !completed {
 		return errors.New("disposable completion required before migration/hardening")
@@ -203,6 +253,12 @@ func bootstrapRelease(ctx context.Context, conn databaseCommandConnection, datab
 	}
 	if !releasecontract.Matches(version, candidate, database) {
 		return errors.New("disposable release binary/runtime identity mismatch")
+	}
+	if fresh, err := db.FreshInitializationMatches(ctx, conn, database, version, candidate); err != nil {
+		return errors.New("fresh initialization receipt inspection failed")
+	} else if fresh {
+		credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+		return db.BootstrapRoles(ctx, conn, database, credentials)
 	}
 	return db.BootstrapDisposableRelease(ctx, conn, database, credentials)
 }
