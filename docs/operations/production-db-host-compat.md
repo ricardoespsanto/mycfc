@@ -134,15 +134,19 @@ host receipt still do not alone prove traffic cutover.
 
 A real adult administrator must be created with the existing `cmd/admin create`
 using the owner-supplied identity and privately entered password, then
-authenticate before traffic cutover. The app branch at `2688394` packages
+authenticate before traffic cutover. The app branch at `5d913d9` packages
 `/app/admin` stamped with the same release identity as `/app/mycfc`, so its
 production `ResolvedDatabaseURL` maps the old remote `DB_USER` to the new
-candidate web role. **Execution proof remains pending:** the committed
-real-PostgreSQL/image test harness used a literal redacted password in its
-connection URL and must be fixed and rerun from committed source before this
-admin path is accepted. The owner provided the real adult name, email and DOB
-privately to delivery; none is recorded in this repository. The password has
-not been supplied, and must never be requested or passed in chat.
+candidate web role. The combined local artifact's
+`python3 scripts/test-fresh-database-release.py` passed against a disposable
+PostgreSQL 16.9 container and the built image: guarded fresh initialization,
+exact 77-marker ledger, stamped bootstrap/migrate, production-mode admin via
+remote configuration, and synthetic administrator login. The test image uses
+a synthetic/reused stamp for its local fixture, **not** a newly signed release
+identity. This is local proof, not a production execution or authorization.
+The owner provided the real adult name, email and DOB privately to delivery;
+none is recorded in this repository. The password has not been supplied, and
+must never be requested or passed in chat.
 
 Preferred custody, if an authorized private interactive host terminal is
 available: run the one-shot admin CLI with Compose's TTY/interactive input
