@@ -19,9 +19,12 @@ from the signed source poller; do not overwrite it as part of this repair.
   mounts only `mycfc-production_pgdata` at `/var/lib/postgresql/data`. Do not
   use `docker compose down -v`: unrelated uploads and volumes are out of scope.
 - The signed `v2.0.1` image requires the exact populated predecessor ledger and
-  refuses a newly initialized empty database. The app engineer owns a *new*
-  fresh-initialization implementation and tests. Do not reset the volume or
-  retry that image solely because this Compose candidate renders.
+  refuses a newly initialized empty database. The app engineer's *local,
+  unreleased* `b20bc42` candidate adds an explicit `fresh-init-db --confirm-empty`
+  command; see `docs/planning/fresh-database-init.md` in that worktree. Do not
+  reset the volume or retry `v2.0.1` solely because this Compose candidate
+  renders. The new binary and host compatibility change need reviewed release
+  integration before any reset.
 
 ## Local candidate (no live write)
 
@@ -84,6 +87,50 @@ as a probe: the former can execute destructive DDL. A previous auth-only probe
 was **not run** because the local terminal approval control blocked it; do not
 bypass that control. Release retry and quarantine clearing need their own exact
 scope after the fresh-init path has passed tests.
+
+## Integration with the unreleased fresh-init app path
+
+The locally tested `b20bc42` app branch adds **only** the explicit
+`fresh-init-db --confirm-empty` command; it does not turn `bootstrap-db` into
+fresh initialization. Its `runFreshInitCommand` uses `DATABASE_URL` if present;
+otherwise it loads AWS production configuration, builds the superuser URL from
+`POSTGRES_USER` (SSM) and `POSTGRES_PASSWORD` (the service environment), and
+uses app password (runtime secret), migration password (service environment),
+and all four maintenance fields (dedicated env file). The compatibility
+candidate supplies only the locally missing fields; it does not replace AWS
+configuration. The stamped `APP_VERSION`/`GIT_SHA` and exact database must match
+the *new* signed binary, not `v2.0.1`.
+
+Before the new image becomes host-visible, a later approved host operation must
+fence the old poller and other DB writers. After the reviewed/signed candidate
+is published and independently identified without automatic pickup, that
+operation would perform the separately approved **exact** DB reset (never
+blanket `down -v`), then start only the same-project PostgreSQL service with
+its existing protected credential. An auth-only `SELECT 1` must pass before
+DDL. With the approved new image identity staged in Compose interpolation
+(never a guessed or mutable tag), the **one-time** initialization command is:
+
+    docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile release run --rm --no-deps db-bootstrap fresh-init-db --confirm-empty
+
+`docker compose run SERVICE COMMAND` overrides the service's normal
+`bootstrap-db` command; `--no-deps` avoids silently starting other services.
+This is a future, destructive database-initialization command, **not** a probe
+or permission to run it now. A separate non-mutating `SELECT 1` remains the
+connection test. If init fails after partial DDL, stop: it rejects nonempty
+retry, and a new recovery decision is necessary. Verify the private fresh
+receipt and exact ledger via the new app's supported checks before the ordinary
+poller can run `bootstrap-db`/`migrate`; a matching signed image and tested
+host receipt still do not alone prove traffic cutover.
+
+A real adult administrator must be created with the existing `cmd/admin create`
+using owner-supplied identity and protected password file/interactive input,
+then authenticates before traffic cutover. The current production Dockerfile
+builds only the server, media-cleanup, data-retention and guardian-activation
+binaries; **it does not include `cmd/admin`**. Production administrator creation
+therefore needs a separately tested approved execution path (for example, an
+explicitly built and attested admin binary in the *new* image), not an assumed
+host command, a synthetic identity, or a password in the shell. This is a
+release-integration prerequisite, not a change to the narrow Compose renderer.
 
 Rollback **before** database work is to restore the exact backed-up Compose
 file and remove only the newly staged maintenance file if it was newly created
