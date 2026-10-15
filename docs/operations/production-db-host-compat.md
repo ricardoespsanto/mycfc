@@ -45,9 +45,12 @@ observed candidate adds exactly these service mappings and nothing else.
 
     python3 scripts/prepare-installed-compose-db-compat.py INSTALLED_COPY CANDIDATE
     MYCFC_INSTALLED_COMPOSE_FIXTURE=INSTALLED_COPY python3 scripts/prepare-installed-compose-db-compat_test.py
+    python3 scripts/stage-fresh-db-maintenance-env_test.py
 
-The test suite checks drift refusal, exclusive output, input preservation, and
-Docker Compose `config --quiet` with synthetic placeholders. Never run `docker
+The test suites check drift refusal, exclusive output, input preservation,
+Docker Compose `config --quiet` with synthetic placeholders, exact four-key
+credential generation and root-file-mode behaviour on local temporary paths.
+No real host secret is generated or read by these tests. Never run `docker
 compose config` without `--quiet` against production credentials; normal output
 would disclose their values. Do not paste protected diagnostics into chat.
 
@@ -57,15 +60,21 @@ The signed source install contract requires one root-owned, non-symlink `0600`
 `/etc/mycfc/database-maintenance.env` containing **only** these four keys:
 `MEDIA_CLEANUP_DB_USER`, `MEDIA_CLEANUP_DB_PASSWORD`,
 `DATA_RETENTION_DB_USER`, `DATA_RETENTION_DB_PASSWORD`. The observed legacy env
-has none; the expected dedicated file and legacy media-cleanup/retention files
-are absent. There is therefore **no established source or custody** for those
-values. Obtain them from an owner-approved secure source or provision new
-fresh-database role credentials under an expressly approved secret-custody path;
-never copy values through chat, command arguments, Compose output, logs, or a
-workstation artifact. Do not invent role identities, assume old values, or rotate
-other credentials. The two privileged values already in `mycfc.env` remain
-there unchanged for the bridge. New file staging and role creation are *not*
-authorized by this preparation.
+has none; the dedicated file is absent. For a newly initialized database,
+`scripts/stage-fresh-db-maintenance-env.py --create` is a bounded *future*
+on-host generator: it runs only as root with an existing `/etc/mycfc` directory,
+creates only that exact file exclusively with `0600` and no symlink follow,
+and never prints either new password. The technical login names are the
+repository's tested `mycfc_media_cleanup_login` and
+`mycfc_data_retention_login`; passwords are independently generated from the
+OS CSPRNG in Compose-safe characters. It refuses an existing file instead of
+rotating or overwriting anything. No credentials have been generated on the
+host yet; run it only inside an approved host-maintenance operation with
+secret-file custody and backup policy. Never copy values through chat, command
+arguments, Compose output, logs, or a workstation artifact. The two existing
+privileged values in `mycfc.env` remain unchanged for the bridge. No new role
+is created by this file stage; the reviewed fresh-init app command does that
+after its empty-DB preflight.
 
 Before any host change, verify the exact live Compose source still matches the
 reviewed candidate input, identify and fence the release poller and other DB
@@ -124,13 +133,25 @@ host receipt still do not alone prove traffic cutover.
 
 A real adult administrator must be created with the existing `cmd/admin create`
 using owner-supplied identity and protected password file/interactive input,
-then authenticates before traffic cutover. The current production Dockerfile
-builds only the server, media-cleanup, data-retention and guardian-activation
-binaries; **it does not include `cmd/admin`**. Production administrator creation
-therefore needs a separately tested approved execution path (for example, an
-explicitly built and attested admin binary in the *new* image), not an assumed
-host command, a synthetic identity, or a password in the shell. This is a
-release-integration prerequisite, not a change to the narrow Compose renderer.
+then authenticate before traffic cutover. The app branch now packages
+`/app/admin` in the new image, but at `feb143f` the admin binary is **not
+stamped** with the release identity like `/app/mycfc`. Its production
+`ResolvedDatabaseURL` consequently does not remap the old web principal to
+the fresh candidate role. This is a known blocker pending the engineer's
+matching stamp and production-mode regression test; do not treat packaging
+alone as working admin access. Once fixed and independently verified, the
+one-shot form is:
+
+    docker compose --env-file /etc/mycfc/mycfc.env -f /opt/mycfc/deployment/compose.yaml --profile blue run --rm --no-deps --entrypoint /app/admin -v OWNER_PASSWORD_FILE:/run/mycfc/admin.password:ro -e MYCFC_ADMIN_PASSWORD_FILE=/run/mycfc/admin.password app-blue create --email OWNER_EMAIL --name OWNER_NAME --date-of-birth OWNER_DOB
+
+These are operator-supplied placeholders, **not** values to paste into chat
+or a shared shell history. The password file must be privately supplied and
+readable by the image's unprivileged UID through a protected read-only bind
+mount; do not pass a password value in flags/environment. The stamped admin
+binary must use the candidate web role (not PostgreSQL superuser, migration
+role, or old web principal). A future host operator must verify actual admin
+login on the candidate before any route switch. The owner has not supplied
+real identity/password custody to this workstream; none is invented.
 
 Rollback **before** database work is to restore the exact backed-up Compose
 file and remove only the newly staged maintenance file if it was newly created
