@@ -5,6 +5,17 @@ scratch.mkdir(mode=0o700,parents=True,exist_ok=True)
 name='mycfc-fresh-test-'+uuid.uuid4().hex[:9]
 password=secrets.token_urlsafe(22)
 app=secrets.token_urlsafe(24); migration=secrets.token_urlsafe(24); media=secrets.token_urlsafe(24); retention=secrets.token_urlsafe(24)
+def postgres_url(user,secret,port,db='mycfc'):
+ return 'postgres://'+urllib.parse.quote(user,safe='')+':'+urllib.parse.quote(secret,safe='')+'@127.0.0.1:'+str(port)+'/'+urllib.parse.quote(db,safe='')+'?sslmode=disable'
+# Assert both credential components round-trip without exposing their values.
+reserved_user='account:@/?#% &'
+reserved_secret='password:@/?#% &'
+reserved_url=urllib.parse.urlsplit(postgres_url(reserved_user,reserved_secret,5432,'fresh_contract'))
+assert reserved_url.username is not None and reserved_url.password is not None
+assert urllib.parse.unquote(reserved_url.username)==reserved_user
+assert urllib.parse.unquote(reserved_url.password)==reserved_secret
+assert reserved_url.hostname=='127.0.0.1' and reserved_url.port==5432
+assert reserved_url.path=='/fresh_contract' and reserved_url.query=='sslmode=disable'
 def run(args,env=None,check=True,**kw):
  p=subprocess.run(args,cwd=root,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**kw)
  if check and p.returncode: raise RuntimeError(f'command {args[:2]} exit={p.returncode}: '+p.stderr[:500])
@@ -19,7 +30,7 @@ try:
  port=run(['docker','port',name,'5432/tcp']).stdout.strip().split(':')[-1]
  run(['docker','exec',name,'createdb','-U','postgres','mycfc'])
  run(['docker','exec',name,'createdb','-U','postgres','fresh_contract'])
- url=lambda user,secret,db='mycfc': 'postgres://'+urllib.parse.quote(user)+':'+urllib.parse.quote(secret,safe='')+'@127.0.0.1:'+port+'/'+db+'?sslmode=disable'
+ url=lambda user,secret,db='mycfc': postgres_url(user,secret,port,db)
  testenv=dict(os.environ,TEST_FRESH_INIT_URL=url('postgres',password,'fresh_contract'))
  print(run(['go','test','-tags=integration','./cmd/server','-run','^TestExplicitFreshInitRealPostgres$','-count=1'],env=testenv).stdout.strip())
  candidate='fedc71658fde1a193685332c19d954c51dcb10e6'
