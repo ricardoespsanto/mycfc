@@ -46,6 +46,19 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if err := runServerCommand(ctx, []string{"fresh-init-db"}); err == nil || !strings.Contains(err.Error(), "--confirm-empty") {
 		t.Fatalf("explicit confirmation missing: %v", err)
 	}
+	if _, err := conn.Exec(ctx, `CREATE FUNCTION public.unapproved_control() RETURNS integer LANGUAGE sql AS 'SELECT 1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil || !strings.Contains(err.Error(), "requires the named empty database") {
+		t.Fatalf("function-only nonempty database accepted: %v", err)
+	}
+	var functionRetained bool
+	if err := conn.QueryRow(ctx, `SELECT to_regprocedure('public.unapproved_control()') IS NOT NULL`).Scan(&functionRetained); err != nil || !functionRetained {
+		t.Fatalf("nonempty function negative control lost: %t %v", functionRetained, err)
+	}
+	if _, err := conn.Exec(ctx, `DROP FUNCTION public.unapproved_control()`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Exec(ctx, `CREATE TABLE public.unrelated_control(id integer PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +106,28 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	var after int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&after); err != nil || after != count {
 		t.Fatal(fmt.Errorf("negative retry changed ledger: %d %v", after, err))
+	}
+	// The migration role can reproduce the schema, ledger and matching row,
+	// but cannot forge the bootstrap superuser's ownership of the receipt.
+	if _, err := conn.Exec(ctx, `DROP SCHEMA mycfc_fresh_init CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{migration}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE SCHEMA mycfc_fresh_init`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE mycfc_fresh_init.receipt(database_name text PRIMARY KEY, version text NOT NULL, candidate text NOT NULL, schema_digest text NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO mycfc_fresh_init.receipt VALUES ($1,$2,$3,$4)`, parsed.Database, "", "", db.EmbeddedMigrationDigest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, "", ""); err == nil || matched || !strings.Contains(err.Error(), "bootstrap-superuser-owned") {
+		t.Fatalf("migration-role forged receipt accepted: matched=%t err=%v", matched, err)
 	}
 }

@@ -38,8 +38,8 @@ func FreshInitializeDatabase(ctx context.Context, conn interface {
 	var allowed bool
 	if err := conn.QueryRow(ctx, `SELECT current_database()=$1 AND
   (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AND
-  NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f')) AND
+  NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.refclassid='pg_namespace'::regclass
+    AND d.refobjid='public'::regnamespace) AND
   NOT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','pg_catalog','information_schema')
     AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%') AND
   NOT EXISTS(SELECT 1 FROM pg_extension WHERE extnamespace='public'::regnamespace)`, database).Scan(&allowed); err != nil {
@@ -90,6 +90,22 @@ func FreshInitializationMatches(ctx context.Context, conn interface {
 	var exists bool
 	if err := conn.QueryRow(ctx, `SELECT to_regclass('mycfc_fresh_init.receipt') IS NOT NULL`).Scan(&exists); err != nil || !exists {
 		return false, err
+	}
+	// The migration login owns the application schema and can create a matching
+	// ledger and a lookalike receipt. Only the bootstrap superuser can have
+	// created the private receipt; never trust its contents alone.
+	var protected bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (
+  SELECT 1 FROM pg_class c
+  JOIN pg_namespace n ON n.oid=c.relnamespace
+  JOIN pg_roles owner ON owner.oid=c.relowner AND owner.oid=n.nspowner
+  WHERE n.nspname='mycfc_fresh_init' AND c.relname='receipt'
+    AND c.relkind='r' AND owner.rolsuper
+)`).Scan(&protected); err != nil {
+		return false, err
+	}
+	if !protected {
+		return false, errors.New("fresh initialization receipt is not bootstrap-superuser-owned")
 	}
 	var receipt bool
 	if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mycfc_fresh_init.receipt WHERE database_name=$1 AND version=$2 AND candidate=$3 AND schema_digest=$4)`, database, version, candidate, EmbeddedMigrationDigest()).Scan(&receipt); err != nil {
