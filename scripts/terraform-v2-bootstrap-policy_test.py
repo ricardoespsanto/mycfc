@@ -153,6 +153,76 @@ def metadata_reader(responses):
     return read
 
 class BootstrapPolicyTest(unittest.TestCase):
+    def test_kms_refusal_categories_bind_first_predicate_and_never_leak(self):
+        prefix = "v2 bootstrap policy: v2 secret KMS proof "
+        for value, category in ((None, "null/input-null"), (4, "invalid/input-type"),
+                                ("x" * 2049, "nonempty/input-length"),
+                                ("private-key\n::error::LEAK", "nonempty/input-format")):
+            with self.subTest(category=category), patch.object(policy.subprocess, "run") as run:
+                with self.assertRaises(SystemExit) as caught:
+                    policy.prove_existing_default_kms_key(value)
+                self.assertEqual(str(caught.exception), prefix + category)
+                run.assert_not_called()
+
+        for value, kind in (("", "empty"), ("private-key-id", "nonempty")):
+            cases = (
+                (0, lambda r: r[0].update(ARN="private-wrong-arn"), "describe-secret-identity"),
+                (0, lambda r: r[0].update(Name="private-wrong-name"), "describe-secret-identity"),
+                (0, lambda r: r[0].update(DeletedDate="private-deleted"), "describe-secret-identity"),
+                (0, lambda r: r[0].update(KmsKeyId="private-other-key"), "describe-secret-field"),
+                (1, lambda r: r[1].pop("KeyMetadata"), "describe-key-shape"),
+                (1, lambda r: r[1]["KeyMetadata"].update(KeyId=""), "describe-key-account-region"),
+                (1, lambda r: r[1]["KeyMetadata"].update(Arn="private-wrong-arn"), "describe-key-account-region"),
+                (1, lambda r: r[1]["KeyMetadata"].update(AWSAccountId="private-wrong-account"), "describe-key-account-region"),
+                (1, lambda r: r[1]["KeyMetadata"].update(KeyManager="CUSTOMER"), "describe-key-manager"),
+                (1, lambda r: r[1]["KeyMetadata"].update(KeyState="Disabled"), "describe-key-state"),
+                (1, lambda r: r[1]["KeyMetadata"].update(Enabled=False), "describe-key-state"),
+                (1, lambda r: r[1]["KeyMetadata"].update(KeyUsage="SIGN_VERIFY"), "describe-key-spec"),
+                (1, lambda r: r[1]["KeyMetadata"].update(KeySpec="RSA_2048"), "describe-key-spec"),
+                (2, lambda r: r[2].update(Aliases=None), "list-aliases-shape"),
+                (2, lambda r: r[2].update(Truncated="private-bad"), "list-aliases-pagination"),
+                (2, lambda r: r[2].update(NextMarker="private-marker"), "list-aliases-pagination"),
+                (2, lambda r: r[2]["Aliases"][0].update(AliasName="private-wrong-alias"), "list-aliases-target"),
+                (2, lambda r: r[2]["Aliases"][0].update(TargetKeyId="private-wrong-key"), "list-aliases-target"),
+            )
+            for stage, mutate, reason in cases:
+                responses = list(default_key_metadata(value))
+                if kind == "empty":
+                    responses[0].pop("KmsKeyId")
+                mutate(responses)
+                with self.subTest(kind=kind, reason=reason, mutate=mutate), patch.object(
+                        policy.subprocess, "run", side_effect=metadata_reader(responses)) as run:
+                    with self.assertRaises(SystemExit) as caught:
+                        policy.validate("secret", default_key_plan(value))
+                    self.assertEqual(str(caught.exception), prefix + kind + "/" + reason)
+                    self.assertEqual(run.call_count, stage + 1)
+            for stage, name in enumerate(("describe-secret", "describe-key", "list-aliases")):
+                for mode, reason in (("denied", "call"), ("oserror", "call"),
+                                     ("timeout", "call"), ("malformed", "shape"),
+                                     ("array", "shape")):
+                    responses = list(default_key_metadata(value))
+                    if kind == "empty":
+                        responses[0].pop("KmsKeyId")
+                    read = metadata_reader(responses)
+                    def failed_stage(argv, **kwargs):
+                        if tuple(argv[1:3]) == (("secretsmanager", "describe-secret") if stage == 0 else
+                                                 ("kms", name)):
+                            if mode == "denied":
+                                return SimpleNamespace(returncode=1, stdout="private-stdout",
+                                                       stderr="private-denied")
+                            if mode == "oserror":
+                                raise OSError("private-error")
+                            if mode == "timeout":
+                                raise policy.subprocess.TimeoutExpired(argv, 30, stderr="private-timeout")
+                            return SimpleNamespace(returncode=0, stdout="private-invalid" if mode == "malformed" else "[]")
+                        return read(argv, **kwargs)
+                    with self.subTest(kind=kind, name=name, mode=mode), patch.object(
+                            policy.subprocess, "run", side_effect=failed_stage) as run:
+                        with self.assertRaises(SystemExit) as caught:
+                            policy.validate("secret", default_key_plan(value))
+                        self.assertEqual(str(caught.exception), prefix + kind + "/" + name + "-" + reason)
+                        self.assertEqual(run.call_count, stage + 1)
+
     def test_default_key_representation_requires_exact_private_live_proof(self):
         with patch.object(policy.subprocess, "run") as run:
             policy.validate("secret", default_key_plan(None))

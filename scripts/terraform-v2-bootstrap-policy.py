@@ -25,6 +25,13 @@ V2_RECOVERY_ARN = "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/p
 V2_KMS_REGION = "eu-west-1"
 V2_KMS_ACCOUNT = "334960985019"
 V2_KMS_ALIAS = "alias/aws/secretsmanager"
+KMS_PROOF_REASONS = frozenset({
+    "input-null", "input-type", "input-length", "input-format",
+    "describe-secret-call", "describe-secret-shape", "describe-secret-identity", "describe-secret-field",
+    "describe-key-call", "describe-key-shape", "describe-key-account-region",
+    "describe-key-manager", "describe-key-state", "describe-key-spec",
+    "list-aliases-call", "list-aliases-shape", "list-aliases-pagination", "list-aliases-target",
+})
 
 def prove_existing_default_kms_key(value: str) -> None:
     """Bind a non-null plan representation to the live, enabled AWS-managed key.
@@ -32,61 +39,83 @@ def prove_existing_default_kms_key(value: str) -> None:
     This is metadata-only and runs under both protected plan and apply roles.
     Never include CLI output, errors, or identifiers in refusal messages.
     """
-    refusal = "v2 secret KMS default-key proof unavailable or mismatched"
-    if (not isinstance(value, str) or len(value) > 2048
-            or (value and not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value))):
-        fail(refusal)
+    # Only these source literals enter the refusal; never an AWS response,
+    # identifier, stderr, or user-controlled plan value.
+    kind = ("null" if value is None else
+            "empty" if isinstance(value, str) and value == "" else
+            "nonempty" if isinstance(value, str) else "invalid")
+    def refuse(reason: str) -> NoReturn:
+        if reason not in KMS_PROOF_REASONS:
+            fail("v2 secret KMS proof invalid-category")
+        fail(f"v2 secret KMS proof {kind}/{reason}")
 
-    def aws_json(*args):
+    if value is None:
+        refuse("input-null")
+    if not isinstance(value, str):
+        refuse("input-type")
+    if len(value) > 2048:
+        refuse("input-length")
+    if value and not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value):
+        refuse("input-format")
+
+    def aws_json(stage: str, *args):
         try:
             result = subprocess.run(
                 ["aws", *args, "--region", V2_KMS_REGION, "--output", "json", "--no-cli-pager"],
                 capture_output=True, text=True, timeout=30, check=False,
             )
-            if result.returncode != 0:
-                fail(refusal)
+        except (OSError, subprocess.TimeoutExpired):
+            refuse(f"{stage}-call")
+        if result.returncode != 0:
+            refuse(f"{stage}-call")
+        try:
             response = json.loads(result.stdout)
-            if not isinstance(response, dict):
-                fail(refusal)
-            return response
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            fail(refusal)
+        except ValueError:
+            refuse(f"{stage}-shape")
+        if not isinstance(response, dict):
+            refuse(f"{stage}-shape")
+        return response
 
-    secret = aws_json("secretsmanager", "describe-secret", "--secret-id", V2_RECOVERY_ARN)
+    secret = aws_json("describe-secret", "secretsmanager", "describe-secret", "--secret-id", V2_RECOVERY_ARN)
     # AWS documents that DescribeSecret omits KmsKeyId for aws/secretsmanager.
     # A retained plan representation may be non-null: independently bind that
     # representation to the sole service alias, never to an arbitrary KMS key.
     if (secret.get("ARN") != V2_RECOVERY_ARN or secret.get("Name") != V2_NAME
             or secret.get("DeletedDate") is not None):
-        fail(refusal)
+        refuse("describe-secret-identity")
     if value == "" and "KmsKeyId" in secret:
-        fail(refusal)
+        refuse("describe-secret-field")
     if value != "" and secret.get("KmsKeyId") not in (None, value):
-        fail(refusal)
+        refuse("describe-secret-field")
     # The pinned SDK can retain a known empty string for a missing API field.
     # Only for that representation, resolve the exact service alias instead
     # of passing an empty KeyId to KMS. All other representations keep their
     # original live-field binding and resolve the planned value itself.
-    key = aws_json("kms", "describe-key", "--key-id", value or V2_KMS_ALIAS).get("KeyMetadata")
+    key = aws_json("describe-key", "kms", "describe-key", "--key-id", value or V2_KMS_ALIAS).get("KeyMetadata")
     if not isinstance(key, dict):
-        fail(refusal)
+        refuse("describe-key-shape")
     key_id, arn = key.get("KeyId"), key.get("Arn")
     if (not isinstance(key_id, str) or not key_id
             or arn != f"arn:aws:kms:{V2_KMS_REGION}:{V2_KMS_ACCOUNT}:key/{key_id}"
-            or key.get("AWSAccountId") != V2_KMS_ACCOUNT
-            or key.get("KeyManager") != "AWS" or key.get("KeyState") != "Enabled"
-            or key.get("Enabled") is not True or key.get("KeyUsage") != "ENCRYPT_DECRYPT"
-            or key.get("KeySpec") != "SYMMETRIC_DEFAULT"):
-        fail(refusal)
-    aliases = aws_json("kms", "list-aliases", "--key-id", key_id, "--no-paginate")
+            or key.get("AWSAccountId") != V2_KMS_ACCOUNT):
+        refuse("describe-key-account-region")
+    if key.get("KeyManager") != "AWS":
+        refuse("describe-key-manager")
+    if key.get("KeyState") != "Enabled" or key.get("Enabled") is not True:
+        refuse("describe-key-state")
+    if key.get("KeyUsage") != "ENCRYPT_DECRYPT" or key.get("KeySpec") != "SYMMETRIC_DEFAULT":
+        refuse("describe-key-spec")
+    aliases = aws_json("list-aliases", "kms", "list-aliases", "--key-id", key_id, "--no-paginate")
     if (("Truncated" in aliases and aliases["Truncated"] is not False)
-            or aliases.get("NextMarker") is not None
-            or not isinstance(aliases.get("Aliases"), list)
-            or not any(isinstance(alias, dict)
-                       and alias.get("AliasName") == V2_KMS_ALIAS
-                       and alias.get("TargetKeyId") == key_id
-                       for alias in aliases["Aliases"])):
-        fail(refusal)
+            or aliases.get("NextMarker") is not None):
+        refuse("list-aliases-pagination")
+    if not isinstance(aliases.get("Aliases"), list):
+        refuse("list-aliases-shape")
+    if not any(isinstance(alias, dict)
+               and alias.get("AliasName") == V2_KMS_ALIAS
+               and alias.get("TargetKeyId") == key_id
+               for alias in aliases["Aliases"]):
+        refuse("list-aliases-target")
 
 
 def known(value):
