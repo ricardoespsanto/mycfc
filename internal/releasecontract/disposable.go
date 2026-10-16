@@ -22,9 +22,11 @@ const FinalDigest = "41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b
 const BaselineDigest = "0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"
 const ReviewedParent = "e90033d"
 
-// Signed production fresh initialization genesis; adding a new lineage or
-// changing the schema requires an explicit reviewed compatibility contract.
+// FreshGenesisVersion identifies the original signed production fresh initialization.
+// A new genesis lineage or changed schema needs an explicit reviewed contract.
 const FreshGenesisVersion = "v2.0.2"
+
+// FreshGenesisCandidate identifies the signed source of that genesis receipt.
 const FreshGenesisCandidate = "dbe7eb1771af741c3c41008bcf9e92986310ff3c"
 
 var versionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)

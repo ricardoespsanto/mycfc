@@ -16,46 +16,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TEST_FRESH_INIT_URL can point to a dedicated disposable empty database.
-// In the normal integration suite, create a uniquely named throwaway database
-// using the existing PostgreSQL test superuser; never reuse mycfc_test.
+// TEST_FRESH_INIT_URL may point to an explicitly dedicated empty mycfc DB.
+// The CI path creates a separate disposable PostgreSQL container because a
+// stamped release can only initialize the fixed database name, never mycfc_test.
 func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	url := os.Getenv("TEST_FRESH_INIT_URL")
 	ctx := context.Background()
 	if url == "" {
-		base := os.Getenv("TEST_DATABASE_URL")
-		if base == "" {
-			t.Skip("requires a dedicated disposable PostgreSQL test database")
-		}
-		parsedBase, err := urlpkg.Parse(base)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsedBase.Path = "/postgres"
-		admin, err := pgx.Connect(ctx, parsedBase.String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = admin.Close(context.Background()) })
-		var superuser bool
-		if err := admin.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user").Scan(&superuser); err != nil || !superuser {
-			t.Fatalf("fresh test requires existing test superuser: %v", err)
-		}
-		name := "fresh_contract_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
-		if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			if _, err := admin.Exec(context.Background(), "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)"); err != nil {
-				t.Errorf("remove disposable fresh test database: %v", err)
-			}
-		})
-		parsedBase.Path = "/" + name
-		url = parsedBase.String()
+		url = isolatedFreshInitURL(t)
 	}
 	parsed, err := pgx.ParseConfig(url)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if parsed.Database != releasecontract.Database {
+		t.Fatal("fresh integration fixture must use a dedicated mycfc database")
 	}
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
