@@ -90,6 +90,10 @@ func (s PostgresClassificationStore) Versions(ctx context.Context, actor, member
 	return sport, dated, nil
 }
 
+var errCoachCrossProgrammeTransition = errors.New("coach cross-programme transition requires administrator")
+
+const coachCrossProgrammeMessage = "A transição entre programas não pode ser guardada por um treinador, mesmo com acesso aos dois programas. Peça a um administrador que reveja e efetue esta transição; os valores introduzidos foram mantidos e nada foi guardado."
+
 func (h Classification) datedPreview(ctx context.Context, actor, member uuid.UUID, options []ClassificationOption, f *classificationForm, today time.Time) error {
 	_, rows, err := h.Store.View(ctx, actor, member)
 	if err != nil {
@@ -100,6 +104,9 @@ func (h Classification) datedPreview(ctx context.Context, actor, member uuid.UUI
 		found := false
 		for _, row := range rows {
 			if row.ID == f.PreviousID && row.StartsOn < today.Format("2006-01-02") && (row.EndsOn == "" || row.EndsOn >= f.StartsOn) {
+				if !row.ActorIsAdmin && row.ProgrammeID.String() != f.ProgrammeID {
+					return errCoachCrossProgrammeTransition
+				}
 				category := row.Category
 				if category == "" {
 					category = "sem escalão"

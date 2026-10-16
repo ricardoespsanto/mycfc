@@ -68,11 +68,71 @@ func TestClassificationPreviewRechecksIntervalInsideTransaction(t *testing.T) {
 	}
 	store := PostgresClassificationStore{Pool: pool}
 	v := url.Values{"scope": {season.String() + ":" + initiation.String()}, "starts_on": {today.AddDate(0, 0, 1).Format("2006-01-02")}, "previous_id": {old.String()}}
+	coach := uuid.New()
+	exec(`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Treinador',$2,'hash','1980-01-01')`, coach, uuid.NewString()+"@example.test")
+	for _, programme := range []uuid.UUID{leisure, initiation} {
+		exec(`INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$3)`, coach, programme, admin)
+	}
+	coachPost := func(subject uuid.UUID, values url.Values) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/equipa/classificacao/"+subject.String(), strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("id", subject.String())
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: coach}))
+		w := httptest.NewRecorder()
+		(Classification{Store: store}).Post(w, r)
+		return w
+	}
+	refused := coachPost(member, v)
+	if refused.Code != 409 || !strings.Contains(refused.Body.String(), "Peça a um administrador") || strings.Contains(refused.Body.String(), "Confirmar participação") || !strings.Contains(refused.Body.String(), v.Get("starts_on")) || !strings.Contains(refused.Body.String(), old.String()) || !strings.Contains(refused.Body.String(), initiation.String()) {
+		t.Fatalf("dual-grant coach cross-programme preview status=%d body=%s", refused.Code, refused.Body.String())
+	}
+	var before int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE user_id=$1`, member).Scan(&before); err != nil || before != 1 {
+		t.Fatalf("cross-programme preview changed history: %d %v", before, err)
+	}
+	_, coachVersion, err := store.Versions(ctx, coach, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, _ := time.Parse("2006-01-02", v.Get("starts_on"))
+	coachInput := ClassificationWrite{ActorID: coach, MemberID: member, SeasonID: season, ProgrammeID: initiation, StartsOn: proposed, PreviousID: &old}
+	confirmation := url.Values{}
+	for k, values := range v {
+		confirmation[k] = append([]string(nil), values...)
+	}
+	confirmation.Set("confirm", "yes")
+	confirmation.Set("preview_token", signClassificationConfirmation(confirmationBinding(coach, member, "DATED", coachInput), coachVersion, time.Now()))
+	if response := coachPost(member, confirmation); response.Code != 409 || !strings.Contains(response.Body.String(), "Peça a um administrador") || strings.Contains(response.Body.String(), "Confirmar participação") {
+		t.Fatalf("dual-grant coach direct confirmation status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE user_id=$1`, member).Scan(&before); err != nil || before != 1 {
+		t.Fatalf("cross-programme confirmation changed history: %d %v", before, err)
+	}
+	// A coach with the same two grants can still transition within one programme.
+	sameMember := uuid.New()
+	exec(`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Mesmo programa',$2,'hash','1980-01-01')`, sameMember, uuid.NewString()+"@example.test")
+	var sameOld uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,$4) RETURNING id`, sameMember, season, leisure, today.AddDate(0, 0, -5)).Scan(&sameOld); err != nil {
+		t.Fatal(err)
+	}
+	sameValues := url.Values{"scope": {season.String() + ":" + leisure.String()}, "starts_on": {v.Get("starts_on")}, "previous_id": {sameOld.String()}}
+	samePreview := coachPost(sameMember, sameValues)
+	if samePreview.Code != 200 {
+		t.Fatalf("same-programme coach preview status=%d body=%s", samePreview.Code, samePreview.Body.String())
+	}
+	sameValues.Set("preview_token", extractPreviewToken(t, samePreview.Body.String()))
+	sameValues.Set("confirm", "yes")
+	if sameConfirm := coachPost(sameMember, sameValues); sameConfirm.Code != 200 {
+		t.Fatalf("same-programme coach confirm status=%d body=%s", sameConfirm.Code, sameConfirm.Body.String())
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE user_id=$1`, sameMember).Scan(&before); err != nil || before != 2 {
+		t.Fatalf("same-programme coach history=%d err=%v", before, err)
+	}
 	post := func(h Classification) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/equipa/classificacao/"+member.String(), strings.NewReader(v.Encode()))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.SetPathValue("id", member.String())
-		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: admin}))
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: admin, IsAdmin: true}))
 		w := httptest.NewRecorder()
 		h.Post(w, r)
 		return w
