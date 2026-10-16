@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -105,6 +106,12 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, `DROP TABLE public.unrelated_control`); err != nil {
 		t.Fatal(err)
 	}
+	oldVersion, oldCandidate := releasecontract.Version, releasecontract.Candidate
+	genesisCandidate := releasecontract.FreshGenesisCandidate
+	releasecontract.Version, releasecontract.Candidate = "v2.0.2", genesisCandidate
+	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
+	t.Setenv("APP_VERSION", "v2.0.2")
+	t.Setenv("GIT_SHA", genesisCandidate)
 	t.Setenv("DATA_RETENTION_DB_PASSWORD", "")
 	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil {
 		t.Fatal("missing maintenance password accepted")
@@ -120,10 +127,92 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != len(db.EmbeddedMigrationInventory()) {
 		t.Fatalf("ledger count=%d expected=%d err=%v", count, len(db.EmbeddedMigrationInventory()), err)
 	}
-	matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, "", "")
+	matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, "v2.0.2", genesisCandidate)
 	if err != nil || !matched {
 		t.Fatalf("private receipt/ledger invalid: %t %v", matched, err)
 	}
+	// A later stamped release must accept the original protected genesis,
+	// without rewriting it or loosening the actual ledger/schema checks.
+	releasecontract.Version, releasecontract.Candidate = "v2.0.3", strings.Repeat("b", 40)
+	t.Setenv("APP_VERSION", releasecontract.Version)
+	t.Setenv("GIT_SHA", releasecontract.Candidate)
+	checkUpgrade := func(want bool) {
+		t.Helper()
+		ok, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate)
+		if want && (err != nil || !ok) || !want && err == nil && ok {
+			t.Fatalf("upgrade receipt outcome matched=%t err=%v want=%t", ok, err, want)
+		}
+	}
+	checkUpgrade(true)
+	if err := requireDisposableCompletion(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err != nil {
+		t.Fatalf("stamped upgrade refused before migration: %v", err)
+	}
+	if err := runServerCommand(ctx, []string{"bootstrap-db"}); err != nil {
+		t.Fatalf("stamped upgrade bootstrap rejected: %v", err)
+	}
+	migrationURL, err := urlpkg.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationURL.User = urlpkg.UserPassword(migration, "test-migration-"+suffix)
+	t.Setenv("DATABASE_URL", migrationURL.String())
+	if err := runServerCommand(ctx, []string{"migrate"}); err != nil {
+		t.Fatalf("stamped upgrade migration rejected: %v", err)
+	}
+	t.Setenv("DATABASE_URL", url)
+	var genesisVersion, originalCandidate string
+	if err := conn.QueryRow(ctx, `SELECT version,candidate FROM mycfc_fresh_init.receipt WHERE database_name=$1`, parsed.Database).Scan(&genesisVersion, &originalCandidate); err != nil || genesisVersion != releasecontract.FreshGenesisVersion || originalCandidate != genesisCandidate {
+		t.Fatalf("genesis receipt was rewritten: %v", err)
+	}
+	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES('tampered-test-marker')`); err != nil {
+		t.Fatal(err)
+	}
+	checkUpgrade(false)
+	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `ALTER TABLE public.user_memberships DROP CONSTRAINT user_memberships_one_participation_per_day`); err != nil {
+		t.Fatal(err)
+	}
+	checkUpgrade(false)
+	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE mycfc_fresh_init.receipt SET candidate=$1`, strings.Repeat("c", 40)); err != nil {
+		t.Fatal(err)
+	}
+	checkUpgrade(false)
+	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE mycfc_fresh_init.receipt SET schema_digest=$1`, strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+	checkUpgrade(false)
+	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.FreshInitializationMatches(ctx, conn, "wrong_database", releasecontract.Version, releasecontract.Candidate); err == nil && ok {
+		t.Fatal("wrong database accepted")
+	}
+	releasecontract.Version = "v2.0.1"
+	if ok, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil && ok {
+		t.Fatal("older unsupported release accepted")
+	}
+	releasecontract.Version = "v2.0.3"
+	checkUpgrade(true)
 	for _, username := range []string{app, migration, media, retention} {
 		var login bool
 		if err := conn.QueryRow(ctx, `SELECT rolcanlogin FROM pg_roles WHERE rolname=$1`, username).Scan(&login); err != nil || !login {
@@ -151,13 +240,13 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, `CREATE TABLE mycfc_fresh_init.receipt(database_name text PRIMARY KEY, version text NOT NULL, candidate text NOT NULL, schema_digest text NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO mycfc_fresh_init.receipt VALUES ($1,$2,$3,$4)`, parsed.Database, "", "", db.EmbeddedMigrationDigest()); err != nil {
+	if _, err := conn.Exec(ctx, `INSERT INTO mycfc_fresh_init.receipt VALUES ($1,$2,$3,$4)`, parsed.Database, genesisVersion, originalCandidate, db.EmbeddedMigrationDigest()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx, `RESET ROLE`); err != nil {
 		t.Fatal(err)
 	}
-	if matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, "", ""); err == nil || matched || !strings.Contains(err.Error(), "bootstrap-superuser-owned") {
+	if matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil || matched || !strings.Contains(err.Error(), "bootstrap-superuser-owned") {
 		t.Fatalf("migration-role forged receipt accepted: matched=%t err=%v", matched, err)
 	}
 }
