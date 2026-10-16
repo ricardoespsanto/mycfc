@@ -29,9 +29,11 @@ try:
  else:raise RuntimeError('disposable PG did not start')
  port=run(['docker','port',name,'5432/tcp']).stdout.strip().split(':')[-1]
  run(['docker','exec',name,'createdb','-U','postgres','mycfc'])
- run(['docker','exec',name,'createdb','-U','postgres','fresh_contract'])
  url=lambda user,secret,db='mycfc': postgres_url(user,secret,port,db)
- testenv=dict(os.environ,TEST_FRESH_INIT_URL=url('postgres',password,'fresh_contract'))
+ # The stamped integration test creates its own isolated PG container named
+ # mycfc; never initialize the release harness's mycfc before this sequence.
+ testenv=dict(os.environ,TEST_DATABASE_URL=url('postgres',password))
+ testenv.pop('TEST_FRESH_INIT_URL',None)
  print(run(['go','test','-tags=integration','./cmd/server','-run','^TestExplicitFreshInitRealPostgres$','-count=1'],env=testenv).stdout.strip())
  candidate='fedc71658fde1a193685332c19d954c51dcb10e6'
  version='v2.0.1'

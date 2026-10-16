@@ -82,6 +82,15 @@ func (freshReceiptErrorConn) QueryRow(context.Context, string, ...any) pgx.Row {
 
 type freshLedgerRow struct{}
 
+type freshReceiptRow struct{}
+
+func (freshReceiptRow) Scan(dest ...any) error {
+	*dest[0].(*bool) = true
+	*dest[1].(*string) = releasecontract.Version
+	*dest[2].(*string) = releasecontract.Candidate
+	return nil
+}
+
 func (freshLedgerRow) Scan(dest ...any) error {
 	*dest[0].(*string) = strings.Join(db.EmbeddedMigrationInventory(), "\n")
 	return nil
@@ -92,6 +101,9 @@ type freshReceiptReadyConn struct{ *databaseCommandConnectionFake }
 func (freshReceiptReadyConn) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
 	if strings.Contains(statement, "string_agg(version") {
 		return freshLedgerRow{}
+	}
+	if strings.Contains(statement, "FROM mycfc_fresh_init.receipt") {
+		return freshReceiptRow{}
 	}
 	return databaseMigrationRowFake{}
 }

@@ -3,7 +3,11 @@
 // reset implementation after this release; do not carry it into real-data use.
 package releasecontract
 
-import "regexp"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // These are binary build inputs, not host environment flags. An unstamped
 // development binary cannot request a reset. Runtime input cannot select a
@@ -18,12 +22,41 @@ const FinalDigest = "41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b
 const BaselineDigest = "0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"
 const ReviewedParent = "e90033d"
 
+// FreshGenesisVersion identifies the original signed production fresh initialization.
+// A new genesis lineage or changed schema needs an explicit reviewed contract.
+const FreshGenesisVersion = "v2.0.2"
+
+// FreshGenesisCandidate identifies the signed source of that genesis receipt.
+const FreshGenesisCandidate = "dbe7eb1771af741c3c41008bcf9e92986310ff3c"
+
 var versionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
 var candidatePattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func Matches(version, candidate, database string) bool {
 	return versionPattern.MatchString(Version) && candidatePattern.MatchString(Candidate) &&
 		version == Version && candidate == Candidate && database == Database
+}
+
+// CompatibleFreshGenesis accepts the original signed genesis on a later
+// stable stamped release, or a receipt created by the current release.
+func CompatibleFreshGenesis(database, version, candidate, genesisVersion, genesisCandidate string) bool {
+	if !Matches(version, candidate, database) {
+		return false
+	}
+	if genesisVersion == version && genesisCandidate == candidate {
+		return true
+	}
+	if genesisVersion != FreshGenesisVersion || genesisCandidate != FreshGenesisCandidate || strings.Contains(version, "-") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	major, e1 := strconv.ParseUint(parts[0], 10, 64)
+	minor, e2 := strconv.ParseUint(parts[1], 10, 64)
+	patch, e3 := strconv.ParseUint(parts[2], 10, 64)
+	return e1 == nil && e2 == nil && e3 == nil && (major > 2 || major == 2 && (minor > 0 || minor == 0 && patch > 2))
 }
 
 func AppRole(role string) string {

@@ -82,8 +82,8 @@ func FreshInitializeDatabase(ctx context.Context, conn interface {
 }
 
 // FreshInitializationMatches is read-only and never substitutes for the
-// predecessor-bound disposable completion. It binds the private receipt to
-// the exact binary and the ACTUAL migration ledger and schema postcondition.
+// predecessor-bound disposable completion. It binds the protected genesis
+// to the stamped binary and the ACTUAL migration ledger and schema contract.
 func FreshInitializationMatches(ctx context.Context, conn interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, database, version, candidate string) (bool, error) {
@@ -108,10 +108,14 @@ func FreshInitializationMatches(ctx context.Context, conn interface {
 		return false, errors.New("fresh initialization receipt is not bootstrap-superuser-owned")
 	}
 	var receipt bool
-	if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mycfc_fresh_init.receipt WHERE database_name=$1 AND version=$2 AND candidate=$3 AND schema_digest=$4)`, database, version, candidate, EmbeddedMigrationDigest()).Scan(&receipt); err != nil {
+	var genesisVersion, genesisCandidate string
+	if err := conn.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(database_name=$1 AND schema_digest=$2),
+    coalesce(max(version),''), coalesce(max(candidate),'') FROM mycfc_fresh_init.receipt`,
+		database, EmbeddedMigrationDigest()).Scan(&receipt, &genesisVersion, &genesisCandidate); err != nil {
 		return false, err
 	}
-	if !receipt {
+	if !receipt || EmbeddedMigrationDigest() != releasecontract.FinalDigest ||
+		!releasecontract.CompatibleFreshGenesis(database, version, candidate, genesisVersion, genesisCandidate) {
 		return false, errors.New("fresh initialization receipt identity mismatch")
 	}
 	var ledger string

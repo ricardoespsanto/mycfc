@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -19,8 +20,14 @@ func (r freshTestRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	if len(dest) != 1 {
+	if len(dest) != 1 && len(dest) != 3 {
 		return errors.New("unexpected scan shape")
+	}
+	if len(dest) == 3 {
+		*dest[0].(*bool) = r.value.(bool)
+		*dest[1].(*string) = releasecontract.Version
+		*dest[2].(*string) = releasecontract.Candidate
+		return nil
 	}
 	switch out := dest[0].(type) {
 	case *bool:
@@ -59,6 +66,9 @@ func (*freshTestConn) Begin(context.Context) (pgx.Tx, error) {
 }
 
 func TestFreshReceiptRejectsUntrustedMetadata(t *testing.T) {
+	oldVersion, oldCandidate := releasecontract.Version, releasecontract.Candidate
+	releasecontract.Version, releasecontract.Candidate = "v2.0.2", strings.Repeat("a", 40)
+	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
 	boom := errors.New("synthetic query failure")
 	cases := []struct {
 		name string
@@ -77,7 +87,7 @@ func TestFreshReceiptRejectsUntrustedMetadata(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := &freshTestConn{rows: tc.rows}
-			matched, err := FreshInitializationMatches(t.Context(), conn, "mycfc", "v-test", "candidate")
+			matched, err := FreshInitializationMatches(t.Context(), conn, "mycfc", releasecontract.Version, releasecontract.Candidate)
 			if matched || (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
 				t.Fatalf("matched=%t err=%v", matched, err)
 			}
