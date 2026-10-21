@@ -227,7 +227,7 @@ func TestPasswordResetThrottleRollingLimitAndEligibilityCancellation(t *testing.
 	if _, err := pool.Exec(ctx, `UPDATE users SET email = $2 WHERE id = $1`, userID, "changed-"+email); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queries.CancelUndeliverableEmailOutbox(ctx, resetTimestamp(now.Add(8*time.Minute))); err != nil {
+	if _, err := queries.CancelUndeliverableTokenEmailOutbox(ctx, resetTimestamp(now.Add(8*time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	var cancelled int
@@ -249,7 +249,7 @@ func TestPasswordResetThrottleRollingLimitAndEligibilityCancellation(t *testing.
 	if _, err := pool.Exec(ctx, `UPDATE users SET is_active = false WHERE id = $1`, inactiveID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queries.CancelUndeliverableEmailOutbox(ctx, resetTimestamp(now.Add(time.Minute))); err != nil {
+	if _, err := queries.CancelUndeliverableTokenEmailOutbox(ctx, resetTimestamp(now.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	var inactiveStatus string

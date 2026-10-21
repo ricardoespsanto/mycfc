@@ -196,4 +196,23 @@ func TestTokenOutboxClaimsUnderIsolatedRuntimeRole(t *testing.T) {
 	if err := admin.QueryRow(ctx, "SELECT status FROM email_outbox WHERE password_reset_token_id=$1", consumedID).Scan(&status); err != nil || status != "CANCELLED" {
 		t.Fatalf("revoked outbox: %s %v", status, err)
 	}
+	// The same privilege-safe token path still carries adult email verification.
+	verificationID, err := dbgen.New(admin).CreateEmailVerification(ctx, dbgen.CreateEmailVerificationParams{UserID: userID, Email: newEmail, CreatedAt: resetTimestamp(later.Add(9 * time.Second)), ExpiresAt: resetTimestamp(later.Add(time.Hour)), Throttle: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.ClaimedAt = resetTimestamp(later.Add(10 * time.Second))
+	verification, err := q.ClaimTokenEmailOutbox(ctx, params)
+	if err != nil || verification.MessageType != "EMAIL_VERIFICATION" || verification.VerificationTokenID == nil || *verification.VerificationTokenID != verificationID || verification.Email != newEmail || verification.UserID != userID || verification.Attempts != 1 {
+		t.Fatalf("verification token claim failed: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "UPDATE users SET email=$1 WHERE id=$2", "other-"+newEmail, userID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := q.CancelUndeliverableTokenEmailOutbox(ctx, resetTimestamp(later.Add(11*time.Second))); err != nil || n != 1 {
+		t.Fatalf("verification recipient cancellation: %d %v", n, err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT status FROM email_outbox WHERE verification_token_id=$1", verificationID).Scan(&status); err != nil || status != "CANCELLED" {
+		t.Fatalf("verification outbox: %s %v", status, err)
+	}
 }
