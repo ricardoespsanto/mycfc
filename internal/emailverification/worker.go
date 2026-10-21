@@ -35,6 +35,8 @@ type GuardianHandoffSender interface {
 }
 
 type DeliveryStore interface {
+	ClaimTokenEmailOutbox(context.Context, dbgen.ClaimTokenEmailOutboxParams) (dbgen.ClaimTokenEmailOutboxRow, error)
+	CancelUndeliverableTokenEmailOutbox(context.Context, pgtype.Timestamptz) (int64, error)
 	ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error)
 	CompleteEmailOutbox(context.Context, dbgen.CompleteEmailOutboxParams) (int64, error)
 	RetryEmailOutbox(context.Context, dbgen.RetryEmailOutboxParams) (int64, error)
@@ -68,9 +70,20 @@ func (w Worker) Run(ctx context.Context) {
 
 func (w Worker) drain(ctx context.Context) {
 	now := w.now()
+	_, _ = w.Store.CancelUndeliverableTokenEmailOutbox(ctx, timestamp(now))
 	_, _ = w.Store.CancelUndeliverableEmailOutbox(ctx, timestamp(now))
 	for ctx.Err() == nil {
-		item, err := w.Store.ClaimEmailOutbox(ctx, dbgen.ClaimEmailOutboxParams{ClaimedAt: timestamp(now), StaleBefore: timestamp(now.Add(-StaleAfter))})
+		item, err := w.Store.ClaimTokenEmailOutbox(ctx, dbgen.ClaimTokenEmailOutboxParams{ClaimedAt: timestamp(now), StaleBefore: timestamp(now.Add(-StaleAfter))})
+		if err == nil {
+			w.deliver(ctx, dbgen.ClaimEmailOutboxRow(item))
+			now = w.now()
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			w.log("email outbox token claim failed", uuid.Nil, "database")
+			return
+		}
+		guardian, err := w.Store.ClaimEmailOutbox(ctx, dbgen.ClaimEmailOutboxParams{ClaimedAt: timestamp(now), StaleBefore: timestamp(now.Add(-StaleAfter))})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return
 		}
@@ -78,7 +91,7 @@ func (w Worker) drain(ctx context.Context) {
 			w.log("email outbox claim failed", uuid.Nil, "database")
 			return
 		}
-		w.deliver(ctx, item)
+		w.deliver(ctx, guardian)
 		now = w.now()
 	}
 }

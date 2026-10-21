@@ -39,7 +39,9 @@ WITH candidate AS (
   LEFT JOIN users guardian ON guardian.id = guardian_reminder.guardian_user_id
   LEFT JOIN LATERAL guardian_age_handoff_outbox_delivery(outbox.id,sqlc.arg(claimed_at))
     handoff_delivery(deliverable,user_id,email,expires_at) ON true
-  WHERE ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= sqlc.arg(claimed_at))
+  WHERE outbox.message_type IN ('GUARDIAN_RENEWAL_30_DAY', 'GUARDIAN_RENEWAL_7_DAY',
+      'GUARDIAN_AGE_18_30_DAY', 'GUARDIAN_AGE_18_7_DAY', 'GUARDIAN_AGE_18_EMAIL_VERIFY')
+    AND ((outbox.status = 'PENDING' AND outbox.next_attempt_at <= sqlc.arg(claimed_at))
       OR (outbox.status = 'SENDING' AND outbox.claimed_at < sqlc.arg(stale_before)))
     AND ((COALESCE(verification.consumed_at, reset.consumed_at) IS NULL
     AND COALESCE(verification.expires_at, reset.expires_at) > sqlc.arg(claimed_at)
@@ -96,7 +98,9 @@ WHERE id = sqlc.arg(id) AND status = 'SENDING';
 
 -- name: CancelUndeliverableEmailOutbox :execrows
 UPDATE email_outbox outbox SET status = 'CANCELLED', claimed_at = NULL, updated_at = sqlc.arg(cancelled_at)
-WHERE outbox.status IN ('PENDING', 'SENDING')
+WHERE outbox.message_type IN ('GUARDIAN_RENEWAL_30_DAY', 'GUARDIAN_RENEWAL_7_DAY',
+    'GUARDIAN_AGE_18_30_DAY', 'GUARDIAN_AGE_18_7_DAY', 'GUARDIAN_AGE_18_EMAIL_VERIFY')
+  AND outbox.status IN ('PENDING', 'SENDING')
   AND (
     (outbox.message_type = 'EMAIL_VERIFICATION' AND EXISTS (
       SELECT 1 FROM email_verification_tokens token JOIN users account ON account.id = token.user_id

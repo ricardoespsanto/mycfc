@@ -27,6 +27,17 @@ type deliveryStoreFake struct {
 	cancelErr                  error
 }
 
+func (f *deliveryStoreFake) ClaimTokenEmailOutbox(context.Context, dbgen.ClaimTokenEmailOutboxParams) (dbgen.ClaimTokenEmailOutboxRow, error) {
+	if f.claimed || (f.item.MessageType != "PASSWORD_RESET" && f.item.MessageType != "EMAIL_VERIFICATION") {
+		return dbgen.ClaimTokenEmailOutboxRow{}, pgx.ErrNoRows
+	}
+	f.claimed = true
+	return dbgen.ClaimTokenEmailOutboxRow(f.item), nil
+}
+func (f *deliveryStoreFake) CancelUndeliverableTokenEmailOutbox(context.Context, pgtype.Timestamptz) (int64, error) {
+	return 0, nil
+}
+
 func (f *deliveryStoreFake) ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error) {
 	if f.claimErr != nil {
 		return dbgen.ClaimEmailOutboxRow{}, f.claimErr
@@ -129,7 +140,7 @@ func TestWorkerDeliversPasswordResetAndFailsInvalidPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	resetID := uuid.New()
-	store := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: issuance.created.SealedPayload, Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}}
+	store := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: issuance.created.SealedPayload, Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}, claimErr: errors.New("guardian relation permission denied"), cancelErr: errors.New("guardian relation permission denied")}
 	sender := &senderFake{}
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
