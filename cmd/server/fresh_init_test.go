@@ -88,6 +88,7 @@ func (freshReceiptRow) Scan(dest ...any) error {
 	*dest[0].(*bool) = true
 	*dest[1].(*string) = releasecontract.Version
 	*dest[2].(*string) = releasecontract.Candidate
+	*dest[3].(*string) = releasecontract.FinalDigest
 	return nil
 }
 
