@@ -12,21 +12,35 @@ import (
 )
 
 type freshTestRow struct {
-	value any
-	err   error
+	value     any
+	err       error
+	version   string
+	candidate string
+	digest    string
 }
 
 func (r freshTestRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	if len(dest) != 1 && len(dest) != 3 {
+	if len(dest) != 1 && len(dest) != 4 {
 		return errors.New("unexpected scan shape")
 	}
-	if len(dest) == 3 {
+	if len(dest) == 4 {
 		*dest[0].(*bool) = r.value.(bool)
-		*dest[1].(*string) = releasecontract.Version
-		*dest[2].(*string) = releasecontract.Candidate
+		version, candidate, digest := r.version, r.candidate, r.digest
+		if version == "" {
+			version = releasecontract.Version
+		}
+		if candidate == "" {
+			candidate = releasecontract.Candidate
+		}
+		if digest == "" {
+			digest = releasecontract.FinalDigest
+		}
+		*dest[1].(*string) = version
+		*dest[2].(*string) = candidate
+		*dest[3].(*string) = digest
 		return nil
 	}
 	switch out := dest[0].(type) {
@@ -90,6 +104,41 @@ func TestFreshReceiptRejectsUntrustedMetadata(t *testing.T) {
 			matched, err := FreshInitializationMatches(t.Context(), conn, "mycfc", releasecontract.Version, releasecontract.Candidate)
 			if matched || (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
 				t.Fatalf("matched=%t err=%v", matched, err)
+			}
+		})
+	}
+}
+
+func TestFreshReceiptAcceptsOnlyPinnedGenesisAcrossForwardMigration(t *testing.T) {
+	oldVersion, oldCandidate := releasecontract.Version, releasecontract.Candidate
+	releasecontract.Version, releasecontract.Candidate = "v2.0.7", strings.Repeat("b", 40)
+	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
+	var original []string
+	for _, version := range EmbeddedMigrationInventory() {
+		if version != "202610010003_privacy_attachment_trigger_runtime" {
+			original = append(original, version)
+		}
+	}
+	for _, tc := range []struct {
+		name, ledger, candidate, digest string
+		protected, want                 bool
+	}{
+		{"before migration", strings.Join(original, "\n"), releasecontract.FreshGenesisCandidate, releasecontract.FreshGenesisDigest, true, true},
+		{"after migration", strings.Join(EmbeddedMigrationInventory(), "\n"), releasecontract.FreshGenesisCandidate, releasecontract.FreshGenesisDigest, true, true},
+		{"forged candidate", strings.Join(original, "\n"), strings.Repeat("c", 40), releasecontract.FreshGenesisDigest, true, false},
+		{"forged receipt digest", strings.Join(original, "\n"), releasecontract.FreshGenesisCandidate, releasecontract.FinalDigest, true, false},
+		{"tampered ledger", "unexpected", releasecontract.FreshGenesisCandidate, releasecontract.FreshGenesisDigest, true, false},
+		{"unowned receipt", strings.Join(original, "\n"), releasecontract.FreshGenesisCandidate, releasecontract.FreshGenesisDigest, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &freshTestConn{rows: []freshTestRow{
+				{value: true}, {value: tc.protected},
+				{value: true, version: releasecontract.FreshGenesisVersion, candidate: tc.candidate, digest: tc.digest},
+				{value: tc.ledger}, {value: true},
+			}}
+			matched, err := FreshInitializationMatches(t.Context(), conn, "mycfc", releasecontract.Version, releasecontract.Candidate)
+			if matched != tc.want || tc.want && err != nil {
+				t.Fatalf("pinned genesis match=%t want=%t error=%v", matched, tc.want, err)
 			}
 		})
 	}

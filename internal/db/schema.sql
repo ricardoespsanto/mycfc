@@ -1309,13 +1309,16 @@ CREATE TRIGGER users_erased_immutable BEFORE UPDATE ON users FOR EACH ROW
 -- erasure routine takes FOR UPDATE, closing the insert-vs-erasure race. Actor
 -- and author references deliberately remain opaque historical references.
 CREATE OR REPLACE FUNCTION require_active_privacy_attachment_subject() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE subject_id uuid; old_subject_id uuid; subject_column text;
 BEGIN
  subject_column:=COALESCE(NULLIF(TG_ARGV[0],''),'user_id');
  subject_id:=NULLIF(to_jsonb(NEW)->>subject_column,'')::uuid;
  IF TG_OP='UPDATE' THEN old_subject_id:=NULLIF(to_jsonb(OLD)->>subject_column,'')::uuid; END IF;
- IF current_user<>session_user AND current_setting('mycfc.privacy_erasure_operation',true)='MEMBERSHIP_HISTORY_ANONYMIZE' THEN RETURN NEW; END IF;
+ -- The definer owns the protected erasure tables; only a login with actual
+ -- migration-role membership may use the historic SET ROLE erasure bypass.
+ IF current_user<>session_user AND pg_has_role(session_user,current_user,'MEMBER')
+  AND current_setting('mycfc.privacy_erasure_operation',true)='MEMBERSHIP_HISTORY_ANONYMIZE' THEN RETURN NEW; END IF;
  IF subject_id IS NOT NULL THEN
   PERFORM 1 FROM users WHERE id=subject_id AND is_active AND erased_at IS NULL FOR KEY SHARE;
   IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='inactive_privacy_attachment_subject'; END IF;
@@ -1330,6 +1333,7 @@ BEGIN
  RETURN NEW;
 END;
 $$;
+REVOKE EXECUTE ON FUNCTION require_active_privacy_attachment_subject() FROM PUBLIC;
 
 DROP TRIGGER users_active_guardian_attachment ON users;
 CREATE TRIGGER users_active_guardian_attachment BEFORE INSERT OR UPDATE OF guardian_id ON users

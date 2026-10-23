@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -181,5 +182,174 @@ func TestClassificationGETWithHardenedWebRole(t *testing.T) {
 				t.Fatal("unscoped GET disclosed subject")
 			}
 		})
+	}
+	firstMember := uuid.New()
+	if _, err = migrator.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic first member',$2,'hash','1980-01-01')`, firstMember, uuid.NewString()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	var baselineDefinition string
+	if err = migrator.QueryRow(ctx, `SELECT pg_get_functiondef('public.require_active_privacy_attachment_subject()'::regprocedure)`).Scan(&baselineDefinition); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce the deployed v2.0.6 trigger's invoker privilege boundary and
+	// apply only the pending forward migration on the disposable database.
+	if _, err = migrator.Exec(ctx, `ALTER FUNCTION require_active_privacy_attachment_subject() SECURITY INVOKER`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = migrator.Exec(ctx, `DELETE FROM mycfc_meta.schema_migrations WHERE version='202610010003_privacy_attachment_trigger_runtime'`); err != nil {
+		t.Fatal(err)
+	}
+	priorErr := store.Write(ctx, ClassificationWrite{ActorID: adminID, MemberID: firstMember, SeasonID: season, ProgrammeID: programme, StartsOn: today})
+	var priorState *pgconn.PgError
+	if !errors.As(priorErr, &priorState) || priorState.Code != "42501" || !strings.Contains(priorState.Message, "privacy_erasure_category_jobs") {
+		t.Fatalf("prior membership trigger failure type=%T SQLSTATE=%s", priorErr, func() string {
+			if priorState == nil {
+				return ""
+			}
+			return priorState.Code
+		}())
+	}
+	if err = db.ApplyBaselineAndHarden(ctx, migrator, database, credentials); err != nil {
+		t.Fatalf("forward trigger migration: %v", err)
+	}
+	var migrated bool
+	if err = migrator.QueryRow(ctx, `SELECT prosecdef FROM pg_proc WHERE oid='public.require_active_privacy_attachment_subject()'::regprocedure`).Scan(&migrated); err != nil || !migrated {
+		t.Fatalf("forward trigger definer=%t err=%v", migrated, err)
+	}
+	var forwardDefinition string
+	if err = migrator.QueryRow(ctx, `SELECT pg_get_functiondef('public.require_active_privacy_attachment_subject()'::regprocedure)`).Scan(&forwardDefinition); err != nil || forwardDefinition != baselineDefinition {
+		t.Fatalf("fresh baseline and forward trigger definitions differ: query error=%v", err)
+	}
+	form := url.Values{"scope": {season.String() + ":" + programme.String()}, "starts_on": {today.Format("2006-01-02")}}
+	request := func(actor, member uuid.UUID, values url.Values) *http.Request {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/equipa/classificacao/"+member.String(), strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("id", member.String())
+		return r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+	}
+	preview := httptest.NewRecorder()
+	(Classification{Store: store}).Post(preview, request(adminID, firstMember, form))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("first assignment preview status=%d", preview.Code)
+	}
+	form.Set("preview_token", extractPreviewToken(t, preview.Body.String()))
+	form.Set("confirm", "yes")
+	confirmed := httptest.NewRecorder()
+	(Classification{Store: store}).Post(confirmed, request(adminID, firstMember, form))
+	if confirmed.Code != http.StatusOK {
+		// Test-only diagnosis: report SQLSTATE rather than a private SQL message.
+		writeErr := store.Write(ctx, ClassificationWrite{ActorID: adminID, MemberID: firstMember, SeasonID: season, ProgrammeID: programme, StartsOn: today})
+		var postgresErr *pgconn.PgError
+		if errors.As(writeErr, &postgresErr) {
+			t.Fatalf("first assignment confirm status=%d, writer SQLSTATE=%s, message=%s", confirmed.Code, postgresErr.Code, postgresErr.Message)
+		}
+		t.Fatalf("first assignment confirm status=%d, writer error type=%T", confirmed.Code, writeErr)
+	}
+	var count int
+	if err = migrator.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE user_id=$1`, firstMember).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("first assignment rows=%d err=%v", count, err)
+	}
+	var originalStart time.Time
+	if err = migrator.QueryRow(ctx, `SELECT starts_on FROM user_memberships WHERE user_id=$1`, firstMember).Scan(&originalStart); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate/overlapping ordinary writes cannot replace the historical row.
+	overlapErr := store.Write(ctx, ClassificationWrite{ActorID: adminID, MemberID: firstMember, SeasonID: season, ProgrammeID: programme, StartsOn: today})
+	if overlapErr == nil {
+		t.Fatal("overlapping assignment succeeded")
+	}
+	var overlapState *pgconn.PgError
+	if !errors.As(overlapErr, &overlapState) || (overlapState.Code != "23P01" && overlapState.Code != "23505") {
+		t.Fatalf("overlap error type=%T SQLSTATE=%s", overlapErr, func() string {
+			if overlapState == nil {
+				return ""
+			}
+			return overlapState.Code
+		}())
+	}
+	var historyCount int
+	var historicalStart time.Time
+	if err = migrator.QueryRow(ctx, `SELECT count(*),min(starts_on) FROM user_memberships WHERE user_id=$1`, firstMember).Scan(&historyCount, &historicalStart); err != nil || historyCount != 1 || !historicalStart.Equal(originalStart) {
+		t.Fatalf("overlap changed membership history count=%d start_unchanged=%t err=%v", historyCount, historicalStart.Equal(originalStart), err)
+	}
+	newMember := func() uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, insertErr := migrator.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic first member',$2,'hash','1980-01-01')`, id, uuid.NewString()+"@example.test"); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		return id
+	}
+	post := func(actor, member uuid.UUID, values url.Values) (int, string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		(Classification{Store: store}).Post(response, request(actor, member, values))
+		return response.Code, response.Body.String()
+	}
+	coachMember := newMember()
+	coachForm := url.Values{"scope": {season.String() + ":" + programme.String()}, "starts_on": {today.Format("2006-01-02")}}
+	status, body := post(coachID, coachMember, coachForm)
+	if status != http.StatusOK {
+		t.Fatalf("coach first assignment preview status=%d", status)
+	}
+	coachForm.Set("preview_token", extractPreviewToken(t, body))
+	coachForm.Set("confirm", "yes")
+	status, _ = post(coachID, coachMember, coachForm)
+	if status != http.StatusOK {
+		t.Fatalf("coach first assignment confirm status=%d", status)
+	}
+	unauthorizedMember := newMember()
+	unauthorizedForm := url.Values{"scope": {season.String() + ":" + programme.String()}, "starts_on": {today.Format("2006-01-02")}}
+	status, _ = post(outsiderID, unauthorizedMember, unauthorizedForm)
+	if status != http.StatusNotFound {
+		t.Fatalf("unscoped actor assignment status=%d", status)
+	}
+	staleMember := newMember()
+	staleForm := url.Values{"scope": {season.String() + ":" + programme.String()}, "starts_on": {today.Format("2006-01-02")}}
+	status, body = post(adminID, staleMember, staleForm)
+	if status != http.StatusOK {
+		t.Fatalf("stale preview setup status=%d", status)
+	}
+	staleForm.Set("preview_token", extractPreviewToken(t, body))
+	staleForm.Set("confirm", "yes")
+	if err = store.Write(ctx, ClassificationWrite{ActorID: coachID, MemberID: staleMember, SeasonID: season, ProgrammeID: programme, StartsOn: today}); err != nil {
+		t.Fatalf("concurrent coach assignment: %v", err)
+	}
+	status, _ = post(adminID, staleMember, staleForm)
+	if status != http.StatusConflict {
+		t.Fatalf("stale preview confirm status=%d", status)
+	}
+	for _, tc := range []struct {
+		member uuid.UUID
+		want   int
+	}{{coachMember, 1}, {unauthorizedMember, 0}, {staleMember, 1}} {
+		if err = migrator.QueryRow(ctx, `SELECT count(*) FROM user_memberships WHERE user_id=$1`, tc.member).Scan(&count); err != nil || count != tc.want {
+			t.Fatalf("membership rows=%d want=%d err=%v", count, tc.want, err)
+		}
+	}
+	// An app login may set an arbitrary custom GUC but cannot bypass the
+	// definer's active-subject check or read private erasure relations.
+	inactive := newMember()
+	if _, err = migrator.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1`, inactive); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SET LOCAL mycfc.privacy_erasure_operation='MEMBERSHIP_HISTORY_ANONYMIZE'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,$4)`, inactive, season, programme, today)
+	var spoofErr *pgconn.PgError
+	if !errors.As(err, &spoofErr) || spoofErr.Code != "23514" {
+		t.Fatalf("spoofed GUC bypass accepted or wrong error type=%T", err)
 	}
 }
