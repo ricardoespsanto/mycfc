@@ -108,14 +108,16 @@ func FreshInitializationMatches(ctx context.Context, conn interface {
 		return false, errors.New("fresh initialization receipt is not bootstrap-superuser-owned")
 	}
 	var receipt bool
-	var genesisVersion, genesisCandidate string
-	if err := conn.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(database_name=$1 AND schema_digest=$2),
-    coalesce(max(version),''), coalesce(max(candidate),'') FROM mycfc_fresh_init.receipt`,
-		database, EmbeddedMigrationDigest()).Scan(&receipt, &genesisVersion, &genesisCandidate); err != nil {
+	var genesisVersion, genesisCandidate, receiptDigest string
+	if err := conn.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(database_name=$1),
+    coalesce(max(version),''), coalesce(max(candidate),''), coalesce(max(schema_digest),'') FROM mycfc_fresh_init.receipt`,
+		database).Scan(&receipt, &genesisVersion, &genesisCandidate, &receiptDigest); err != nil {
 		return false, err
 	}
+	genesis := genesisVersion == releasecontract.FreshGenesisVersion && genesisCandidate == releasecontract.FreshGenesisCandidate && receiptDigest == releasecontract.FreshGenesisDigest
 	if !receipt || EmbeddedMigrationDigest() != releasecontract.FinalDigest ||
-		!releasecontract.CompatibleFreshGenesis(database, version, candidate, genesisVersion, genesisCandidate) {
+		!releasecontract.CompatibleFreshGenesis(database, version, candidate, genesisVersion, genesisCandidate) ||
+		!(genesis || receiptDigest == EmbeddedMigrationDigest() && genesisVersion == version && genesisCandidate == candidate) {
 		return false, errors.New("fresh initialization receipt identity mismatch")
 	}
 	var ledger string
@@ -123,7 +125,11 @@ func FreshInitializationMatches(ctx context.Context, conn interface {
 		return false, err
 	}
 	actual := sha256.Sum256([]byte(ledger))
-	if hex.EncodeToString(actual[:]) != EmbeddedMigrationDigest() {
+	ledgerDigest := hex.EncodeToString(actual[:])
+	// Before the reviewed forward migration, the original protected receipt
+	// still has its genesis ledger. After migration, the immutable receipt
+	// remains genesis-owned while the actual ledger advances to this binary.
+	if ledgerDigest != EmbeddedMigrationDigest() && !(genesis && ledgerDigest == releasecontract.FreshGenesisDigest) {
 		return false, errors.New("fresh initialization ledger mismatch")
 	}
 	if err := VerifyDatedParticipationContract(ctx, conn); err != nil {

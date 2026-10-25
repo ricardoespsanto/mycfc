@@ -18,8 +18,13 @@ const Database = "mycfc"
 const OldWebRole = "mycfc_app"
 const WebRole = "mycfc_disposable_web_20261001"
 const PredecessorDigest = "8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e"
-const FinalDigest = "41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7"
-const BaselineDigest = "0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"
+const FinalDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
+const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
+
+// FreshGenesisDigest is the recorded inventory of the original v2.0.2 receipt.
+// The receipt remains immutable when a compatible forward migration advances
+// the ledger; it is not rewritten to impersonate the new binary.
+const FreshGenesisDigest = "41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7"
 const ReviewedParent = "e90033d"
 
 // FreshGenesisVersion identifies the original signed production fresh initialization.
