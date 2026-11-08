@@ -63,7 +63,6 @@ declare -A PANE_ROLES_RIGHT=(
 
 # Inspect existing tabs in the workspace
 CURRENT_TABS_JSON=$(herdr tab list --workspace "$WS_ID")
-EXISTING_TAB_COUNT=$(echo "$CURRENT_TABS_JSON" | jq -r '.result.tabs | length')
 
 for i in {1..6}; do
   TAB_LABEL="${TAB_LABELS[$i]}"
@@ -77,14 +76,13 @@ for i in {1..6}; do
     echo "--> Creating Tab $i: $TAB_LABEL..."
     NEW_TAB_JSON=$(herdr tab create --workspace "$WS_ID" --cwd "$PROJECT_DIR" --label "$TAB_LABEL" --no-focus)
     TAB_ID=$(echo "$NEW_TAB_JSON" | jq -r '.result.tab.tab_id')
-    ROOT_PANE=$(echo "$NEW_TAB_JSON" | jq -r '.result.root_pane.pane_id')
   else
     herdr tab rename "$TAB_ID" "$TAB_LABEL" >/dev/null
   fi
 
   # Query panes in this tab
   PANES_JSON=$(herdr pane list --workspace "$WS_ID")
-  TAB_PANES=($(echo "$PANES_JSON" | jq -r --arg tid "$TAB_ID" '.result.panes[] | select(.tab_id == $tid) | .pane_id'))
+  mapfile -t TAB_PANES < <(echo "$PANES_JSON" | jq -r --arg tid "$TAB_ID" '.result.panes[] | select(.tab_id == $tid) | .pane_id')
 
   PANE_COUNT=${#TAB_PANES[@]}
   if [[ $PANE_COUNT -eq 0 ]]; then
