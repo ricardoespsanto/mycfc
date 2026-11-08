@@ -39,7 +39,10 @@ func (c *databaseCommandConnectionFake) Begin(context.Context) (pgx.Tx, error) {
 	}
 	return c, nil
 }
-func (c *databaseCommandConnectionFake) QueryRow(context.Context, string, ...any) pgx.Row {
+func (c *databaseCommandConnectionFake) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
+	if strings.Contains(statement, "to_regclass('mycfc_fresh_init.receipt')") {
+		return incompleteDisposableRow{}
+	}
 	if c.row != nil {
 		return c.row
 	}

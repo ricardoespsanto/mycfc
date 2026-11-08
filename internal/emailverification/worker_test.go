@@ -22,12 +22,31 @@ type deliveryStoreFake struct {
 	claimed                    bool
 	completed, retried, failed bool
 	cancelled                  bool
+	tokenCancelled             bool
+	guardianClaims             int
+	tokenClaimErr              error
 	claimErr, completeErr      error
 	retryErr, failErr          error
 	cancelErr                  error
 }
 
+func (f *deliveryStoreFake) ClaimTokenEmailOutbox(context.Context, dbgen.ClaimTokenEmailOutboxParams) (dbgen.ClaimTokenEmailOutboxRow, error) {
+	if f.tokenClaimErr != nil {
+		return dbgen.ClaimTokenEmailOutboxRow{}, f.tokenClaimErr
+	}
+	if f.claimed || (f.item.MessageType != "PASSWORD_RESET" && f.item.MessageType != "EMAIL_VERIFICATION") {
+		return dbgen.ClaimTokenEmailOutboxRow{}, pgx.ErrNoRows
+	}
+	f.claimed = true
+	return dbgen.ClaimTokenEmailOutboxRow(f.item), nil
+}
+func (f *deliveryStoreFake) CancelUndeliverableTokenEmailOutbox(context.Context, pgtype.Timestamptz) (int64, error) {
+	f.tokenCancelled = true
+	return 0, nil
+}
+
 func (f *deliveryStoreFake) ClaimEmailOutbox(context.Context, dbgen.ClaimEmailOutboxParams) (dbgen.ClaimEmailOutboxRow, error) {
+	f.guardianClaims++
 	if f.claimErr != nil {
 		return dbgen.ClaimEmailOutboxRow{}, f.claimErr
 	}
@@ -129,7 +148,7 @@ func TestWorkerDeliversPasswordResetAndFailsInvalidPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	resetID := uuid.New()
-	store := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: issuance.created.SealedPayload, Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}}
+	store := &deliveryStoreFake{item: dbgen.ClaimEmailOutboxRow{ID: uuid.New(), MessageType: "PASSWORD_RESET", PasswordResetTokenID: &resetID, SealedPayload: issuance.created.SealedPayload, Email: "member@example.test", Attempts: 1, ExpiresAt: timestamp(now.Add(time.Hour))}, claimErr: errors.New("guardian relation permission denied"), cancelErr: errors.New("guardian relation permission denied")}
 	sender := &senderFake{}
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -211,6 +230,19 @@ func TestWorkerStopsOrRecordsFailuresAcrossOutboxBoundaries(t *testing.T) {
 			}
 			Worker{Store: tc.store, Sender: sender, Now: func() time.Time { return now }}.drain(t.Context())
 		})
+	}
+}
+
+func TestWorkerTokenClaimErrorDoesNotFallThroughToGuardian(t *testing.T) {
+	store := &deliveryStoreFake{tokenClaimErr: errors.New("synthetic token query failure")}
+	var logs bytes.Buffer
+	worker := Worker{Store: store, Sender: &senderFake{}, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	worker.drain(t.Context())
+	if !store.tokenCancelled || !store.cancelled || store.guardianClaims != 0 || store.completed || store.retried || store.failed {
+		t.Fatalf("token claim error crossed outbox boundary: token_cancelled=%t guardian_cancelled=%t guardian_claims=%d completed=%t retried=%t failed=%t", store.tokenCancelled, store.cancelled, store.guardianClaims, store.completed, store.retried, store.failed)
+	}
+	if !strings.Contains(logs.String(), "email outbox token claim failed") || strings.Contains(logs.String(), "synthetic token query failure") {
+		t.Fatal("token query error was not logged safely")
 	}
 }
 

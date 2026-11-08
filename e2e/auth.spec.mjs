@@ -1314,7 +1314,10 @@ test.describe('authentication', () => {
     await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
     await groupForm.getByLabel(new RegExp(athleteName)).check();
     await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
+    await expect(page.getByRole('status')).toHaveText('Grupo de treino criado.');
+    await page.waitForLoadState('domcontentloaded');
     await page.getByRole('link', { name: 'Criar semana' }).click();
+    await expect(page.locator('dialog#criar-semana-treino')).toBeVisible();
     const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
     await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
     await weekForm.getByLabel('Título').fill(weekTitle);

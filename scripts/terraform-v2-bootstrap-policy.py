@@ -9,6 +9,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
+
+from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
 
 MOVES = {
     "aws_secretsmanager_secret.legacy_runtime": "aws_secretsmanager_secret.runtime",
@@ -19,6 +22,100 @@ V2_VERSION = "aws_secretsmanager_secret_version.app_runtime"
 V2_NAME = "/mycfc/production/app-runtime-secrets-v2"
 # Exact metadata-only identity observed after the reviewed partial apply.
 V2_RECOVERY_ARN = "arn:aws:secretsmanager:eu-west-1:334960985019:secret:/mycfc/production/app-runtime-secrets-v2-sVoQ2n"
+V2_KMS_REGION = "eu-west-1"
+V2_KMS_ACCOUNT = "334960985019"
+V2_KMS_ALIAS = "alias/aws/secretsmanager"
+KMS_PROOF_REASONS = frozenset({
+    "input-null", "input-type", "input-length", "input-format",
+    "describe-secret-call", "describe-secret-shape", "describe-secret-identity", "describe-secret-field",
+    "describe-key-call", "describe-key-shape", "describe-key-account-region",
+    "describe-key-manager", "describe-key-state", "describe-key-spec",
+    "list-aliases-call", "list-aliases-shape", "list-aliases-pagination", "list-aliases-target",
+})
+
+def prove_existing_default_kms_key(value: str) -> None:
+    """Bind a non-null plan representation to the live, enabled AWS-managed key.
+
+    This is metadata-only and runs under both protected plan and apply roles.
+    Never include CLI output, errors, or identifiers in refusal messages.
+    """
+    # Only these source literals enter the refusal; never an AWS response,
+    # identifier, stderr, or user-controlled plan value.
+    kind = ("null" if value is None else
+            "empty" if isinstance(value, str) and value == "" else
+            "nonempty" if isinstance(value, str) else "invalid")
+    def refuse(reason: str) -> NoReturn:
+        if reason not in KMS_PROOF_REASONS:
+            fail("v2 secret KMS proof invalid-category")
+        fail(f"v2 secret KMS proof {kind}/{reason}")
+
+    if value is None:
+        refuse("input-null")
+    if not isinstance(value, str):
+        refuse("input-type")
+    if len(value) > 2048:
+        refuse("input-length")
+    if value and not re.fullmatch(r"[A-Za-z0-9:/_.-]+", value):
+        refuse("input-format")
+
+    def aws_json(stage: str, *args):
+        try:
+            result = subprocess.run(
+                ["aws", *args, "--region", V2_KMS_REGION, "--output", "json", "--no-cli-pager"],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            refuse(f"{stage}-call")
+        if result.returncode != 0:
+            refuse(f"{stage}-call")
+        try:
+            response = json.loads(result.stdout)
+        except ValueError:
+            refuse(f"{stage}-shape")
+        if not isinstance(response, dict):
+            refuse(f"{stage}-shape")
+        return response
+
+    secret = aws_json("describe-secret", "secretsmanager", "describe-secret", "--secret-id", V2_RECOVERY_ARN)
+    # AWS documents that DescribeSecret omits KmsKeyId for aws/secretsmanager.
+    # A retained plan representation may be non-null: independently bind that
+    # representation to the sole service alias, never to an arbitrary KMS key.
+    if (secret.get("ARN") != V2_RECOVERY_ARN or secret.get("Name") != V2_NAME
+            or secret.get("DeletedDate") is not None):
+        refuse("describe-secret-identity")
+    if value == "" and "KmsKeyId" in secret:
+        refuse("describe-secret-field")
+    if value != "" and secret.get("KmsKeyId") not in (None, value):
+        refuse("describe-secret-field")
+    # The pinned SDK can retain a known empty string for a missing API field.
+    # Only for that representation, resolve the exact service alias instead
+    # of passing an empty KeyId to KMS. All other representations keep their
+    # original live-field binding and resolve the planned value itself.
+    key = aws_json("describe-key", "kms", "describe-key", "--key-id", value or V2_KMS_ALIAS).get("KeyMetadata")
+    if not isinstance(key, dict):
+        refuse("describe-key-shape")
+    key_id, arn = key.get("KeyId"), key.get("Arn")
+    if (not isinstance(key_id, str) or not key_id
+            or arn != f"arn:aws:kms:{V2_KMS_REGION}:{V2_KMS_ACCOUNT}:key/{key_id}"
+            or key.get("AWSAccountId") != V2_KMS_ACCOUNT):
+        refuse("describe-key-account-region")
+    if key.get("KeyManager") != "AWS":
+        refuse("describe-key-manager")
+    if key.get("KeyState") != "Enabled" or key.get("Enabled") is not True:
+        refuse("describe-key-state")
+    if key.get("KeyUsage") != "ENCRYPT_DECRYPT" or key.get("KeySpec") != "SYMMETRIC_DEFAULT":
+        refuse("describe-key-spec")
+    aliases = aws_json("list-aliases", "kms", "list-aliases", "--key-id", key_id, "--no-paginate")
+    if (("Truncated" in aliases and aliases["Truncated"] is not False)
+            or aliases.get("NextMarker") is not None):
+        refuse("list-aliases-pagination")
+    if not isinstance(aliases.get("Aliases"), list):
+        refuse("list-aliases-shape")
+    if not any(isinstance(alias, dict)
+               and alias.get("AliasName") == V2_KMS_ALIAS
+               and alias.get("TargetKeyId") == key_id
+               for alias in aliases["Aliases"]):
+        refuse("list-aliases-target")
 
 
 def known(value):
@@ -59,7 +156,7 @@ PHASE_TARGETS = {
 }
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"v2 bootstrap policy: {message}")
 
 
@@ -76,7 +173,7 @@ def resources(module: object):
         yield from resources(child.get("module"))
 
 
-def load(path: str, targeted: bool) -> dict:
+def load(path: str, targeted: bool, phase: str = "secret") -> dict:
     with Path(path).open(encoding="utf-8") as source:
         plan = json.load(source)
     if not isinstance(plan, dict):
@@ -96,7 +193,13 @@ def load(path: str, targeted: bool) -> dict:
     if any(resource.get("provisioners") for resource in resources(configuration.get("root_module"))):
         fail("provisioners are not permitted")
     drift = plan.get("resource_drift")
-    if drift not in (None, []):
+    guarded = False
+    if drift not in (None, []) and phase == "secret":
+        try:
+            guarded = guarded_v2_drift(plan)
+        except DriftRefusal:
+            pass
+    if drift not in (None, []) and not guarded:
         # Drift is a hard stop. Only report the resource address without its
         # instance key and the action names; before/after can contain secrets.
         if not isinstance(drift, list) or len(drift) > 100:
@@ -287,15 +390,21 @@ def validate(phase: str, plan: dict) -> None:
             fail("unexpected v2 secret name")
         container_after = container["change"].get("after", {})
         container_unknown = container["change"].get("after_unknown", {})
+        if container_unknown.get("kms_key_id"):
+            fail("v2 secret kms_key_id is unknown")
         expected_container = {
             "description": "MyCFC production web-runtime secrets v2",
             "recovery_window_in_days": 30,
-            "kms_key_id": None,
             "force_overwrite_replica_secret": False,
         }
         for attribute, expected_value in expected_container.items():
             if container_unknown.get(attribute) or container_after.get(attribute) != expected_value:
                 fail(f"unexpected v2 secret {attribute}")
+        kms_key_id = container_after.get("kms_key_id")
+        if kms_key_id is not None:
+            if not continuation or container["change"].get("actions") != ["no-op"]:
+                fail("v2 secret kms_key_id requires unchanged existing container")
+            prove_existing_default_kms_key(kms_key_id)
         if container_after.get("replica") not in (None, []):
             fail("v2 secret replicas are not allowed in bootstrap")
         if container_after.get("name_prefix") not in (None, ""):
@@ -440,7 +549,7 @@ def main() -> None:
     if len(sys.argv) != 4 or sys.argv[1] not in ("validate", "residual", "residual-list") or sys.argv[2] not in PHASE_CHANGES:
         fail("usage: terraform-v2-bootstrap-policy.py validate|residual|manifest-hmac PHASE PLAN_JSON|TARGETS")
     command, phase, path = sys.argv[1:]
-    plan = load(path, command == "validate")
+    plan = load(path, command == "validate", phase=phase)
     if command == "validate":
         validate(phase, plan)
     elif command == "residual-list":

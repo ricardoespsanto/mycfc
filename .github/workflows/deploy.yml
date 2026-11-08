@@ -371,6 +371,7 @@ jobs:
       - name: Publish GitHub release and explicit issue records
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
           SHA: ${{ inputs.sha }}
           ISSUES: ${{ inputs.issues }}

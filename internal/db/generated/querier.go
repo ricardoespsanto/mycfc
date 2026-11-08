@@ -40,10 +40,14 @@ type Querier interface {
 	CancelMaintenanceTask(ctx context.Context, id uuid.UUID) (MaintenanceTask, error)
 	CancelTrainingSession(ctx context.Context, arg CancelTrainingSessionParams) (TrainingSession, error)
 	CancelUndeliverableEmailOutbox(ctx context.Context, cancelledAt pgtype.Timestamptz) (int64, error)
+	CancelUndeliverableTokenEmailOutbox(ctx context.Context, cancelledAt pgtype.Timestamptz) (int64, error)
 	CeaseConsentForms(ctx context.Context, arg CeaseConsentFormsParams) (int32, error)
 	CheckInEventResponse(ctx context.Context, arg CheckInEventResponseParams) (int64, error)
 	ClaimEmailOutbox(ctx context.Context, arg ClaimEmailOutboxParams) (ClaimEmailOutboxRow, error)
 	ClaimNextActivitySyncJob(ctx context.Context, startedAt pgtype.Timestamptz) (ActivitySyncJob, error)
+	// Token mail must not parse or plan joins against guardian-only relations:
+	// the runtime web role has no SELECT privilege on those relations.
+	ClaimTokenEmailOutbox(ctx context.Context, arg ClaimTokenEmailOutboxParams) (ClaimTokenEmailOutboxRow, error)
 	ClearManageableTrainingCycleTargets(ctx context.Context, arg ClearManageableTrainingCycleTargetsParams) error
 	ClearMemberProfilePhoto(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	ClearTrainingCycleChildren(ctx context.Context, cycleID uuid.UUID) error

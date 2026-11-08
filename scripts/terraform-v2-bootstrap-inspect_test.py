@@ -38,6 +38,23 @@ def plan_with_drift():
 
 
 class BootstrapInspectTest(unittest.TestCase):
+    def test_exact_private_container_continuation_is_not_a_drift_refusal(self):
+        from importlib.util import module_from_spec, spec_from_file_location
+        fixture_source = pathlib.Path(__file__).with_name("terraform-v2-bootstrap-policy_test.py")
+        fixture_spec = spec_from_file_location("bootstrap_policy_fixtures", fixture_source)
+        assert fixture_spec is not None and fixture_spec.loader is not None
+        fixtures = module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixtures)
+        report = inspect.inspect_drift(fixtures.guarded_container_plan())
+        self.assertIn("policy/tag continuity: **passed privately**", report)
+        self.assertNotIn("private-old-policy", report)
+        plan = fixtures.guarded_container_plan()
+        plan["resource_drift"][0]["change"]["after"]["policy"] = "private-live-policy"
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        self.assertIn("container-identity-fields=v2-container:policy/tags=1", str(caught.exception))
+        self.assertNotIn("private-live-policy", str(caught.exception))
+
     def test_drift_reports_only_allowlisted_metadata(self):
         report = inspect.inspect_drift(plan_with_drift())
         self.assertIn("`assume_role_policy`", report)
@@ -58,6 +75,160 @@ class BootstrapInspectTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             inspect.inspect_drift(plan)
         self.assertNotIn("injected", str(caught.exception))
+
+    def test_refusal_categories_and_expected_only_inventory_never_echo_private_data(self):
+        cases = (
+            ("count", lambda p: p["resource_drift"].append({
+                "address": "private-extra-address", "change": {"actions": ["private-action"]}})),
+            ("inventory-shape", lambda p: p.update(resource_drift={"private-key": "private-value"})),
+            ("entry-shape", lambda p: p["resource_drift"].__setitem__(0, "private-entry")),
+            ("address-shape", lambda p: p["resource_drift"][0].update(address="private\n::warning::injected")),
+            ("unexpected-address", lambda p: p["resource_drift"][0].update(address="private-extra-address")),
+            ("duplicate-expected", lambda p: p["resource_drift"][1].update(
+                address=p["resource_drift"][0]["address"])),
+            ("change-shape", lambda p: p["resource_drift"][0].update(change="private-change")),
+            ("action-class", lambda p: p["resource_drift"][0]["change"].update(actions=["private-action"])),
+        )
+        for category, mutate in cases:
+            with self.subTest(category=category):
+                plan = plan_with_drift()
+                mutate(plan)
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("drift inventory differs from the four expected resources", message)
+                self.assertIn(f"category={category}", message)
+                for private in ("private-", "secret-principal", "secret-boundary", "secret-old-value",
+                                "secret-new-value", "injected", "::warning::"):
+                    self.assertNotIn(private, message)
+                if category != "inventory-shape":
+                    self.assertIn("entries=", message)
+                    self.assertIn("expected=", message)
+                    for address in inspect.EXPECTED_DRIFT:
+                        self.assertIn(address + ":", message)
+        plan = plan_with_drift()
+        plan["resource_drift"][0]["change"]["actions"] = ["delete", "create"]
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        self.assertIn("category=action-class", str(caught.exception))
+        self.assertIn("other=1", str(caught.exception))
+        self.assertNotIn("secret-principal", str(caught.exception))
+
+    def test_count_refusal_distinguishes_missing_expected_and_known_action_classes(self):
+        plan = plan_with_drift()
+        removed = plan["resource_drift"].pop()
+        plan["resource_drift"][0]["change"]["actions"] = ["delete"]
+        with self.assertRaises(SystemExit) as caught:
+            inspect.inspect_drift(plan)
+        message = str(caught.exception)
+        self.assertIn("category=count; entries=3", message)
+        self.assertIn(removed["address"] + ":0:", message)
+        self.assertIn("delete=1", message)
+        self.assertNotIn("secret-old-value", message)
+
+    def test_unexpected_drift_reports_closed_type_action_without_address_or_values(self):
+        for resource_type, actions, expected in (
+            ("aws_secretsmanager_secret_version", ["update"], "aws_secretsmanager_secret_version/update=1"),
+            ("aws_iam_role", ["delete", "create"], "aws_iam_role/other=1"),
+            ("aws_s3_bucket", ["no-op"], "aws_s3_bucket/no-op=1"),
+            ("private-type\n::warning::injected", ["private-action"], "other/other=1"),
+            (None, "private-actions", "other/invalid=1"),
+        ):
+            with self.subTest(expected=expected):
+                plan = {"resource_drift": [{
+                    "address": "private-address[\"private-key\"]", "type": resource_type,
+                    "change": {"actions": actions, "before": {"secret_string": "private-before"},
+                               "after": {"secret_string": "private-after"}},
+                }]}
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("category=count; entries=1", message)
+                self.assertIn("unexpected-types-actions=" + expected, message)
+                for private in ("private-", "injected", "::warning::"):
+                    self.assertNotIn(private, message)
+
+    def test_unexpected_entry_cli_refuses_without_leaking_address_or_value(self):
+        plan = {"format_version": "1.2", "errored": False, "resource_drift": [{
+            "address": "aws_iam_role.private-instance[\"sensitive-key\"]", "type": "aws_iam_role",
+            "change": {"actions": ["delete"], "before": {"secret": "private-before"}, "after": None},
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run(["python3", str(source), "drift", str(path)],
+                                    text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("unexpected-types-actions=aws_iam_role/delete=1", result.stderr)
+        for private in ("private-instance", "sensitive-key", "private-before"):
+            self.assertNotIn(private, result.stdout + result.stderr)
+
+    def test_container_drift_refusal_reports_only_known_identity_and_field_names(self):
+        for address, identity in (
+            ("aws_secretsmanager_secret.app_runtime", "v2-container"),
+            ("aws_secretsmanager_secret.legacy_runtime", "legacy-container"),
+            ("aws_secretsmanager_secret.runtime", "pre-move-legacy-container"),
+            ("aws_secretsmanager_secret.private-name[\"private-key\"]", "other-container"),
+        ):
+            with self.subTest(identity=identity):
+                plan = {"resource_drift": [{"type": "aws_secretsmanager_secret", "address": address,
+                    "change": {"actions": ["update"],
+                        "before": {"description": "private-before", "rotation_enabled": 1,
+                                   "private-field": "private-value"},
+                        "after": {"description": "private-after", "rotation_enabled": True,
+                                  "private-field": "private-new-value"}}}]}
+                with self.assertRaises(SystemExit) as caught:
+                    inspect.inspect_drift(plan)
+                message = str(caught.exception)
+                self.assertIn("unexpected-types-actions=aws_secretsmanager_secret/update=1", message)
+                self.assertIn(f"container-identity-fields={identity}:description/rotation_enabled/other-unclassified=1", message)
+                for private in ("private-", "private-key", "private-field"):
+                    self.assertNotIn(private, message)
+
+    def test_null_and_absent_field_transitions_are_changed_in_both_directions(self):
+        for field, label in (("description", "description"),
+                             ("private-injected-field", "other-unclassified")):
+            for before, after in (({}, {field: None}), ({field: None}, {})):
+                with self.subTest(field=field, before=before):
+                    plan = {"resource_drift": [{"type": "aws_secretsmanager_secret",
+                        "address": "aws_secretsmanager_secret.app_runtime",
+                        "change": {"actions": ["update"], "before": before, "after": after}}]}
+                    with self.assertRaises(SystemExit) as caught:
+                        inspect.inspect_drift(plan)
+                    message = str(caught.exception)
+                    self.assertIn(f"container-identity-fields=v2-container:{label}=1", message)
+                    self.assertNotIn("private-injected-field", message)
+                    self.assertNotIn("container-identity-fields=v2-container:none", message)
+
+    def test_container_drift_missing_metadata_is_unavailable_and_no_values_leak(self):
+        for change in ("private-change", {"actions": ["update"], "before": "private-before", "after": {}}):
+            resource = {"type": "aws_secretsmanager_secret", "address": "aws_secretsmanager_secret.app_runtime",
+                        "change": change}
+            with self.assertRaises(SystemExit) as caught:
+                inspect.inspect_drift({"resource_drift": [resource]})
+            message = str(caught.exception)
+            if isinstance(change, dict):
+                self.assertIn("container-identity-fields=v2-container:unavailable=1", message)
+            else:
+                self.assertIn("container-identity-fields=none", message)
+            self.assertNotIn("private-", message)
+
+    def test_container_cli_refusal_stdout_empty_and_no_sensitive_value(self):
+        plan = {"format_version": "1.2", "errored": False, "resource_drift": [{
+            "type": "aws_secretsmanager_secret", "address": "aws_secretsmanager_secret.app_runtime",
+            "change": {"actions": ["update"], "before": {"tags": {"private": "private-before"}},
+                       "after": {"tags": {"private": "private-after"}}},
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run(["python3", str(source), "drift", str(path)],
+                                    text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("container-identity-fields=v2-container:tags=1", result.stderr)
+        self.assertNotIn("private-", result.stderr)
 
     def test_additional_role_fields_report_names_without_values(self):
         plan = plan_with_drift()

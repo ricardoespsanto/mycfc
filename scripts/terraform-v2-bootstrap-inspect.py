@@ -6,6 +6,9 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
+
+from terraform_v2_bootstrap_drift import DriftRefusal, guarded_v2_drift
 
 
 ROLE_ADDRESSES = {
@@ -15,6 +18,19 @@ ROLE_ADDRESSES = {
 }
 SECRET_VERSION_ADDRESS = "aws_secretsmanager_secret_version.legacy_runtime"
 EXPECTED_DRIFT = ROLE_ADDRESSES | {SECRET_VERSION_ADDRESS}
+# Closed type labels from this production stack; unknown plan types are never echoed.
+DRIFT_TYPE_LABELS = {
+    "aws_cloudwatch_log_group", "aws_cloudwatch_log_metric_filter", "aws_cloudwatch_metric_alarm",
+    "aws_ecr_lifecycle_policy", "aws_ecr_repository", "aws_iam_access_key", "aws_iam_policy",
+    "aws_iam_role", "aws_iam_role_policy", "aws_iam_user", "aws_iam_user_policy",
+    "aws_s3_bucket", "aws_s3_bucket_lifecycle_configuration", "aws_s3_bucket_ownership_controls",
+    "aws_s3_bucket_policy", "aws_s3_bucket_public_access_block",
+    "aws_s3_bucket_server_side_encryption_configuration", "aws_s3_bucket_versioning",
+    "aws_secretsmanager_secret", "aws_secretsmanager_secret_version",
+    "aws_sesv2_account_suppression_attributes", "aws_sesv2_email_identity",
+    "aws_sesv2_email_identity_mail_from_attributes", "aws_sns_topic",
+    "aws_sns_topic_subscription", "aws_ssm_parameter", "cloudflare_dns_record", "random_id",
+}
 SECRET_FIELDS = {
     "APP_DB_PASSWORD", "CSRF_AUTH_KEY_B64", "EMAIL_VERIFICATION_HMAC_KEY_B64",
     "TURNSTILE_SECRET_KEY", "SMTP_USERNAME", "SMTP_PASSWORD",
@@ -30,9 +46,20 @@ SECRET_VERSION_FIELDS = {
     "version_stages", "version_id", "secret_id", "arn", "id",
     "secret_string", "secret_binary",
 }
+# Only source-known container identities and Terraform provider metadata keys may be reported.
+CONTAINER_IDENTITIES = {
+    "aws_secretsmanager_secret.app_runtime": "v2-container",
+    "aws_secretsmanager_secret.legacy_runtime": "legacy-container",
+    "aws_secretsmanager_secret.runtime": "pre-move-legacy-container",
+}
+CONTAINER_FIELDS = {
+    "arn", "description", "force_overwrite_replica_secret", "id", "kms_key_id", "name",
+    "name_prefix", "policy", "recovery_window_in_days", "replica", "rotation_enabled",
+    "rotation_lambda_arn", "rotation_rules", "tags", "tags_all",
+}
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"v2 bootstrap inspection: {message}")
 
 
@@ -133,21 +160,110 @@ def version_stages(value: object) -> list[str]:
     return value
 
 
+def drift_action_class(change: object) -> str:
+    actions = change.get("actions") if isinstance(change, dict) else None
+    if actions == ["update"]:
+        return "update"
+    if actions == ["no-op"]:
+        return "no-op"
+    if actions == ["delete"]:
+        return "delete"
+    if actions == ["create"]:
+        return "create"
+    return "other" if isinstance(actions, list) else "invalid"
+
+
+def container_drift_class(resource: dict) -> str:
+    """Return only closed identity and metadata-field labels, never plan values."""
+    address = resource.get("address")
+    identity = CONTAINER_IDENTITIES.get(address, "other-container") if isinstance(address, str) else "other-container"
+    change = resource.get("change")
+    before = change.get("before") if isinstance(change, dict) else None
+    after = change.get("after") if isinstance(change, dict) else None
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        fields = "unavailable"
+    else:
+        changed = {key for key in before.keys() | after.keys()
+                   if (key in before) != (key in after) or
+                   json.dumps(before.get(key), sort_keys=True, separators=(",", ":")) !=
+                   json.dumps(after.get(key), sort_keys=True, separators=(",", ":"))}
+        known = sorted(changed & CONTAINER_FIELDS)
+        if changed - CONTAINER_FIELDS:
+            known.append("other-unclassified")
+        fields = "/".join(known) or "none"
+    return f"{identity}:{fields}"
+
+
+def drift_refusal(category: str, drift: object) -> NoReturn:
+    """Report bounded metadata without echoing unexpected plan addresses or values."""
+    if not isinstance(drift, list):
+        fail(f"drift inventory differs from the four expected resources; category={category}; entries=unavailable")
+    counts = {address: {} for address in EXPECTED_DRIFT}
+    unexpected = {}
+    containers = {}
+    for resource in drift:
+        if not isinstance(resource, dict):
+            continue
+        try:
+            address = base_address(resource.get("address"))
+        except SystemExit:
+            address = None
+        action_class = drift_action_class(resource.get("change"))
+        if address not in counts:
+            resource_type = resource.get("type")
+            type_label = resource_type if isinstance(resource_type, str) and resource_type in DRIFT_TYPE_LABELS else "other"
+            key = (type_label, action_class)
+            unexpected[key] = unexpected.get(key, 0) + 1
+            if type_label == "aws_secretsmanager_secret" and action_class == "update":
+                label = container_drift_class(resource)
+                containers[label] = containers.get(label, 0) + 1
+            continue
+        counts[address][action_class] = counts[address].get(action_class, 0) + 1
+    # Every printed address, type and action label is a source constant, never arbitrary plan content.
+    presence = ",".join(
+        f"{address}:{sum(counts[address].values())}:"
+        + "/".join(f"{action}={counts[address][action]}" for action in sorted(counts[address]))
+        for address in sorted(EXPECTED_DRIFT)
+    )
+    classes = ",".join(f"{kind}/{action}={unexpected[kind, action]}"
+                       for kind, action in sorted(unexpected)) or "none"
+    container_classes = ",".join(f"{label}={containers[label]}" for label in sorted(containers)) or "none"
+    fail(f"drift inventory differs from the four expected resources; category={category}; "
+         f"entries={len(drift)}; expected={presence}; unexpected-types-actions={classes}; "
+         f"container-identity-fields={container_classes}")
+
+
 def inspect_drift(plan: dict) -> str:
     drift = plan.get("resource_drift")
     if drift in (None, []):
         return "### Bootstrap drift inspection\n\n- No resource drift reported."
-    if not isinstance(drift, list) or len(drift) != 4:
-        fail("drift inventory differs from the four expected resources")
+    try:
+        if guarded_v2_drift(plan):
+            return "### Bootstrap drift inspection\n\n- Exact v2 container policy/tag continuity: **passed privately**; targeted plan remains separately guarded."
+    except DriftRefusal:
+        pass  # Keep the existing closed refusal classifications below.
+    if not isinstance(drift, list):
+        drift_refusal("inventory-shape", drift)
+    if len(drift) != 4:
+        drift_refusal("count", drift)
     lines = ["### Bootstrap drift inspection", "", "Only fixed field names, booleans, and aggregate counts are shown; no values or instance keys."]
     seen = set()
     for resource in drift:
         if not isinstance(resource, dict):
-            fail("invalid drift entry")
-        address = base_address(resource.get("address"))
+            drift_refusal("entry-shape", drift)
+        try:
+            address = base_address(resource.get("address"))
+        except SystemExit:
+            drift_refusal("address-shape", drift)
         change = resource.get("change")
-        if address not in EXPECTED_DRIFT or address in seen or not isinstance(change, dict) or change.get("actions") != ["update"]:
-            fail("drift inventory differs from the four expected resources")
+        if address not in EXPECTED_DRIFT:
+            drift_refusal("unexpected-address", drift)
+        if address in seen:
+            drift_refusal("duplicate-expected", drift)
+        if not isinstance(change, dict):
+            drift_refusal("change-shape", drift)
+        if change.get("actions") != ["update"]:
+            drift_refusal("action-class", drift)
         seen.add(address)
         before, after = change.get("before"), change.get("after")
         allowed = ROLE_FIELDS if address in ROLE_ADDRESSES else SECRET_VERSION_FIELDS
@@ -174,7 +290,7 @@ def inspect_drift(plan: dict) -> str:
                          f"live {len(set(new_stages) - {'AWSCURRENT', 'AWSPREVIOUS'})}.")
             lines.append(f"  - Version ID changed: {before.get('version_id') != after.get('version_id')}.")
     if seen != EXPECTED_DRIFT:
-        fail("drift inventory differs from the four expected resources")
+        drift_refusal("missing-expected", drift)
     return "\n".join(lines)
 
 

@@ -90,6 +90,9 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	sh scripts/terraform-plan-hmac_test.sh
 	python3 scripts/terraform-v2-bootstrap-policy_test.py
 	python3 scripts/terraform-v2-bootstrap-inspect_test.py
+	python3 scripts/verify-exact-main-ci_test.py
+	python3 scripts/terraform-diagnostic-exception_test.py
+	python3 scripts/terraform-structured-diagnostic_test.py
 	bash scripts/terraform-stack_test.sh
 	bash scripts/discover-terraform-inputs_test.sh
 
@@ -167,7 +170,7 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/retire-privacy-automation_test.sh
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/app/... ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/mediauploads/... ./cmd/media-cleanup/... ./cmd/data-retention/... ./cmd/guardian-activation/...
+	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/app/... ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/mediauploads/... ./cmd/media-cleanup/... ./cmd/data-retention/... ./cmd/guardian-activation/... ./cmd/server/...
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
 	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e

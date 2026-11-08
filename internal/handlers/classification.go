@@ -19,7 +19,11 @@ import (
 
 var ErrClassificationDenied = errors.New("classification unavailable")
 
-type ClassificationRow struct{ ID, Season, Programme, Team, Category, StartsOn, EndsOn string }
+type ClassificationRow struct {
+	ID, Season, Programme, Team, Category, StartsOn, EndsOn string
+	ProgrammeID                                             uuid.UUID
+	ActorIsAdmin                                            bool
+}
 type ClassificationCategory struct {
 	ID                uuid.UUID
 	Name, Eligibility string
@@ -91,7 +95,7 @@ func (s PostgresClassificationStore) View(ctx context.Context, actor, member uui
 	if err != nil {
 		return "", nil, err
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT m.id::text,s.name,p.name_pt,COALESCE(t.name,''),COALESCE(c.name_pt,''),m.starts_on::text,COALESCE(m.ends_on::text,'') FROM user_memberships m JOIN seasons s ON s.id=m.season_id JOIN programmes p ON p.id=m.programme_id LEFT JOIN teams t ON t.id=m.team_id LEFT JOIN competition_categories c ON c.id=m.competition_category_id WHERE m.user_id=$2 AND EXISTS(SELECT 1 FROM users member WHERE member.id=m.user_id AND `+db.ClassificationSubjectEligibilitySQL+`) AND `+classificationScope+` AND (guardian_authority_is_administrator($1) OR EXISTS(SELECT 1 FROM staff_grants g WHERE g.user_id=$1 AND g.capability='COACH' AND g.revoked_at IS NULL AND g.programme_id=m.programme_id AND g.programme_id IS NOT NULL AND s.is_current)) ORDER BY m.starts_on DESC`, actor, member)
+	rows, err := s.Pool.Query(ctx, `SELECT m.id::text,s.name,p.name_pt,COALESCE(t.name,''),COALESCE(c.name_pt,''),m.starts_on::text,COALESCE(m.ends_on::text,''),m.programme_id,guardian_authority_is_administrator($1) FROM user_memberships m JOIN seasons s ON s.id=m.season_id JOIN programmes p ON p.id=m.programme_id LEFT JOIN teams t ON t.id=m.team_id LEFT JOIN competition_categories c ON c.id=m.competition_category_id WHERE m.user_id=$2 AND EXISTS(SELECT 1 FROM users member WHERE member.id=m.user_id AND `+db.ClassificationSubjectEligibilitySQL+`) AND `+classificationScope+` AND (guardian_authority_is_administrator($1) OR EXISTS(SELECT 1 FROM staff_grants g WHERE g.user_id=$1 AND g.capability='COACH' AND g.revoked_at IS NULL AND g.programme_id=m.programme_id AND g.programme_id IS NOT NULL AND s.is_current)) ORDER BY m.starts_on DESC`, actor, member)
 	if err != nil {
 		return "", nil, err
 	}
@@ -99,7 +103,7 @@ func (s PostgresClassificationStore) View(ctx context.Context, actor, member uui
 	var result []ClassificationRow
 	for rows.Next() {
 		var x ClassificationRow
-		if err := rows.Scan(&x.ID, &x.Season, &x.Programme, &x.Team, &x.Category, &x.StartsOn, &x.EndsOn); err != nil {
+		if err := rows.Scan(&x.ID, &x.Season, &x.Programme, &x.Team, &x.Category, &x.StartsOn, &x.EndsOn, &x.ProgrammeID, &x.ActorIsAdmin); err != nil {
 			return "", nil, err
 		}
 		result = append(result, x)
@@ -551,6 +555,13 @@ func (h Classification) Post(w http.ResponseWriter, r *http.Request) {
 	binding := confirmationBinding(actor.ID, member, "DATED", in)
 	if r.PostForm.Get("confirm") != "yes" {
 		if err := h.datedPreview(r.Context(), actor.ID, member, options, &f, today); err != nil {
+			if errors.Is(err, errCoachCrossProgrammeTransition) {
+				f.Message = coachCrossProgrammeMessage
+				f.ErrorTarget = "scope"
+				f.Invalid = true
+				h.render(w, r, http.StatusConflict, f)
+				return
+			}
 			f.Message = "Reveja a participação anterior, as datas e a equipa antes de pré-visualizar."
 			f.Invalid = true
 			h.render(w, r, 409, f)
@@ -577,6 +588,15 @@ func (h Classification) Post(w http.ResponseWriter, r *http.Request) {
 		f.Message = "A pré-visualização expirou ou a participação mudou. Reveja os valores e volte a pré-visualizar; nada foi guardado."
 		f.ErrorTarget = "starts_on"
 		h.render(w, r, 409, f)
+		return
+	}
+	// A previously issued preview must not turn a forbidden programme change
+	// into a generic conflict if the current actor is still a coach.
+	if err := h.datedPreview(r.Context(), actor.ID, member, options, &f, today); errors.Is(err, errCoachCrossProgrammeTransition) {
+		f.Invalid = true
+		f.Message = coachCrossProgrammeMessage
+		f.ErrorTarget = "scope"
+		h.render(w, r, http.StatusConflict, f)
 		return
 	}
 	in.ExpectedVersion = expected

@@ -254,7 +254,23 @@ grep -q 'reverse_proxy app:8080' "$direct_cutover_case/state/caddy-upstream.cadd
 success_case="$work_dir/success"
 disposable_case="$work_dir/disposable-approved"
 setup_case "$disposable_case"
-disposable_inventory=$(go run ./cmd/server schema-inventory)
+# This simulated v1.25.0 direct cutover is an immutable 77-marker release,
+# not the current 78-marker candidate. Preserve the pinned digest and reject a
+# candidate inventory mislabeled as the historical signed release.
+current_inventory=$(go run ./cmd/server schema-inventory)
+disposable_inventory=$(printf '%s' "$current_inventory" | jq -c '[.[] | select(. != "202610010003_privacy_attachment_trigger_runtime")]')
+current_count=$(printf '%s' "$current_inventory" | jq 'length')
+previous_count=$(printf '%s' "$disposable_inventory" | jq 'length')
+test "$((current_count - previous_count))" -eq 1
+test "$(printf '%s' "$disposable_inventory" | jq -rj 'join("\n")' | sha256sum | cut -d' ' -f1)" = '41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7'
+mismatched_inventory_case="$work_dir/disposable-inventory-mismatch"
+setup_case "$mismatched_inventory_case"
+if run_release "$mismatched_inventory_case" TEST_DIRECT_CUTOVER=true TEST_DISPOSABLE_RELEASE=true "TEST_DISPOSABLE_INVENTORY_JSON=$current_inventory" >"$mismatched_inventory_case/rejection.log" 2>&1; then
+  echo 'historical release accepted the current candidate inventory' >&2
+  exit 1
+fi
+grep -q 'signed release manifest migration inventory does not match its digest' "$mismatched_inventory_case/rejection.log"
+test ! -e "$mismatched_inventory_case/events.log" || ! grep -q 'event=release_preparing' "$mismatched_inventory_case/events.log"
 run_release "$disposable_case" TEST_DIRECT_CUTOVER=true TEST_DISPOSABLE_RELEASE=true "TEST_DISPOSABLE_INVENTORY_JSON=$disposable_inventory"
 grep -q 'event=approved_disposable_candidate_fences_predecessor' "$disposable_case/events.log"
 
