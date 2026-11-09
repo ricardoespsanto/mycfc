@@ -43,7 +43,7 @@ func TestTrainingGroupScopeErrorDoesNotInvalidateRetainedName(t *testing.T) {
 	body := renderTrainingGroups(t, TrainingGroupsPage{Mode: "create", Form: TrainingGroupForm{Name: "Grupo conservado", Errors: validation.FieldErrors{"scope": "Escolha uma participação disponível."}}})
 	for _, id := range []string{"training-group-name", "training-group-scope"} {
 		opening := regexp.MustCompile(`<[^>]+id="` + id + `"[^>]*>`).FindString(body)
-		invalid := strings.Contains(opening, `aria-invalid`)
+		invalid := strings.Contains(opening, `aria-invalid="true"`)
 		if invalid != (id == "training-group-scope") {
 			t.Errorf("field %s invalid=%t: %s", id, invalid, opening)
 		}
@@ -102,5 +102,29 @@ func TestTrainingGroupWeekActionReflectsExistingWeek(t *testing.T) {
 		if !strings.Contains(body, want) || strings.Contains(body, absent) {
 			t.Errorf("existing week=%t must offer %q rather than %q", hasWeek, want, absent)
 		}
+	}
+}
+
+func TestTrainingGroupValidationUsesAriaBooleanStrings(t *testing.T) {
+	for _, test := range []struct {
+		mode   string
+		fields []string
+	}{
+		{"create", []string{"training-group-name", "training-group-scope"}},
+		{"add", []string{"training-group-query", "training-group-members"}},
+	} {
+		body := renderTrainingGroups(t, TrainingGroupsPage{Mode: test.mode, SearchPerformed: true,
+			Results: []TrainingGroupAthleteChoice{{Name: "Atleta", MembershipID: "fixture"}},
+			Form:    TrainingGroupForm{Errors: validation.FieldErrors{"name": "Nome inválido", "scope": "Participação inválida", "q": "Pesquisa inválida", "members": "Seleção inválida"}}})
+		for _, id := range test.fields {
+			opening := regexp.MustCompile(`<[^>]+id="` + id + `"[^>]*>`).FindString(body)
+			if !strings.Contains(opening, `aria-invalid="true"`) {
+				t.Errorf("%s needs an ARIA boolean string: %s", id, opening)
+			}
+		}
+	}
+	body := renderTrainingGroups(t, TrainingGroupsPage{Mode: "create"})
+	if strings.Contains(body, `aria-invalid=""`) || strings.Contains(body, `aria-invalid="true"`) {
+		t.Fatal("valid controls must not be marked invalid")
 	}
 }

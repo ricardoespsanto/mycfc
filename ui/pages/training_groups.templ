@@ -90,7 +90,9 @@ templ trainingGroupsContent(page TrainingGroupsPage) {
 }
 
 templ trainingGroupDetail(page TrainingGroupsPage) {
-	@components.PageHeader("Coordenação · Grupos de treino", page.Group.Name, page.Group.ScopeName, trainingGroupDetailActions(page))
+	<div class="training-group-header">
+		@components.PageHeader("Coordenação · Grupos de treino", page.Group.Name, page.Group.ScopeName, trainingGroupDetailActions(page))
+	</div>
 	@components.StatusMessage(page.Success, "success")
 	if page.Error != "" {
 		@components.Callout("Não foi possível concluir a tarefa", page.Error, "error")
@@ -128,14 +130,14 @@ templ trainingGroupNameTask(page TrainingGroupsPage) {
 		@components.RequiredNote()
 		<div class="field-group">
 		@components.FieldLabel("training-group-name", "Nome do grupo", true)
-		<input id="training-group-name" name="name" value={ page.Form.Name } required minlength="2" maxlength="120" aria-invalid?={ page.Form.Errors["name"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-name-help", "name", page.Form.Errors) }/>
+		<input id="training-group-name" name="name" value={ page.Form.Name } required minlength="2" maxlength="120" aria-invalid={ fmt.Sprint(page.Form.Errors["name"] != "") } aria-describedby={ trainingGroupDescribedBy("training-group-name-help", "name", page.Form.Errors) }/>
 		@components.FieldHelp("training-group-name-help", "Por exemplo, Iniciados e Infantis.")
 		@components.FieldErrorMessage("name", page.Form.Errors["name"])
 		</div>
 		if page.Mode == "create" {
 			<div class="field-group">
 			@components.FieldLabel("training-group-scope", "Participação do grupo", true)
-			<select id="training-group-scope" name="scope" required aria-invalid?={ page.Form.Errors["scope"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-scope-help", "scope", page.Form.Errors) }>
+			<select id="training-group-scope" name="scope" required aria-invalid={ fmt.Sprint(page.Form.Errors["scope"] != "") } aria-describedby={ trainingGroupDescribedBy("training-group-scope-help", "scope", page.Form.Errors) }>
 				<option value="">Escolha uma participação</option>
 				for _, scope := range page.Scopes {
 					<option value={ scope.Value } selected?={ page.Form.Scope == scope.Value }>{ scope.Name }</option>
@@ -166,7 +168,7 @@ templ trainingGroupAddTask(page TrainingGroupsPage) {
 			<input type="hidden" name="week_id" value={ page.WeekID }/>
 		}
 		@components.FieldLabel("training-group-query", "Nome do atleta", false)
-		<input id="training-group-query" name="q" type="search" maxlength="100" value={ page.Form.Query } aria-invalid?={ page.Form.Errors["q"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-search-help", "q", page.Form.Errors) }/>
+		<input id="training-group-query" name="q" type="search" maxlength="100" value={ page.Form.Query } aria-invalid={ fmt.Sprint(page.Form.Errors["q"] != "") } aria-describedby={ trainingGroupDescribedBy("training-group-search-help", "q", page.Form.Errors) }/>
 		@components.FieldHelp("training-group-search-help", "Escreva um nome para procurar. Não é apresentada uma lista de atletas sem pesquisa.")
 		@components.FieldErrorMessage("q", page.Form.Errors["q"])
 		<button class="action action--secondary" type="submit">Pesquisar</button>
@@ -180,7 +182,7 @@ templ trainingGroupAddTask(page TrainingGroupsPage) {
 		@trainingGroupTaskErrors(page)
 		if page.SearchPerformed {
 			if len(page.Results) > 0 {
-				<fieldset id="training-group-members" tabindex="-1" class="training-group-members" aria-describedby={ trainingGroupDescribedBy("training-group-selection-help", "members", page.Form.Errors) } aria-invalid?={ page.Form.Errors["members"] != "" }>
+				<fieldset id="training-group-members" tabindex="-1" class="training-group-members" aria-describedby={ trainingGroupDescribedBy("training-group-selection-help", "members", page.Form.Errors) } aria-invalid={ fmt.Sprint(page.Form.Errors["members"] != "") }>
 					<legend>Escolher atletas</legend>
 					for _, athlete := range page.Results {
 						<label class="training-group-members__choice">

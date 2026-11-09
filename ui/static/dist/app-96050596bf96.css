@@ -838,3 +838,11 @@ body.task-surface-open { overflow: hidden; }
 .training-group-members__choice > input {
   flex: none;
 }
+
+/* Group task actions keep readable labels when the detail header wraps. */
+@media (max-width: 40rem) {
+  .training-group-header .page-actions .action {
+    flex: 1 1 8rem;
+    min-inline-size: 0;
+  }
+}
