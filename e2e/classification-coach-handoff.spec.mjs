@@ -26,6 +26,11 @@ test('dual-grant coach sees administrator handoff; same-programme coach and admi
   const {scope,previous}=await propose(coach,'33800000-0000-0000-0000-000000000073','Iniciação');
   await expect(coach.locator('#error-summary')).toBeFocused();
   await expect(coach.locator('#error-summary')).toContainText('Peça a um administrador');
+  await expect(coach.locator('#scope')).toHaveAttribute('aria-invalid','true');
+  await expect(coach.locator('#scope')).toHaveAttribute('aria-describedby','polo-team-help error-summary');
+  await expect(coach.locator('#error-summary a')).toHaveAttribute('href','#scope');
+  await expect(coach.locator('#starts_on')).not.toHaveAttribute('aria-invalid','true');
+  await expect(coach.locator('#starts_on')).toHaveAttribute('aria-describedby','date-help');
   await expect(coach.locator('#scope')).toHaveValue(scope);
   await expect(coach.locator('#previous_id')).toHaveValue(previous);
   await expect(coach.locator('#starts_on')).toHaveValue(date(1));
