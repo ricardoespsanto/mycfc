@@ -29,6 +29,7 @@ import (
 )
 
 type StructuredTraining struct {
+	Groups   TrainingGroupStore
 	Store    StructuredTrainingStore
 	System   System
 	PageMeta components.PageMeta

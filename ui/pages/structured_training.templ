@@ -1541,7 +1541,7 @@ templ gymObjectiveOptions() {
 }
 
 func structuredTrainingActions() []components.PageAction {
-	return []components.PageAction{{Label: "Criar grupo", Href: "#criar-grupo-treino", Variant: "primary", TaskID: "criar-grupo-treino"}, {Label: "Criar semana", Href: "#criar-semana-treino", Variant: "secondary", TaskID: "criar-semana-treino"}, {Label: "Criar sessão", Href: "#criar-sessao-estruturada", Variant: "secondary", TaskID: "criar-sessao-estruturada"}, {Label: "Treinos atuais", Href: "/admin/treinos", Variant: "quiet"}}
+	return []components.PageAction{{Label: "Grupos de treino", Href: "/admin/treinos/estruturados/grupos", Variant: "primary"}, {Label: "Criar grupo", Href: "/admin/treinos/estruturados/grupos/criar", Variant: "secondary"}, {Label: "Criar semana", Href: "#criar-semana-treino", Variant: "secondary", TaskID: "criar-semana-treino"}, {Label: "Criar sessão", Href: "#criar-sessao-estruturada", Variant: "secondary", TaskID: "criar-sessao-estruturada"}, {Label: "Treinos atuais", Href: "/admin/treinos", Variant: "quiet"}}
 }
 func structuredEntryKindLabel(value string) string {
 	switch value {

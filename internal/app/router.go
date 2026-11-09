@@ -173,6 +173,22 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /treinos/prescricoes/sessoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionForSession)))
 	mux.Handle("GET /treinos/prescricoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionDetail)))
 	mux.Handle("GET /admin/treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.Index))))
+	trainingGroups := handlers.TrainingGroups{Store: structuredTraining.Groups, System: system, PageMeta: structuredTraining.PageMeta, Sessions: sessions}
+	for _, route := range []struct {
+		pattern string
+		handler http.HandlerFunc
+	}{
+		{"GET /admin/treinos/estruturados/grupos", trainingGroups.Index},
+		{"GET /admin/treinos/estruturados/grupos/criar", trainingGroups.CreatePage},
+		{"POST /admin/treinos/estruturados/grupos/criar", trainingGroups.Create},
+		{"GET /admin/treinos/estruturados/grupos/{id}", trainingGroups.Detail},
+		{"GET /admin/treinos/estruturados/grupos/{id}/atletas", trainingGroups.Athletes},
+		{"POST /admin/treinos/estruturados/grupos/{id}/atletas", trainingGroups.AddAthletes},
+		{"GET /admin/treinos/estruturados/grupos/{id}/nome", trainingGroups.RenamePage},
+		{"POST /admin/treinos/estruturados/grupos/{id}/nome", trainingGroups.Rename},
+	} {
+		mux.Handle(route.pattern, auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(route.handler)))
+	}
 	mux.Handle("POST /admin/treinos/estruturados/grupos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateGroup))))
 	mux.Handle("POST /admin/treinos/estruturados/semanas", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateWeek))))
 	mux.Handle("POST /admin/treinos/estruturados/semanas/{id}/carga", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.UpdateWeekLoad))))

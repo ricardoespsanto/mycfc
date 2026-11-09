@@ -176,6 +176,10 @@ func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middlewa
 					w.Header().Set("Cache-Control", "no-store")
 					w.Header().Set("Referrer-Policy", "no-referrer")
 				}
+				if strings.HasPrefix(r.URL.Path, "/admin/treinos/estruturados/grupos") {
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Referrer-Policy", "no-referrer")
+				}
 				w.Header().Set("X-Frame-Options", "DENY")
 				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 				w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
@@ -233,6 +237,15 @@ func AccessLogMiddleware(logger *slog.Logger) Middleware {
 					path = route
 				default:
 					path, route = "/equipa/classificacao/*", "/equipa/classificacao/*"
+				}
+			}
+			// Group tasks may contain private roster search/context. Never log their
+			// query values or arbitrary unmatched path suffixes.
+			if strings.HasPrefix(r.URL.Path, "/admin/treinos/estruturados/grupos") {
+				if route != "" {
+					path = route
+				} else {
+					path, route = "/admin/treinos/estruturados/grupos/*", "/admin/treinos/estruturados/grupos/*"
 				}
 			}
 			attributes := []any{

@@ -328,30 +328,12 @@ func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx conte
 	return publication, nil
 }
 
-func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (group dbgen.TrainingGroup, err error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return group, err
+func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
+	_, row, err := (PostgresTrainingGroupStore{Pool: s.Pool}).createGroupWithMembers(ctx, TrainingGroupCreateInput{ActorID: input.Params.CreatedByID, Name: input.Params.Name, ProgrammeID: input.Params.ProgrammeID, TeamID: input.Params.TeamID}, input.MembershipIDs)
+	if errors.Is(err, ErrTrainingGroupEligibility) {
+		err = errStructuredTrainingMembershipScope
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
-	group, err = queries.CreateStructuredTrainingGroup(ctx, input.Params)
-	if err != nil {
-		return group, err
-	}
-	for _, membershipID := range input.MembershipIDs {
-		rows, addErr := queries.AddStructuredTrainingGroupMember(ctx, dbgen.AddStructuredTrainingGroupMemberParams{GroupID: group.ID, MembershipID: membershipID, AddedByID: input.Params.CreatedByID})
-		if addErr != nil {
-			return group, addErr
-		}
-		if rows != 1 {
-			return group, errStructuredTrainingMembershipScope
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return group, err
-	}
-	return group, nil
+	return row, err
 }
 
 func (s PostgresStructuredTrainingStore) CanManageStructuredTrainingGroup(ctx context.Context, params dbgen.CanManageStructuredTrainingGroupParams) (bool, error) {

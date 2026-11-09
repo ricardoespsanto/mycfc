@@ -1175,7 +1175,10 @@ func TestPostgresStructuredTrainingStorePropagatesTransactionStartFailures(t *te
 			_, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{})
 			return err
 		}},
-		{"create group", func() error { _, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{}); return err }},
+		{"create group", func() error {
+			_, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Training group", CreatedByID: id, ProgrammeID: &id}})
+			return err
+		}},
 		{"create segment", func() error { _, err := store.CreateSegment(ctx, StructuredTrainingSegmentInput{}); return err }},
 		{"create gym block", func() error { _, err := store.CreateGymBlock(ctx, StructuredGymBlockInput{}); return err }},
 		{"create water block", func() error { _, err := store.CreateWaterBlock(ctx, StructuredWaterBlockInput{}); return err }},
@@ -1369,7 +1372,10 @@ func TestPostgresStructuredTrainingStorePropagatesFirstTransactionalOperationFai
 			_, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: id})
 			return err
 		}},
-		{"create group", func() error { _, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{}); return err }},
+		{"create group", func() error {
+			_, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Training group", CreatedByID: id, ProgrammeID: &id}})
+			return err
+		}},
 		{"create segment", func() error { _, err := store.CreateSegment(ctx, StructuredTrainingSegmentInput{}); return err }},
 		{"create gym block", func() error { _, err := store.CreateGymBlock(ctx, StructuredGymBlockInput{}); return err }},
 		{"create water block", func() error { _, err := store.CreateWaterBlock(ctx, StructuredWaterBlockInput{}); return err }},
@@ -1515,19 +1521,12 @@ func TestPostgresStructuredTrainingStoreCommitsEmptyDayAndWeekCopies(t *testing.
 	}
 }
 
-func TestPostgresStructuredTrainingStoreCreatesScopedGroupsAtomically(t *testing.T) {
+func TestPostgresStructuredTrainingStoreCreatesVariationGroupsAtomically(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
 		call func(PostgresStructuredTrainingStore) error
 	}{
-		{"training group", func(store PostgresStructuredTrainingStore) error {
-			group, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{CreatedByID: uuid.New()}, MembershipIDs: []uuid.UUID{uuid.New()}})
-			if group.ID == uuid.Nil {
-				return errors.New("missing training group ID")
-			}
-			return err
-		}},
 		{"variation subgroup", func(store PostgresStructuredTrainingStore) error {
 			group, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{CreatedByID: uuid.New(), Kind: dbgen.TrainingVariationGroupKindSUBGROUP}, MembershipIDs: []uuid.UUID{uuid.New()}})
 			if group.ID == uuid.Nil {
@@ -3798,3 +3797,18 @@ func TestParseGymExerciseAcceptsEachResistanceModeAtItsBoundary(t *testing.T) {
 }
 
 func int16Ptr(value int16) *int16 { return &value }
+
+// Successful legacy group creation with an initial roster is covered against
+// PostgreSQL; invalid setup must fail before opening its transaction.
+func TestPostgresStructuredTrainingStoreRejectsInvalidGroupBeforeTransaction(t *testing.T) {
+	store := PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{err: errors.New("transaction must not start")}}
+	for _, params := range []dbgen.CreateStructuredTrainingGroupParams{
+		{},
+		{Name: "Training group", CreatedByID: uuid.New()},
+	} {
+		_, err := store.CreateGroup(t.Context(), StructuredTrainingGroupInput{Params: params})
+		if !errors.Is(err, errStructuredTrainingMembershipScope) {
+			t.Fatalf("invalid group error=%v", err)
+		}
+	}
+}

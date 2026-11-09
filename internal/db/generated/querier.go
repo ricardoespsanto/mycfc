@@ -19,6 +19,7 @@ type Querier interface {
 	AddPhotoAlbumProgrammeAudience(ctx context.Context, arg AddPhotoAlbumProgrammeAudienceParams) error
 	AddPhotoAlbumTeamAudience(ctx context.Context, arg AddPhotoAlbumTeamAudienceParams) error
 	AddStructuredTrainingGroupMember(ctx context.Context, arg AddStructuredTrainingGroupMemberParams) (int64, error)
+	AddTaskTrainingGroupAthlete(ctx context.Context, arg AddTaskTrainingGroupAthleteParams) (int64, error)
 	AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCycleTargetParams) (int64, error)
 	AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error)
 	AdminTransitionGuardianAuthority(ctx context.Context, arg AdminTransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
@@ -183,6 +184,7 @@ type Querier interface {
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
 	HasCurrentGuardianAuthorityForSubject(ctx context.Context, subjectID uuid.UUID) (bool, error)
 	HasVerifiedGuardianAuthority(ctx context.Context, actorID uuid.UUID) (bool, error)
+	InsertTaskTrainingGroup(ctx context.Context, arg InsertTaskTrainingGroupParams) (TrainingGroup, error)
 	IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error)
 	IssueGuardianAuthorityInvitation(ctx context.Context, arg IssueGuardianAuthorityInvitationParams) (IssueGuardianAuthorityInvitationRow, error)
 	IssueMinorCredential(ctx context.Context, arg IssueMinorCredentialParams) (uuid.UUID, error)
@@ -300,6 +302,7 @@ type Querier interface {
 	RecordAnnouncementDelivery(ctx context.Context, arg RecordAnnouncementDeliveryParams) error
 	RecoverGuardianAgeHandoffEmail(ctx context.Context, arg RecoverGuardianAgeHandoffEmailParams) (GuardianAgeHandoff, error)
 	RemoveMediaUploadIntent(ctx context.Context, arg RemoveMediaUploadIntentParams) error
+	RenameTaskTrainingGroup(ctx context.Context, arg RenameTaskTrainingGroupParams) error
 	ReserveGuardianApplicationRate(ctx context.Context, arg ReserveGuardianApplicationRateParams) error
 	ResolvePasswordResetToken(ctx context.Context, arg ResolvePasswordResetTokenParams) (ResolvePasswordResetTokenRow, error)
 	RestoreTrainingBlock(ctx context.Context, arg RestoreTrainingBlockParams) (uuid.UUID, error)
@@ -317,6 +320,12 @@ type Querier interface {
 	SetGuardianAuthorityPolicyEnabled(ctx context.Context, arg SetGuardianAuthorityPolicyEnabledParams) (GuardianAuthorityPolicy, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	SubmitGuardianAuthorityRenewal(ctx context.Context, arg SubmitGuardianAuthorityRenewalParams) (string, error)
+	TouchTaskTrainingGroup(ctx context.Context, groupID uuid.UUID) error
+	TrainingGroupAllowsWeek(ctx context.Context, arg TrainingGroupAllowsWeekParams) (bool, error)
+	TrainingGroupAthleteChoices(ctx context.Context, arg TrainingGroupAthleteChoicesParams) ([]TrainingGroupAthleteChoicesRow, error)
+	TrainingGroupRecords(ctx context.Context, arg TrainingGroupRecordsParams) ([]TrainingGroupRecordsRow, error)
+	// #392/#393 dedicated group tasks. Exact scope authority is independent of athlete counts.
+	TrainingGroupScopeOptions(ctx context.Context, actorID uuid.UUID) ([]TrainingGroupScopeOptionsRow, error)
 	TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, error)
 	TransitionGuardianAuthority(ctx context.Context, arg TransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	UpdateActivityConnectionCredentials(ctx context.Context, arg UpdateActivityConnectionCredentialsParams) (ActivityConnection, error)
@@ -344,6 +353,7 @@ type Querier interface {
 	UpsertCurrentSeasonMembership(ctx context.Context, arg UpsertCurrentSeasonMembershipParams) (UpsertCurrentSeasonMembershipRow, error)
 	UpsertSuggestedActivityMatch(ctx context.Context, arg UpsertSuggestedActivityMatchParams) (TrainingSessionActivityMatch, error)
 	UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActivityParams) (SyncedActivity, error)
+	ValidateTaskTrainingGroupAthlete(ctx context.Context, arg ValidateTaskTrainingGroupAthleteParams) (uuid.UUID, error)
 	VerifyGuardianAgeHandoffEmail(ctx context.Context, tokenDigest []byte) (uuid.UUID, error)
 }
 

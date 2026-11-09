@@ -1,0 +1,276 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type TrainingGroupRow struct {
+	ID, Name, ScopeName, Version, URL, PlannerURL string
+	MemberCount int
+	HasWeek bool
+}
+
+type TrainingGroupScopeChoice struct { Value, Name string }
+
+type TrainingGroupAthleteChoice struct {
+	MembershipID, Name string
+	AlreadyMember, Unavailable bool
+}
+
+type TrainingGroupForm struct {
+	Name, Scope, Version, Query string
+	SelectedIDs map[string]bool
+	Errors validation.FieldErrors
+}
+
+type TrainingGroupsPage struct {
+	Meta components.PageMeta
+	CSRFField templ.Component
+	Mode string
+	Groups []TrainingGroupRow
+	Group TrainingGroupRow
+	Scopes []TrainingGroupScopeChoice
+	Roster, Results []TrainingGroupAthleteChoice
+	Form TrainingGroupForm
+	SearchPerformed, CanCreate bool
+	SearchPage int
+	ActionURL, ReturnURL, ReviewURL, PlannerURL, GroupURL, CollectionURL, CreateURL, AddURL, RenameURL string
+	PreviousURL, NextURL, RosterPreviousURL, RosterNextURL string
+	WeekID, Success, Error, Conflict string
+}
+
+templ TrainingGroups(page TrainingGroupsPage) {
+	@components.Base(page.Meta, trainingGroupsContent(page))
+}
+
+templ trainingGroupsContent(page TrainingGroupsPage) {
+	if page.Mode == "create" || page.Mode == "rename" || page.Mode == "add" {
+		<div class="task-route-page">@components.TaskRoute(trainingGroupTaskConfig(page)) {
+			<div class="task-form">
+			@components.StatusMessage(page.Success, "success")
+			if page.Error != "" {
+				<section class="error-summary" role="alert" tabindex="-1" autofocus><h2>Não foi possível concluir a tarefa</h2><p>{ page.Error }</p></section>
+			}
+			if page.Mode == "add" {
+				@trainingGroupAddTask(page)
+			} else {
+				@trainingGroupNameTask(page)
+			}
+			</div>
+		}</div>
+	} else if page.Mode == "detail" {
+		@trainingGroupDetail(page)
+	} else {
+		@components.PageHeader("Coordenação · Treinos", "Grupos de treino", "Organize os atletas com quem prepara as semanas de treino.", trainingGroupCollectionActions(page))
+		@components.StatusMessage(page.Success, "success")
+		if page.Error != "" {
+			@components.Callout("Não foi possível carregar os grupos", page.Error, "error")
+		}
+		if len(page.Groups) > 0 {
+			@components.RecordList("Grupos de treino") {
+				for _, group := range page.Groups {
+					@components.RecordItem(group.Name, group.URL, group.ScopeName) {
+						<div class="cluster">
+							<span class="record-meta">{ trainingGroupCount(group.MemberCount) }</span>
+							<a class="action action--quiet" href={ templ.SafeURL(group.URL) }>Abrir grupo</a>
+						</div>
+						}
+					}
+			}
+		} else {
+			@components.EmptyState("Ainda sem grupos de treino", "Crie um grupo e adicione atletas quando estiver preparado.")
+		}
+		if !page.CanCreate {
+			<p class="form-help">Não tem uma participação disponível para criar um grupo. Peça a um administrador para rever o seu acesso ao treino.</p>
+		}
+		@trainingGroupPagination(page.PreviousURL, page.NextURL, "Páginas de grupos")
+	}
+}
+
+templ trainingGroupDetail(page TrainingGroupsPage) {
+	@components.PageHeader("Coordenação · Grupos de treino", page.Group.Name, page.Group.ScopeName, trainingGroupDetailActions(page))
+	@components.StatusMessage(page.Success, "success")
+	if page.Error != "" {
+		@components.Callout("Não foi possível concluir a tarefa", page.Error, "error")
+	}
+	@components.StatusSummary("Contexto do grupo", []components.StatusItem{{Label: "Participação", Value: page.Group.ScopeName}, {Label: "Atletas", Value: fmt.Sprint(page.Group.MemberCount)}})
+	<p>O grupo organiza o treino. Não altera a participação nem o escalão dos atletas.</p>
+	<section class="module" aria-labelledby="training-group-roster-title">
+		<h2 id="training-group-roster-title">Atletas do grupo</h2>
+		<p>Adicionar atletas não publica instruções nem retira uma colocação noutro grupo.</p>
+		if len(page.Roster) == 0 {
+			@components.EmptyState("Ainda sem atletas", "Pode preparar uma semana em rascunho e adicionar destinatários depois.")
+		} else {
+			@components.RecordList("Atletas do grupo") {
+				for _, athlete := range page.Roster {
+					@components.RecordItem(athlete.Name, "", "") {
+						if athlete.Unavailable {
+							<span class="record-meta">Rever participação</span>
+						} else {
+							<span class="record-meta">Elegível para este grupo</span>
+						}
+					}
+				}
+			}
+		}
+		@trainingGroupPagination(page.RosterPreviousURL, page.RosterNextURL, "Páginas de atletas do grupo")
+	</section>
+	<p class="form-help">As semanas guardam o seu próprio estado de rascunho e publicação. Depois de adicionar atletas, reveja os destinatários antes de publicar.</p>
+	<p><a href={ templ.SafeURL(page.CollectionURL) }>Voltar aos grupos de treino</a></p>
+}
+
+templ trainingGroupNameTask(page TrainingGroupsPage) {
+	<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
+		@trainingGroupHiddenContext(page)
+		@trainingGroupTaskErrors(page)
+		@components.RequiredNote()
+		<div class="field-group">
+		@components.FieldLabel("training-group-name", "Nome do grupo", true)
+		<input id="training-group-name" name="name" value={ page.Form.Name } required minlength="2" maxlength="120" aria-invalid?={ page.Form.Errors["name"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-name-help", "name", page.Form.Errors) }/>
+		@components.FieldHelp("training-group-name-help", "Por exemplo, Iniciados e Infantis.")
+		@components.FieldErrorMessage("name", page.Form.Errors["name"])
+		</div>
+		if page.Mode == "create" {
+			<div class="field-group">
+			@components.FieldLabel("training-group-scope", "Participação do grupo", true)
+			<select id="training-group-scope" name="scope" required aria-invalid?={ page.Form.Errors["scope"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-scope-help", "scope", page.Form.Errors) }>
+				<option value="">Escolha uma participação</option>
+				for _, scope := range page.Scopes {
+					<option value={ scope.Value } selected?={ page.Form.Scope == scope.Value }>{ scope.Name }</option>
+				}
+			</select>
+			@components.FieldHelp("training-group-scope-help", "O grupo organiza o treino. Não altera a participação nem o escalão dos atletas. Pode criar o grupo antes de adicionar atletas ou preparar uma época.")
+			@components.FieldErrorMessage("scope", page.Form.Errors["scope"])
+			</div>
+			<details><summary>Programa, escalão e grupo de treino</summary><p>Competição é um programa de participação; Iniciados é um escalão; Iniciados e Infantis pode ser o nome de um grupo de treino. Uma tripulação é outra organização, usada num treino específico.</p></details>
+		} else {
+			<p class="form-help">A participação e as semanas deste grupo serão mantidas.</p>
+		}
+		@components.TaskActions(page.ReturnURL) {
+			if page.Mode == "create" {
+				<button class="action action--primary" type="submit" disabled?={ len(page.Scopes) == 0 }>Criar grupo</button>
+			} else {
+				<button class="action action--primary" type="submit">Guardar nome</button>
+			}
+		}
+	</form>
+}
+
+templ trainingGroupAddTask(page TrainingGroupsPage) {
+	<p>Pesquise pelo nome dentro de { page.Group.ScopeName }. Só são apresentadas as pessoas elegíveis para este grupo.</p>
+	<form class="form-layout" method="get" action={ templ.SafeURL(page.ActionURL) }>
+		<input type="hidden" name="return_to" value={ page.ReturnURL }/>
+		if page.WeekID != "" {
+			<input type="hidden" name="week_id" value={ page.WeekID }/>
+		}
+		@components.FieldLabel("training-group-query", "Nome do atleta", false)
+		<input id="training-group-query" name="q" type="search" maxlength="100" value={ page.Form.Query } aria-invalid?={ page.Form.Errors["q"] != "" } aria-describedby={ trainingGroupDescribedBy("training-group-search-help", "q", page.Form.Errors) }/>
+		@components.FieldHelp("training-group-search-help", "Escreva um nome para procurar. Não é apresentada uma lista de atletas sem pesquisa.")
+		@components.FieldErrorMessage("q", page.Form.Errors["q"])
+		<button class="action action--secondary" type="submit">Pesquisar</button>
+	</form>
+	<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
+		@trainingGroupHiddenContext(page)
+		<input type="hidden" name="q" value={ page.Form.Query }/>
+		if page.SearchPage > 0 {
+			<input type="hidden" name="page" value={ fmt.Sprint(page.SearchPage) }/>
+		}
+		@trainingGroupTaskErrors(page)
+		if page.SearchPerformed {
+			if len(page.Results) > 0 {
+				<fieldset id="training-group-members" tabindex="-1" class="training-group-members" aria-describedby={ trainingGroupDescribedBy("training-group-selection-help", "members", page.Form.Errors) } aria-invalid?={ page.Form.Errors["members"] != "" }>
+					<legend>Escolher atletas</legend>
+					for _, athlete := range page.Results {
+						<label class="training-group-members__choice">
+							<input type="checkbox" name="membership_id" value={ athlete.MembershipID } checked?={ page.Form.SelectedIDs[athlete.MembershipID] } disabled?={ athlete.AlreadyMember || athlete.Unavailable }/>
+							<span><strong>{ athlete.Name }</strong>
+								if athlete.AlreadyMember {
+									<span class="record-meta">Já pertence ao grupo</span>
+								} else if athlete.Unavailable {
+									<span class="record-meta">Não está disponível para adição a este grupo</span>
+								}
+							</span>
+						</label>
+					}
+				</fieldset>
+				@components.FieldErrorMessage("members", page.Form.Errors["members"])
+			} else {
+				<div id="training-group-members" tabindex="-1">@components.EmptyState("Sem resultados", "Não foram encontradas pessoas elegíveis neste grupo.")</div>
+				@components.FieldErrorMessage("members", page.Form.Errors["members"])
+			}
+		} else {
+			<div id="training-group-members" tabindex="-1"><p>Pesquise por um nome para escolher atletas.</p></div>
+			@components.FieldErrorMessage("members", page.Form.Errors["members"])
+		}
+		@components.FieldHelp("training-group-selection-help", "As escolhas aplicam-se apenas a esta página. Adicione os atletas selecionados antes de mudar de pesquisa ou página. Um atleta só pode ter um grupo de treino ativo; uma mudança de grupo deve ser tratada separadamente.")
+		@components.TaskActions(page.ReturnURL) {
+			<button class="action action--primary" type="submit">Adicionar atletas</button>
+		}
+	</form>
+	@trainingGroupPagination(page.PreviousURL, page.NextURL, "Páginas de resultados")
+}
+
+templ trainingGroupHiddenContext(page TrainingGroupsPage) {
+	@page.CSRFField
+	<input type="hidden" name="return_to" value={ page.ReturnURL }/>
+	if page.Form.Version != "" {
+		<input type="hidden" name="version" value={ page.Form.Version }/>
+	}
+	if page.WeekID != "" {
+		<input type="hidden" name="week_id" value={ page.WeekID }/>
+	}
+}
+
+templ trainingGroupTaskErrors(page TrainingGroupsPage) {
+	if page.Conflict != "" {
+		@components.TaskConflict("O grupo foi alterado", page.Conflict, trainingGroupFirstField(page), trainingGroupReviewURL(page), "Recarregar e rever o grupo")
+	} else {
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "form", Field: trainingGroupFirstField(page)}, {Key: "version", Field: trainingGroupFirstField(page)}, {Key: "name", Field: "training-group-name"}, {Key: "scope", Field: "training-group-scope"}, {Key: "members", Field: "training-group-members"}, {Key: "q", Field: "training-group-query"}}))
+	}
+}
+
+templ trainingGroupPagination(previous, next, label string) {
+	if previous != "" || next != "" {
+		<nav class="cluster" aria-label={ label }>
+			if previous != "" {
+				<a class="action action--quiet" href={ templ.SafeURL(previous) }>Página anterior</a>
+			}
+			if next != "" {
+				<a class="action action--quiet" href={ templ.SafeURL(next) }>Página seguinte</a>
+			}
+		</nav>
+	}
+}
+
+func trainingGroupTaskConfig(page TrainingGroupsPage) components.TaskSurfaceConfig {
+	title, description := "Criar grupo de treino", "Comece pelo nome e pela participação. Pode adicionar atletas depois."
+	if page.Mode == "rename" { title, description = "Alterar nome de " + page.Group.Name, page.Group.ScopeName }
+	if page.Mode == "add" { title, description = "Adicionar atletas a " + page.Group.Name, page.Group.ScopeName }
+	return components.TaskSurfaceConfig{ID: "training-group-task", Variant: "modal", TitleID: "training-group-task-title", Eyebrow: "Coordenação · Grupos de treino", Title: title, Description: description, ReturnURL: page.ReturnURL}
+}
+
+func trainingGroupFirstField(page TrainingGroupsPage) string { if page.Mode == "add" { return "training-group-members" }; return "training-group-name" }
+
+func trainingGroupReviewURL(page TrainingGroupsPage) string { if page.ReviewURL != "" { return page.ReviewURL }; return page.ActionURL }
+
+func trainingGroupDescribedBy(help, field string, errors validation.FieldErrors) string {
+	if errors[field] != "" { return help + " " + field + "-error" }; return help
+}
+
+func trainingGroupCount(n int) string { if n == 1 { return "1 atleta" }; return fmt.Sprintf("%d atletas", n) }
+
+func trainingGroupCollectionActions(page TrainingGroupsPage) []components.PageAction {
+	actions := []components.PageAction{}
+	if page.CanCreate { actions = append(actions, components.PageAction{Label: "Criar grupo", Href: page.CreateURL, Variant: "primary"}) }
+	return append(actions, components.PageAction{Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "quiet"})
+}
+
+func trainingGroupDetailActions(page TrainingGroupsPage) []components.PageAction {
+	weekLabel := "Criar semana"
+	if page.Group.HasWeek { weekLabel = "Abrir semana" }
+	weekVariant, addVariant := "primary", "secondary"
+	if page.Group.MemberCount == 0 { weekVariant, addVariant = "secondary", "primary" }
+	return []components.PageAction{{Label: "Adicionar atletas", Href: page.AddURL, Variant: addVariant}, {Label: weekLabel, Href: page.PlannerURL, Variant: weekVariant}, {Label: "Atletas do grupo", Href: "#training-group-roster-title", Variant: "quiet"}, {Label: "Alterar nome", Href: page.RenameURL, Variant: "quiet"}}
+}

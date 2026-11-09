@@ -2979,10 +2979,10 @@ func trainingOutcomeTone(status string) string {
 
 func trainingPageActions(page TrainingPage) []components.PageAction {
 	if page.Management && page.CanManage {
-		actions := []components.PageAction{{Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "secondary", TaskID: "criar-sessao"}}
 		if page.StructuredAvailable {
-			actions = append(actions, components.PageAction{Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"})
+			return []components.PageAction{{Label: "Grupos de treino", Href: "/admin/treinos/estruturados/grupos", Variant: "primary"}, {Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"}, {Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "quiet", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "quiet", TaskID: "criar-sessao"}}
 		}
+		actions := []components.PageAction{{Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "secondary", TaskID: "criar-sessao"}}
 		return actions
 	}
 	if !page.Management && page.StructuredAvailable {

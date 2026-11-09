@@ -445,6 +445,10 @@ func TestPostgresStructuredTrainingVariationsResolveAthleteOverSubgroup(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Group creation now rechecks the same concrete authority as the route.
+	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, actorID, programme.ID); err != nil {
+		t.Fatal(err)
+	}
 	group, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Grupo variações " + uuid.NewString()[:8], ProgrammeID: &programme.ID, CreatedByID: actorID}, MembershipIDs: []uuid.UUID{membership.ID}})
 	if err != nil {
 		t.Fatal(err)

@@ -828,3 +828,13 @@ body.task-surface-open { overflow: hidden; }
 .preserve-lines {
   white-space: pre-wrap;
 }
+
+.training-group-members__choice > span {
+  display: grid;
+  min-inline-size: 0;
+  gap: var(--space-1);
+}
+
+.training-group-members__choice > input {
+  flex: none;
+}
