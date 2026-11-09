@@ -23,6 +23,10 @@ test('admin records mismatched age with reason; invalid focus and no history dis
  await form.getByRole('button',{name:'Guardar participação'}).click();
  await expect(page.locator('#error-summary')).toBeFocused();
  await expect(page.locator('#age_exception_reason')).toHaveAttribute('aria-invalid','true');
+ await expect(page.locator('#age_exception_reason')).toHaveAttribute('aria-describedby','age-reason-help error-summary');
+ await expect(page.locator('#starts_on')).not.toHaveAttribute('aria-invalid','true');
+ await expect(page.locator('#starts_on')).toHaveAttribute('aria-describedby','date-help');
+ await expect(page.locator('#starts_on')).toHaveValue(today);
  await expect(page.locator('#error-summary a')).toHaveAttribute('href','#age_exception_reason');
  const violations=(await new AxeBuilder({page}).analyze()).violations.filter(({impact})=>impact==='serious'||impact==='critical');
  expect(violations).toEqual([]);
