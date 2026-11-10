@@ -18,11 +18,11 @@ Production startup, readiness and requests require both the database contract an
 - A compile-stamped test process exercised actual application construction and the real router against the low web role and root-owned admission file. Valid admission served readiness/login; blocked admission refused startup/serving. Cookie-bearing GET/HEAD liveness remained available after closing the application database pool. This was not an externally launched server or browser run.
 - Deployment-control tests include twelve admission/helper/adapter cases and the source release-controller suite. These use isolated files and synthetic command adapters; they are not an installed deployment rehearsal.
 
-The delivery lead retains private test logs, source hashes and handoffs. The final integrated source gate and routed reader evidence must be recorded against the assembled candidate, rather than inferred from earlier component runs.
+The delivery lead retains private test logs, source hashes and handoffs. The assembled source passed full Go tests/vet and the revised stale-input regressions. Ten actual routed browser cases on clean77abe1a passed without selected skips or retries; seven axe analyses reported no serious or critical violations. History and denied-write invariants held and fixture cleanup completed. See [the routed record](scheduling-reader-browser-verification.md) for source/binary hashes, prior failed attempts and exact limits. The full release repository gate remains separate.
 
 ## Outstanding acceptance
 
-Actual routed compatibility coverage and the final integrated repository gate, and an actual future nullable-schema ledger/current-operator-to-compatible-reader fallback rehearsal remain separate evidence requirements. A test-only nullable-shape fixture does not establish a real future migration or rollout.
+The final integrated release repository gate and an actual future nullable-schema ledger/current-operator-to-compatible-reader fallback rehearsal remain separate evidence requirements. A test-only nullable-shape fixture does not establish a real future migration or rollout.
 
 An inherited recipient-eligibility mismatch remains a #403/#404 finding: publication selection and insertion can include a dependant after all current verified guardian authority is lost, although roster eligibility excludes that person. Viewer permissions are separate. The fix must bind the reviewed audience, recheck eligibility at transactional save and preserve existing history. This stage does not claim that finding resolved.
 
