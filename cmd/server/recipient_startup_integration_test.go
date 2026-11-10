@@ -21,6 +21,21 @@ import (
 
 const startupPublisher = "local_recipient_web"
 
+type localQueryInterruption struct {
+	match       func(string) bool
+	interrupted bool
+}
+
+func (f *localQueryInterruption) TraceQueryStart(ctx context.Context, conn *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
+	if !f.interrupted && f.match(query.SQL) {
+		f.interrupted = true
+		_ = conn.Close(ctx)
+	}
+	return ctx
+}
+
+func (*localQueryInterruption) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
 func testLocalPreparationRefusals(t *testing.T, root *pgx.Conn, migrationURL string) {
 	t.Helper()
 	for _, tc := range []struct{ name, password, message string }{
@@ -342,18 +357,6 @@ func testLocalAuthoringRejectsMissingActivationWitness(t *testing.T, root, low *
 
 // Close the real fixture connection before its COMMIT is sent. A caller
 // must still treat the failed acknowledgement as unknown and inspect state.
-type localCommitDisconnect struct{ interrupted bool }
-
-func (f *localCommitDisconnect) TraceQueryStart(ctx context.Context, conn *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
-	if strings.EqualFold(query.SQL, "commit") && !f.interrupted {
-		f.interrupted = true
-		_ = conn.Close(ctx)
-	}
-	return ctx
-}
-
-func (*localCommitDisconnect) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
 func testLocalRecipientTransactionDisconnect(t *testing.T, root, low *pgx.Conn, state db.TrainingScheduleState) {
 	t.Helper()
 	ctx := t.Context()
@@ -395,7 +398,7 @@ func testLocalRecipientTransactionDisconnect(t *testing.T, root, low *pgx.Conn, 
 			if err := tc.mutate(t.Context(), closed); err == nil {
 				t.Fatal("a closed session acknowledged a transaction")
 			}
-			fault := &localCommitDisconnect{}
+			fault := &localQueryInterruption{match: func(sql string) bool { return strings.EqualFold(sql, "commit") }}
 			cfg.Tracer = fault
 			connected, err := pgx.ConnectConfig(t.Context(), cfg)
 			if err != nil {
@@ -417,6 +420,117 @@ func testLocalRecipientTransactionDisconnect(t *testing.T, root, low *pgx.Conn, 
 	publisher, err := db.InspectTrainingRecipientPublisher(ctx, root, startupPublisher)
 	if err != nil || publisher.OID != inspected.Publisher.OID || !publisher.CanLogin {
 		t.Fatal("interrupted transaction changed the fixture publisher", err)
+	}
+}
+
+func TestLocalAuthoringRecoversInterruptedEnableRealPostgres(t *testing.T) {
+	raw, _, migrationURL := setupLocalRecipientFixture(t)
+	ctx := t.Context()
+	root, err := pgx.Connect(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close(ctx)
+	low, err := pgx.Connect(ctx, migrationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer low.Close(ctx)
+	target, err := loadRecipientCommandTarget(ctx, "migration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := localManifestBinding(ctx, root, target.Roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Construct the real intermediate state where the floor committed before
+	// the command recorded or attempted an authoring enable.
+	var closed db.TrainingScheduleState
+	func() {
+		defer record.Close()
+		if _, err := setRecipientPublisherLogin(ctx, root, startupPublisher, *record.Value.PublisherOID, false); err != nil {
+			t.Fatal(err)
+		}
+		inspected, err := inspectRecipientConnection(ctx, low, target.Database, target.Roles, db.RecipientInspectFinal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := *inspected.ScheduleState
+		floor := recipientFloorInput{Incarnation: before.DatabaseIncarnation, Commit: uuid.New(), Epoch: before.StateEpoch, Manifest: strings.Repeat("d", 64), Reader: trainingcompat.ReaderGeneration}
+		err = withRecipientPolicySession(ctx, low, func(ctx context.Context) error {
+			closed, err = commitRecipientFloor(ctx, low, inspected, floor)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.Value.Phase = "floor_committed"
+		record.Value.Intent = &localRecipientFloorIntent{Incarnation: floor.Incarnation.String(), ExpectedEpoch: floor.Epoch, Commit: floor.Commit.String(), MinimumReader: floor.Reader, ManifestSHA256: floor.Manifest}
+		if err := record.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	for _, tc := range []struct {
+		name, want string
+		committed  bool
+	}{
+		{"disconnect before enable", "enable not acknowledged", false},
+		{"disconnect after committed enable", "training schedule status unavailable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reachedEnable bool
+			fault := &localQueryInterruption{match: func(sql string) bool {
+				if strings.Contains(sql, "training_schedule_control.set_enabled(") {
+					reachedEnable = true
+					return !tc.committed
+				}
+				return reachedEnable && strings.Contains(sql, "FROM training_schedule_control.status()")
+			}}
+			cfg := low.Config().Copy()
+			cfg.Tracer = fault
+			conn, err := pgx.ConnectConfig(t.Context(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close(t.Context())
+			record, err := openLocalRecipientManifest(binding, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer record.Close()
+			err = completeLocalAuthoringPreparation(t.Context(), conn, root, target, record, closed)
+			if !fault.interrupted || err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q after interruption", err, tc.want)
+			}
+			current, err := db.TrainingScheduleStatus(t.Context(), low)
+			wantEpoch := closed.StateEpoch
+			if tc.committed {
+				wantEpoch++
+			}
+			if err != nil || current.StateEpoch != wantEpoch || current.PartialV2Enabled != tc.committed {
+				t.Fatalf("unexpected durable state after interrupted enable: %+v, %v", current, err)
+			}
+			publisher, err := db.InspectTrainingRecipientPublisher(t.Context(), root, startupPublisher)
+			if err != nil || publisher.CanLogin {
+				t.Fatal("interrupted enable lifted the publisher fence", err)
+			}
+		})
+	}
+	if err := runServerCommand(ctx, []string{"prepare-local-recipient-floor"}); err != nil {
+		t.Fatal("resume exact recorded enable", err)
+	}
+	state, err := db.TrainingScheduleStatus(ctx, low)
+	if err != nil || !state.PartialV2Enabled || state.StateEpoch != closed.StateEpoch+1 {
+		t.Fatal("resume changed the committed activation", err)
+	}
+	publisher, err := db.InspectTrainingRecipientPublisher(ctx, root, startupPublisher)
+	if err != nil || !publisher.CanLogin {
+		t.Fatal("confirmed activation did not restore the original publisher", err)
 	}
 }
 
@@ -577,9 +691,13 @@ func testLocalAuthoringRestoreNeedsFreshEvidence(t *testing.T, root, low *pgx.Co
 		fenced     bool
 	}{
 		{"publisher still has work", "stop every local application", false},
+		{"publisher fence connection lost", "publisher LOGIN change failed", false},
+		{"migration inspector connection lost", "ledger inspection rejected", true},
 		{"floor changed between inspections", "unchanged floor and fenced publisher", true},
 		{"final inspector cannot authenticate", "independent migration connection rejected", true},
 		{"journal cannot record the fence", "rename", true},
+		{"journal directory disappeared", "no such file or directory", true},
+		{"publisher restore connection lost", "publisher LOGIN change failed", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() {
@@ -598,12 +716,25 @@ func testLocalAuthoringRestoreNeedsFreshEvidence(t *testing.T, root, low *pgx.Co
 					}
 				}
 			})
-			migration, err := pgx.ConnectConfig(t.Context(), low.Config())
+			migrationCfg, bootstrapCfg := low.Config().Copy(), root.Config().Copy()
+			var fault *localQueryInterruption
+			switch tc.name {
+			case "publisher fence connection lost":
+				fault = &localQueryInterruption{match: func(sql string) bool { return strings.HasSuffix(sql, " NOLOGIN") }}
+				bootstrapCfg.Tracer = fault
+			case "migration inspector connection lost":
+				fault = &localQueryInterruption{match: func(sql string) bool { return sql == "SET TRANSACTION READ ONLY" }}
+				migrationCfg.Tracer = fault
+			case "publisher restore connection lost":
+				fault = &localQueryInterruption{match: func(sql string) bool { return strings.HasSuffix(sql, " LOGIN") }}
+				bootstrapCfg.Tracer = fault
+			}
+			migration, err := pgx.ConnectConfig(t.Context(), migrationCfg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer migration.Close(t.Context())
-			bootstrap, err := pgx.ConnectConfig(t.Context(), root.Config())
+			bootstrap, err := pgx.ConnectConfig(t.Context(), bootstrapCfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -630,10 +761,15 @@ func testLocalAuthoringRestoreNeedsFreshEvidence(t *testing.T, root, low *pgx.Co
 				if err := os.Mkdir(record.path, 0700); err != nil {
 					t.Fatal(err)
 				}
+			case "journal directory disappeared":
+				record.path = filepath.Join(t.TempDir(), "missing", "journal")
 			}
 			err = completeLocalAuthoringPreparation(t.Context(), migration, bootstrap, target, record, candidate)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if fault != nil && !fault.interrupted {
+				t.Fatal("expected physical session interruption did not occur")
 			}
 			after, err := db.TrainingScheduleStatus(t.Context(), low)
 			if err != nil || after.StateEpoch != state.StateEpoch || after.FloorManifestSHA256 == nil || *after.FloorManifestSHA256 != *state.FloorManifestSHA256 {
@@ -647,7 +783,7 @@ func testLocalAuthoringRestoreNeedsFreshEvidence(t *testing.T, root, low *pgx.Co
 	}
 }
 
-func testLocalProvenanceRefusesUnboundTarget(t *testing.T, root, low *pgx.Conn) {
+func testLocalProvenanceRefusesUnboundTarget(t *testing.T, low *pgx.Conn) {
 	t.Helper()
 	roles := db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User}
 	for _, tc := range []struct{ name, want string }{
@@ -660,11 +796,6 @@ func testLocalProvenanceRefusesUnboundTarget(t *testing.T, root, low *pgx.Conn) 
 			switch tc.name {
 			case "no explicit endpoint":
 				t.Setenv("DATABASE_URL", "")
-				_, err := localManifestBinding(t.Context(), root, roles)
-				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("err = %v, want %q", err, tc.want)
-				}
-				return
 			case "bootstrap clone lacks credentials":
 				t.Setenv("POSTGRES_PASSWORD", "")
 			case "clone is independently authenticated without bootstrap privilege":
@@ -678,4 +809,98 @@ func testLocalProvenanceRefusesUnboundTarget(t *testing.T, root, low *pgx.Conn) 
 			}
 		})
 	}
+}
+
+func testLocalProvenanceJournalLifecycle(t *testing.T, root, low *pgx.Conn) {
+	t.Helper()
+	ctx := t.Context()
+	roles := databaseRoleCredentialsFromEnvironment()
+	binding, err := localManifestBinding(ctx, root, roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, original := journal.path, journal.Value
+	journal.Close()
+	check := func(t *testing.T, err error, want string) {
+		t.Helper()
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+	}
+	write := func(t *testing.T, value localRecipientManifest) {
+		t.Helper()
+		file, err := openLocalRecipientManifest(binding, false)
+		check(t, err, "")
+		defer file.Close()
+		file.Value = value
+		check(t, file.Save(), "")
+	}
+	contents := func(t *testing.T) string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		check(t, err, "")
+		return string(data)
+	}
+	before := contents(t)
+	t.Run("completion is idempotent after restoration", func(t *testing.T) {
+		check(t, completeLocalRecipientBootstrap(t.Context(), root), "")
+	})
+	t.Run("stamped and unconfigured bootstrap skip local journal", func(t *testing.T) {
+		t.Run("stamped", func(t *testing.T) {
+			t.Setenv("APP_VERSION", "v2.1.0")
+			check(t, completeLocalRecipientBootstrap(t.Context(), root), "")
+		})
+		t.Run("missing roles", func(t *testing.T) {
+			t.Setenv("APP_DB_USER", "")
+			check(t, completeLocalRecipientBootstrap(t.Context(), root), "")
+		})
+	})
+	t.Run("authenticated migration cannot capture or complete bootstrap", func(t *testing.T) {
+		check(t, captureLocalRecipientProvenance(t.Context(), low, roles), "requires original authenticated configured bootstrap")
+		check(t, completeLocalRecipientBootstrap(t.Context(), low), "requires original authenticated configured bootstrap")
+	})
+	t.Run("active lock prevents competing readers and writers", func(t *testing.T) {
+		locked, err := openLocalRecipientManifest(binding, false)
+		check(t, err, "")
+		defer locked.Close()
+		const busy = "local fixture operation already running"
+		check(t, captureLocalRecipientProvenance(t.Context(), root, roles), busy)
+		check(t, completeLocalRecipientBootstrap(t.Context(), root), busy)
+		check(t, requireLocalRecipientProvenance(t.Context(), low, roles), busy)
+	})
+	if contents(t) != before {
+		t.Fatal("bootstrap calls overwrote the existing local journal")
+	}
+	t.Run("captured provenance belongs to the original publisher and bootstrap", func(t *testing.T) {
+		captured := original
+		captured.Phase = "captured"
+		otherOID := *original.PublisherOID + 1
+		captured.PublisherOID = &otherOID
+		write(t, captured)
+		t.Cleanup(func() { write(t, original) })
+		recorded := contents(t)
+		check(t, requireLocalRecipientProvenance(t.Context(), low, roles), "provenance is incomplete")
+		check(t, completeLocalRecipientBootstrap(t.Context(), root), "publisher OID changed")
+		if contents(t) != recorded {
+			t.Fatal("journal adopted another publisher")
+		}
+		t.Run("interrupted publisher inspection", func(t *testing.T) {
+			fault := &localQueryInterruption{match: func(sql string) bool {
+				return strings.HasPrefix(sql, "SELECT (SELECT oid FROM pg_catalog.pg_roles")
+			}}
+			cfg := root.Config().Copy()
+			cfg.Tracer = fault
+			broken, err := pgx.ConnectConfig(t.Context(), cfg)
+			check(t, err, "")
+			defer broken.Close(t.Context())
+			check(t, completeLocalRecipientBootstrap(t.Context(), broken), "closed")
+			if !fault.interrupted || contents(t) != recorded {
+				t.Fatal("failed catalog read changed captured provenance")
+			}
+		})
+	})
 }

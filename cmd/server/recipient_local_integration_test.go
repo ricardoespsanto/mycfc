@@ -14,7 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
+func setupLocalRecipientFixture(t *testing.T) (string, *url.URL, string) {
+	t.Helper()
 	raw := strings.Replace(isolatedFreshInitURL(t), "127.0.0.1:", "localhost:", 1)
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -44,6 +45,11 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err := runServerCommand(t.Context(), []string{"migrate"}); err != nil {
 		t.Fatal("prepared exact migration", err)
 	}
+	return raw, parsed, migration.String()
+}
+
+func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
+	raw, parsed, migration := setupLocalRecipientFixture(t)
 	if err := runServerCommand(t.Context(), []string{"migrate"}); err == nil || !strings.Contains(err.Error(), "publisher NOLOGIN and proved drain") {
 		t.Fatalf("pre-floor final ledger accepted a live publisher: %v", err)
 	}
@@ -54,7 +60,7 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	}
 	defer root.Close(context.Background())
 	t.Run("recorded preparation refusals", func(t *testing.T) {
-		testLocalPreparationRefusals(t, root, migration.String())
+		testLocalPreparationRefusals(t, root, migration)
 	})
 	other := *parsed
 	other.Path = "/postgres"
@@ -70,7 +76,7 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err := runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
 		t.Fatal("local floor", err)
 	}
-	low, err := pgx.Connect(t.Context(), migration.String())
+	low, err := pgx.Connect(t.Context(), migration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +109,10 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 		testLocalAuthoringRestoreNeedsFreshEvidence(t, root, low, state)
 	})
 	t.Run("local provenance rejects an unbound target", func(t *testing.T) {
-		testLocalProvenanceRefusesUnboundTarget(t, root, low)
+		testLocalProvenanceRefusesUnboundTarget(t, low)
+	})
+	t.Run("bootstrap provenance preserves exact journal ownership", func(t *testing.T) {
+		testLocalProvenanceJournalLifecycle(t, root, low)
 	})
 	original := state
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
